@@ -237,7 +237,7 @@ export const TIMED_LINES = 8;
  */
 export function timedTestLines(tests) {
   const ordered = [...(tests || [])].sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file) || a.line - b.line);
-  const lines = ordered.slice(0, TIMED_LINES).map((test) => `test ${test.file} › ${test.name} — ${test.seconds.toFixed(3)} s`);
+  const lines = ordered.slice(0, TIMED_LINES).map((test) => `test ${test.file} › ${test.name} — ${test.seconds.toFixed(3)} s${test.reused ? ` (reused from ${test.reused})` : ''}`);
   if (ordered.length > TIMED_LINES) lines.push(`… and ${ordered.length - TIMED_LINES} more timed tests (--json has them all)`);
   return lines;
 }

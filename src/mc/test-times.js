@@ -212,16 +212,86 @@ export function runProgress(paths) {
   return { unfinished: unfinished.sort(), finished };
 }
 
+/**
+ * What the reporter's per-test lines say of each file, beside `runProgress`:
+ * `failed` is every file with a test that failed, was cancelled or reached its
+ * time limit (the reporter marks all three `failed`), and `tests` every test it
+ * named, `{ file, name, line, seconds }`, the file absolute as node reports it.
+ * `ended` is every file whose run node summed up with no failed or cancelled
+ * test (the reporter's `ended` line); one it summed up otherwise is `failed`.
+ * A resumed gate reuses only a file that ended, that `runProgress` finished and
+ * that never failed.
+ */
+export function runOutcomes(paths) {
+  const failed = new Set();
+  const ended = new Set();
+  const tests = [];
+  for (const path of paths || []) {
+    let text = '';
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.file === 'string' && entry.ended === true) {
+        (entry.ok === true ? ended : failed).add(entry.file);
+        continue;
+      }
+      const test = entry?.test;
+      if (typeof entry?.file !== 'string' || !test || typeof test.name !== 'string') continue;
+      if (test.failed === true || test.timeout > 0) failed.add(entry.file);
+      if (test.line > 0) tests.push({ file: entry.file, name: test.name, line: Number(test.line), seconds: test.ms >= 0 ? test.ms / 1000 : null });
+    }
+  }
+  return { failed: [...failed].sort(), ended: [...ended].filter((file) => !failed.has(file)).sort(), tests };
+}
+
+/**
+ * Each asked file's outcome in one run, as it was asked for (matched by tail, as
+ * `outputCut` matches): `passed` when its top-level tests all ended, node summed
+ * the file up as ended (`runOutcomes`) and none of its tests failed; `failed`;
+ * `unfinished` when a test or the file itself never ended; and `not-started`
+ * when the reporter named none of it.
+ */
+export function fileOutcomes(files, { progress, outcomes }) {
+  const asked = [...new Set((files || []).map(String).filter(Boolean))];
+  const name = (path) => asked.find((file) => path === file || path.endsWith(`/${file}`)) || null;
+  const unfinished = new Set((progress?.unfinished || []).map(name));
+  const finished = new Map((progress?.finished || []).map((one) => [name(one.file), one.seconds]));
+  const failed = new Set((outcomes?.failed || []).map(name));
+  const ended = new Set((outcomes?.ended || []).map(name));
+  const tests = new Map();
+  for (const test of outcomes?.tests || []) {
+    const file = name(test.file);
+    if (file) tests.set(file, [...(tests.get(file) || []), { ...test, file }]);
+  }
+  return asked.map((file) => ({
+    file,
+    outcome: unfinished.has(file) ? 'unfinished' : failed.has(file) ? 'failed' : !finished.has(file) ? 'not-started'
+      : ended.has(file) ? 'passed' : 'unfinished',
+    seconds: finished.get(file) ?? null,
+    tests: tests.get(file) || [],
+  }));
+}
+
 /** Keep compact snapshots before reporter files are deleted at batch completion.
  * A timeout in a later batch or command must not forget the earlier evidence. */
 export function progressTracker() {
   const active = new Set();
   const completed = [];
+  const outcomes = [];
   return {
     track: (file) => active.add(file),
     complete: (file) => {
       if (!active.delete(file)) return;
       completed.push(runProgress([file]));
+      outcomes.push(runOutcomes([file]));
+    },
+    /** The failed files and named tests of every run, completed or still going (`runOutcomes`). */
+    outcomes: () => {
+      const all = [...outcomes, runOutcomes(active)];
+      const failed = new Set(all.flatMap((one) => one.failed));
+      return { failed: [...failed].sort(), ended: [...new Set(all.flatMap((one) => one.ended))].filter((file) => !failed.has(file)).sort(),
+        tests: all.flatMap((one) => one.tests) };
     },
     read: () => {
       const snapshots = [...completed, runProgress(active)];

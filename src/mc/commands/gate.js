@@ -7,6 +7,7 @@
  *   mc gate                   affected tests and command gates against origin/main
  *   mc gate --base <ref>      … against another base
  *   mc gate --whole-selection run the complete affected selection without cost deferral
+ *   mc gate --fresh           run the whole request again, reusing nothing from earlier attempts
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
  *   mc gate --wait            wait for the gate running here and print its verdict
@@ -35,6 +36,13 @@
  * and the file's path, at most 2 KB. Past the budget it answers `RUNNING` and
  * exits 3; the tests run on, and `mc gate --wait` prints the verdict from the
  * same log.
+ *
+ * A rerun on content identical to an earlier measured attempt (same tree and
+ * bytes, version, configuration and flags, no name pattern) reuses each selected
+ * file and command gate that already passed there and runs only the rest; it
+ * prints `reused N files and M commands from <runs>; running K` first, and its
+ * verdict says it was resumed. Any content change reuses nothing. --fresh
+ * reuses nothing either (session-gate-evidence.js, `findResumable`).
  *
  * One gate per worktree: a lock beside the git directory names the running
  * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
@@ -102,7 +110,7 @@ export function gateOwner(cwd, env = process.env, io = SYSTEM) {
 }
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--wait', '--full', '--whole-selection'], strictValues: ['--base', '--budget', '--test-name-pattern'] } };
+export const ROUTES = { '': { booleans: ['--json', '--wait', '--full', '--whole-selection', '--fresh'], strictValues: ['--base', '--budget', '--test-name-pattern'] } };
 ROUTES['*'] = ROUTES[''];
 
 export async function run(argv, deps = {}) {
@@ -127,6 +135,9 @@ export async function run(argv, deps = {}) {
   }
   if (scanned.flags['whole-selection'] && scanned.flags.wait) {
     stderr.write(`mc: --whole-selection starts a complete affected-selection request; --wait only observes the already-started request and cannot start or broaden it\n${usage()}`); return 2;
+  }
+  if (scanned.flags.fresh && scanned.flags.wait) {
+    stderr.write(`mc: --fresh starts a new request; --wait only observes the one already running\n${usage()}`); return 2;
   }
   if (named.length && scanned.flags.wait) { stderr.write(`mc: --wait takes no test files — it waits for the gate running here\n${usage()}`); return 2; }
   if (named.length && scanned.flags.base) { stderr.write(`mc: --base selects checks for the changed code — it takes no named files\n${usage()}`); return 2; }
@@ -227,7 +238,7 @@ export async function run(argv, deps = {}) {
       io.mkdir(dir);
       io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, timed, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
         round_timeout_ms: declaration?.round_timeout_ms ?? null,
-        log: logPath, defer: !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
+        log: logPath, fresh: Boolean(scanned.flags.fresh), defer: !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
           session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));
       const fd = io.open(logPath);
@@ -284,14 +295,29 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   ]);
   const deferredFiles = result?.deferred || [];
   const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: ${deferredFiles.join(' ')}` : '';
+  const resumed = resumedLine(result);
+  const resumedText = resumed ? `\n${resumed}` : '';
   if (json) {
     const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
     stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, deferred: deferredFiles,
-      coverage: result?.coverage ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+      coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests) })}${left}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests) })}${resumedText}${left}\n`);
   }
   return (summary.process_ok ?? summary.ok) ? 0 : 1;
+}
+
+/**
+ * What a resumed verdict says it reused: `RESUMED — reused N files and M
+ * commands from <runs>`, on content identical to those runs; null when nothing was.
+ */
+export function resumedLine(result) {
+  const resumed = result?.resumed;
+  if (!resumed?.from?.length) return null;
+  const files = Object.keys(resumed.files || {}).length;
+  const commands = (resumed.commands || []).length;
+  const word = (count, one) => `${count} ${one}${count === 1 ? '' : 's'}`;
+  return `RESUMED — reused ${word(files, 'file')} and ${word(commands, 'command')} from ${resumed.from.join(', ')} on identical content; mc gate --fresh reruns them`;
 }
 
 /**

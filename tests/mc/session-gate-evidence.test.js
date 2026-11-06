@@ -310,7 +310,7 @@ it('named or pattern-filtered runs never populate broader selector coverage; com
     const cached = findGreen({ root: req.gate.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(selected) });
     assert.equal(Boolean(cached), mode === 'affected');
     assert.equal(Boolean(findGreenForHead({ root: req.gate.root, repo: 'repo', headTree: receipt.tree })), mode === 'affected');
-    assert.equal(readdirSync(join(req.gate.root, 'gate-evidence')).length, 1);
+    assert.equal(readdirSync(join(req.gate.root, 'gate-evidence')).filter((name) => name.endsWith('.json')).length, 1);
   }
 });
 
@@ -565,5 +565,57 @@ it('corrupt or incomplete durable evidence never authorizes reuse or publication
     assert.equal(fx.lookup(), null);
     assert.equal(findGreen(args), null);
     assert.equal(findGreenForHead({ ...args, headTree: fx.receipt.tree }), null);
+  }
+});
+
+it('a resumed full green is recorded for the merger and accepted for publication like a single-run green', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(join(fx.cwd, 'b.test.js'), 'export {};\n');
+  git(fx.cwd, 'add', '.');
+  git(fx.cwd, 'commit', '-qm', 'two tests');
+  const selected = { ok: true, files: ['a.test.js', 'b.test.js'], commands: [] };
+  const attempt = (run, outcome) => {
+    const req = { ...fx.request(), files: null, select: 'selector' };
+    req.measurement = { ...req.measurement, run };
+    return runSessionGate(req, { ...quiet, select: async () => selected, tests: async ({ files, times }) => {
+      const path = join(fx.root, `${run}.jsonl`);
+      times.track(path);
+      writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true },
+        { file: `/fixture/${file}`, test: { name: 'x', line: 1, ms: 1, ...(file === 'b.test.js' && outcome === 'red' ? { failed: true } : {}) } },
+        { file: `/fixture/${file}`, done: true, ms: 1 },
+        { file: `/fixture/${file}`, ended: true, ok: !(file === 'b.test.js' && outcome === 'red') }]).map((line) => JSON.stringify(line)).join('\n') + '\n');
+      times.complete(path);
+      return outcome === 'red' ? { code: 1, tap: 'not ok 1 - x\n1..1\n# tests 1\n# pass 0\n# fail 1\n' } : { code: 0, tap: GREEN };
+    } });
+  };
+  const red = receiptOf(await attempt('gate-red', 'red'));
+  assert.equal(red.outcome, 'red');
+  const resumed = await attempt('gate-resumed', 'green');
+  const receipt = receiptOf(resumed);
+  assert.equal(receipt.outcome, 'green');
+  assert.deepEqual(receipt.members.files.map(({ file, how, from }) => [file, how, from]),
+    [['a.test.js', 'reused', 'gate-red'], ['b.test.js', 'ran', null]]);
+  const context = { repository: receipt.repository, run: 'gate-resumed', sessionRun: 'session-one', goalRevision: 3,
+    configuration: receipt.configuration };
+  const root = join(fx.root, 'state');
+  const cached = findGreen({ root, repo: 'repo', tree: receipt.tree, selection: selectionHash(selected), evidence: context, checks: receipt.coverage });
+  assert.equal(cached?.receipt, resumed.evidence.path, 'recordReceiptGreen recorded the resumed green');
+  const head = git(fx.cwd, 'rev-parse', 'HEAD');
+  assert.equal(findPublicationReceipt({ ...context, root, cwd: fx.cwd, repo: 'repo', head, pushed: head,
+    selection: { files: selected.files, commands: [] } })?.run, 'gate-resumed');
+});
+
+it('a reused member that did not pass, or names no source, never makes a receipt green', (t) => {
+  const { request } = fixture(t);
+  const measurement = request().measurement;
+  const coverage = { kind: 'affected', files: ['a.test.js'], commands: [], flags: [], pattern: null, selector: 'selector' };
+  const make = (member) => gateReceipt({ measurement, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
+    result: { ok: true, code: 0, coverage, execution: { tests: null, commands: [] }, members: { files: [member], commands: [] } } });
+  assert.equal(make({ file: 'a.test.js', how: 'reused', from: 'gate-zero', outcome: 'passed' }).outcome, 'green');
+  for (const member of [{ file: 'a.test.js', how: 'reused', from: 'gate-zero', outcome: 'failed' },
+    { file: 'a.test.js', how: 'reused', from: null, outcome: 'passed' },
+    { file: 'a.test.js', how: 'ran', from: null, outcome: 'passed' }]) {
+    assert.equal(make(member).outcome, 'incomplete', JSON.stringify(member));
   }
 });

@@ -12,8 +12,9 @@ import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { readTestTimes, outputCut, progressTracker, sessionFiles, touchedTests } from './test-times.js';
-import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
+import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, touchedTests } from './test-times.js';
+import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
+import { commandIdentity } from './gate-greens.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
 
@@ -28,17 +29,26 @@ export function selectorCommand(command, { base = 'origin/main', changed = [] } 
   return `${withoutBase} --base-ref ${quote(base)}${changed.map((path) => ` --changed-path ${quote(path)}`).join('')}`;
 }
 
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
 export async function runSessionGate(request, {
   snapshot = captureWorktree, persist = persistGateReceipt, record = recordReceiptGreen,
   now = () => new Date().toISOString(), ...deps
 } = {}) {
+  // What earlier attempts on this content proved passing (`findResumable`):
+  // only a measured request, and never with --fresh.
+  let prior = { files: new Map(), commands: new Map() };
+  // The tracker, and what it said when a ceiling or an interrupt stopped the
+  // run: the run's times files are gone once its process closes.
+  let tracker = null;
+  let stopped = null;
   const execute = async () => {
     const controller = new AbortController();
     const external = deps.signal;
     const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
     const timeoutMs = Number(request.round_timeout_ms) > 0 ? Number(request.round_timeout_ms) : 60 * 60_000;
     // The runs' times files, tracked as the runs start (`runProgress`).
-    const tracker = progressTracker();
+    tracker = progressTracker();
     const activePhases = new Set(['selection']);
     let pendingFiles = request.files || [];
     let live = null;
@@ -51,6 +61,7 @@ export async function runSessionGate(request, {
       timedOut = true;
       // Read before the abort: the run's files are gone once its process closes.
       progress = tracker.read();
+      stopped = { progress, outcomes: tracker.outcomes() };
       ceilingLive = live ? JSON.parse(JSON.stringify(live)) : null;
       ceilingPhases = [...activePhases];
       ceilingFiles = [...pendingFiles];
@@ -61,11 +72,15 @@ export async function runSessionGate(request, {
       // Cut when the signal comes, as well as stopped by it: a child that ignores
       // its signal must not hold the gate past the ceiling (repo-gate.js's `untilCeiling`).
       const cut = new Promise((resolve) => {
-        if (signal.aborted) resolve(null);
-        else signal.addEventListener('abort', () => resolve(null), { once: true });
+        const stop = () => {
+          if (!stopped) stopped = { progress: tracker.read(), outcomes: tracker.outcomes() };
+          resolve(null);
+        };
+        if (signal.aborted) stop();
+        else signal.addEventListener('abort', stop, { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, signal, track: tracker.track, complete: tracker.complete, read: tracker.read,
+        executeSessionGate(request, { ...deps, prior, signal, track: tracker.track, complete: tracker.complete, read: tracker.read,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
@@ -97,13 +112,43 @@ export async function runSessionGate(request, {
     } finally { clearTimeout(timeout); }
   };
   if (!request.measurement) return execute();
+  // Each member as this attempt ran or reused it, for the receipt: what a later
+  // attempt on the same content may resume from (`findResumable`).
+  const withMembers = (result) => {
+    if (!Array.isArray(result?.coverage?.files) || !tracker) return result;
+    const reused = result.resumed?.files || {};
+    const timed = request.timed || {};
+    const kept = (file, tests) => (Object.hasOwn(timed, file) ? tests.map(({ name, line, seconds }) => ({ name, line, seconds })) : []);
+    const ran = fileOutcomes(result.coverage.files.filter((file) => !reused[file]),
+      stopped || { progress: tracker.read(), outcomes: tracker.outcomes() });
+    const outcome = new Map(ran.map((one) => [one.file, one]));
+    const files = result.coverage.files.map((file) => {
+      if (reused[file]) {
+        const source = prior.files.get(file);
+        return { file, how: 'reused', from: reused[file], outcome: 'passed', seconds: source?.seconds ?? null, tests: kept(file, source?.tests || []) };
+      }
+      const one = outcome.get(file);
+      return { file, how: 'ran', from: null, outcome: one.outcome, seconds: one.seconds, tests: kept(file, one.tests) };
+    });
+    const commands = (result.execution?.commands || []).map((command) => ({
+      packageScript: command.packageScript, how: command.state === 'reused' ? 'reused' : 'ran', from: command.from ?? null,
+      outcome: command.state === 'reused' ? 'passed'
+        : command.state === 'completed' && command.exit === 0 && command.ok === true && !command.unavailable && !command.error ? 'passed'
+          : command.state === 'completed' ? 'failed' : command.state,
+    }));
+    return { ...result, members: { files, commands } };
+  };
+  if (!request.fresh) {
+    try { prior = findResumable({ root: request.gate?.root, measurement: request.measurement, flags: request.flags || [], pattern: request.pattern ?? null }); }
+    catch { /* nothing to resume from: the whole selection runs */ }
+  }
   const started = now();
   let before = null;
   let after = null;
   let result = stoppedResult(null, 'content-changed');
   try {
     before = snapshot(request.cwd);
-    if (sameContent(request.measurement.candidate, before)) result = await execute();
+    if (sameContent(request.measurement.candidate, before)) result = withMembers(await execute());
     after = snapshot(request.cwd);
   } catch (error) {
     result = stoppedResult({ ...result, error: error.message }, 'evidence');
@@ -127,6 +172,7 @@ export async function runSessionGate(request, {
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
   write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, onPhase = () => {}, onProgress = () => {},
+  prior = null,
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
@@ -145,13 +191,17 @@ async function executeSessionGate(request, {
     write('Error: selector named a test outside the worktree or a non-test file\n');
     return { ok: false, code: 1, stopped_at: 'selection' };
   }
+  // A selected file an earlier attempt on this content saw pass is not run again.
+  const reusedFiles = Object.fromEntries(selected.filter((file) => prior?.files?.has(file)).map((file) => [file, prior.files.get(file).from]));
+  const remaining = selected.filter((file) => !reusedFiles[file]);
   // Named files are what was asked for, and a goal's measurement must be whole.
   const { run: files, deferred } = request.defer
-    ? sessionFiles(selected, { times: readTestTimes(request.gate), keep: request.addedTests })
-    : { run: selected, deferred: [] };
+    ? sessionFiles(remaining, { times: readTestTimes(request.gate), keep: request.addedTests })
+    : { run: remaining, deferred: [] };
+  const covered = selected.filter((file) => reusedFiles[file] || files.includes(file));
   onPhase('selection', false);
   if (deferred.length) write(`deferred, too costly for this partial gate (${deferred.length}; unmeasured): ${deferred.join(' ')}\n`);
-  if (!files.length && !selection.commands?.length) {
+  if (!covered.length && !selection.commands?.length) {
     write('NOTHING RUN — the repository selector selected no checks\n');
     return { ok: false, code: 2, stopped_at: 'no-checks', files, deferred, coverage: {
       kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
@@ -162,13 +212,24 @@ async function executeSessionGate(request, {
   let code = 0;
   let details = [];
   let testResult = null;
-  let timed = [];
-  const commands = selectedCommands.map((command) => ({
-    id: command.id || command.packageScript, packageScript: command.packageScript,
-    command: `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`,
-    exit: null, ok: false, state: 'pending',
-  }));
-  const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selectedCommands,
+  const commands = selectedCommands.map((command) => {
+    const source = prior?.commands?.get(commandIdentity(command));
+    return { id: command.id || command.packageScript, packageScript: command.packageScript,
+      command: `npm run ${quote(command.packageScript)}${command.passBaseRef ? ` -- --base-ref ${quote(base)}` : ''}`,
+      ...(source ? { exit: 0, ok: true, state: 'reused', from: source.from } : { exit: null, ok: false, state: 'pending' }) };
+  });
+  const reusedCommands = commands.filter((command) => command.state === 'reused');
+  const sources = [...new Set([...Object.values(reusedFiles), ...reusedCommands.map((command) => command.from)])];
+  const resumed = sources.length ? { from: sources, files: reusedFiles,
+    commands: reusedCommands.map((command) => ({ packageScript: command.packageScript, from: command.from })) } : null;
+  if (resumed) {
+    write(`reused ${plural(Object.keys(reusedFiles).length, 'file')} and ${plural(reusedCommands.length, 'command')} from ${sources.join(', ')}; running ${files.length + commands.length - reusedCommands.length}\n`);
+  }
+  // The reused files' touched tests are timed from their source run, and say so.
+  const reusedTimed = touchedTests(Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || [])
+    .map((test) => ({ ...test, file }))), request.timed || {}).map((test) => ({ ...test, reused: reusedFiles[test.file] }));
+  let timed = reusedTimed;
+  const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
     flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
   const snapshot = () => {
     const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
@@ -177,7 +238,7 @@ async function executeSessionGate(request, {
     return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
       ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed,
-      coverage, execution: { tests: testResult, commands } };
+      coverage, execution: { tests: testResult, commands }, resumed };
   };
   const progress = () => onProgress(snapshot());
   progress();
@@ -190,7 +251,7 @@ async function executeSessionGate(request, {
     try {
       const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
       write(`${run.tap || ''}\n${run.stderr || ''}`);
-      timed = touchedTests(run.tests || [], request.timed || {});
+      timed = [...touchedTests(run.tests || [], request.timed || {}), ...reusedTimed];
       details = redTests(run.tap, files, { cwd });
       const totals = tapTotals(run.tap);
       for (const key of ['tests', 'pass', 'fail', 'skipped', 'cancelled']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
@@ -221,6 +282,7 @@ async function executeSessionGate(request, {
     for (let index = 0; index < selectedCommands.length; index++) {
       const command = selectedCommands[index];
       const evidence = commands[index];
+      if (evidence.state === 'reused') continue;
       if (signal?.aborted) { code = 1; break; }
       evidence.state = 'running';
       const phase = `command ${command.packageScript}`;
