@@ -340,57 +340,45 @@ export async function getStatus({
 }
 
 // ─────────────────────────────────────────────────────────────
-// Token vault — JIT materialisation contract (§12d)
+// Token vault — refusal-only compatibility API
 //
-// Phase 2 of the vault plan: mc materialises tokens to per-tool paths
-// at session start (`mc new`/`mc resume`) and shreds them at session
-// end (`mc end`). Adapter declares WHERE tokens live and HOW they're
-// shaped on disk; the lifecycle owns WHEN.
+// `tokenLocations()` advertises no destinations and `materializeToken()`
+// refuses plaintext materialisation. Claude Code owns native authentication;
+// this adapter does not create its credentials file or inject a provider key.
+// `shredToken()` remains legacy best-effort cleanup for files created by older
+// mc versions, not part of an active materialisation lifecycle.
 //
-// Claude Code reads `~/.claude/.credentials.json` for auth. The on-
-// disk shape (confirmed in drev 3) is
-//   { "anthropic": { "apiKey": "<token>" } }
-// We materialise that exactly, mode 0600. The model running inside
-// Native Claude auth remains owned by Claude. mc never converts a vault secret
-// into ~/.claude/.credentials.json or an environment variable. The shred
-// function remains only for cleanup of artifacts created by older mc versions.
-//
-// API-billed MC sessions use billing-gateway-session.js. It reads the fixed
-// vault record and keeps the provider key in the gateway process. Claude gets
-// a bounded loopback grant, never ANTHROPIC_API_KEY from MC.
+// API-billed sessions use billing-gateway-session.js: the gateway retains its
+// fixed vault credential and Claude receives a bounded loopback grant. This
+// boundary is unchanged; the audit does not certify provider/runtime custody.
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Where claude-code looks for credentials. Empty → "no materialisable
- * location known".
+ * Refusal-only compatibility API: Claude Code's native auth is tool-owned;
+ * mc advertises no plaintext credential locations.
  */
 export function tokenLocations() {
   return [];
 }
 
 /**
- * Materialise a token to the given location. Idempotent — overwriting
- * a previously-materialised file is fine; the shape doesn't carry any
- * mc-specific state, so re-running with the same token is a no-op
- * from the tool's perspective.
+ * Refuse plaintext materialisation. This compatibility entrypoint is disabled;
+ * callers must not infer an idempotent write or active session lifecycle.
  *
  * @param {object} arg
- * @param {string} arg.token       - the token string
- * @param {object} arg.location    - one of the entries from tokenLocations()
- * @param {string} [arg.sessionId] - session-name (informational; the
- *   adapter doesn't fan files out per session — Claude Code reads
- *   a single, fixed path)
- * @param {object} [arg.deps]      - test injection for writeProtectedFile
+ * @param {string} [arg.token] - ignored by the refusal-only implementation
+ * @param {object} [arg.location] - ignored by the refusal-only implementation
+ * @param {string} [arg.sessionId] - ignored by the refusal-only implementation
+ * @param {object} [arg.deps] - ignored by the refusal-only implementation
  */
 export async function materializeToken({ token, location, sessionId, deps = {} } = {}) {
   return { ok: false, reason: 'plaintext-materialisation-disabled' };
 }
 
 /**
- * Shred a previously-materialised file. Best-effort + idempotent —
- * missing files are not an error. Errors during shred are reported
- * via the return value but never thrown, so `mc end` can shred all
- * adapters' files in a row without one failure blocking the rest.
+ * Legacy cleanup of a previously-materialised file. Best-effort and
+ * idempotent: missing files are not an error. Errors are returned, not
+ * thrown, so cleanup of an old artifact does not block other cleanup.
  */
 export async function shredToken({ location, sessionId, deps = {} } = {}) {
   if (!location || typeof location !== 'object') {

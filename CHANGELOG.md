@@ -7,6 +7,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- Corrected stale adapter and vault-crypto comments to reflect refusal-only
+  plaintext materialisation, direct protected-file writes, and retained
+  fixed-vector evidence without a current browser-parity claim.
 - A goal in `review` whose pull request is in the merger's line gets no
   review session (`reviewDue`), and the plan role queues a mechanical fix of
   a red with `mc publish` instead of sending it to review. On 2026-11-03

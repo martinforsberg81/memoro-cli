@@ -13,12 +13,12 @@
  * The Auth Hash is sent to the server to prove identity.
  * The Vault Key never leaves the process.
  *
- * IMPORTANT: This is a near-verbatim port. The browser source uses
- * Web Crypto via `globalThis.crypto`; Node 22's `globalThis.crypto` /
- * `crypto.subtle` is the same WHATWG-spec implementation, so output is
- * byte-identical to the browser for the same inputs. The port-verification
- * test in tests/mc/vault/crypto-port.test.js asserts this — change here
- * only if that test still passes.
+ * Compatibility evidence: `tests/vault/engine/crypto-port.test.js` retains
+ * dated fixed vectors and Node WebCrypto checks; it does not currently
+ * reproduce a browser comparison. The historical audit records the boundary
+ * and evidence limits in
+ * [`docs/technical/test-audits/audit-vault-001.md`](../../../docs/technical/test-audits/audit-vault-001.md).
+ * Do not claim current browser parity from those retained vectors.
  *
  * Differences from the browser source (mechanical, not cryptographic):
  *   - No `window.dispatchEvent('vault:locked')` (Node has no window).
