@@ -22,8 +22,8 @@ import {
   shotWorktree, slug,
 } from '../shot.js';
 import {
-  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, lastLogLine, liveSessions, nextSessionId,
-  readSessions, removeSession, runKeep, sendLine, writeSession,
+  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, lastLogLine, liveSessions, readRecords,
+  readSessions, releaseReservation, removeSession, reserveSession, runKeep, sendLine, sessionUnchanged, writeSession,
 } from '../shot-session.js';
 import { ensureAppServer, readDeclaration } from '../test-environment.js';
 import { scanArgs } from './flags.js';
@@ -35,7 +35,7 @@ import { answer, servedTree, usage } from './shot.js';
  * help-routes.test.js walks the help with it.
  */
 export const STEP_FLAGS = {
-  booleans: ['--full', '--json', '--open', '--reload', '--no-shot'],
+  booleans: ['--full', '--json', '--open', '--reload', '--no-shot', '--any-worktree'],
   strictValues: ['--wait-for', '--scroll', '--measure', '--el', '--shell', '--timeout', '--out', '--goto'],
   repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   check: refuseStep,
@@ -71,26 +71,36 @@ export async function keep({
 }) {
   const now = () => (deps.now ? deps.now() : new Date());
   const dir = ensureSessionsDir(env);
-  const live = liveSessions(env, deps);
-  while (live.length >= SESSION_LIMIT) {
-    const idlest = live.reduce((a, b) => (idleMinutes(b, now()) > idleMinutes(a, now()) ? b : a));
-    live.splice(live.indexOf(idlest), 1);
-    const idle = idleMinutes(idlest, now());
-    await closeSession(idlest, { env, deps });
-    stderr.write(`mc: ${SESSION_LIMIT} browsers are kept at most, so ${idlest.id} (idle ${idle} min) was closed\n`);
-  }
-  const id = nextSessionId(live);
+  liveSessions(env, deps); // the dead ones' files go first
+  // Room for this one: a fifth closes the longest idle, as before. Keeps still
+  // taking their id hold a place and are never closed.
+  await trimTo(SESSION_LIMIT - 1, { env, deps, now, stderr });
+  // The id is reserved before anything is deleted or launched: its file is
+  // created exclusively, so a concurrent keep takes the next id.
+  const reservation = reserveSession(env, { deps, now: now() });
+  await trimTo(SESSION_LIMIT, { env, deps, now, stderr });
+  const { id } = reservation;
   const socket = join(dir, `${id}.sock`);
   const log = join(dir, `${id}.log`);
-  for (const stale of [socket, log, join(dir, `${id}.json`)]) rmSync(stale, { force: true });
+  for (const stale of [socket, log]) rmSync(stale, { force: true });
 
-  const ran = await (deps.runKeep || runKeep)({
-    worktree, declaration: declared, request: { ...request, mode: 'session', socket }, env, log, deps,
-  });
-  if (!ran.ok) { stderr.write(`mc: ${scrub(ran.error)}\n`); return 1; }
+  let ran = null;
+  try {
+    ran = await (deps.runKeep || runKeep)({
+      worktree, declaration: declared, request: { ...request, mode: 'session', socket }, env, log, deps,
+    });
+  } catch (error) {
+    releaseReservation(env, reservation);
+    throw error;
+  }
+  if (!ran.ok) {
+    releaseReservation(env, reservation);
+    stderr.write(`mc: ${scrub(ran.error)}\n`);
+    return 1;
+  }
   if (!ran.result.ok) {
     ran.kill?.();
-    removeSession({ id, socket, log }, env);
+    releaseReservation(env, reservation);
     return answer(ran.result, {
       request, served, who: fields.account, scrub, stdout, stderr, deps,
       worktree, script: declared.argv.join(' '),
@@ -99,7 +109,7 @@ export async function keep({
   if (existsSync(socket)) chmodSync(socket, 0o600);
   const started = now().toISOString();
   writeSession(env, {
-    id, pid: ran.pid, socket, log, ...fields, started, last_used: started, steps: 0,
+    id, pid: ran.pid, owner_pid: reservation.owner_pid, nonce: reservation.nonce, socket, log, ...fields, started, last_used: started, steps: 0,
   });
   const code = answer(flags.json ? { ...ran.result, kept: id } : ran.result, {
     request, served, who: fields.account, json: flags.json, open: flags.open, scrub, stdout, stderr, deps,
@@ -124,7 +134,7 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   if (!acting.ok) { stderr.write(`mc: ${acting.error}\n`); return 2; }
   const timeout = parseTimeout(flags.timeout);
   if (!timeout.ok) { stderr.write(`mc: ${timeout.error}\n`); return 2; }
-  const picked = pick(positional[0], { cwd, env, deps });
+  const picked = pick(positional[0], { cwd, env, deps, sameWorktree: !flags['any-worktree'] });
   if (picked.error) { stderr.write(`mc: ${picked.error}\n`); return picked.code; }
   const { session } = picked;
   if (!session.alive) return ended(session, { env, stderr });
@@ -176,7 +186,6 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
   const message = {
     step: n,
     actions,
-    wait_for: flags['wait-for'],
     scroll: scroll.scroll,
     measure: flags.measure,
     element: flags.el,
@@ -189,6 +198,12 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
     timeout_ms: timeout.timeoutMs,
     ...(rebase ? { rebase } : {}),
   };
+  // The session file must still be the one read: a keep that took this id in
+  // the meantime owns the socket now, and the step is not sent to it.
+  if (!sessionUnchanged(env, session)) {
+    stderr.write(`mc: ${session.id} changed while the step was readied — another keep may have taken its id; nothing was sent, run it again\n`);
+    return 1;
+  }
   const timeoutMs = deps.stepTimeoutMs ?? captureTimeoutMs(message);
   const sent = await sendLine({ socket: session.socket, message, timeoutMs, deps });
   if (!sent.ok && sent.refused) return ended(session, { env, stderr });
@@ -199,12 +214,16 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
 
   const { result } = sent;
   const rebased = Boolean(rebase && result.rebased);
-  writeSession(env, {
-    ...session,
-    steps: n,
-    last_used: (deps.now ? deps.now() : new Date()).toISOString(),
-    ...(rebased ? server : {}),
-  });
+  // Recorded only if the session is still the one stepped: never over a newcomer's file.
+  const kept = sessionUnchanged(env, session);
+  if (kept) {
+    writeSession(env, {
+      ...session,
+      steps: n,
+      last_used: (deps.now ? deps.now() : new Date()).toISOString(),
+      ...(rebased ? server : {}),
+    });
+  }
   const code = answer(result, {
     request: { actions }, served, who: session.account, json: flags.json, open: flags.open, picture: !flags['no-shot'], stdout, stderr, deps,
     worktree: session.worktree, script: shot.declaration.argv.join(' '),
@@ -213,6 +232,10 @@ export async function next(argv, { stdout, stderr, deps = {} }) {
     stdout.write(`mc: the tree was edited, so the server restarted — the page was opened again at ${rebasedPath(result)}; what it held in memory is gone\n`);
   } else if (rebase) {
     stdout.write(`mc: warning — the server restarted, and ${session.id} did not say it opened the page again on it\n`);
+  }
+  if (!kept) {
+    stderr.write(`mc: ${session.id} changed while the step ran — its answer is above, but nothing was recorded for it\n`);
+    return 1;
   }
   return code;
 }
@@ -267,12 +290,23 @@ export async function sessions(argv, { stdout, stderr, deps = {} }) {
 /**
  * The session a call means: the id given; else the most recently used live
  * session of the worktree `shotWorktree` chooses here; else the only live one.
+ * An id of another worktree's session is refused by a step (`sameWorktree`)
+ * unless the caller said `--any-worktree`.
  */
-function pick(id, { cwd, env, deps }) {
+function pick(id, { cwd, env, deps, sameWorktree = false }) {
   if (id) {
     if (!/^s\d+$/u.test(id)) return { error: `a session is s<n>, not ${id} — mc shot sessions lists them`, code: 2 };
     const session = readSessions(env, deps).find((entry) => entry.id === id);
     if (!session) return { error: `no session called ${id} — mc shot sessions lists them`, code: 1 };
+    if (sameWorktree) {
+      const { worktree: here } = shotWorktree({ cwd, env, deps });
+      if (session.worktree !== here) {
+        return {
+          error: `${id} is a browser of ${session.worktree}, and this is ${here || cwd} — a step goes to the worktree its browser belongs to; add --any-worktree to drive it from here`,
+          code: 2,
+        };
+      }
+    }
     return { session };
   }
   // A dead session of this worktree is still the one meant: it says it ended.
@@ -288,6 +322,22 @@ function pick(id, { cwd, env, deps }) {
   if (!live.length) return { error: 'no browser is kept — mc shot <dev|prod> <target> --keep keeps one', code: 1 };
   const named = live.map((session) => `${session.id} (${session.where} ${session.target}, ${basename(session.worktree)})`);
   return { error: `${live.length} browsers are kept and none is this worktree's — name one: ${named.join(', ')}`, code: 2 };
+}
+
+/**
+ * Close the longest idle live session while more than `limit` browsers are
+ * held. A keep still taking its id is held too, but is never the one closed.
+ */
+async function trimTo(limit, { env, deps, now, stderr }) {
+  for (;;) {
+    const held = readRecords(env, deps).filter((record) => record.alive);
+    const candidates = held.filter((record) => !record.placeholder);
+    if (held.length <= limit || !candidates.length) return;
+    const idlest = candidates.reduce((a, b) => (idleMinutes(b, now()) > idleMinutes(a, now()) ? b : a));
+    const idle = idleMinutes(idlest, now());
+    await closeSession(idlest, { env, deps });
+    stderr.write(`mc: ${SESSION_LIMIT} browsers are kept at most, so ${idlest.id} (idle ${idle} min) was closed\n`);
+  }
 }
 
 /** The one line a dead session gets, and its files gone. */

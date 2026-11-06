@@ -21,6 +21,9 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    `git diff origin/main...<head>` and `git log --oneline origin/main..<head>`.
    Check that the worktree's `HEAD` is the head the prompt names; if it is not,
    judge the head the prompt names.
+   A claim about help or usage text is checked by running
+   `node src/mc-cli.js <verb> --help` in the reviewed worktree: a bare `mc` on
+   PATH runs main's code, and shows the old text.
 2. **Goal.** Each criterion, one by one: run its check yourself — a test with
    `mc gate`, an `mc` command and its output, `mc shot`, the code you read and
    where. A criterion whose check does not hold is not met, whatever its ✓

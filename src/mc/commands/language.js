@@ -728,7 +728,7 @@ async function conduct({
       manifest: name, lang: manifest.lang, sha, holder, pid: deps.pid ?? process.pid, dryRun, resumes: prior?.started || null,
     }, env);
     return { run, closed };
-  });
+  }, { name: 'language-run' });
   if (locked.refused) {
     stderr.write(`mc: ${locked.refused}\n`);
     return 1;

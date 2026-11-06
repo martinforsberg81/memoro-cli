@@ -241,7 +241,7 @@ export function queueMerge({
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
     write(mergesPath(root), next);
     return next;
-  });
+  }, { name: 'merges' });
   const already = queuedFor(entries, repo, pr)?.state === 'landing';
   const merger = start({ root, env });
   return { place: placeOf(entries, repo, pr), merger, already };
@@ -359,7 +359,7 @@ export async function sweepMergedReds({
     for (const { entry } of out) entries = dequeue(entries, entry);
     if (out.length) write(mergesPath(root), entries);
     return out;
-  });
+  }, { name: 'merges' });
   for (const { entry, facts } of dropped) {
     if (facts.state === 'MERGED') {
       const report = alreadyMerged(facts);
@@ -732,7 +732,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   if (!back) lock(root, () => {
     const goal = goalOfJob(job, goalsOf);
     if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
-  });
+  }, { name: 'merges' });
 
   if (appendRun) {
     try {
@@ -870,7 +870,7 @@ export async function serve({
         ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
         : markRed(entries, job, { reason, answered: at });
       write(mergesPath(root), entries);
-    });
+    }, { name: 'merges' });
     written.add(keyOf(job));
     changed();
   };
@@ -904,7 +904,7 @@ export async function serve({
         if (next.length) write(mergesPath(root), entries);
         pending = entries;
         return next;
-      });
+      }, { name: 'merges' });
       openLanes(pending);
       if (!batch.length) {
         await sweepReds();
@@ -969,7 +969,7 @@ export async function serve({
               : markRed(entries, one, { reason, answered });
           }
           write(mergesPath(root), entries);
-        });
+        }, { name: 'merges' });
       }
       // Queued again later, a job is written again.
       for (const one of batch) written.delete(keyOf(one));

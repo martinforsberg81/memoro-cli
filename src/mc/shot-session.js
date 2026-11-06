@@ -12,9 +12,10 @@
  *
  * Every read on a socket has a timeout, so a dead session is a line, not a hang.
  */
+import { randomBytes } from 'node:crypto';
 import { createConnection } from 'node:net';
 import {
-  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 
@@ -49,33 +50,134 @@ export function isAlive(pid, deps = {}) {
   }
 }
 
-/** Every session file, each with `alive`; a file that does not parse is skipped. */
-export function readSessions(env = process.env, deps = {}) {
+/** A file's JSON object, or null when it is missing, half-written or not an object. */
+function readRecord(path) {
+  try {
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    return record && typeof record === 'object' ? record : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A record is alive while its owner is: a placeholder while the `keep` that
+ * reserved its id is, a session while its browser is.
+ */
+function recordAlive(record, deps) {
+  return isAlive(record.placeholder ? record.owner_pid : record.pid, deps);
+}
+
+/**
+ * Every record in the directory, placeholders included, each with `file` and
+ * `alive`; a file that does not parse is skipped.
+ */
+export function readRecords(env = process.env, deps = {}) {
   const dir = sessionsDir(env);
   if (!existsSync(dir)) return [];
-  const sessions = [];
+  const records = [];
   for (const name of readdirSync(dir).filter((entry) => /^s\d+\.json$/u.test(entry)).sort()) {
-    try {
-      const session = JSON.parse(readFileSync(join(dir, name), 'utf8'));
-      sessions.push({ ...session, file: join(dir, name), alive: isAlive(session.pid, deps) });
-    } catch { /* half-written or foreign: not a session */ }
+    const record = readRecord(join(dir, name));
+    if (record) records.push({ ...record, file: join(dir, name), alive: recordAlive(record, deps) });
   }
-  return sessions;
+  return records;
 }
 
-/** The live sessions, the files of the dead ones removed on the way. */
+/** Every session file, each with `alive`. A placeholder is not a session yet. */
+export function readSessions(env = process.env, deps = {}) {
+  return readRecords(env, deps).filter((record) => !record.placeholder);
+}
+
+/** The live sessions; the files of the dead ones, placeholders included, are removed on the way. */
 export function liveSessions(env = process.env, deps = {}) {
-  const all = readSessions(env, deps);
-  for (const session of all.filter((entry) => !entry.alive)) removeSession(session);
-  return all.filter((entry) => entry.alive);
+  const all = readRecords(env, deps);
+  for (const record of all.filter((entry) => !entry.alive)) removeSession(record, env);
+  return all.filter((entry) => entry.alive && !entry.placeholder);
 }
 
-/** `s<n>`, the lowest number no live session holds. */
-export function nextSessionId(live) {
-  const held = new Set(live.map((session) => session.id));
-  let n = 1;
-  while (held.has(`s${n}`)) n += 1;
-  return `s${n}`;
+/** A nonce: tells one session (or one reservation) from the next that takes its id. */
+export function newNonce() {
+  return randomBytes(8).toString('hex');
+}
+
+/** Create `path` exclusively with `record` as its JSON; false when it already exists. */
+function createExclusive(path, record) {
+  try {
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
+  }
+}
+
+/**
+ * Clear `id` when its owner is gone: a dead placeholder, or a session whose
+ * browser is. Two callers reclaiming at once are serialised by `s<n>.lock`, made
+ * exclusively; a lock whose owner is gone is removed. True when the id is free.
+ */
+function reclaim(dir, id, deps) {
+  const lock = join(dir, `${id}.lock`);
+  if (!createExclusive(lock, { owner_pid: process.pid })) {
+    const holder = readRecord(lock);
+    if (holder && !isAlive(holder.owner_pid, deps)) rmSync(lock, { force: true });
+    return false;
+  }
+  try {
+    const path = join(dir, `${id}.json`);
+    if (!existsSync(path)) return true;
+    const record = readRecord(path);
+    // A file that does not parse may be another caller's write in progress: it waits a minute.
+    if (record ? recordAlive(record, deps) : Date.now() - statSync(path).mtimeMs < RECLAIM_AFTER_MS) return false;
+    removeSession({ id, file: path, socket: join(dir, `${id}.sock`), log: join(dir, `${id}.log`) });
+    return true;
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
+const RECLAIM_AFTER_MS = 60_000;
+
+/**
+ * Reserve the lowest `s<n>` no record holds. Its file is created exclusively
+ * (`wx`) as a placeholder owned by this process, so the create is the
+ * reservation: no two callers get one id, and a record of an id is never
+ * overwritten by a newcomer. `{ id, nonce, owner_pid, file }`.
+ */
+export function reserveSession(env = process.env, { owner = process.pid, deps = {}, now = new Date() } = {}) {
+  const dir = ensureSessionsDir(env);
+  for (let n = 1; n < 10_000; n += 1) {
+    const id = `s${n}`;
+    const file = join(dir, `${id}.json`);
+    const reservation = {
+      id, placeholder: true, owner_pid: owner, nonce: newNonce(), reserved: now.toISOString(),
+    };
+    if (createExclusive(file, reservation)) return { ...reservation, file };
+    if (reclaim(dir, id, deps) && createExclusive(file, reservation)) return { ...reservation, file };
+  }
+  throw new Error('no session id is free');
+}
+
+/** A keep that did not launch gives its id back, if the file is still its own reservation. */
+export function releaseReservation(env, reservation) {
+  const record = readRecord(reservation.file);
+  if (!record || record.nonce !== reservation.nonce) return;
+  const dir = sessionsDir(env);
+  removeSession({
+    id: reservation.id, file: reservation.file, socket: join(dir, `${reservation.id}.sock`), log: join(dir, `${reservation.id}.log`),
+  }, env);
+}
+
+/**
+ * Is the session file still the one `session` was read from: the same nonce,
+ * owner and browser? False when it is gone, or another keep has taken the id.
+ */
+export function sessionUnchanged(env, session) {
+  const record = readRecord(join(sessionsDir(env), `${session.id}.json`));
+  return Boolean(record)
+    && record.nonce === session.nonce
+    && record.owner_pid === session.owner_pid
+    && record.pid === session.pid;
 }
 
 /** The session file, 0600; `file` and `alive` are read, never written. */

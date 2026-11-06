@@ -74,8 +74,11 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   declared viewport may carry its own (`viewports.iphone.safe_area` in
   memoro's `.mc/shot.json`: 47, 0, 34, 0), so `--viewport iphone` is a phone
   with a notch and a home indicator without saying so; the flag overrides it.
-- **`--wait-for <css>`**: wait until it is visible (10 s unless `--timeout`
-  says), else `no-element`.
+- **`--wait-for <css>`**: an action like the others, in its place among the
+  acting flags: it waits until the element is visible (10 s unless `--timeout`
+  says). The request carries it as `{ kind: 'wait-for', selector }` in `actions`.
+  A script that predates the kind refuses the request; mc then says to rebase
+  onto main, since there is no fallback to the top-level `wait_for`.
 - **`--scroll <css>[@end|@top|@<px>]`**: scroll that element first; `@end`
   when nothing follows the `@`. The last `@` separates, so an attribute
   selector keeps its own characters. A bare `@end` or `@top` (no selector)
@@ -113,7 +116,7 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   60 s for a slot. A refusal names the compare servers still running, and
   `--compare <sha>` reuses one of them, with its tree and its database.
 - `--click <selector>`, repeatable: the capture script presses each selector in
-  order, after the page and its window are open and before `--wait-for`,
+  order, after the page and its window are open and in the order of the acting flags,
   `--scroll` and `--el`. The request carries them as `click`. A result that does
   not answer `acted` with one entry per action is refused (exit 1, no path); an
   older script's `clicked` array with one entry per click is also accepted for
@@ -137,11 +140,11 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   refused when it does not exist (`mc: --upload: no file at <path>`).
 - `--timeout <s>`, whole seconds 1 to 120 (else `mc: --timeout is whole
   seconds, 1 to 120`, exit 2): how long each wait and each action may take —
-  `--wait-for` and every acting flag — not the whole shot. Without it the
+  every acting flag, `--wait-for` among them — not the whole shot. Without it the
   script's own 10 s stands. mc lets the script run `max(180 s, 60 s + 4 ×
   timeout × (1 + actions))`, so a long wait is not killed by mc first.
 
-The request gains `safe_area`, `wait_for`, `scroll`, `measure`, `onboarding`,
+The request gains `safe_area`, `scroll`, `measure`, `onboarding`,
 `click`, `actions` and `timeout_ms`, after `out`; a capture result gains
 `safe_area` and, when asked, `measure`.
 
@@ -230,22 +233,32 @@ mc shot next --click 'text=New entry' --eval 'document.activeElement.name'
   read. A first answer of `ok: false` ends the process and keeps nothing.
 - **`next`** is one step on that page. Without an id it is the most recently
   used session of the worktree `shotWorktree` chooses where you stand, else the
-  only one; with several elsewhere it refuses and names them. Its answer prints
+  only one; with several elsewhere it refuses and names them. An explicit id of
+  a session whose worktree is not the one you stand in is refused with exit 2,
+  naming both worktrees, unless `--any-worktree` says to drive it from here.
+  Its answer prints
   exactly as a shot's — path, URL, measure, access, `error`, `eval`, `failed`
   and warning lines, the same exit codes — so a session reads every step the
   same way; every error since the previous step comes back with it. `--goto`
   goes to a path or a declared target inside the app, as a capture navigates;
   `--reload` loads the current URL again; `--no-shot` answers without a
   picture, so there is no path line and the URL comes first. Without `--out`
-  the file is named as a shot's with `-<id>-<step>` after the target. **A failed
+  the file is named as a shot's with `-<id>-<step>` after the target. Without
+  `--out`, a default name carries milliseconds and four random hex digits, so
+  two shots in one second do not overwrite each other. **A failed
   step leaves the page where it stood**: the next call continues from there.
 - **`close`** asks the session to close, waits up to 5 s for its process to
   leave, else ends its process group, and removes its files. **`sessions`**
   prints one line per live session — `<id>  <where> <target>  <worktree
   basename>  <viewport>  idle <n> min` — and removes the files of dead ones.
 - **At most four** are live. A fifth `--keep` closes the longest idle one first
-  and says so on stderr. The id is `s<n>`, the lowest number no live session
-  holds.
+  and says so on stderr. The id is `s<n>`, the lowest number no record holds. A
+  `--keep` takes it before it deletes or launches anything: `<id>.json` is
+  created exclusively (`wx`) as a placeholder owned by that mc process, so two
+  keeps started together get two ids. A placeholder whose owner is gone is
+  reclaimed, under `<id>.lock`. A step reads the session file's `nonce`,
+  `owner_pid` and `pid` before it sends and again before it records; a file that
+  changed refuses the step, so a newcomer's session is never overwritten.
 
 ### The session file and the socket
 
@@ -253,9 +266,12 @@ Both live in `~/.memoro/mc/shots/sessions/` (`mcHome()/shots/sessions`), mode
 0700. `<id>.json` is mode 0600:
 
 ```
-{ id, pid, socket, log, where, worktree, account, target, viewport, base_url,
-  server_id, started, last_used, steps, sign_in_path? }
+{ id, pid, owner_pid, nonce, socket, log, where, worktree, account, target,
+  viewport, base_url, server_id, started, last_used, steps, sign_in_path? }
 ```
+
+`owner_pid` is the mc process that launched the browser; `nonce` is a random
+identity of this session, so a step can tell it has been taken over.
 
 `steps` counts the steps sent; `sign_in_path` is a dev session's `/dev/login`
 path, which holds no secret. Neither file carries a token, a cookie or a prod
@@ -266,7 +282,7 @@ mc narrows it to 0600 once it exists. `<id>.log` is the script's stderr.
 On the socket, one JSON line goes each way per connection. mc sends a step:
 
 ```
-{ step, actions, wait_for, scroll, measure, element, shell, full_page, out,
+{ step, actions, scroll, measure, element, shell, full_page, out,
   goto, reload, shot, timeout_ms, rebase? }
 ```
 
@@ -443,7 +459,11 @@ for a capture, `{ ok: true, session }` for a login, or
 with the script's exit code in it, when the last line does not parse, when there
 is no result line, or when the run times out. On `ok: false`, mc prints
 `mc: <error>` and exits 1. If the code is `not-signed-in` and the account is
-`me`, it adds a second line: `mc shot login prod`. As a second safeguard, mc
+`me`, it adds a second line: `mc shot login prod`. `app-not-ready` means the
+sign-in was not refused (`/api/boot` answered something other than 401 or 403)
+and the app did not show in its wait; the message gives the status and the
+seconds. mc says so in one line and gives no login hint. A login runs up to 390 s (`LOGIN_TIMEOUT_MS`), its own
+window; an ordinary shot keeps 180 s. As a second safeguard, mc
 also scrubs the token and the cookie from everything it prints, in case a script
 echoes them.
 
@@ -454,7 +474,8 @@ mc creates its directory. Without `--out` the file goes to
 `~/.memoro/mc/shots/` (`mcHome()/shots`), named in local time:
 
 ```
-<YYYYMMDD-HHMMSS>-<dev|prod>[-me]-<target>[-<shell>|-el]-<viewport>[-<theme>].png
+<YYYYMMDD-HHMMSS>-<mmm>-<xxxx>-<dev|prod>[-me]-<target>[-<shell>|-el]-<viewport>[-<theme>].png
+(`<mmm>` the milliseconds, `<xxxx>` four random hex digits; `--out` names its own file)
 ```
 
 `<target>` is the target name, or the path as a slug (`/app/people` →
