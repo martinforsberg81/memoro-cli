@@ -16,7 +16,10 @@
  * branch carries commits `origin/main` does not have. Both true is the case:
  * the push is refused with the pull request's number and date and the way
  * forward (a new branch from `origin/main`). `MC_PUSH_ANYWAY=1` lets a
- * deliberate push through — the hook is a question, not a lock.
+ * deliberate push through — the hook is a question, not a lock. A merged pull
+ * request does not close the branch while a newer one is open on the same head
+ * (2026-11-02, #1221 merged and #1225 open from one branch): then the push is
+ * let through and the hook names the open one.
  *
  * It never blocks on not knowing. No `gh`, no network, no pull request found:
  * the push goes, and the hook says in one line what it could not ask. A
@@ -165,8 +168,10 @@ export function pushGuardState(repoPath, { git = defaultGit } = {}) {
 /**
  * The question, for one local branch about to be pushed.
  *
- *   refuse   a merged pull request exists and the branch has commits main lacks
- *   allow    no merged pull request, or nothing to push main does not have
+ *   refuse   a merged pull request exists, none is open on the branch, and the
+ *            branch has commits main lacks
+ *   allow    no merged pull request, nothing to push main does not have, or an
+ *            open pull request on the branch (named in `open_pr`)
  *   unknown  could not ask — allowed, with the reason
  */
 export function pushVerdict({
@@ -184,6 +189,20 @@ export function pushVerdict({
   let merged = [];
   try { merged = JSON.parse(asked.stdout || '[]'); } catch { return { verdict: 'unknown', reason: 'GitHub answered something that was not a list' }; }
   if (!Array.isArray(merged) || merged.length === 0) return { verdict: 'allow', reason: `no merged pull request for ${branch}` };
+
+  // Refused only if nothing is open on the same head. The question is asked on
+  // the refuse path alone, like the remote one below. A failed or unreadable
+  // answer is no open pull request: not knowing never turns a refusal into an allow.
+  const open = openPullRequests(branch, { cwd, gh });
+  if (open.length) {
+    return {
+      verdict: 'allow',
+      reason: `${branch} has open pull request #${open[0].number}${open[0].title ? ` “${open[0].title}”` : ''} — the push goes to it`,
+      open_pr: open[0].number,
+      ahead: Number(ahead),
+      base: baseRef,
+    };
+  }
 
   // The newest merge wins the sentence; a branch reused across two pull
   // requests is the case this exists for, and its last merge is the fact.
@@ -232,7 +251,25 @@ export function pushCheckLines(verdict, { branch, anyway = false }) {
     return lines;
   }
   if (verdict.verdict === 'unknown') return [`mc: push-guard could not check ${branch}: ${verdict.reason} — pushing`];
+  if (verdict.verdict === 'allow' && verdict.open_pr) return [`mc: push allowed — ${verdict.reason}`];
   return [];
+}
+
+/**
+ * The open pull requests on this branch's head, newest first. `[]` when there
+ * are none, and also when GitHub could not say: a failed question is not an
+ * open pull request, so the refusal it sits under stands.
+ */
+function openPullRequests(branch, { cwd, gh }) {
+  const asked = gh(['pr', 'list', '--head', branch, '--state', 'open', '--limit', '5', '--json', 'number,title'], { cwd });
+  if (!asked.ok) return [];
+  try {
+    const open = JSON.parse(asked.stdout || '[]');
+    if (!Array.isArray(open)) return [];
+    return open.filter((pr) => Number.isInteger(pr?.number)).sort((a, b) => b.number - a.number);
+  } catch {
+    return [];
+  }
 }
 
 function ago(iso, now) {

@@ -22,6 +22,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { livenessForLeases, livenessOf } from '../../src/mc/lease-liveness.js';
+import { ownerState } from '../../src/mc/lease-owner.js';
 import { livenessRow } from '../../src/mc/repo-render.js';
 
 await preloadVerbs('repo');
@@ -48,6 +49,15 @@ function area({ name = 'mc-repo', working = false, waiting = false, seenMinAgo =
     waiting,
     conversations: seenMinAgo === null ? [] : [{ id: 'a', updated_ms: NOW - seenMinAgo * 60_000 }],
   };
+}
+
+/**
+ * A merge round's lease: `study` holding `#14600`, with the merger's pid
+ * answered the way readLease answers it (ownerState, on a kill stub).
+ */
+function roundLease({ pid = 79748, alive = true, ageMin = 13 } = {}) {
+  const kill = alive ? () => {} : () => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); };
+  return { ...lease({ holder: 'study', errand: 'merge round for #14600', ageMin }), ...ownerState({ owner_pid: pid }, { kill }) };
 }
 
 const plain = (text) => text;
@@ -120,16 +130,64 @@ describe('what mc cannot see, it says it cannot see', () => {
     assert.equal(answer.known, false);
   });
 
-  it('never reports a state outside the four it has words for', () => {
+  it('never reports a state outside the five it has words for', () => {
     const cases = [
       livenessOf(lease(), new Map([['mc-repo', area({ working: true })]])),
       livenessOf(lease(), new Map([['mc-repo', area({ waiting: true })]])),
       livenessOf(lease(), new Map([['mc-repo', area()]])),
       livenessOf(lease({ kind: 'shell' }), new Map()),
+      livenessOf(roundLease(), new Map()),
+      livenessOf(roundLease({ alive: false }), new Map()),
     ];
     for (const answer of cases) {
-      assert.ok(['working', 'waiting', 'idle', 'unknown'].includes(answer.state), answer.state);
+      assert.ok(['working', 'waiting', 'idle', 'dead', 'unknown'].includes(answer.state), answer.state);
     }
+  });
+});
+
+describe('a lease that recorded its process is answered by that process', () => {
+  it('a merge round names the merger pid, its PR and how long it has held — not unknown', () => {
+    // The incident (2026-10-31): `study` held merge round #14600 for 13 minutes
+    // and the board, which carries no merge rounds, said nothing about it.
+    const held = roundLease();
+    const answer = livenessOf(held, new Map());
+    assert.equal(answer.state, 'working');
+    assert.equal(answer.known, true);
+    const row = livenessRow(plain, held, answer, NOW);
+    assert.match(row, /holder working/u);
+    assert.match(row, /merger pid 79748 alive/u);
+    assert.match(row, /round for #14600/u);
+    assert.match(row, /held 13m/u);
+    assert.doesNotMatch(row, /unknown/u);
+  });
+
+  it('a merger whose process is gone is dead, and the row says so', () => {
+    const held = roundLease({ alive: false });
+    const answer = livenessOf(held, new Map());
+    assert.equal(answer.state, 'dead');
+    assert.equal(answer.known, true);
+    const row = livenessRow(plain, held, answer, NOW);
+    assert.match(row, /holder dead/u);
+    assert.match(row, /merger pid 79748 is gone/u);
+    assert.doesNotMatch(row, /unknown/u);
+  });
+
+  it('a merge round is answered without asking the board at all', async () => {
+    // The board is unreadable here on purpose: the answer must not need it.
+    const answers = await livenessForLeases([roundLease()], {
+      env: { MC_WORK_ROOT: '/nowhere/at/all/that/exists', HOME: '/nowhere/at/all' },
+    });
+    assert.equal(answers.get('study').state, 'working');
+  });
+
+  it('a merge round with no recorded pid is unknown, and the board does not rescue it', () => {
+    // Taken before a pid was recorded: the board never carried it, so its
+    // answer for `study` is not one to use.
+    const answer = livenessOf(lease({ holder: 'study', errand: 'merge round for #14600' }), new Map([
+      ['study', area({ working: true, seenMinAgo: 0 })],
+    ]));
+    assert.equal(answer.state, 'unknown');
+    assert.equal(answer.known, false);
   });
 });
 
