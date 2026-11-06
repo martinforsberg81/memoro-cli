@@ -1152,7 +1152,7 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   };
   f.deps.refreshClaude = async () => { reads.claude.push(clock); return { ok: false, why: 'login unavailable' }; };
   const runner = createRunner({ deps: f.deps });
-  const stop = runner.startCapacityTicker();
+  runner.startCapacityTicker();
   const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
   await flush();
   assert.deepEqual(reads, { claude: [clock], codex: [clock] }, 'startup polls both providers without chores');
@@ -1169,8 +1169,9 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   timer(); await flush();
   assert.equal(reads.codex.length, 2, 'failed attempt is suppressed for fifteen minutes');
   assert.equal(reads.claude.length, 2, 'Claude has its own fifteen-minute attempt window');
-  stop();
-  assert.equal(timer, null, 'stop clears ticker');
+  f.files['/w/runner/STOP'] = '';
+  timer();
+  assert.equal(timer, null, 'STOP stops the independent ticker');
 });
 
 test('STOP file: the loop exits after the session it is in, and the next start removes the STOP it left', async () => {
@@ -1396,6 +1397,10 @@ test('runLoop: an idle lane reads STOP within a slice, not after its whole sleep
  */
 test('UPDATE file: the handover happens while the session is in flight, and the old runner exits after it', async () => {
   const f = goalFixture({ a: {} }, { livePids: [9001] });
+  const stoppedIntervals = [];
+  f.deps.every = (ms) => () => stoppedIntervals.push(ms);
+  f.deps.refreshClaude = async () => ({ ok: false, why: 'fixture' });
+  f.deps.refreshCodex = async () => ({ ok: false, why: 'fixture' });
   const events = [];
   f.answer = async (call) => {
     f.files['/w/runner/UPDATE'] = '';
@@ -1415,7 +1420,8 @@ test('UPDATE file: the handover happens while the session is in flight, and the 
     say(`update: handed over to pid 9001 — finishing ${finishing} session(s) in flight, taking nothing new`);
     return { ok: true, pid: 9001 };
   };
-  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.equal(await runLoop({ deps: f.deps, awake: false }), 0);
+  assert.ok(stoppedIntervals.includes(15 * 60 * 1000), 'the predecessor stops polling when its successor takes over');
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(handovers, [{ update: '/w/runner/UPDATE', predecessor: 4242, finishing: 1 }], 'one handover for the runner, not one per loop');
   assert.deepEqual(events, ['handed over', 'session ends'], 'the handover waited for the session to end');
