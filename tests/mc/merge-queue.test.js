@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  MERGE_BATCH_MAX, dequeue, enqueue, heldBy, markLanding, markQueued, markRed, markRequeued,
+  MERGE_BATCH_MAX, dequeue, enqueue, heldBy, markLanding, markOffline, markQueued, markRed, markRequeued,
   mergesPath, nextBatch, nextJob, parseQueue, placeOf, queueEntries, queueOrder, queuedFor,
 } from '../../src/mc/merge-queue.js';
 
@@ -138,6 +138,19 @@ test('a requeued job keeps its place, counts the requeue, and is not taken befor
   assert.deepEqual(nextBatch(back, { now: at('2026-10-19T20:15:00Z'), max: 4 }).map((e) => e.pr), [1, 2], 'due, it is first again');
   assert.deepEqual(nextBatch(back, { max: 4 }).map((e) => e.pr), [1, 2], 'no now waits for nothing');
   assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].requeues, 2);
+});
+
+test('an offline entry keeps its place, counts an offline and no requeue, and is not taken before not_before', () => {
+  const entries = queueEntries([job({ pr: 1, since: 'a', state: 'landing' }), job({ pr: 2, since: 'b' })]);
+  const back = queueEntries(markOffline(entries, { repo: 'memoro-cli', pr: 1 }, { notBefore: '2026-11-06T12:01:00.000Z' }));
+  assert.equal(back[0].state, 'queued');
+  assert.equal(back[0].offline, 1);
+  assert.equal(back[0].requeues, 0, 'the requeue budget is untouched');
+  assert.equal(back[0].since, 'a', 'its place is kept');
+  assert.deepEqual(nextBatch(back, { now: Date.parse('2026-11-06T12:00:30Z') }).map((e) => e.pr), [2], 'the one behind it goes first');
+  assert.deepEqual(nextBatch(back, { now: Date.parse('2026-11-06T12:01:00Z'), max: 4 }).map((e) => e.pr), [1, 2], 'due, it is first again');
+  assert.equal(queueEntries(markOffline(back, { repo: 'memoro-cli', pr: 1 }))[0].offline, 2);
+  assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].offline, 0, 'a requeue is a new answer, so the count starts again');
 });
 
 test('markLanding names its merger; queueEntries keeps it on landing, and drops it on queued and red', () => {

@@ -44,7 +44,7 @@ import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
 import {
-  dequeue, enqueue, heldBy, inLine, markLanding, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
+  dequeue, enqueue, heldBy, inLine, markLanding, markOffline, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor,
 } from './merge-queue.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
@@ -446,15 +446,18 @@ export async function landJob(batch, {
     const back = !landed && !moved && report?.stopped_at === 'pushed';
     // A red goes where it goes without a mend: a goal's to one plan session (`tellGoal`).
     const requeued = !landed && !back && !moved && mayRequeue(job, report);
-    const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}) };
-    answers.push({ job, landed, report, ...flags });
-    await tell(job, landed, report, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, setGoal, goalsOf, noteGoal,
+    // The network stopped the round: back in line after a backoff, until the sixth in a row, which is answered as it stands.
+    const offline = !landed && !back && !moved && !requeued && mayOffline(job, report);
+    const given = !landed && !offline && report?.stopped_at === OFFLINE_STOP ? offlineGivenUp(report) : report;
+    const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}), ...(offline ? { offline: true } : {}) };
+    answers.push({ job, landed, report: given, ...flags });
+    await tell(job, landed, given, {
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal,
     });
     // Outside any lock: the queue's lock, taken twice by this process, waits 5 s.
     if (onAnswer) {
       try {
-        await onAnswer({ job, landed, report, ...flags });
+        await onAnswer({ job, landed, report: given, ...flags });
       } catch (error) {
         say(`${job.repo} #${job.pr}: the queue could not be told (${error?.message || error}) — written after the round`);
       }
@@ -640,6 +643,39 @@ export function mayRequeue(job, report) {
   return Boolean(report) && !report.ok && REQUEUE_STOPS.includes(report.stopped_at) && (job?.requeues || 0) < MAX_REQUEUES;
 }
 
+/**
+ * The stop a round gives when the network did not answer (`NETWORK_FAILURE`,
+ * repo-merge.js): a failed fetch, or a gh call that could not connect. Nothing
+ * about the pull request was read, so nothing is wrong with it. It goes back in
+ * line after a backoff — a minute, doubling, at most `REQUEUE_DELAY_MS` — with
+ * no session started, the goal left as it is, and no requeue used up. The
+ * `OFFLINE_BLOCK_AFTER`th such answer in a row is answered as it stands, and the
+ * goal is blocked with a reason that says how long the network has been down.
+ */
+export const OFFLINE_STOP = 'offline';
+export const OFFLINE_FIRST_MS = 60_000;
+export const OFFLINE_BLOCK_AFTER = 6;
+
+/** The wait before the retry after the `n`th offline answer in a row: a minute, doubling, at most 15 minutes. */
+export function offlineBackoffMs(n) {
+  return Math.min(REQUEUE_DELAY_MS, OFFLINE_FIRST_MS * 2 ** Math.max(0, n - 1));
+}
+
+/** Whether this answer is put back in line: the network stopped the round, and fewer than `OFFLINE_BLOCK_AFTER` have come in a row. */
+export function mayOffline(job, report) {
+  return Boolean(report) && !report.ok && report.stopped_at === OFFLINE_STOP && (job?.offline || 0) + 1 < OFFLINE_BLOCK_AFTER;
+}
+
+/** The sixth offline answer in a row, with the reason: the network has been down for at least the backoffs between the six. */
+function offlineGivenUp(report) {
+  const waits = Array.from({ length: OFFLINE_BLOCK_AFTER - 1 }, (_, index) => offlineBackoffMs(index + 1));
+  const minutes = Math.round(waits.reduce((sum, ms) => sum + ms, 0) / 60_000);
+  return { ...report, reason: `${report.reason} — the network has been unreachable for at least ${minutes} min (${OFFLINE_BLOCK_AFTER} rounds in a row)` };
+}
+
+/** When an offline job is taken again, as an ISO instant: the backoff after its next offline answer. */
+const offlineNotBefore = (job, now) => new Date(now().getTime() + offlineBackoffMs((job?.offline || 0) + 1)).toISOString();
+
 /** A goal's stage or status and a runner entry, written to its GOAL.json and LOG.md. */
 function realSetGoal({ dir, stage, status, entry }) {
   return setGoalState({ dir, stage, status, entry });
@@ -671,10 +707,10 @@ export function goalOfJob(job, goalsOf) {
  * runner sets `done` once the rest has landed (`settleLanded`, run.js). Not
  * landed — red, or moved past the reviewed head — sets `merge · blocked`
  * immediately, for plan recovery. A goal in another stage keeps its stage.
- * A requeue says nothing yet: the next round answers it.
+ * A requeue or an offline answer says nothing yet: the next round answers it.
  */
-function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued }) {
-  if (requeued) return;
+function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline }) {
+  if (requeued || offline) return;
   const label = `${job.repo} #${job.pr}`;
   const name = `${goal.programme}/${goal.goal}`;
   const at = logStamp(now());
@@ -692,7 +728,10 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
     }
     const red = redMergeText(job.pr, moved ? 'moved' : 'red');
     const why = moved ? (report?.reason || 'the branch moved past the reviewed head') : reason;
-    if (!landed && goal.stage && goal.stage !== 'merge') {
+    // The sixth offline answer in a row blocks a goal still before merge: the
+    // network is its obstacle now, and a red-style note would leave it running.
+    const blocksGoal = !landed && report?.stopped_at === OFFLINE_STOP && (goal.stage === 'build' || goal.stage === 'review');
+    if (!landed && goal.stage && goal.stage !== 'merge' && !blocksGoal) {
       noteGoal({ dir: goal.dir, entry: { ...entry(red, `${why} — the goal is in ${goal.stage}, not merge; it stays there`), ...kept } });
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
@@ -709,12 +748,14 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
 }
 
 /** One job's answer, said and written: the page's cache, the goal, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
     : requeued
     ? `${label}: ${report?.stopped_at}: ${report?.reason || 'red only under load'} — back in line in ${Math.round(REQUEUE_DELAY_MS / 60_000)} min (requeue ${(job.requeues || 0) + 1} of ${MAX_REQUEUES}), no session started`
+    : offline
+    ? `${label}: offline: ${report?.reason || 'the network did not answer'} — back in line in ${Math.round(offlineBackoffMs((job.offline || 0) + 1) / 60_000)} min (offline ${(job.offline || 0) + 1} of ${OFFLINE_BLOCK_AFTER}), no session started`
     : landed && report?.already_merged
     ? `${label}: already merged on GitHub as ${String(report.merge_commit || '').slice(0, 7)} — answered landed`
     : landed
@@ -731,7 +772,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // the same goal concurrently, and both landings must survive in its log.
   if (!back) lock(root, () => {
     const goal = goalOfJob(job, goalsOf);
-    if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued });
+    if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline });
   });
 
   if (appendRun) {
@@ -743,7 +784,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
         exit: landed ? 0 : 1,
         seconds,
         pr: job.pr,
-        note: landed ? 'merged' : back ? 'pushed' : moved ? 'moved' : `red,${report?.stopped_at || 'unknown'}`,
+        note: landed ? 'merged' : back ? 'pushed' : moved ? 'moved' : offline ? 'offline' : `red,${report?.stopped_at || 'unknown'}`,
       });
     } catch { /* the row is a courtesy; the goal and the round log carry the answer */ }
   }
@@ -857,7 +898,7 @@ export async function serve({
   // (2026-10-10: #13400 closed and #13397 read `landing` for the 9 minutes
   // of the others' round). Called after `tell`, outside any lock, so it
   // takes the queue's lock itself.
-  const writeAnswer = async ({ job, landed: isLanded, report, requeued, back, moved }) => {
+  const writeAnswer = async ({ job, landed: isLanded, report, requeued, back, moved, offline }) => {
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
     lock(root, () => {
@@ -868,6 +909,8 @@ export async function serve({
         ? markQueued(entries, job)
         : requeued
         ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+        : offline
+        ? markOffline(entries, job, { notBefore: offlineNotBefore(job, now) })
         : markRed(entries, job, { reason, answered: at });
       write(mergesPath(root), entries);
     });
@@ -958,7 +1001,7 @@ export async function serve({
       if (left.length) {
         lock(root, () => {
           let entries = parseQueue(read(mergesPath(root)));
-          for (const { job: one, report, requeued, back, moved } of left) {
+          for (const { job: one, report, requeued, back, moved, offline } of left) {
             const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
             entries = (report?.ok && report.merged) || moved
               ? dequeue(entries, one)
@@ -966,6 +1009,8 @@ export async function serve({
               ? markQueued(entries, one)
               : requeued
               ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+              : offline
+              ? markOffline(entries, one, { notBefore: offlineNotBefore(one, now) })
               : markRed(entries, one, { reason, answered });
           }
           write(mergesPath(root), entries);
