@@ -497,7 +497,7 @@ function prNumber(value) {
  */
 export function mergesSection({
   landing = null, queued = [], prs = [], now = new Date(), alive = pidAlive,
-  repos = REPO_NAMES, pauses = {}, merger = null, history = [], goals = [],
+  repos = REPO_NAMES, pauses = {}, merger = null, history = [], goals = [], recoverySessions = [],
 } = {}) {
   const all = queueEntries(queued);
   // The stage is saved before queueing. Keep the pending PRs visible even
@@ -577,8 +577,17 @@ export function mergesSection({
   const reds = redEntries(all).filter(open).map((item) => {
     const answered = Date.parse(item.answered || '');
     const pr = titled(item.repo, item.pr);
+    const goal = goals.find((goal) => (goal.prs || []).some((ref) => ref.repo === item.repo && Number(ref.pr) === Number(item.pr)));
+    const owner = goal || item.goal;
+    const session = owner && recoverySessions.find((session) =>
+      (session.goal || session.name?.replace(/^goal:/u, '')) === `${owner.programme}/${owner.goal}`
+      && session.kind === 'plan' && alive(session.pid));
+    const recovery = session ? { state: 'running', pid: session.session_pid || session.pid,
+      elapsed_seconds: session.elapsed_seconds ?? null, tool: session.tool || null, model: session.model || null }
+      : { state: goal?.status === 'Martin' ? 'Martin' : goal && goal.stage === 'merge' ? 'waiting' : 'unassigned' };
     return {
       ...item,
+      recovery,
       name: item.branch || pr?.headRefName || null,
       title: pr?.title || null,
       age_seconds: Number.isFinite(answered) ? Math.max(0, Math.round((at - answered) / 1000)) : null,
@@ -1472,7 +1481,7 @@ export async function collectPage({
     repos: repos.map((repo) => repo.name),
     pauses: mergePauses({ repos: present, rounds: roundsNow, env, root: home, now, alive }),
     merger: readMerger({ root, alive }), history: readRounds({ root: home }).rounds,
-    alive, goals,
+    alive, goals, recoverySessions: runner.sessions,
   });
   const programmes = programmesSection({
     planning: sessions.planning,
