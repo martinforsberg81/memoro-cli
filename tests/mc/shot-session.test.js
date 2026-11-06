@@ -571,6 +571,8 @@ describe('mc shot --keep and next: ids, records and ownership', () => {
       },
     });
     assert.equal(swept.code, 0, swept.stderr);
+    assert.equal(existsSync(file), true, 'the newcomer\'s file is left in place');
+    assert.equal(existsSync(socket), true, 'and its socket');
     assert.equal(sessionOf(fx, 's1').nonce, 'newcomer', 'the newcomer\'s file is left as it is');
     assert.equal(readFileSync(socket, 'utf8'), 'the newcomer\'s socket', 'and its socket');
     assert.equal(existsSync(join(fx.sessions, 's1.lock')), false, 'the id\'s lock is released');
