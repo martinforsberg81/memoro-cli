@@ -1014,14 +1014,14 @@ describe('mc shot — wait-for in order, the login timeout, and an app that is n
     assert.equal(result.code, 1);
     const lines = result.stderr.trimEnd().split('\n');
     assert.equal(lines[0], 'mc: the app at https://meetmemoro.app did not show itself after 20.0 s; /api/boot answered 200');
-    assert.equal(lines[1], 'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again');
+    assert.equal(lines[1], 'error  boot  the session was not refused, so sign-in is not the problem; the app did not show — try again');
     assert.equal(lines.length, 2);
     assert.ok(!result.stderr.includes('mc shot login prod'));
   });
 
   it('errorLines names an app that is not ready, and a sign-in refusal gets no line of its own', () => {
     assert.deepEqual(errorLines({ ok: false, code: 'app-not-ready', error: 'x' }), [
-      'error  boot  the session was accepted, so sign-in is not the problem; the app did not show — try again',
+      'error  boot  the session was not refused, so sign-in is not the problem; the app did not show — try again',
     ]);
     assert.deepEqual(errorLines({ ok: false, code: 'not-signed-in', error: 'x' }), []);
   });
