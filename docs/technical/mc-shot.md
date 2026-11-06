@@ -256,7 +256,13 @@ mc shot next --click 'text=New entry' --eval 'document.activeElement.name'
   `--keep` takes it before it deletes or launches anything: `<id>.json` is
   created exclusively (`wx`) as a placeholder owned by that mc process, so two
   keeps started together get two ids. A placeholder whose owner is gone is
-  reclaimed, under `<id>.lock`. A step reads the session file's `nonce`,
+  reclaimed, under `<id>.lock`. The sweep of dead records takes the same lock and
+  removes a record only while its file still carries the `nonce` the sweep read,
+  so a newcomer that took the id in between keeps its files. A lock nobody holds
+  that does not parse and is a minute old is cleared. Once its browser has
+  started, the placeholder carries its `pid`: if the mc that kept it is then gone
+  while the browser lives, the id stays taken and `sessions` names the browser as
+  orphaned, with its pid. mc does not close it. A step reads the session file's `nonce`,
   `owner_pid` and `pid` before it sends and again before it records; a file that
   changed refuses the step, so a newcomer's session is never overwritten.
 

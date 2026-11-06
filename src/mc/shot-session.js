@@ -62,10 +62,17 @@ function readRecord(path) {
 
 /**
  * A record is alive while its owner is: a placeholder while the `keep` that
- * reserved its id is, a session while its browser is.
+ * reserved its id is, a session while its browser is. A placeholder whose browser
+ * has started stays alive while that browser does, so its id is never reused.
  */
 function recordAlive(record, deps) {
-  return isAlive(record.placeholder ? record.owner_pid : record.pid, deps);
+  if (!record.placeholder) return isAlive(record.pid, deps);
+  return isAlive(record.owner_pid, deps) || isAlive(record.pid, deps);
+}
+
+/** A placeholder whose mc is gone while its browser lives: named as an orphaned browser, not reclaimed. */
+export function isOrphan(record, deps = {}) {
+  return Boolean(record.placeholder) && !isAlive(record.owner_pid, deps) && isAlive(record.pid, deps);
 }
 
 /**
@@ -88,11 +95,18 @@ export function readSessions(env = process.env, deps = {}) {
   return readRecords(env, deps).filter((record) => !record.placeholder);
 }
 
-/** The live sessions; the files of the dead ones, placeholders included, are removed on the way. */
+/**
+ * The live records: sessions, and orphans (see `isOrphan`). Each record read as
+ * dead is swept on the way, through its id's lock and only while it is still the
+ * one read. `deps.onSweepRead`, when given, runs between the read and the sweep.
+ */
 export function liveSessions(env = process.env, deps = {}) {
   const all = readRecords(env, deps);
-  for (const record of all.filter((entry) => !entry.alive)) removeSession(record, env);
-  return all.filter((entry) => entry.alive && !entry.placeholder);
+  for (const record of all.filter((entry) => !entry.alive)) {
+    deps.onSweepRead?.(record);
+    sweepRecord(record, env, deps);
+  }
+  return all.filter((entry) => entry.alive && (!entry.placeholder || isOrphan(entry, deps)));
 }
 
 /** A nonce: tells one session (or one reservation) from the next that takes its id. */
@@ -111,32 +125,86 @@ function createExclusive(path, record) {
   }
 }
 
+const RECLAIM_AFTER_MS = 60_000;
+
 /**
- * Clear `id` when its owner is gone: a dead placeholder, or a session whose
- * browser is. Two callers reclaiming at once are serialised by `s<n>.lock`, made
- * exclusively; a lock whose owner is gone is removed. True when the id is free.
+ * Is a lock's holder gone? A lock that parses is held by its `owner_pid`, gone
+ * when that is dead. One that does not parse was written by a creator that died
+ * between create and write: gone once it is a minute old.
  */
-function reclaim(dir, id, deps) {
-  const lock = join(dir, `${id}.lock`);
-  if (!createExclusive(lock, { owner_pid: process.pid })) {
-    const holder = readRecord(lock);
-    if (holder && !isAlive(holder.owner_pid, deps)) rmSync(lock, { force: true });
-    return false;
-  }
+function lockGone(lock, deps) {
+  const holder = readRecord(lock);
+  if (holder) return !isAlive(holder.owner_pid, deps);
   try {
-    const path = join(dir, `${id}.json`);
-    if (!existsSync(path)) return true;
-    const record = readRecord(path);
-    // A file that does not parse may be another caller's write in progress: it waits a minute.
-    if (record ? recordAlive(record, deps) : Date.now() - statSync(path).mtimeMs < RECLAIM_AFTER_MS) return false;
-    removeSession({ id, file: path, socket: join(dir, `${id}.sock`), log: join(dir, `${id}.log`) });
+    return Date.now() - statSync(lock).mtimeMs >= RECLAIM_AFTER_MS;
+  } catch {
     return true;
-  } finally {
-    rmSync(lock, { force: true });
   }
 }
 
-const RECLAIM_AFTER_MS = 60_000;
+/**
+ * Hold `<id>.lock` exclusively while `inside` runs; true when it did. A lock whose
+ * holder is gone is cleared and taken once more; a lock a live caller holds is
+ * not waited for.
+ */
+function withLock(dir, id, deps, inside) {
+  const lock = join(dir, `${id}.lock`);
+  if (!createExclusive(lock, { owner_pid: process.pid })) {
+    if (!lockGone(lock, deps)) return false;
+    rmSync(lock, { force: true });
+    if (!createExclusive(lock, { owner_pid: process.pid })) return false;
+  }
+  try {
+    inside();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+  return true;
+}
+
+/**
+ * Clear `id` when its owner is gone: a dead placeholder, or a session whose
+ * browser is. Callers serialise on `<id>.lock` (`withLock`), so two of them never
+ * clear or take one id at once. True when the id is free.
+ */
+function reclaim(dir, id, deps) {
+  const path = join(dir, `${id}.json`);
+  let free = false;
+  const held = withLock(dir, id, deps, () => {
+    if (!existsSync(path)) {
+      free = true;
+      return;
+    }
+    const record = readRecord(path);
+    // A file that does not parse may be another caller's write in progress: it waits a minute.
+    if (record ? recordAlive(record, deps) : Date.now() - statSync(path).mtimeMs < RECLAIM_AFTER_MS) return;
+    removeSession({ id, file: path, socket: join(dir, `${id}.sock`), log: join(dir, `${id}.log`) });
+    free = true;
+  });
+  return held && free;
+}
+
+/**
+ * Remove a record's file, socket and log. Only under its id's lock, and only while
+ * the file still carries the nonce that was read: a caller that took the id in
+ * between keeps its files, and a lock another caller holds leaves them be.
+ */
+export function sweepRecord(record, env = process.env, deps = {}) {
+  const dir = sessionsDir(env);
+  const file = join(dir, `${record.id}.json`);
+  withLock(dir, record.id, deps, () => {
+    const now = readRecord(file);
+    if (!now || now.nonce !== record.nonce) return;
+    removeSession({ id: record.id, file, socket: join(dir, `${record.id}.sock`), log: join(dir, `${record.id}.log`) });
+  });
+}
+
+/** The browser's pid goes into its placeholder as soon as it starts, so a keep killed mid-capture leaves a named orphan. */
+export function notePlaceholderPid(reservation, pid) {
+  const record = readRecord(reservation.file);
+  if (!record || record.nonce !== reservation.nonce) return;
+  writeFileSync(reservation.file, `${JSON.stringify({ ...record, pid }, null, 2)}\n`, { mode: 0o600 });
+}
 
 /**
  * Reserve the lowest `s<n>` no record holds. Its file is created exclusively
@@ -262,9 +330,11 @@ export function sendLine({ socket, message, timeoutMs, deps = {} }) {
  * the session's log, the request removed once the first result line is read.
  * That line is the first capture's result.
  */
-export function runKeep({ worktree, declaration, request, env = process.env, log, deps = {} }) {
+export function runKeep({
+  worktree, declaration, request, env = process.env, log, deps = {}, onSpawn,
+}) {
   return spawnDetached({
-    worktree, declaration, request, env, log, timeoutMs: deps.timeoutMs ?? captureTimeoutMs(request), deps,
+    worktree, declaration, request, env, log, timeoutMs: deps.timeoutMs ?? captureTimeoutMs(request), deps, onSpawn,
   });
 }
 
@@ -289,6 +359,6 @@ export async function closeSession(session, { env = process.env, deps = {} } = {
     });
     try { kill(session.pid, 'SIGTERM'); } catch { /* gone in between */ }
   }
-  removeSession(session, env);
+  sweepRecord(session, env, deps);
   return left;
 }

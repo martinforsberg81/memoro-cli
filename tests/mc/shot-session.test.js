@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
@@ -547,6 +547,103 @@ describe('mc shot --keep and next: ids, records and ownership', () => {
     assert.match(ran.stderr, /s1 changed while the step ran/u);
     assert.equal(fake.received.length, 1);
     assert.equal(sessionOf(fx, 's1').nonce, 'taken', 'mc did not overwrite the newcomer\'s file');
+  });
+
+  it('a sweep that read a record as dead leaves it when another process has taken its id since', async () => {
+    const fx = fixture();
+    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
+    const deadOwner = spawnSync(process.execPath, ['-e', '']).pid;
+    mkdirSync(fx.sessions, { recursive: true, mode: 0o700 });
+    const file = join(fx.sessions, 's1.json');
+    const socket = join(fx.sessions, 's1.sock');
+    const dead = {
+      id: 's1', pid: deadPid, owner_pid: deadOwner, nonce: 'dead-one', socket, log: join(fx.sessions, 's1.log'),
+      where: 'dev', worktree: fx.worktree, account: 'seeded', target: 'vault', viewport: 'desktop',
+      base_url: 'http://127.0.0.1:8787', server_id: 'srv-1', started: NOW.toISOString(), last_used: NOW.toISOString(), steps: 0,
+    };
+    writeFileSync(file, JSON.stringify(dead));
+    writeFileSync(socket, 'the dead one\'s socket');
+    const swept = await mc(['sessions'], fx, {
+      // Between the read that found s1 dead and its removal, another process reclaims s1 and starts its browser.
+      onSweepRead: () => {
+        writeFileSync(file, JSON.stringify({ ...dead, pid: process.pid, owner_pid: process.pid, nonce: 'newcomer' }));
+        writeFileSync(socket, 'the newcomer\'s socket');
+      },
+    });
+    assert.equal(swept.code, 0, swept.stderr);
+    assert.equal(existsSync(file), true, 'the newcomer\'s file is left in place');
+    assert.equal(existsSync(socket), true, 'and its socket');
+    assert.equal(sessionOf(fx, 's1').nonce, 'newcomer', 'the newcomer\'s file is left as it is');
+    assert.equal(readFileSync(socket, 'utf8'), 'the newcomer\'s socket', 'and its socket');
+    assert.equal(existsSync(join(fx.sessions, 's1.lock')), false, 'the id\'s lock is released');
+    const listed = await mc(['sessions'], fx);
+    assert.match(listed.stdout, /^s1  dev vault  memoro  desktop  idle 0 min$/mu, 'the newcomer is a live session');
+
+    const kept = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'race.png')], fx, { runKeep: slowKeep(0, browser()) });
+    assert.equal(kept.code, 0, kept.stderr);
+    assert.match(kept.stdout, /kept as s2 —/u, 'a second keep does not take the newcomer\'s id');
+  });
+
+  it('an unwritten lock is kept while it is fresh, and cleared once it is a minute old, so its id is usable', async () => {
+    const fx = fixture();
+    const deadOwner = spawnSync(process.execPath, ['-e', '']).pid;
+    mkdirSync(fx.sessions, { recursive: true, mode: 0o700 });
+    const file = join(fx.sessions, 's1.json');
+    const lock = join(fx.sessions, 's1.lock');
+    writeFileSync(file, JSON.stringify({
+      id: 's1', placeholder: true, owner_pid: deadOwner, nonce: 'dead-one', reserved: NOW.toISOString(),
+    }));
+    writeFileSync(lock, '');
+    const fresh = await mc(['sessions'], fx);
+    assert.equal(fresh.code, 0, fresh.stderr);
+    assert.equal(existsSync(lock), true, 'a fresh empty lock is kept');
+    assert.equal(existsSync(file), true, 'and so is the record it holds');
+
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(lock, old, old);
+    const cleared = await mc(['sessions'], fx);
+    assert.equal(cleared.code, 0, cleared.stderr);
+    assert.equal(existsSync(lock), false, 'an empty lock a minute old is removed');
+    assert.equal(existsSync(file), false, 'and the dead placeholder it guarded with it');
+    const kept = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'stale.png')], fx, { runKeep: slowKeep(0, browser()) });
+    assert.equal(kept.code, 0, kept.stderr);
+    assert.match(kept.stdout, /kept as s1 —/u, 's1 is usable again');
+  });
+
+  it('a placeholder whose mc is gone while its browser lives is named as orphaned, and its id is kept', async () => {
+    const fx = fixture();
+    const deadOwner = spawnSync(process.execPath, ['-e', '']).pid;
+    const orphan = browser();
+    mkdirSync(fx.sessions, { recursive: true, mode: 0o700 });
+    const file = join(fx.sessions, 's1.json');
+    writeFileSync(file, JSON.stringify({
+      id: 's1', placeholder: true, owner_pid: deadOwner, pid: orphan, nonce: 'orphan', reserved: NOW.toISOString(),
+    }));
+    const listed = await mc(['sessions'], fx);
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.equal(listed.stdout, `s1  orphaned browser, pid ${orphan} — the mc that kept it (pid ${deadOwner}) is gone; mc does not close it\n`);
+    assert.equal(existsSync(file), true, 'not reclaimed');
+    const kept = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'orphan.png')], fx, { runKeep: slowKeep(0, browser()) });
+    assert.equal(kept.code, 0, kept.stderr);
+    assert.match(kept.stdout, /kept as s2 —/u, 'its id is not reused while its browser lives');
+  });
+
+  it('a kept browser\'s pid is written into its placeholder as soon as it starts', async () => {
+    const fx = fixture();
+    const pid = browser();
+    let during = null;
+    const kept = await mc(['dev', 'home', '--keep', '--out', join(fx.home, 'pid.png')], fx, {
+      runKeep: async ({ request, onSpawn }) => {
+        onSpawn(pid);
+        during = sessionOf(fx, 's1');
+        return slowKeep(0, pid)({ request });
+      },
+    });
+    assert.equal(kept.code, 0, kept.stderr);
+    assert.equal(during.placeholder, true);
+    assert.equal(during.pid, pid);
+    assert.equal(during.owner_pid, process.pid);
+    assert.equal(sessionOf(fx, 's1').placeholder, undefined, 'the session file replaces the placeholder once the first capture is in');
   });
 });
 

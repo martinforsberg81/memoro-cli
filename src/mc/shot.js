@@ -581,7 +581,7 @@ export function runOpen({ worktree, declaration, request, env = process.env, dep
  * carries the child's pid and a `kill` for a caller that must end it after all.
  */
 export function spawnDetached({
-  worktree, declaration, request, env = process.env, log, timeoutMs, deps = {},
+  worktree, declaration, request, env = process.env, log, timeoutMs, deps = {}, onSpawn,
 }) {
   const dir = (deps.mkdtemp || mkdtempSync)(join(deps.tmpdir || tmpdir(), 'mc-shot-'));
   const file = join(dir, 'request.json');
@@ -607,6 +607,8 @@ export function spawnDetached({
     cleanup();
     return Promise.resolve({ ok: false, error: `the browser script could not run: ${error.message} — ${log}` });
   }
+  // A caller that must know the pid while the first capture runs (a kept browser's placeholder) is told now.
+  if (child.pid) onSpawn?.(child.pid);
 
   return new Promise((settle) => {
     let done = false;
