@@ -1999,7 +1999,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The disk monitor's tick (`runLoop`'s timer, every `POLL_MS`): a cheap
-   * reading, and a pressure pass at once below 20 GB unless the cooldown
+   * reading, and a pressure pass at once below 30 GB unless the cooldown
    * holds. Independent of the chores and lanes, so a nightly or a session in
    * flight does not hide the disk. A tick while the last is running is skipped.
    */

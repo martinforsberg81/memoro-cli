@@ -818,7 +818,7 @@ export function renderPageLines(data, {
   const runner = data.runner || {};
   // Surface active resource holds beside the work, with current readings in SYSTEM.
   if (runner.process?.alive) {
-    if (runner.pressure && runner.pressure.status !== 'healthy') detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
+    if (runner.pressure && (runner.pressure.admission_blocked ?? (runner.pressure.status !== 'healthy'))) detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
     if (runner.memory?.line) detail(lines, c, wide, 2, 'New sessions paused — low memory', ['yellow']);
     if (runner.stop) detail(lines, c, wide, 2, 'New sessions paused — runner stopping', ['yellow']);
   } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);

@@ -9,10 +9,9 @@
  * Decimal gigabytes throughout (1 GB = 1e9 bytes).
  *
  *   - `RESERVE_BYTES` (20 GB) is the floor kept for mc's operations.
- *   - Below `PRESSURE_BYTES` (20 GB) a pressure pass starts, and no new heavy
- *     work (a headless session, a deploy script, a stopped Docker runtime) is
- *     admitted unless the pass restores the reserve. Admission and the reserve
- *     share the same floor; cleanup still aims for 40 GB.
+ *   - Below `PRESSURE_BYTES` (30 GB) automatic cleanup starts.
+ *   - `ADMISSION_BYTES` (20 GB) is independent: new work can start at or above
+ *     it while cleanup pressure remains. Admission cannot clear that cooldown.
  *   - A pass stops at `RECOVERY_BYTES` (40 GB) or when its safe steps are
  *     exhausted, and reports the shortfall.
  *
@@ -46,7 +45,8 @@ import { dirname, join } from 'node:path';
 
 export const GB = 1e9;
 export const RESERVE_BYTES = 20 * GB;
-export const PRESSURE_BYTES = 20 * GB;
+export const ADMISSION_BYTES = 20 * GB;
+export const PRESSURE_BYTES = 30 * GB;
 export const RECOVERY_BYTES = 40 * GB;
 /** A pass that ends below the pressure line is not tried again for this long. */
 export const COOLDOWN_MS = 5 * 60 * 1000;
@@ -61,7 +61,7 @@ export const STATE_FILE = 'disk-pressure.json';
 export const EVENTS_FILE = 'disk-pressure-events.json';
 export const SCHEMA = 'mc-disk-pressure';
 
-export const POLICY = Object.freeze({ reserve_bytes: RESERVE_BYTES, pressure_bytes: PRESSURE_BYTES, recovery_bytes: RECOVERY_BYTES });
+export const POLICY = Object.freeze({ reserve_bytes: RESERVE_BYTES, pressure_bytes: PRESSURE_BYTES, admission_bytes: ADMISSION_BYTES, recovery_bytes: RECOVERY_BYTES });
 
 /** The limit, in a line a person reads: what this policy does not promise. */
 export const LIMITATION = 'this holds back mc\'s new work only; other apps and running work can still fill the disk';
@@ -324,21 +324,24 @@ export function createDiskPressure({
 
   async function decide({ trigger, what }) {
     let reading = measure();
-    if (reading.known && reading.available >= PRESSURE_BYTES) { healthy(reading, readState()); return { admitted: true, available: reading.available, reason: null }; }
+    if (reading.known && reading.available >= ADMISSION_BYTES) {
+      if (reading.available >= PRESSURE_BYTES) healthy(reading, readState());
+      return { admitted: true, available: reading.available, reason: null };
+    }
     let relief = null;
     if (reading.known) {
       relief = await relieve({ trigger, leased: true });
       reading = measure();
-      if (reading.known && reading.available >= PRESSURE_BYTES) {
+      if (reading.known && reading.available >= ADMISSION_BYTES) {
         if (relief.event) recordAdmission(relief.event, { admitted: true, trigger, what, available: reading.available });
         return { admitted: true, available: reading.available, reason: null };
       }
     }
     const reason = !reading.known
       ? 'free space could not be measured'
-      : relief?.skipped === 'cooldown' ? `below ${gb(PRESSURE_BYTES)}; the last pressure pass could not restore it (${relief.cooldown.why}), next pass after ${relief.cooldown.until}`
-        : relief?.skipped === 'busy' ? `below ${gb(PRESSURE_BYTES)}; pid ${relief.holder.pid} is reclaiming space now`
-          : `below ${gb(PRESSURE_BYTES)} after tidying; safe candidates are exhausted`;
+      : relief?.skipped === 'cooldown' ? `below ${gb(ADMISSION_BYTES)}; the last pressure pass could not restore it (${relief.cooldown.why}), next pass after ${relief.cooldown.until}`
+        : relief?.skipped === 'busy' ? `below ${gb(ADMISSION_BYTES)}; pid ${relief.holder.pid} is reclaiming space now`
+          : `below ${gb(ADMISSION_BYTES)} after tidying; safe candidates are exhausted`;
     const line = `disk: ${gb(reading.available)} free — ${what} not started: ${reason}`;
     const admission = { admitted: false, trigger, what, available: reading.available, reason };
     if (relief?.event) recordAdmission(relief.event, admission);
@@ -400,17 +403,20 @@ export function describe(state, reading, events = [], nowMs = Date.now()) {
   const known = reading?.known === true;
   const available = known ? reading.available : null;
   const status = !known ? 'unknown' : available >= PRESSURE_BYTES ? 'healthy' : 'pressure';
+  const admissionBlocked = !known || available < ADMISSION_BYTES;
   const last = state?.last_cleanup || null;
   const cooldownUntil = state?.cooldown_until && Date.parse(state.cooldown_until) > nowMs ? state.cooldown_until : null;
   const lines = [];
   lines.push(!known
     ? 'disk: free space could not be measured — new sessions, deploys and Docker starts are refused'
     : status === 'healthy'
-      ? `disk: ${gb(available)} free (measured) — healthy; pressure below ${gb(PRESSURE_BYTES)}, reserve ${gb(RESERVE_BYTES)}`
-      : `disk: ${gb(available)} free (measured) — below ${gb(PRESSURE_BYTES)}: new sessions, deploys and Docker starts wait`);
+      ? `disk: ${gb(available)} free (measured) — healthy; cleanup below ${gb(PRESSURE_BYTES)}, reserve ${gb(RESERVE_BYTES)}`
+      : !admissionBlocked
+        ? `disk: ${gb(available)} free (measured) — cleanup below ${gb(PRESSURE_BYTES)}; new work allowed at ${gb(ADMISSION_BYTES)}`
+        : `disk: ${gb(available)} free (measured) — below ${gb(ADMISSION_BYTES)}: new sessions, deploys and Docker starts wait`);
   if (status !== 'healthy' && cooldownUntil) lines.push(`disk: next pass after ${minute(cooldownUntil)}`);
   return {
-    available_bytes: available, status, pressure: status === 'pressure', cooldown_until: cooldownUntil,
+    available_bytes: available, status, pressure: status === 'pressure', admission_blocked: admissionBlocked, cooldown_until: cooldownUntil,
     last_cleanup: last, shortfall_bytes: last && known ? Math.max(0, RECOVERY_BYTES - available) : null, last_refusal: state?.last_refusal || null,
     lease: state?.lease || null, events: Array.isArray(events) ? events.length : 0, policy: POLICY, limitation: LIMITATION, lines,
   };

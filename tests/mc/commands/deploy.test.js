@@ -1438,7 +1438,7 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
   });
 
   it('a pressure pass that restores 20 GB lets the script go, and the monitor reads every minute while it runs without stopping it', async () => {
-    const disk = fakeDisk(19e9, { frees: 2e9 });
+    const disk = fakeDisk(19e9, { frees: 12e9 });
     const timers = [];
     let finish;
     let started;
@@ -1465,7 +1465,7 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
     await timers[0].fn();
     assert.equal(disk.ran, 2, 'below 20 GB during the deploy: a pass at once');
     const events = JSON.parse(disk.files['/w/runner/disk-pressure-events.json']);
-    assert.deepEqual(events.map((event) => [event.trigger, event.before_bytes, event.after_bytes]), [['deploy', 19e9, 21e9], ['deploy-monitor', 17e9, 19e9]]);
+    assert.deepEqual(events.map((event) => [event.trigger, event.before_bytes, event.after_bytes]), [['deploy', 19e9, 31e9], ['deploy-monitor', 17e9, 29e9]]);
     assert.equal(timers[0].stopped, false, 'the deploy is not stopped for it');
     finish({ code: 0 });
     assert.equal(await shipped, 0);
