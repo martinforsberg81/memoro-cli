@@ -22,6 +22,11 @@ Before you finish: `mc gate` on what you changed, fix the red, commit, then
 model reads the PR, and queues it for the merger when it is OK. The goal is
 `done` when it lands.
 
+Commissioned proof — the fault replay with its failing assertion, the timings,
+the gate logs with their paths, the head judged — is recorded in the goal's
+`LOG.md` with its commands and results. The PR body may repeat it, but a later
+session cites the log entry, never the PR alone, and never proof no entry holds.
+
 End with `mc goal log --done "…" --comment "…" --next "…"`. A goal has a
 stage and a status (`build · ready` while it is yours), and the stage only
 moves forward. You do one of two things to it, nothing else:
