@@ -9,7 +9,7 @@ import { cwdsOfUser } from '../../src/mc/standing.js';
  */
 import assert from 'node:assert/strict';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
 import {
-  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, orphanSlug, outsideRoots, runTidy,
+  LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, openFilesAmong, orphanSlug, outsideRoots, runTidy,
   staleGateCacheEntry, tidyPlan, tidyRoots,
 } from '../../src/mc/tidy.js';
 
@@ -156,6 +156,7 @@ function machine() {
   });
   m.doors = (over = {}) => ({
     env, now: NOW, git: m.git, cwds: () => m.cwds, inspect: m.inspect, pullAtTip: () => null, command: () => 'claude',
+    filesOpen: (paths) => new Map(paths.map((path) => [path, []])),
     release: (wt) => { m.released.push(wt.path); rmSync(wt.path, { recursive: true }); return true; },
     prune: (repoPaths) => { m.pruned.push(...repoPaths); },
     ...over,
@@ -814,7 +815,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 9);
+      assert.equal(written.rules_version, 10);
       assert.equal(written.person, false, 'the list says whose run it was');
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
       for (const item of written.kept) assert.deepEqual(Object.keys(item).sort(), ['path', 'rule', 'why']);
@@ -1425,6 +1426,234 @@ describe('(F) old Wrangler logs, MC shots and Codex generated images', () => {
       assert.equal(list.targets.some((item) => item.kind === 'mc-shot'), false);
       assert.match(keptOf(list, f.shots).why, /error: EACCES/u);
       assert.ok(existsSync(f.oldShot));
+    } finally { m.cleanup(); }
+  });
+});
+
+describe('(B) exact rebuildable caches', () => {
+  const nativePaths = [
+    'native-phone/derived', 'native-phone/packages/repositories', 'native-phone/packages/artifacts',
+    'native-phone/authorization-home/Library/Caches/org.swift.swiftpm', 'native-phone/host/ios/App/App/public',
+  ];
+  function cacheMachine() {
+    const m = machine();
+    const dir = join(m.work, 'runner/scratch/ended');
+    const marker = { schema: 'mc-scratch', version: 1, owner: 'runner', session: 'goal:phone/probe', stem: 'ended',
+      started: new Date(NOW - 2 * HOUR).toISOString(), ended: new Date(NOW - HOUR).toISOString(), exit: 0 };
+    m.write(join(dir, '.mc-scratch.json'), JSON.stringify(marker), NOW - HOUR);
+    goal(m, 'probe', 'done', { programme: 'phone' });
+    const native = nativePaths.map((rel) => join(dir, rel));
+    const wt = join(m.work, 'self/memoro');
+    m.worktrees.memoro.push(wt);
+    const bundle = join(wt, '.wrangler/dev-server/measure/bundle');
+    const shared = [
+      join(m.home, 'Library/Caches/org.swift.swiftpm'), join(m.env.MC_HOME, 'build/ios-derived'),
+      join(m.home, 'Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas'),
+      join(m.home, 'Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches/com.apple.mediaanalysisd/com.apple.e5rt.e5bundlecache'),
+    ];
+    const targets = [...native, bundle, ...shared];
+    for (const path of targets) {
+      m.write(join(path, 'nested/output'), 'generated', OLD);
+      for (const child of [join(path, 'nested'), path]) utimesSync(child, new Date(OLD), new Date(OLD));
+    }
+    const protectedPaths = ['build.log', 'fault.patch', 'native-phone/manifest.json', 'native-phone/host/ios/App/App/Probe.swift',
+      'native-phone/host/public/source.js', 'native-phone/authorization-home/.netrc'].map((rel) => join(dir, rel));
+    for (const path of protectedPaths) m.write(path, 'keep', OLD);
+    m.write(join(wt, '.wrangler/dev-server/state/local.sqlite'), 'local data', OLD);
+    m.write(join(wt, '.wrangler/dev-server/measure/generated.dev.vars'), 'settings', OLD);
+    const doors = (over = {}) => m.doors({ openIn: () => [], servers: () => [], ...over });
+    return { m, dir, marker, wt, native, bundle, shared, targets, protectedPaths, doors };
+  }
+
+  it('previews and removes only approved caches, retaining source, logs, ownership, credentials and local server data', () => {
+    const s = cacheMachine();
+    try {
+      const preview = runTidy(s.doors());
+      assert.deepEqual(ruled(preview.list, 'B').map((x) => x.path).sort(), [...s.targets].sort());
+      assert.ok(s.targets.every(existsSync), 'preview does not delete');
+      const goals = join(s.m.work, 'programs/phone/goals');
+      mkdirSync(join(goals, '.archive')); renameSync(join(goals, 'probe'), join(goals, '.archive/probe'));
+      const result = applyTidy({ listPath: preview.listPath, ...s.doors() });
+      assert.ok(result.applied.filter((x) => s.targets.includes(x.path)).every((x) => x.ok));
+      for (const path of s.targets) assert.equal(existsSync(path), false, path);
+      for (const path of [...s.protectedPaths, join(s.dir, '.mc-scratch.json'),
+        join(s.wt, '.wrangler/dev-server/state/local.sqlite'), join(s.wt, '.wrangler/dev-server/measure/generated.dev.vars')]) {
+        assert.ok(existsSync(path), `${path} stays`);
+      }
+    } finally { s.m.cleanup(); }
+  });
+
+  it('retains native compilation evidence while its goal needs review and rechecks reopened goals at removal', () => {
+    const s = cacheMachine();
+    try {
+      goal(s.m, 'probe', 'review', { programme: 'phone' });
+      assert.deepEqual(ruled(runTidy(s.doors()).list, 'B').filter((x) => x.kind === 'native-cache'), [], 'an ended build session may still supply the next review');
+      goal(s.m, 'probe', 'done', { programme: 'phone' });
+      const preview = runTidy(s.doors());
+      goal(s.m, 'probe', 'build', { programme: 'phone' });
+      const applied = applyTidy({ listPath: preview.listPath, ...s.doors() });
+      for (const path of s.native) {
+        assert.equal(applied.applied.find((x) => x.path === path).ok, false, path);
+        assert.ok(existsSync(path));
+      }
+    } finally { s.m.cleanup(); }
+  });
+
+  it('keeps native outputs without ended ownership, with active/open owners, and when process evidence is incomplete', () => {
+    const s = cacheMachine();
+    try {
+      const cases = ['running', 'missing', 'malformed', 'foreign', 'version', 'future', 'active', 'open', 'uncertain', 'goal-missing', 'goal-invalid'];
+      const paths = new Map();
+      for (const name of cases) {
+        const dir = join(s.m.work, 'runner/scratch', name);
+        const path = join(dir, nativePaths[0]); paths.set(name, path);
+        s.m.write(join(path, 'app.o'));
+        const marker = { ...s.marker, stem: name };
+        if (name === 'running') delete marker.ended;
+        if (name === 'foreign') marker.owner = 'someone-else';
+        if (name === 'version') marker.version = 2;
+        if (name === 'future') marker.ended = new Date(NOW + HOUR).toISOString();
+        if (name.startsWith('goal-')) marker.session = 'goal:phone/' + name;
+        if (name === 'goal-invalid') goal(s.m, name, 'done', { programme: 'phone', text: '{invalid' });
+        if (name !== 'missing') s.m.write(join(dir, '.mc-scratch.json'), name === 'malformed' ? '{broken' : JSON.stringify(marker));
+      }
+      s.m.cwds.push({ pid: 50, cwd: join(s.m.work, 'runner/scratch/active/other') });
+      const { list } = runTidy(s.doors({ openIn: (path) => path.endsWith('/open') ? [51] : path.endsWith('/uncertain') ? null : [] }));
+      assert.deepEqual(ruled(list, 'B').filter((x) => x.kind === 'native-cache').map((x) => x.path).sort(), [...s.native].sort());
+      for (const [name, path] of paths) {
+        assert.ok(existsSync(path), name);
+        assert.ok(keptOf(list, path), name);
+      }
+      s.m.cwds = Object.assign([{ pid: 1, cwd: '/' }], { complete: false });
+      assert.deepEqual(ruled(runTidy(s.doors()).list, 'B'), [], 'partial cwd evidence never proves inactivity');
+    } finally { s.m.cleanup(); }
+  });
+
+  it('keeps warm shared caches, live dev bundles, open files and unknown inventories', () => {
+    const s = cacheMachine();
+    try {
+      // A new nested file keeps the whole cache even when the root itself looks old.
+      s.m.write(join(s.shared[2], 'new.bin'), 'new', NOW - 72 * HOUR);
+      utimesSync(s.shared[2], new Date(OLD), new Date(OLD));
+      s.m.cwds.push({ pid: 90, cwd: join(s.m.env.MC_HOME, 'build/memoro') });
+      const { list } = runTidy(s.doors({
+        servers: () => [{ pid: 91 }],
+        openIn: (path) => {
+          if (path === s.shared[0]) return [92];
+          if (path === s.shared[3]) throw new Error('unreadable');
+          return [];
+        },
+      }));
+      for (const path of [s.bundle, ...s.shared]) {
+        assert.ok(keptOf(list, path), path);
+        assert.ok(existsSync(path), path);
+      }
+      assert.deepEqual(ruled(list, 'B').map((x) => x.path).sort(), [...s.native].sort());
+      s.m.worktrees.memoro = [];
+      assert.equal(ruled(runTidy(s.doors()).list, 'B').some((x) => x.path === s.bundle), false, 'unregistered worktrees are not adopted');
+    } finally { s.m.cleanup(); }
+  });
+
+  it('rechecks ownership, complete cache identity, dev-server state and exact path boundaries at apply', () => {
+    const s = cacheMachine();
+    try {
+      const preview = runTidy(s.doors());
+      s.m.write(join(s.dir, '.mc-scratch.json'), JSON.stringify({ ...s.marker, session: 'goal:phone/new-owner' }));
+      s.m.write(join(s.shared[0], 'nested/output'), 'changed', OLD);
+      renameSync(s.shared[1], s.shared[1] + '.previous');
+      s.m.write(join(s.shared[1], 'nested/output'), 'replacement', OLD);
+      for (const p of [s.shared[1], join(s.shared[1], 'nested')]) utimesSync(p, new Date(OLD), new Date(OLD));
+      const outside = join(s.m.home, 'outside'); s.m.write(join(outside, 'keep'), 'outside');
+      rmSync(s.shared[2], { recursive: true }); symlinkSync(outside, s.shared[2]);
+      // Even an in-root parent symlink is refused, not followed to the formerly approved cache.
+      const parent = join(s.m.home, 'Library/Containers/com.apple.mediaanalysisd/Data/Library/Caches');
+      renameSync(parent, parent + '.saved'); symlinkSync(parent + '.saved', parent);
+      const written = JSON.parse(readFileSync(preview.listPath, 'utf8'));
+      written.targets.push({ path: join(s.m.home, 'Library/Containers'), kind: 'device-delta-cache', rule: 'B' });
+      writeFileSync(preview.listPath, JSON.stringify(written));
+      const result = applyTidy({ listPath: preview.listPath, ...s.doors({ servers: () => [{ pid: 99 }] }) });
+      for (const path of s.targets) {
+        assert.equal(result.applied.find((x) => x.path === path).ok, false, path);
+        assert.ok(existsSync(path), path);
+      }
+      assert.equal(result.applied.at(-1).ok, false, 'a forged parent target is not allowed');
+      assert.equal(readFileSync(join(outside, 'keep'), 'utf8'), 'outside');
+    } finally { s.m.cleanup(); }
+  });
+
+  it('refreshes activity again at each removal and unlinks inner cache symlinks without touching their targets', () => {
+    const s = cacheMachine();
+    try {
+      const outside = join(s.m.home, 'outside.txt'); s.m.write(outside, 'keep');
+      symlinkSync(outside, join(s.native[0], 'external-link'));
+      let busy = false;
+      const doors = s.doors({
+        openIn: (path) => path === s.dir && busy ? [88] : [],
+        remove: (path) => { rmSync(path, { recursive: true }); if (path === s.native[0]) busy = true; },
+      });
+      const preview = runTidy(doors);
+      const result = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.equal(result.applied.find((x) => x.path === s.native[0]).ok, true);
+      for (const path of s.native.slice(1)) {
+        assert.equal(result.applied.find((x) => x.path === path).ok, false, path);
+        assert.ok(existsSync(path));
+      }
+      assert.equal(readFileSync(outside, 'utf8'), 'keep');
+    } finally { s.m.cleanup(); }
+  });
+});
+
+describe('file-scoped screenshot open-file evidence', () => {
+  it('cleans closed old shots despite unrelated subtree failures and preserves opened or uncertain files', () => {
+    const m = machine();
+    try {
+      const root = join(m.env.MC_HOME, 'shots');
+      const closed = join(root, 'old.png'); const opened = join(root, 'nested/open.png');
+      const hidden = join(root, '.browser-profile/keep.png');
+      for (const p of [closed, opened, hidden]) m.write(p);
+      const doors = m.doors({
+        openIn: () => { throw new Error('whole subtree cannot be inventoried'); },
+        filesOpen: (paths) => {
+          assert.deepEqual([...paths].sort(), [closed, opened].sort(), 'hidden profiles never enter lsof');
+          return new Map([[closed, []], [opened, [77]]]);
+        },
+      });
+      const preview = runTidy(doors);
+      assert.deepEqual(ruled(preview.list, 'F').map((x) => x.path), [closed]);
+      const uncertain = applyTidy({ listPath: preview.listPath, ...doors, filesOpen: () => null });
+      assert.equal(uncertain.applied.find((x) => x.path === closed).ok, false);
+      assert.ok(existsSync(closed) && existsSync(opened) && existsSync(hidden));
+      const applied = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.equal(applied.applied.find((x) => x.path === closed).ok, true);
+      assert.ok(!existsSync(closed) && existsSync(opened) && existsSync(hidden));
+    } finally { m.cleanup(); }
+  });
+
+  it('bounds exact-file lsof batches, accepts mixed open/closed results and rejects malformed or failed evidence', () => {
+    const m = machine();
+    try {
+      const paths = Array.from({ length: 105 }, (_, i) => join(m.home, i === 7 ? 'file\np777.png' : `file-${i}.png`));
+      for (const p of paths) m.write(p);
+      const calls = [];
+      const opened = openFilesAmong(paths, { run: (cmd, args) => {
+        assert.equal(cmd, 'lsof'); assert.ok(!args.includes('+D'));
+        const files = args.slice(args.indexOf('--') + 1); calls.push(files);
+        return calls.length === 1 ? { status: 1, stdout: `p42\0\nf19\0n${files[7]}\0\np43\0\nfmem\0n${files[7]}\0\n`, stderr: '' }
+          : { status: 1, stdout: '', stderr: '' };
+      } });
+      assert.deepEqual(calls.map((x) => x.length), [100, 5]);
+      assert.deepEqual([...opened].filter(([, pids]) => pids.length), [[paths[7], [42, 43]]]);
+      const real = realpathSync(paths[0]);
+      for (const result of [
+        { status: 0, stdout: `p42\0n${real}\0`, stderr: 'partial inventory' },
+        { status: 1, stdout: `p42\0n${real}\0`, stderr: 'partial inventory' },
+        { status: 2, stdout: `p42\0n${real}\0` },
+        { status: 0, stdout: `n${real}\0` },
+        { status: 0, stdout: 'p42\0n/outside\0' },
+        { status: 0, stdout: '' }, { status: 2 }, { error: new Error('timeout') },
+      ]) assert.equal(openFilesAmong([paths[0]], { run: () => result }), null);
+      assert.equal(openFilesAmong([paths[0]], { run: () => { throw new Error('spawn failed'); } }), null);
+      assert.deepEqual(openFilesAmong([], { run: () => assert.fail('empty inventory spawns nothing') }), new Map());
     } finally { m.cleanup(); }
   });
 });
