@@ -1400,9 +1400,9 @@ describe('the page', () => {
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
-    // What is true of the work: the session in flight, and the goals
-    // PROGRAMMES counts open, waiting and blocked, in the same numbers.
-    assert.match(text, /1 in flight · 2 ready · 0 blocked · 1 Martin/u);
+    // Sessions and goal statuses have separate summaries in the header.
+    assert.match(text, /1 in flight · 1 build · 0 review · 0 plan/u);
+    assert.match(text, /Goals: 3 total · status: 2 ready · 0 blocked · 1 Martin/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     assert.match(text, /runner pid 4242/u);
     assert.match(text, /■ stopping since an unknown time/u);
