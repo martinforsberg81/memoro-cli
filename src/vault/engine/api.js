@@ -183,11 +183,19 @@ export async function changePassword(portal, { currentAuthHash, newAuthHash, new
   });
 }
 
-export async function setRecoveryKey(portal, { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash }) {
+export async function setRecoveryKey(portal, { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash, currentAuthHash }) {
+  // Every request carries the fresh current-password proof: the server needs
+  // it to replace a code, and a first code must not be a bypass.
+  if (typeof currentAuthHash !== 'string' || !currentAuthHash) {
+    throw new TypeError('currentAuthHash is required to create or replace a recovery code');
+  }
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, '/api/vault/recovery-key', {
+    // Non-idempotent: a lost fetch response may follow a committed replacement.
+    // Never replay it via curl, even if the default transport enables fallback.
+    curlFallback: false,
     token: p.token, method: 'POST',
-    body: { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash },
+    body: { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash, currentAuthHash },
   });
 }
 

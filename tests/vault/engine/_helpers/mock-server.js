@@ -20,6 +20,7 @@ import { createHash } from 'node:crypto';
 export function createMockVaultServer({ userId = 'usr_test' } = {}) {
   let config = null; // { auth_hash, salt, iterations, created_at, updated_at }
   let secrets = []; // [{ id, secret_type, encrypted_label, encrypted_data, iv, label_iv, ... }]
+  let recovery = null; // { wrapped_crk_recovery, recovery_iv, recovery_salt, recovery_auth_hash }
   let unlocked = false;
   let idCounter = 0;
   let conflictNextWrite = false;
@@ -56,6 +57,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
           salt: config?.salt || null,
           iterations: config?.iterations || null,
           createdAt: config?.created_at || null,
+          recovery_set: !!recovery,
         },
       };
     }
@@ -123,6 +125,32 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       config.salt = body.newSalt || generateSaltB64();
       config.updated_at = `t${++idCounter}`;
       return { ok: true, salt: config.salt };
+    }
+
+    if (path === '/api/vault/recovery-key' && method === 'POST') {
+      if (!unlocked) {
+        const err = new Error('Memoro 403: Vault is locked'); err.status = 403; throw err;
+      }
+      // Server rule (docs/technical/vault.md): with a code on file, a missing
+      // currentAuthHash is refused. This mock refuses it on first creation too,
+      // stricter than the server, so an omitted proof cannot pass here.
+      if (body?.currentAuthHash === undefined) {
+        const err = new Error('Memoro 400: current password is required');
+        err.status = 400; err.data = { ok: false, code: 'CURRENT_PASSWORD_REQUIRED' };
+        throw err;
+      }
+      if (hashAuthHash(body.currentAuthHash) !== config.auth_hash) {
+        const err = new Error('Memoro 401: Invalid master password');
+        err.status = 401; err.data = { ok: false, code: 'INVALID_PASSWORD' };
+        throw err;
+      }
+      recovery = {
+        wrapped_crk_recovery: body.wrappedCrkRecovery,
+        recovery_iv: body.recoveryIv,
+        recovery_salt: body.recoverySalt,
+        recovery_auth_hash: hashAuthHash(body.recoveryAuthHash),
+      };
+      return { ok: true };
     }
 
     if (path === '/api/vault/secrets' && method === 'GET') {
@@ -327,6 +355,7 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
     inspect: () => ({
       config,
       unlocked,
+      recovery: recovery ? { ...recovery } : null,
       secrets: secrets.map(s => ({ ...s })),
     }),
     forceLock: () => { unlocked = false; },
