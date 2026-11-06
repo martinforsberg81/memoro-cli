@@ -115,6 +115,11 @@ No new session starts unless the disk policy admits it
 ([mc-tidy.md § Disk pressure](mc-tidy.md#disk-pressure)): 20 GB available on
 the scratch volume, after a pressure pass if need be, asked at the top of a
 pass and again at the start itself. A reading that fails refuses. No session
+waits ten minutes just because another start holds the admission lease:
+contended lanes retry within one second, remeasure, and still honor STOP,
+UPDATE and the configured lane total. The lease remains exclusive through
+allocation and spawn and is released before waiting for the session to end.
+Dead-owner leases are reclaimed; live owners retain exclusion. No session
 starts either below 20 percent host available memory. On Linux this is
 `100 * MemAvailable / MemTotal` from `/proc/meminfo`: `MemAvailable` includes
 memory the kernel estimates can be made available without swapping, including

@@ -340,7 +340,7 @@ export function createDiskPressure({
     const reading = measure();
     const reason = `pid ${lease.holder.pid} is admitting work`;
     appendEvent({ at: iso(), volume: path, trigger, before_bytes: reading.available, after_bytes: reading.available, measured_delta_bytes: 0, estimate_bytes: 0, steps: [], errors: [], outcome: 'busy', admission: { admitted: false, trigger, what, available: reading.available, reason } });
-    return { ok: false, answer: { admitted: false, available: reading.available, reason, line: `disk: ${gb(reading.available)} free — ${what} not started: ${reason}` } };
+    return { ok: false, answer: { admitted: false, busy: true, available: reading.available, reason, line: `disk: ${gb(reading.available)} free — ${what} not started: ${reason}` } };
   }
 
   async function decide({ trigger, what, relief = null }) {

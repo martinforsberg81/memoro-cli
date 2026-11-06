@@ -117,6 +117,9 @@ import {
 /** How often the runner asks GitHub whether a goal's pull requests have all landed (`settleLanded`). */
 export const SETTLE_EVERY_MS = 5 * 60_000;
 
+/** A competing allocation is temporary, even during simultaneous boot starts. */
+const ADMISSION_RETRY_MS = 1000;
+
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** Headless planning candidates, independent of the build/review catalog. */
@@ -1368,7 +1371,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (planning) claims.delete(`plan:${goal.programme}`);
     }
     if (outcome === 'stop') return { ran: 0, stop: true };
-    if (outcome === 'skipped:disk') return { ran: 0, waited: outcome };
+    if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
     if (outcome !== 'ran') return { ran: 0 };
     const ran = { ran: 1, name, step: null, goal: true };
     if (stopRequested()) {
@@ -1628,6 +1631,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
     if (!admission.admitted) {
       dropSlot();
+      if (admission.busy) return 'skipped:disk-busy';
       const line = `disk: ${gb(admission.available)} free — no session started: ${admission.reason}`;
       say(line);
       writeJson(paths.disk, { at: stamp(), free_bytes: admission.available, line });
@@ -1706,6 +1710,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           writeJson(paths.disk, { at: stamp(), free_bytes: rechecked.available, line: rechecked.line });
           return 'skipped:disk';
         }
+        // Allocation can yield. A stop or handover during it cancels launch,
+        // and the existing finally blocks release admission and the slot.
+        if (stopRequested()) return 'stop';
+        if (updateRequested()) return 'skipped:update';
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
         const canHandoff = !programmeTurn && (review || planning) && scratchEnv.MC_SCRATCH;
         if (canHandoff) remove(handoffPath);
@@ -1943,7 +1951,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * when a session has run, because the goals it was picked from have moved
    * on, and the next pick must be made against them as they are now. `waited`
    * is a refusal about the machine (disk, memory) — the lane sleeps and asks
-   * again. A goal that did not start is passed over for the rest of this pass
+   * again, using a short retry for temporary admission contention. A goal that
+   * did not start is passed over for the rest of this pass
    * and the lane takes the next one, so one stuck goal does not stand in front
    * of the rest.
    *
@@ -1956,7 +1965,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   } = {}) {
     const label = tag || repo || 'run';
     const passed = new Set(already);
-    if (!(await diskRoom('lane'))) return { ran: 0, waited: 'skipped:disk' };
+    const diskWait = await diskRoom('lane');
+    if (diskWait) return { ran: 0, waited: diskWait };
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
     for (;;) {
       if (stopRequested()) return { ran: 0, stop: true };
@@ -1979,22 +1989,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * start itself, so a pass that waited for a slot does not start on an old
    * reading. A refusal — under 20 GB after a pressure pass, or a reading that
    * failed — is said once per line and written to `disk.json` for the page.
+   * Returns a wait reason, or null when admitted. Temporary admission
+   * contention is separate from insufficient space and writes no disk hold.
    * Sessions already running go on. No policy (a fixture) is room.
    */
   let diskLine = null;
   async function diskRoom(trigger) {
-    if (!disk) return true;
+    if (!disk) return null;
     const answer = await disk.admit({ trigger: `session:${trigger}`, what: 'no session' });
     if (answer.admitted) {
       diskLine = null;
       if (deps.exists(paths.disk)) remove(paths.disk);
-      return true;
+      return null;
     }
+    if (answer.busy) return 'skipped:disk-busy';
     const line = `disk: ${gb(answer.available)} free — no session started: ${answer.reason}`;
     if (line !== diskLine) say(line);
     diskLine = line;
     writeJson(paths.disk, { at: stamp(), free_bytes: answer.available, line });
-    return false;
+    return 'skipped:disk';
   }
 
   /**
@@ -2422,14 +2435,15 @@ export async function runLoop({
           // next pick is made at once rather than after a sleep nobody is
           // waiting for.
           if (r.ran) { quietLine = null; last = { name: r.name }; continue; }
-          // Nothing ran, and the sleep below is ten minutes.
+          // A shared admission lease covers allocation and spawn, not the
+          // session. Retry contention promptly; genuine refusals stay idle.
           last = null;
           const line = r.waited
             ? `${tag}: waiting — ${r.waited === 'skipped' ? 'nothing could be started this pass' : r.waited.slice('skipped:'.length)}`
             : `${tag}: nothing to run — sleeping`;
           if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
-          await nap(idleSleepMs, { until: retired });
+          await nap(r.waited === 'skipped:disk-busy' ? ADMISSION_RETRY_MS : idleSleepMs, { until: retired });
           if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
         }
       };
