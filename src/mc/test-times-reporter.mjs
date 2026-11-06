@@ -8,10 +8,21 @@
  * describe block (a suite) gets none; its tests do. A test that failed says so
  * (`failed`), and one that node cut at its time limit says the limit
  * (`timeout`, in ms): what `recordTooSlow` keeps. A skipped or todo test ran
- * nothing and gets no line.
+ * nothing and gets no line. A file whose run ended gets `{ file, ended, ok }`
+ * last, `ok` when node counted no failed or cancelled test in it: the only
+ * proof a resumed gate takes that the whole file ran (`fileOutcomes`).
  */
 export default async function* timesReporter(source) {
   for await (const event of source) {
+    // Node reports a file's summary once its process has ended (`test:summary`
+    // with the file); a file cut before then never gets one. Its top-level tests
+    // are not enough: node reports a test's start only when it reports the test,
+    // so a file killed between two tests looks as if every test it began ended.
+    if (event.type === 'test:summary' && event.data?.file) {
+      const counts = event.data.counts || {};
+      yield `${JSON.stringify({ file: event.data.file, ended: true, ok: event.data.success === true && !(counts.failed > 0) && !(counts.cancelled > 0) })}\n`;
+      continue;
+    }
     if (event.type !== 'test:start' && event.type !== 'test:pass' && event.type !== 'test:fail') continue;
     const { nesting, file, details, name, line, skip, todo } = event.data;
     if (!file) continue;

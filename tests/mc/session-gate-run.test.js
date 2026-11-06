@@ -10,6 +10,7 @@ import { run as gateCommand } from '../../src/mc/commands/gate.js';
 import { readGreenReceipt } from '../../src/mc/gate-greens.js';
 import { runningRounds } from '../../src/mc/gate-lock.js';
 import { realTests } from '../../src/mc/repo-gate.js';
+import timesReporter from '../../src/mc/test-times-reporter.mjs';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
 
@@ -610,22 +611,29 @@ it('a command ceiling retains reporter and pending or unavailable evidence witho
 /**
  * Resume on unchanged content (Martin, 2026-11-06). Each attempt persists its
  * receipt into one temporary state root, and the next reads it back from there.
- * The test child writes the reporter's own lines per file, through the tracker:
- * `pass`, `fail`, `cancel` and `timeout` end their file, `hang` starts it and
- * never ends it, `absent` never starts it.
+ * The test child sends node's own events for each file through the real
+ * reporter (`test-times-reporter.mjs`), and the tracker reads what it wrote:
+ * `pass`, `fail`, `cancel` and `timeout` end their file; `hang` is a file cut
+ * after its first test passed, as node reports it — the test that hangs never
+ * starts in the events, and the file gets no summary; `absent` never starts.
  */
 const BASE = 'b'.repeat(40);
 const CONTENT = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
 const COMMANDS = [{ packageScript: 'lint', passBaseRef: true }, { id: 'db', packageScript: 'check:db', unavailableExitCode: 69 }];
-const reporterLines = (file, outcome) => {
+const FAILURES = { fail: { failureType: 'testCodeFailure', message: 'boom' }, cancel: { failureType: 'cancelledByParent', message: 'cancelled' },
+  timeout: { failureType: 'testTimeoutFailure', message: 'test timed out after 30000ms' } };
+async function reporterLines(file, outcome) {
   const at = `/work/${file}`;
-  if (outcome === 'absent') return [];
-  if (outcome === 'hang') return [{ file: at, started: true }];
-  const test = { name: `${file} ${outcome}`, line: 3, ms: 4 };
-  if (outcome !== 'pass') test.failed = true;
-  if (outcome === 'timeout') test.timeout = 30000;
-  return [{ file: at, started: true }, { file: at, test }, { file: at, done: true, ms: 4 }];
-};
+  if (outcome === 'absent') return '';
+  const test = (name, line, error) => [{ type: 'test:start', data: { file: at, nesting: 0, name, line } },
+    { type: error ? 'test:fail' : 'test:pass', data: { file: at, nesting: 0, name, line, details: { duration_ms: 4, ...(error ? { error } : {}) } } }];
+  const counts = { failed: outcome === 'fail' || outcome === 'timeout' ? 1 : 0, cancelled: outcome === 'cancel' ? 1 : 0 };
+  const events = outcome === 'hang' ? test(`${file} pass`, 3)
+    : [...test(`${file} ${outcome}`, 3, FAILURES[outcome]), { type: 'test:summary', data: { file: at, success: outcome === 'pass', counts } }];
+  let text = '';
+  for await (const chunk of timesReporter((async function* () { yield* events; })())) text += chunk;
+  return text;
+}
 function resumable(t) {
   const root = mkdtempSync(join(tmpdir(), 'mc-session-resume-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -638,6 +646,7 @@ function resumable(t) {
     const ran = { files: null, commands: [] };
     let output = '';
     const controller = new AbortController();
+    const lines = Object.fromEntries(await Promise.all(files.map(async (file) => [file, await reporterLines(file, outcomes[file] || 'pass')])));
     const request = { cwd: '/work', select: 'selector', files: named ? files : null, flags, pattern, base, fresh, timed,
       gate: { root, repo: 'repo' }, ...(stop === 'ceiling' ? { round_timeout_ms: 1 } : {}),
       measurement: { repo: 'repo', run, base, candidate: content, configuration } };
@@ -650,7 +659,8 @@ function resumable(t) {
         ran.files = [...chosen];
         const path = join(root, `${run}.jsonl`);
         times.track(path);
-        writeFileSync(path, chosen.flatMap((file) => reporterLines(file, outcomes[file] || 'pass')).map((line) => JSON.stringify(line)).join('\n') + '\n');
+        // Written before the commands start: an interrupt comes while they wait.
+        writeFileSync(path, chosen.map((file) => lines[file]).join(''));
         if (stop) {
           // The run is still going when the ceiling comes or the worker is stopped.
           if (stop === 'interrupt') controller.abort();

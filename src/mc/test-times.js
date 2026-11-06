@@ -217,10 +217,14 @@ export function runProgress(paths) {
  * `failed` is every file with a test that failed, was cancelled or reached its
  * time limit (the reporter marks all three `failed`), and `tests` every test it
  * named, `{ file, name, line, seconds }`, the file absolute as node reports it.
- * A resumed gate reuses only a file `runProgress` finished and this never failed.
+ * `ended` is every file whose run node summed up with no failed or cancelled
+ * test (the reporter's `ended` line); one it summed up otherwise is `failed`.
+ * A resumed gate reuses only a file that ended, that `runProgress` finished and
+ * that never failed.
  */
 export function runOutcomes(paths) {
   const failed = new Set();
+  const ended = new Set();
   const tests = [];
   for (const path of paths || []) {
     let text = '';
@@ -228,20 +232,25 @@ export function runOutcomes(paths) {
     for (const line of text.split('\n')) {
       let entry = null;
       try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.file === 'string' && entry.ended === true) {
+        (entry.ok === true ? ended : failed).add(entry.file);
+        continue;
+      }
       const test = entry?.test;
       if (typeof entry?.file !== 'string' || !test || typeof test.name !== 'string') continue;
       if (test.failed === true || test.timeout > 0) failed.add(entry.file);
       if (test.line > 0) tests.push({ file: entry.file, name: test.name, line: Number(test.line), seconds: test.ms >= 0 ? test.ms / 1000 : null });
     }
   }
-  return { failed: [...failed].sort(), tests };
+  return { failed: [...failed].sort(), ended: [...ended].filter((file) => !failed.has(file)).sort(), tests };
 }
 
 /**
  * Each asked file's outcome in one run, as it was asked for (matched by tail, as
- * `outputCut` matches): `passed` when its top-level tests all ended and none of
- * its tests failed, `failed`, `unfinished` when one never ended, and
- * `not-started` when the reporter named none of it.
+ * `outputCut` matches): `passed` when its top-level tests all ended, node summed
+ * the file up as ended (`runOutcomes`) and none of its tests failed; `failed`;
+ * `unfinished` when a test or the file itself never ended; and `not-started`
+ * when the reporter named none of it.
  */
 export function fileOutcomes(files, { progress, outcomes }) {
   const asked = [...new Set((files || []).map(String).filter(Boolean))];
@@ -249,6 +258,7 @@ export function fileOutcomes(files, { progress, outcomes }) {
   const unfinished = new Set((progress?.unfinished || []).map(name));
   const finished = new Map((progress?.finished || []).map((one) => [name(one.file), one.seconds]));
   const failed = new Set((outcomes?.failed || []).map(name));
+  const ended = new Set((outcomes?.ended || []).map(name));
   const tests = new Map();
   for (const test of outcomes?.tests || []) {
     const file = name(test.file);
@@ -256,7 +266,8 @@ export function fileOutcomes(files, { progress, outcomes }) {
   }
   return asked.map((file) => ({
     file,
-    outcome: unfinished.has(file) ? 'unfinished' : !finished.has(file) ? 'not-started' : failed.has(file) ? 'failed' : 'passed',
+    outcome: unfinished.has(file) ? 'unfinished' : failed.has(file) ? 'failed' : !finished.has(file) ? 'not-started'
+      : ended.has(file) ? 'passed' : 'unfinished',
     seconds: finished.get(file) ?? null,
     tests: tests.get(file) || [],
   }));
@@ -278,7 +289,9 @@ export function progressTracker() {
     /** The failed files and named tests of every run, completed or still going (`runOutcomes`). */
     outcomes: () => {
       const all = [...outcomes, runOutcomes(active)];
-      return { failed: [...new Set(all.flatMap((one) => one.failed))].sort(), tests: all.flatMap((one) => one.tests) };
+      const failed = new Set(all.flatMap((one) => one.failed));
+      return { failed: [...failed].sort(), ended: [...new Set(all.flatMap((one) => one.ended))].filter((file) => !failed.has(file)).sort(),
+        tests: all.flatMap((one) => one.tests) };
     },
     read: () => {
       const snapshots = [...completed, runProgress(active)];

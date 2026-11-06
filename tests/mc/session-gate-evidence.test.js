@@ -582,7 +582,8 @@ it('a resumed full green is recorded for the merger and accepted for publication
       times.track(path);
       writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true },
         { file: `/fixture/${file}`, test: { name: 'x', line: 1, ms: 1, ...(file === 'b.test.js' && outcome === 'red' ? { failed: true } : {}) } },
-        { file: `/fixture/${file}`, done: true, ms: 1 }]).map((line) => JSON.stringify(line)).join('\n') + '\n');
+        { file: `/fixture/${file}`, done: true, ms: 1 },
+        { file: `/fixture/${file}`, ended: true, ok: !(file === 'b.test.js' && outcome === 'red') }]).map((line) => JSON.stringify(line)).join('\n') + '\n');
       times.complete(path);
       return outcome === 'red' ? { code: 1, tap: 'not ok 1 - x\n1..1\n# tests 1\n# pass 0\n# fail 1\n' } : { code: 0, tap: GREEN };
     } });
