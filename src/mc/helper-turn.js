@@ -41,6 +41,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
+import { registerForeground } from './foreground.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { readModels } from './model-config.js';
 import { readCapacity } from './model-capacity.js';
@@ -345,9 +346,20 @@ export async function runHelperTurn({
   const selectedModel = model || routeCandidate?.model || role.model;
   const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
 
-  const result = await (deps.session || realSession)({
-    bin: processLaunch.bin, args: processLaunch.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake', MC_HEADLESS: '1' }),
+  const release = (deps.register || registerForeground)({
+    verb: 'helper', area: dir, tool: launch.shortName || launch.id, model: selectedModel, env,
+    // The runner repeats turns in one process; finally and dead-pid filtering
+    // handle cleanup without accumulating one exit listener per turn.
+    onExit: () => {},
   });
+  let result;
+  try {
+    result = await (deps.session || realSession)({
+      bin: processLaunch.bin, args: processLaunch.args, cwd: dir, timeoutMs: minutes * 60_000, env: scrubProviderApiKeysFromEnv({ ...withoutSessionIdentity(env), MC_ROLE: 'intake', MC_HEADLESS: '1' }),
+    });
+  } finally {
+    release();
+  }
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
   });

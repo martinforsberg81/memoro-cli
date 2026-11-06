@@ -81,6 +81,28 @@ async function turn(overrides = {}, options = {}) {
   return { result, seen, env: e };
 }
 
+describe('intake activity visibility', () => {
+  it('registers a helper during the session and removes it on success or throw', async () => {
+    for (const fails of [false, true]) {
+      const e = env();
+      const record = join(e.MC_WORK_ROOT, 'runner', 'foreground', `${process.pid}.json`);
+      const exitListeners = process.listenerCount('exit');
+      try {
+        const pending = turn({ session: async () => {
+          const active = JSON.parse(readFileSync(record, 'utf8'));
+          assert.deepEqual([active.verb, active.tool, active.model], ['helper', 'claude', 'sonnet']);
+          if (fails) throw new Error('session failed');
+          return { status: 0, stdout: CLAUDE_JSON, stderr: '' };
+        } }, { env: e, tool: 'claude' });
+        if (fails) await assert.rejects(pending, /session failed/u);
+        else await pending;
+        assert.throws(() => readFileSync(record), { code: 'ENOENT' });
+        assert.equal(process.listenerCount('exit'), exitListeners);
+      } finally { rmSync(e.MC_WORK_ROOT, { recursive: true, force: true }); }
+    }
+  });
+});
+
 describe('the helper turn', () => {
   it('uses the saved Codex priority with the intake candidate and supported effort', async () => {
     let capacity = applyObservation(normaliseCapacity(null), 'claude', {

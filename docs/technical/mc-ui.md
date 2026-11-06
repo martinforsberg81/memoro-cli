@@ -99,20 +99,26 @@ Unowned sessions and directories remain visible as strays.
 
 ### MAINTENANCE
 
-Each repository has a named block, always including memoro and memoro-cli.
-Its status dot is red for loud errors, critical dependencies or failed full
-tests; yellow for missing/old measurements or high vulnerabilities; green for
-current readings without those findings. Child rows show error fingerprints
-(total, new and loud, with digest age), the last full test (age, commit and
-result), and the dependency reading (age, commit and severity counts).
-Unknown measurements stay unknown, including new counts before a baseline.
-These replace the separate CHECKS section and the maintenance column table.
+Three bold orange subheadings summarize maintenance without listing programmes,
+proposals or individual errors. Proposals shows New / unassigned (direct files in
+`~/mc/proposals/`) and Unhandled (pending proposals across programme directories,
+excluding archives). Other intake counts direct inbox files other than collector
+digests; directories and archived files do not count.
 
-Helper status and its last recorded collection sit below the panel title.
-Root proposals appear under their repository; untagged root proposals follow
-the repository blocks. Programme-owned proposals stay on their programmes.
-`a` adds the recorded loud error details. Missing readings and failures stay
-visible in both modes; long details wrap at narrow terminal widths.
+Errors has New, Critical and High columns per repository, with each digest's age.
+New is the existing digest delta; an absent baseline remains unknown. Critical
+and High count items in the digest's recorded Analysis items table. These are
+analysis priorities, not dependency vulnerabilities or the hit threshold used by
+`!`. Missing or failed analysis remains `?`; a successful empty analysis is zero.
+The local memoro-cli digest currently has no priority analysis and stays unknown.
+A failed latest collection remains red. Expanded view retains aggregate full-test
+and dependency readings; individual error details remain available in JSON.
+
+Each live helper uses the shared rounded session activity component, including
+automated intake turns registered for the duration of their model session. The
+activity dot is green, kind/frame uses the shared palette, and time/tool/model/pid
+follow the same formatting as programme sessions. Cleanup runs on success and
+exceptions; dead process records are filtered by the existing reader.
 
 ### DEV
 
