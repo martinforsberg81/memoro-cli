@@ -28,6 +28,16 @@ A retired route answers with where the work went and exit 2, not an alias
 that silently performs the old operation. `mc status` points to the page and
 `mc goal show`; free-standing workarea entrances are retired too.
 
+## Proposal counts
+
+`mc proposals` reports waiting proposal counts per programme, unassigned root
+proposals and the total. It uses the shared filesystem proposal reader, so it
+also includes dormant and local-only programme directories. Only direct
+Markdown files count; archives, directories and other files do not. No proposal
+body or network is read. `mc proposals --json` returns `total`, `programmes`
+(`programme`, `count`, `path`) and `unassigned` (`count`, `path`). The paths
+follow the configured mc work root.
+
 ## Checks
 
 `tests/mc/help-routes.test.js` checks declared forms and flag routing against

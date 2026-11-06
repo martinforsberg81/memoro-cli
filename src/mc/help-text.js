@@ -16,6 +16,7 @@ PLAN AND FOLLOW
   mc goal list [<programme>]       Goals and their last session's next action
   mc programs list [--json]        Every programme and its priority
   mc programs priority <p>... --set <n>  Set programme priorities
+  mc proposals [--json]           Waiting proposals by programme and total
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
 
 RUN AND LAND
@@ -64,6 +65,8 @@ WHO USES THE VERBS
 ${commandReference('goal')}
 
 ${commandReference('programs')}
+
+${commandReference('proposals')}
 
 ${commandReference('run')}
 
