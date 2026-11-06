@@ -2080,6 +2080,20 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    it('a merge round whose candidate run was cut short is not green, and names the file it did not finish', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const tap = '# tests 3\n# pass 3\n# fail 0\n';
+      try {
+        const report = await fx.report({
+          // The batch's own tracker found `own` started and never ended: its exit and summary read clean.
+          tests: () => Promise.resolve({ code: 0, tap, cut: [own] }),
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.notEqual(report.stopped_at, 'green');
+        assert.match(report.reason ?? '', new RegExp(`output cut: ${own.replace(/[./]/gu, '\\$&')}`, 'u'));
+      } finally { fx.cleanup(); }
+    });
+
     /** The pull request's last round, as `gate-rounds.jsonl` keeps it. */
     function lastRound(fx, line) {
       writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({
@@ -2904,6 +2918,16 @@ describe('the selected files run in their resource classes', () => {
       assert.ok(Date.now() - started < 10_000, 'killed, not waited out');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
+
+  it('realTests: a batch whose output was cut short is not counted passed, whatever its exit said', async () => {
+    // Two resource classes, so two batches: the sqlite file's batch is cut, its exit reads 0 and its summary is clean.
+    const run = await realTests({ cwd: '/work', files: ['a.test.js', 'db.test.js'], flags: ['--no-warnings'], lanes: 2, classes: { 'db.test.js': 'sqlite' },
+      runBatch: async ({ files }) => (files.includes('db.test.js')
+        ? { code: 0, tap: '# tests 1\n# pass 1\n# fail 0\n', cut: ['db.test.js'] }
+        : { code: 0, tap: '# tests 1\n# pass 1\n# fail 0\n' }) });
+    assert.deepEqual(run.cut, ['db.test.js']);
+    assert.notEqual(run.code, 0);
+  });
 
   it('realTests: a round already stopped spawns nothing', async () => {
     const controller = new AbortController();

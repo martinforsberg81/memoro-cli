@@ -176,6 +176,12 @@ const SIGNAL = /^\s*signal:\s*'?([A-Z][A-Z0-9]*)'?\s*$/u;
 const TYPE = /^\s*type:\s*'?(\w+)'?\s*$/u;
 const FAILURE_TYPE = /^\s*failureType:\s*'?(\w+)'?\s*$/u;
 
+/** A top-level diagnostic comment (`# file:///…:3`, `# SyntaxError: …`), and the totals node prints as comments too. */
+const COMMENT = /^# (?!Subtest:)/u;
+const TOTAL = /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s/u;
+/** A hook that failed, as node names it when it timed out: `failed running before hook`. */
+const HOOK_TIMEOUT = /^failed running (\w+) hook$/u;
+
 /** The location as written, line and column kept: `/abs/x.test.js:12:3`. */
 const LOCATION_AT = /^\s*location:\s*'?(.*?)'?\s*$/u;
 /** A multi-line scalar in the block — `error: |-`, `stack: |-` — whose lines sit deeper than its key. */
@@ -196,34 +202,44 @@ function failingBlocks(tap) {
   let open = null;
   // The multi-line scalar being read: its key's indent and where its lines go.
   let scalar = null;
+  // The top-level `#` comment lines since the last result, and the ones each level's
+  // entry was announced after. node writes a file that failed to load (a SyntaxError
+  // on import) as these comments, then its `# Subtest:` entry, so they belong to it.
+  let notes = [];
+  const held = [];
   for (const line of String(tap ?? '').split('\n')) {
     if (scalar) {
       const indent = /^\s*/u.exec(line)[0].length;
       if (!line.trim() || indent > scalar.indent) { scalar.lines.push(line.slice(scalar.indent + 2)); continue; }
       scalar = null;
     }
+    if (COMMENT.test(line) && !TOTAL.test(line)) { notes.push(line.slice(2)); continue; }
     const announced = SUBTEST.exec(line);
     if (announced) {
       open = null;
       const level = Math.floor(announced[1].length / INDENT);
       path.length = level;
       path[level] = announced[2].trim();
+      held[level] = notes;
+      notes = [];
       continue;
     }
     const failed = RESULT.exec(line);
     if (failed) {
       open = null;
-      if (DIRECTIVE.test(failed[2])) continue;
       const level = Math.floor(failed[1].length / INDENT);
+      const notesOf = held[level] || [];
+      notes = [];
+      if (DIRECTIVE.test(failed[2])) continue;
       const own = failed[2].trim();
       open = {
         name: [...path.slice(0, level), own].join(' › '), own, top: level ? path[0] : own,
-        locations: [], at: null, signal: null, type: null, failureType: null, error: [], stack: [],
+        locations: [], at: null, signal: null, type: null, failureType: null, error: [], stack: [], notes: notesOf,
       };
       blocks.push(open);
       continue;
     }
-    if (/^\s*ok \d+ - /u.test(line)) { open = null; continue; }
+    if (/^\s*ok \d+ - /u.test(line)) { open = null; notes = []; continue; }
     if (!open) continue;
     if (BLOCK_END.test(line)) { open = null; continue; }
     const multi = SCALAR.exec(line);
@@ -329,10 +345,26 @@ export function redTests(tap, files, { cwd = null } = {}) {
     const file = relative([...block.locations, ...named].map(owner).find(Boolean) || null);
     tests.push({
       file, name: block.name, own: block.own, at: placeOf(block, file, relative),
-      error: errorLines(block.error), diagnostic: diagnosticOf(block.error),
+      error: errorLines(shownError(block)), diagnostic: diagnosticOf(block.error),
     });
   }
   return tests;
+}
+
+/**
+ * The lines an entry's error is shown by. A file that failed to load has only
+ * `error: 'test failed'` in its block: its own diagnostic is the comment node
+ * wrote before it (`block.notes`), which says what failed to load and where. A
+ * hook that failed names its hook, which node says in the message only when it
+ * timed out; a thrown hook's message is the thrown error.
+ */
+function shownError(block) {
+  if (block.failureType === 'testCodeFailure') return [...block.notes, ...block.error];
+  if (block.failureType !== 'hookFailed') return block.error;
+  const timedOut = block.error.find((line) => HOOK_TIMEOUT.test(line));
+  const kind = timedOut ? HOOK_TIMEOUT.exec(timedOut)[1] : null;
+  const message = block.error.filter((line) => line !== timedOut);
+  return [`${kind ? `${kind} hook` : 'hook'} of ${block.own} failed${message.length ? ':' : ''}`, ...message];
 }
 
 /** Where a red test failed: its frame in its own file from the stack, else its location; `file:line:col`. */

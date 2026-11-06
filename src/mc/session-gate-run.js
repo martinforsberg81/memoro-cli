@@ -12,7 +12,7 @@ import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { readTestTimes, progressTracker, sessionFiles, touchedTests } from './test-times.js';
+import { readTestTimes, outputCut, progressTracker, sessionFiles, touchedTests } from './test-times.js';
 import { captureWorktree, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
@@ -65,7 +65,7 @@ export async function runSessionGate(request, {
         else signal.addEventListener('abort', () => resolve(null), { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, signal, track: tracker.track, complete: tracker.complete,
+        executeSessionGate(request, { ...deps, signal, track: tracker.track, complete: tracker.complete, read: tracker.read,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
@@ -126,7 +126,7 @@ export async function runSessionGate(request, {
 
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
-  write = (text) => process.stdout.write(text), signal, track = null, complete = null, onPhase = () => {}, onProgress = () => {},
+  write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, onPhase = () => {}, onProgress = () => {},
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
@@ -193,12 +193,17 @@ async function executeSessionGate(request, {
       timed = touchedTests(run.tests || [], request.timed || {});
       details = redTests(run.tap, files, { cwd });
       const totals = tapTotals(run.tap);
-      for (const key of ['tests', 'pass', 'fail', 'skipped']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
-      testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted, totals };
-      if (run.error || run.timedOut || run.aborted || !totals.finished || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
+      for (const key of ['tests', 'pass', 'fail', 'skipped', 'cancelled']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
+      // What the tracker saw of the files asked for, read now the run is over: a file
+      // never started, or with a top-level test that never ended, was cut short
+      // whatever the exit code and the summary say (`outputCut`).
+      const cut = request.gate && read ? outputCut(files, { progress: read() }) : [];
+      testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted && !cut.length, totals,
+        ...(cut.length ? { cut } : {}) };
+      if (run.error || run.timedOut || run.aborted || !totals.finished || cut.length || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
         code = 1;
         const reason = run.error || (run.timedOut ? 'tests exceeded their time limit' : run.aborted ? 'tests interrupted'
-          : !totals.finished ? 'tests did not finish' : !totals.tests || !totals.pass ? 'no passing tests executed'
+          : !totals.finished ? 'tests did not finish' : cut.length ? `output cut: ${cut.join(', ')}` : !totals.tests || !totals.pass ? 'no passing tests executed'
             : run.code == null ? 'test exit is unknown' : null);
         if (reason) write(`Error: ${reason}\n`);
       }

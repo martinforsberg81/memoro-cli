@@ -6,6 +6,29 @@ import { describe, it } from 'node:test';
 
 import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, redFiles, rerunLine, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
 
+describe('the verdict line and a load error', () => {
+  it('counts cancelled tests on the verdict line, beside the failures', () => {
+    const summary = summarizeGate('ℹ tests 82\nℹ pass 66\nℹ fail 0\nℹ cancelled 16', { exitCode: 1 });
+    assert.equal(summary.counts.cancelled, 16);
+    const [headline] = gateLines(summary, { command: 'npm test', seconds: 3, logPath: '/x.log' }).split('\n');
+    assert.equal(headline, 'RED — npm test — 82 tests, 0 failed, 16 cancelled — 3s');
+  });
+
+  it('a file that failed to load shows its SyntaxError in the verdict, not only "test failed"', () => {
+    // The lines session-gate-run writes for a red entry (`✖`, its location, its error lines).
+    const output = [
+      '✖ dup.test.js',
+      '    at dup.test.js:1:1',
+      "    file:///tmp/fixture/dup.test.js:3",
+      '    const a = 2;',
+      "    SyntaxError: Identifier 'a' has already been declared",
+      'ℹ tests 2', 'ℹ pass 1', 'ℹ fail 1', 'ℹ cancelled 0',
+    ].join('\n');
+    const text = gateLines(summarizeGate(output, { exitCode: 1 }), { command: 'npm test', seconds: 1, logPath: '/x.log' });
+    assert.match(text, /SyntaxError: Identifier 'a' has already been declared/u);
+  });
+});
+
 describe('gateCommand', () => {
   it('is npm run ci with the base where there is a ci script, npm test otherwise, null with neither', () => {
     assert.deepEqual(gateCommand({ scripts: { ci: 'node scripts/testing/ci.mjs', test: 'node scripts/testing/ci.mjs' } }),
