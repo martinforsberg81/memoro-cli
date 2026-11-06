@@ -48,6 +48,7 @@ import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
+import { STAGES, STATUSES } from './goals.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
   KIND_TONE, PR_QUIET_S, PR_TONE, STATE_TONE, clipCell, duration, kindTone, stateTone,
@@ -765,23 +766,57 @@ function headerLines(lines, c, wide, data, version) {
   const brand = `MC${version ? `  ${version}` : ''}`;
   const action = 'mc manager';
   frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
-  const stats = [
-    { text: `${(data.runner?.sessions || []).length} in flight` },
-    { text: `${statuses.ready || 0} ready`, styles: ['green'] },
-    { text: `${statuses.blocked || 0} blocked`, styles: statuses.blocked ? ['red'] : ['grey'] },
-    { text: `${statuses.Martin || 0} Martin`, styles: statuses.Martin ? ['red'] : ['grey'] },
+  // Wrap complete fields so every count survives a narrow terminal.
+  const summary = (parts) => {
+    let row = [];
+    for (const part of parts.filter(part => part.text)) {
+      if (row.length && width(paint(c, between([...row, part], ' · '))) > room) {
+        frame(paint(c, between(row, ' · ')));
+        row = [];
+      }
+      row.push(part);
+    }
+    if (row.length) frame(paint(c, between(row, ' · ')));
+  };
+  const groups = data.programmes?.programmes || [];
+  const dormant = data.programmes?.dormant ?? groups.filter(group => group.dormant).length;
+  summary([
+    { text: `Programs: ${data.programmes?.active ?? groups.length - dormant} active` },
+    { text: `${dormant} dormant`, styles: ['grey'] },
     { text: `${proposals} proposals`, styles: proposals ? ['yellow'] : ['grey'] },
     { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
-  ];
-  let row = [];
-  for (const part of stats.filter(part => part.text)) {
-    if (row.length && width(paint(c, between([...row, part], ' · '))) > room) {
-      frame(paint(c, between(row, ' · ')));
-      row = [];
-    }
-    row.push(part);
+  ]);
+  const sessions = data.runner?.sessions || [];
+  const kinds = ['build', 'review', 'plan'];
+  const inFlight = Object.fromEntries(kinds.map(kind => [kind, 0]));
+  for (const session of sessions) {
+    const kind = session.kind || 'unknown';
+    inFlight[kind] = (inFlight[kind] || 0) + 1;
   }
-  if (row.length) frame(paint(c, between(row, ' · ')));
+  summary([
+    { text: `${sessions.length} in flight` },
+    ...Object.entries(inFlight).map(([kind, count]) => ({ text: `${count} ${kind}`, styles: kindTone(kind) })),
+  ]);
+  summary([
+    { text: `Goals: ${data.programmes?.count ?? groups.reduce((n, group) => n + (group.goals?.length || 0), 0)} total` },
+    ...[...new Set([...STATUSES, ...Object.keys(statuses)])].map(status => ({
+      text: `${status === STATUSES[0] ? 'status: ' : ''}${statuses[status] || 0} ${status}`,
+      styles: statuses[status] ? statusTone(status) : ['grey'],
+    })),
+  ]);
+  const stages = Object.fromEntries(STAGES.map(stage => [stage, 0]));
+  for (const goal of groups.flatMap(group => group.goals || [])) {
+    const stage = goal.stage || 'unknown';
+    stages[stage] = (stages[stage] || 0) + 1;
+  }
+  summary([
+    ...Object.entries(stages).map(([stage, count]) => ({ text: `${stage === STAGES[0] ? 'Stage: ' : ''}${count} ${stage}`, styles: count ? statusTone(stage) : ['grey'] })),
+  ]);
+  summary([
+    ...kinds.map(kind => ({ text: `${kind === kinds[0] ? 'Throughput 24 h: ' : ''}${data.runner?.day?.by_kind?.[kind]?.sessions || 0} ${kind}`, styles: kindTone(kind) })),
+    { text: `${(data.merges?.repos || []).reduce((n, repo) => n + (repo.day_count || 0), 0)} merges`, styles: ['green'] },
+    { text: `latest deploy: ${data.runner?.production?.at?.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/u, ' UTC') || 'none recorded'}`, styles: ['grey'] },
+  ]);
   frame(paint(c, fitting(trailing([
     { text: 'MANAGER', styles: ['bold', 'cyan'] },
     { text: manager ? `${MARK.running} ${openFor(manager.age_seconds)}` : 'not open', styles: manager ? ['cyan'] : ['grey'] },
