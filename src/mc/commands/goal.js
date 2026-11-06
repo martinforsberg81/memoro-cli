@@ -58,6 +58,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -120,6 +121,8 @@ export async function run(argv, deps = {}) {
     write: deps.write || writeFileAtomic,
     list: deps.list || listDirsOf,
     git: deps.git || gitIn,
+    // The merge check before review and merge (main-conflict.js); a test stands in for it.
+    mainCheck: deps.mainCheck,
     known: deps.known || (() => knownRepositories(env)),
     gh: deps.gh || ghIn,
     queue: deps.queue || ((options) => queueMerge({ root: workRoot(env), env, ...options })),
@@ -254,6 +257,10 @@ function logEntry(args, fields, ctx) {
     const unmet = unmetGoalWords(goal, target.name);
     if (unmet) { stderr.write(`mc: ${target.name} is not moved to review — ${unmet}\n`); return 1; }
   }
+  if (fields.stage === 'review' || fields.stage === 'merge') {
+    const conflicted = mainConflictRefusal(goal, target, ctx);
+    if (conflicted) { stderr.write(`mc: ${target.name} is not moved to ${fields.stage} — ${conflicted}\n`); return 1; }
+  }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
@@ -321,6 +328,23 @@ function entryTexts(flags, ctx) {
 /** A file's text as it is; `-` is stdin's. */
 function readEntryFile(path) {
   return readFileSync(path === '-' ? 0 : path, 'utf8');
+}
+
+/**
+ * Why the goal may not be moved to review or merge, or null: a repository of
+ * the goal whose branch merges into origin/main with a conflict, its paths
+ * named as `<repo>/<path>` (main-conflict.js). A failed fetch is a warning, and
+ * that repository is checked against the origin/main it already holds.
+ */
+function mainConflictRefusal(goal, target, ctx) {
+  const check = ctx.mainCheck || ((dir) => checkAgainstMain(dir));
+  const paths = [];
+  for (const repo of goal.repos) {
+    const checked = check(join(target.dir, repo));
+    if (!checked.fetch.ok) ctx.stderr.write(`mc: warning: ${repo}: git fetch origin failed (${checked.fetch.text}) — checked against the origin/main already held\n`);
+    paths.push(...checked.paths.map((path) => `${repo}/${path}`));
+  }
+  return paths.length ? conflictReason(paths) : null;
 }
 
 /** Execute the session's merge decision for every PR it registered on the goal. */

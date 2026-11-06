@@ -11,6 +11,9 @@ export const REAL_GIT_FILES = new Set([
   'tests/mc/merger.test.js',
   'tests/mc/repo-merge-live.test.js',
   'tests/mc/push-guard.test.js',
+  // A real origin and clone for the merge against origin/main before publish and goal stage (main-conflict.js).
+  'tests/mc/publish.test.js',
+  'tests/mc/commands/goal.test.js',
   // `git archive`, and worktree removal on disk.
   'tests/mc/asc-build-testflight.test.js',
   'tests/mc/work-layout.test.js',

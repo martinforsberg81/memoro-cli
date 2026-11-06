@@ -18,7 +18,9 @@
  *
  * The sequence memoro's `AGENTS.md` asks a session to walk by hand
  * (`publish.js` has each rule): refuse on main, refuse a dirty tree, refuse
- * a remote branch that moved (never force), non-force `git push -u`, then
+ * a remote branch that moved (never force), refuse a branch whose merge with
+ * origin/main conflicts (after a fetch; a failed fetch only warns),
+ * non-force `git push -u`, then
  * one `gh pr create` — or, when the branch already has an open pull request,
  * `gh pr edit` of exactly the fields given (title, body, base) — and one
  * `gh pr view` of the result.
@@ -42,6 +44,7 @@ import { describedBody, markedBody, messageParts, publishLines, readBody, refusa
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
 import { commandUsage } from '../command-help.js';
+import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
@@ -77,6 +80,10 @@ export async function run(argv, deps = {}) {
   const remoteIsAncestor = remoteHead ? git(['merge-base', '--is-ancestor', remoteHead, 'HEAD']) !== null : true;
   const why = refusal({ branch, dirty, remoteHead, localHead, remoteIsAncestor });
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
+  // A branch whose merge with origin/main conflicts is not published (memoro-cli#1369): asked after a fetch.
+  const checked = (deps.mainCheck || ((dir) => checkAgainstMain(dir)))(cwd);
+  if (!checked.fetch.ok) stderr.write(`mc: warning: git fetch origin failed (${checked.fetch.text}) — checked against the origin/main already held\n`);
+  if (checked.paths.length) { stderr.write(`mc: ${conflictReason(checked.paths)}\n`); return 1; }
   const env = deps.env || process.env;
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
