@@ -28,7 +28,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { applyFailure, applyObservation, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyCollectedCapacity, readCapacity, writeCapacity } from './model-capacity.js';
 import { runnerDir } from './paths.js';
 import { realLock } from './runner-lock.js';
 
@@ -205,10 +205,7 @@ export async function refreshCodexCapacity({ root = runnerDir(), now = new Date(
   const answer = await collectCodexCapacity(options);
   const written = lock(root, () => {
     const state = readCapacity({ root });
-    const changedDuringRead = JSON.stringify(state.providers.codex) !== before;
-    const next = answer.ok && !changedDuringRead
-      ? applyObservation(state, 'codex', { windows: answer.windows, models: answer.models }, now)
-      : answer.ok ? state : applyFailure(state, 'codex', { why: answer.why }, now);
+    const next = applyCollectedCapacity(state, 'codex', answer, now, before);
     return writeCapacity(next, { root });
   });
   return { ok: answer.ok, why: answer.why ?? null, state: written };

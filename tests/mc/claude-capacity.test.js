@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CLAUDE_USAGE_URL, claudeUsageWindows, collectClaudeCapacity, readClaudeCredential } from '../../src/mc/claude-capacity.js';
+import { applyCollectedCapacity, applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 
 const valid = JSON.stringify({
   five_hour: { utilization: 37.5, resets_at: '2026-11-06T15:00:00Z' },
@@ -51,6 +52,25 @@ test('Claude auth is read-only from the macOS Keychain or standard credentials f
   assert.equal(file, 'file-token');
   assert.equal(seen.at(-1), '/fixture/.claude/.credentials.json');
   assert.equal(readClaudeCredential({ platform: 'linux', home: '/fixture', exists: () => false }), null);
+});
+
+test('a failed collector retains its last snapshot and an older success preserves concurrent provider updates', () => {
+  const now = new Date('2026-11-06T12:00:00Z');
+  const later = new Date('2026-11-06T12:00:01Z');
+  const window = (fraction_used) => ({ fraction_used, resets_at: '2026-11-06T15:00:00Z' });
+  const base = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: window(0.25), seven_day: window(0.4) } }, now);
+  const before = JSON.stringify(base.providers.claude);
+  const failed = applyCollectedCapacity(base, 'claude', { ok: false, why: 'login unavailable' }, later, before);
+  assert.equal(failed.providers.claude.windows.five_hour.fraction_used, 0.25);
+  assert.deepEqual(failed.providers.claude.failure, { at: later.toISOString(), why: 'login unavailable' });
+
+  let concurrent = applyObservation(base, 'claude', { windows: { five_hour: window(0.3), seven_day: window(0.45) } }, later);
+  concurrent = applyRefusal(concurrent, 'claude', '2026-11-06T13:00:00Z');
+  concurrent = applyObservation(concurrent, 'codex', { windows: { primary: window(0.6) }, models: [{ id: 'gpt-6-luna', efforts: ['high'] }] }, later);
+  const wonByNewer = applyCollectedCapacity(concurrent, 'claude', { ok: true, windows: { five_hour: window(0.1), seven_day: window(0.1) } }, now, before);
+  assert.equal(wonByNewer.providers.claude.windows.five_hour.fraction_used, 0.3);
+  assert.equal(wonByNewer.providers.claude.refusal_until, '2026-11-06T13:00:00Z');
+  assert.equal(wonByNewer.providers.codex.windows.primary.fraction_used, 0.6);
 });
 
 test('Claude collector sanitizes absent login, auth errors, redirects and malformed schema', async () => {

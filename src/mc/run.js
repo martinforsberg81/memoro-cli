@@ -98,7 +98,7 @@ import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readB
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { CODEX_POLL_MS, refreshCodexCapacity } from './codex-capacity.js';
 import { collectClaudeCapacity } from './claude-capacity.js';
-import { applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
+import { applyCollectedCapacity, applyRefusal, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, gatewayLaunch } from './billing-route.js';
@@ -526,10 +526,7 @@ export function realDeps(env = process.env) {
       // so stream/refusal observations and the other provider survive.
       const state = realLock(root, () => {
         const atWrite = readCapacity({ root });
-        const changedDuringRead = JSON.stringify(atWrite.providers.claude) !== before;
-        const next = got.ok && !changedDuringRead
-          ? applyObservation(atWrite, 'claude', { windows: got.windows, models: null }, now)
-          : got.ok ? atWrite : applyFailure(atWrite, 'claude', { why: got.why }, now);
+        const next = applyCollectedCapacity(atWrite, 'claude', got, now, before);
         return writeCapacity(next, { root });
       });
       return { ...got, state };
