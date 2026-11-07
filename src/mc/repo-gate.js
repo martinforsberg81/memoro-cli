@@ -47,7 +47,8 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
@@ -2382,6 +2383,9 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests, cut };
 }
 
+/** test-stdio-blocking.mjs, loaded by every batch (`runTestBatch`). */
+const STDIO_BLOCKING = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-stdio-blocking.mjs')).href;
+
 function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
@@ -2398,6 +2402,11 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     // the timeout alone that process stays alive on the test's own timers. A
     // repository that declares its own `--test-timeout` keeps it.
     const perTest = declared.some((flag) => String(flag).startsWith('--test-timeout')) ? [] : [`--test-timeout=${TEST_TIMEOUT_MS}`];
+    // `--test-force-exit` ends a file's process the moment its tests end, and on macOS
+    // that drops a report still queued on its pipe: the batch then reads fewer tests
+    // than exist and exits 0 ("output cut"). `STDIO_BLOCKING` makes stdout and stderr
+    // blocking before any test runs. It comes before the declared flags, so the
+    // repository's own `--import`s still load, here and in every test file.
     const forceExit = declared.includes('--test-force-exit') ? [] : ['--test-force-exit'];
     // The measured cost of each file (test-times.js), in a second reporter so
     // that the TAP this reads stays as it was.
@@ -2423,7 +2432,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
       return { tests, cut };
     };
-    const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, ...declared, ...files], {
+    const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, '--import', STDIO_BLOCKING, ...declared, ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
