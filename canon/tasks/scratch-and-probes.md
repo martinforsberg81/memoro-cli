@@ -31,7 +31,7 @@ git -C "$reviewed" status --short
 ```
 Stop unless HEAD equals `$sha` and the status is empty. A dev server the goal started is stopped first with `mc dev stop <instance_id>` (`mc dev list` names it), before the cwd check below; `mc shot dev` restarts it afterwards. Stop too if another process stands in the worktree:
 `lsof -a -d cwd -Fpn` lists each process with its working directory, and the only processes in `$reviewed` may be this
-session's shell and the processes it is running for the check. Then save the source before the fault and record the pre-replay state:
+session (its agent process and its shell) and the processes it runs for the check. Then save the source before the fault and record the pre-replay state:
 ```sh
 before=$(git -C "$reviewed" rev-parse HEAD)
 cp "$reviewed/$source" "$MC_SCRATCH/source-before"
