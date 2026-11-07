@@ -19,13 +19,14 @@ mc goal martin [<programme>/<goal>] --reason "<the question>" \
 ```
 
 - 2 to 4 options, each a whole way to proceed, keys `^[a-z][a-z0-9_]{0,31}$`
-  each once; `--recommend` is yours among them; evidence is what you found
-  and tried. A malformed call is refused with an example: fix it, call again.
+  each once. They are not a menu: `--recommend` is your proposal among them;
+  evidence is what you found and tried. A malformed call is refused with an
+  example: fix it, call again.
 - When mc prints `mc: jev answered <key> (…) — continue with: <text>`, the
   status stays: continue with that answer as if Martin had given it.
   Otherwise the goal is `Martin` with jev's reading; end as your role says.
-- A reserved act goes with `--reserved <act>`, never to jev. User data and
-  passwords never go in a question: key redaction is only the guard.
+- A reserved act goes with `--reserved <act>`, never to jev. No user data or
+  passwords in a question: key redaction is only the guard.
 
 ## What reaches Martin
 
@@ -46,9 +47,8 @@ over.
 
 ## How to ask and tell
 
-- Headless, there is nobody to ask: your role says where the question goes (a
-  blocked step or a pull request). Build and review report an obstacle as
-  `blocked`, which a mend session takes.
+- Headless, there is nobody to ask: your role says where the question goes.
+  Build and review report an obstacle as `blocked`, which a mend session takes.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.
