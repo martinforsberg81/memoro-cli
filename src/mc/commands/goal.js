@@ -223,12 +223,17 @@ function newGoal(args, flags, ctx) {
   return 0;
 }
 
-/** The word a session's log entry names its writer by: from `MC_ROLE`, as the role's name before its `:`. A person writes none. */
+/**
+ * The word a session's log entry names its writer by: from `MC_ROLE`, as the role's name before its `:`. A word
+ * that is not one token (it holds whitespace, or is empty) is left out, and the entry is written without the
+ * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. A person writes none.
+ */
 const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
 function writerRole(env) {
   const role = env.MC_ROLE || '';
   if (!role || (env.MC_TOOL || 'person') === 'person') return null;
-  return WRITER_WORDS[role] ?? (role.split(':')[0] || null);
+  const word = WRITER_WORDS[role] ?? role.split(':')[0];
+  return /^\S+$/u.test(word) ? word : null;
 }
 
 /**
