@@ -22,7 +22,7 @@ export const COMMAND_USAGE = Object.freeze({
     "\n",
     "The runner runs headless sessions on goals: build, review, and plan for a goal that waits on it.\n",
     "A free lane takes blocked recovery, finish/merge, review, build, then programme planning; it starts no project step.\n",
-    "Programme planning wakes with one or no unfinished goals, or at most once per 24 hours for direct open proposals.\n",
+    "Programme planning wakes when its last goal finishes, or at most once per 24 hours for direct open proposals.\n",
     "The daily digest runs after 05:00Z; inbox turns have their own chore cadence.\n",
     "--once runs one session and skips chores; --no-merge leaves pull requests open.\n",
     "--idle-sleep is the idle wait in seconds (600 by default); --no-caffeinate allows sleep.\n",
