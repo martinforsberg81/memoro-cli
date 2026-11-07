@@ -55,5 +55,5 @@ test -z "$(git -C "$reviewed" status --short)"
 test "$(git -C "$reviewed" rev-parse HEAD)" = "$before"
 ```
 Rerun the corresponding normal `mc gate <test-files…>` and record its log and green result. Repeat the HEAD and status
-checks after it. mc-code probes also isolate `MC_HOME`/`MC_WORK_ROOT`; skill-install probes isolate `HOME`/`CLAUDE_CONFIG_DIR`
+checks after it. A rerun that reports `reused` at the judged HEAD with a clean status is valid evidence, since reuse needs identical tree bytes (`findResumable`) and so proves the restore exact; record its log, and use `mc gate --fresh` only when the earlier GREEN itself is in doubt. mc-code probes also isolate `MC_HOME`/`MC_WORK_ROOT`; skill-install probes isolate `HOME`/`CLAUDE_CONFIG_DIR`
 above. This is bounded evidence, not a mutation framework or repeated full-suite requirement.

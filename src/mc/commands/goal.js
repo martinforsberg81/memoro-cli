@@ -9,6 +9,7 @@
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
+ *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a build or review session
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
  *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
  *                                  and every goal that started after others given a phase (`phaseGoals`)
@@ -77,6 +78,7 @@ const VERB_FLAGS = {
   set: ['--text'],
   'document add': ['--label', '--path'],
   'criterion add': ['--criterion', '--check'],
+  'criterion set': ['--criterion', '--check'],
   'criterion met': [],
   'criterion unmet': [],
   convert: [],
@@ -140,6 +142,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'set') return setField(rest, flags, ctx);
   if (verb === 'document add') return addDocument(rest, flags, ctx);
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
+  if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
   if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
@@ -464,7 +467,8 @@ function addCriterion(args, flags, ctx) {
   const missing = ['criterion', 'check'].filter((key) => !flags[key]?.trim()).map((key) => `--${key}`);
   if (missing.length) { stderr.write(`mc: criterion add needs ${missing.join(', ')} — what must be true, and how it is checked\n`); return 2; }
   return changeGoal(args[0], ctx, (goal) => ({ ...goal, success_criteria: [...goal.success_criteria, { criterion: flags.criterion.trim(), check: flags.check.trim(), met: false }] }),
-    (goal) => `criterion ${goal.success_criteria.length} added · ${criteriaWords(goal)}`);
+    (goal) => `criterion ${goal.success_criteria.length} added · ${criteriaWords(goal)}`,
+    (goal, target) => warnAbsentTests(goal, target, flags.check.trim(), ctx));
 }
 
 /**
@@ -483,8 +487,85 @@ function markCriterion(args, met, ctx) {
   }, (goal) => `criterion ${n} ${met ? 'met' : 'unmet'} · ${criteriaWords(goal)}`);
 }
 
-/** One verb's change to a goal's GOAL.json (`updateGoal`), said on stdout, or why not on stderr. */
-function changeGoal(named, ctx, change, said) {
+/**
+ * `mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]`
+ * — criterion `n`'s text and/or check rewritten, and the criterion unmet, its
+ * check to be run again. Logged with the old and new text; the stage and status
+ * kept. Acceptance is written by plan or a person: a build or review session is
+ * refused, and so is a call with no flag. A check given is read for the test
+ * files it names (`warnAbsentTests`).
+ */
+function setCriterion(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
+  const role = writerRole(env);
+  if (role === 'build' || role === 'review') { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan or a person\n`); return 2; }
+  const given = ['criterion', 'check'].filter((key) => flags[key] !== null);
+  if (!given.length) { stderr.write('mc: criterion set needs --criterion "…" or --check "…" — what is rewritten\n'); return 2; }
+  const blank = given.filter((key) => !flags[key].trim()).map((key) => `--${key}`);
+  if (blank.length) { stderr.write(`mc: criterion set needs ${blank.join(', ')} with text in it\n`); return 2; }
+  const [named, number] = args.length === 2 ? args : [undefined, args[0]];
+  const n = Number(number);
+  if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${number} is not a criterion's number — 1, 2, …\n`); return 2; }
+  const criterion = flags.criterion === null ? null : flags.criterion.trim();
+  const check = flags.check === null ? null : flags.check.trim();
+  let was = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`] };
+    was = goal.success_criteria[n - 1];
+    return { ...goal, success_criteria: goal.success_criteria.map((item, i) => (i === n - 1
+      ? { criterion: criterion ?? item.criterion, check: check ?? item.check, met: false }
+      : item)) };
+  }, (goal) => `criterion ${n} rewritten, unmet · ${criteriaWords(goal)}`, (goal, target) => {
+    const changed = [
+      criterion === null ? null : `criterion was "${oneLine(was.criterion)}", now "${oneLine(criterion)}"`,
+      check === null ? null : `check was "${oneLine(was.check)}", now "${oneLine(check)}"`,
+    ].filter(Boolean);
+    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment: `criterion ${n} rewritten, unmet — ${changed.join('; ')}`, next: null, stage: goal.stage, status: goal.status };
+    appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
+    if (check !== null) warnAbsentTests(goal, target, check, ctx);
+  });
+}
+
+/** A text on one line, for a LOG.md comment. */
+const oneLine = (text) => String(text).replace(/\s*\n\s*/gu, ' ');
+
+/** The test files a check names: `tests/<path>.test.(js|mjs|cjs|ts)`. */
+const TEST_FILE_RE = /tests\/[\w./-]+\.test\.(?:js|mjs|cjs|ts)\b/gu;
+
+/**
+ * A warning, never a refusal, for each test file `check` names that is on no
+ * repository's origin/main of the goal: once per path, saying the repositories.
+ * A git failure is no answer, and warns nothing (`onOriginMain`).
+ */
+function warnAbsentTests(goal, target, check, ctx) {
+  for (const path of new Set(check.match(TEST_FILE_RE) ?? [])) {
+    const answers = goal.repos.map((repo) => onOriginMain(repo, path, target, ctx));
+    if (answers.length && answers.every((answer) => answer === 'absent')) {
+      ctx.stderr.write(`mc: warning: ${path} is not on origin/main of ${goal.repos.join(', ')} — a new file the build creates, or a wrong name?\n`);
+    }
+  }
+}
+
+/**
+ * Whether `path` is on origin/main of `repo`: `present`, `absent` (git says it
+ * does not exist there) or `unknown` (no answer). Asked in the goal's worktree
+ * of the repository when there is one, else in the repository mc knows.
+ */
+function onOriginMain(repo, path, target, ctx) {
+  const worktree = join(target.dir, repo);
+  const cwd = ctx.exists(worktree) ? worktree : ctx.known().find((known) => repoNameOf(known) === repo);
+  if (!cwd) return 'unknown';
+  const r = ctx.git(cwd, ['cat-file', '-e', `origin/main:${path}`]);
+  if (r.ok) return 'present';
+  return /does not exist in/u.test(r.stderr || '') ? 'absent' : 'unknown';
+}
+
+/**
+ * One verb's change to a goal's GOAL.json (`updateGoal`), said on stdout, or why
+ * not on stderr. `after(goal, target)` runs once the write is made.
+ */
+function changeGoal(named, ctx, change, said, after = null) {
   const { stdout, stderr, read, write } = ctx;
   const target = goalNamed(named, ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
@@ -494,6 +575,7 @@ function changeGoal(named, ctx, change, said) {
     for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
+  if (after) after(outcome.goal, target);
   stdout.write(`mc: ${target.name} · ${said(outcome.goal)}\n`);
   return 0;
 }
