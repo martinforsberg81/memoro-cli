@@ -84,7 +84,7 @@ import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
-import { queueMerge, readMerger, startMerger } from './merger.js';
+import { offlineBackoffMs, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
 import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
@@ -776,6 +776,33 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     observeCapacity((state) => applyRefusal(state, provider, until.toISOString()));
     say(`${provider} refused until ${until.toISOString()}`);
   }
+  /**
+   * The API server cannot be reached (`apiInterruption` kind `offline`): no new
+   * model session of any kind starts until the hold lapses. Its length is
+   * `offlineBackoffMs(n)` — a minute, doubling, at most fifteen — with `n` the
+   * offline endings in a row. A session that ends any other way clears it and
+   * resets `n`; a running session is untouched. It is held in memory, so a
+   * restart starts without one. The tick writes nothing while it holds.
+   */
+  let offlineHold = null;
+  const untilText = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  function offlineHeld() {
+    return Boolean(offlineHold) && deps.now().getTime() < offlineHold.until;
+  }
+  function noteOfflineEnding(name, kind) {
+    if (kind !== 'offline') {
+      if (!offlineHold) return;
+      offlineHold = null;
+      say(`${name}: the API answers again — the offline hold is cleared`);
+      return;
+    }
+    const n = (offlineHold?.n ?? 0) + 1;
+    const wait = offlineBackoffMs(n);
+    const until = deps.now().getTime() + wait;
+    offlineHold = { n, until };
+    say(`${name}: the API server cannot be reached — no session starts until ${untilText(until)} (n=${n}, ${wait / 1000} s)`);
+  }
+
   /** The candidate a work class runs on now, from the local catalog and snapshot (`chooseCandidate`). No turn, no account read. */
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
@@ -932,6 +959,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * without the day's reading being the only reading there is.
    */
   async function runHelperDay() {
+    if (offlineHeld()) return null;
     const due = helperDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
     if (!due.due) return null;
     const t0 = deps.now().getTime();
@@ -1110,6 +1138,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * carries the outcome.
    */
   async function runIntakeDrain() {
+    if (offlineHeld()) return;
     const out = await drainIntake({
       env: deps.env,
       now: deps.now,
@@ -1782,6 +1811,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A goal's name holds a `/`, which a file stem may not.
       const stem = programmeTurn ? `plan-${goal.programme}-${reason.replaceAll('_', '-')}-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
       const out = join(paths.log, stem);
+      // Before anything a launch leaves behind (the in-flight file, the scratch directory, a receipt, a log entry).
+      if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
       say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
@@ -1871,6 +1902,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
       if (result.handedOff) read.note = 'success,queued';
+      noteOfflineEnding(name, read.interrupted);
       recordRefusal({ name, launch, route }, read, picked.billing);
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
@@ -1878,8 +1910,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (programmeTurn) writeJson(planReceipt(goal.programme), { ...programmeReceipt, finished: stamp(), outcome: read.note, status: result.status, timed_out: Boolean(result.timedOut) });
       else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
-      else if (review) afterReview(goal, name);
-      else if (!spoke) goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
+      // An offline ending answers nothing about the goal: no review entry, no runner entry.
+      else if (review && read.interrupted !== 'offline') afterReview(goal, name);
+      else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
       const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
       logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
@@ -2074,6 +2107,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   } = {}) {
     const label = tag || repo || 'run';
     const passed = new Set(already);
+    // The hold: a tick during it picks nothing, starts nothing, and says nothing per goal.
+    if (offlineHeld()) return { ran: 0 };
     const diskWait = await diskRoom('lane');
     if (diskWait) return { ran: 0, waited: diskWait };
     if (!memoryRoom()) return { ran: 0, waited: 'skipped:memory' };
@@ -2082,6 +2117,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A runner that has handed over finishes the pass it is in and picks
       // nothing more (`runLoop`).
       if (updateRequested()) return { ran: 0 };
+      if (offlineHeld()) return { ran: 0 };
       const pick = nextWork({ repo, passed, carry: last?.name });
       if (!pick) return { ran: 0 };
       // A goal's build or review, or the plan session a blocked goal wakes: the only work a lane takes.
