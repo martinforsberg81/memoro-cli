@@ -3035,6 +3035,7 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(hung.outcome, 'red', 'a test that never ends is red in the receipt');
       assert.equal(hung.stopped_at, null, 'the child closed on its own, not at the round ceiling');
       assert.deepEqual(hungRun.red_tests.map((test) => test.name), ['hangs']);
+      assert.match(hungRun.red_tests[0].error.join(' '), /test timed out after 300ms/u, 'named by the run\'s own timeout, at the 300 ms it was given');
       assert.equal(hung.execution.tests.totals.pass, 2, 'the other tests, in both files, still pass');
       const [batch, ...settled] = hung.execution.tests.batches;
       assert.deepEqual(batch.files, ['hang.test.js', 'ok.test.js']);
