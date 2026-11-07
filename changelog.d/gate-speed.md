@@ -1,1 +1,5 @@
-- Suites find the toolchain's git directly, a third of the shim's cost per call; memoro-cli's rounds no longer wait behind memoro's deploy; `autonomous-merge.test.js` is split into three files.
+section: Changed
+
+- **Suites run faster and in separate files.** Suites find the toolchain's git directly, a third of the shim's cost per call;
+  memoro-cli's rounds no longer wait behind memoro's deploy; `autonomous-merge.test.js`
+  is split into three files.
