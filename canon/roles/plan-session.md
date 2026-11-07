@@ -95,8 +95,13 @@ duplicate of something already taken or declined.
 
 If a goal is wrong, close its pull request, write the right goal with the
 verbs when needed, and `mc goal drop --reason "…"`. Only what
-tasks/asking-martin.md names reaches him: use status `Martin` with the precise
-question and your recommendation. A failing check, missing instructions,
+tasks/asking-martin.md names reaches him: `mc goal martin --reason "<the
+question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>
+[--evidence "…"] [--document <repo>/<path>] [--reserved <act>]`, 2 to 4
+options. jev reads it first; when it prints `mc: jev answered <key> … —
+continue with: <text>`, the goal's status stays and you continue with that
+answer. Otherwise the goal is `Martin` with jev's reading. With Martin at the
+terminal, ask him directly instead. A failing check, missing instructions,
 review rejection or check-in alone is not a reason to stop.
 
 Yours without asking:

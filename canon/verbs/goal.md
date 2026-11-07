@@ -40,9 +40,18 @@ with ✓/✗ and its check, and each worktree's state.
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
   `done`. `blocked`, in any stage, wakes a mend session, which resolves the
   obstacle and retries the stage (`mc goal ready`; in `merge`, `mc goal stage
-  merge` requeues). `Martin` waits on Martin and wakes nothing; `mc goal martin
-  --reason "…"` records his question and the recommendation. `mc goal ready`
-  keeps the stage.
+  merge` requeues). `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
+  first: `mc goal martin --reason "<the question>" --option "<key>: <text>"
+  --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
+  <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys
+  `^[a-z][a-z0-9_]{0,31}$`, the recommendation one of them. A call without them is refused with a return
+  instruction (exit 2, nothing written): fix it and call again. When jev
+  settles the question it prints `mc: jev answered <key> … — continue with:
+  <option text>`, the status stays, and the session continues with that answer;
+  otherwise the goal is `Martin` with jev's reading in the entry. A reserved
+  act (`--reserved deploy|production-data|credentials|admin`) and a person's
+  call never go to jev. `mc goal log --status Martin` is refused: use
+  `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
   REVIEW.md when present), and the instructions for that stage before acting:
@@ -61,8 +70,9 @@ with ✓/✗ and its check, and each worktree's state.
   In a headless session, follow the assigned role: a build or review that
   cannot run its stage sets `blocked` for a mend session; a finish or mend
   that needs a change to the goal, contract or product scope, or a person's
-  act, sets `mc goal martin --reason "…"` in its current stage and records
-  exactly what is needed.
+  act, calls `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
+  <key>` in its current stage with exactly what is needed; when jev answers, it
+  continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session a backward move, naming both stages
   — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
   logged. It refuses `done` and `dropped` from every session but plan, any

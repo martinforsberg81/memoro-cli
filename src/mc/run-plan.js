@@ -354,7 +354,7 @@ export function goalFinishCheckInPrompt({ minutes, count }) {
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
     'Your job is what review found: fix it, gate, publish, and `mc goal stage merge`. Preserve acceptance and gate requirements.',
-    'An obstacle you cannot resolve within the goal as written: `mc goal blocked --reason "…"` (a mend session takes it). A change to the goal, contract or product scope: `mc goal martin --reason "<the question, what you tried, and your recommendation>"`.',
+    'An obstacle you cannot resolve within the goal as written: `mc goal blocked --reason "…"` (a mend session takes it). A change to the goal, contract or product scope: `mc goal martin --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> --evidence "<what you tried>"`; when jev answers, continue with its answer.',
   ].join('\n');
 }
 
@@ -365,7 +365,7 @@ export function goalMendCheckInPrompt({ minutes, count }) {
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
     'Your job is the obstacle: diagnose it, resolve it, and retry the goal\'s current stage (`mc goal ready`; in merge, `mc goal stage merge`). Preserve acceptance and gate requirements.',
-    'Only a change to the goal, contract or product scope waits on Martin: `mc goal martin --reason "<the question, what you tried, and your recommendation>"`.',
+    'Only a change to the goal, contract or product scope waits on Martin: `mc goal martin --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> --evidence "<what you tried>"`; when jev answers, continue with its answer.',
   ].join('\n');
 }
 
