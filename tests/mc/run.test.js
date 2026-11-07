@@ -3162,6 +3162,27 @@ test('a goal in phase 2 is not started while a goal in phase 1 is in plan, build
   assert.ok(f.calls.git.some((call) => call[0] === `${GOALS}/second/memoro` && call.slice(1).join(' ') === 'rev-list --count origin/main..HEAD'), 'its unbuilt branch is looked at against origin/main before its first build');
 });
 
+test('a goal whose only build-stage entry is its plan\'s is remade from origin/main before its first build; a build\'s entry is not remade over', async () => {
+  // rev-list --count: the branch has no commits of its own, and main is two ahead of it.
+  const counted = (f) => {
+    const git = f.deps.git;
+    f.deps.git = (cwd, args) => (args[0] === 'rev-list' && args.includes('--count')
+      ? { ok: true, stdout: args.at(-1) === 'origin/main..HEAD' ? '0\n' : '2\n' } : git(cwd, args));
+    return f;
+  };
+  const reset = (f) => f.calls.git.some((call) => call[0] === `${GOALS}/planned/memoro` && call.slice(1).join(' ') === 'reset -q --keep origin/main');
+  const planned = counted(goalFixture({ planned: { log: '## 2026-08-20T10:00Z · claude opus · build · ready · by plan\n\nDone: the plan\n' } }));
+  let resetBeforeSession = null;
+  planned.answer = (call) => { resetBeforeSession = reset(planned); return okSession()(call); };
+  await createRunner({ deps: planned.deps }).pass({ repo: 'memoro' });
+  assert.equal(resetBeforeSession, true, 'remade before the session starts');
+  assert.ok(planned.log.some((line) => /goal:prog\/planned: memoro goal\/planned remade from origin\/main — it had no commits of its own, and main has 2 more/u.test(line)));
+
+  const built = counted(goalFixture({ planned: { log: '## 2026-08-20T10:00Z · claude opus · build · ready · by build\n\nDone: built\n' } }));
+  await createRunner({ deps: built.deps }).pass({ repo: 'memoro' });
+  assert.equal(reset(built), false, 'a build\'s own entry: the branch is not moved');
+});
+
 test('two goals in one phase run side by side, while the next phase waits', async () => {
   const f = goalFixture({ a: { log: goalLog('2026-08-20T10:00Z') }, b: { log: goalLog('2026-08-21T10:00Z') }, later: { phase: 2 } });
   let release;
@@ -3240,6 +3261,20 @@ test('a goal whose every pull request (prs) has landed or closed is set done by 
   const entry = parseLog(f.files[`${GOALS}/asc/LOG.md`]).at(-1);
   assert.deepEqual([entry.tool, entry.stage, entry.done], ['runner', 'done', 'landed memoro#14761, memoro#14756']);
   assert.equal(where(f, 'open'), 'merge · Martin', 'memoro#20 is open');
+});
+
+test('a closed pull request is never queued: the goal is done once the others have landed, and the closed one is named', async () => {
+  const f = goalFixture({ shut: { stage: 'merge', status: 'ready' } });
+  f.files[`${GOALS}/shut/GOAL.json`] = withGoal(f.files[`${GOALS}/shut/GOAL.json`], { prs: ['memoro#1', 'memoro#2'] });
+  const states = { 1: 'MERGED', 2: 'CLOSED' };
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => (args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'state'
+    ? { ok: true, stdout: JSON.stringify({ state: states[args[2]] }) } : gh(cwd, args));
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(f.calls.rounds.some(({ pr }) => pr === 2), false, 'memoro#2 is not queued');
+  assert.equal(goalField(f.files[`${GOALS}/shut/GOAL.json`], 'stage'), 'done');
+  const entry = parseLog(f.files[`${GOALS}/shut/LOG.md`]).at(-1);
+  assert.deepEqual([entry.tool, entry.stage, entry.done, entry.comment], ['runner', 'done', 'landed memoro#1', 'closed without landing: memoro#2']);
 });
 
 test('a Martin or done goal is never started', async () => {

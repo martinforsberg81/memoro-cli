@@ -366,12 +366,17 @@ function mainConflictRefusal(goal, target, ctx) {
   return paths.length ? conflictReason(paths) : null;
 }
 
-/** Execute the session's merge decision for every PR it registered on the goal. */
+/**
+ * Execute the session's merge decision for every PR it registered on the goal.
+ * A PR GitHub says is closed without merging is not queued, and is named.
+ */
 function queueGoal(target, goal, ctx) {
   const queued = [];
+  const closed = [];
   for (const item of goal.prs) {
     const repoPath = ctx.known().find((path) => repoNameOf(path) === item.repo);
     if (!repoPath) return { error: `${item.repo} is not a repository mc knows` };
+    if (prStateOf(ctx, repoPath, item.pr) === 'CLOSED') { closed.push(prRef(item)); continue; }
     try {
       ctx.queue({ repo: item.repo, repoPath, pr: item.pr, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, now: ctx.now });
       queued.push(prRef(item));
@@ -379,7 +384,16 @@ function queueGoal(target, goal, ctx) {
       return { error: `${prRef(item)} could not be queued (${error?.message || error})` };
     }
   }
-  return { text: queued.length ? `queued ${queued.join(', ')} for the merger` : 'no pull requests registered on the goal' };
+  const said = queued.length ? [`queued ${queued.join(', ')} for the merger`] : [];
+  for (const ref of closed) said.push(`${ref} closed without merging — not queued`);
+  return { text: said.length ? said.join('; ') : 'no pull requests registered on the goal' };
+}
+
+/** GitHub's `state` of pull request `pr` in the repository at `repoPath`, or null when it cannot say. */
+function prStateOf(ctx, repoPath, pr) {
+  const asked = ctx.gh(repoPath, ['pr', 'view', String(pr), '--json', 'state']);
+  if (!asked.ok) return null;
+  try { return JSON.parse(asked.stdout || 'null')?.state ?? null; } catch { return null; }
 }
 
 /** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */

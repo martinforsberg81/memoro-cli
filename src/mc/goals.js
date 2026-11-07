@@ -374,6 +374,8 @@ const LEGACY_VERDICT = /^(green|red)\b.*?\b[0-9a-f]{7,40}\b/u;
 /** The sessions that write the goal's build: neither the runner, a person, nor a review. */
 function buildWrote(entry) {
   if (entry.tool === 'runner' || entry.tool === 'person') return false;
+  // An entry that names another role (`· by plan`, `· by review`) is no build's: a plan's stage entry moved the goal to build.
+  if (entry.role && entry.role !== 'build') return false;
   if (entry.stage === null) return !LEGACY_VERDICT.test(String(entry.done ?? '').split('\n')[0]);
   return entry.stage === 'build' || entry.stage === 'review';
 }
@@ -381,8 +383,9 @@ function buildWrote(entry) {
 /**
  * The last entry a build session wrote: neither the runner's nor a person's,
  * and in `build` or the `review` it moved the goal to — a review's own entry
- * names `merge` or `finish`. Its heading's `<tool> <model>` is the model a
- * review of the goal may not run on. Null when no build session has written one.
+ * names `merge` or `finish`. An entry with a `· by <role>` other than build is
+ * no build's either. Its heading's `<tool> <model>` is the model a review of
+ * the goal may not run on. Null when no build session has written one.
  */
 export function lastBuildEntry(log) {
   return log.findLast(buildWrote) ?? null;
@@ -629,9 +632,11 @@ export function goalOfPr(goals, repo, pr) {
 /**
  * Where a goal's pull requests stand, from `stateOf({ repo, pr })` — GitHub's
  * `OPEN`, `MERGED` or `CLOSED`, or null when it cannot say: `{ landed, open,
- * closed, unknown }`, each a list of `<repo>#<n>`, and `done` — every one has
- * landed, with none closed, open or unknown. A goal with no `prs` is
- * never done here: only the merger's answer on its own branch, or a person, says so.
+ * closed, unknown }`, each a list of `<repo>#<n>`, and `done` — at least one
+ * has landed, and none is open or unknown. A closed one is settled, not
+ * waited for: it is listed, and a goal whose every one is closed is not done.
+ * A goal with no `prs` is never done here: only the merger's answer on its
+ * own branch, or a person, says so.
  */
 export function prsLanded(prs, stateOf) {
   const out = { landed: [], open: [], closed: [], unknown: [] };
@@ -640,7 +645,7 @@ export function prsLanded(prs, stateOf) {
     const key = state === 'MERGED' ? 'landed' : state === 'OPEN' ? 'open' : state === 'CLOSED' ? 'closed' : 'unknown';
     out[key].push(prRef(item));
   }
-  return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.closed.length === 0 && out.unknown.length === 0 };
+  return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.unknown.length === 0 };
 }
 
 /**

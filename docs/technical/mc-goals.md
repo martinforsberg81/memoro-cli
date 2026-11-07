@@ -574,10 +574,14 @@ memoro and memoro-cli — left the goal for a person to close by hand.
   change (`… the goal carries memoro-cli#1238 too — done when every one has
   landed or closed`). The runner's `settleLanded` pass (run.js), at most every
   five minutes, asks GitHub for the state of each pull request of every goal
-  that is not finished and carries any, and sets `done` when every
-  one is merged (`prsLanded`) — however each
+  that is not finished and carries any, and sets `done` when at least one is
+  merged and none is open or unknown (`prsLanded`) — however each
   landed: the merger, `mc merge --docs`, `--admin`, or on GitHub. A pull
-  request GitHub cannot say about leaves the goal as it is.
+  request GitHub cannot say about leaves the goal as it is. A pull request
+  closed without merging is settled, not waited for: its entry's comment
+  names it (`closed without landing: …`), and the runner and `mc goal stage
+  merge` never queue it (`… closed without merging — not queued`). A goal
+  whose every pull request is closed is not done.
 - **Review stays on the first repository.** A goal's review session is told
   the open pull request on `goal/<g>` in its first repository, as before; a
   second repository's pull request carries the goal and lands it, but is not
