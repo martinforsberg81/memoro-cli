@@ -661,7 +661,8 @@ export function readBack({
  * `timeoutMs` the command gets SIGTERM, and SIGKILL `KILL_GRACE_MS` later.
  * Resolves `{ ok, code, signal, timedOut, stalled, error, output }`; never
  * rejects. `step.stop(signal)` passes a signal the builder received on to the
- * command running now, and every step after it fails without starting.
+ * command running now (to its whole group when it has one; SIGKILL `graceMs`
+ * later, as the stalls and timeouts get), and every step after it fails without starting.
  *
  * `silenceMs` is the stall stop: a command whose output has been silent that
  * long is stopped the same way, and `stalled` says where it stood
@@ -674,7 +675,7 @@ export function readBack({
 export function makeStep({
   stdout = process.stdout, spawnProcess = spawn, graceMs = KILL_GRACE_MS, killTree = killProcessTree,
 } = {}) {
-  let current = null;
+  let currentStop = null; // the stop of the command running now: it knows whether that command has a group
   let halted = null;
   const step = (label, argv, {
     cwd, env = process.env, timeoutMs = 10 * MIN, quiet = false, silenceMs = 0, group = false,
@@ -697,7 +698,7 @@ export function makeStep({
       clearTimeout(timer);
       clearTimeout(killer);
       clearTimeout(silence);
-      current = null;
+      currentStop = null;
       resolve({ ok: false, signal: null, error: null, ...result, timedOut, stalled, output });
     };
     let child;
@@ -707,12 +708,14 @@ export function makeStep({
       settle({ code: 127, error: error?.message || String(error) });
       return;
     }
-    current = child;
     const kill = (signal) => { if (group) killTree(child, signal); else { try { child.kill(signal); } catch { /* gone */ } } };
-    const stop = () => {
-      kill('SIGTERM');
+    // The stall, the timeout and the builder's own stop all come here: the signal to the group (or the command), SIGKILL after the grace.
+    const stop = (signal = 'SIGTERM') => {
+      kill(signal);
+      clearTimeout(killer);
       killer = setTimeout(() => kill('SIGKILL'), graceMs);
     };
+    currentStop = stop;
     const watch = () => {
       if (!silenceMs || stalled || timedOut) return;
       clearTimeout(silence);
@@ -741,7 +744,7 @@ export function makeStep({
   });
   step.stop = (signal = 'SIGTERM') => {
     halted = signal;
-    try { current?.kill(signal); } catch { /* gone */ }
+    currentStop?.(signal);
   };
   return step;
 }
