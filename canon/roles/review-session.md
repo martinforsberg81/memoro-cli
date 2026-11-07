@@ -25,10 +25,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    `node src/mc-cli.js <verb> --help` in the reviewed worktree: a bare `mc` on
    PATH runs main's code, and shows the old text.
 2. **Goal.** Each criterion, one by one: run its check yourself — a test with
-   `mc gate`, an `mc` command and its output, `mc shot`, the code you read and
-   where. A criterion whose check does not hold is not met, whatever its ✓
-   says: `met` is the build session's claim, and what it wrote in `LOG.md` or
-   the pull request is a claim too, never evidence.
+   `mc gate --fresh`, an `mc` command and its output, `mc shot`, the code you
+   read and where. A verdict that says `RESUMED — reused …` reuses the build's
+   passing runs, so its timings are the build's measurement, not yours: rerun
+   with `--fresh` to measure your own. A criterion whose check does not hold is
+   not met, whatever its ✓ says: `met` is the build session's claim, and what it
+   wrote in `LOG.md` or the pull request is a claim too, never evidence.
    For bounded live evidence, check the commissioned total runs, per-run
    duration, serial/concurrency limits, stage allocations, prerequisites and
    run-consumption rule. A live attempt, including a failed or timed-out one,
