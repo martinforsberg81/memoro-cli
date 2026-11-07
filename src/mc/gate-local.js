@@ -42,8 +42,9 @@ export function gateCommand(manifest, { base = 'origin/main' } = {}) {
 
 /**
  * The `node --test` flags a repository's `test` script carries: every
- * `--import <x>` / `--import=<x>` and `--experimental-*` argument, in order.
- * Empty when the script does not start with `node --test`.
+ * `--import <x>` / `--import=<x>` and `--experimental-*` argument, and its
+ * `--test-timeout` (`scriptTimeoutAt`), in order. Empty when the script does
+ * not start with `node --test`.
  */
 export function testFlags(script) {
   const words = String(script || '').trim().split(/\s+/u);
@@ -51,10 +52,66 @@ export function testFlags(script) {
   const flags = [];
   for (let i = 2; i < words.length; i += 1) {
     const word = words[i];
-    if (word === '--import' && words[i + 1]) { flags.push(word, words[i + 1]); i += 1; }
+    const timeout = scriptTimeoutAt(words, i);
+    if (timeout) { if (timeout.flag) flags.push(timeout.flag); i += timeout.length - 1; }
+    else if (word === '--import' && words[i + 1]) { flags.push(word, words[i + 1]); i += 1; }
     else if (word.startsWith('--import=') || word.startsWith('--experimental-')) flags.push(word);
   }
   return flags;
+}
+
+/** A `--test-timeout` value as milliseconds: a positive integer, else null (0, Infinity, words). */
+export function timeoutMs(value) {
+  return /^[1-9]\d*$/u.test(String(value ?? '')) ? Number(value) : null;
+}
+
+/**
+ * The `--test-timeout` among the words of a test script at `i`, the one
+ * reading both script parsers share (this file's `testFlags` and the merge
+ * round's `nodeTestFlags`): `{ flag, length }` — the flag as
+ * `--test-timeout=<ms>`, or null when its value is not a positive integer,
+ * and how many words it took — or null when the word is not one. The
+ * separate form takes the next word only when it is a number, so a file
+ * glob is never read as a flag.
+ */
+export function scriptTimeoutAt(words, i) {
+  const word = String(words[i]);
+  if (word.startsWith('--test-timeout=')) {
+    const ms = timeoutMs(word.slice('--test-timeout='.length));
+    return { flag: ms === null ? null : `--test-timeout=${ms}`, length: 1 };
+  }
+  if (word !== '--test-timeout') return null;
+  const ms = timeoutMs(words[i + 1]);
+  return ms === null ? { flag: null, length: 1 } : { flag: `--test-timeout=${ms}`, length: 2 };
+}
+
+/**
+ * The `--test-timeout` values a flag array states, in order, as written:
+ * `--test-timeout=<v>` and `--test-timeout <v>` both count.
+ */
+export function timeoutValues(flags) {
+  const values = [];
+  for (let i = 0; i < flags.length; i += 1) {
+    const word = String(flags[i]);
+    if (word.startsWith('--test-timeout=')) values.push(word.slice('--test-timeout='.length));
+    else if (word === '--test-timeout') { values.push(flags[i + 1] === undefined ? '' : String(flags[i + 1])); i += 1; }
+  }
+  return values;
+}
+
+/** Whether a test script is a `node … --test …` line the parsers can read. */
+export function nodeTestScript(script) {
+  return /^node\s+(?:.*\s)?--test(?:\s|$)/u.test(String(script || ''));
+}
+
+/**
+ * The one positive `--test-timeout` a `node --test` script states, in ms, or
+ * null when it states none, more than one, or one that is not a number.
+ */
+export function scriptTestTimeout(script) {
+  if (!nodeTestScript(script)) return null;
+  const values = timeoutValues(String(script).trim().split(/\s+/u));
+  return values.length === 1 ? timeoutMs(values[0]) : null;
 }
 
 /**

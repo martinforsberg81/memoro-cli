@@ -3,9 +3,13 @@
  * the gate lane, a detached run, a budget, one gate per worktree. No whole gate.
  *
  * Everything the verb touches is injected: the spawn, the clock, the sleep,
- * the files and the pid liveness. Nothing here starts a process or reads disk.
+ * the files and the pid liveness. Nothing here starts a process; only the
+ * timeout-policy cases read disk — real declaration files in a throwaway directory.
  */
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/gate.js';
@@ -192,11 +196,85 @@ describe('mc gate <test files…>', () => {
   it('named files run with the declared pr_tests_flags, which replace the test script\'s', async () => {
     const { out, deps, files } = harness({ manifest: { scripts: { test: 'node scripts/testing/ci.mjs' } }, tests: ['tests/x.test.js'], finishAfter: 1, output: GREEN });
     const asked = [];
-    deps.declaration = (path) => { asked.push(path); return { ok: true, declaration: { pr_tests_flags: ['--import', './tests/_helpers/browser-paths.mjs'] } }; };
+    deps.declaration = (path, options) => { asked.push([path, options.contentDir]); return { ok: true, declaration: { pr_tests_flags: ['--import', './tests/_helpers/browser-paths.mjs'] } }; };
     assert.equal(await run(['tests/x.test.js'], deps), 0);
     assert.equal(out.spawned[0].args[1], `${LOG}.request.json`);
     assert.deepEqual(JSON.parse(files.get(`${LOG}.request.json`)).flags, ['--import', './tests/_helpers/browser-paths.mjs']);
-    assert.deepEqual(asked, ['/repo/memoro', '/repo/memoro']);
+    assert.deepEqual(asked, [['/repo/memoro', '/w/x']], 'named by the repository, read from the worktree, once');
+  });
+
+  /**
+   * The verb on real declaration files: the worktree of a bare `memoro.git`,
+   * its own `.mc/test.json`, and an operator table in a throwaway home. Only
+   * git's answers, the spawn and the clock are the harness's.
+   */
+  function measuredTree({ own, override = null, script = 'node scripts/testing/ci.mjs', common = 'repos/memoro.git' }) {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-gate-policy-'));
+    const wt = join(dir, 'wt');
+    const home = join(dir, 'home');
+    mkdirSync(join(wt, 'tests'), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(wt, 'package.json'), JSON.stringify({ name: 'fixture', scripts: { test: script } }));
+    writeFileSync(join(wt, 'tests', 'x.test.js'), '');
+    if (own !== undefined) {
+      mkdirSync(join(wt, '.mc'));
+      writeFileSync(join(wt, '.mc', 'test.json'), typeof own === 'string' ? own : JSON.stringify(own));
+    }
+    if (override) writeFileSync(join(home, 'repo-gates.json'), JSON.stringify(override));
+    const h = harness({ finishAfter: 1, output: GREEN });
+    delete h.deps.declaration;
+    Object.assign(h.deps, {
+      cwd: wt,
+      env: { MC_SCRATCH: '/scratch', MC_HOME: home },
+      git: (cwd, args) => {
+        if (args[0] === 'merge-base') return 'mb0000';
+        if (args[0] === 'diff' || args[0] === 'ls-files') return '';
+        if (args.includes('--git-common-dir')) return join(dir, common);
+        return ({ '--show-toplevel': wt, '--absolute-git-dir': join(wt, '.git') })[args[1]] ?? null;
+      },
+      read: (path) => (h.files.has(path) ? h.files.get(path) : readFileSync(path, 'utf8')),
+      exists: (path) => h.files.has(path) || existsSync(path),
+      isFile: (path) => h.files.has(path) || (existsSync(path) && statSync(path).isFile()),
+    });
+    return { ...h, wt, home, request: () => JSON.parse(h.files.get(`${LOG}.request.json`)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+  const LOADER = ['--import', './tests/_helpers/browser-paths.mjs'];
+
+  it('timeout policy: a worktree of a bare memoro runs with its own 1000 under a loader-only override, and prints the notice', async () => {
+    const fx = measuredTree({ own: { pr_tests_flags: [...LOADER, '--test-timeout=1000'] }, override: { memoro: { pr_tests_flags: LOADER } } });
+    try {
+      assert.equal(await run(['tests/x.test.js'], fx.deps), 0, fx.out.stderr);
+      assert.equal(fx.out.spawned.length, 1);
+      assert.deepEqual(fx.request().flags, [...LOADER, '--test-timeout=1000']);
+      assert.equal(fx.out.stdout.split('\n')[0], `timeout policy: --test-timeout=1000 from ${join(fx.wt, '.mc', 'test.json')} — `
+        + `pr_tests_flags from the operator override ${join(fx.home, 'repo-gates.json')} states no --test-timeout`);
+      assert.match(fx.out.stdout, /^GREEN — node --test --import \.\/tests\/_helpers\/browser-paths\.mjs --test-timeout=1000 tests\/x\.test\.js — /mu);
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: a malformed worktree declaration or a looser override refuses before anything is spawned', async () => {
+    for (const [setup, said] of [
+      [{ own: '{"pr_tests_flags": [' }, 'could not be read as JSON'],
+      [{ own: { pr_tests_flags: [...LOADER, '--test-timeout=1000'] }, override: { memoro: { pr_tests_flags: [...LOADER, '--test-timeout=600000'] } } }, 'states --test-timeout=600000 (looser than the measured tree)'],
+    ]) {
+      const fx = measuredTree(setup);
+      try {
+        assert.equal(await run(['tests/x.test.js'], fx.deps), 2);
+        assert.deepEqual(fx.out.spawned, []);
+        assert.equal(fx.files.has(`${LOG}.request.json`), false);
+        assert.equal(fx.out.stdout, '');
+        assert.ok(fx.out.stderr.startsWith('mc: ') && fx.out.stderr.includes(said) && fx.out.stderr.includes(join(fx.wt, '.mc', 'test.json')), fx.out.stderr);
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('timeout policy: with no declaration at all, the test script\'s --test-timeout=1000 is the flag the gate runs with', async () => {
+    const fx = measuredTree({ common: 'repos/stranger.git', script: 'node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\'' });
+    try {
+      assert.equal(await run(['tests/x.test.js'], fx.deps), 0, fx.out.stderr);
+      assert.deepEqual(fx.request().flags, ['--import', './x.mjs', '--test-timeout=1000']);
+      assert.doesNotMatch(fx.out.stdout, /timeout policy/u);
+    } finally { fx.cleanup(); }
   });
 
   it('the child is told the lanes to use, unless its environment already names them', async () => {

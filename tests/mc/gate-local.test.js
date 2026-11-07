@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, redFiles, rerunLine, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
+import { FAILURE_LINES, OUTPUT_CAP, failingNames, gateCommand, gateLines, namePattern, namedCommand, redFiles, rerunLine, scriptTestTimeout, summarizeGate, testFlags } from '../../src/mc/gate-local.js';
 
 describe('the verdict line and a load error', () => {
   it('counts cancelled tests on the verdict line, beside the failures', () => {
@@ -138,6 +138,18 @@ describe('named test files', () => {
     assert.deepEqual(testFlags('node --test --import ./tests/_isolate-home.mjs \'tests/**/*.test.js\''), ['--import', './tests/_isolate-home.mjs']);
     assert.deepEqual(testFlags('node --test --experimental-strip-types --import=./x.mjs --test-reporter spec tests/a.js'), ['--experimental-strip-types', '--import=./x.mjs']);
     assert.deepEqual(testFlags('vitest run'), []);
+  });
+
+  it('timeout policy: testFlags keeps a valid script --test-timeout in either form and never takes a file glob as its value', () => {
+    assert.deepEqual(testFlags('node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\''), ['--import', './x.mjs', '--test-timeout=1000']);
+    assert.deepEqual(testFlags('node --test --test-timeout 1000 --import ./x.mjs tests/'), ['--test-timeout=1000', '--import', './x.mjs']);
+    assert.deepEqual(testFlags('node --test --test-timeout tests/a.test.js --import ./x.mjs'), ['--import', './x.mjs']);
+    assert.deepEqual(testFlags('node --test --test-timeout=0 --test-timeout=Infinity tests/'), []);
+    assert.deepEqual([
+      scriptTestTimeout('node --test --test-timeout=1000 tests/'), scriptTestTimeout('node --test --test-timeout 1000 tests/'),
+      scriptTestTimeout('node --test tests/'), scriptTestTimeout('node --test --test-timeout=1 --test-timeout=2 tests/'),
+      scriptTestTimeout('node scripts/testing/ci.mjs --test-timeout=1000'),
+    ], [1000, 1000, null, null, null]);
   });
 
   it('namedCommand: node --test, the flags, the files, the pattern', () => {

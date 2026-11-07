@@ -54,7 +54,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { changedAgainst, declaredTestFlags, primaryCheckoutDeclaration } from '../gate-fast.js';
+import { changedAgainst, flagsOf, measuredDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
 import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags, timedTestLines } from '../gate-local.js';
 import { changedRanges } from '../test-times.js';
@@ -100,7 +100,7 @@ const SYSTEM = {
   id: randomUUID,
   claim: takeClaim,
   release: releaseClaim,
-  declaration: (repoPath, { env }) => declarationFor(repoPath, { root: mcHome(env), env }),
+  declaration: (repoPath, { env, contentDir }) => declarationFor(repoPath, { root: mcHome(env), env, contentDir }),
 };
 
 /** Whose gate this is: the primary checkout's repository. A worktree of memoro is memoro. */
@@ -174,7 +174,16 @@ export async function run(argv, deps = {}) {
       stdout.write(`NOTHING CHANGED — no changes against ${baseRef}\n`);
       return 0;
     }
-    const declared = primaryCheckoutDeclaration(io, { root, env });
+  }
+  // The declaration of the tree this gate measures: the worktree's own
+  // `.mc/test.json`, under the repository's name (`measuredDeclaration`). A
+  // malformed one, or a layer that drops or loosens its timeout
+  // ambiguously, is a stop here, before anything is spawned.
+  const measured = measuredDeclaration(io, { root, env });
+  if (measured?.stop) { stderr.write(`mc: ${measured.stop}\n`); return 2; }
+  if (measured?.notice) stdout.write(`${measured.notice}\n`);
+  if (!files.length) {
+    const declared = measured;
     declaration = declared?.declaration ?? null;
     if (!declared?.declaration.select) {
       stderr.write('mc: no repository test selector declared — name the tests explicitly; nothing was verified\n');
@@ -190,12 +199,11 @@ export async function run(argv, deps = {}) {
 
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
-  const flags = declaredTestFlags(io, { root, env });
+  const flags = flagsOf(measured?.declaration);
   const effectiveFlags = flags || testFlags(manifest?.scripts?.test);
   if (files.length) {
-    const declared = primaryCheckoutDeclaration(io, { root, env });
-    declaration = declared?.declaration ?? null;
-    if (declared?.declaration.select) select = selectorCommand(declared.declaration.select, { base, changed: files });
+    declaration = measured?.declaration ?? null;
+    if (declaration?.select) select = selectorCommand(declaration.select, { base, changed: files });
   }
   const configuration = gateConfiguration(declaration, effectiveFlags);
   const command = files.length ? namedCommand(manifest, files, { pattern, flags })

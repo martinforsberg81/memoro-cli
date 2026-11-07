@@ -81,6 +81,7 @@ import { join } from 'node:path';
 
 import { mcHome, workRoot } from './paths.js';
 import { repoNameOf } from './repos.js';
+import { scriptTestTimeout, timeoutMs, timeoutValues } from './gate-local.js';
 
 /** Preparation that is deliberately not known, as opposed to not needed. */
 export const UNKNOWN = 'unknown';
@@ -378,15 +379,31 @@ function layerSources({ shipped, own, override }) {
  * named fourteen, almost everything the shipped entry gained since August.
  * The rule that cannot drop a field in silence is the one that has no hole to
  * warn about (2026-11-03).
+ *
+ * Who the repository is and which tree declares it are two answers, not one.
+ * `repoPath` names the repository — the shipped and operator layers are
+ * looked up by its name, `memoro` for `~/mc/repos/memoro.git` as for a
+ * checkout. `contentDir` is the tree whose `.mc/test.json` and `package.json`
+ * are read: the worktree a session measures, the final candidate a round
+ * measures. It defaults to `repoPath`. A bare repository has no
+ * `.mc/test.json` of its own, and reading it there is how Memoro's declared
+ * 1000 ms timeout went missing from every gate (timeout-enforcement-plan.md).
+ *
+ * The test timeout is the one field that is not plain precedence
+ * (`timeoutPolicy`): a layer whose `pr_tests_flags` wins keeps its loaders,
+ * but cannot drop or loosen the measured tree's own timeout in silence.
+ * `ok: false` with `kind` `malformed` or `timeout` is a stop for a session
+ * too, which otherwise falls back to the test script when nothing is declared.
  */
-export function declarationFor(repoPath, { root = mcHome(), env = process.env } = {}) {
+export function declarationFor(repoPath, { root = mcHome(), env = process.env, contentDir = repoPath } = {}) {
   const name = basenameOf(repoPath);
-  const own = readRepoDeclaration(repoPath);
+  const own = readRepoDeclaration(contentDir);
   if (own.error) {
     return {
       ok: false,
       name,
-      reason: `${name} declares itself in ${repoDeclarationPath(repoPath)}, but ${own.error}. `
+      kind: 'malformed',
+      reason: `${name} declares itself in ${repoDeclarationPath(contentDir)}, but ${own.error}. `
         + 'mc will not fall back to what it ships when a repository has tried to say something else — '
         + 'that would run the round on an instruction somebody believes they replaced. '
         + 'Fix that file, or delete it and let the shipped table answer.',
@@ -405,12 +422,12 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
   // then it has to state its preparation, like any other declaration. Saying
   // `select` and nothing else is exactly the partial declaration this file
   // refuses, and without this it would quietly mean "prepare: null".
-  if (own.entry && !overridden && !shipped && !('prepare' in declared) && !nothingToInstall(repoPath).proven) {
+  if (own.entry && !overridden && !shipped && !('prepare' in declared) && !nothingToInstall(contentDir).proven) {
     return {
       ok: false,
       name,
       known: normalise(declared, env),
-      reason: `${name} declares itself in ${repoDeclarationPath(repoPath)}, but says nothing about `
+      reason: `${name} declares itself in ${repoDeclarationPath(contentDir)}, but says nothing about `
         + 'its preparation — and mc ships no entry for it, so nothing else does either. '
         + 'Add "prepare" and "prepare_why" to that file: a command, or null with the evidence '
         + 'that its suite runs from a clean checkout.',
@@ -428,7 +445,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
         known: normalise({ ...declared, prepare: null }, env),
         reason: `${name} is declared, but its preparation step is not: ${declared.prepare_why || 'no reason recorded'}. `
           + `What is known about it — ${describeKnown(declared)} — is not enough to run a round on. `
-          + `Complete it where the fact belongs — in the repository, ${repoDeclarationPath(repoPath)}: `
+          + `Complete it where the fact belongs — in the repository, ${repoDeclarationPath(contentDir)}: `
           + '{"prepare": "<command>", "prepare_why": "<where that was decided>"}, '
           + `or, if it is a fact about this machine, in ${tablePath(root)}: `
           + `{"${name}": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} `
@@ -465,21 +482,31 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + 'true or false — true says its `select` command takes `--changed-path <path>` (repeatable) in place of its diff.',
       };
     }
+    const declaration = normalise(declared, env);
+    // Which of the three files each field came from. A reader who disagrees
+    // with a declaration has to know which one to edit, and "it is declared"
+    // does not say that once there are three places it could be declared in.
+    const sources = layerSources({ shipped, own: own.entry, override: overridden });
+    const policy = timeoutPolicy({ name, flags: declaration.pr_tests_flags, layer: sources.pr_tests_flags, own: own.entry, contentDir, root });
+    if (!policy.ok) return { ok: false, name, kind: 'timeout', reason: policy.reason };
+    declaration.pr_tests_flags = policy.flags;
     return {
       ok: true,
       name,
-      declaration: normalise(declared, env),
+      declaration,
       source: 'declared',
-      // Which of the three files each field came from. A reader who disagrees
-      // with a declaration has to know which one to edit, and "it is declared"
-      // does not say that once there are three places it could be declared in.
-      sources: layerSources({ shipped, own: own.entry, override: overridden }),
+      sources,
+      // The line a gate prints when it applied the measured tree's timeout to
+      // a winning array that stated none; null when nothing was inherited.
+      notice: policy.notice,
+      // The timeout the measured tree declares, and where: null when it declares none.
+      timeout: policy.reference,
     };
   }
 
   // No entry. The only thing that lets a round proceed anyway is proof that
   // preparation could not have been needed.
-  const nothing = nothingToInstall(repoPath);
+  const nothing = nothingToInstall(contentDir);
   if (nothing.proven) {
     return {
       ok: true,
@@ -493,12 +520,90 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
     ok: false,
     name,
     reason: `${name} has no gate declaration, and ${nothing.why} — so mc cannot tell whether its suite `
-      + `needs anything installed first. Declare it in the repository itself, ${repoDeclarationPath(repoPath)}: `
+      + `needs anything installed first. Declare it in the repository itself, ${repoDeclarationPath(contentDir)}: `
       + '{"prepare": "<command>", "prepare_why": "<where that was decided>"} '
       + `— or, for a fact about this machine rather than about the repository, in ${tablePath(root)}: `
       + '{"' + name + '": {"prepare": "<command>", "prepare_why": "<where that was decided>"}}. '
       + 'Either way "prepare": null with a "prepare_why" says the suite runs from a clean checkout. '
       + 'mc suggests no command here on purpose: the one it would suggest is the guess this refusal exists to prevent.',
+  };
+}
+
+/**
+ * The measured tree's own per-test timeout, the floor every layer above it
+ * is held to: the `--test-timeout` in its `.mc/test.json` `pr_tests_flags`
+ * when that states one, otherwise a parseable one in its `package.json`
+ * `test` script. `{ ms, source }`, null when the tree states none, or
+ * `{ error }` when its own declaration states one that is not one positive
+ * number.
+ */
+function referenceTimeout(own, contentDir) {
+  const values = Array.isArray(own?.pr_tests_flags) ? timeoutValues(own.pr_tests_flags.map(String)) : [];
+  const path = repoDeclarationPath(contentDir);
+  if (values.length) {
+    const ms = values.length === 1 ? timeoutMs(values[0]) : null;
+    if (ms === null) return { error: `${path} declares ${values.map((value) => `--test-timeout=${value}`).join(' ')} — exactly one positive --test-timeout or none` };
+    return { ms, source: path };
+  }
+  let script = null;
+  try { script = JSON.parse(readFileSync(join(contentDir, 'package.json'), 'utf8'))?.scripts?.test ?? null; } catch { return null; }
+  const ms = scriptTestTimeout(script);
+  return ms === null ? null : { ms, source: `${join(contentDir, 'package.json')} scripts.test` };
+}
+
+/** The file a layer is, as a person editing it would look for it. */
+function layerWhere(layer, { name, contentDir, root }) {
+  if (layer === 'override') return `the operator override ${tablePath(root)}`;
+  if (layer === 'repository') return `the repository's ${repoDeclarationPath(contentDir)}`;
+  return `mc's shipped gate table entry for ${name} (src/mc/repo-gate-table.js)`;
+}
+
+/**
+ * The winning `pr_tests_flags`, held to the measured tree's timeout
+ * (timeout-enforcement-plan.md contract A, with the 2026-11-07 planning
+ * amendment). Precedence is unchanged for every flag but this one:
+ *
+ * - The tree states no timeout: the array as declared, and a session or
+ *   round without one falls back exactly as before (script, else
+ *   `TEST_TIMEOUT_MS`).
+ * - No layer states an array, or an empty one when the reference is the
+ *   script's: unchanged — the script fallback carries the script's timeout.
+ * - The winning array states none: the reference is appended, and `notice`
+ *   names the reference and the layer whose array left it out. Loaders stay;
+ *   nothing else is merged in.
+ * - It states a larger value, 0, Infinity, a word, or more than one: a stop,
+ *   naming both sources and values, before any test is spawned.
+ * - An equal or tighter value stands as written.
+ */
+function timeoutPolicy({ name, flags, layer, own, contentDir, root }) {
+  const reference = referenceTimeout(own, contentDir);
+  if (reference?.error) {
+    return { ok: false, reason: `timeout policy: ${reference.error}; nothing was run. Fix that file.` };
+  }
+  if (!reference || !layer || (!flags.length && !reference.source.endsWith('.mc/test.json'))) {
+    return { ok: true, flags, notice: null, reference };
+  }
+  const wanted = `--test-timeout=${reference.ms}`;
+  const where = layerWhere(layer, { name, contentDir, root });
+  const values = timeoutValues(flags);
+  if (!values.length) {
+    return {
+      ok: true,
+      flags: [...flags, wanted],
+      notice: `timeout policy: ${wanted} from ${reference.source} — pr_tests_flags from ${where} states no --test-timeout`,
+      reference,
+    };
+  }
+  const stated = values.map((value) => `--test-timeout=${value}`).join(' ');
+  const ms = values.length === 1 ? timeoutMs(values[0]) : null;
+  if (ms !== null && ms <= reference.ms) return { ok: true, flags, notice: null, reference };
+  const why = values.length > 1 ? 'more than one --test-timeout'
+    : ms === null ? 'not a positive number of milliseconds' : 'looser than the measured tree';
+  return {
+    ok: false,
+    reason: `timeout policy: pr_tests_flags from ${where} states ${stated} (${why}), but ${reference.source} `
+      + `declares ${wanted} — nothing was run. A layer may tighten the repository's timeout, never loosen or `
+      + `drop it: state at most ${wanted} there, or none and the repository's applies.`,
   };
 }
 

@@ -386,6 +386,150 @@ describe('pr_tests_flags', () => {
 });
 
 /**
+ * The measured tree's timeout is the floor the layers above it are held to
+ * (timeout-enforcement-plan.md contract A). Memoro declares 1000 ms in its
+ * own `.mc/test.json`; read from the bare common directory, or replaced by a
+ * loader-only override, it became the 600000 ms default in silence.
+ */
+describe('the timeout policy of the measured tree', () => {
+  const LOADER = ['--import', './tests/_helpers/browser-paths.mjs'];
+  /** A bare common directory, a primary checkout and a worktree, each declaring differently. */
+  function layout({ worktree = { pr_tests_flags: [...LOADER, '--test-timeout=1000'] }, script = 'node scripts/testing/ci.mjs' } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-timeout-policy-'));
+    const bare = join(root, 'repos', 'memoro.git');
+    const primary = join(root, 'memoro');
+    const tree = join(root, 'gate', 'memoro', 'candidate');
+    const home = join(root, 'home');
+    for (const dir of [bare, primary, tree, home]) mkdirSync(dir, { recursive: true });
+    const declare = (dir, entry) => {
+      mkdirSync(join(dir, '.mc'), { recursive: true });
+      writeFileSync(repoDeclarationPath(dir), typeof entry === 'string' ? entry : JSON.stringify(entry));
+    };
+    declare(primary, { pr_tests_flags: [...LOADER, '--test-timeout=5000'] });
+    if (worktree !== null) declare(tree, worktree);
+    writeFileSync(join(tree, 'package.json'), JSON.stringify({ name: 'memoro', scripts: { test: script } }));
+    return {
+      root, bare, primary, tree, home,
+      override: (entry) => writeFileSync(tablePath(home), JSON.stringify({ memoro: entry })),
+      ask: (repoPath, contentDir) => declarationFor(repoPath, { root: home, env: { MC_WORK_ROOT: join(root, 'work') }, ...(contentDir ? { contentDir } : {}) }),
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('timeout policy: the repository is named by its identity, the declaration read from the measured tree — bare and ordinary alike', () => {
+    const fx = layout();
+    try {
+      const fromBare = fx.ask(fx.bare, fx.tree);
+      const fromPrimary = fx.ask(fx.primary, fx.tree);
+      for (const answer of [fromBare, fromPrimary]) {
+        assert.equal(answer.ok, true, answer.reason);
+        assert.equal(answer.name, 'memoro', 'identity, not the directory called candidate');
+        assert.deepEqual(answer.declaration.pr_tests_flags, [...LOADER, '--test-timeout=1000']);
+        assert.deepEqual(answer.timeout, { ms: 1000, source: repoDeclarationPath(fx.tree) });
+        assert.equal(answer.sources.pr_tests_flags, 'repository');
+        assert.equal(answer.declaration.select, SHIPPED.memoro.select, 'the shipped layer is memoro\'s');
+        assert.equal(answer.notice, null);
+      }
+      // Read where the repository is, a bare one says nothing and a primary checkout its own 5000.
+      assert.deepEqual(fx.ask(fx.bare).declaration.pr_tests_flags, LOADER);
+      assert.equal(fx.ask(fx.bare).timeout, null);
+      assert.deepEqual(fx.ask(fx.primary).declaration.pr_tests_flags, [...LOADER, '--test-timeout=5000']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: an override array without a timeout inherits the reference with a notice, and every other field is the override\'s precedence', () => {
+    const fx = layout();
+    const plain = layout({ worktree: { pr_tests_flags: LOADER } });
+    try {
+      const entry = { pr_tests_flags: ['--import', './op-loader.mjs'], prepare: 'npm ci --offline', prepare_why: 'operator' };
+      fx.override(entry);
+      plain.override(entry);
+      const answer = fx.ask(fx.bare, fx.tree);
+      assert.equal(answer.ok, true, answer.reason);
+      assert.deepEqual(answer.declaration.pr_tests_flags, ['--import', './op-loader.mjs', '--test-timeout=1000']);
+      assert.equal(answer.notice, `timeout policy: --test-timeout=1000 from ${repoDeclarationPath(fx.tree)} — `
+        + `pr_tests_flags from the operator override ${tablePath(fx.home)} states no --test-timeout`);
+      assert.equal(answer.sources.pr_tests_flags, 'override');
+      // The same layers with no timeout in the tree: only pr_tests_flags differs.
+      const without = plain.ask(plain.bare, plain.tree);
+      assert.deepEqual(without.declaration.pr_tests_flags, ['--import', './op-loader.mjs']);
+      assert.equal(without.notice, null);
+      const rest = (declaration) => ({ ...declaration, pr_tests_flags: null, merge_log: null });
+      assert.deepEqual(rest(answer.declaration), rest(without.declaration));
+      assert.equal(answer.declaration.prepare, 'npm ci --offline');
+      assert.deepEqual(answer.sources, without.sources);
+    } finally { fx.cleanup(); plain.cleanup(); }
+  });
+
+  it('timeout policy: a looser, zero, Infinity, wordy or duplicated override timeout refuses, naming both sources and values', () => {
+    const fx = layout();
+    try {
+      for (const [flags, stated, why] of [
+        [[...LOADER, '--test-timeout=600000'], '--test-timeout=600000', 'looser than the measured tree'],
+        [['--test-timeout=0'], '--test-timeout=0', 'not a positive number of milliseconds'],
+        [['--test-timeout=Infinity'], '--test-timeout=Infinity', 'not a positive number of milliseconds'],
+        [['--test-timeout', 'soon'], '--test-timeout=soon', 'not a positive number of milliseconds'],
+        [['--test-timeout=1000', '--test-timeout=500'], '--test-timeout=1000 --test-timeout=500', 'more than one --test-timeout'],
+      ]) {
+        fx.override({ pr_tests_flags: flags });
+        const answer = fx.ask(fx.bare, fx.tree);
+        assert.deepEqual({ ok: answer.ok, kind: answer.kind, declaration: answer.declaration }, { ok: false, kind: 'timeout', declaration: undefined }, stated);
+        assert.equal(answer.reason, `timeout policy: pr_tests_flags from the operator override ${tablePath(fx.home)} states ${stated} (${why}), `
+          + `but ${repoDeclarationPath(fx.tree)} declares --test-timeout=1000 — nothing was run. A layer may tighten the repository's `
+          + 'timeout, never loosen or drop it: state at most --test-timeout=1000 there, or none and the repository\'s applies.');
+      }
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: an equal or tighter override timeout stands exactly as written', () => {
+    const fx = layout();
+    try {
+      for (const flags of [[...LOADER, '--test-timeout=1000'], ['--test-timeout', '500', ...LOADER]]) {
+        fx.override({ pr_tests_flags: flags });
+        const answer = fx.ask(fx.bare, fx.tree);
+        assert.equal(answer.ok, true, answer.reason);
+        assert.deepEqual(answer.declaration.pr_tests_flags, flags);
+        assert.equal(answer.notice, null);
+      }
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: a script timeout is the reference when .mc/test.json states none; with neither, the array is as declared', () => {
+    const scripted = layout({ worktree: null, script: 'node --test --test-timeout=1000 tests/' });
+    const neither = layout({ worktree: null });
+    try {
+      const shipped = scripted.ask(scripted.bare, scripted.tree);
+      assert.equal(shipped.ok, true, shipped.reason);
+      assert.deepEqual(shipped.declaration.pr_tests_flags, [...LOADER, '--test-timeout=1000']);
+      assert.equal(shipped.notice, `timeout policy: --test-timeout=1000 from ${join(scripted.tree, 'package.json')} scripts.test — `
+        + 'pr_tests_flags from mc\'s shipped gate table entry for memoro (src/mc/repo-gate-table.js) states no --test-timeout');
+      scripted.override({ pr_tests_flags: ['--test-timeout=2000'] });
+      assert.equal(scripted.ask(scripted.bare, scripted.tree).kind, 'timeout');
+      // No reference anywhere: today's behaviour, a looser array included.
+      neither.override({ pr_tests_flags: [...LOADER, '--test-timeout=600000'] });
+      const unchanged = neither.ask(neither.bare, neither.tree);
+      assert.equal(unchanged.ok, true, unchanged.reason);
+      assert.deepEqual(unchanged.declaration.pr_tests_flags, [...LOADER, '--test-timeout=600000']);
+      assert.deepEqual([unchanged.notice, unchanged.timeout], [null, null]);
+    } finally { scripted.cleanup(); neither.cleanup(); }
+  });
+
+  it('timeout policy: a malformed declaration in the measured tree, or one stating two timeouts, is a stop with its kind', () => {
+    const broken = layout({ worktree: '{"pr_tests_flags": [' });
+    const twice = layout({ worktree: { pr_tests_flags: ['--test-timeout=1000', '--test-timeout=2000'] } });
+    try {
+      const malformed = broken.ask(broken.bare, broken.tree);
+      assert.deepEqual([malformed.ok, malformed.kind], [false, 'malformed']);
+      assert.ok(malformed.reason.startsWith(`memoro declares itself in ${repoDeclarationPath(broken.tree)}, but it could not be read as JSON`), malformed.reason);
+      const ambiguous = twice.ask(twice.bare, twice.tree);
+      assert.deepEqual([ambiguous.ok, ambiguous.kind], [false, 'timeout']);
+      assert.equal(ambiguous.reason, `timeout policy: ${repoDeclarationPath(twice.tree)} declares --test-timeout=1000 --test-timeout=2000 `
+        + '— exactly one positive --test-timeout or none; nothing was run. Fix that file.');
+    } finally { broken.cleanup(); twice.cleanup(); }
+  });
+});
+
+/**
  * The layer the repository owns.
  *
  * How memoro tests itself is a fact about memoro, and it lived in mc's source

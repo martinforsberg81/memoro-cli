@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- `mc gate` and the merge round take their test timeout from the tree they
+  measure: the worktree's or the final candidate's own `.mc/test.json`, not
+  the bare common directory's (absent), so Memoro's declared 1000 ms is no
+  longer replaced by the 600000 ms default. A layer whose `pr_tests_flags`
+  omits the timeout inherits it with a printed `timeout policy:` line; one
+  that loosens it, sets 0/Infinity or states two stops before any test is
+  spawned, and so does a malformed `.mc/test.json`. A script's own
+  `--test-timeout` now survives the fallback parsers.
 - Corrected stale adapter and vault-crypto comments to reflect refusal-only
   plaintext materialisation, direct protected-file writes, and retained
   fixed-vector evidence without a current browser-parity claim.

@@ -28,7 +28,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
-import { directGitDir, gateRoot, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, gateRoot, nodeTestFlags, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -1139,6 +1139,78 @@ describe('a repository that selects by diff', () => {
       // And with the repository's own declared flags, not a guess at them.
       assert.deepEqual(fx.runs[0].flags, ['--import', './x.mjs']);
     } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The flags of the tree the round measures: the source repository and the
+   * operator say loader-only, and only the final candidate — after the base
+   * merge — declares 1000 ms. Its declaration is written by the merge, so a
+   * read before it, or of the repository instead, cannot see it.
+   */
+  function candidateDeclares(body, { override = ['--import', './x.mjs'] } = {}) {
+    const own = 'tests/own.test.js';
+    const write = (dir, text) => { mkdirSync(join(dir, '.mc'), { recursive: true }); writeFileSync(join(dir, '.mc', 'test.json'), text); };
+    let headDir = null;
+    const fx = selecting({
+      files: [own],
+      gitAlso: (args, opts) => {
+        if (args[0] === 'merge') { headDir = opts.cwd; write(opts.cwd, body); return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'diff' && args.includes('--diff-filter=AM')) return { status: 0, stdout: `${own}\n`, stderr: '' };
+        return undefined;
+      },
+    });
+    write(fx.repoPath, JSON.stringify({ pr_tests_flags: ['--import', './x.mjs'] }));
+    const table = JSON.parse(readFileSync(join(fx.mcHome, 'repo-gates.json'), 'utf8'));
+    table.repo.pr_tests_flags = override;
+    writeJson(join(fx.mcHome, 'repo-gates.json'), table);
+    // The pull request's last round was red in `own`: the round runs it alone first.
+    writeFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), `${JSON.stringify({
+      schema: 'mc-gate-round', version: 1, phase: 'end', at: '2026-10-16T10:00:00Z', repo: 'repo', mode: 'merge', prs: [7], ok: false, stopped_at: 'red', red_files: [own],
+    })}\n`);
+    return { ...fx, own, headDir: () => headDir };
+  }
+
+  it('timeout policy: previous-red, selected and own tests run with the final candidate\'s 1000 when the repository and the override say loader-only', async () => {
+    const fx = candidateDeclares(JSON.stringify({ pr_tests_flags: ['--import', './x.mjs', '--test-timeout=1000'] }));
+    const said = [];
+    try {
+      const report = await fx.report({ onProgress: (line) => said.push(line) });
+      assert.equal(report.verdict, 'green', report.reason);
+      const flags = ['--import', './x.mjs', '--test-timeout=1000'];
+      assert.deepEqual(fx.runs.map((one) => ({ files: one.files, flags: one.flags, cwd: one.cwd })), [
+        { files: [fx.own], flags, cwd: fx.headDir() }, // the previous red, alone
+        { files: [fx.own], flags, cwd: fx.headDir() }, // the selection
+        { files: [fx.own], flags, cwd: fx.headDir() }, // the pull request's own tests
+      ]);
+      assert.ok(said.includes(`timeout policy: --test-timeout=1000 from ${join(fx.headDir(), '.mc', 'test.json')} — `
+        + `pr_tests_flags from the operator override ${join(fx.mcHome, 'repo-gates.json')} states no --test-timeout`), said.join('\n'));
+      assert.deepEqual(report.previous_red, { files: [fx.own], red: [] });
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: a malformed or loosened final candidate declaration stops the round before the previous red or any test runs', async () => {
+    for (const [body, override, said] of [
+      ['{"pr_tests_flags": [', ['--import', './x.mjs'], 'could not be read as JSON'],
+      [JSON.stringify({ pr_tests_flags: ['--import', './x.mjs', '--test-timeout=1000'] }), ['--import', './x.mjs', '--test-timeout=600000'], 'states --test-timeout=600000 (looser than the measured tree)'],
+    ]) {
+      const fx = candidateDeclares(body, { override });
+      try {
+        const report = await fx.report();
+        assert.deepEqual([report.stopped_at, fx.runs], ['declaration', []], report.reason);
+        assert.ok(report.reason.includes(said) && report.reason.includes(join(fx.headDir(), '.mc', 'test.json')), report.reason);
+        assert.equal(report.previous_red, undefined);
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('timeout policy: the round\'s script fallback keeps a script --test-timeout, and no glob as a flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-node-test-flags-'));
+    try {
+      writeJson(join(dir, 'package.json'), { scripts: { test: 'node --test --import ./x.mjs --test-timeout=1000 --test-reporter=spec \'tests/**/*.test.js\'' } });
+      assert.deepEqual(nodeTestFlags(dir), ['--import', './x.mjs', '--test-timeout=1000']);
+      writeJson(join(dir, 'package.json'), { scripts: { test: 'node --test --test-timeout tests/ --import ./x.mjs' } });
+      assert.deepEqual(nodeTestFlags(dir), ['--import', './x.mjs']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   /**
