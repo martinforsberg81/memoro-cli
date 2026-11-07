@@ -283,6 +283,24 @@ export function fileOutcomes(files, { progress, outcomes }) {
   }));
 }
 
+/**
+ * The files a tracker's run snapshots leave ended, in the order the runs ran: a
+ * file is ended as the latest run that named it left it, so an earlier run's ended
+ * line does not stand for a later rerun of the same file that never wrote one.
+ */
+function endedAsLatest(snapshots) {
+  const ended = new Set();
+  for (const snapshot of snapshots) {
+    const summed = new Set(snapshot.ended);
+    const named = [...snapshot.unfinished, ...snapshot.finished.map((one) => one.file), ...summed];
+    for (const file of named) {
+      if (summed.has(file)) ended.add(file);
+      else ended.delete(file);
+    }
+  }
+  return ended;
+}
+
 /** Keep compact snapshots before reporter files are deleted at batch completion.
  * A timeout in a later batch or command must not forget the earlier evidence. */
 export function progressTracker() {
@@ -296,27 +314,23 @@ export function progressTracker() {
       completed.push(runProgress([file]));
       outcomes.push(runOutcomes([file]));
     },
-    /** The failed files and named tests of every run, completed or still going (`runOutcomes`). */
+    /**
+     * The failed files and named tests of every run, completed or still going (`runOutcomes`).
+     * `failed` and `tests` are unions over every run. `ended` is the files `read()` leaves
+     * ended, less the failed: a file is ended as the latest run that named it left it, as in
+     * `read()`, so an earlier run's ended line never stands for a later rerun that wrote none.
+     */
     outcomes: () => {
       const all = [...outcomes, runOutcomes(active)];
       const failed = new Set(all.flatMap((one) => one.failed));
-      return { failed: [...failed].sort(), ended: [...new Set(all.flatMap((one) => one.ended))].filter((file) => !failed.has(file)).sort(),
+      const ended = endedAsLatest([...completed, runProgress(active)]);
+      return { failed: [...failed].sort(), ended: [...ended].filter((file) => !failed.has(file)).sort(),
         tests: all.flatMap((one) => one.tests) };
     },
     read: () => {
       const snapshots = [...completed, runProgress(active)];
       const unfinished = new Set(snapshots.flatMap((one) => one.unfinished));
-      // A file is ended as the latest run that named it left it: an earlier run's
-      // ended line does not stand for a later rerun of the same file that never wrote one.
-      const ended = new Set();
-      for (const snapshot of snapshots) {
-        const summed = new Set(snapshot.ended);
-        const named = [...snapshot.unfinished, ...snapshot.finished.map((one) => one.file), ...summed];
-        for (const file of named) {
-          if (summed.has(file)) ended.add(file);
-          else ended.delete(file);
-        }
-      }
+      const ended = endedAsLatest(snapshots);
       const seconds = new Map();
       for (const one of snapshots.flatMap((snapshot) => snapshot.finished)) {
         seconds.set(one.file, (seconds.get(one.file) || 0) + one.seconds);
