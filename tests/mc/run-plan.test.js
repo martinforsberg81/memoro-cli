@@ -620,6 +620,17 @@ test('apiInterruption: a limit is quota, a lost login is login, a 5xx is server,
   assert.equal(apiInterruption(null), null);
 });
 
+test('apiInterruption: a server that cannot be reached is offline, marked or not; a limit still wins, and a 5xx stays server', () => {
+  // The result of 2026-11-06 (runner/log/goal-surfaces-popover-behaviour-20261106T211246Z.json), after ten retries.
+  const unreachable = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)";
+  assert.deepEqual(apiInterruption(apiEnded(unreachable, { api_error: 'connection_failed', api_error_status: null, num_turns: 1 })), { kind: 'offline', said: unreachable });
+  assert.equal(apiInterruption(apiEnded(unreachable, { api_error_status: null })).kind, 'offline', 'the same words without the connection_failed mark');
+  assert.equal(apiInterruption(apiEnded('API Error: connect ETIMEDOUT 160.79.104.10:443', { api_error_status: null })).kind, 'offline');
+  assert.equal(apiInterruption(apiEnded('API Error: connect ECONNREFUSED 127.0.0.1:443', { api_error_status: null })).kind, 'offline');
+  assert.equal(apiInterruption(apiEnded("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error: 'connection_failed', api_error_status: 429 })).kind, 'quota', 'a limit is read before the connection');
+  assert.equal(apiInterruption(apiEnded('API Error: 500 Internal server error.', { api_error_status: 500 })).kind, 'server');
+});
+
 test('apiInterruption: an exhausted credit is credits and a rejected key is key, before the quota test', () => {
   const low = 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.';
   assert.deepEqual(apiInterruption(apiEnded(low, { api_error_status: 400 })), { kind: 'credits', said: low });

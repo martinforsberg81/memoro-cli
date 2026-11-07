@@ -179,6 +179,16 @@ without writing a log entry, the runner writes one; three such build ends
 in succession send the goal to finish. A normal build end with more work
 leaves it build · ready for the next session.
 
+A session that ends because the API server cannot be reached (`apiInterruption`
+kind `offline`: `connection_failed`, or the result says `Can't reach the API
+server`, ENOTFOUND, ECONNREFUSED or ETIMEDOUT) is no answer about its goal: it
+writes no runner entry and records no refusal, and its `runs.tsv` note is
+`offline`. It holds every new model session of any kind — build, review, plan,
+programme planning, the helper and the intake — for `offlineBackoffMs(n)`: a
+minute, doubling, at most fifteen, with `n` the offline endings in a row. The
+hold is in memory, so a restart starts without one. A session that ends any
+other way clears it and resets `n`. Sessions already running are untouched.
+
 ### Launch settings
 
 `mc model priority [auto|codex|claude]` saves one global provider preference in

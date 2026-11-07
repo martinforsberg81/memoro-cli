@@ -2954,6 +2954,67 @@ test('a build session that writes no log entry gets a runner entry, and three in
   assert.equal(runRows(f.files).length, 5);
 });
 
+/** The result of an API the runner cannot reach (2026-11-06): ten retries, then this, with no tokens. */
+const UNREACHABLE = streamed(apiEndedSession("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", { api_error: 'connection_failed', api_error_status: null, num_turns: 1, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }));
+
+test('an unreachable API holds every launch with a growing wait, writes no goal entry or refusal, and an ordinary ending clears the hold', async () => {
+  const f = goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } });
+  let clock = Date.parse('2026-11-07T12:00:00Z');
+  f.deps.now = () => new Date(clock);
+  const patches = [];
+  f.deps.billing = { readMode: () => 'plan', readState: () => ({ plan: {}, credits: {} }), patchState: (patch) => { patches.push(patch); } };
+  f.answer = UNREACHABLE;
+  const runner = createRunner({ deps: f.deps });
+  const runnerLog = () => f.files['/w/runner/log/runner.log'] || '';
+  const holdLines = () => runnerLog().split('\n').filter((line) => /API server cannot be reached|API answers again/u.test(line));
+  const entries = () => parseLog(f.files[`${GOALS}/mute/LOG.md`]);
+  const where = () => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/mute/GOAL.json`], key)).join(' · ');
+
+  // The first offline ending: the goal is left as it was, and nothing is refused.
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(entries().length, 1, 'no runner entry: an offline ending answers nothing about the goal');
+  assert.equal(where(), 'build · ready');
+  assert.deepEqual(patches, [], 'no provider or API-reserve refusal is recorded for it');
+  assert.equal(f.deps.capacity.read().providers.claude.refusal_until ?? null, null);
+  assert.equal(holdLines().length, 1);
+  assert.match(holdLines()[0], /until 2026-11-07T12:01:00Z \(n=1, 60 s\)$/u);
+  assert.equal(runRows(f.files).length, 1);
+  assert.match(runRows(f.files)[0].note, /^offline,no-log$/u);
+
+  // A tick inside that minute launches nothing and says nothing about the goal.
+  const before = runnerLog();
+  clock += 30_000;
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 1, 'a tick inside the hold launches nothing');
+  assert.equal(runnerLog(), before, 'and writes no line for the goal');
+
+  // Once the hold has passed, one session launches; a second offline ending doubles the wait.
+  clock = Date.parse('2026-11-07T12:01:00Z');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.length, 2);
+  assert.match(holdLines().at(-1), /until 2026-11-07T12:03:00Z \(n=2, 120 s\)$/u);
+
+  // A third in a row: the goal is still build · ready, and no entry says why.
+  clock = Date.parse('2026-11-07T12:03:00Z');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.match(holdLines().at(-1), /until 2026-11-07T12:07:00Z \(n=3, 240 s\)$/u);
+  assert.equal(where(), 'build · ready', 'three offline endings in a row do not move the goal to finish');
+  assert.equal(entries().length, 1);
+  assert.equal(runRows(f.files).length, 3);
+  assert.ok(runRows(f.files).every((row) => /^offline/u.test(row.note)));
+
+  // An ordinary ending clears the hold, with one line, and the next tick launches without waiting.
+  clock = Date.parse('2026-11-07T12:07:00Z');
+  f.answer = logsItself(f, 'mute');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(entries().length, 2, 'the ordinary session wrote its own entry');
+  assert.equal(holdLines().filter((line) => /API answers again/u.test(line)).length, 1, 'one line when it clears');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'the next tick launches at once');
+  assert.equal(f.calls.sessions.length, 5);
+  assert.equal(holdLines().length, 4, 'three set lines and one clear line, nothing else');
+});
+
 /* ------------------------------------------------------- archive a finished goal */
 
 /** A goal's one entry, made by a session, with the status it set. */
