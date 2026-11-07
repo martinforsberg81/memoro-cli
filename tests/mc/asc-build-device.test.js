@@ -582,8 +582,8 @@ describe('makeStep — the stall stop', () => {
     t.mock.timers.tick(STALL_MS - 1);
     assert.deepEqual(kills, [], 'output restarts the silence');
     t.mock.timers.tick(1);
+    assert.deepEqual(kills, [[777, 'SIGTERM']], 'five silent minutes stop the tree');
     const r = await pending;
-    assert.deepEqual(kills, [[777, 'SIGTERM']]);
     assert.equal(r.ok, false);
     assert.deepEqual(r.stalled, { stage: 'Resolve Package Graph', line: 'Fetching from https://github.com/ionic-team/ion-ios-camera.git' });
     assert.equal(stepNote('xcodebuild Debug', r, 60 * 60 * 1000),
