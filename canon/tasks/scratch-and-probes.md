@@ -13,7 +13,7 @@ export MC_SCRATCH
 A probe that runs mc's own code from a worktree — a review trying a branch, the page drawn from it, a runner function
 called by hand — sets `MC_HOME="$MC_SCRATCH/mc-home"` and `MC_WORK_ROOT="$MC_SCRATCH/mc-root"` first. Reading mc's
 state can write it (a migration, a heal), and without them it writes Martin's: `~/.memoro/mc/lanes.json` was rewritten
-that way on 2026-11-02 and the running runner dropped to one lane per repository.
+that way on 2026-11-02 and the running runner dropped to one lane per repository. A goal that changes gate worker code (`src/mc/session-gate-run.js`, `repo-gate.js`, `test-times*.js`) cannot prove itself end to end with `mc gate`, which spawns the installed `~/mc/self` worker, main's code, not the branch's: its end-to-end checks run through tests that import the branch's `src` (for example `realTests` in `tests/mc/repo-gate.test.js`), or through `node <worktree>/src/mc/session-gate-run.js <copied request.json>`, and the evidence names which was used.
 
 For a worktree's `mc skills sync` or `mc hook install`, also isolate `HOME` and `CLAUDE_CONFIG_DIR` under that root; otherwise
 it writes `~/.claude`/`~/.agents`.
@@ -29,7 +29,7 @@ source=<source-path>
 git -C "$reviewed" rev-parse HEAD
 git -C "$reviewed" status --short
 ```
-Stop unless HEAD equals `$sha` and the status is empty. Stop too if another process stands in the worktree:
+Stop unless HEAD equals `$sha` and the status is empty. A dev server the goal started is stopped first with `mc dev stop <instance_id>` (`mc dev list` names it), before the cwd check below; `mc shot dev` restarts it afterwards. Stop too if another process stands in the worktree:
 `lsof -a -d cwd -Fpn` lists each process with its working directory, and the only one in `$reviewed` may be this
 session's own shell. Then save the source before the fault and record the pre-replay state:
 ```sh

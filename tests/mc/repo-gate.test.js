@@ -29,6 +29,7 @@ import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
 import { directGitDir, gateRoot, nodeTestFlags, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { fileOutcomes, outputCut, progressTracker } from '../../src/mc/test-times.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -3071,6 +3072,29 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(run.cut.length, 1, 'the one file the times file says never ended');
       assert.match(run.cut[0], /quits\.test\.js$/u);
       assert.equal(run.code, -1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('realTests: a file that only calls a helper which defines its tests is whole, not cut', async () => {
+    // Node names the helper, not the file that calls it, on each test's start and done lines; the file's own ended line says it ran whole.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-helper-suite-')));
+    try {
+      writeFileSync(join(dir, '_helper.js'), [
+        "import { describe, test } from 'node:test';",
+        "export function suite() { describe('helper suite', () => { test('first', () => {}); test('second', () => {}); }); }",
+      ].join('\n'));
+      writeFileSync(join(dir, 'one.test.js'), "import { suite } from './_helper.js';\nsuite();\n");
+      const tracker = progressTracker();
+      const times = { root: join(dir, 'home'), repo: 'fixture', where: 'gate', track: tracker.track, complete: tracker.complete };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const run = await realTests({ cwd: dir, files: ['one.test.js'], flags: ['--no-warnings'], env, lanes: 1, times });
+      assert.deepEqual(run.cut, [], 'the file that only calls the helper was cut');
+      assert.equal(tapTotals(run.tap).tests, 2, run.tap);
+      assert.equal(run.code, 0, run.stderr);
+      const progress = tracker.read();
+      assert.ok(progress.finished.some((one) => one.file.endsWith('/_helper.js')), `node did not name the helper: ${JSON.stringify(progress)}`);
+      assert.deepEqual(outputCut(['one.test.js'], { progress }), []);
+      assert.deepEqual(fileOutcomes(['one.test.js'], { progress, outcomes: tracker.outcomes() }).map((one) => one.outcome), ['passed']);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
 
