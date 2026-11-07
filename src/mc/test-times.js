@@ -73,7 +73,51 @@ export function testsMeasured(text, cwd) {
   return tests;
 }
 
-/** Where the tests that reached their time limit are kept: `<work root>/runner/too-slow/<repo>.tsv`. */
+/**
+ * The slow-test indicator (Martin, 2026-11-07): a test that passed in more than
+ * this is named as slow, so the tests that slow or stall a gate are found. It is
+ * an indicator, never red: the hard limit is the stall guard, the run's own
+ * `--test-timeout`, and only a test cut at that is red. Not configurable per
+ * repository.
+ */
+export const SLOW_TEST_MS = 1000;
+/** How many slow tests a verdict names before it counts the rest. */
+export const SLOW_LINES = 20;
+
+/** A test that passed, measured over `SLOW_TEST_MS`, and was not cut. */
+const isSlow = (test) => !test.failed && !(test.timeout > 0) && test.seconds !== null && test.seconds * 1000 > SLOW_TEST_MS;
+
+/**
+ * The passed tests over the indicator, `{ file, name, seconds }`, slowest first,
+ * one per file and name (the slowest time of a test measured twice). `tests` is
+ * what `testsMeasured` read; a test with no time, failed or cut is not slow.
+ */
+export function slowTests(tests) {
+  const slowest = new Map();
+  for (const test of tests || []) {
+    if (!isSlow(test)) continue;
+    const known = slowest.get(keyOf(test));
+    if (!known || test.seconds > known.seconds) slowest.set(keyOf(test), { file: test.file, name: test.name, seconds: test.seconds });
+  }
+  return [...slowest.values()].sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
+}
+
+/**
+ * The verdict's lines for the slow tests (`slowTests`): a heading that says they
+ * are over the indicator and not red, then `slow <file> › <name> — 1.400 s` for
+ * at most `SLOW_LINES`, then how many were left out. Nothing when none is slow.
+ * `indent` prefixes every line.
+ */
+export function slowTestLines(slow, { indent = '' } = {}) {
+  const list = slowTests(slow || []);
+  if (!list.length) return [];
+  const lines = [`${indent}${list.length} test${list.length === 1 ? '' : 's'} over the ${SLOW_TEST_MS / 1000} s slow-test indicator — not red; rebuild a new or changed one, or say in the PR why its cost is warranted:`];
+  for (const test of list.slice(0, SLOW_LINES)) lines.push(`${indent}slow ${test.file} › ${test.name} — ${test.seconds.toFixed(3)} s`);
+  if (list.length > SLOW_LINES) lines.push(`${indent}… and ${list.length - SLOW_LINES} more slow tests`);
+  return lines;
+}
+
+/** Where the slow tests and the tests that reached their time limit are kept: `<work root>/runner/too-slow/<repo>.tsv`. */
 export function tooSlowPath(root, repo) {
   return join(root, 'runner', 'too-slow', `${repo}.tsv`);
 }
@@ -94,20 +138,25 @@ export function readTooSlow({ root, repo }) {
 }
 
 /**
- * The tests of a round that node cut at their time limit, kept in the
- * repository's too-slow file until they pass under it (Martin, 2026-11-03: a
- * test over the limit is red and is rebuilt, not rerun). `tests` is what
- * `testsMeasured` read off the round; `where` names it, the pull request or
- * `gate`. One row per test: a test already there keeps its `first_seen` and
- * gets this round's `last_seen`, `where` and limit; a test that passed under
- * its row's limit this round is removed. The file is written whole or not at
- * all, and only when a row changed. A courtesy like `recordTestTimes`: a file
- * that cannot be written costs the record, never the round its verdict. Returns
- * the rows now in the file, or null when nothing was written.
+ * The tests of a round that node cut at the stall guard, and the passed tests
+ * over the slow-test indicator, kept in the repository's too-slow file until
+ * they pass under their row's limit (Martin, 2026-11-03 and 2026-11-07: a cut
+ * test is red and is rebuilt, not rerun; a slow one is named, not red). A cut
+ * row's `limit_ms` is the limit it was cut at; a slow row's is `SLOW_TEST_MS`.
+ * `tests` is what `testsMeasured` read off the round; `where` names it, the pull
+ * request or `gate`. One row per test: a test already there keeps its
+ * `first_seen` and gets this round's `last_seen`, `where` and limit; a test that
+ * passed under its row's limit this round is removed. The file is written whole
+ * or not at all, and only when a row changed. A courtesy like `recordTestTimes`:
+ * a file that cannot be written costs the record, never the round its verdict.
+ * Returns the rows now in the file, or null when nothing was written.
  */
 export function recordTooSlow({ root, repo, where = 'gate', tests = [], now = new Date() }) {
   try {
-    const slow = tests.filter((test) => test.timeout > 0);
+    const slow = [
+      ...tests.filter((test) => test.timeout > 0).map((test) => ({ test, limit: test.timeout })),
+      ...tests.filter(isSlow).map((test) => ({ test, limit: SLOW_TEST_MS })),
+    ];
     const passed = new Map(tests.filter((test) => !test.failed && test.seconds !== null).map((test) => [keyOf(test), test.seconds * 1000]));
     const before = readTooSlow({ root, repo });
     const rows = before.filter((row) => {
@@ -115,10 +164,12 @@ export function recordTooSlow({ root, repo, where = 'gate', tests = [], now = ne
       return ms === undefined || (row.limit_ms !== null && ms >= row.limit_ms);
     });
     const stamp = now.toISOString();
-    for (const test of slow) {
+    for (const { test, limit } of slow) {
       const row = rows.find((one) => keyOf(one) === keyOf(test));
-      if (row) Object.assign(row, { last_seen: stamp, where, limit_ms: test.timeout });
-      else rows.push({ file: test.file, name: test.name, first_seen: stamp, last_seen: stamp, where, limit_ms: test.timeout });
+      // A cut row that passed over the indicator becomes a slow row and keeps when it was first seen.
+      const first = before.find((one) => keyOf(one) === keyOf(test))?.first_seen || stamp;
+      if (row) Object.assign(row, { last_seen: stamp, where, limit_ms: limit });
+      else rows.push({ file: test.file, name: test.name, first_seen: first, last_seen: stamp, where, limit_ms: limit });
     }
     if (!slow.length && rows.length === before.length) return null;
     rows.sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));

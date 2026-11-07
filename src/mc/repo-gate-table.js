@@ -158,7 +158,7 @@ export const SHIPPED = Object.freeze({
     // test fits 30 s on a loaded machine (2026-11-01), so 30 s. It cannot read
     // 1000 yet: measured 2026-11-03 at three lanes on a loaded machine, 164
     // tests in 31 files take over 1 s (the slowest 8.1 s), and a round cuts
-    // each of them red (`too slow — rebuild`, repo-gate.js), so nothing would
+    // each of them red (`reached the stall guard — rebuild`, repo-gate.js), so nothing would
     // land. Goal mc/tests-under-1s rebuilds them file by file and lowers this
     // as it goes, until it reads 1000. Node cuts the test, not its describe
     // block, and the round goes on; a test cut is kept in

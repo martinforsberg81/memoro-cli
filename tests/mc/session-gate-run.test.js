@@ -160,6 +160,22 @@ it('the automatic gate runs affected tests and command gates, including a projec
   assert.equal(result.ok, false);
 });
 
+it('a passed test over 1 s is listed slow and the gate stays green; a quick test is not listed', async () => {
+  const measured = [
+    { file: 'tests/a.test.js', name: 'slow one', line: 3, seconds: 1.4, failed: false, timeout: null },
+    { file: 'tests/a.test.js', name: 'quick one', line: 9, seconds: 0.2, failed: false, timeout: null },
+  ];
+  const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+    write: () => {},
+    select: async () => ({ ok: true, files: ['tests/a.test.js'], commands: [] }),
+    tests: async () => ({ tap: GREEN, code: 0, tests: measured }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 0);
+  assert.equal(result.verdict, 'green');
+  assert.deepEqual(result.slow_tests, [{ file: 'tests/a.test.js', name: 'slow one', seconds: 1.4 }]);
+});
+
 it('starts the serial command sequence beside tests without waiting additively', async () => {
   const started = [];
   let releaseCommand;

@@ -1067,6 +1067,8 @@ describe('a repository that selects by diff', () => {
     select = null,
     // The declaration's `retry_once` (ruling 44 § 5), when the test wants one.
     retryOnce = null,
+    // What the times reporter measured of each run's tests (`testsMeasured`).
+    measured = [],
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -1130,7 +1132,7 @@ describe('a repository that selects by diff', () => {
     });
     const tests = ({ cwd, files: ran, flags }) => {
       runs.push({ files: [...ran], flags, cwd });
-      return Promise.resolve({ code: candidateRed.length || candidateTap ? 1 : 0, tap: candidateTap || tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
+      return Promise.resolve({ code: candidateRed.length || candidateTap ? 1 : 0, tap: candidateTap || tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }), tests: measured });
     };
     const suites = [];
     const suiteCommands = [];
@@ -1954,11 +1956,31 @@ describe('a repository that selects by diff', () => {
         try {
           const report = await fx.report({ onProgress: (line) => said.push(line) });
           assert.equal(report.stopped_at, 'red');
-          assert.equal(report.reason, 'too slow — rebuild: slow operation (30 s)');
+          assert.equal(report.reason, 'reached the stall guard — rebuild: slow operation (cut at 30 s)');
           assert.deepEqual(report.too_slow, [{ file: slowFile, name: 'slow operation', duration_ms: 30_000 }]);
           assert.equal(fx.runs.length, 1, 'the timeout test was run again');
           assert.ok(said.includes(report.reason));
-          assert.match(gateLines(report).join('\n'), /RED — 1 test too slow — rebuild:[\s\S]*slow operation \(30 s\)/u);
+          assert.equal(report.ok, false);
+          assert.match(gateLines(report).join('\n'), /RED — 1 test reached the stall guard — rebuild:\n {6}stall guard — rebuild: slow operation \(cut at 30 s\)/u);
+        } finally { fx.cleanup(); }
+      });
+
+      it('a test over the 1 s indicator but under the stall guard is not red: the round is green and the report names it slow', async () => {
+        const fx = selecting({ files: [own], measured: [
+          { file: own, name: 'slow but passing', line: 3, seconds: 1.4, failed: false, timeout: null },
+          { file: own, name: 'quick', line: 9, seconds: 0.2, failed: false, timeout: null },
+        ] });
+        try {
+          const report = await fx.report();
+          assert.equal(report.ok, true, report.reason);
+          assert.equal(report.stopped_at, null);
+          assert.equal(report.verdict, 'green');
+          assert.equal(report.too_slow, undefined);
+          assert.deepEqual(report.slow_tests, [{ file: own, name: 'slow but passing', seconds: 1.4 }]);
+          const lines = gateLines(report);
+          assert.doesNotMatch(lines[0], /RED/u);
+          assert.ok(lines.includes(`mc: slow ${own} › slow but passing — 1.400 s`), lines.join('\n'));
+          assert.ok(!lines.some((line) => /quick/u.test(line)));
         } finally { fx.cleanup(); }
       });
 

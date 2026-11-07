@@ -88,8 +88,10 @@ The verdict and the merge log name two groups of files, kept apart: the
 **unfinished** files (a test file whose top-level test started and did not
 end, or a selected file that never started) are the red, the ones to rebuild;
 the **slowest finished** files are for the reader. A whole-suite round names
-only the files it started, since its selection is not known to mc. A test that
-exceeds its own time limit is `too slow — rebuild` and is not run again. `mc
+only the files it started, since its selection is not known to mc. A test cut at
+the stall guard (its run's `--test-timeout`) is red, `reached the stall guard —
+rebuild`, and is not run again; a test that passes over the 1 s slow-test
+indicator is named as slow and is not red. `mc
 gate` and the gate a session reaches through `mc publish` use this same
 repository ceiling; a caller's wait budget cannot extend it.
 
@@ -791,17 +793,29 @@ the `.mc/test.json` read is the measured tree's, never the common directory's.
 
 A malformed `.mc/test.json` in the measured tree is a stop too; it never falls
 through to the shipped table or the test script.
-A per-test timeout is not run again by `retry_once`: the verdict says
-`too slow — rebuild` with the test name and timeout duration, so a timed-out
-test is rebuilt by a session rather than consuming another round.
+A test cut at the stall guard is not run again by `retry_once`: the verdict
+says `reached the stall guard — rebuild` with the test name and the limit it was
+cut at (`cut at 30 s`), so a timed-out test is rebuilt by a session rather than
+consuming another round. Only the stall guard is red.
 
-**A test cut at its limit is kept in `~/mc/runner/too-slow/<repo>.tsv`**
+**The slow-test indicator is 1 s per test** (`SLOW_TEST_MS` in
+`src/mc/test-times.js`, not configurable per repository). Every passed test a
+session's `mc gate` or a merger round measured over it is listed as slow, with
+its file, name and seconds, slowest first, at most 20 named and then a count
+(`slow_tests` in `--json` and the round report). A slow test never changes the
+verdict, the exit code or whether the merger lands: a new or changed test over
+it is rebuilt, or its pull request says why its cost is warranted and review
+judges that.
+
+**A slow or cut test is kept in `~/mc/runner/too-slow/<repo>.tsv`**
 (`recordTooSlow` in `src/mc/test-times.js`). Every run that measures times — a
 session's `mc gate`, `mc test`, `mc publish`'s round and the merger's — reads
 the reporter's lines after the run and writes the tests node cut
-(`test timed out after <n>ms`): one row per test with its file, its name, when
-it was first and last seen, where (the pull request, `full`, or `gate`) and
-the limit. A test already there keeps its first-seen time; one that passes
+(`test timed out after <n>ms`) and the passed tests over the 1 s slow-test
+indicator: one row per test with its file, its name, when it was first and last
+seen, where (the pull request, `full`, or `gate`) and the limit — the cut limit
+for a cut row, 1000 for a slow row. A file written before slow rows existed is
+read as it is. A test already there keeps its first-seen time; one that passes
 under its row's limit in a later run is removed. The file is written whole
 or not at all, and a write that fails never turns a round red. The limit is
 the repository's `--test-timeout` (`pr_tests_flags` in

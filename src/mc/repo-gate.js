@@ -66,7 +66,7 @@ import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, testsMeasured } from './test-times.js';
+import { TIMES_REPORTER, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -280,7 +280,14 @@ export async function runGate({
   const lanes = testLanes({ env, load, mode: gateMode });
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
   const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete };
-  const runSuite = suite || ((options) => realSuite({ ...options, env, lanes, signal, times: timesOf }));
+  // Every test the round's runs measured, all on the candidate: the ones over the
+  // slow-test indicator are named in the report (`slow_tests`), never its red.
+  const measuredTests = [];
+  const runSuite = async (options) => {
+    const result = await (suite || ((one) => realSuite({ ...one, env, lanes, signal, times: timesOf })))(options);
+    measuredTests.push(...(result?.tests || []));
+    return result;
+  };
   const runTests = async (options) => {
     const ownProgress = progressTracker();
     const request = { files: options.files || [], progress: ownProgress };
@@ -290,6 +297,7 @@ export async function runGate({
       complete: (file) => { progress.complete(file); ownProgress.complete(file); },
     };
     const result = await (tests || realTests)({ ...options, env, lanes, classes: fileClasses, signal, times });
+    measuredTests.push(...(result?.tests || []));
     if (tapTotals(result.tap).finished && !result.aborted && !result.timedOut && !result.error) pendingTestRuns.delete(request);
     return result;
   };
@@ -394,6 +402,7 @@ export async function runGate({
   const finish = (stoppedAt, reason) => {
     report.stopped_at = stoppedAt;
     report.reason = reason;
+    report.slow_tests = slowTests(measuredTests);
     report.ok = stoppedAt === null;
     report.verdict = verdictFor(report);
     const ended = clock();
@@ -829,7 +838,9 @@ export async function runGate({
       // What a killed or cancelled file failed is not the red either, and is
       // not handed to whoever fixes it (ruling 44).
       if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
-      // A per-test timeout is already an actionable failure. Re-running that
+      // A test cut at the stall guard (the run's `--test-timeout`) is already an
+      // actionable failure, and the only time that is red: a test over the 1 s
+      // slow-test indicator is named in `slow_tests`, never here. Re-running the
       // file cannot make the test pass reliably and can spend another full
       // timeout holding the lane; leave it red for a rebuild instead.
       const tooSlow = (result.red_tests || []).flatMap((test) => {
@@ -840,10 +851,10 @@ export async function runGate({
       });
       if (tooSlow.length) {
         report.too_slow = tooSlow;
-        const details = tooSlow.map((test) => `${test.name} (${Math.ceil(test.duration_ms / 1000)} s)`).join(', ');
+        const details = tooSlow.map((test) => `${test.name} (cut at ${Math.ceil(test.duration_ms / 1000)} s)`).join(', ');
         const otherRed = (result.red_tests || []).filter((test) => !tooSlow.some((slow) => slow.name === test.name)).map((test) => test.name);
         const rest = otherRed.length ? `; other tests red: ${nameSome(otherRed)}` : '';
-        const reason = `too slow — rebuild: ${details}${rest}`;
+        const reason = `reached the stall guard — rebuild: ${details}${rest}`;
         say(reason);
         return finish('red', reason);
       }
@@ -2572,15 +2583,16 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
     if (timesFile) times.track?.(timesFile);
     const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
     const noteTimes = () => {
-      if (!timesFile) return [];
+      if (!timesFile) return { cut: [], tests: [] };
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
       times.complete?.(timesFile);
       // A whole suite names no files, so what its times file can show is a file whose top-level test started and never ended.
       const cut = outputCut([], { progress: runProgress([timesFile]) });
       rmSync(timesFile, { force: true });
-      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests: testsMeasured(text, cwd) });
-      return cut;
+      const tests = testsMeasured(text, cwd);
+      recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
+      return { cut, tests };
     };
     const child = spawn(command, {
       cwd,
@@ -2622,9 +2634,9 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A suite whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
-      const cut = noteTimes();
+      const { cut, tests } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
-      resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut });
+      resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests });
     });
   });
 }

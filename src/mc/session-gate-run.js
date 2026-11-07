@@ -12,7 +12,7 @@ import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
-import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, touchedTests } from './test-times.js';
+import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
 import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 import { commandIdentity } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
@@ -235,6 +235,9 @@ async function executeSessionGate(request, {
   const reusedTimed = touchedTests(Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || [])
     .map((test) => ({ ...test, file }))), request.timed || {}).map((test) => ({ ...test, reused: reusedFiles[test.file] }));
   let timed = reusedTimed;
+  // Every passed test over the slow-test indicator (`slowTests`): named in the verdict, never its red.
+  const reusedSlow = Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || []).map((test) => ({ ...test, file })));
+  let slow = slowTests(reusedSlow);
   const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
     flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
   const snapshot = () => {
@@ -243,7 +246,7 @@ async function executeSessionGate(request, {
     }));
     return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
-      ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed,
+      ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed, slow_tests: slow,
       coverage, execution: { tests: testResult, commands }, resumed,
       ...(settled && (settled.alone.length || settled.main.length) ? { settled: { alone: settled.alone, main: settled.main, base: settled.base, red: settled.red } } : {}) };
   };
@@ -259,6 +262,7 @@ async function executeSessionGate(request, {
       const run = await tests({ cwd, files, flags: testFlags, classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
       write(`${run.tap || ''}\n${run.stderr || ''}`);
       timed = [...touchedTests(run.tests || [], request.timed || {}), ...reusedTimed];
+      slow = slowTests([...(run.tests || []), ...reusedSlow]);
       details = redTests(run.tap, files, { cwd });
       const totals = tapTotals(run.tap);
       for (const key of ['tests', 'pass', 'fail', 'skipped', 'cancelled']) if (Number.isFinite(totals[key])) write(`ℹ ${key} ${totals[key]}\n`);
