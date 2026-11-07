@@ -835,31 +835,36 @@ describe('the pull request\'s own tests run with the declared flags', () => {
   });
 
   it('a batch reports every test of each file, though each file\'s report is bigger than a pipe buffer', async () => {
-    // Three files of 400 tests with names of about 300 characters: ~350 KB of TAP
-    // each. Measured on macOS (node 24.10, 2026-11-07): one such file was cut in 3
-    // of 10 runs; three in one batch were cut in 10 of 10 without the preload. The
-    // child's own argv is what the test checks for `--test-force-exit`.
+    // Three files of 200 tests with names of about 300 characters: ~175 KB of TAP
+    // each, more than a pipe holds. Measured on macOS (node 24.10, 2026-11-07)
+    // without the preload, three such files of 400 tests were cut in 8 of 10
+    // batches: the count alone is not a sure proof. So each file also writes 128 KB
+    // to stderr in one write and records what is still queued after it: 0 when the
+    // write blocks, all of it when it does not (5 of 5 each way). The child's own
+    // argv is what the test checks for `--test-force-exit`.
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-stdio-cut-')));
     try {
       const names = ['one', 'two', 'three'];
       const fixture = (name) => [
         "import { writeFileSync } from 'node:fs';",
         "import { test } from 'node:test';",
-        `writeFileSync(new URL('./argv-${name}.json', import.meta.url), JSON.stringify(process.execArgv));`,
-        "for (let i = 0; i < 400; i++) test(`${String(i).padStart(4, '0')} ${'n'.repeat(290)}`, () => {});",
+        "process.stderr.write(('x'.repeat(999) + '\\n').repeat(128));",
+        `writeFileSync(new URL('./argv-${name}.json', import.meta.url), JSON.stringify({ argv: process.execArgv, queued: process.stderr.writableLength }));`,
+        "for (let i = 0; i < 200; i++) test(`${String(i).padStart(4, '0')} ${'n'.repeat(290)}`, () => {});",
       ].join('\n');
       for (const name of names) writeFileSync(join(dir, `${name}.test.js`), fixture(name));
       const times = { root: join(dir, 'home'), repo: 'fixture', where: 'gate' };
       const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
       const run = await realTests({ cwd: dir, files: names.map((name) => `${name}.test.js`), flags: ['--no-warnings'], env, lanes: 3, times });
       const totals = tapTotals(run.tap);
-      assert.equal(totals.tests, 1200, `the batch read ${totals.tests} of 1200 tests`);
+      assert.equal(totals.tests, 600, `the batch read ${totals.tests} of 600 tests`);
       assert.equal(totals.finished, true, 'the batch printed its totals');
       assert.equal(run.code, 0, JSON.stringify(run.stderr.slice(0, 300)));
       assert.deepEqual(run.cut, [], 'no file was cut');
       for (const name of names) {
-        const childArgs = JSON.parse(readFileSync(join(dir, `argv-${name}.json`), 'utf8'));
-        assert.ok(childArgs.includes('--test-force-exit'), `${name} ran without --test-force-exit: ${childArgs.join(' ')}`);
+        const child = JSON.parse(readFileSync(join(dir, `argv-${name}.json`), 'utf8'));
+        assert.ok(child.argv.includes('--test-force-exit'), `${name} ran without --test-force-exit: ${child.argv.join(' ')}`);
+        assert.equal(child.queued, 0, `${name}: a write bigger than a pipe left ${child.queued} bytes queued, so its stderr does not block`);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
