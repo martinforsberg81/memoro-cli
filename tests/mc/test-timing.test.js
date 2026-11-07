@@ -3,13 +3,13 @@
  * which tests a diff reaches, and the line the verdict prints for each.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import timesReporter from '../../src/mc/test-times-reporter.mjs';
-import { changedRanges, measuredSeconds, readTooSlow, recordTooSlow, testsMeasured, tooSlowPath, touchedTests } from '../../src/mc/test-times.js';
+import { changedRanges, measuredSeconds, readTooSlow, recordTooSlow, SLOW_LINES, SLOW_TEST_MS, slowTestLines, slowTests, testsMeasured, tooSlowPath, touchedTests } from '../../src/mc/test-times.js';
 import { gateLines, timedTestLines, TIMED_LINES } from '../../src/mc/gate-local.js';
 
 const cwd = '/w';
@@ -112,6 +112,50 @@ describe('the too-slow file', () => {
     try {
       assert.equal(recordTooSlow({ root: dir, repo: 'r', tests: [green('fine')] }), null);
       assert.throws(() => readFileSync(tooSlowPath(dir, 'r')), { code: 'ENOENT' });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), []);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a passed test over the 1 s indicator gets a slow row at 1000, kept while it stays over and removed once under', () => {
+    const dir = root();
+    try {
+      const first = new Date('2026-11-07T10:00:00Z');
+      const later = new Date('2026-11-07T11:00:00Z');
+      const rows = recordTooSlow({ root: dir, repo: 'r', where: 'gate', tests: [green('slow', 1.4), green('quick', 0.2)], now: first });
+      assert.deepEqual(rows, [{ file: 'tests/a.test.js', name: 'slow', first_seen: first.toISOString(), last_seen: first.toISOString(), where: 'gate', limit_ms: SLOW_TEST_MS }]);
+      assert.equal(SLOW_TEST_MS, 1000);
+      recordTooSlow({ root: dir, repo: 'r', where: '#7', tests: [green('slow', 1.1)], now: later });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), [
+        { file: 'tests/a.test.js', name: 'slow', first_seen: first.toISOString(), last_seen: later.toISOString(), where: '#7', limit_ms: 1000 },
+      ]);
+      recordTooSlow({ root: dir, repo: 'r', tests: [green('slow', 0.9)] });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), []);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a cut row and a slow row stand side by side, each judged by its own limit', () => {
+    const dir = root();
+    try {
+      recordTooSlow({ root: dir, repo: 'r', tests: [slow('cut', 30_000), green('slow', 1.5)] });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }).map((row) => [row.name, row.limit_ms]), [['cut', 30_000], ['slow', 1000]]);
+      // The cut test passes at 5 s: under its 30 s limit, so its cut row goes, and it is now a slow row.
+      recordTooSlow({ root: dir, repo: 'r', tests: [green('cut', 5), green('slow', 1.2)] });
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }).map((row) => [row.name, row.limit_ms]), [['cut', 1000], ['slow', 1000]]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('a file written before slow rows existed is read unchanged, and a quick pass still removes its cut row', () => {
+    const dir = root();
+    try {
+      const old = 'file\ttest\tfirst_seen\tlast_seen\twhere\tlimit_ms\ntests/a.test.js\tone\t2026-11-03T10:00:00.000Z\t2026-11-03T11:00:00.000Z\t#12\t30000\n';
+      mkdirSync(join(dir, 'runner', 'too-slow'), { recursive: true });
+      writeFileSync(tooSlowPath(dir, 'r'), old);
+      assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), [
+        { file: 'tests/a.test.js', name: 'one', first_seen: '2026-11-03T10:00:00.000Z', last_seen: '2026-11-03T11:00:00.000Z', where: '#12', limit_ms: 30_000 },
+      ]);
+      assert.equal(recordTooSlow({ root: dir, repo: 'r', tests: [green('other', 0.1)] }), null);
+      assert.equal(readFileSync(tooSlowPath(dir, 'r'), 'utf8'), old, 'nothing changed, nothing written');
+      recordTooSlow({ root: dir, repo: 'r', tests: [green('one', 0.3)] });
       assert.deepEqual(readTooSlow({ root: dir, repo: 'r' }), []);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -224,5 +268,39 @@ describe('the lines the verdict prints for them', () => {
       command: 'node --test a.test.js', seconds: 2, logPath: '/s/g.log', timed: ['test a.test.js › x — 0.100 s'],
     });
     assert.equal(text, 'GREEN — node --test a.test.js — 3 tests, 0 failed — 2s\ntest a.test.js › x — 0.100 s\nwhole output: /s/g.log');
+  });
+});
+
+describe('the slow-test indicator', () => {
+  const passed = (name, seconds, file = 'tests/a.test.js') => ({ file, name, line: 1, seconds, failed: false, timeout: null });
+
+  it('only a passed test over 1 s is slow: not a quick one, a failed one, a cut one or an untimed one', () => {
+    assert.deepEqual(slowTests([
+      passed('quick', 0.2), passed('slow', 1.4), passed('at the line', 1),
+      { ...passed('failed', 2), failed: true }, { ...passed('cut', 30), failed: true, timeout: 30_000 }, passed('untimed', null),
+    ]), [{ file: 'tests/a.test.js', name: 'slow', seconds: 1.4 }]);
+  });
+
+  it('one line for the slow test, with file, name and seconds, under a heading that says it is not red', () => {
+    assert.deepEqual(slowTestLines(slowTests([passed('slow one', 1.4), passed('quick one', 0.2)])), [
+      '1 test over the 1 s slow-test indicator — not red; rebuild a new or changed one, or say in the PR why its cost is warranted:',
+      'slow tests/a.test.js › slow one — 1.400 s',
+    ]);
+  });
+
+  it('25 slow tests: the 20 slowest named, slowest first, and a count of the rest', () => {
+    const many = Array.from({ length: 25 }, (_, i) => passed(`t${i}`, 1 + (i + 1) / 100));
+    const lines = slowTestLines(slowTests(many));
+    assert.equal(SLOW_LINES, 20);
+    assert.equal(lines.length, 1 + 20 + 1);
+    assert.match(lines[0], /^25 tests over the 1 s slow-test indicator — not red/u);
+    assert.equal(lines[1], 'slow tests/a.test.js › t24 — 1.250 s');
+    assert.equal(lines[20], 'slow tests/a.test.js › t5 — 1.060 s');
+    assert.equal(lines[21], '… and 5 more slow tests');
+  });
+
+  it('no test over 1 s prints nothing', () => {
+    assert.deepEqual(slowTestLines(slowTests([passed('quick', 0.2)])), []);
+    assert.deepEqual(slowTestLines(undefined), []);
   });
 });

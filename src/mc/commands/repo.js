@@ -30,6 +30,7 @@ import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate, verdictHeadline } from '../repo-gate.js';
+import { slowTestLines } from '../test-times.js';
 import { runMergeRound } from '../repo-merge.js';
 import { countRounds, readRounds, recordRound, recordRoundStart } from '../repo-round-log.js';
 import { livenessForLeases } from '../lease-liveness.js';
@@ -656,7 +657,7 @@ export function gateLines(report) {
   // for the second.
   const failed = selectedGates(report).filter((gate) => !gate.ok);
   const what = [
-    tooSlow.length ? `${tooSlow.length} test${tooSlow.length === 1 ? '' : 's'} too slow — rebuild`
+    tooSlow.length ? `${tooSlow.length} test${tooSlow.length === 1 ? '' : 's'} reached the stall guard — rebuild`
       + (otherRed.length ? `, ${otherRed.length} other test${otherRed.length === 1 ? '' : 's'} red` : '')
       : red.length ? `${red.length} test${red.length === 1 ? '' : 's'} red` : null,
     failed.length ? `${failed.length} command gate${failed.length === 1 ? '' : 's'} failed` : null,
@@ -665,7 +666,7 @@ export function gateLines(report) {
   if (what) {
     lines.push(`mc: ${subjectOf(report)} — RED — ${what}:`);
     for (const test of tooSlow) {
-      lines.push(`      too slow — rebuild: ${test.name} (${Math.ceil(test.duration_ms / 1000)} s)`);
+      lines.push(`      stall guard — rebuild: ${test.name} (cut at ${Math.ceil(test.duration_ms / 1000)} s)`);
     }
     const namedRed = tooSlow.length ? otherRed : red;
     for (const name of namedRed.slice(0, 20)) lines.push(`      ${name}`);
@@ -678,6 +679,8 @@ export function gateLines(report) {
     lines.push(`mc: ${ranPhrase(report)}${measuredOn(report)}`);
   }
 
+  // The tests over the slow-test indicator: named, never part of the verdict above.
+  lines.push(...slowTestLines(report.slow_tests, { indent: 'mc: ' }));
   const took = tookLine(report);
   if (took) lines.push(took);
   return lines;

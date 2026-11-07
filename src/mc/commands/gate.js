@@ -57,7 +57,7 @@ import { fileURLToPath } from 'node:url';
 import { changedAgainst, flagsOf, measuredDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
 import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags, timedTestLines } from '../gate-local.js';
-import { changedRanges } from '../test-times.js';
+import { changedRanges, slowTestLines } from '../test-times.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
 import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
@@ -299,7 +299,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     summary.failures = [result.reason || 'the gate reached its repository ceiling'];
     summary.more = 0;
   } else if (result?.red_tests?.length) summary.failures = result.red_tests.slice(0, 5).flatMap((test) => [
-    `✖ ${test.name}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
+    `✖ ${test.name}${stallGuardOf(test)}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
   ]);
   const deferredFiles = result?.deferred || [];
   const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: ${deferredFiles.join(' ')}` : '';
@@ -309,11 +309,17 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   if (json) {
     const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
     stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, deferred: deferredFiles,
-      coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, settled: result?.settled ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+      coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, settled: result?.settled ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, slow_tests: result?.slow_tests || [], seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests), reused: reusedOf(result?.resumed) })}${resumedText}${left}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests), slow: slowTestLines(result?.slow_tests), reused: reusedOf(result?.resumed) })}${resumedText}${left}\n`);
   }
   return (summary.process_ok ?? summary.ok) ? 0 : 1;
+}
+
+/** ` — reached the 30 s stall guard` for a test node cut at its limit, and nothing for any other red. */
+export function stallGuardOf(test) {
+  const cut = /(?:test )?timed out after\s+(\d+)\s*ms/iu.exec((test?.error || []).join(' '));
+  return cut ? ` — reached the ${Math.ceil(Number(cut[1]) / 1000)} s stall guard` : '';
 }
 
 /**

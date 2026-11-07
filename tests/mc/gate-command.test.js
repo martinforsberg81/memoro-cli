@@ -166,6 +166,33 @@ describe('mc gate <test files…>', () => {
     assert.equal(result.evidence, undefined);
   });
 
+  it('a green gate with a test over 1 s stays GREEN, exit 0, and names that test as slow; the 0.2 s test is not named', async () => {
+    const slow_tests = [{ file: 'tests/a.test.js', name: 'slow one', seconds: 1.4 }, { file: 'tests/a.test.js', name: 'quick one', seconds: 0.2 }];
+    const h = harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN, code: 0, result: { ok: true, code: 0, slow_tests } });
+    assert.equal(await run(['tests/a.test.js'], h.deps), 0);
+    assert.match(h.out.stdout, /^GREEN — .* — 1 tests, 0 failed — \d+s\n/u);
+    assert.equal(h.out.stdout.split('\n').slice(1).join('\n'),
+      '1 test over the 1 s slow-test indicator — not red; rebuild a new or changed one, or say in the PR why its cost is warranted:\n'
+      + `slow tests/a.test.js › slow one — 1.400 s\nwhole output: ${LOG}\n`);
+    const json = harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN, code: 0, result: { ok: true, code: 0, slow_tests: slow_tests.slice(0, 1) } });
+    assert.equal(await run(['tests/a.test.js', '--json'], json.deps), 0);
+    assert.deepEqual(JSON.parse(json.out.stdout).slow_tests, slow_tests.slice(0, 1));
+  });
+
+  it('a green gate with no test over 1 s prints no slow line', async () => {
+    const h = harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN, code: 0, result: { ok: true, code: 0, slow_tests: [] } });
+    assert.equal(await run(['tests/a.test.js'], h.deps), 0);
+    assert.doesNotMatch(h.out.stdout, /slow/u);
+  });
+
+  it('a test cut at the stall guard is red and its line names the guard and the limit', async () => {
+    const red_tests = [{ file: 'tests/a.test.js', name: 'hangs', error: ['test timed out after 30000ms'] }];
+    const h = harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: 'ℹ tests 1\nℹ pass 0\nℹ fail 1\n', code: 1, result: { ok: false, code: 1, red_tests } });
+    assert.equal(await run(['tests/a.test.js'], h.deps), 1);
+    assert.match(h.out.stdout, /^RED —/u);
+    assert.match(h.out.stdout, /✖ hangs — reached the 30 s stall guard\n {4}test timed out after 30000ms/u);
+  });
+
   it('reports declared unavailable execution as incomplete without changing the permitted zero exit', async () => {
     const unavailable = [{ id: 'db:postgres', packageScript: 'sql:pr-ci', command: "npm run 'sql:pr-ci'", exit: 69 }];
     const human = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN,

@@ -315,12 +315,13 @@ export function reusedCountText(reused) {
 /**
  * The lines the session reads, capped at `OUTPUT_CAP` bytes. Green is three
  * lines; red names what failed, the re-run line when there are named files,
- * the time of each test the change touches (`timedTestLines`), and where the
- * whole output is. `reused` is what a resumed run took from earlier runs
+ * the time of each test the change touches (`timedTestLines`), the tests over
+ * the slow-test indicator (`slowTestLines`, never red), and where the whole
+ * output is. `reused` is what a resumed run took from earlier runs
  * (`{ files, commands, from }`): it heads the verdict only when the output
  * printed no counts, and the counts win otherwise.
  */
-export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null, timed = [], reused = null }) {
+export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null, timed = [], slow = [], reused = null }) {
   const c = summary.counts;
   const gates = summary.gates ?? [];
   const reusedText = c.tests == null && c.files == null ? reusedCountText(reused) : null;
@@ -346,6 +347,8 @@ export function gateLines(summary, { command, seconds, logPath, rerun = null, la
     if (rerun) lines.push(rerun);
   }
   lines.push(...timed);
+  // The slow-test indicator's lines (`slowTestLines`): information, never the verdict.
+  lines.push(...slow);
   lines.push(`whole output: ${logPath}`);
   let text = lines.join('\n');
   if (Buffer.byteLength(text) > OUTPUT_CAP) {
