@@ -17,13 +17,16 @@
  *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
  *                                  (`project-convert.js`); a finished one is refused
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
- *   mc goal log [<programme>/<goal>] [--done "…"|--done-file <path|->] [--comment "…"|--comment-file <path|->] [--next "…"|--next-file <path|->] [--stage <stage>] [--status ready|blocked|Martin]
+ *   mc goal log [<programme>/<goal>] [--done "…"|--done-file <path|->] [--comment "…"|--comment-file <path|->] [--next "…"|--next-file <path|->] [--stage <stage>] [--status ready|blocked]
+ *                                  (--status Martin is refused with a return instruction: Martin is asked with mc goal martin)
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
  *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
- *   mc goal blocked|martin|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
+ *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
+ *   mc goal martin [<programme>/<goal>] --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
+ *                  [--document <repo>/<path>]… [--reserved <act>]   jev first (`askMartin`), then Martin
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
@@ -1036,7 +1039,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
     if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked (a mend session takes it) or Martin, not ${status}`;
     if (!moves) return null;
     if (from !== 'finish') return `a finish session moves only a goal in finish, and this one is ${from}`;
-    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is Martin's (mc goal martin --reason "…")`;
+    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is Martin's (mc goal martin --reason "…" --option "<key>: <text>"… --recommend <key>)`;
     return null;
   }
   if (env.MC_ROLE === MEND_ROLE) {

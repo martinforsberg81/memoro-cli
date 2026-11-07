@@ -52,10 +52,18 @@ a move), other goals.
 
 - `mc goal ready` (build, review, finish) or `mc goal stage merge` (merge) —
   the obstacle is resolved and the stage runs again.
-- `mc goal martin --reason "…"` — resolving needs a change to the goal, its
-  contract or the product scope, or an act reserved for Martin (`mc deploy`,
-  production data, credentials, `--admin`): the question, what you tried and
-  your recommendation.
+- `mc goal martin` — resolving needs a change to the goal, its contract or
+  the product scope, or an act reserved for Martin (`mc deploy`, production
+  data, credentials, `--admin`): the question, the options, what you tried as
+  evidence, and your recommendation.
+  Call `mc goal martin --reason "<the question>" --option "<key>: <text>"
+  --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
+  <repo>/<path>]` (2 to 4 options; `--reserved <act>` for a reserved act, which
+  goes straight to Martin). jev reads the question first: when it prints `mc:
+  jev answered <key> … — continue with: <text>`, the goal stays yours —
+  continue with that answer and end in one of the other exits. Otherwise the
+  goal is `Martin` and nothing starts until he answers. A call mc refuses says
+  what is wrong and how to call again.
 
 Then end the session, in that same turn. The runner's guards hold: a mend that
 leaves the goal blocked sets `Martin`; three mends in one stage without a

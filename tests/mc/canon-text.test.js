@@ -20,7 +20,7 @@ const DEFINING = {
   'scratch-and-probes': 'Files that are not the change — probes, output, a PR body, a script — go in',
   'measure-the-app': 'Prove which tree is served before you measure.',
   'dev-servers': 'Dev servers start only through mc',
-  'asking-martin': 'Never a menu of options.',
+  'asking-martin': 'Never a question without its options.',
   memory: 'A rule about how to work is never a memory.',
   'writing-a-goal': 'A goal is written through the verbs; the files are mc',
   'writing-tests': 'A pinned number is a summary of a list, and the list is what to pin.',

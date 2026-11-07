@@ -5,8 +5,27 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 # Asking Martin, and telling him
 
 A question for Martin is one thing: what you found, what it costs, what you
-would do — answerable in a word. Never a menu of options. Never ask while the
-question is unclear or reading would settle it: then read.
+would do. Never a question without its options. Never ask while the question
+is unclear or reading would settle it: then read.
+
+A goal's question goes through `mc goal martin`, and jev reads it first
+(docs/technical/mc-jev.md):
+
+```
+mc goal martin [<programme>/<goal>] --reason "<the question>" \
+  --option "<key>: <text>" --option "<key>: <text>" --recommend <key> \
+  [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]… \
+  [--reserved deploy|production-data|credentials|admin]
+```
+
+- 2 to 4 options, each a whole way to proceed, keys `^[a-z][a-z0-9_]{0,31}$`
+  each once; `--recommend` is yours among them; evidence is what you found
+  and tried. A malformed call is refused with an example: fix it, call again.
+- When mc prints `mc: jev answered <key> (…) — continue with: <text>`, the
+  status stays: continue with that answer as if Martin had given it.
+  Otherwise the goal is `Martin` with jev's reading; end as your role says.
+- A reserved act goes with `--reserved <act>`, never to jev. User data and
+  passwords never go in a question: key redaction is only the guard.
 
 ## What reaches Martin
 
@@ -28,9 +47,8 @@ over.
 ## How to ask and tell
 
 - Headless, there is nobody to ask: your role says where the question goes (a
-  blocked step or a pull request). A goal needing Martin uses status
-  `Martin`; build and review report an obstacle as `blocked`, which a mend
-  session takes.
+  blocked step or a pull request). Build and review report an obstacle as
+  `blocked`, which a mend session takes.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.

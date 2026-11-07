@@ -214,16 +214,33 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the highest of its programme's other goals, with an entry `Done: phase <n>`;
   then the programme's phases are renumbered (`renumberPhases`), so a phase
   the move left empty closes up and the line names each goal that moved.
-- **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--stage <s>] [--status ready|blocked|Martin]`** —
+- **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--stage <s>] [--status ready|blocked]`** —
   appends one entry; at least one field is needed. `--stage` and `--status`
-  also set them. The goal is `MC_GOAL`'s when none is named.
+  also set them. The goal is `MC_GOAL`'s when none is named. `--status Martin`
+  is refused (exit 2, nothing written) with a return instruction pointing at
+  `mc goal martin`: a question for Martin carries its options.
 - **`stage [<p>/<g>] <stage> [--reason "…"]`** — moves the stage
   (`log --stage <stage> --comment <reason>`); a stage moved to is `ready`.
   `merge` records the review's or finish session's decision (or a mend
   session's requeue) and queues every registered PR, without head or criteria checks. A queue failure preserves
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
-- **`blocked|martin|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
+- **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
+- **`martin [<p>/<g>] --reason "<question>" --option "<key>: <text>"… --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]… [--reserved deploy|production-data|credentials|admin]`** —
+  asks Martin, jev first (Martin, 2026-11-07; [mc-jev.md](mc-jev.md)). 2 to 4
+  options, keys `^[a-z][a-z0-9_]{0,31}$` and unique, `--recommend` one of them,
+  `--reason` required; a call that breaks any of these, or whose question,
+  options, evidence and goal alone are over jev's budget, exits 2, writes
+  nothing and prints what is wrong with a complete example call. A reserved
+  act or a person's call (MC_TOOL unset or `person`) sets `Martin` with no
+  request. A session's call asks jev once: when jev answers, the status stays,
+  stdout says `mc: jev answered <key> (p …, fits …, settled …, <model>) —
+  continue with: <option text>`, the entry records question, options and
+  answer, and the session continues with it; otherwise the status is `Martin`
+  and the entry records question, options, recommendation and jev's reading,
+  `jev not asked: <reserved act …|person>` or `jev unavailable: <reason>`.
+  jev never fails the verb. Who may set `Martin` (`refusedMove`) is unchanged,
+  and so are the runner's own recovery settings of `Martin`.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: stage
