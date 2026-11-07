@@ -531,7 +531,7 @@ function layout2(m) {
 }
 
 /** A registered, synthetic goal worktree and the Git/process answers it needs. */
-function planGoalTree(m, { name = 'draft', stage = 'plan', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', cwd = '/', open = [], registration = true, metadata = null } = {}) {
+function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', cwd = '/', open = [], registration = true, metadata = null } = {}) {
   layout2(m);
   const dir = join(m.work, 'programs', 'mc', 'goals', name);
   const path = join(dir, 'memoro');
@@ -587,7 +587,7 @@ describe('(P) automatic plan goal worktree release', () => {
       const target = preview.list.targets.find((item) => item.kind === 'plan-goal-worktree');
       assert.deepEqual(preview.list.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), [f.path], JSON.stringify(preview.list.kept.filter((item) => item.path.includes('/goals/'))));
       assert.equal(preview.list.person, false);
-      assert.deepEqual([target.stage, target.status, target.branch, target.head, target.owner], ['plan', 'ready', 'goal/draft', 'a'.repeat(40), f.owner]);
+      assert.deepEqual([target.stage, target.status, target.branch, target.head, target.owner], ['draft', 'ready', 'goal/draft', 'a'.repeat(40), f.owner]);
       assert.equal(target.metadata, f.metadata);
       assert.ok(target.identity && target.activity < NOW - 72 * HOUR);
       const applied = applyTidy({ listPath: preview.listPath, ...f.doors() });
@@ -754,7 +754,7 @@ describe('(P) automatic plan goal worktree release', () => {
       m.write(join(f.dir, 'GOAL.json'), f.metadata, OLD);
       ageTree(f.dir, OLD);
       const changedMetadata = runTidy(f.doors());
-      m.write(join(f.dir, 'GOAL.json'), goalJson({ stage: 'plan', status: 'blocked', repos: ['memoro'] }), OLD);
+      m.write(join(f.dir, 'GOAL.json'), goalJson({ stage: 'draft', status: 'blocked', repos: ['memoro'] }), OLD);
       ageTree(f.dir, OLD);
       assert.match(applyTidy({ listPath: changedMetadata.listPath, ...f.doors() }).applied[0].why, /metadata/u);
       m.write(join(f.dir, 'GOAL.json'), f.metadata, OLD);
@@ -794,9 +794,9 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
       assert.deepEqual(paths(ruled(list, 'P')).sort(), [martin.path, later.path].sort());
       assert.equal(list.targets.find((item) => item.path === martin.path).why, 'clean inactive goal checkout, status Martin, which waits on a person, untouched for 72 hours');
       assert.equal(list.targets.find((item) => item.path === later.path).why, 'clean inactive goal checkout, phase 2 is above the programme\'s lowest unfinished phase 1, untouched for 72 hours');
-      assert.equal(keptOf(list, current.path).why, 'goal stage is build, not plan, and a session can start it');
+      assert.equal(keptOf(list, current.path).why, 'goal stage is build, not draft, and a session can start it');
       assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays for the mend session that resolves it');
-      assert.equal(keptOf(list, review.path).why, 'goal stage is review, not plan, and a session can start it');
+      assert.equal(keptOf(list, review.path).why, 'goal stage is review, not draft, and a session can start it');
     } finally { m.cleanup(); }
   });
 
@@ -807,7 +807,7 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
       const later = planGoalTree(m, { name: 'later', metadata: goalJson({ stage: 'build', status: 'ready', phase: 2, repos: ['memoro'] }) });
       const { list } = runTidy(later.doors());
       assert.deepEqual(ruled(list, 'P'), [], 'phase 2 is the lowest unfinished now');
-      assert.equal(keptOf(list, later.path).why, 'goal stage is build, not plan, and a session can start it');
+      assert.equal(keptOf(list, later.path).why, 'goal stage is build, not draft, and a session can start it');
     } finally { m.cleanup(); }
   });
 

@@ -3185,9 +3185,9 @@ test('a red in merge starts one mend session; queued again it gets the runner\'s
   assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
 });
 
-test('a Martin goal, in any stage, and a goal in plan, start nothing', async () => {
+test('a Martin goal, in any stage, and a goal in draft, start nothing', async () => {
   const goals = Object.fromEntries(STAGES.map((stage) => [`in-${stage}`, { stage, status: 'Martin' }]));
-  const f = goalFixture({ ...goals, planned: { stage: 'plan' } });
+  const f = goalFixture({ ...goals, planned: { stage: 'draft' } });
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 0);
 });
@@ -3201,8 +3201,8 @@ test('a session with a word between runner entries keeps the goal in build', asy
   assert.equal(parseLog(f.files[`${GOALS}/goal/LOG.md`]).length, 4);
 });
 
-test('a goal in phase 2 is not started while a goal in phase 1 is in plan, build, review, finish or merge, and is once phase 1 is done or dropped', async () => {
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) {
+test('a goal in phase 2 is not started while a goal in phase 1 is in draft, build, review, finish or merge, and is once phase 1 is done or dropped', async () => {
+  for (const stage of ['draft', 'build', 'review', 'finish', 'merge']) {
     // The phase-1 goal is on another repository, so this lane could not take it itself.
     const f = goalFixture({ first: { stage, repos: 'elsewhere' }, second: { phase: 2 } });
     assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0, `phase 1 ${stage}`);
@@ -3751,7 +3751,7 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
 });
 
 test('blocked work in any stage wakes a mend session, which retries the same stage; Martin never wakes it', async () => {
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) {
+  for (const stage of ['draft', 'build', 'review', 'finish', 'merge']) {
     const f = goalFixture({ stuck: { stage, status: 'blocked' } });
     if (stage === 'merge') {
       f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { prs: ['memoro#31'] });
@@ -3768,7 +3768,7 @@ test('blocked work in any stage wakes a mend session, which retries the same sta
     assert.equal(call.env.MC_GOAL, 'prog/stuck', stage);
     assert.equal(where(f, 'stuck'), `${stage} · ready`, stage);
     assert.equal(runner.nextWork({ repo: 'memoro' })?.kind ?? null,
-      { plan: null, build: 'build', review: 'review', finish: 'finish', merge: null }[stage], stage);
+      { draft: null, build: 'build', review: 'review', finish: 'finish', merge: null }[stage], stage);
     f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'Martin' });
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, stage);
   }
@@ -3830,7 +3830,7 @@ test('programme priority is reread live within a stage; blocked recovery, review
   f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { status: 'blocked' });
   assert.equal(runner.nextWork().name, 'goal:preferred/new', 'recovery precedes review');
   f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { phase: 2 });
-  f.files[`${base}/goals/first/GOAL.json`] = goalJson({ repos: ['memoro'], stage: 'plan' });
+  f.files[`${base}/goals/first/GOAL.json`] = goalJson({ repos: ['memoro'], stage: 'draft' });
   assert.equal(runner.nextWork().name, 'goal:prog/older', 'priority does not bypass phases');
   f.files[`${GOALS}/older/GOAL.json`] = withGoal(f.files[`${GOALS}/older/GOAL.json`], { stage: 'build' });
   f.files[`${base}/PRIORITY.json`] = JSON.stringify({ priority: 0 });

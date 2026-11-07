@@ -9,8 +9,8 @@ session that has read nothing else, with nobody watching: can that session build
 and know when it is done? If not, it is not a goal yet.
 
 1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class
-   fast|large --title "…" [--phase <n>] [--stage plan|build]` — the
-   skeleton, in `plan` (nothing happens to it there) unless `--stage build`,
+   fast|large --title "…" [--phase <n>] [--stage draft|build]` — the
+   skeleton, in `draft` (nothing happens to it there) unless `--stage build`,
    and in phase 1 unless `--phase` says another.
 2. `mc goal set <p>/<g> goal|contract|out-of-scope --text "…"` — what the
    work is, what may not change without Martin, what is left out, named.
@@ -26,10 +26,10 @@ goal starts only when every goal of its programme in a lower phase is done or dr
 phase <p>/<g> <n>` changes the order later; goals of one phase run side by side. Phase numbers may
 be renumbered; name prerequisite goals too. A plan placeholder also holds later phases back.
 
-- **Readiness:** before creating a goal, including a `plan` skeleton, apply
+- **Readiness:** before creating a goal, including a `draft` skeleton, apply
   [goal design](references/goal-design.md): establish the problem, choose the
   solution, and define success criteria and exclusions. Missing investigation
-  stays with the proposal. A concrete future goal may wait in `plan` for named
+  stays with the proposal. A concrete future goal may wait in `draft` for named
   prerequisites; resolve policy and acceptance before activating build.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable
   commands, working directory, prerequisites and expected results. For reports, specify reconciliation

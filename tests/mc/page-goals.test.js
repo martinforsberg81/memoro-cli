@@ -267,13 +267,13 @@ describe('a goal in a phase its programme has not reached', () => {
   const goals = [
     { programme: 'mc', goal: 'landed', repos: ['memoro-cli'], stage: 'done', status: 'ready', phase: 1, log: [], problems: [] },
     { programme: 'mc', goal: 'runner-sessions', repos: ['memoro-cli'], stage: 'build', status: 'ready', phase: 2, log: [], problems: [] },
-    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], stage: 'plan', status: 'ready', phase: 3, log: [], problems: [] },
+    { programme: 'mc', goal: 'headless-plan', repos: ['memoro-cli'], stage: 'draft', status: 'ready', phase: 3, log: [], problems: [] },
   ];
 
   it('goalsOf gives its phase and whether it is held, and the page JSON carries both', () => {
     const rows = goalsOf({ goals });
     const row = rows.find((each) => each.name === 'headless-plan');
-    assert.deepEqual([row.stage, row.status], ['plan', 'ready'], 'it keeps its stage');
+    assert.deepEqual([row.stage, row.status], ['draft', 'ready'], 'it keeps its stage');
     assert.equal(row.phase, 3);
     assert.equal(row.held, true);
     assert.equal(rows.find((each) => each.name === 'runner-sessions').held, false, 'the phase in progress is not held');
@@ -283,13 +283,13 @@ describe('a goal in a phase its programme has not reached', () => {
     const listed = json.programmes.flatMap((group) => group.goals ?? []).find((goal) => goal.name === 'headless-plan');
     assert.equal(listed.phase, 3);
     assert.equal(listed.held, true);
-    assert.deepEqual([listed.stage, listed.status], ['plan', 'ready'], 'mc --json carries stage and status');
+    assert.deepEqual([listed.stage, listed.status], ['draft', 'ready'], 'mc --json carries stage and status');
   });
 
   it('the page labels future phases without replacing the goal status', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: goalsOf({ goals }), programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 160, now: NOW, colour: true, expand: true }));
-    assert.ok(lines.some((line) => /stage plan · status ready/u.test(plain(line))));
+    assert.ok(lines.some((line) => /stage draft · status ready/u.test(plain(line))));
     assert.ok(lines.some((line) => /Phase 3 · after phase 2/u.test(line)), 'phase eligibility is separate from goal status');
   });
 });

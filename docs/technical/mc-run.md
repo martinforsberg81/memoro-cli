@@ -72,7 +72,7 @@ order without a model call:
    every `blocked` goal, or `merge · ready` after its first red or moved head
    and once it is no longer in the merger's line. A blocked goal and a red
    merge wake a mend session; `finish · ready` a finish session. `Martin`
-   waits for the person. `plan · ready`, `done` and `dropped` do not start a
+   waits for the person. `draft · ready`, `done` and `dropped` do not start a
    goal session; the runner never starts a plan session.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.

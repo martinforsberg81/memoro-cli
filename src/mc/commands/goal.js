@@ -1,18 +1,18 @@
 /**
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
- *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--phase <n>] [--stage plan|build]
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|large --title "<title>" [--phase <n>] [--stage draft|build]
  *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
  *                                  repository's worktree on goal/<goal> at the goal's first session;
  *                                  in phase <n> (1 by default), at most one past the last;
- *                                  in stage plan (by default) or build
+ *                                  in stage draft (by default) or build
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
  *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a goal session (build, review, finish, mend)
  *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a goal session
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
- *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
+ *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json; stage plan written draft,
  *                                  and every goal that started after others given a phase (`phaseGoals`)
  *   mc goal from-project <programme>/<project>   a live project's remaining steps turned into goals, once
  *                                  (`project-convert.js`); a finished one is refused
@@ -199,8 +199,8 @@ function newGoal(args, flags, ctx) {
   const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
-  const stage = flags.stage ?? 'plan';
-  if (stage !== 'plan' && stage !== 'build') { stderr.write(`mc: --stage is plan or build for a new goal, not ${stage}\n`); return 2; }
+  const stage = flags.stage ?? 'draft';
+  if (stage !== 'draft' && stage !== 'build') { stderr.write(`mc: --stage is draft or build for a new goal, not ${stage}\n`); return 2; }
   const phase = flags.phase === null ? 1 : Number(flags.phase);
   if (!Number.isInteger(phase) || phase < 1) { stderr.write(`mc: --phase is a whole number from 1, not ${flags.phase}\n`); return 2; }
 

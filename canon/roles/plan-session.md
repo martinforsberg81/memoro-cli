@@ -111,7 +111,7 @@ Yours without asking:
 - The goal's text after a decision: amend goal, contract and criteria with the
   verbs so they say what was decided.
 
-A person opens a plan session to write goals: `mc goal new … --stage plan`
+A person opens a plan session to write goals: `mc goal new … --stage draft`
 while the brief is being written, then `mc goal stage <p>/<g> build` when
 ready, or `--stage build` at once.
 
