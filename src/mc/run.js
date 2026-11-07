@@ -1485,26 +1485,34 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * Goals whose every pull request (`prs`) has landed,
-   * set `done` — however each landed: the merger, `mc merge --docs`, `--admin`,
-   * or on GitHub by hand. The merger sets done itself when the pull request it
-   * lands is the goal's last; this pass is for the rest, and asks GitHub at
-   * most every `SETTLE_EVERY_MS`, only for goals that are not finished and
-   * carry pull requests. A pull request GitHub cannot say about
-   * leaves the goal as it is.
+   * Goals whose every pull request (`prs`) has landed or been closed without
+   * merging, with one landed, set `done` — however each landed: the merger,
+   * `mc merge --docs`, `--admin`, or on GitHub by hand. The merger sets done
+   * itself when the pull request it lands is the goal's last; this pass is for
+   * the rest, and asks GitHub at most every `SETTLE_EVERY_MS`, only for goals
+   * that are not finished and carry pull requests. A pull request GitHub
+   * cannot say about leaves the goal as it is. A closed one is never queued.
    */
   function settleLanded() {
     const at = deps.now().getTime();
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
+    /** GitHub's `state` of a goal's pull request — `OPEN`, `MERGED`, `CLOSED` — or null when it cannot say. */
+    const readState = ({ repo: repoName, pr }) => {
+      const repo = repos.find((item) => item.name === repoName);
+      if (!repo) return null;
+      const answer = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'state']);
+      if (!answer.ok) return null;
+      try { return JSON.parse(answer.stdout || 'null')?.state ?? null; } catch { return null; }
+    };
     for (const goal of goals()) {
       if (goal.problems.length || FINISHED.includes(goal.stage) || !goal.prs?.length) continue;
-      const stateOf = ({ repo: repoName, pr }) => {
-        const repo = repos.find((item) => item.name === repoName);
-        if (!repo) return null;
-        const asked = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'state']);
-        if (!asked.ok) return null;
-        try { return JSON.parse(asked.stdout || 'null')?.state ?? null; } catch { return null; }
+      // Each pull request is asked once in this pass over the goal.
+      const asked = new Map();
+      const stateOf = (item) => {
+        const key = `${item.repo}#${item.pr}`;
+        if (!asked.has(key)) asked.set(key, readState(item));
+        return asked.get(key);
       };
       // Recover the execution of an existing merge decision, including a
       // process that stopped after saving the stage but before queueing all PRs.
@@ -1514,6 +1522,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         for (const item of goal.prs) {
           if (pending.some((job) => job.repo === item.repo && Number(job.pr) === Number(item.pr))) continue;
           if (goal.log.some((entry) => String(entry.done ?? '').startsWith(`${item.repo}#${item.pr} landed `))) continue;
+          // Closed without merging: the merger has nothing to land, and would answer red.
+          if (stateOf(item) === 'CLOSED') { say(`${goalName(goal)}: ${item.repo}#${item.pr} closed without merging — not queued`); continue; }
           const repo = repos.find((entry) => entry.name === item.repo);
           try {
             deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.pr,

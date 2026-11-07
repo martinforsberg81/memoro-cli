@@ -465,7 +465,7 @@ test('a build session cannot move to review while a criterion is not met: the re
   }
 });
 
-test('review and plan execute merge for every registered PR without head, criteria or GitHub checks', async () => {
+test('review and plan execute merge for every registered PR without head or criteria checks, reading only each PR\'s state', async () => {
   for (const env of [{ ...REVIEW, MC_REVIEW_HEAD: undefined }, PLAN]) {
     const files = inStage(env.MC_ROLE === PLAN_ROLE ? 'finish' : 'review');
     files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], {
@@ -474,7 +474,7 @@ test('review and plan execute merge for every registered PR without head, criter
     const f = reviewed({ files, env });
     assert.equal(await run(['stage', 'merge'], f.deps), 0, f.err());
     assert.equal(stateOf(f), 'merge · ready');
-    assert.deepEqual(f.gh, []);
+    assert.deepEqual(f.gh.map(({ args }) => args.slice(0, 3)), [['pr', 'view', '31'], ['pr', 'view', '14804']], 'the only GitHub read is each PR\'s state');
     assert.deepEqual(f.queued.map(({ repo, pr, sha }) => ({ repo, pr, sha })), [
       { repo: 'memoro-cli', pr: 31, sha: undefined }, { repo: 'memoro', pr: 14804, sha: undefined },
     ]);
@@ -492,6 +492,17 @@ test('a queue failure preserves the merge decision so it can be retried', async 
   f.deps.queue = (job) => { f.queued.push(job); };
   assert.equal(await run(['stage', 'merge'], { ...f.deps, env: PLAN }), 0, f.err());
   assert.deepEqual(f.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
+});
+
+test('mc goal stage merge queues the pull request GitHub says is open, and names the one it says is closed without queueing it', async () => {
+  const files = inStage('review');
+  files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32'] });
+  const f = reviewed({ files });
+  f.deps.gh = (cwd, args) => { f.gh.push({ cwd, args }); return ok(JSON.stringify({ state: args[2] === '32' ? 'CLOSED' : 'OPEN' })); };
+  assert.equal(await run(['stage', 'merge'], f.deps), 0, f.err());
+  assert.deepEqual(f.queued.map(({ repo, pr }) => [repo, pr]), [['memoro-cli', 31]]);
+  assert.equal(f.out(), 'mc: mc/plain · merge · ready\nmc: queued memoro-cli#31 for the merger; memoro#32 closed without merging — not queued\n');
+  assert.equal(stateOf(f), 'merge · ready');
 });
 
 test('a partial merge enqueue does not release its session before all PRs are handed off', async () => {

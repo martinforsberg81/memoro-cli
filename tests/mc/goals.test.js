@@ -281,6 +281,15 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
   // A log from before stages: a review's verdict is no build entry.
   const old = parseLog('## 2026-11-02T10:00Z · claude opus · review\n\nDone: built\n\n## 2026-11-02T11:00Z · codex sol · blocked\n\nDone: red abc1234\n');
   assert.equal(lastBuildEntry(old).model, 'opus');
+  // An entry that names another role is no build entry: a plan's stage entry moved the goal to build, a review's is a review's.
+  const byPlan = [
+    '## 2026-11-03T09:00Z · person · plan · ready', '', 'Done: created', '',
+    '## 2026-11-03T10:00Z · claude opus · build · ready · by plan', '', 'Done: the plan', '',
+    '## 2026-11-03T11:00Z · claude opus · review · ready · by review', '', 'Done: judged', '',
+  ].join('\n');
+  assert.equal(lastBuildEntry(parseLog(byPlan)), null);
+  const builtAfter = `${byPlan}\n## 2026-11-03T12:00Z · codex gpt-6.1-sol · review · ready · by build\n\nDone: built\n`;
+  assert.equal(lastBuildEntry(parseLog(builtAfter)).model, 'gpt-6.1-sol');
 });
 
 /** A goal as `programsGoals` gives it, in `stage · status`, with `log`. */
@@ -411,15 +420,18 @@ test('prs: <repo>#<n> each once, written back as strings; a bad one is a problem
   assert.equal(prRef({ repo: 'memoro', pr: 3 }), 'memoro#3');
 });
 
-test('prsLanded: done when every pull request landed; closed, open or unknown is not', async () => {
+test('prsLanded: done when one landed and every other is closed or landed; open or unknown is not', async () => {
   const { prsLanded } = await import('../../src/mc/goals.js');
   const prs = [{ repo: 'memoro', pr: 1 }, { repo: 'memoro-cli', pr: 2 }];
   const states = (map) => ({ repo, pr }) => map[`${repo}#${pr}`] ?? null;
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'MERGED' })).done, true);
-  assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'CLOSED' })).done, false);
+  const settled = prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'CLOSED' }));
+  assert.equal(settled.done, true, 'a closed pull request is settled');
+  assert.deepEqual(settled.closed, ['memoro-cli#2']);
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).done, false);
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'MERGED' })).done, false, 'unknown is not done');
   assert.equal(prsLanded(prs, states({ 'memoro#1': 'CLOSED', 'memoro-cli#2': 'CLOSED' })).done, false, 'nothing landed');
+  assert.equal(prsLanded([prs[0]], states({ 'memoro#1': 'CLOSED' })).done, false, 'one closed alone is not done');
   assert.equal(prsLanded([], () => 'MERGED').done, false);
   assert.deepEqual(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).open, ['memoro-cli#2']);
 });
