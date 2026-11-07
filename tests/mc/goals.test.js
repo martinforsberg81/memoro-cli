@@ -144,18 +144,35 @@ test('updateGoal writes a valid change, and refuses an invalid one without writi
 test('parseLog reads each heading, and each labelled line up to the next label or heading', () => {
   const log = parseLog(LOG_TEXT);
   assert.equal(log.length, 3);
-  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'plan', status: 'ready', done: 'created', comment: null, next: null });
+  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'plan', status: 'ready', role: null, done: 'created', comment: null, next: null });
   assert.deepEqual(log[1], {
-    at: '2026-11-01T21:30Z', tool: 'claude', model: 'claude-opus-5-5', stage: 'build', status: 'ready',
+    at: '2026-11-01T21:30Z', tool: 'claude', model: 'claude-opus-5-5', stage: 'build', status: 'ready', role: null,
     done: 'the reader\nand its tests, over two paragraphs', comment: 'none yet', next: 'the verbs',
   });
-  assert.deepEqual(log[2], { at: '2026-11-01T22:00Z', tool: 'runner', model: null, stage: 'build', status: 'ready', done: null, comment: 'no session ran', next: null });
+  assert.deepEqual(log[2], { at: '2026-11-01T22:00Z', tool: 'runner', model: null, stage: 'build', status: 'ready', role: null, done: null, comment: 'no session ran', next: null });
 });
 
 test('parseLog reads an entry written before stages with its old status and no stage', () => {
   const [entry] = parseLog('## 2026-11-01T20:00Z · claude opus · review\n\nDone: built\n');
   assert.deepEqual([entry.model, entry.stage, entry.status], ['opus', null, 'review']);
   assert.equal(renderEntry(entry), '## 2026-11-01T20:00Z · claude opus · review\n\nDone: built\n', 'written back as it was');
+});
+
+test('parseLog reads the by segment as the writer\'s role; the three old forms read as before, with role null', () => {
+  const log = parseLog([
+    '## 2026-11-01T19:00Z · person · done\n\nDone: closed\n',
+    '## 2026-11-01T20:00Z · claude opus · review\n\nDone: built\n',
+    '## 2026-11-01T21:00Z · person · plan · ready\n\nDone: created\n',
+    '## 2026-11-01T22:00Z · claude opus · build · ready · by build\n\nDone: next\nNext: the page\n',
+    '## 2026-11-01T23:00Z · claude · review · ready · by review\n\nDone: looked\n',
+  ].join('\n'));
+  assert.deepEqual(log.map(({ stage, status, role }) => [stage, status, role]), [
+    [null, 'done', null], [null, 'review', null], ['plan', 'ready', null], ['build', 'ready', 'build'], ['review', 'ready', 'review'],
+  ]);
+  assert.deepEqual(log[3], { at: '2026-11-01T22:00Z', tool: 'claude', model: 'opus', stage: 'build', status: 'ready', role: 'build', done: 'next', comment: null, next: 'the page' });
+  assert.equal(renderEntry(log[3]), '## 2026-11-01T22:00Z · claude opus · build · ready · by build\n\nDone: next\nNext: the page\n', 'written back with its segment');
+  assert.equal(renderEntry(log[1]), '## 2026-11-01T20:00Z · claude opus · review\n\nDone: built\n', 'an old heading is written back as it was');
+  assert.equal(sessions(log), 3, 'a session is any entry but the runner\'s and a person\'s');
 });
 
 test('parseLog still reads a log written with the Swedish labels', () => {

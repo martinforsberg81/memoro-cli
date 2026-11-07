@@ -193,7 +193,7 @@ test('mc goal log appends one entry, tagged with MC_TOOL and MC_MODEL, and the g
   const entries = parseLog(f.store[`${DIR}/LOG.md`]);
   assert.equal(entries.length, 5);
   assert.deepEqual(entries.at(-1), {
-    at: '2026-11-01T20:00Z', tool: 'claude', model: 'claude-haiku-5-5', stage: 'build', status: 'ready', done: 'the verb', comment: null, next: 'the page',
+    at: '2026-11-01T20:00Z', tool: 'claude', model: 'claude-haiku-5-5', stage: 'build', status: 'ready', role: null, done: 'the verb', comment: null, next: 'the page',
   });
   assert.equal(f.store[`${DIR}/GOAL.json`], GOAL_TEXT, 'a log entry alone leaves GOAL.json as it is');
 });
@@ -202,7 +202,7 @@ test('mc goal log with neither MC_TOOL nor MC_MODEL writes a person\'s entry', a
   const f = fixture({ files: seededGoal() });
   assert.equal(await run(['log', 'mc/plain', '--comment', 'a note'], f.deps), 0, f.err());
   assert.deepEqual(parseLog(f.store[`${DIR}/LOG.md`]).at(-1), {
-    at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'build', status: 'ready', done: null, comment: 'a note', next: null,
+    at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'build', status: 'ready', role: null, done: null, comment: 'a note', next: null,
   });
 });
 
@@ -250,7 +250,7 @@ test('mc goal log --done-file keeps a file\'s text verbatim, read by the real co
     const log = readFileSync(join(dir, 'LOG.md'), 'utf8');
     assert.ok(log.endsWith('Done: a `x` $(y) "q"\nline2\nComment: Comment with $HOME and `date`\nNext: the page\n'), log);
     assert.deepEqual(parseLog(log).at(-1), {
-      at: '2026-11-01T20:00Z', tool: 'claude', model: 'claude-haiku-5-5', stage: 'build', status: 'ready',
+      at: '2026-11-01T20:00Z', tool: 'claude', model: 'claude-haiku-5-5', stage: 'build', status: 'ready', role: null,
       done: 'a `x` $(y) "q"\nline2', comment: 'Comment with $HOME and `date`', next: 'the page',
     });
   } finally {
@@ -279,7 +279,7 @@ test('mc goal log --done-file - reads stdin verbatim; a field given both ways, s
   }
   assert.equal(await run(['log', '--done-file', '-', '--comment-file', 'note.txt'], f.deps), 0, f.err());
   assert.deepEqual(parseLog(f.store[`${DIR}/LOG.md`]).at(-1), {
-    at: '2026-11-01T20:00Z', tool: 'claude', model: null, stage: 'build', status: 'ready',
+    at: '2026-11-01T20:00Z', tool: 'claude', model: null, stage: 'build', status: 'ready', role: null,
     done: 'a `x` $(y) "q"\nline2', comment: 'the note $(z)', next: null,
   });
 });
@@ -395,6 +395,27 @@ test('a session\'s backward move is refused naming both stages, whatever its rol
     assert.deepEqual([last.tool, last.stage, last.comment], ['person', 'build', 'the plan was wrong — moved back from merge to build by a person']);
     assert.match(f.out(), /mc: mc\/plain · build · ready — moved back from merge\n/u);
   }
+});
+
+test('mc goal log and new name the session that wrote the entry by its role in the heading: build, review, plan; a person, or no role, writes none', async () => {
+  const cases = [
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal }, ['--stage', 'review', '--done', 'x'], '· claude · review · ready · by build', 'review', 'build'],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE }, ['--done', 'x'], '· claude · build · ready · by review', 'build', 'review'],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE }, ['--done', 'x'], '· claude · build · ready · by plan', 'build', 'plan'],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person', MC_ROLE: BUILD_ROLES.goal }, ['--done', 'x'], '· person · build · ready', 'build', null],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
+  ];
+  for (const [env, args, heading, stage, role] of cases) {
+    const f = fixture({ files: inStage('build'), env });
+    assert.equal(await run(['log', ...args], f.deps), 0, `${heading}: ${f.err()}`);
+    const last = f.store[`${DIR}/LOG.md`].match(/^## .*$/gmu).at(-1);
+    assert.equal(last, `## 2026-11-01T20:00Z ${heading}`, JSON.stringify(env));
+    const entry = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+    assert.deepEqual([entry.role, entry.stage], [role, stage]);
+  }
+  const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE } });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], created.deps), 0, created.err());
+  assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · plan · ready · by plan\n\nDone: created\n');
 });
 
 test('a build session moves build to review or sets blocked, and nothing else', async () => {

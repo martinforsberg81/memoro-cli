@@ -87,9 +87,10 @@ export const CLASSES = ['fast', 'large'];
  */
 const LABEL_FIELD = { Done: 'done', Comment: 'comment', Next: 'next', Gjort: 'done', Kommentar: 'comment', 'Nästa': 'next' };
 const LABEL = /^(Done|Comment|Next|Gjort|Kommentar|Nästa): ?(.*)$/u;
-// `## <at> · <tool> [<model>] · <stage> · <status>`; an entry written before
-// stages has only a status there, and is read with `stage` null.
-const HEADING = /^## (\S+) · (\S+)(?: (\S+))? · (\S+)(?: · (\S+))?$/u;
+// `## <at> · <tool> [<model>] · <stage> · <status>[ · by <role>]`; an entry written before
+// stages has only a status there, and is read with `stage` null. The `by` segment names
+// the session that wrote the entry, and is absent from older entries and from runner's.
+const HEADING = /^## (\S+) · (\S+)(?: (\S+))? · (\S+)(?: · (\S+))?(?: · by (\S+))?$/u;
 
 /** The key a goal named the goals it started after by, before phases (`goal-convert.js` `phaseGoals`), named only to say so. */
 export const LEGACY_AFTER = 'after';
@@ -269,10 +270,11 @@ export function unmetGoalWords(goal, name = '<programme>/<goal>') {
 }
 
 /**
- * LOG.md's entries, in order: `[{ at, tool, model, stage, status, done, comment, next }]`.
- * A heading that is not one (`## <at> · <tool> [<model>] · <stage> · <status>`) is
+ * LOG.md's entries, in order: `[{ at, tool, model, stage, status, role, done, comment, next }]`.
+ * A heading that is not one (`## <at> · <tool> [<model>] · <stage> · <status>[ · by <role>]`) is
  * skipped with its lines; one written before stages (`… · <status>`) has
- * `stage` null and the old status. A labelled line runs on until the next label or
+ * `stage` null and the old status. `role` is the `by` segment's word, null when there is none.
+ * A labelled line runs on until the next label or
  * heading, so a field may take several paragraphs. Absent fields are null.
  */
 export function parseLog(text) {
@@ -302,6 +304,7 @@ export function parseLog(text) {
     return [{
       at: heading[1], tool: heading[2], model: heading[3] ?? null,
       stage: heading[5] === undefined ? null : heading[4] === 'merging' ? 'merge' : heading[4], status: heading[5] ?? heading[4],
+      role: heading[6] ?? null,
       done: value('done'), comment: value('comment'), next: value('next'),
     }];
   });
@@ -311,7 +314,8 @@ export function parseLog(text) {
 export function renderEntry(entry) {
   const who = [entry.tool, entry.model].filter(Boolean).join(' ');
   const where = entry.stage ? `${entry.stage} · ${entry.status}` : entry.status;
-  const lines = [`## ${entry.at} · ${who} · ${where}`, ''];
+  const by = entry.role ? ` · by ${entry.role}` : '';
+  const lines = [`## ${entry.at} · ${who} · ${where}${by}`, ''];
   if (entry.done) lines.push(`Done: ${entry.done}`);
   if (entry.comment) lines.push(`Comment: ${entry.comment}`);
   if (entry.next) lines.push(`Next: ${entry.next}`);

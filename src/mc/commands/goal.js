@@ -216,11 +216,19 @@ function newGoal(args, flags, ctx) {
 
   const created = stampSeconds(now);
   ctx.write(join(dir, GOAL_FILE), renderGoal({ stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] }));
-  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, role: writerRole(ctx.env), stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
   stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
   stdout.write(`${GOAL_FILE} is to be filled in by verbs: mc goal set ${programme}/${goal} goal|contract|out-of-scope --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
   return 0;
+}
+
+/** The word a session's log entry names its writer by: from `MC_ROLE`, as the role's name before its `:`. A person writes none. */
+const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
+function writerRole(env) {
+  const role = env.MC_ROLE || '';
+  if (!role || (env.MC_TOOL || 'person') === 'person') return null;
+  return WRITER_WORDS[role] ?? (role.split(':')[0] || null);
 }
 
 /**
@@ -267,7 +275,7 @@ function logEntry(args, fields, ctx) {
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
   const comment = back ? [fields.comment, `moved back from ${goal.stage} to ${fields.stage} by a person`].filter(Boolean).join(' — ') : fields.comment;
-  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, done, comment, next: fields.next };
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done, comment, next: fields.next };
   let now = goal;
   if (fields.stage !== null || fields.status !== null) {
     const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? (fields.stage === 'merge' ? 'ready' : undefined), entry, read, write });
