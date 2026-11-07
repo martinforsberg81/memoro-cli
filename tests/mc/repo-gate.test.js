@@ -28,7 +28,24 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
-import { directGitDir, gateRoot, nodeTestFlags, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { runSessionGate } from '../../src/mc/session-gate-run.js';
+import { spawnedBatch } from './_helpers/spawned-batch.js';
+
+/**
+ * One real `runSessionGate` over `files` in `cwd`, its receipt returned. The candidate
+ * is a fixed identity (no git is asked), and the work root is the temporary directory.
+ */
+async function receiptThrough(cwd, files, flags, run) {
+  const candidate = { repository: '/repo/.git', tree: 'c'.repeat(40), fingerprint: 'bytes' };
+  const work = join(cwd, 'work');
+  let saved = null;
+  await runSessionGate({ cwd, files, flags, gate: { root: work, repo: 'repo' }, measurement: { repo: 'repo', run, base: 'b'.repeat(40), candidate } }, {
+    snapshot: () => candidate, write: () => {}, record: () => {}, env: { PATH: process.env.PATH, MC_WORK_ROOT: work, MC_HOME: work },
+    persist: ({ receipt }) => { saved = receipt; return join(work, `${run}.json`); },
+  });
+  return saved;
+}
 import { fileOutcomes, outputCut, progressTracker } from '../../src/mc/test-times.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
@@ -2429,15 +2446,19 @@ describe('a repository that selects by diff', () => {
       table.repo.extra_gates = [{ name: 'required', command: 'npm run required' }];
       writeJson(tablePath, table);
       const declaration = declarationFor(fx.repoPath, { root: fx.mcHome }).declaration;
+      // The plan the round resolves for this declaration, and the batch its spawn carries.
+      const plan = resolveTestPlan({ flags: declaration.pr_tests_flags || [] });
+      const identity = executionIdentity(plan);
       const evidence = { repository, run: 'gate-bound',
         sessionRun: 'session-bound', goalRevision: 1 };
       const candidate = { repository: evidence.repository, tree, fingerprint: 'raw-content' };
       const receipt = gateReceipt({ measurement: { repo: 'repo', run: evidence.run, session_run: evidence.sessionRun,
-        goal_revision: evidence.goalRevision, configuration: gateConfiguration(declaration, declaration.pr_tests_flags),
+        goal_revision: evidence.goalRevision, configuration: gateConfiguration(declaration, plan.flags, identity),
         base: 'a'.repeat(40), candidate }, before: candidate, after: candidate,
         started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z', result: { ok: true, code: 0,
-          coverage: { kind: limited ? 'named' : 'affected', files, commands, pattern: null, flags: declaration.pr_tests_flags },
-          execution: { tests: { exit: 0, finished: true, totals: { tests: 2, pass: 2, fail: 0 } },
+          coverage: { kind: limited ? 'named' : 'affected', files, commands, pattern: null, flags: plan.flags, execution: identity },
+          execution: { tests: { exit: 0, finished: true, totals: { tests: 2, pass: 2, fail: 0 },
+            batches: files.length ? [spawnedBatch({ plan, files })] : [] },
             commands: [{ exit: 0, ok: true }] } } });
       const path = persistGateReceipt({ root: fx.mcHome, receipt });
       if (record) recordReceiptGreen({ root: fx.mcHome, receipt, path });
@@ -3011,8 +3032,65 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(run.timedOut, false, 'the run ends on its own, not at the whole-run timer');
       assert.deepEqual(redNames(run.tap), ['hangs']);
       assert.equal(tapTotals(run.tap).pass, 2, 'the other tests, in both files, still pass');
+      // What the child was launched with, from the spawn boundary: one batch, the requested 300 ms
+      // before the file paths, the loader and forced exit beside it, this Node, the standard class.
+      assert.equal(run.batches.length, 1);
+      const [batch] = run.batches;
+      assert.deepEqual(batch.files, ['hang.test.js', 'ok.test.js']);
+      assert.equal(batch.timeoutMs, 300);
+      assert.equal(batch.timeoutSource, 'declaration');
+      assert.equal(batch.nodeVersion, process.version);
+      assert.equal(batch.resource, 'standard');
+      assert.ok(batch.argv.indexOf('--test-timeout=300') < batch.argv.indexOf('hang.test.js'), batch.argv.join(' '));
+      assert.ok(batch.argv.includes('--test-force-exit') && batch.argv.includes('--no-warnings'), batch.argv.join(' '));
+      // The same real child through the receipt mechanism: red, and the record names the timeout it ran with.
+      const hung = await receiptThrough(dir, ['hang.test.js', 'ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'hang-run');
+      assert.equal(hung.outcome, 'red', 'a test that never ends is red in the receipt');
+      assert.equal(hung.execution.tests.batches[0].timeoutMs, 300);
+      assert.equal(hung.coverage.execution.timeoutMs, 300);
+      // The restored quick child: complete green, with matching metadata.
+      const quick = await receiptThrough(dir, ['ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'quick-run');
+      assert.equal(quick.outcome, 'green');
+      assert.equal(quick.exit, 0);
+      assert.deepEqual(quick.coverage.execution, { timeoutMs: 300, timeoutSource: 'declaration', forceExit: true, nodeVersion: process.version });
+      assert.equal(quick.execution.tests.batches[0].timeoutMs, 300);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
+
+  it('timeout policy: the requested flags and the effective timeout are resolved once, each with its provenance', () => {
+    const plan = (flags, script = null) => resolveTestPlan({ flags, script });
+    // A declared timeout is the declaration's; the same flags as they are requested.
+    assert.deepEqual(plan(['--import', './x.mjs', '--test-timeout=1000']).timeout, { ms: 1000, source: 'declaration' });
+    assert.deepEqual(plan(['--import', './x.mjs', '--test-timeout', '1000']).timeout, { ms: 1000, source: 'declaration' });
+    // With nothing declared, the test script's timeout stands, with its loader.
+    assert.deepEqual(plan([], 'node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\''),
+      { flags: ['--import', './x.mjs', '--test-timeout=1000'], timeout: { ms: 1000, source: 'script' }, invalid: null, concurrencyDeclared: false });
+    // Neither states one: the round's own default, never Node's unlimited.
+    assert.deepEqual(plan(['--import', './x.mjs']).timeout, { ms: TEST_TIMEOUT_MS, source: 'default' });
+    assert.deepEqual(plan([], 'node --test --import ./x.mjs tests/').timeout, { ms: TEST_TIMEOUT_MS, source: 'default' });
+    // A declared array that states no timeout is not completed by the script's.
+    assert.deepEqual(plan(['--import', './x.mjs'], 'node --test --test-timeout=1000 tests/').timeout, { ms: TEST_TIMEOUT_MS, source: 'default' });
+    // A script timeout that is not a positive integer is no declaration; a declared one that is not refuses, spawning nothing.
+    assert.deepEqual(plan([], 'node --test --test-timeout=0 tests/').timeout, { ms: TEST_TIMEOUT_MS, source: 'default' });
+    assert.match(plan(['--test-timeout=0']).invalid, /not a positive number of milliseconds/u);
+    assert.match(plan(['--test-timeout=1000', '--test-timeout=2000']).invalid, /exactly one positive --test-timeout or none/u);
+    assert.match(plan([], 'node --test --test-timeout=1000 --test-timeout=2000 tests/').invalid, /exactly one positive/u);
+    assert.equal(plan(['--test-timeout=1000']).invalid, null);
+    // Lanes are not identity: the same policy at other lanes is the same execution identity.
+    assert.deepEqual(executionIdentity(plan(['--test-timeout=1000'])), { timeoutMs: 1000, timeoutSource: 'declaration', forceExit: true, nodeVersion: process.version });
+  });
+
+  it('timeout policy: the argv a batch spawns carries its one effective timeout, and the loader and forced exit, before the file paths', () => {
+    const plan = resolveTestPlan({ flags: ['--import', './tests/_isolate-home.mjs', '--test-timeout', '1000', '--test-concurrency=3'] });
+    const argv = nodeTestArgv({ plan, files: ['a.test.js', 'b.test.js'], lanes: 2, reporters: ['--test-reporter=tap'], stdioBlocking: 'stdio.mjs' });
+    assert.deepEqual(argv, ['--test', '--test-reporter=tap', '--test-timeout=1000', '--test-force-exit', '--import', 'stdio.mjs',
+      '--import', './tests/_isolate-home.mjs', '--test-concurrency=3', 'a.test.js', 'b.test.js']);
+    assert.equal(executedTimeoutOf(argv), 1000);
+    // Undeclared: the default is what is given, and its lanes are the batch's.
+    const undeclared = nodeTestArgv({ plan: resolveTestPlan({}), files: ['a.test.js'], lanes: 4, stdioBlocking: 'stdio.mjs' });
+    assert.deepEqual(undeclared, ['--test', '--test-concurrency=4', `--test-timeout=${TEST_TIMEOUT_MS}`, '--test-force-exit', '--import', 'stdio.mjs', 'a.test.js']);
+    assert.equal(executedTimeoutOf(undeclared), TEST_TIMEOUT_MS);
+  });
 
   it('realTests: a test cut at its limit is kept in the work root\'s too-slow file, and goes when it passes under it', async () => {
     // The real path: node reports each test's file resolved, and the row is relative to the cwd.
@@ -3136,13 +3214,13 @@ describe('the selected files run in their resource classes', () => {
     const files = ['a.test.js', 'db.test.js', 'b.test.js', 'build.test.js', 'odd.test.js'];
     const classes = { 'db.test.js': 'sqlite', 'build.test.js': 'heavy', 'odd.test.js': 'mystery' };
     assert.deepEqual(testBatches(files, classes, 4), [
-      { files: ['a.test.js', 'b.test.js', 'odd.test.js'], lanes: 4 },
-      { files: ['db.test.js'], lanes: 4 },
-      { files: ['build.test.js'], lanes: 1 },
+      { name: 'standard', files: ['a.test.js', 'b.test.js', 'odd.test.js'], lanes: 4 },
+      { name: 'sqlite', files: ['db.test.js'], lanes: 4 },
+      { name: 'heavy', files: ['build.test.js'], lanes: 1 },
     ]);
-    assert.deepEqual(testBatches(['a.test.js'], {}, 3), [{ files: ['a.test.js'], lanes: 3 }]);
-    assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ files: ['db.test.js'], lanes: 3 }]);
-    assert.deepEqual(testBatches(['build.test.js'], { 'build.test.js': 'heavy' }, 3), [{ files: ['build.test.js'], lanes: 1 }]);
+    assert.deepEqual(testBatches(['a.test.js'], {}, 3), [{ name: 'standard', files: ['a.test.js'], lanes: 3 }]);
+    assert.deepEqual(testBatches(['db.test.js'], { 'db.test.js': 'sqlite' }, 3), [{ name: 'sqlite', files: ['db.test.js'], lanes: 3 }]);
+    assert.deepEqual(testBatches(['build.test.js'], { 'build.test.js': 'heavy' }, 3), [{ name: 'heavy', files: ['build.test.js'], lanes: 1 }]);
     assert.deepEqual(testBatches([], {}, 3), []);
   });
 });

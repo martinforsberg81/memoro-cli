@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { it } from 'node:test';
-import { runSessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
+import { runSessionGate as sessionGate, selectorCommand } from '../../src/mc/session-gate-run.js';
+import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
+
+/** Every fake `tests` here stands for a spawn: it reports the batch that spawn would carry. */
+const runSessionGate = (request, deps = {}) => sessionGate(request, deps.tests ? { ...deps, tests: withSpawnedBatches(deps.tests) } : deps);
 import { run as gateCommand } from '../../src/mc/commands/gate.js';
 import { readGreenReceipt } from '../../src/mc/gate-greens.js';
 import { runningRounds } from '../../src/mc/gate-lock.js';
@@ -120,11 +124,12 @@ it('receipt measurement preserves resource batching, lane counts and execution o
   const dir = mkdtempSync(join(tmpdir(), 'mc-receipt-batches-'));
   let saved;
   try {
-    const result = await runSessionGate({ cwd: '/repo', select: 'selector', flags: ['--no-warnings'],
+    // Unwrapped: this fake is the real `realTests`, which reports its own launches.
+    const result = await sessionGate({ cwd: '/repo', select: 'selector', flags: ['--no-warnings'],
       gate: { root: '/state', repo: 'repo' }, measurement: { repo: 'repo', run: 'resources', base: 'b'.repeat(40), candidate } }, {
       snapshot: () => candidate, write: () => {},
       select: async () => ({ ok: true, files, commands: [], classes: { 'db.test.js': 'sqlite', 'heavy.test.js': 'heavy' } }),
-      tests: (options) => realTests({ ...options, lanes: 4, runBatch: async ({ files: batch, lanes, flags, times }) => {
+      tests: (options) => realTests({ ...options, lanes: 4, runBatch: async ({ files: batch, lanes, flags, times, plan, resource, onBatch }) => {
         batches.push({ files: batch, lanes, flags });
         // The batch as node's reporter leaves it when each of its files finishes, through the round's tracker.
         const path = join(dir, `batch-${batches.length}.jsonl`);
@@ -132,6 +137,7 @@ it('receipt measurement preserves resource batching, lane counts and execution o
           .map((line) => JSON.stringify(line)).join('\n') + '\n');
         times.track(path);
         times.complete(path);
+        onBatch?.(spawnedBatch({ plan, files: batch, lanes, resource }));
         return { code: 0, tap: GREEN };
       } }),
       persist: ({ receipt }) => { saved = receipt; return '/state/receipt.json'; }, record: () => {},

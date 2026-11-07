@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, filesComplete, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, executionComplete, filesComplete, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -88,7 +88,7 @@ export function gateReceipt({ measurement, before, after, result, started, ended
   // content and its own work completed (`filesComplete`).
   const members = result.members ?? null;
   const complete = Boolean(coverage && (coverage.files.length || coverage.commands.length)
-    && filesComplete(coverage, execution, members)
+    && filesComplete(coverage, execution, members) && executionComplete(coverage, execution, members)
     && commands.length === coverage.commands.length
     && commands.every((command) => command.exit === 0 && command.ok === true && !command.error
       && (command.state !== 'reused' || (typeof command.from === 'string' && command.from))));
@@ -170,7 +170,8 @@ export function findResumable({ root, measurement, flags = [], pattern = null } 
       || ['content-changed', 'evidence'].includes(receipt.stopped_at)
       || receipt.coverage?.pattern !== null || JSON.stringify(receipt.coverage?.flags) !== JSON.stringify(flags)
       || !Array.isArray(receipt.members?.files) || !Array.isArray(receipt.members?.commands)
-      || !Array.isArray(receipt.coverage?.commands) || !Number.isFinite(Date.parse(receipt.ended))) continue;
+      || !Array.isArray(receipt.coverage?.commands) || !Number.isFinite(Date.parse(receipt.ended))
+      || !executionComplete(receipt.coverage, receipt.execution, receipt.members)) continue;
     receipts.push(receipt);
   }
   receipts.sort((a, b) => Date.parse(a.ended) - Date.parse(b.ended) || a.run.localeCompare(b.run));

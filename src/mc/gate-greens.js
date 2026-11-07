@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 
 import { mcHome } from './paths.js';
+import { timeoutValues } from './gate-local.js';
 
 /**
  * What a recorded green and a merge round must both be measuring, as a number.
@@ -26,8 +27,12 @@ import { mcHome } from './paths.js';
  * so a green measured under the old meaning is never read under the new one.
  * 4: a receipt names each member as ran or reused (`members`), and a resumed
  * green's reused files need no test run of their own (`filesComplete`).
+ * 5: a receipt binds the resolved execution identity (the effective timeout and
+ * its provenance, forced exit, Node version) and proves it with the argv each
+ * batch was spawned with (`executionComplete`). Every earlier green lacks that
+ * proof, bound or unbound, and is never read as one.
  */
-export const GATE_MEASUREMENT_VERSION = 4;
+export const GATE_MEASUREMENT_VERSION = 5;
 
 /** How many greens the file keeps: the last ones, which are the ones still unmerged. */
 export const GATE_GREENS_KEPT = 2000;
@@ -103,10 +108,11 @@ function readLines(path) {
   try { return readFileSync(path, 'utf8').split('\n').filter((line) => line.trim()); } catch { return []; }
 }
 
-/** A declaration can change outside Git (the operator table). Keep it, and the
- * effective test flags, in the measurement identity rather than trusting names. */
-export function gateConfiguration(declaration, flags = []) {
-  return digest({ declaration, flags });
+/** A declaration can change outside Git (the operator table). Keep it, the
+ * requested test flags and the resolved execution identity (`executionIdentity`)
+ * in the measurement identity rather than trusting names. */
+export function gateConfiguration(declaration, flags = [], execution = null) {
+  return digest({ declaration, flags, execution });
 }
 
 export function commandIdentity(command) {
@@ -118,7 +124,63 @@ export function commandIdentity(command) {
  * semantics matter to a bound receipt, not just filenames/script names. */
 export function checksHash(coverage) {
   return digest({ files: [...coverage.files].sort(), commands: coverage.commands.map(commandIdentity).sort(),
-    flags: coverage.flags || [], pattern: coverage.pattern ?? null });
+    flags: coverage.flags || [], pattern: coverage.pattern ?? null, execution: coverage.execution ?? null });
+}
+
+const TIMEOUT_SOURCES = Object.freeze(['declaration', 'script', 'default']);
+
+/**
+ * Whether a receipt proves the test policy it was planned with was the one
+ * spawned (contract B). The coverage carries the planned identity
+ * (`coverage.execution`: timeout, its provenance, forced exit, Node version);
+ * the requested flags must state exactly that timeout (none, for `default`);
+ * and every batch the run spawned must say, from its own argv, the same
+ * timeout and Node version, force its exit, and carry the requested flags
+ * before its file paths. The files the batches ran are exactly the files the
+ * attempt ran itself, so a missing batch cannot hide behind the others.
+ * Reused members need no batch. A run that ran no file needs none either.
+ */
+export function executionComplete(coverage, execution, members = null) {
+  const identity = coverage?.execution;
+  if (!identity || typeof identity !== 'object' || !Number.isInteger(identity.timeoutMs) || identity.timeoutMs <= 0
+    || !TIMEOUT_SOURCES.includes(identity.timeoutSource) || identity.forceExit !== true
+    || typeof identity.nodeVersion !== 'string' || !identity.nodeVersion) return false;
+  const flags = Array.isArray(coverage.flags) ? coverage.flags.map(String) : null;
+  if (!flags || !Array.isArray(coverage.files)) return false;
+  const stated = timeoutValues(flags);
+  if (identity.timeoutSource === 'default' ? stated.length !== 0
+    : stated.length !== 1 || Number(stated[0]) !== identity.timeoutMs) return false;
+  const claims = members == null ? [] : Array.isArray(members.files) ? members.files.filter((member) => member?.how === 'reused') : null;
+  if (!claims || claims.some((member) => typeof member?.file !== 'string')) return false;
+  const reused = new Set(claims.map((member) => member.file));
+  const ran = coverage.files.filter((file) => !reused.has(file));
+  const batches = execution?.tests?.batches;
+  if (!ran.length) return !Array.isArray(batches) || batches.length === 0;
+  if (!Array.isArray(batches) || !batches.length) return false;
+  const covered = new Set();
+  for (const batch of batches) {
+    if (!batch || typeof batch !== 'object' || !Array.isArray(batch.files) || !batch.files.length || !Array.isArray(batch.argv)
+      || batch.nodeVersion !== identity.nodeVersion || typeof batch.node !== 'string' || !batch.node
+      || batch.timeoutSource !== identity.timeoutSource || batch.timeoutMs !== identity.timeoutMs || batch.forceExit !== true) return false;
+    const argv = batch.argv.map(String);
+    const first = argv.length - batch.files.length;
+    if (first < 0 || JSON.stringify(argv.slice(first)) !== JSON.stringify(batch.files)) return false;
+    const timeouts = argv.filter((word) => word.startsWith('--test-timeout'));
+    if (timeouts.length !== 1 || timeouts[0] !== `--test-timeout=${identity.timeoutMs}` || argv.indexOf(timeouts[0]) >= first) return false;
+    const forced = argv.indexOf('--test-force-exit');
+    if (forced < 0 || forced >= first) return false;
+    for (let i = 0; i < flags.length; i += 1) {
+      if (flags[i].startsWith('--test-timeout')) { if (flags[i] === '--test-timeout') i += 1; continue; }
+      const at = argv.indexOf(flags[i]);
+      if (at < 0 || at >= first) return false;
+    }
+    for (const file of batch.files) {
+      if (covered.has(file)) return false;
+      covered.add(file);
+    }
+  }
+  const asked = new Set(coverage.files);
+  return [...covered].every((file) => asked.has(file)) && ran.every((file) => covered.has(file));
 }
 
 export function fullCoverage(coverage) {
@@ -153,6 +215,7 @@ export function readGreenReceipt({ root = mcHome(), repo, repository, run, sessi
     || execution.commands.some((command) => !command || command.exit !== 0 || command.ok !== true || command.error
       || (command.state === 'reused' && (typeof command.from !== 'string' || !command.from)))) return null;
   if (!filesComplete(coverage, execution, receipt.members)) return null;
+  if (!executionComplete(coverage, execution, receipt.members)) return null;
   return receipt;
 }
 

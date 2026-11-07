@@ -71,7 +71,7 @@ function redByFile(tap, files, cwd) {
  * that say what was done. `red` holds every file when nothing could be settled.
  */
 export async function settleRed({
-  cwd, base, red, failing, flags = [], classes = {}, env = process.env, signal = null,
+  cwd, base, red, failing, flags = [], plan = null, classes = {}, env = process.env, signal = null,
   tests, times = undefined, git = (dir, args) => gitAsync(dir, args, signal),
   attach = attachRepoDepsAsync, root = workRoot(env), id = `${Date.now()}-${process.pid}`,
 }) {
@@ -82,7 +82,7 @@ export async function settleRed({
   const notes = [];
 
   // 1. Alone on the candidate, one file at a time.
-  const again = await tests({ cwd, files: red, flags, classes, env, signal, lanes: 1, times });
+  const again = await tests({ cwd, files: red, flags, plan, classes, env, signal, lanes: 1, times });
   if (signal?.aborted) return unsettled('interrupted while running the red files alone');
   const totals = tapTotals(again.tap);
   if (again.error || again.timedOut || again.aborted || !totals.finished) return unsettled('the run of the red files alone did not finish: not settled');
@@ -106,7 +106,7 @@ export async function settleRed({
     await attach(dir);
     const present = untouched.filter((file) => existsSync(join(dir, file)));
     if (!present.length) return { alone, main: [], red: still, base, notes };
-    const atBase = await tests({ cwd: dir, files: present, flags, classes, env, signal, lanes: 1 });
+    const atBase = await tests({ cwd: dir, files: present, flags, plan, classes, env, signal, lanes: 1 });
     if (signal?.aborted) return { alone, main: [], red: still, base, notes: [...notes, 'interrupted at the base'] };
     if (atBase.error || atBase.timedOut || atBase.aborted || !tapTotals(atBase.tap).finished) {
       return { alone, main: [], red: still, base, notes: [...notes, `the run at ${base.slice(0, 7)} did not finish: the rest stays red`] };

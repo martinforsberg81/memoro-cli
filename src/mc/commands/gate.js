@@ -56,7 +56,7 @@ import { fileURLToPath } from 'node:url';
 
 import { changedAgainst, flagsOf, measuredDeclaration } from '../gate-fast.js';
 import { selectorCommand } from '../session-gate-run.js';
-import { gateLines, namedCommand, rerunLine, summarizeGate, testFlags, timedTestLines } from '../gate-local.js';
+import { gateLines, namedCommand, rerunLine, summarizeGate, timedTestLines } from '../gate-local.js';
 import { changedRanges, slowTestLines } from '../test-times.js';
 import { tryGit } from '../git.js';
 import { mcHome } from '../paths.js';
@@ -64,6 +64,7 @@ import { declarationFor, gateLaneOf } from '../repo-gate-table.js';
 import { repositoryDir } from '../repos.js';
 import { captureWorktree } from '../session-gate-evidence.js';
 import { gateConfiguration } from '../gate-greens.js';
+import { executionIdentity, resolveTestPlan } from '../repo-gate.js';
 import { testLanes } from '../repo-gate.js';
 import { scanArgs } from './flags.js';
 import { takeClaim, releaseClaim } from '../resource-claim.js';
@@ -200,12 +201,16 @@ export async function run(argv, deps = {}) {
   let manifest = null;
   try { manifest = JSON.parse(io.read(join(root, 'package.json'), 'utf8')); } catch { manifest = null; }
   const flags = flagsOf(measured?.declaration);
-  const effectiveFlags = flags || testFlags(manifest?.scripts?.test);
+  // The one resolution (`resolveTestPlan`) the worker spawns with: the requested
+  // flags, and the effective timeout with its provenance (declaration, script or default).
+  const plan = resolveTestPlan({ flags: flags ?? [], script: manifest?.scripts?.test ?? null });
+  if (plan.invalid) { stderr.write(`mc: timeout policy: ${plan.invalid} — nothing was run\n`); return 2; }
+  const effectiveFlags = plan.flags;
   if (files.length) {
     declaration = measured?.declaration ?? null;
     if (declaration?.select) select = selectorCommand(declaration.select, { base, changed: files });
   }
-  const configuration = gateConfiguration(declaration, effectiveFlags);
+  const configuration = gateConfiguration(declaration, effectiveFlags, executionIdentity(plan));
   const command = files.length ? namedCommand(manifest, files, { pattern, flags })
     : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
   // The test files this change adds or changes, with the changed lines of each: the tests
@@ -244,7 +249,7 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, timed, flags: effectiveFlags, pattern, select, base, mainOnly: declaration?.main_only ?? [],
+      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: declaration?.main_only ?? [],
         round_timeout_ms: declaration?.round_timeout_ms ?? null,
         log: logPath, fresh: Boolean(scanned.flags.fresh), defer: !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,

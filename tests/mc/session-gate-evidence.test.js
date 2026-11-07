@@ -6,8 +6,12 @@ import { join } from 'node:path';
 import { it } from 'node:test';
 import { captureWorktree, findPublicationReceipt, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
-import { selectorCommand, runSessionGate } from '../../src/mc/session-gate-run.js';
-import { deltaFromGreen, realTests, selectFiles } from '../../src/mc/repo-gate.js';
+import { selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
+import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
+import { spawnedBatch, withSpawnedBatches } from './_helpers/spawned-batch.js';
+
+/** Every fake `tests` here stands for a spawn: it reports the batch that spawn would launch. */
+const runSessionGate = (request, deps = {}) => sessionGate(request, deps.tests ? { ...deps, tests: withSpawnedBatches(deps.tests) } : deps);
 import { runShell } from '../../src/mc/child-async.js';
 import { main as selectorMain } from '../../scripts/affected-tests.js';
 
@@ -18,7 +22,7 @@ const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0
  * complete it. A run with a gate that reports nothing is a run whose files never
  * started (`outputCut`), so a substitute that stands for a finished run reports one.
  */
-const reporting = (run) => async ({ files = [], times } = {}) => {
+const reporting = (run) => async ({ files = [], plan = null, flags = [], lanes = 1, times } = {}) => {
   if (times?.track) {
     const path = join(tmpdir(), `mc-evidence-times-${process.pid}-${Math.random().toString(36).slice(2)}.jsonl`);
     times.track(path);
@@ -364,7 +368,7 @@ async function measured(t, { files = null, pattern = null, flags = [], commands 
   const lookup = (overrides = {}) => {
     const head = git(fx.cwd, 'rev-parse', 'HEAD');
     return findPublicationReceipt({ ...context, cwd: fx.cwd, head, pushed: head,
-      selection: { files: ['a.test.js'], commands, flags }, ...overrides });
+      selection: { files: ['a.test.js'], commands, flags, execution: executionIdentity(resolveTestPlan({ flags })) }, ...overrides });
   };
   return { ...fx, req, result, receipt, context, lookup };
 }
@@ -379,7 +383,7 @@ it('publication accepts the measured uncommitted content after an equal-tree com
   const result = await runSessionGate(req, { ...quiet, select: async () => selected, tests: reporting({ code: 0, tap: GREEN }) });
   const receipt = receiptOf(result);
   const args = { root: req.gate.root, cwd: fx.cwd, repo: 'repo', run: 'gate-one', sessionRun: 'session-one',
-    goalRevision: 3, configuration: req.measurement.configuration, selection: selected };
+    goalRevision: 3, configuration: req.measurement.configuration, selection: { ...selected, execution: executionIdentity(resolveTestPlan({})) } };
   const old = git(fx.cwd, 'rev-parse', 'HEAD');
   assert.equal(findPublicationReceipt({ ...args, head: old, pushed: old }), null, 'uncommitted content is not published');
   git(fx.cwd, 'add', '-A');
@@ -577,7 +581,7 @@ it('a resumed full green is recorded for the merger and accepted for publication
   const attempt = (run, outcome) => {
     const req = { ...fx.request(), files: null, select: 'selector' };
     req.measurement = { ...req.measurement, run };
-    return runSessionGate(req, { ...quiet, select: async () => selected, tests: async ({ files, times }) => {
+    return runSessionGate(req, { ...quiet, select: async () => selected, tests: async ({ files, times, plan }) => {
       const path = join(fx.root, `${run}.jsonl`);
       times.track(path);
       writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true },
@@ -602,13 +606,13 @@ it('a resumed full green is recorded for the merger and accepted for publication
   assert.equal(cached?.receipt, resumed.evidence.path, 'recordReceiptGreen recorded the resumed green');
   const head = git(fx.cwd, 'rev-parse', 'HEAD');
   assert.equal(findPublicationReceipt({ ...context, root, cwd: fx.cwd, repo: 'repo', head, pushed: head,
-    selection: { files: selected.files, commands: [] } })?.run, 'gate-resumed');
+    selection: { files: selected.files, commands: [], execution: executionIdentity(resolveTestPlan({})) } })?.run, 'gate-resumed');
 });
 
 it('a reused member that did not pass, or names no source, never makes a receipt green', (t) => {
   const { request } = fixture(t);
   const measurement = request().measurement;
-  const coverage = { kind: 'affected', files: ['a.test.js'], commands: [], flags: [], pattern: null, selector: 'selector' };
+  const coverage = { kind: 'affected', files: ['a.test.js'], commands: [], flags: [], pattern: null, selector: 'selector', execution: executionIdentity(resolveTestPlan({})) };
   const make = (member) => gateReceipt({ measurement, before: measurement.candidate, after: measurement.candidate,
     started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
     result: { ok: true, code: 0, coverage, execution: { tests: null, commands: [] }, members: { files: [member], commands: [] } } });
@@ -618,4 +622,44 @@ it('a reused member that did not pass, or names no source, never makes a receipt
     { file: 'a.test.js', how: 'ran', from: null, outcome: 'passed' }]) {
     assert.equal(make(member).outcome, 'incomplete', JSON.stringify(member));
   }
+});
+
+it('receipt: a timeout the batch was not launched with, a missing batch, a changed Node or a missing identity never mint green', (t) => {
+  const { request } = fixture(t);
+  const measurement = request().measurement;
+  // The requested policy: 1000 ms, declared; the identity the measurement was planned with.
+  const plan = resolveTestPlan({ flags: ['--import', './x.mjs', '--test-timeout=1000'] });
+  const identity = executionIdentity(plan);
+  const flags = ['--import', './x.mjs', '--test-timeout=1000'];
+  const coverage = (files, extra = {}) => ({ kind: 'affected', files, commands: [], flags, pattern: null, selector: 'selector', execution: identity, ...extra });
+  const launch = (files, over = {}) => ({ ...spawnedBatch({ plan, files }), ...over });
+  const members = (files) => ({ files: files.map((file) => ({ file, how: 'ran', from: null, outcome: 'passed' })), commands: [] });
+  const outcome = (cover, batches, files = ['a.test.js']) => gateReceipt({ measurement, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
+    result: { ok: true, code: 0, coverage: cover, execution: { tests: { exit: 0, finished: true, totals: { tests: 1, pass: 1, fail: 0 }, batches }, commands: [] }, members: members(files) } }).outcome;
+
+  assert.equal(outcome(coverage(['a.test.js']), [launch(['a.test.js'])]), 'green', 'the consistent launch is green');
+  // Requested 1000, executed 600000: the spawn boundary dropped the declared timeout and Node was given the default.
+  const dropped = launch(['a.test.js'], { argv: launch(['a.test.js']).argv.map((word) => (word === '--test-timeout=1000' ? '--test-timeout=600000' : word)) });
+  dropped.timeoutMs = executedTimeoutOf(dropped.argv);
+  assert.equal(dropped.timeoutMs, 600000);
+  assert.equal(outcome(coverage(['a.test.js']), [dropped]), 'incomplete', 'requested 1000, executed 600000');
+  // A batch argv that does not carry the loader before its file paths.
+  assert.equal(outcome(coverage(['a.test.js']), [launch(['a.test.js'], { argv: launch(['a.test.js']).argv.filter((word) => word !== './x.mjs') })]), 'incomplete', 'loader missing');
+  // No execution identity at all, or one whose timeout the requested flags do not state.
+  assert.equal(outcome({ ...coverage(['a.test.js']), execution: undefined }, [launch(['a.test.js'])]), 'incomplete', 'missing identity');
+  assert.equal(outcome(coverage(['a.test.js'], { execution: { ...identity, timeoutSource: 'default' } }), [launch(['a.test.js'])]), 'incomplete', 'identity says default, flags state 1000');
+  // A changed Node: the batch was spawned by another version than the one the identity names.
+  assert.equal(outcome(coverage(['a.test.js']), [launch(['a.test.js'], { nodeVersion: 'v0.0.1' })]), 'incomplete', 'changed Node');
+  // A missing batch: one of the two files ran in no launch.
+  assert.equal(outcome(coverage(['a.test.js', 'b.test.js']), [launch(['a.test.js'])], ['a.test.js', 'b.test.js']), 'incomplete', 'missing batch');
+  // A launch of a file the attempt did not select.
+  assert.equal(outcome(coverage(['a.test.js']), [launch(['a.test.js']), launch(['z.test.js'])]), 'incomplete', 'unselected file launched');
+  // Nothing ran: commands only, and no test batch is required of it.
+  const commandsOnly = gateReceipt({ measurement, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
+    result: { ok: true, code: 0, coverage: { kind: 'affected', files: [], commands: [{ packageScript: 'lint' }], flags, pattern: null, selector: 'selector', execution: identity },
+      execution: { tests: null, commands: [{ packageScript: 'lint', exit: 0, ok: true, state: 'completed' }] }, members: { files: [], commands: [] } } });
+  assert.equal(commandsOnly.outcome, 'green', 'commands only need no batch');
+  assert.equal(commandsOnly.coverage.execution.timeoutMs, 1000);
 });

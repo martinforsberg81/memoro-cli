@@ -72,7 +72,7 @@ import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from '
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
-import { nodeTestScript, scriptTimeoutAt } from './gate-local.js';
+import { nodeTestScript, scriptTimeoutAt, timeoutMs as positiveMs, timeoutValues } from './gate-local.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -764,6 +764,11 @@ export async function runGate({
     if (!measured.ok) return finish('declaration', measured.reason);
     if (measured.notice) say(measured.notice);
     const flags = measured.declaration.pr_tests_flags || [];
+    // The same resolution the session's `mc gate` makes, on the same declared flags and
+    // the candidate's own script: what a green receipt is bound to, and what the tests
+    // below are spawned with (`realTests` resolves the same way from `flags` and `headDir`).
+    const plan = resolveTestPlan({ flags, script: testScriptOf(headDir) });
+    if (plan.invalid) return finish('declaration', `timeout policy: ${plan.invalid} — nothing was run`);
     const is =facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
 
     // What each pull request changed against the base, asked of git once a
@@ -994,12 +999,13 @@ export async function runGate({
     // still are, below. Only a single pull request's round: a batch candidate
     // is a tree no session stood in, and `--full` asks for a measurement.
     const receiptContext = await bindReceiptRepository(askGit, repoPath, evidence === null ? null : { ...evidence,
-      configuration: gateConfiguration(measured.declaration, flags) });
+      configuration: gateConfiguration(measured.declaration, plan.flags, executionIdentity(plan)) });
     let reused = null;
     if (selection && facts.pr && !batch) {
       const tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
       const green = findGreen({
-        root, repo: repoNameOf(repoPath), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION, evidence: receiptContext, checks: { ...selection, flags },
+        root, repo: repoNameOf(repoPath), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION, evidence: receiptContext,
+        checks: { ...selection, flags: plan.flags, execution: executionIdentity(plan) },
       });
       if (green) {
         const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
@@ -2178,12 +2184,27 @@ function testScriptShape(cwd) {
  * gets bare `node --test`, and the report names the files either way.
  */
 export function nodeTestFlags(cwd) {
-  let script = '';
+  return scriptFlagsOf(testScriptOf(cwd));
+}
+
+/** The `test` script of the package at `cwd`, or null when there is none or it cannot be read. */
+export function testScriptOf(cwd) {
   try {
-    script = String(JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).scripts?.test || '');
-  } catch { return []; }
+    const script = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).scripts?.test;
+    return typeof script === 'string' && script.trim() ? script : null;
+  } catch { return null; }
+}
+
+/**
+ * The node flags a `node --test` script string carries, as `nodeTestFlags`
+ * reads them off a package: the loaders and experimental options, and its one
+ * `--test-timeout` as `--test-timeout=<ms>` (a script timeout that is not a
+ * positive integer is dropped, and reads as no timeout). Empty when the script
+ * is not a `node --test` line.
+ */
+export function scriptFlagsOf(script) {
   if (!nodeTestScript(script)) return [];
-  const tokens = script.slice(4).trim().split(/\s+/u);
+  const tokens = String(script).trim().slice(4).trim().split(/\s+/u);
   const flags = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
@@ -2201,6 +2222,79 @@ export function nodeTestFlags(cwd) {
     }
   }
   return flags;
+}
+
+/**
+ * The semantic test arguments of one `node --test` run, resolved once for every
+ * consumer (the session's `mc gate`, the candidate round and the worker that
+ * spawns the tests) — contract B of docs/technical/test-audits/timeout-enforcement-plan.md.
+ *
+ * - `flags`: the requested flags: the declared `pr_tests_flags` when any are
+ *   declared, else the flags of the `test` script (`scriptFlagsOf`). Requested,
+ *   not executed: what the receipt names as asked for.
+ * - `timeout`: the effective per-test timeout `{ ms, source }`. `source` is
+ *   `declaration` (the declared flags state it), `script` (the script states it
+ *   and nothing is declared) or `default` (neither states one: Node would run
+ *   without any per-test limit, so the round's own `TEST_TIMEOUT_MS` applies).
+ * - `invalid`: a reason, when the declared flags state more than one timeout or
+ *   one that is not a positive integer. An invalid plan spawns nothing. A script
+ *   timeout that is not a positive integer is not a declaration: it is dropped,
+ *   and the default applies.
+ *
+ * Node's `--test-timeout` is a default for each test and its hooks, not an
+ * absolute cap on a file or on synchronous work (docs/technical/mc-merge.md).
+ */
+export function resolveTestPlan({ flags = [], script = null } = {}) {
+  const declared = (Array.isArray(flags) ? flags : []).map(String);
+  const requested = declared.length ? declared : scriptFlagsOf(script);
+  const stated = timeoutValues(requested);
+  let invalid = null;
+  if (stated.length > 1) invalid = `${stated.map((value) => `--test-timeout=${value}`).join(' ')} — exactly one positive --test-timeout or none`;
+  else if (stated.length === 1 && positiveMs(stated[0]) === null) invalid = `--test-timeout=${stated[0]} is not a positive number of milliseconds`;
+  const timeout = stated.length === 1 && !invalid
+    ? { ms: Number(stated[0]), source: declared.length ? 'declaration' : 'script' }
+    : { ms: TEST_TIMEOUT_MS, source: 'default' };
+  return { flags: requested, timeout, invalid, concurrencyDeclared: requested.some((flag) => flag.startsWith('--test-concurrency')) };
+}
+
+/**
+ * What a receipt binds as the execution's stable identity: the effective
+ * timeout with its provenance, that the run always forces its exit, and the
+ * Node version that spawned it. Lanes (load-dependent) and reporter paths
+ * (ephemeral) are not identity.
+ */
+export function executionIdentity(plan, nodeVersion = process.version) {
+  return { timeoutMs: plan.timeout.ms, timeoutSource: plan.timeout.source, forceExit: true, nodeVersion };
+}
+
+/**
+ * The argv one batch spawns: `--test`, the reporters, the lanes, the one
+ * effective `--test-timeout`, `--test-force-exit`, the stdio helper, the
+ * requested flags without their timeouts, then the files. The timeout always
+ * precedes the file paths, and it is the only timeout Node is given.
+ */
+export function nodeTestArgv({ plan, files, lanes = 1, reporters = [], stdioBlocking }) {
+  const concurrency = plan.concurrencyDeclared ? [] : [`--test-concurrency=${lanes}`];
+  const forceExit = plan.flags.includes('--test-force-exit') ? [] : ['--test-force-exit'];
+  return ['--test', ...reporters, ...concurrency, `--test-timeout=${plan.timeout.ms}`, ...forceExit,
+    '--import', stdioBlocking, ...withoutTimeouts(plan.flags), ...files];
+}
+
+function withoutTimeouts(flags) {
+  const kept = [];
+  for (let i = 0; i < flags.length; i += 1) {
+    const word = String(flags[i]);
+    if (word.startsWith('--test-timeout=')) continue;
+    if (word === '--test-timeout') { i += 1; continue; }
+    kept.push(word);
+  }
+  return kept;
+}
+
+/** The one `--test-timeout` an argv actually carries, in ms; null when it has none or more than one. */
+export function executedTimeoutOf(argv) {
+  const values = argv.filter((word) => String(word).startsWith('--test-timeout=')).map((word) => Number(String(word).slice('--test-timeout='.length)));
+  return values.length === 1 && Number.isInteger(values[0]) && values[0] > 0 ? values[0] : null;
 }
 
 /**
@@ -2354,11 +2448,11 @@ export function testBatches(files, classes = {}, lanes = 1) {
   const later = new Set(LATER_CLASSES);
   const standard = files.filter((file) => !later.has(classes[file]));
   return [
-    ...(standard.length ? [{ files: standard, lanes }] : []),
+    ...(standard.length ? [{ name: 'standard', files: standard, lanes }] : []),
     ...LATER_CLASSES
       .map((name) => ({ name, files: files.filter((file) => classes[file] === name) }))
       .filter(({ files: batch }) => batch.length)
-      .map(({ name, files: batch }) => ({ files: batch, lanes: EXCLUSIVE_CLASSES.includes(name) ? 1 : lanes })),
+      .map(({ name, files: batch }) => ({ name, files: batch, lanes: EXCLUSIVE_CLASSES.includes(name) ? 1 : lanes })),
   ];
 }
 
@@ -2367,9 +2461,23 @@ export function testBatches(files, classes = {}, lanes = 1) {
  * as one result: the TAP of each batch in order (`tapTotals` adds up one
  * summary per process), the first non-zero exit, and the time budget shared.
  */
-export async function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, times = null, runBatch = runTestBatch } = {}) {
+export async function realTests({ cwd, files, flags = [], plan = null, onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, times = null, runBatch = runTestBatch } = {}) {
+  // Resolved once here, unless the caller resolved it (the session's worker and the
+  // candidate round do, so provenance reaches the spawn): the same function as
+  // `mc gate` configuration reads, so the requested policy and the spawned one agree.
+  const resolved = plan ?? resolveTestPlan({ flags, script: flags.length ? null : testScriptOf(cwd) });
+  if (resolved.invalid) return { code: -1, tap: '', stderr: '', error: resolved.invalid, timedOut: false, timeoutMs, tests: [], cut: [], batches: [] };
+  // Nothing to run is nothing spawned: no batch is fabricated for it.
   const batches = testBatches(files, classes, lanes);
-  if (batches.length <= 1) return runBatch({ cwd, files, flags, onLine, env, timeoutMs, lanes: batches[0]?.lanes ?? lanes, signal, times });
+  if (!batches.length) return { code: 0, tap: '', stderr: '', timedOut: false, timeoutMs, tests: [], cut: [], batches: [] };
+  // Each batch is told to the caller at its spawn (`onBatch`), so a run the caller
+  // stops before it returns still says what it launched.
+  const launched = [];
+  const noteBatch = (batch) => { launched.push(batch); onBatch?.(batch); };
+  if (batches.length === 1) {
+    const only = await runBatch({ cwd, files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs, lanes: batches[0].lanes, resource: batches[0].name, signal, times });
+    return { ...only, batches: launched };
+  }
   const started = Date.now();
   let tap = '';
   let stderr = '';
@@ -2378,47 +2486,41 @@ export async function realTests({ cwd, files, flags = [], onLine = () => {}, env
   const cut = [];
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
-    const ran = await runBatch({ cwd, files: batch.files, flags, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, signal, times });
+    const ran = await runBatch({ cwd, files: batch.files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, resource: batch.name, signal, times });
     tap += ran.tap;
     stderr += ran.stderr || '';
     tests.push(...(ran.tests || []));
     cut.push(...(ran.cut || []));
-    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests, cut };
+    if (ran.error) return { code: -1, tap, stderr, error: ran.error, tests, cut, batches: launched };
     // A batch with an unknown exit, no summary, or a file its tracker says was cut
     // short cannot disappear behind the passing totals of another resource class.
     const totals = tapTotals(ran.tap);
     if (!code && (ran.code !== 0 || !totals.finished || !totals.tests || ran.cut?.length)) code = ran.code || -1;
-    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests, cut };
-    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests, cut };
+    if (ran.aborted) return { code: ran.code ?? -1, tap, stderr, aborted: true, timeoutMs, tests, cut, batches: launched };
+    if (ran.timedOut) return { code, tap, stderr, timedOut: true, timeoutMs, tests, cut, batches: launched };
   }
-  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests, cut };
+  return { code, tap, stderr, timedOut: false, timeoutMs, lanes, tests, cut, batches: launched };
 }
 
 /** test-stdio-blocking.mjs, loaded by every batch (`runTestBatch`). */
 const STDIO_BLOCKING = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-stdio-blocking.mjs')).href;
 
-function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
+function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), resource = 'standard', signal = null, times = null } = {}) {
   return new Promise((resolve) => {
-    // Stopped before it started: nothing is spawned.
+    // Stopped before it started: nothing is spawned, and no batch is recorded.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
     const clean = suiteEnv(env);
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
-    // Declared flags first; the test-script heuristic only when none are.
-    const declared = flags.length ? flags : nodeTestFlags(cwd);
-    const concurrency = declared.some((flag) => String(flag).startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${lanes}`];
-    // A test that never ends is a red by name, not the run's hour: `--test-timeout`
-    // reports it, and `--test-force-exit` ends its file's process too, since with
-    // the timeout alone that process stays alive on the test's own timers. A
-    // repository that declares its own `--test-timeout` keeps it.
-    const perTest = declared.some((flag) => String(flag).startsWith('--test-timeout')) ? [] : [`--test-timeout=${TEST_TIMEOUT_MS}`];
+    // The one resolution (`resolveTestPlan`): requested flags, the effective timeout
+    // with its provenance. Its argv is assembled below, and only there.
+    const resolved = plan ?? resolveTestPlan({ flags, script: flags.length ? null : testScriptOf(cwd) });
     // `--test-force-exit` ends a file's process the moment its tests end, and on macOS
     // that drops a report still queued on its pipe: the batch then reads fewer tests
     // than exist and exits 0 ("output cut"). `STDIO_BLOCKING` makes stdout and stderr
     // blocking before any test runs. It comes before the declared flags, so the
     // repository's own `--import`s still load, here and in every test file.
-    const forceExit = declared.includes('--test-force-exit') ? [] : ['--test-force-exit'];
     // The measured cost of each file (test-times.js), in a second reporter so
     // that the TAP this reads stays as it was.
     const timesFile = times ? join(tmpdir(), `mc-test-times-${randomUUID()}.jsonl`) : null;
@@ -2443,12 +2545,25 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
       return { tests, cut };
     };
-    const child = spawn(process.execPath, ['--test', ...reporters, ...concurrency, ...perTest, ...forceExit, '--import', STDIO_BLOCKING, ...declared, ...files], {
+    const argv = nodeTestArgv({ plan: resolved, files, lanes, reporters, stdioBlocking: STDIO_BLOCKING });
+    // What this batch was actually given at the spawn: its argv (reporter destinations
+    // are ephemeral and masked), the Node that ran it, the timeout Node was handed,
+    // the requested policy's provenance, the resource class and the lanes.
+    const record = () => {
+      const concurrency = argv.find((word) => word.startsWith('--test-concurrency='));
+      return { resource, files: [...files], lanes: concurrency ? Number(concurrency.slice('--test-concurrency='.length)) : null,
+        node: process.execPath, nodeVersion: process.version, timeoutSource: resolved.timeout.source,
+        timeoutMs: executedTimeoutOf(argv), forceExit: argv.includes('--test-force-exit'),
+        argv: argv.map((word) => (word.startsWith('--test-reporter-destination=') ? '--test-reporter-destination=<ephemeral>' : word)) };
+    };
+    const child = spawn(process.execPath, argv, {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
+    // Launched: this is what the batch was given, whatever becomes of it.
+    onBatch?.(record());
     let timedOut = false;
     // Stopped from outside: the process group goes at once, and the close says
     // `aborted`. A child that cannot be signalled as a group is signalled alone.
@@ -2479,7 +2594,7 @@ function runTestBatch({ cwd, files, flags = [], onLine = () => {}, env = process
     child.on('close', (code) => {
       const { tests, cut } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
-      resolve({ code: cut.length && code === 0 ? -1 : code, tap, stderr, timedOut, timeoutMs, aborted, lanes: concurrency.length ? lanes : null, tests, cut });
+      resolve({ code: cut.length && code === 0 ? -1 : code, tap, stderr, timedOut, timeoutMs, aborted, lanes: resolved.concurrencyDeclared ? null : lanes, tests, cut });
     });
   });
 }

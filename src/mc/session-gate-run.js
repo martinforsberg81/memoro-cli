@@ -8,7 +8,7 @@ import { setPriority } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runShell } from './child-async.js';
-import { realTests, selectFiles, suiteEnv, suiteTimeoutMs } from './repo-gate.js';
+import { executionIdentity, realTests, resolveTestPlan, selectFiles, suiteEnv, suiteTimeoutMs, testScriptOf } from './repo-gate.js';
 import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
@@ -39,6 +39,8 @@ export async function runSessionGate(request, {
   // What earlier attempts on this content proved passing (`findResumable`):
   // only a measured request, and never with --fresh.
   let prior = { files: new Map(), commands: new Map() };
+  // The batches this attempt launched, in order (`executeSessionGate`).
+  const launched = [];
   // The tracker, and what it said when a ceiling or an interrupt stopped the
   // run: the run's times files are gone once its process closes.
   let tracker = null;
@@ -81,7 +83,7 @@ export async function runSessionGate(request, {
         else signal.addEventListener('abort', stop, { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, prior, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
+        executeSessionGate(request, { ...deps, prior, launched, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
@@ -151,7 +153,10 @@ export async function runSessionGate(request, {
   let result = stoppedResult(null, 'content-changed');
   try {
     before = snapshot(request.cwd);
-    if (sameContent(request.measurement.candidate, before)) result = withMembers(await execute());
+    // The batches as they launched, whatever the run returned (a cut run returns no record of its own).
+    const withLaunched = (value) => (value?.execution?.tests
+      ? { ...value, execution: { ...value.execution, tests: { ...value.execution.tests, batches: [...launched] } } } : value);
+    if (sameContent(request.measurement.candidate, before)) result = withMembers(withLaunched(await execute()));
     after = snapshot(request.cwd);
   } catch (error) {
     result = stoppedResult({ ...result, error: error.message }, 'evidence');
@@ -175,9 +180,19 @@ export async function runSessionGate(request, {
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
   write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, outcomes = null, onPhase = () => {}, onProgress = () => {},
-  prior = null, settle = settleRed,
+  prior = null, settle = settleRed, launched = [],
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
+  // The one resolution (`resolveTestPlan`): the declared flags the caller named, and this
+  // worktree's own `test` script. The same answer the measurement's configuration was read with.
+  const plan = resolveTestPlan({ flags: request.declared ?? flags, script: testScriptOf(cwd) });
+  const identity = executionIdentity(plan);
+  if (plan.invalid) {
+    write(`Error: timeout policy: ${plan.invalid} — nothing was run\n`);
+    return { ok: false, code: 1, stopped_at: 'declaration', deferred: [], coverage: {
+      kind: request.files ? 'named' : 'affected', files: [], commands: [], flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
+    } };
+  }
   let selection = { files: request.files || [], commands: [], classes: {} };
   if (request.select) {
     const selected = await select({ command: request.select, cwd, env, signal, say: (line) => write(`${line}\n`), mainOnly: request.mainOnly });
@@ -208,7 +223,7 @@ async function executeSessionGate(request, {
     write('NOTHING RUN — the repository selector selected no checks\n');
     return { ok: false, code: 2, stopped_at: 'no-checks', files, deferred, coverage: {
       kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
-      flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null,
+      flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
     } };
   }
   const selectedCommands = selection.commands || [];
@@ -217,7 +232,13 @@ async function executeSessionGate(request, {
   let testResult = null;
   // Whose red the test half's red was (`gate-settle.js`): null when nothing was settled.
   let settled = null;
-  const testFlags = [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])];
+  // What is spawned: the plan, with the name filter (not a timeout) added to its requested flags.
+  const runPlan = request.pattern == null ? plan : { ...plan, flags: [...plan.flags, `--test-name-pattern=${request.pattern}`] };
+  // Every batch as it launches (`realTests`' onBatch, into `launched`): what the receipt
+  // says ran, including a run the ceiling or an interrupt cuts before it returns.
+  // Settle's own runs count too.
+  const onBatch = (batch) => { launched.push(batch); };
+  const settleTests = (options) => tests({ ...options, onBatch });
   const commands = selectedCommands.map((command) => {
     const source = prior?.commands?.get(commandIdentity(command));
     return { id: command.id || command.packageScript, packageScript: command.packageScript,
@@ -239,7 +260,7 @@ async function executeSessionGate(request, {
   const reusedSlow = Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || []).map((test) => ({ ...test, file })));
   let slow = slowTests(reusedSlow);
   const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
-    flags: [...flags], pattern: request.pattern ?? null, selector: request.select ?? null };
+    flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null };
   const snapshot = () => {
     const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
       id, packageScript, command: invocation, exit,
@@ -247,7 +268,7 @@ async function executeSessionGate(request, {
     return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
       ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed, slow_tests: slow,
-      coverage, execution: { tests: testResult, commands }, resumed,
+      coverage, execution: { tests: testResult && { ...testResult, batches: [...launched] }, commands }, resumed,
       ...(settled && (settled.alone.length || settled.main.length) ? { settled: { alone: settled.alone, main: settled.main, base: settled.base, red: settled.red } } : {}) };
   };
   const progress = () => onProgress(snapshot());
@@ -259,7 +280,7 @@ async function executeSessionGate(request, {
     testResult = { exit: null, finished: false, totals: {} };
     progress();
     try {
-      const run = await tests({ cwd, files, flags: testFlags, classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
+      const run = await tests({ cwd, files, flags: runPlan.flags, plan: runPlan, onBatch, classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
       write(`${run.tap || ''}\n${run.stderr || ''}`);
       timed = [...touchedTests(run.tests || [], request.timed || {}), ...reusedTimed];
       slow = slowTests([...(run.tests || []), ...reusedSlow]);
@@ -284,7 +305,7 @@ async function executeSessionGate(request, {
         if (seen && failed.length && failed.every((one) => one.outcome === 'failed') && !signal?.aborted) {
           try {
             settled = await settle({ cwd, base: request.measurement?.base || base, red: failed.map((one) => one.file), failing: details,
-              flags: testFlags, classes: selection.classes || {}, env, signal, tests,
+              flags: runPlan.flags, plan: runPlan, classes: selection.classes || {}, env, signal, tests: settleTests,
               times: request.gate ? { ...request.gate, track, complete } : undefined });
           } catch (error) {
             settled = { alone: [], main: [], red: failed.map((one) => one.file), base: null, notes: [`could not settle the red: ${error.message}`] };
