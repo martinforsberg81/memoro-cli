@@ -405,14 +405,19 @@ test('mc goal log and new name the session that wrote the entry by its role in t
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person', MC_ROLE: BUILD_ROLES.goal }, ['--done', 'x'], '· person · build · ready', 'build', null],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'odd role:x' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'constructor' }, ['--done', 'x'], '· claude · build · ready · by constructor', 'build', 'constructor'],
   ];
   for (const [env, args, heading, stage, role] of cases) {
     const f = fixture({ files: inStage('build'), env });
+    const before = parseLog(f.store[`${DIR}/LOG.md`]).length;
     assert.equal(await run(['log', ...args], f.deps), 0, `${heading}: ${f.err()}`);
+    const entries = parseLog(f.store[`${DIR}/LOG.md`]);
+    assert.equal(entries.length, before + 1, `the entry is kept: ${JSON.stringify(env)}`);
+    const entry = entries.at(-1);
+    assert.equal(entry.done, 'x', JSON.stringify(env));
+    assert.deepEqual([entry.role, entry.stage], [role, stage], JSON.stringify(env));
     const last = f.store[`${DIR}/LOG.md`].match(/^## .*$/gmu).at(-1);
     assert.equal(last, `## 2026-11-01T20:00Z ${heading}`, JSON.stringify(env));
-    const entry = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-    assert.deepEqual([entry.role, entry.stage], [role, stage]);
   }
   const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE } });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], created.deps), 0, created.err());

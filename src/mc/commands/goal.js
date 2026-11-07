@@ -232,7 +232,7 @@ const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [
 function writerRole(env) {
   const role = env.MC_ROLE || '';
   if (!role || (env.MC_TOOL || 'person') === 'person') return null;
-  const word = WRITER_WORDS[role] ?? role.split(':')[0];
+  const word = Object.hasOwn(WRITER_WORDS, role) ? WRITER_WORDS[role] : role.split(':')[0];
   return /^\S+$/u.test(word) ? word : null;
 }
 

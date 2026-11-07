@@ -318,7 +318,8 @@ export function progressTracker() {
      * The failed files and named tests of every run, completed or still going (`runOutcomes`).
      * `failed` and `tests` are unions over every run. `ended` is the files `read()` leaves
      * ended, less the failed: a file is ended as the latest run that named it left it, as in
-     * `read()`, so an earlier run's ended line never stands for a later rerun that wrote none.
+     * `read()`, so an earlier run's ended line never stands for a later rerun that wrote none. Less the failed, it is the
+     * ended-with-ok files of `runOutcomes().ended`, since `runOutcomes` puts every not-ok ended file in `failed`.
      */
     outcomes: () => {
       const all = [...outcomes, runOutcomes(active)];
