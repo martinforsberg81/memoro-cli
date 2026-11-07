@@ -8,6 +8,25 @@ A question for Martin is one thing: what you found, what it costs, what you
 would do — answerable in a word. Never a menu of options. Never ask while the
 question is unclear or reading would settle it: then read.
 
+## What reaches Martin
+
+Three things, and nothing else:
+
+- A reserved act: `mc deploy`, production data, credentials, `--admin`.
+- A product or policy choice that no decided standard answers (all-sessions,
+  Decided standards). His answer is written where the standard belongs, so the
+  same question is never asked twice.
+- An exception to a decided standard, named and bounded.
+
+Never permission to run or rerun a check, a run or time budget, a quiet machine
+or a lane count. Never a red that is `SETTLED` (red alike at the base): it is
+not the goal's, and goes as a proposal to the programme that owns the failing
+file. Never a repair the goal's own acceptance needs: plan commissions it. Never
+which session owns a goal: the one whose LOG.md entry took it, until it hands
+over.
+
+## How to ask and tell
+
 - Headless, there is nobody to ask: your role says where the question goes (a
   blocked step or a pull request). A goal needing Martin uses status
   `Martin`; build and review report `blocked` to plan for recovery.

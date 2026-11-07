@@ -38,7 +38,9 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    independently reproduced live fact. Missing essential proof is not
    acceptance; it goes to finish with REVIEW.md.
 3. **Structure.** The change fits where it sits; no duplication; the right
-   altitude; readable names; the documents the goal names are updated.
+   altitude; readable names; the documents the goal names are updated. It
+   holds to the `docs/technical/` standards it touches and sets no new
+   cross-programme standard in passing.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.
 5. **Test value.** Compare additions and removals with commissioned protection.
    Reject uncommissioned expansion, duplicate or implementation-pinning checks,

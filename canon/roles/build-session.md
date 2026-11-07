@@ -67,6 +67,13 @@ For changed tests, report the fault protected, existing overlap, fault-sensitive
 proof, timings including setup, and any protection lost by retirement. Use the
 test-writing skill for construction and evidence, not a test-count target.
 
+## Standards
+
+Hold to the `docs/technical/` standards the work touches. A standard you need
+and do not find, or one the goal contradicts, is a finding for plan in your
+log entry; do not settle it in the code. A `SETTLED` red is not yours: name it
+in the log and go on.
+
 ## Every build
 
 You build, headless, with nobody watching.

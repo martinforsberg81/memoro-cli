@@ -42,8 +42,8 @@ be renumbered; name prerequisite goals too. A plan placeholder also holds later 
   ceiling per run; never a run count, stage allocation, reserved run or a condition on the
   machine's load: a check that holds only on a quiet machine is a defect to repair. Any session
   reruns a check after a change or a diagnosis; a failed run is evidence, not budget spent.
-- **What waits on Martin:** a product or policy choice, or a reserved act (deploy, production data,
-  credentials, `--admin`). Never permission to run a check again, a run budget or a quiet machine.
+- **Standards:** list the `docs/technical/` documents it holds to; criteria apply them, never set new.
+- **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build.
 - **Test protection:** name protected behaviours, failure consequences, the
   cheapest credible test level and existing tests to reuse. State the evidence
   the build must produce, or why no new automated test is warranted. Follow
