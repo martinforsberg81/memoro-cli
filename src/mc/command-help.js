@@ -223,7 +223,7 @@ export const COMMAND_USAGE = Object.freeze({
     "A red of failed files only is settled before it is called the change's: the red files run once more alone, one at a time, with the same per-test limit, and a file still red that the change does not touch runs alone at the frozen base in a temporary worktree. Green alone, or the same tests red at the base, is not this change's red; the verdict says SETTLED and names those files. A crash, a cut file, a touched file or a test over its limit alone stays red.\n",
     "Each test the change adds or changes is timed in the verdict — test <file> › <name> — 0.xyz s, as node measured it. The time does not decide GREEN or RED.\n",
     "Over 1 s is the slow-test indicator: every passed test over it is listed as slow (slow <file> › <name> — 1.400 s, at most 20 and a count) and is not red; a new or changed one is rebuilt, or the PR says why its cost is warranted and review judges that.\n",
-    "Only the stall guard is red: a test cut at the run's --test-timeout (30 s) says it reached the stall guard and the limit. Every run keeps slow and cut tests in ~/mc/runner/too-slow/<repo>.tsv until they pass under their row's limit.\n",
+    "Only the stall guard is red: a test cut at the repository's per-test limit (30 s) says it reached the stall guard and names the limit. Every run keeps slow and cut tests in ~/mc/runner/too-slow/<repo>.tsv until they pass under their row's limit.\n",
     "Prints at most 2 KB — GREEN/RED, counts, the failing lines and their locations, the timed tests, and the path of the whole output.\n",
     "Exit 0 green (or no changes), 1 red, 2 refused or already running, 3 still running.\n",
   ].join(''),
