@@ -304,15 +304,31 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   const deferredFiles = result?.deferred || [];
   const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: ${deferredFiles.join(' ')}` : '';
   const resumed = resumedLine(result);
-  const resumedText = resumed ? `\n${resumed}` : '';
+  const settled = settledLine(result);
+  const resumedText = `${resumed ? `\n${resumed}` : ''}${settled ? `\n${settled}` : ''}`;
   if (json) {
     const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
     stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, deferred: deferredFiles,
-      coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
+      coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, settled: result?.settled ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
     stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests), reused: reusedOf(result?.resumed) })}${resumedText}${left}\n`);
   }
   return (summary.process_ok ?? summary.ok) ? 0 : 1;
+}
+
+/**
+ * What the gate settled before calling a red the change's (`gate-settle.js`):
+ * `SETTLED — green alone: …; red on main <sha> too, untouched: …`; null when nothing was.
+ * The counts above it are the round's own, failures included: this line is why it is green.
+ */
+export function settledLine(result) {
+  const settled = result?.settled;
+  if (!settled || (!settled.alone?.length && !settled.main?.length)) return null;
+  const parts = [];
+  if (settled.alone?.length) parts.push(`green alone (red in the round under load): ${settled.alone.join(' ')}`);
+  if (settled.main?.length) parts.push(`red on main ${String(settled.base || '').slice(0, 7)} too, untouched by this change: ${settled.main.join(' ')}`);
+  if (settled.red?.length) parts.push(`still red: ${settled.red.join(' ')}`);
+  return `SETTLED — ${parts.join('; ')}`;
 }
 
 /**
