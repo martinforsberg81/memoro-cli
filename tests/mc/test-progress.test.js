@@ -107,6 +107,26 @@ it('a later unfinished rerun is not hidden by an earlier completed run of the sa
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+it('outcomes().ended follows read().ended: a rerun that wrote no ended line leaves its file unended in both, and an ok file whose latest run ended stays in both', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-progress-outcomes-ended-'));
+  try {
+    const tracker = progressTracker();
+    const first = join(dir, 'first.jsonl');
+    const rerun = join(dir, 'rerun.jsonl');
+    tracker.track(first);
+    writeFileSync(first, lines([
+      { file: '/w/tests/a.test.js', ended: true, ok: true },
+      { file: '/w/tests/b.test.js', ended: true, ok: true },
+    ]));
+    tracker.complete(first);
+    rmSync(first);
+    tracker.track(rerun);
+    writeFileSync(rerun, lines([{ file: '/w/tests/a.test.js', started: true }]));
+    assert.deepEqual(tracker.read().ended, ['/w/tests/b.test.js']);
+    assert.deepEqual(tracker.outcomes().ended, ['/w/tests/b.test.js']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 describe('whether an asked file is whole: its own ended line, and no top-level test left started', () => {
   it('(a) an asked file whose lines all balance but which wrote no ended line is cut, and unfinished', () => {
     assert.deepEqual(judge([
