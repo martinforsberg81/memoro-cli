@@ -310,7 +310,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, deferred: deferredFiles,
       coverage: result?.coverage ?? null, resumed: result?.resumed ?? null, red_tests: result?.red_tests, commands: result?.commands, evidence: result?.evidence, timed_tests: result?.timed_tests, seconds, log: lock.log, exit: outcome.code }, null, 2)}\n`);
   } else {
-    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests) })}${resumedText}${left}\n`);
+    stdout.write(`${gateLines(summary, { command: shown, seconds, logPath: lock.log, rerun: rerunLine(lock.command.files, output), timed: timedTestLines(result?.timed_tests), reused: reusedOf(result?.resumed) })}${resumedText}${left}\n`);
   }
   return (summary.process_ok ?? summary.ok) ? 0 : 1;
 }
@@ -320,12 +320,19 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
  * commands from <runs>`, on content identical to those runs; null when nothing was.
  */
 export function resumedLine(result) {
-  const resumed = result?.resumed;
-  if (!resumed?.from?.length) return null;
-  const files = Object.keys(resumed.files || {}).length;
-  const commands = (resumed.commands || []).length;
+  const reused = reusedOf(result?.resumed);
+  if (!reused) return null;
   const word = (count, one) => `${count} ${one}${count === 1 ? '' : 's'}`;
-  return `RESUMED — reused ${word(files, 'file')} and ${word(commands, 'command')} from ${resumed.from.join(', ')} on identical content; mc gate --fresh reruns them`;
+  return `RESUMED — reused ${word(reused.files, 'file')} and ${word(reused.commands, 'command')} from ${reused.from.join(', ')} on identical content; mc gate --fresh reruns them`;
+}
+
+/**
+ * What a resumed run reused, counted: `{ files, commands, from }`, the runs it
+ * came from; null when it resumed nothing (the same condition as the RESUMED line).
+ */
+export function reusedOf(resumed) {
+  if (!resumed?.from?.length) return null;
+  return { files: Object.keys(resumed.files || {}).length, commands: (resumed.commands || []).length, from: resumed.from };
 }
 
 /**

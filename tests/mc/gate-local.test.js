@@ -189,6 +189,19 @@ describe('gateLines', () => {
     assert.match(red, /^- tests\/_helpers\/x\.mjs$/mu);
     assert.doesNotMatch(red, /names no failing test/u);
   });
+
+  it('a run that reused every file says so in its headline; counts in the output win; reusing nothing keeps "no counts"', () => {
+    const headline = (summary, reused) => gateLines(summary, { command: 'npm test', seconds: 2, logPath: '/s/g.log', reused }).split('\n')[0];
+    const empty = summarizeGate('', { exitCode: 0 });
+    const reused = headline(empty, { files: 2, commands: 0, from: ['r1'] });
+    assert.match(reused, /reused 2 files and 0 commands/u);
+    assert.doesNotMatch(reused, /no counts in the output/u);
+    assert.equal(headline(empty, null), 'GREEN — npm test — no counts in the output — 2s');
+    assert.equal(headline(empty, { files: 0, commands: 0, from: ['r1'] }), 'GREEN — npm test — no counts in the output — 2s');
+    assert.equal(headline(summarizeGate('ℹ tests 3\nℹ fail 0', { exitCode: 0 }), { files: 2, commands: 0, from: ['r1'] }), 'GREEN — npm test — 3 tests, 0 failed — 2s');
+    const redReused = headline(summarizeGate('✖ a\n    f.js:3', { exitCode: 1 }), { files: 2, commands: 0, from: ['r1'] });
+    assert.match(redReused, /^RED — npm test — reused 2 files and 0 commands, 0 run — the failure is below — 2s$/u);
+  });
 });
 
 

@@ -300,22 +300,38 @@ export function timedTestLines(tests) {
 }
 
 /**
+ * The count part of a run that printed no counts because it reused what passed
+ * earlier: `reused N files and M commands, 0 run`. Null when it reused nothing,
+ * so the headline keeps `no counts in the output`.
+ */
+export function reusedCountText(reused) {
+  const files = reused?.files ?? 0;
+  const commands = reused?.commands ?? 0;
+  if (!files && !commands) return null;
+  const word = (count, one) => `${count} ${one}${count === 1 ? '' : 's'}`;
+  return `reused ${word(files, 'file')} and ${word(commands, 'command')}, 0 run`;
+}
+
+/**
  * The lines the session reads, capped at `OUTPUT_CAP` bytes. Green is three
  * lines; red names what failed, the re-run line when there are named files,
  * the time of each test the change touches (`timedTestLines`), and where the
- * whole output is.
+ * whole output is. `reused` is what a resumed run took from earlier runs
+ * (`{ files, commands, from }`): it heads the verdict only when the output
+ * printed no counts, and the counts win otherwise.
  */
-export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null, timed = [] }) {
+export function gateLines(summary, { command, seconds, logPath, rerun = null, label = null, timed = [], reused = null }) {
   const c = summary.counts;
   const gates = summary.gates ?? [];
+  const reusedText = c.tests == null && c.files == null ? reusedCountText(reused) : null;
   let counted = c.tests != null
     ? `${c.tests} tests, ${c.fail ?? 0} failed${c.cancelled ? `, ${c.cancelled} cancelled` : ''}${c.skipped ? `, ${c.skipped} skipped` : ''}`
-    : c.files != null ? `${c.files}/${c.selected} files` : 'no counts in the output';
+    : c.files != null ? `${c.files}/${c.selected} files` : (reusedText ?? 'no counts in the output');
   if (!summary.ok && gates.length) {
     counted += `; command gate${gates.length === 1 ? '' : 's'} failed: ${gates.join(', ')}`;
   } else if (!summary.ok && !c.fail && c.files == null && summary.failures.length) {
     // The counts say nothing failed, but something did, and it is named below.
-    counted = `${c.tests ?? 0} tests counted — the failure is below`;
+    counted = reusedText ? `${reusedText} — the failure is below` : `${c.tests ?? 0} tests counted — the failure is below`;
   }
   const lines = [
     `${summary.incomplete ? 'INCOMPLETE' : summary.ok ? 'GREEN' : 'RED'}${label ? ` ${label}` : ''} — ${command} — ${counted} — ${seconds}s`,
