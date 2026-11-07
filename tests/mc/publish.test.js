@@ -326,6 +326,7 @@ describe('mc publish', () => {
       git(seed, ['commit', '-q', '-m', 'base']);
       git(seed, ['remote', 'add', 'origin', origin]);
       git(seed, ['push', '-q', 'origin', 'main']);
+      git(seed, ['push', '-q', 'origin', 'main:release']);
       git(root, ['clone', '-q', origin, workX]);
       git(workX, ['checkout', '-q', '-b', 'step-x']);
       write(workX, 'shared.md', 'BRANCH\ntwo\n');
@@ -347,6 +348,26 @@ describe('mc publish', () => {
       assert.equal(await run([], deps), 1);
       assert.equal(out.stderr, 'mc: the branch conflicts with origin/main in shared.md — rebase onto origin/main, then run this again\n');
       assert.deepEqual([out.pushed, out.gh, out.merged], [[], [], []]);
+    });
+
+    // origin/release is the base before main's edit: the branch that conflicts with main is clean against it.
+    // The check is asked for the base publish was given, and the real merge check answers against that base.
+    it('--base names the branch the merge is checked against: asked for release, clean against origin/release, so published', async () => {
+      const { out, deps } = fixture({ branch: 'step-x' });
+      const asked = [];
+      deps.mainCheck = (dir, opts) => { asked.push(opts); return checkAgainstMain(workX, opts); };
+      assert.equal(await run(['--base', 'release', '--no-merge'], deps), 0, out.stderr);
+      assert.deepEqual(asked, [{ base: 'release' }]);
+      assert.deepEqual(out.pushed, ['step-x']);
+      assert.equal(out.stderr, '');
+    });
+
+    it('without --base the check is asked for main, as before', async () => {
+      const { deps } = fixture({ branch: 'step-y' });
+      const asked = [];
+      deps.mainCheck = (dir, opts) => { asked.push(opts); return CLEAN_MAIN; };
+      assert.equal(await run(['--no-merge'], deps), 0);
+      assert.deepEqual(asked, [{ base: 'main' }]);
     });
 
     it('a branch only behind origin/main, with no conflict, publishes as before', async () => {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -124,6 +124,18 @@ test('keys serve names its child to the caller: the pid is written as it starts 
   });
   assert.equal(killed, 128 + 15);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { pid: 4322, exit: null, signal: 'SIGTERM' });
+});
+
+test('keys serve writes its exit into no child file its caller has removed', async t => {
+  const f = await fixture(t);
+  const file = join(f.directory, 'child.json');
+  const exit = await keysCommand(['serve', process.execPath, 'server.mjs'], {
+    cwd: f.cwd, env: { ...f.env, MC_KEYS_CHILD_FILE: file }, stdout: capture().stream, stderr: capture().stream,
+    // The caller decides while the child runs and removes the file: the exit must not bring it back.
+    spawn: () => leavingChild({ pid: 4324, exit: 3, seen: () => rmSync(file) }),
+  });
+  assert.equal(exit, 3);
+  assert.equal(existsSync(file), false, 'nothing is written back into the file the caller removed');
 });
 
 test('keys serve writes no child file when the caller names none', async t => {

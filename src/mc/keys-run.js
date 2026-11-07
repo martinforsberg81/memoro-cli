@@ -18,7 +18,8 @@ const EXECUTOR_CONTROLS = new Set(['ENV', 'BASH_ENV']);
  * a file, and the run writes the child's pid as it starts and its exit code or signal when it leaves. Only
  * those — never the environment or a value — and nothing at all when the variable is unset. Written at
  * `exit`, not `close`: a grandchild that keeps stdio open holds `close` back, and the caller must still
- * know the child is gone. Resolution on `close` is unchanged.
+ * know the child is gone. The exit is written only into a file still there: a caller that has decided
+ * removes it, and nothing is written back. Resolution on `close` is unchanged.
  */
 export const KEYS_CHILD_FILE = 'MC_KEYS_CHILD_FILE';
 
@@ -29,6 +30,27 @@ function recordChild(file, record, stderr) {
     renameSync(temporary, file);
   } catch {
     stderr.write('mc keys: cannot record the child pid\n');
+  }
+}
+
+/**
+ * The exit, into the file only while the caller still holds it. The file is opened as it is — no rename, no
+ * create — and written over the pid record, which the exit record is longer than, so it covers that whole.
+ */
+function recordExit(file, record, stderr) {
+  let fd;
+  try {
+    fd = openSync(file, 'r+');
+  } catch (error) {
+    if (error.code !== 'ENOENT') stderr.write('mc keys: cannot record the child exit\n');
+    return;
+  }
+  try {
+    writeFileSync(fd, `${JSON.stringify(record)}\n`);
+  } catch {
+    stderr.write('mc keys: cannot record the child exit\n');
+  } finally {
+    closeSync(fd);
   }
 }
 
@@ -108,7 +130,7 @@ async function runWithKeys(script, args = [], { cwd = process.cwd(), env = proce
     if (childFile && child.pid !== undefined) {
       const pid = child.pid;
       recordChild(childFile, { pid }, stderr);
-      child.once('exit', (code, signal) => recordChild(childFile, { pid, exit: code, signal: signal ?? null }, stderr));
+      child.once('exit', (code, signal) => recordExit(childFile, { pid, exit: code, signal: signal ?? null }, stderr));
     }
     const completion = new Promise(resolveCompletion => {
       child.once('error', () => resolveCompletion(1));

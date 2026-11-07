@@ -22,7 +22,7 @@ import {
   shotWorktree, slug,
 } from '../shot.js';
 import {
-  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, lastLogLine, liveSessions, notePlaceholderPid, readRecords,
+  SESSION_LIMIT, closeSession, ensureSessionsDir, idleMinutes, isOrphan, lastLogLine, liveSessions, notePlaceholderPid, readRecords,
   readSessions, releaseReservation, reserveSession, runKeep, sendLine, sessionUnchanged, sweepRecord, writeSession,
 } from '../shot-session.js';
 import { ensureAppServer, readDeclaration } from '../test-environment.js';
@@ -307,7 +307,14 @@ function pick(id, { cwd, env, deps, sameWorktree = false }) {
   if (id) {
     if (!/^s\d+$/u.test(id)) return { error: `a session is s<n>, not ${id} — mc shot sessions lists them`, code: 2 };
     const session = readSessions(env, deps).find((entry) => entry.id === id);
-    if (!session) return { error: `no session called ${id} — mc shot sessions lists them`, code: 1 };
+    if (!session) {
+      // An orphan is a placeholder, which readSessions drops: named as `mc shot sessions` names it. mc does not signal it.
+      const orphan = readRecords(env, deps).find((entry) => entry.id === id && isOrphan(entry, deps));
+      if (orphan) {
+        return { error: `${id} is an orphaned browser, pid ${orphan.pid} — the mc that kept it (pid ${orphan.owner_pid}) is gone; mc does not close it; kill ${orphan.pid} stops it`, code: 1 };
+      }
+      return { error: `no session called ${id} — mc shot sessions lists them`, code: 1 };
+    }
     if (sameWorktree) {
       const { worktree: here } = shotWorktree({ cwd, env, deps });
       if (session.worktree !== here) {

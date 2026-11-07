@@ -628,6 +628,33 @@ describe('mc shot --keep and next: ids, records and ownership', () => {
     assert.match(kept.stdout, /kept as s2 —/u, 'its id is not reused while its browser lives');
   });
 
+  it('shot close and shot next name an orphaned browser and its pid, and signal nothing; an unknown id still says no session', async () => {
+    const fx = fixture();
+    const deadOwner = spawnSync(process.execPath, ['-e', '']).pid;
+    const orphan = browser();
+    mkdirSync(fx.sessions, { recursive: true, mode: 0o700 });
+    const file = join(fx.sessions, 's1.json');
+    writeFileSync(file, JSON.stringify({
+      id: 's1', placeholder: true, owner_pid: deadOwner, pid: orphan, nonce: 'orphan', reserved: NOW.toISOString(),
+    }));
+    const signalled = [];
+    const kill = (pid, signal) => { signalled.push([pid, signal]); };
+    const named = `mc: s1 is an orphaned browser, pid ${orphan} — the mc that kept it (pid ${deadOwner}) is gone; mc does not close it; kill ${orphan} stops it\n`;
+
+    const closed = await mc(['close', 's1'], fx, { kill });
+    assert.equal(closed.code, 1, closed.stdout);
+    assert.equal(closed.stderr, named);
+    const stepped = await mc(['next', 's1', '--press', 'Enter'], fx, { kill });
+    assert.equal(stepped.code, 1, stepped.stdout);
+    assert.equal(stepped.stderr, named);
+    assert.deepEqual(signalled, [], 'mc signals nothing');
+    assert.equal(existsSync(file), true, 'not reclaimed');
+
+    const unknown = await mc(['close', 's9'], fx, { kill });
+    assert.equal(unknown.code, 1);
+    assert.match(unknown.stderr, /no session called s9/u);
+  });
+
   it('a kept browser\'s pid is written into its placeholder as soon as it starts', async () => {
     const fx = fixture();
     const pid = browser();

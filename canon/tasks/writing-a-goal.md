@@ -4,10 +4,9 @@ description: Writing or changing a goal's GOAL.json with the mc goal verbs — n
 ---
 # Writing a goal with `mc goal`
 
-A goal is written through the verbs; the files are mc's. It is instructions
-for a headless build session that has read nothing else, with nobody watching:
-can that session build it start to finish, and know when it is done? If not,
-it is not a goal yet.
+A goal is written through the verbs; the files are mc's. It is instructions for a headless build
+session that has read nothing else, with nobody watching: can that session build it start to finish,
+and know when it is done? If not, it is not a goal yet.
 
 1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class
    fast|large --title "…" [--phase <n>] [--stage plan|build]` — the
@@ -22,11 +21,10 @@ it is not a goal yet.
 5. `mc goal show <p>/<g>` renders it as the build session will read it.
 6. `mc goal stage <p>/<g> build` once it is ready to be built.
 
-Work that is several pieces in order is several goals, each in the phase after
-the one before: a goal starts only when every goal of its programme in a lower
-phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later;
-goals of one phase run side by side. Phase numbers may be renumbered; name
-prerequisite goals too. A plan placeholder also holds later phases back.
+Work that is several pieces in order is several goals, each in the phase after the one before: a
+goal starts only when every goal of its programme in a lower phase is done or dropped. `mc goal
+phase <p>/<g> <n>` changes the order later; goals of one phase run side by side. Phase numbers may
+be renumbered; name prerequisite goals too. A plan placeholder also holds later phases back.
 
 - **Readiness:** before creating a goal, including a `plan` skeleton, apply
   [goal design](references/goal-design.md): establish the problem, choose the
@@ -53,7 +51,9 @@ prerequisite goals too. A plan placeholder also holds later phases back.
 - **Class:** `fast` when the goal says exactly what changes, where and in what
   order; `large` only for work that must choose and that you cannot choose
   for. Never a concrete model.
-- **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind every claim, and only files you opened.
-  A brief that says a state is set wrongly names the caller that sets it today and the stage it runs in; its fixture uses that stage. Leave out the case for the goal, history, and what code shows.
+- **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind
+  every claim, and only files you opened. A brief that says a state is set wrongly names the caller
+  that sets it today and the stage it runs in; its fixture uses that stage. Leave out the case for
+  the goal, history, and what code shows.
 - **Proposals consumed:** move them to the programme's `proposals/archive/` in the same move,
   first line `Utfall: <the goal>`, and carry into the goal everything it needs from them.
