@@ -41,7 +41,7 @@
  *     them back.
  *   - (P) A clean inactive registered goal checkout may go after 72 hours
  *     (younger only in pressure) when its goal cannot start a build or review
- *     session now: in `stage: plan`, or with `status: Martin`, or in a phase
+ *     session now: in `stage: draft`, or with `status: Martin`, or in a phase
  *     above its programme's lowest unfinished phase (`phaseOpen`). A goal with
  *     `status: blocked` keeps its checkout. Clean means no tracked, untracked
  *     or ignored entry, except the `node_modules/` dependency link the runner
@@ -301,7 +301,7 @@ export function gatherTidyFacts({
     }
   }
 
-  // (P) Registered goal checkouts still in plan. Unlike programme planning
+  // (P) Registered goal checkouts still in draft. Unlike programme planning
   // worktrees, these retain their branch and the goal directory when released.
   gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openIn, command });
 
@@ -1266,23 +1266,23 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
 
 /**
  * (P) A registered goal checkout that may go: its goal cannot start a build or
- * review session now (`goalCannotStart`), or it is in `plan` (as before). A
+ * review session now (`goalCannotStart`), or it is in `draft` (as before). A
  * blocked goal keeps its checkout: a mend session is what resolves it.
  */
 export function planGoalWorktree(item, { now, pressure = false } = {}) {
   if (item.error) return { target: false, why: `error: ${item.error}` };
   if (!item.wt) return { target: false, why: 'error: goal checkout identity could not be established' };
-  const cannot = item.stage === 'plan' ? 'plan' : item.status === 'blocked' ? null : goalCannotStart(item);
+  const cannot = item.stage === 'draft' ? 'draft' : item.status === 'blocked' ? null : goalCannotStart(item);
   if (!cannot) {
     if (FINISHED.includes(item.stage)) return { target: false, why: `goal stage is ${item.stage}, which no session starts on` };
     if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays for the mend session that resolves it' };
-    return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not plan, and a session can start it` };
+    return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not draft, and a session can start it` };
   }
   if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };
-  if (cannot === 'plan') {
+  if (cannot === 'draft') {
     return { target: true, why: pressure
-      ? 'clean inactive plan goal checkout (pressure pass; age exception)'
-      : 'clean inactive plan goal checkout, untouched for 72 hours' };
+      ? 'clean inactive draft goal checkout (pressure pass; age exception)'
+      : 'clean inactive draft goal checkout, untouched for 72 hours' };
   }
   return { target: true, why: pressure
     ? `clean inactive goal checkout, ${cannot} (pressure pass; age exception)`

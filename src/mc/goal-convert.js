@@ -14,13 +14,17 @@
  * This is the one place in mc that reads GOAL.md (`docs/technical/mc-goals.md`).
  *
  * `phaseGoals` is the second conversion, from goals that started after other
- * goals (`after`, and the status they waited in) to phases, and from the one
+ * goals (`after`, and the status they waited in) to phases, from the one
  * `status` a goal had before stages to its `stage` and `status`
- * (`stageOfLegacy`): the one place in mc that still reads `after` or an old status.
+ * (`stageOfLegacy`), and from stage `plan` to `draft` (renamed 2026-11-07):
+ * the one place in mc that still reads `after`, an old status or the old word.
  */
 import { join } from 'node:path';
 
-import { appendEntry, FINISHED, GOAL_FILE, GOALS_DIR, isPhase, LEGACY_AFTER, LEGACY_STATUSES, LOG_FILE, listDirsOf, logStamp, parseLog, readTextOrNull, renderGoal, renumberPhases, validateGoal } from './goals.js';
+import { appendEntry, FINISHED, GOAL_FILE, GOALS_DIR, isPhase, LEGACY_AFTER, LEGACY_STATUSES, LOG_FILE, listDirsOf, logStamp, parseLog, readStage, readTextOrNull, renderGoal, renumberPhases, validateGoal } from './goals.js';
+
+/** The stage word `draft` was written as until 2026-11-07; a GOAL.json still carrying it is rewritten once. */
+const RENAMED_STAGE = 'plan';
 
 /** The status a goal waited in while its `after` had not landed, before phases. */
 const LEGACY_STATUS = 'waiting';
@@ -180,7 +184,8 @@ export function convertGoals({ home, programme = null, list = listDirsOf, read =
 /**
  * Every goal of `programme` (every programme when null) that still names an
  * `after`, or has no `stage` (`stageOfLegacy` gives it one from its old
- * status and log), or is in the status it waited in, given a phase by the depth of its
+ * status and log), or is in stage `plan` (written `draft`, `RENAMED_STAGE`),
+ * or is in the status it waited in, given a phase by the depth of its
  * chain: a goal whose `after` has all landed — done, dropped, or no goal any
  * more — keeps its phase (1 when it has none); a goal after one that has not
  * is one phase past the latest of those. `after` is removed, and a waiting goal
@@ -203,7 +208,7 @@ export function phaseGoals({ home, programme = null, list = listDirsOf, read = r
       if (value && typeof value === 'object' && !Array.isArray(value)) raw.set(`${one}/${name}`, { programme: one, dir, value });
     }
   }
-  const legacy = (value) => Object.hasOwn(value, LEGACY_AFTER) || value.stage === undefined;
+  const legacy = (value) => Object.hasOwn(value, LEGACY_AFTER) || value.stage === undefined || value.stage === RENAMED_STAGE;
   const depth = new Map();
   const phaseOf = (ref, seen = new Set()) => {
     if (depth.has(ref)) return depth.get(ref);
@@ -226,22 +231,24 @@ export function phaseGoals({ home, programme = null, list = listDirsOf, read = r
     if ((programme && one !== programme) || !legacy(value)) continue;
     const after = Array.isArray(value[LEGACY_AFTER]) ? value[LEGACY_AFTER] : [];
     const phase = phaseOf(ref);
-    const staged = value.stage === undefined ? stageOfLegacy(value.status, parseLog(read(join(dir, LOG_FILE)) ?? '')) : { stage: value.stage, status: value.status };
+    const staged = value.stage === undefined ? stageOfLegacy(value.status, parseLog(read(join(dir, LOG_FILE)) ?? '')) : { stage: readStage(value.stage), status: value.status };
     const { [LEGACY_AFTER]: _after, stage: _stage, status: _status, ...rest } = value;
     const next = { ...rest, ...staged, phase };
     const problems = validateGoal(next, { draft: true });
     if (problems.length) { answers.push({ name: ref, problems }); continue; }
     write(join(dir, GOAL_FILE), renderGoal(next));
     const restaged = value.stage === undefined;
-    if (restaged || phase !== (isPhase(value.phase) ? value.phase : 1)) {
+    const renamed = value.stage === RENAMED_STAGE;
+    if (restaged || renamed || phase !== (isPhase(value.phase) ? value.phase : 1)) {
       const said = [
         ...(restaged ? [`${staged.stage} · ${staged.status}, from ${value.status}`] : []),
+        ...(renamed ? [`stage ${staged.stage}, from ${RENAMED_STAGE} (the stage was renamed 2026-11-07)`] : []),
         after.length ? `phase ${phase}, from after ${after.join(', ')}` : `phase ${phase}`,
       ];
       appendEntry({ dir, entry: { at: logStamp(now), tool, model: null, ...staged, done: said.join('; '), comment: null, next: null }, read, write });
     }
     touched.add(one);
-    answers.push({ name: ref, phase, ...staged, after, from: restaged ? value.status : null });
+    answers.push({ name: ref, phase, ...staged, after, from: restaged ? value.status : renamed ? RENAMED_STAGE : null });
   }
   for (const one of touched) renumberPhases({ home, programme: one, list, read, write });
   return answers;

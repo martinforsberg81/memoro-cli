@@ -59,9 +59,13 @@ test('parseGoal reads GOAL.json: its fields, prose as paragraphs, criteria and d
 
 test('parseGoal names each problem by its field: not JSON, a stage, status or class unknown, no repository, a bad repository name', () => {
   assert.match(parseGoal('# no json\n').problems.join(), /^GOAL\.json is not JSON/u);
-  assert.deepEqual(STAGES, ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped']);
+  assert.deepEqual(STAGES, ['draft', 'build', 'review', 'finish', 'merge', 'done', 'dropped']);
   assert.deepEqual(STATUSES, ['ready', 'blocked', 'Martin']);
-  assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: 'started' })).problems.join(), /^stage: one of plan, build, review, finish, merge, done, dropped, not started$/u);
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: 'started' })).problems.join(), /^stage: one of draft, build, review, finish, merge, done, dropped, not started$/u);
+  // The words files were written with before read as today's stage, and are written back as today's.
+  assert.equal(parseGoal(withGoal(GOAL_TEXT, { stage: 'plan' })).stage, 'draft', 'plan was draft until 2026-11-07');
+  assert.equal(parseGoal(withGoal(GOAL_TEXT, { stage: 'merging' })).stage, 'merge', 'merging was merge until 2026-11-03');
+  assert.equal(goalField(renderGoal({ ...parseGoal(GOAL_TEXT), stage: 'plan' }), 'stage'), 'draft');
   assert.match(parseGoal(withGoal(GOAL_TEXT, { status: 'started' })).problems.join(), /^status: one of ready, blocked, Martin, not started$/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { status: undefined })).problems.join(), /status: .*not missing/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { stage: undefined })).problems.join(), /stage: .*not missing/u);
@@ -144,7 +148,7 @@ test('updateGoal writes a valid change, and refuses an invalid one without writi
 test('parseLog reads each heading, and each labelled line up to the next label or heading', () => {
   const log = parseLog(LOG_TEXT);
   assert.equal(log.length, 3);
-  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'plan', status: 'ready', role: null, done: 'created', comment: null, next: null });
+  assert.deepEqual(log[0], { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'draft', status: 'ready', role: null, done: 'created', comment: null, next: null }, 'a heading written plan reads as draft');
   assert.deepEqual(log[1], {
     at: '2026-11-01T21:30Z', tool: 'claude', model: 'claude-opus-5-5', stage: 'build', status: 'ready', role: null,
     done: 'the reader\nand its tests, over two paragraphs', comment: 'none yet', next: 'the verbs',
@@ -167,7 +171,7 @@ test('parseLog reads the by segment as the writer\'s role; the three old forms r
     '## 2026-11-01T23:00Z · claude · review · ready · by review\n\nDone: looked\n',
   ].join('\n'));
   assert.deepEqual(log.map(({ stage, status, role }) => [stage, status, role]), [
-    [null, 'done', null], [null, 'review', null], ['plan', 'ready', null], ['build', 'ready', 'build'], ['review', 'ready', 'review'],
+    [null, 'done', null], [null, 'review', null], ['draft', 'ready', null], ['build', 'ready', 'build'], ['review', 'ready', 'review'],
   ]);
   assert.deepEqual(log[3], { at: '2026-11-01T22:00Z', tool: 'claude', model: 'opus', stage: 'build', status: 'ready', role: 'build', done: 'next', comment: null, next: 'the page' });
   assert.equal(renderEntry(log[3]), '## 2026-11-01T22:00Z · claude opus · build · ready · by build\n\nDone: next\nNext: the page\n', 'written back with its segment');
@@ -195,7 +199,7 @@ test('appendLog adds one heading at the end, with a blank line between entries, 
   const text = appendLog(LOG_TEXT, entry);
   assert.equal(text, `${LOG_TEXT.trimEnd()}\n\n${renderEntry(entry)}`);
   assert.match(text, /^## 2026-11-01T23:00Z · claude claude-haiku-5-5 · build · blocked\n\nDone: part\nNext: the rest\n$/mu);
-  assert.equal(appendLog('', { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'plan', status: 'ready', done: 'created', comment: 'c', next: null }), '## 2026-11-01T20:00Z · person · plan · ready\n\nDone: created\nComment: c\n');
+  assert.equal(appendLog('', { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'draft', status: 'ready', done: 'created', comment: 'c', next: null }), '## 2026-11-01T20:00Z · person · draft · ready\n\nDone: created\nComment: c\n');
 });
 
 test('sessions counts the entries a session wrote: not the runner\'s, not a person\'s', () => {
@@ -243,7 +247,7 @@ test('setGoalState rewrites the stage or status and appends the entry with both,
   assert.equal(parseLog(store[`${dir}/${LOG_FILE}`]).at(-1).stage, 'review');
 
   const before = { ...store };
-  assert.deepEqual(setGoalState({ dir, stage: 'open', entry, read, write }).problems, ['stage: one of plan, build, review, finish, merge, done, dropped, not open']);
+  assert.deepEqual(setGoalState({ dir, stage: 'open', entry, read, write }).problems, ['stage: one of draft, build, review, finish, merge, done, dropped, not open']);
   assert.deepEqual(setGoalState({ dir, status: 'waiting', entry, read, write }).problems, ['status: one of ready, blocked, Martin, not waiting']);
   assert.deepEqual(store, before, 'nothing written');
   const refused = model({ [`${dir}/${GOAL_FILE}`]: 'nothing here' });
@@ -255,18 +259,18 @@ test('setGoalState rewrites the stage or status and appends the entry with both,
 test('backward: an earlier stage, or out of done or dropped; staying, forward and dropping are not', () => {
   assert.equal(backward('review', 'build'), true);
   assert.equal(backward('merge', 'review'), true);
-  assert.equal(backward('finish', 'plan'), true);
+  assert.equal(backward('finish', 'draft'), true);
   assert.equal(backward('done', 'merge'), true);
   assert.equal(backward('dropped', 'done'), true);
-  for (const [from, to] of [['plan', 'build'], ['build', 'review'], ['review', 'finish'], ['review', 'merge'], ['finish', 'merge'], ['merge', 'done'], ['build', 'dropped'], ['build', 'build'], ['plan', 'merge']]) {
+  for (const [from, to] of [['draft', 'build'], ['build', 'review'], ['review', 'finish'], ['review', 'merge'], ['finish', 'merge'], ['merge', 'done'], ['build', 'dropped'], ['build', 'build'], ['draft', 'merge']]) {
     assert.equal(backward(from, to), false, `${from} → ${to}`);
   }
 });
 
 test('appendEntry adds to LOG.md alone, and starts it when there is none', () => {
   const { store, read, write } = model({});
-  appendEntry({ dir: '/p/mc/goals/plain', entry: { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'plan', status: 'ready', done: 'created', comment: null, next: null }, read, write });
-  assert.equal(store['/p/mc/goals/plain/LOG.md'], '## 2026-11-01T20:00Z · person · plan · ready\n\nDone: created\n');
+  appendEntry({ dir: '/p/mc/goals/plain', entry: { at: '2026-11-01T20:00Z', tool: 'person', model: null, stage: 'draft', status: 'ready', done: 'created', comment: null, next: null }, read, write });
+  assert.equal(store['/p/mc/goals/plain/LOG.md'], '## 2026-11-01T20:00Z · person · draft · ready\n\nDone: created\n');
 });
 
 test('lastBuildEntry is the last entry a build session wrote: not the runner\'s, a person\'s or a review\'s', () => {
@@ -296,7 +300,7 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
 const staged = (stage, status = 'ready', log = [], extra = {}) => ({ programme: 'p', goal: 'g', stage, status, repos: ['memoro'], problems: [], prs: [], log, success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra });
 const said = (tool, stage, done, comment = null) => ({ at: '2026-11-02T10:00Z', tool, model: null, stage, status: 'ready', done, comment, next: null });
 
-test('goalSession: build · ready is a build, review · ready a review, finish · ready a finish, merge · ready after a red a mend, blocked in any stage a mend; never plan · ready, never Martin', () => {
+test('goalSession: build · ready is a build, review · ready a review, finish · ready a finish, merge · ready after a red a mend, blocked in any stage a mend; never draft · ready, never Martin', () => {
   assert.equal(goalSession(staged('build')), 'build');
   assert.equal(goalSession(staged('build', 'ready', [], { success_criteria: [] })), null, 'no criterion yet: not started');
   assert.equal(goalSession(staged('review')), 'review');
@@ -310,7 +314,7 @@ test('goalSession: build · ready is a build, review · ready a review, finish �
     assert.equal(goalSession(staged(stage, 'Martin')), null, `${stage} · Martin`);
     assert.equal(goalSession(staged(stage, 'blocked')), ['done', 'dropped'].includes(stage) ? null : 'mend', `${stage} · blocked`);
   }
-  for (const stage of ['plan', 'done', 'dropped']) assert.equal(goalSession(staged(stage)), null, stage);
+  for (const stage of ['draft', 'done', 'dropped']) assert.equal(goalSession(staged(stage)), null, stage);
   assert.equal(goalSession({ ...staged('build'), problems: ['x'] }), null);
 });
 
@@ -328,7 +332,7 @@ test('the merger\'s red, inStage and a review that died before', () => {
 
 test('nextGoal takes the goals the runner starts, oldest first, and leaves out what may refuses', () => {
   const goal = (name, stage, at, status = 'ready') => ({ ...staged(stage, status, [{ at, tool: 'claude', done: 'x' }]), goal: name });
-  const goals = [goal('a', 'build', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'build', '2026-11-01T10:00Z', 'Martin'), goal('d', 'plan', '2026-11-01T09:00Z')];
+  const goals = [goal('a', 'build', '2026-11-02T12:00Z'), goal('b', 'review', '2026-11-02T10:00Z'), goal('c', 'build', '2026-11-01T10:00Z', 'Martin'), goal('d', 'draft', '2026-11-01T09:00Z')];
   assert.equal(nextGoal(goals, { repos: ['memoro'] }).goal, 'b');
   assert.equal(nextGoal(goals, { repos: ['memoro'], may: (g) => g.stage !== 'review' }).goal, 'a');
   const bare = [{ ...goal('a', 'build', '2026-11-02T12:00Z'), success_criteria: [] }];
@@ -336,7 +340,7 @@ test('nextGoal takes the goals the runner starts, oldest first, and leaves out w
 });
 
 test('waitsOnPerson: Martin, in any stage that is not finished', () => {
-  for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) assert.equal(waitsOnPerson(staged(stage, 'Martin')), true, stage);
+  for (const stage of ['draft', 'build', 'review', 'finish', 'merge']) assert.equal(waitsOnPerson(staged(stage, 'Martin')), true, stage);
   assert.equal(waitsOnPerson(staged('build')), false);
   assert.equal(waitsOnPerson(staged('done', 'blocked')), false);
 });

@@ -29,10 +29,10 @@ planning, builds while they make progress, reviews and finish, then merge.
 A blocked stage gets a mend session, with a bounded retry budget.
 
 ```
-stage:  plan → build → review → finish → merge → done      (and dropped, from any)
+stage:  draft → build → review → finish → merge → done     (and dropped, from any)
 status: ready | blocked | Martin
 
-plan     ── the interactive plan session moves it ────────────▶ build
+draft    ── the interactive plan session moves it ────────────▶ build
 build    ── build session: done with the task ────────────────▶ review
 build    ── build session: cannot solve it ───────────────────▶ build · blocked
 build    ── three sessions without a word (runner) ───────────▶ finish
@@ -98,9 +98,14 @@ written, and a write that would make one is refused with the field named.
 }
 ```
 
-- `stage` — `plan`, `build`, `review`, `finish`, `merge`, `done` or
-  `dropped` (*Stages*). A goal starts in `plan`, or `build` with `mc goal new
-  --stage build`.
+- `stage` — `draft`, `build`, `review`, `finish`, `merge`, `done` or
+  `dropped` (*Stages*). A goal starts in `draft`, or `build` with `mc goal new
+  --stage build`. `draft` was written `plan` until 2026-11-07 (Martin: the
+  stage names the goal's state; plan is the session that writes drafts): a
+  GOAL.json or a LOG.md heading saying `plan` reads as `draft` (`readStage`),
+  `mc goal convert` and the runner's `convertAfter` rewrite the GOAL.json once
+  with an entry `stage draft, from plan (the stage was renamed 2026-11-07)`,
+  and LOG.md history stays as written. `merging` reads as `merge` the same way.
 - `status` — `ready`, `blocked` (a mend session takes it), or `Martin` (waiting for Martin). An unknown stage or status is refused with
   its field named. A GOAL.json from before stages has one `status` (`open`,
   `review`, `blocked`, …) and no `stage`; it does not parse, and says `mc
@@ -162,7 +167,7 @@ Next: what the next session should do
   A label's text runs on until the next label or heading, so a field may take
   several paragraphs.
 - A heading that does not match the form is skipped with its lines.
-- `mc goal new` writes the first entry: `plan · ready` (or `build · ready`), `Done: created`.
+- `mc goal new` writes the first entry: `draft · ready` (or `build · ready`), `Done: created`.
 - A session count is every entry whose tool is neither `runner` nor `person`.
 - The **last build entry** is the last entry a session wrote in `build`, or
   the one that moved the goal to `review` (`lastBuildEntry`); a review's own
@@ -177,9 +182,9 @@ Next: what the next session should do
 Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 `drop` set one field each.
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--phase <n>] [--stage plan|build]`** — makes a
+- **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
-  stage `plan` (nothing happens to it there; the runner never takes it), or
+  stage `draft` (nothing happens to it there; the runner never takes it), or
   `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's
   highest is refused (`phase 4 would leave a hole — mc's phases run to 2, so 3
   is the highest a goal may take`). Each
@@ -434,7 +439,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `review · ready` (a review), `finish · ready` (a finish session), every
    `blocked` goal in its current stage (a mend session), and legacy `merge ·
    ready` whose last entry is the merger's red and none of whose pull requests
-   is in the merger's line (a mend session) — never `plan · ready` or
+   is in the merger's line (a mend session) — never `draft · ready` or
    `Martin`. Eligible work is in the phase their programme is in or an earlier one
    (*Phases*), and not held, on any repository (a lane serves them all), the
    one whose last entry is oldest. A review that cannot run now (step 3) is
@@ -528,7 +533,7 @@ overarching role the runner woke at different moments). Plan is interactive,
   stage merge` in merge, which requeues every registered pull request. A
   `SETTLED` red (red alike at the base) becomes a proposal to the programme
   that owns the failing file, and the retry goes on. It moves no stage. A
-  change to the goal, contract or product scope is `Martin`. In `plan`, the
+  change to the goal, contract or product scope is `Martin`. In `draft`, the
   obstacle is the brief, which is plan's or a person's: it sets `Martin`.
   The recovery guards carry over unchanged: a mend left blocked becomes
   `Martin`; three mends in one stage without sustained progress become
@@ -656,9 +661,9 @@ existing decision and does not move a goal to `merge` on its own.
 
 Each stage has one owner, and a goal passes each once:
 
-- `plan` — the interactive plan session writes the goal; nothing happens to
+- `draft` — the interactive plan session writes the goal; nothing happens to
   it, and the runner never takes it. The plan session moves it to `build`
-  when it is ready to be built.
+  when it is ready to be built. (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`.
 - `review` — one review session decides; one that dies is run again once.
 - `finish` — one finish session finishes it to `merge`.

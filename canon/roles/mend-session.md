@@ -28,7 +28,7 @@ resolve it, and retry the goal's current stage:
   or the goal's red in the worktree, `mc gate`, commit, `mc publish`, then
   `mc goal stage merge` to queue every registered pull request again. In a
   runner session that command ends the session once all are queued.
-- In `plan`: the obstacle is the brief, which is plan's or a person's. Record
+- In `draft`: the obstacle is the brief, which is plan's or a person's. Record
   what is missing and set `Martin`.
 
 A red outside the goal's change (`SETTLED`: red alike at the base) is not the

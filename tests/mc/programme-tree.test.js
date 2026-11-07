@@ -11,7 +11,7 @@ const goal = (name, phase, over = {}) => ({ programme: 'inbox', goal: name, titl
 function fixture({ finishedPr = false, currents = [] } = {}) {
   const goals = [goal('later', 3), goal('parallel-b', 1), goal('parallel-a', 1),
     goal('finished', 1, { stage: 'done' }), goal('stuck-later', 4, { status: 'blocked' }),
-    goal('pr-later', 5), goal('far-future', 10), goal('plan', 1, { stage: 'plan' }), goal('empty-build', 1, { success_criteria: [] })];
+    goal('pr-later', 5), goal('far-future', 10), goal('plan', 1, { stage: 'draft' }), goal('empty-build', 1, { success_criteria: [] })];
   const programmes = programmesSection({ goalRows: goalsOf({ goals, currents, alive: () => true }), programmes: ['empty'] });
   const prs = prsSection({ now: NOW, fetched: NOW.toISOString(), prs: [
     { repo: 'memoro', number: 14857, headRefName: 'goal/pr-later', title: 'Open later PR' },
@@ -81,7 +81,7 @@ describe('PROGRAMMES phase tree', () => {
     assert.ok(inbox.goals.every((g) => !('availability' in g)));
     assert.deepEqual(inbox.goals.map((g) => [g.name, g.stage, g.status]), [
       ['empty-build', 'build', 'ready'], ['far-future', 'build', 'ready'], ['finished', 'done', 'ready'], ['later', 'build', 'ready'],
-      ['parallel-a', 'build', 'ready'], ['parallel-b', 'build', 'ready'], ['plan', 'plan', 'ready'],
+      ['parallel-a', 'build', 'ready'], ['parallel-b', 'build', 'ready'], ['plan', 'draft', 'ready'],
       ['pr-later', 'build', 'ready'], ['stuck-later', 'build', 'blocked'],
     ]);
     assert.deepEqual(data.programmes.statuses, { ready: 8, blocked: 1 });

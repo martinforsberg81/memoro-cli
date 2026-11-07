@@ -32,9 +32,9 @@ with ✓/✗ and its check, and each worktree's state.
   mc goal show <programme>/<goal>
   ```
   Read the entry back with `mc goal show` before moving the stage.
-- **Stage and status.** A goal is `<stage> · <status>`: stage `plan → build
+- **Stage and status.** A goal is `<stage> · <status>`: stage `draft → build
   → review → finish → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, each stage with one owner: the
-  interactive plan session writes it in `plan` and moves it to `build`; a build
+  interactive plan session writes it in `draft` and moves it to `build`; a build
   session moves it to `review` or sets `blocked`; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
@@ -46,7 +46,7 @@ with ✓/✗ and its check, and each worktree's state.
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
   REVIEW.md when present), and the instructions for that stage before acting:
-  `plan` uses [plan-session](../roles/plan-session.md), `build` uses
+  `draft` uses [plan-session](../roles/plan-session.md), `build` uses
   [build-session](../roles/build-session.md), `review` uses
   [review-session](../roles/review-session.md), `finish` uses
   [finish-session](../roles/finish-session.md), and a blocked goal or a red
@@ -70,10 +70,10 @@ with ✓/✗ and its check, and each worktree's state.
   merge|finish` from a review, `finish` without REVIEW.md, any but `finish →
   merge` from a finish session, every stage move from a mend session, and
   `review` from a session other than plan while a criterion is not met. The
-  runner starts no session on `plan · ready`, on `Martin`, or a build session
+  runner starts no session on `draft · ready`, on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|large --title "…" [--stage plan|build]` makes one: GOAL.json and
+  fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` lets one go without landing; plan's or a person's.

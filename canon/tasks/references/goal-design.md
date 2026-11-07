@@ -1,7 +1,7 @@
 # Define the work before creating a goal
 
 An implementation goal commissions a chosen change. Before creating one,
-including a skeleton in `plan`, establish all of the following:
+including a skeleton in `draft`, establish all of the following:
 
 - The problem: affected behaviour, trigger, expected result and observed
   failure. Distinguish a user's report, reproduced behaviour and a hypothesis.

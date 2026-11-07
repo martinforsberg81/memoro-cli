@@ -34,13 +34,26 @@ export const GOALS_DIR = 'goals';
  * Where a goal is in the process: its `stage`, in this order, which only
  * moves forward (`backward`). Each stage has one owner
  * (`docs/technical/mc-goals.md`): the interactive plan session writes the goal
- * in `plan` and moves it to `build`; a build session moves it to `review`; a
+ * in `draft` and moves it to `build`; a build session moves it to `review`; a
  * review session to `merge` (OK, all registered PRs sent to merge) or `finish`
  * (not OK, with REVIEW.md); a finish session finishes it to `merge`; the
  * merger sets `done` when it lands. `dropped` is a goal let go without
  * landing, from any stage. Only a person moves a stage backward.
  */
-export const STAGES = ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
+export const STAGES = ['draft', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
+/**
+ * The stage words files were written with before, and what each reads as:
+ * `merging` was `merge` until 2026-11-03, and `plan` was `draft` until
+ * 2026-11-07 (Martin: the stage names the goal's state, plan is the session
+ * that writes drafts). A GOAL.json or a LOG.md heading with one reads as the
+ * new word; `mc goal convert` (and the runner's `convertAfter`) rewrites a
+ * GOAL.json once, and LOG.md history stays as written.
+ */
+const LEGACY_STAGE_WORDS = Object.freeze({ merging: 'merge', plan: 'draft' });
+/** `stage` as mc names it today: a legacy word (`LEGACY_STAGE_WORDS`) read as its stage, any other word as it is. */
+export function readStage(stage) {
+  return Object.hasOwn(LEGACY_STAGE_WORDS, stage) ? LEGACY_STAGE_WORDS[stage] : stage;
+}
 /**
  * Whether a goal's stage can run now: `ready`, or `blocked` — waiting on a
  * mend session, in any stage. `Martin` waits on Martin and wakes nothing.
@@ -155,7 +168,7 @@ export function validateGoal(value, { draft = false } = {}) {
   // A goal written before stages has only a status (`open`, `review`, …): `mc goal convert` (or the runner) gives it its stage.
   if (value.stage === undefined && LEGACY_STATUSES.includes(value.status)) problems.push(`stage: missing — goals have a stage now; mc goal convert gives this ${value.status} goal one`);
   else {
-    if (!STAGES.includes(value.stage) && value.stage !== 'merging') problems.push(`stage: one of ${STAGES.join(', ')}, not ${value.stage ?? 'missing'}`);
+    if (!STAGES.includes(readStage(value.stage))) problems.push(`stage: one of ${STAGES.join(', ')}, not ${value.stage ?? 'missing'}`);
     if (!STATUSES.includes(value.status)) problems.push(`status: one of ${STATUSES.join(', ')}, not ${value.status ?? 'missing'}`);
   }
   if (!CLASSES.includes(value.class)) problems.push(`class: ${CLASSES.join(' or ')}, not ${value.class ?? 'missing'}`);
@@ -199,7 +212,7 @@ export function parseGoal(text) {
   const prs = [];
   for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
   return {
-    stage: value.stage === 'merging' ? 'merge' : value.stage, status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
+    stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
     prs, title: value.title.trim(),
     goal: value.goal ?? [], contract: value.contract ?? [], out_of_scope: value.out_of_scope ?? [],
     success_criteria: value.success_criteria, documents: value.documents ?? [],
@@ -213,7 +226,7 @@ export function parseGoal(text) {
  */
 export function renderGoal(goal) {
   const value = {
-    schema: GOAL_SCHEMA, version: GOAL_VERSION, stage: goal.stage === 'merging' ? 'merge' : goal.stage, status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
+    schema: GOAL_SCHEMA, version: GOAL_VERSION, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
     title: goal.title, goal: goal.goal ?? [], contract: goal.contract ?? [], out_of_scope: goal.out_of_scope ?? [],
     success_criteria: goal.success_criteria ?? [], documents: goal.documents ?? [],
@@ -303,7 +316,7 @@ export function parseLog(text) {
     };
     return [{
       at: heading[1], tool: heading[2], model: heading[3] ?? null,
-      stage: heading[5] === undefined ? null : heading[4] === 'merging' ? 'merge' : heading[4], status: heading[5] ?? heading[4],
+      stage: heading[5] === undefined ? null : readStage(heading[4]), status: heading[5] ?? heading[4],
       role: heading[6] ?? null,
       done: value('done'), comment: value('comment'), next: value('next'),
     }];
@@ -461,7 +474,7 @@ export const MEND_ROLE = 'mend-session';
  * `build · ready` (with a criterion), a review session on `review · ready`, a
  * finish session on `finish · ready`, and a mend session on every `blocked`
  * goal, in its current stage, and on `merge · ready` after a red
- * (`mergeRetryDue`). Never on `plan · ready`, on `Martin` or on a goal that
+ * (`mergeRetryDue`). Never on `draft · ready`, on `Martin` or on a goal that
  * does not parse. `inLine` is the merger's line.
  */
 export function goalSession(goal, inLine = []) {
