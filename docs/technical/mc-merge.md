@@ -789,10 +789,69 @@ the `.mc/test.json` read is the measured tree's, never the common directory's.
    without any `--test-timeout` gets `--test-timeout=600000` (`TEST_TIMEOUT_MS`
    in `src/mc/repo-gate.js`): a test that runs past ten minutes is a red named
    `test timed out after 600000ms`, not a 60-minute stop that names nothing
-   (memoro #14067, 95 minutes, 2026-10-23).
+   (memoro #14067, 95 minutes, 2026-10-23). Node itself gives no per-test limit
+   when none is stated; the round's default is what makes a hang red.
 
 A malformed `.mc/test.json` in the measured tree is a stop too; it never falls
 through to the shipped table or the test script.
+
+**One resolution, and what the receipt binds.** `resolveTestPlan`
+(`src/mc/repo-gate.js`) resolves the test arguments once, for the session's
+`mc gate` (`src/mc/commands/gate.js`), the candidate round and the worker that
+spawns the tests. It returns the requested flags (the declared `pr_tests_flags`,
+else the test script's `node --test` flags, timeouts as written), and the
+effective timeout with its provenance: `declaration`, `script` or `default`.
+Every spawned batch takes its argv from that plan (`nodeTestArgv`): `--test`,
+the reporters, `--test-concurrency=<lanes>` unless declared, the one
+`--test-timeout=<ms>`, `--test-force-exit`, the stdio helper, the requested
+flags without their timeouts, then the file paths. The timeout is therefore
+always before the files, and it is the only timeout Node is given.
+
+A receipt keeps the two apart. `coverage.flags` is what was **requested**;
+`coverage.execution` is the **effective** identity `{ timeoutMs, timeoutSource,
+forceExit: true, nodeVersion }`, which is part of the measurement's
+configuration and of its check identity. Each batch is recorded **when it is
+launched**, from the argv the spawn boundary was given: its resource class, its
+files, the lanes it ran at (the `--test-concurrency` it carried), the Node
+executable and version, the timeout Node was handed, and the argv with reporter
+destinations masked (they are ephemeral). A run the ceiling or an interrupt cuts
+before it returns still says what it launched.
+
+A green receipt needs `executionComplete` (`src/mc/gate-greens.js`): the
+requested flags state exactly the identity's timeout (none, for `default`); every
+batch's argv carries that one timeout, the same Node version and the forced exit,
+with the requested flags before its file paths; and the files the batches ran are
+exactly the files the attempt ran itself. A run that ran no test file needs no
+batch, so command-only runs are unaffected. Reused members need no batch of this
+attempt, and name the run that passed them. A mismatch, a missing batch, a changed
+Node or a missing identity is incomplete: never reusable green, never resumed
+from, never published. Earlier greens (measurement version 4 and below, bound or
+unbound) are not read; `GATE_MEASUREMENT_VERSION` is 5.
+
+The identity excludes what load decides (the lanes) and what is ephemeral (the
+reporter paths). It includes the Node version: a green measured by another Node
+is measured again. Local measurements were made on Node v24.10.0; other
+supported versions were not exercised.
+
+**Declared, invalid and partial timeouts.** Declared flags that state more than
+one `--test-timeout`, or one that is not a positive integer (`0`, `Infinity`, a
+word), refuse before any test is spawned, and name the file and the values.
+A script timeout that is not a positive integer is not a declaration: it is
+dropped and the default applies. A script with two timeouts is refused like
+declared ones. A declared array that states no timeout takes the default, not the
+script's timeout. A repository's declared timeout is still a default for each
+test, not a cap: a test that gives its own `{ timeout }` may run longer, and this
+is not an exception the round grants or detects.
+
+**What the timeout means in time.** `--test-timeout` bounds each test callback
+and each hook from when it starts. It does not bound a file's startup (module
+loading, top-level `await`), which is outside every callback clock, nor the
+whole file, batch or round: those are the round's ceiling (`round_timeout_ms`,
+15 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
+that does not yield cannot be interrupted by any timer, so a blocked callback is
+measured as long as it ran, not cut at its limit. None of these is an absolute
+synchronous CPU cap, and no repository scanner enforces that every explicit
+per-test timeout is at most the default.
 A test cut at the stall guard is not run again by `retry_once`: the verdict
 says `reached the stall guard — rebuild` with the test name and the limit it was
 cut at (`cut at 30 s`), so a timed-out test is rebuilt by a session rather than

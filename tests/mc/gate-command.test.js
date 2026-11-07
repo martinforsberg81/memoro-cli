@@ -9,10 +9,13 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/gate.js';
+import { gateConfiguration } from '../../src/mc/gate-greens.js';
+import { executionIdentity, resolveTestPlan, TEST_TIMEOUT_MS } from '../../src/mc/repo-gate.js';
+import { declarationFor } from '../../src/mc/repo-gate-table.js';
 
 const CHILD = 4242;
 const LOG = '/scratch/gate-20260925T100000Z-test.log';
@@ -266,6 +269,22 @@ describe('mc gate <test files…>', () => {
     return { ...h, wt, home, request: () => JSON.parse(h.files.get(`${LOG}.request.json`)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
   }
   const LOADER = ['--import', './tests/_helpers/browser-paths.mjs'];
+  /**
+   * The configuration a session gate binds for this fixture: the declaration it reads for
+   * the repository (the same read `measuredDeclaration` makes), the flags and the identity.
+   */
+  function configurationOf(fx, flags, identity) {
+    const declared = declarationFor(join(dirname(fx.wt), 'repos', 'stranger.git'), { root: fx.home, env: fx.deps.env, contentDir: fx.wt });
+    assert.ok(declared.ok, declared.reason);
+    return gateConfiguration(declared.declaration, flags, identity);
+  }
+  /** The measurement a session gate binds (its candidate identity and frozen base), answered by the harness. */
+  function measurable(fx) {
+    const git = fx.deps.git;
+    fx.deps.git = (cwd, args) => (args[0] === 'rev-parse' && args[1] === 'origin/main^{commit}' ? 'b'.repeat(40) : git(cwd, args));
+    fx.deps.snapshot = () => ({ repository: '/r/.git', tree: 'a'.repeat(40), fingerprint: 'f' });
+    return fx;
+  }
 
   it('timeout policy: a worktree of a bare memoro runs with its own 1000 under a loader-only override, and prints the notice', async () => {
     const fx = measuredTree({ own: { pr_tests_flags: [...LOADER, '--test-timeout=1000'] }, override: { memoro: { pr_tests_flags: LOADER } } });
@@ -296,11 +315,26 @@ describe('mc gate <test files…>', () => {
   });
 
   it('timeout policy: with no declaration at all, the test script\'s --test-timeout=1000 is the flag the gate runs with', async () => {
-    const fx = measuredTree({ common: 'repos/stranger.git', script: 'node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\'' });
+    const fx = measurable(measuredTree({ common: 'repos/stranger.git', script: 'node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\'' }));
     try {
       assert.equal(await run(['tests/x.test.js'], fx.deps), 0, fx.out.stderr);
       assert.deepEqual(fx.request().flags, ['--import', './x.mjs', '--test-timeout=1000']);
       assert.doesNotMatch(fx.out.stdout, /timeout policy/u);
+      // The identity the measurement is bound to is the policy the worker spawns with: the script's 1000 ms, from the script.
+      const script = 'node --test --import ./x.mjs --test-timeout=1000 \'tests/**/*.test.js\'';
+      assert.deepEqual(fx.request().declared, []);
+      assert.equal(fx.request().measurement.configuration, configurationOf(fx, ['--import', './x.mjs', '--test-timeout=1000'],
+        executionIdentity(resolveTestPlan({ flags: [], script }))));
+    } finally { fx.cleanup(); }
+  });
+
+  it('timeout policy: a script with no timeout is measured under the round\'s default, and says so in its identity', async () => {
+    const fx = measurable(measuredTree({ common: 'repos/stranger.git', script: 'node --test --import ./x.mjs \'tests/**/*.test.js\'' }));
+    try {
+      assert.equal(await run(['tests/x.test.js'], fx.deps), 0, fx.out.stderr);
+      assert.deepEqual(fx.request().flags, ['--import', './x.mjs']);
+      assert.equal(fx.request().measurement.configuration, configurationOf(fx, ['--import', './x.mjs'],
+        { timeoutMs: TEST_TIMEOUT_MS, timeoutSource: 'default', forceExit: true, nodeVersion: process.version }));
     } finally { fx.cleanup(); }
   });
 
