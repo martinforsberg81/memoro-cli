@@ -313,11 +313,16 @@ function short(sha) {
   return String(sha || '').slice(0, 7);
 }
 
-/** The builder, started detached with its log emptied — `startDetached`, as the deployer is. */
+/**
+ * The builder, started detached with its log emptied — `startDetached`, as
+ * the deployer is. A simulator build's builder is this tree's own, not the
+ * installed one: its job is this code's shape, and it is run from a branch's
+ * mc as often as from the installed one.
+ */
 export function startBuilderDefault(job, { env = process.env } = {}) {
   return startDetached(job, {
     script: join('src', 'mc', 'ios-build-run.js'), fallback: BUILDER_RUN, log: job.log || iosBuildLogPath(job.root),
-    cwd: job.worktree || job.repoPath, env,
+    cwd: job.worktree || job.repoPath, env, direct: job.kind === SIM,
   });
 }
 

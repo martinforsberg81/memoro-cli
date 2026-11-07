@@ -1007,13 +1007,13 @@ export function startDeployerDefault(job, { env = process.env, spawnProcess = sp
  * `{ pid: null, error }`. The deployer's start, and the iOS builder's.
  */
 export function startDetached(job, {
-  script, fallback, log, cwd, env = process.env, spawnProcess = spawn,
+  script, fallback, log, cwd, env = process.env, spawnProcess = spawn, direct = false,
 }) {
   let fd = null;
   try {
     mkdirSync(dirname(log), { recursive: true });
     fd = openSync(log, 'w', 0o644);
-    const run = installedScript(script, fallback, env);
+    const run = direct ? { path: fallback } : installedScript(script, fallback, env);
     const child = spawnProcess(process.execPath, [run.path, JSON.stringify(job)], {
       cwd, detached: true, stdio: ['ignore', fd, fd], env,
     });
