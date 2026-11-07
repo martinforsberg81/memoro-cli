@@ -9,9 +9,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { measuredSeconds, runProgress, progressTracker } from '../../src/mc/test-times.js';
+import { fileOutcomes, measuredSeconds, outputCut, progressTracker, runOutcomes, runProgress } from '../../src/mc/test-times.js';
 
 const lines = (entries) => `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`;
+
+/** One run's times file, written from `entries`, read as the gate reads it. */
+function withRun(entries, check) {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-progress-run-'));
+  try {
+    const path = join(dir, 'times.jsonl');
+    writeFileSync(path, lines(entries));
+    return check(path);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+/** What the gate says of the asked files, from one run's progress and outcomes: `outputCut` and `fileOutcomes`. */
+const verdict = (asked, progress, outcomes) => ({
+  cut: outputCut(asked, { progress }),
+  outcomes: fileOutcomes(asked, { progress, outcomes }).map((one) => one.outcome),
+});
+
+const judge = (entries, asked) => withRun(entries, (path) => verdict(asked, runProgress([path]), runOutcomes([path])));
 
 describe('what a run that has not ended says about its files', () => {
   it('a file with a test that started and did not end is unfinished; the others are finished, slowest first', () => {
@@ -37,7 +55,7 @@ describe('what a run that has not ended says about its files', () => {
   });
 
   it('a file nobody started is in neither list: the caller knows which files it asked for', () => {
-    assert.deepEqual(runProgress([]), { unfinished: [], finished: [] });
+    assert.deepEqual(runProgress([]), { unfinished: [], finished: [], ended: [] });
   });
 
   it('the start lines add no seconds to the measured times', () => {
@@ -69,6 +87,7 @@ it('completed reporter snapshots survive deletion and retain earlier batch timin
     assert.deepEqual(tracker.read(), {
       unfinished: ['/w/hang.test.js'],
       finished: [{ file: '/w/slow.test.js', seconds: 12 }, { file: '/w/fast.test.js', seconds: 0.2 }],
+      ended: [],
     });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -84,6 +103,100 @@ it('a later unfinished rerun is not hidden by an earlier completed run of the sa
     rmSync(path);
     tracker.track(path);
     writeFileSync(path, lines([{ file: '/w/a.test.js', started: true }]));
-    assert.deepEqual(tracker.read(), { unfinished: ['/w/a.test.js'], finished: [] });
+    assert.deepEqual(tracker.read(), { unfinished: ['/w/a.test.js'], finished: [], ended: [] });
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+describe('whether an asked file is whole: its own ended line, and no top-level test left started', () => {
+  it('(a) an asked file whose lines all balance but which wrote no ended line is cut, and unfinished', () => {
+    assert.deepEqual(judge([
+      { file: '/w/tests/a.test.js', started: true },
+      { file: '/w/tests/a.test.js', done: true, ms: 40 },
+    ], ['tests/a.test.js']), { cut: ['tests/a.test.js'], outcomes: ['unfinished'] });
+  });
+
+  it('(b) an asked file that wrote an ok ended line is whole and passed, beside balanced lines of a helper it calls', () => {
+    assert.deepEqual(judge([
+      { file: '/w/tests/_helper.js', started: true },
+      { file: '/w/tests/_helper.js', done: true, ms: 40 },
+      { file: '/w/tests/one.test.js', ended: true, ok: true },
+    ], ['tests/one.test.js']), { cut: [], outcomes: ['passed'] });
+  });
+
+  it('(b) an asked file that wrote a failed ended line is whole and failed', () => {
+    assert.deepEqual(judge([
+      { file: '/w/tests/one.test.js', started: true },
+      { file: '/w/tests/one.test.js', done: true, ms: 40 },
+      { file: '/w/tests/one.test.js', ended: true, ok: false },
+    ], ['tests/one.test.js']), { cut: [], outcomes: ['failed'] });
+  });
+
+  it('(c) an asked file that nothing named is cut, and not-started; a balanced file that was not asked is not cut', () => {
+    assert.deepEqual(judge([
+      { file: '/w/tests/other.test.js', started: true },
+      { file: '/w/tests/other.test.js', done: true, ms: 1 },
+    ], ['tests/a.test.js']), { cut: ['tests/a.test.js'], outcomes: ['not-started'] });
+  });
+
+  it('(d) with no file asked, outputCut is the unfinished paths, as before; with asked files, an unfinished path not asked is still cut', () => {
+    withRun([
+      { file: '/w/tests/a.test.js', started: true },
+      { file: '/w/tests/a.test.js', done: true, ms: 1 },
+      { file: '/w/tests/hang.test.js', started: true },
+    ], (path) => {
+      const progress = runProgress([path]);
+      assert.deepEqual(outputCut([], { progress }), ['/w/tests/hang.test.js']);
+      assert.deepEqual(outputCut(['tests/a.test.js'], { progress }), ['tests/a.test.js', '/w/tests/hang.test.js']);
+    });
+    withRun([
+      { file: '/w/tests/a.test.js', started: true },
+      { file: '/w/tests/a.test.js', done: true, ms: 1 },
+      { file: '/w/tests/a.test.js', ended: true, ok: true },
+    ], (path) => assert.deepEqual(outputCut([], { progress: runProgress([path]) }), []));
+  });
+
+  it('(e) the tracker carries ended files across completed runs, so the asked-file rule holds through it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-progress-ended-'));
+    try {
+      const tracker = progressTracker();
+      const first = join(dir, 'first.jsonl');
+      const second = join(dir, 'second.jsonl');
+      tracker.track(first);
+      writeFileSync(first, lines([
+        { file: '/w/tests/one.test.js', ended: true, ok: true },
+        { file: '/w/tests/bal.test.js', started: true },
+        { file: '/w/tests/bal.test.js', done: true, ms: 5 },
+      ]));
+      tracker.complete(first);
+      rmSync(first);
+      tracker.track(second);
+      writeFileSync(second, lines([
+        { file: '/w/tests/_helper.js', started: true },
+        { file: '/w/tests/_helper.js', done: true, ms: 9 },
+      ]));
+      assert.deepEqual(tracker.read().ended, ['/w/tests/one.test.js']);
+      assert.deepEqual(verdict(['tests/one.test.js', 'tests/bal.test.js'], tracker.read(), tracker.outcomes()),
+        { cut: ['tests/bal.test.js'], outcomes: ['passed', 'unfinished'] });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('(e) an earlier run that ended a file does not whole a later rerun of it that wrote no ended line', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-progress-rerun-ended-'));
+    try {
+      const tracker = progressTracker();
+      const first = join(dir, 'first.jsonl');
+      const second = join(dir, 'second.jsonl');
+      tracker.track(first);
+      writeFileSync(first, lines([{ file: '/w/tests/one.test.js', ended: true, ok: true }]));
+      tracker.complete(first);
+      rmSync(first);
+      tracker.track(second);
+      writeFileSync(second, lines([
+        { file: '/w/tests/one.test.js', started: true },
+        { file: '/w/tests/one.test.js', done: true, ms: 5 },
+      ]));
+      assert.deepEqual(verdict(['tests/one.test.js'], tracker.read(), tracker.outcomes()),
+        { cut: ['tests/one.test.js'], outcomes: ['unfinished'] });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

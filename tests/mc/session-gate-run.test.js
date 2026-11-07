@@ -128,7 +128,7 @@ it('receipt measurement preserves resource batching, lane counts and execution o
         batches.push({ files: batch, lanes, flags });
         // The batch as node's reporter leaves it when each of its files finishes, through the round's tracker.
         const path = join(dir, `batch-${batches.length}.jsonl`);
-        writeFileSync(path, batch.flatMap((file) => [{ file: `/repo/${file}`, started: true }, { file: `/repo/${file}`, done: true, ms: 1 }])
+        writeFileSync(path, batch.flatMap((file) => [{ file: `/repo/${file}`, started: true }, { file: `/repo/${file}`, done: true, ms: 1 }, { file: `/repo/${file}`, ended: true, ok: true }])
           .map((line) => JSON.stringify(line)).join('\n') + '\n');
         times.track(path);
         times.complete(path);
@@ -346,15 +346,15 @@ it('a run that exits 0 with its summary is red when the tracker says a requested
   // started, a file with a top-level test that never ended, and a file that finished.
   const cases = [
     { files: ['tests/done.test.js', 'tests/cut.test.js'], lines: [
-      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 }, { file: '/work/tests/done.test.js', ended: true, ok: true },
       { file: '/work/tests/cut.test.js', started: true },
     ], cut: 'tests/cut.test.js' },
     { files: ['tests/done.test.js', 'tests/absent.test.js'], lines: [
-      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 }, { file: '/work/tests/done.test.js', ended: true, ok: true },
     ], cut: 'tests/absent.test.js' },
     { files: ['tests/done.test.js', 'tests/two.test.js'], lines: [
-      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 },
-      { file: '/work/tests/two.test.js', started: true }, { file: '/work/tests/two.test.js', done: true, ms: 5 },
+      { file: '/work/tests/done.test.js', started: true }, { file: '/work/tests/done.test.js', done: true, ms: 5 }, { file: '/work/tests/done.test.js', ended: true, ok: true },
+      { file: '/work/tests/two.test.js', started: true }, { file: '/work/tests/two.test.js', done: true, ms: 5 }, { file: '/work/tests/two.test.js', ended: true, ok: true },
     ], cut: null },
   ];
   for (const { files, lines, cut } of cases) {

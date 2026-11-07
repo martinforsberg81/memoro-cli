@@ -14,7 +14,7 @@ import { main as selectorMain } from '../../scripts/affected-tests.js';
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
 /**
  * A test child that reports each file it ran through the round's tracker, as node's
- * reporter does: track the times file, write a started and a done line per file,
+ * reporter does: track the times file, write a started, a done and an ended line per file,
  * complete it. A run with a gate that reports nothing is a run whose files never
  * started (`outputCut`), so a substitute that stands for a finished run reports one.
  */
@@ -22,7 +22,7 @@ const reporting = (run) => async ({ files = [], times } = {}) => {
   if (times?.track) {
     const path = join(tmpdir(), `mc-evidence-times-${process.pid}-${Math.random().toString(36).slice(2)}.jsonl`);
     times.track(path);
-    writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true }, { file: `/fixture/${file}`, done: true, ms: 1 }])
+    writeFileSync(path, files.flatMap((file) => [{ file: `/fixture/${file}`, started: true }, { file: `/fixture/${file}`, done: true, ms: 1 }, { file: `/fixture/${file}`, ended: true, ok: true }])
       .map((line) => JSON.stringify(line)).join('\n') + '\n');
     times.complete(path);
     rmSync(path, { force: true });

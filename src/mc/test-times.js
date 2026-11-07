@@ -182,13 +182,18 @@ export function touchedTests(tests, timed = {}) {
  * going (a run that hangs never writes its last line, so it cannot be read after
  * it ends). `unfinished` is every file with a top-level test that started and has
  * not ended; `finished` is every file whose top-level tests all ended, with the
- * seconds they took, slowest first. Both are absolute paths, as node reports them.
- * A file that was never started is in neither: the caller knows which it was asked for.
+ * seconds they took, slowest first; `ended` is every file whose run wrote its own
+ * `{ file, ended }` line (any `ok`), which node writes once the file's run is summed up.
+ * Start and done lines name the file a test was called from, which for a file that
+ * only calls a helper is the helper: so `ended` alone says a file ran whole.
+ * All are absolute paths, as node reports them. A file that was never started is
+ * in none of them: the caller knows which it was asked for.
  */
 export function runProgress(paths) {
   const started = new Map();
   const ended = new Map();
   const seconds = new Map();
+  const summed = new Set();
   const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
   for (const path of paths || []) {
     let text = '';
@@ -201,7 +206,7 @@ export function runProgress(paths) {
       else if (entry.done) {
         bump(ended, entry.file);
         if (entry.ms >= 0) bump(seconds, entry.file, entry.ms / 1000);
-      }
+      } else if (entry.ended === true) summed.add(entry.file);
     }
   }
   const unfinished = [...started.keys()].filter((file) => (ended.get(file) || 0) < started.get(file));
@@ -209,7 +214,7 @@ export function runProgress(paths) {
   const finished = [...ended.keys()].filter((file) => !done.has(file))
     .map((file) => ({ file, seconds: Math.round((seconds.get(file) || 0) * 10) / 10 }))
     .sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file));
-  return { unfinished: unfinished.sort(), finished };
+  return { unfinished: unfinished.sort(), finished, ended: [...summed].sort() };
 }
 
 /**
@@ -247,18 +252,23 @@ export function runOutcomes(paths) {
 
 /**
  * Each asked file's outcome in one run, as it was asked for (matched by tail, as
- * `outputCut` matches): `passed` when its top-level tests all ended, node summed
- * the file up as ended (`runOutcomes`) and none of its tests failed; `failed`;
- * `unfinished` when a test or the file itself never ended; and `not-started`
- * when the reporter named none of it.
+ * `outputCut` matches). A file is whole only when its run wrote its ended line
+ * and no top-level test of it is left started (`outputCut`'s rule); a file that is
+ * not whole is `unfinished`, or `not-started` when the run named none of it. A
+ * whole file is `failed` when node summed it up as failed or one of its tests
+ * failed, and `passed` when node summed it up as ended and none failed (`runOutcomes`).
  */
 export function fileOutcomes(files, { progress, outcomes }) {
   const asked = [...new Set((files || []).map(String).filter(Boolean))];
   const name = (path) => asked.find((file) => path === file || path.endsWith(`/${file}`)) || null;
   const unfinished = new Set((progress?.unfinished || []).map(name));
+  const summed = new Set((progress?.ended || []).map(name));
+  // Named by any line of the run: a start, a done, an ended or a test line.
+  const named = new Set([...(progress?.unfinished || []), ...(progress?.finished || []).map((one) => one.file),
+    ...(progress?.ended || []), ...(outcomes?.tests || []).map((test) => test.file)].map(name));
   const finished = new Map((progress?.finished || []).map((one) => [name(one.file), one.seconds]));
   const failed = new Set((outcomes?.failed || []).map(name));
-  const ended = new Set((outcomes?.ended || []).map(name));
+  const endedOk = new Set((outcomes?.ended || []).map(name));
   const tests = new Map();
   for (const test of outcomes?.tests || []) {
     const file = name(test.file);
@@ -266,8 +276,8 @@ export function fileOutcomes(files, { progress, outcomes }) {
   }
   return asked.map((file) => ({
     file,
-    outcome: unfinished.has(file) ? 'unfinished' : failed.has(file) ? 'failed' : !finished.has(file) ? 'not-started'
-      : ended.has(file) ? 'passed' : 'unfinished',
+    outcome: unfinished.has(file) || !summed.has(file) ? (named.has(file) ? 'unfinished' : 'not-started')
+      : failed.has(file) ? 'failed' : endedOk.has(file) ? 'passed' : 'unfinished',
     seconds: finished.get(file) ?? null,
     tests: tests.get(file) || [],
   }));
@@ -296,6 +306,17 @@ export function progressTracker() {
     read: () => {
       const snapshots = [...completed, runProgress(active)];
       const unfinished = new Set(snapshots.flatMap((one) => one.unfinished));
+      // A file is ended as the latest run that named it left it: an earlier run's
+      // ended line does not stand for a later rerun of the same file that never wrote one.
+      const ended = new Set();
+      for (const snapshot of snapshots) {
+        const summed = new Set(snapshot.ended);
+        const named = [...snapshot.unfinished, ...snapshot.finished.map((one) => one.file), ...summed];
+        for (const file of named) {
+          if (summed.has(file)) ended.add(file);
+          else ended.delete(file);
+        }
+      }
       const seconds = new Map();
       for (const one of snapshots.flatMap((snapshot) => snapshot.finished)) {
         seconds.set(one.file, (seconds.get(one.file) || 0) + one.seconds);
@@ -305,26 +326,31 @@ export function progressTracker() {
         finished: [...seconds].filter(([file]) => !unfinished.has(file))
           .map(([file, seconds]) => ({ file, seconds: Math.round(seconds * 10) / 10 }))
           .sort((a, b) => b.seconds - a.seconds || a.file.localeCompare(b.file)),
+        ended: [...ended].sort(),
       };
     },
   };
 }
 
 /**
- * The requested files a run did not finish, as they were asked for: a file no
- * test of it ever started, and a file with a top-level test that started and
- * never ended. `progress` is what the run's tracker read (`runProgress`). A run
- * that exits 0 and prints its summary can still have been cut short — its exit
- * code and its totals say nothing about a file whose tests never ended. Matched
- * by tail, as `redFiles` matches: node reports the real path of a file, and a
- * worktree may be reached through a link.
+ * The requested files a run did not finish, as they were asked for. An asked file
+ * is whole only when its run wrote its `{ file, ended }` line (`runProgress`'s
+ * `ended`) and no top-level test of it is left started; any other asked file is
+ * cut, including one whose start and done lines all balance but which never wrote
+ * its ended line, and one no line named at all. Start and done lines of a path that was not
+ * asked (a helper a file calls) never cut an asked file. With no files asked (a
+ * whole suite), the unfinished paths are the cut. A run that exits 0 and prints its
+ * summary can still have been cut short — its exit code and its totals say nothing
+ * about a file that never wrote its ended line. Matched by tail, as `redFiles`
+ * matches: node reports the real path of a file, and a worktree may be reached
+ * through a link.
  */
 export function outputCut(files, { progress }) {
   const asked = [...new Set((files || []).map(String).filter(Boolean))];
   const name = (path) => asked.find((file) => path === file || path.endsWith(`/${file}`)) || path;
   const unfinished = new Set((progress?.unfinished || []).map(name));
-  const finished = new Set((progress?.finished || []).map((one) => name(one.file)));
-  const cut = asked.filter((file) => unfinished.has(file) || !finished.has(file));
+  const summed = new Set((progress?.ended || []).map(name));
+  const cut = asked.filter((file) => unfinished.has(file) || !summed.has(file));
   return [...cut, ...[...unfinished].filter((file) => !asked.includes(file))];
 }
 

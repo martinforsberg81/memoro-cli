@@ -29,7 +29,7 @@ source=<source-path>
 git -C "$reviewed" rev-parse HEAD
 git -C "$reviewed" status --short
 ```
-Stop unless HEAD equals `$sha` and the status is empty. Stop too if another process stands in the worktree:
+Stop unless HEAD equals `$sha` and the status is empty. A dev server the goal started is stopped first with `mc dev stop <instance_id>` (`mc dev list` names it), before the cwd check below; `mc shot dev` restarts it afterwards. Stop too if another process stands in the worktree:
 `lsof -a -d cwd -Fpn` lists each process with its working directory, and the only one in `$reviewed` may be this
 session's own shell. Then save the source before the fault and record the pre-replay state:
 ```sh
@@ -57,3 +57,7 @@ test "$(git -C "$reviewed" rev-parse HEAD)" = "$before"
 Rerun the corresponding normal `mc gate <test-files…>` and record its log and green result. Repeat the HEAD and status
 checks after it. mc-code probes also isolate `MC_HOME`/`MC_WORK_ROOT`; skill-install probes isolate `HOME`/`CLAUDE_CONFIG_DIR`
 above. This is bounded evidence, not a mutation framework or repeated full-suite requirement.
+
+## Gate-code goals
+
+A goal that changes gate worker code (`src/mc/session-gate-run.js`, `repo-gate.js`, `test-times*.js`) cannot prove itself end to end with `mc gate`, which spawns the installed `~/mc/self` worker, main's code, not the branch's. Its end-to-end checks run through tests that import the branch's `src` (for example `realTests` in `tests/mc/repo-gate.test.js`), or through `node <worktree>/src/mc/session-gate-run.js <copied request.json>`, and the evidence names which was used.
