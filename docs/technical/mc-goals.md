@@ -654,13 +654,12 @@ sessions. Its canonical file remains `canon/roles/plan-session.md`; the old
   handed back ready by an older merger. Diagnose, repair and retry the same stage
   (`mc goal ready`; `mc goal stage merge` re-executes merge). A review may
   report an obstacle with blocked without pretending to have judged the work.
-- `one_goal_remaining`: prepare follow-up with one unfinished goal.
 - `no_goals_remaining`: reconsider next work and previously unmet dependencies
   when no unfinished goal remains. Done and dropped both count as finished.
 - `daily_proposals`: review direct open `.md` proposals at most once per rolling
   24 hours. Nested/archive proposals and directories are not open proposals.
 
-The last three are programme sessions with no MC_GOAL. Their prompt lists all
+The last two are programme sessions with no MC_GOAL. Their prompt lists all
 simultaneously due triggers, remaining goals and open proposals. Read README,
 PLAN.md, current/completed goal evidence and proposals, inspect dependencies,
 commission justified work within the approved direction and record the decision
