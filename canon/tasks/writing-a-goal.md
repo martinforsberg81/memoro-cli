@@ -38,12 +38,12 @@ be renumbered; name prerequisite goals too. A plan placeholder also holds later 
 - **Evidence:** distinguish measured, historical and missing proof. Record revision, scope and logs;
   partial, skipped or unavailable evidence is not green. Mark criteria met only after the whole check
   holds. Follow writing-tests.md for costs; moving work between clocks is not a saving.
-- **Bounded live evidence:** specify total live runs (offline checks excluded), duration/run,
-  serial/concurrency limits, build/review/finish allocations, prerequisites and run consumption (failures/timeouts count).
-  Reserve any required independent-review run before build; build spends only its allocation. An
-  account/binary restores none. With no run left, commission executable offline reconciliation
-  (command/procedure, evidence, expected result, limits). Inspected traces are not reproduced;
-  missing essential proof fails acceptance and goes to finish/plan within authority, without retry.
+- **Live evidence:** a live check (app, browser) gives its command, prerequisites and a wall-time
+  ceiling per run; never a run count, stage allocation, reserved run or a condition on the
+  machine's load: a check that holds only on a quiet machine is a defect to repair. Any session
+  reruns a check after a change or a diagnosis; a failed run is evidence, not budget spent.
+- **What waits on Martin:** a product or policy choice, or a reserved act (deploy, production data,
+  credentials, `--admin`). Never permission to run a check again, a run budget or a quiet machine.
 - **Test protection:** name protected behaviours, failure consequences, the
   cheapest credible test level and existing tests to reuse. State the evidence
   the build must produce, or why no new automated test is warranted. Follow

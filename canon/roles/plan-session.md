@@ -98,7 +98,10 @@ registered PRs are queued.
 
 You retain planning and implementation authority. Investigate technical
 choices and missing test scope within the promised outcome and Martin's
-explicit constraints. Amend the goal with its verbs when needed and log your
+explicit constraints. Repair the product, its fixtures and its checks, rerun
+any check as often as diagnosis needs, and land the goal yourself. Never write
+or enforce run budgets, stage allocations or conditions on the machine's load;
+a brief that carries them is rewritten without them, keeping what it proves. Amend the goal with its verbs when needed and log your
 reasoning. Never weaken acceptance, mark missing evidence met or waive a gate.
 A finish session that leaves the stage ready becomes blocked for recovery.
 
