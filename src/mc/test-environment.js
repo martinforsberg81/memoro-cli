@@ -27,7 +27,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -534,9 +534,13 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     started = false;
   } else {
     let child;
-    // Where keys-run writes the server's pid as it starts, and its exit as it leaves. The wrapper's pid is
-    // not the server's, and a server can die while its wrapper lives (see keys-run.js).
-    const serverFile = join(tmpdir(), `mc-keys-child-${randomUUID()}.json`);
+    // Where keys-run writes the server's pid as it starts, and its exit as it leaves while the file is still
+    // there. The wrapper's pid is not the server's, and a server can die while its wrapper lives (see keys-run.js).
+    // Once this start has decided, the file is removed: nothing of it stays in the temp directory.
+    const serverFile = join(deps.tmpDir || tmpdir(), `mc-keys-child-${randomUUID()}.json`);
+    const forgetChild = () => {
+      try { rmSync(serverFile, { force: true }); } catch (error) { log('dev-keys-child-remove-failed', { file: serverFile, error: error.message }); }
+    };
     try {
       child = (deps.spawn || spawn)(process.execPath, [
         fileURLToPath(new URL('../mc-cli.js', import.meta.url)), 'keys', 'serve', ...start.argv,
@@ -597,6 +601,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       if (wrapperGone()) {
         // Gone, and it will not register: the slot is freed now, and the end of its log says why.
         letGo([process.pid, wrapperPid, ...(gone ? [gone.pid] : [])]);
+        forgetChild();
         return {
           ok: false,
           error: `${start.service} (pid ${wrapperPid}) exited before it registered for ${worktree}`
@@ -607,6 +612,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
         // Its server is gone and will not register, but its wrapper is alive: the slot is freed, and the
         // wrapper is named, not stopped — mc does not stop a process it did not see leave.
         letGo([process.pid, ...(wrapperPid !== null ? [wrapperPid] : []), gone.pid]);
+        forgetChild();
         return {
           ok: false,
           error: `${start.service}'s server (pid ${gone.pid}) ${exitWord(gone)} before it registered for ${worktree}`
@@ -617,6 +623,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       // The slot stays held by a wrapper still alive, and goes when it does.
       letGo([process.pid]);
       const record = readKeysChild(serverFile);
+      forgetChild();
       const silent = tail ? ` — the log has been silent for ${seconds(Math.max(0, now() - tail.mtimeMs))}` : '';
       return {
         ok: false,
@@ -629,6 +636,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     // Registered: the record counts now, and the registration fulfilled the reservation.
     letGo([process.pid, ...(wrapperPid !== null ? [wrapperPid] : [])]);
+    forgetChild();
   }
   deps.onRegistered?.(server);
 

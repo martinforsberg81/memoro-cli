@@ -756,6 +756,57 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
+  // One start, decided. Its child writes the keys child file as keys-run does (the pid, at spawn); the temp
+  // directory is injected so that what is left in it is what the start left.
+  async function decidedStart({ registers, wrapperAlive }) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const temp = mkdtempSync(join(tmpdir(), 'mc-test-env-temp-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      tmpDir: temp,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+        if (registers && t > 5_000) registerServer(root, worktree, { port: 8900 });
+      },
+      registerTimeoutMs: 5_000,
+      spawn: (_exe, _args, options) => {
+        writeFileSync(options.env.MC_KEYS_CHILD_FILE, `${JSON.stringify({ pid: 4242 })}\n`);
+        return { pid: 4242, unref() {} };
+      },
+      pidAlive: () => wrapperAlive,
+      onSlowStart: () => {},
+      fetch: async () => ({ ok: true }),
+    });
+    const left = readdirSync(temp).filter((name) => name.startsWith('mc-keys-child-'));
+    for (const path of [root, temp, worktree]) rmSync(path, { recursive: true, force: true });
+    return { ensured, left };
+  }
+
+  it('leaves no keys child file in the temp directory once its start registered', async () => {
+    const { ensured, left } = await decidedStart({ registers: true, wrapperAlive: true });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.deepEqual(left, []);
+  });
+
+  it('leaves no keys child file once its start failed because its wrapper exited', async () => {
+    const { ensured, left } = await decidedStart({ registers: false, wrapperAlive: false });
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /exited before it registered/u);
+    assert.deepEqual(left, []);
+  });
+
+  it('leaves no keys child file once its start lapsed with its wrapper still alive', async () => {
+    const { ensured, left } = await decidedStart({ registers: false, wrapperAlive: true });
+    assert.equal(ensured.ok, false);
+    assert.match(ensured.error, /no \S+ registered for/u);
+    assert.deepEqual(left, []);
+  });
+
   it('names a spawned wrapper that is still alive after two windows, and stops nothing', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
