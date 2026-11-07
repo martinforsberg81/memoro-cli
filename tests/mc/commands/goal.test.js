@@ -47,7 +47,7 @@ function listUnder(store, path) {
  * the repositories `KNOWN`, and a `git` fake that records each call and answers
  * with `git(cwd, args)`. No real file or git process is touched.
  */
-function fixture({ files = {}, env = {}, git = allOk, known = KNOWN } = {}) {
+function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [] } = {}) {
   const store = { [`${HOME}/mc/PLAN.json`]: '{}', ...files };
   const calls = [];
   const out = [];
@@ -67,6 +67,7 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN } = {}) {
       return git(cwd, args);
     },
     mainCheck: () => ({ fetch: { ok: true, text: '' }, paths: [] }),
+    exists: (path) => !absent.includes(path),
   };
   return { deps, store, calls, out: () => out.join(''), err: () => err.join('') };
 }
@@ -542,6 +543,16 @@ describe('mc goal stage against a real origin/main', () => {
     assert.equal(stageOf('h'), 'review');
     assert.equal(sink.text, '');
   });
+});
+
+test('a repository with no worktree is not checked: the goal moves to review on one line, and git is not asked of it', async () => {
+  const asked = [];
+  const f = fixture({ files: seededGoal(), absent: [`${DIR}/memoro-cli`] });
+  f.deps.mainCheck = (dir) => { asked.push(dir); return { fetch: { ok: false, text: 'could not read from remote' }, paths: [] }; };
+  assert.equal(await run(['stage', 'mc/plain', 'review'], f.deps), 0, f.err());
+  assert.deepEqual(asked, [], 'the absent worktree is not checked');
+  assert.equal(f.err(), 'mc: memoro-cli: no worktree — not checked against origin/main\n');
+  assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'review');
 });
 
 test('a failed fetch before review is a warning: the goal moves, and its merge is checked against the origin/main it holds', async () => {

@@ -47,7 +47,7 @@
  * with no holes.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
@@ -123,6 +123,8 @@ export async function run(argv, deps = {}) {
     git: deps.git || gitIn,
     // The merge check before review and merge (main-conflict.js); a test stands in for it.
     mainCheck: deps.mainCheck,
+    // A repository with no worktree in the goal's directory is not checked (mainConflictRefusal).
+    exists: deps.exists || existsSync,
     known: deps.known || (() => knownRepositories(env)),
     gh: deps.gh || ghIn,
     queue: deps.queue || ((options) => queueMerge({ root: workRoot(env), env, ...options })),
@@ -334,13 +336,17 @@ function readEntryFile(path) {
  * Why the goal may not be moved to review or merge, or null: a repository of
  * the goal whose branch merges into origin/main with a conflict, its paths
  * named as `<repo>/<path>` (main-conflict.js). A failed fetch is a warning, and
- * that repository is checked against the origin/main it already holds.
+ * that repository is checked against the origin/main it already holds. A
+ * repository with no worktree in the goal's directory is not checked at all:
+ * one line says so, and the move goes on.
  */
 function mainConflictRefusal(goal, target, ctx) {
   const check = ctx.mainCheck || ((dir) => checkAgainstMain(dir));
   const paths = [];
   for (const repo of goal.repos) {
-    const checked = check(join(target.dir, repo));
+    const dir = join(target.dir, repo);
+    if (!ctx.exists(dir)) { ctx.stderr.write(`mc: ${repo}: no worktree — not checked against origin/main\n`); continue; }
+    const checked = check(dir);
     if (!checked.fetch.ok) ctx.stderr.write(`mc: warning: ${repo}: git fetch origin failed (${checked.fetch.text}) — checked against the origin/main already held\n`);
     paths.push(...checked.paths.map((path) => `${repo}/${path}`));
   }
