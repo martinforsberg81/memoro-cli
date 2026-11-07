@@ -30,10 +30,10 @@ network, repeated process launches and whole-system setup for local decisions.
   Where a test asserts a count, assert the members beside it. A sum can be
   right for the wrong reason, and every check that reads only the sum passes
   it.
-- **A repository scan reads what git tracks** (`git ls-files` in a work tree),
-  never a disk walk: a walk once picked up ignored probe scripts and made
-  tests green locally and red on the merge candidate. Use the repository's
-  helper where it has one (memoro: `scripts/lib/tracked-source-files.mjs`).
+- **A repository scan reads what git tracks**, never a disk walk (a walk once
+  read ignored probes: green locally, red on the merge candidate), through the
+  repository's helper (memoro: `scripts/lib/tracked-source-files.mjs`). A test
+  of code that reads disk itself reads the same set through that code.
 
 ## Cost and retirement
 

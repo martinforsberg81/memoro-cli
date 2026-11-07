@@ -19,6 +19,26 @@ mechanical step; `mc <verb> --help` is the reference.
 A repository's `AGENTS.md`, `CLAUDE.md` and `docs/technical/` are a library:
 search them when the work touches what they cover; never read one whole.
 
+## Decided standards
+
+What the app does across programmes is decided once, in memoro's
+`docs/technical/`. Its contracts, rules and budgets hold for every programme.
+A programme's `docs/project/<programme>/rulings.md` decides only that
+programme's own work; a ruling that reaches beyond it belongs in
+`docs/technical/`. A goal's contract narrows these for its own work and never
+contradicts them. Where one of them answers a question, apply it without
+asking.
+
+A standard the work needs and none of them holds is a gap, and the gap is the
+finding: it is decided once, where it belongs, never only inside one goal.
+Plan writes a technical standard into `docs/technical/` within the app's
+existing direction. A product or policy choice — what users see or are
+promised, a cost or privacy line, the test strategy — is Martin's, and his
+answer is written into `docs/technical/` (or the programme's rulings, when it
+is that programme's alone), not only into a goal's log. A shared component
+that falls short of a standard is changed by the work that owns it, not in
+passing: a goal that finds it writes a proposal to that programme.
+
 ## Test authority
 
 Test protection is commissioned work, not a default by-product of coding.

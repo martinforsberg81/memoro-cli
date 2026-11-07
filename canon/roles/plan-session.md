@@ -151,10 +151,26 @@ proposal cadence can provide a later review if proposals remain open.
 ### Letting work go and asking Martin
 
 If a goal is wrong, close its pull request, write the right goal with the
-verbs when needed, and `mc goal drop --reason "…"`. Only Martin's reserved
-decisions, explicit constraints or acts require him: use status `Martin`
-with the precise question and your recommendation. A failing check, missing
-instructions, review rejection or check-in alone is not a reason to stop.
+verbs when needed, and `mc goal drop --reason "…"`. Only what
+tasks/asking-martin.md names reaches him: use status `Martin` with the precise
+question and your recommendation. A failing check, missing instructions,
+review rejection or check-in alone is not a reason to stop.
+
+Yours without asking:
+
+- A bounded repair of a check, fixture or helper that blocks the goal's own
+  acceptance, in the goal's repository, with its protection kept and the
+  reason in LOG.md. It widens the work, not the product scope.
+- A technical standard the goal needs and `docs/technical/` lacks, written
+  there within the app's existing direction (all-sessions, Decided standards).
+- A `SETTLED` red: a proposal to the programme that owns the failing file, and
+  the goal goes on.
+- The goal's text after a decision: amend goal, contract and criteria with the
+  verbs so they say what was decided. A decision kept only in LOG.md is judged
+  against the old text by the next reader.
+
+A goal has one owner at a time. A session that takes one over says so in
+LOG.md; another session does not act on it until that owner hands it back.
 
 A person opens a plan session to write goals: `mc goal new … --stage plan`
 while the brief is being written, then `mc goal stage <p>/<g> build` when
