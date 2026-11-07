@@ -197,6 +197,20 @@ edits a package in `node_modules` in place.
 device build unsets `env.build_number`, so the declaration's default stands.
 A TestFlight build sets it to the number from App Store Connect.
 
+(e′) The binary artifacts, prefetched (`swiftpm.js`). Every remote
+`.binaryTarget(url:, checksum:)` in the generated `CapApp-SPM/Package.swift`,
+the local packages it names and the checkouts in the cloned-packages
+directory (where `capacitor-swift-pm` declares Capacitor's xcframework zips)
+is fetched with `curl` into `<package cache>/artifacts/<url as SwiftPM
+escapes it>` — `https___github_com_ionic_team_…_Capacitor_xcframework_zip` —
+and its sha256 compared with the declared checksum before it is renamed into
+place. A file already there that verifies is reused. A mismatch deletes the
+download and stops the build at `prefetch` with the URL named. A device or
+TestFlight build uses SwiftPM's own cache, `~/Library/Caches/org.swift.swiftpm`,
+which its `xcodebuild` already reads; nothing else in its command changes.
+SwiftPM's own download of these zips hung at "Resolve Package Graph" for over
+20 minutes on 2026-10-25 while curl fetched them in seconds.
+
 For a device build: `xcodebuild … -configuration Release -destination
 generic/platform=iOS -derivedDataPath ~/.memoro/mc/build/ios-derived
 -clonedSourcePackagesDirPath ~/.memoro/mc/build/ios-spm
@@ -277,7 +291,7 @@ is what the bare question compares against.
 
 ### Memoro's lane
 
-The builder holds the heavy gate lock as a deploy does (`holdHeavyLane`
+The builder holds the heavy gate lock as a deploy does (`holdBuildLane`
 from `commands/deploy.js`, with `mode: 'ios-build'`). It first waits for the
 rounds in flight, then takes `gate-running.json`, and gives it back however
 the build ends. The merger's heavy rounds wait for it, and a `mc gate` started
@@ -285,10 +299,80 @@ meanwhile waits in its detached child (`await-deploy.js`), as it does for a
 deploy. A build and a deploy exclude each other. Both compile on the same
 machine, and both would take three times as long side by side.
 
+### Simulator: mc asc build --sim
+
+`mc asc build --sim [--release-check]` builds the worktree the caller stands
+in — a branch's own native code — for the simulator. It is not a build of
+production's commit: nothing is read back, signed for a device, installed or
+uploaded, and no simulator is booted. It exists because every session that
+changed native code hand-rolled this build, and one sat for 27 minutes at
+"Checking out ion-ios-camera" with an empty packages directory.
+
+The asking process checks that the cwd is in a git worktree with
+`.mc/ios.json` in its working tree (the branch's own declaration, with the
+keys above), that Xcode answers, and reads HEAD. It writes a `sim` row (its
+derived data in `artifact` while it runs, the worktree in `note`) and starts
+the same detached builder (`ios-build-run.js` → `buildSim`,
+`ios-sim-build.js`), with its log beside the derived data
+(`<derived>.log`). `mc asc build --follow` watches it as it does a device
+build. A second `--sim` in the same derived data is refused while one runs
+(exit 2); one elsewhere starts and waits in the build lane.
+
+Where it builds:
+
+- **Derived data**: `$MC_SCRATCH/DerivedData` in a runner session (tidy rule
+  S reclaims it once the session has ended), else one shared
+  `<mcHome>/build/ios-sim-derived`. Fixed, so a second build there is
+  incremental.
+- **Cloned packages**: `<derived>/SourcePackages`, made once from the shared
+  `<mcHome>/build/ios-spm` (the device build's) with `cp -c -R`, an APFS
+  clone. The paths the seed's `workspace-state.json` names are rewritten to
+  the copy's. No seed: SwiftPM clones from the network, and the build says so.
+- **Package cache**: `<derived>/PackageCache` (`-packageCachePath`), never
+  the shared `~/Library/Caches/org.swift.swiftpm`; the artifacts are
+  prefetched into it as (e′) above.
+
+The builder's order: (a) the build lane (below), with
+`mc: waiting for the build lane (<holder>, <age>)` once while another holds
+it; (b) `npm ci`, only when `node_modules/.mc-sim-install` does not hold this
+`package-lock.json`'s hash — a reinstall makes every package's sources new
+and the build cold — and a `node_modules` that is a link to a shared install
+is unlinked first, since the sync patches packages in place; (c) the
+declaration's `setup`, only when the project does not exist yet
+(`npx cap add ios` refuses an existing one); (d) the `sync`, told the commit
+and no build number; (e) the seed and the prefetch; (f) `xcodebuild -project
+… -scheme … -configuration Debug -sdk iphonesimulator -destination
+'generic/platform=iOS Simulator' -derivedDataPath <derived>
+-clonedSourcePackagesDirPath <derived>/SourcePackages -packageCachePath
+<derived>/PackageCache build`, with `-disableAutomaticPackageResolution
+-skipPackageUpdates` when the project's
+`project.xcworkspace/xcshareddata/swiftpm/Package.resolved` pins exactly the
+packages and revisions the seed's `workspace-state.json` holds. A missing or
+different `Package.resolved` resolves as usual. (g) With `--release-check`,
+the same for `-configuration Release` with `CODE_SIGNING_ALLOWED=NO` into
+the same derived data. Each `xcodebuild` prints how long it took, and the
+row is completed `built` with `Debug-iphonesimulator/App.app` as its
+artifact.
+
+**The stall stop.** Each simulator `xcodebuild` runs in its own process
+group. When its output has been silent for 5 minutes (`STALL_MS`), the whole
+group gets SIGTERM, then SIGKILL, and the build fails with the stage it
+stood at and its last line: `xcodebuild Debug stalled at Resolve Package
+Graph: Fetching from https://… — silent for 5 min, stopped`. The stage is
+the last heading `xcodebuild` printed (`Resolve Package Graph`, `Prepare
+packages`, …) or build task (`CompileSwift`, `PhaseScriptExecution`, …).
+The wall-clock limit of 60 minutes stays behind it.
+
+**The hook.** `mc hook pre-tool` refuses a raw `xcodebuild … build` or
+`archive` whose `-sdk` or `-destination` names the simulator and points at
+`mc asc build --sim`. `xcodebuild -version`, `-list` and
+`-showBuildSettings` pass.
+
 ### What it never does
 
 - It opens no GUI application. No `npx cap open`, no `open`, no Xcode.app or
-  Simulator.app, and no simulator is booted. Only `xcodebuild`,
+  Simulator.app, and no simulator is booted — `--sim` builds for one and
+  boots none. Only `xcodebuild`,
   `xcrun devicectl`, `plutil`, `codesign`, `unzip` and memoro's own scripts
   run.
 - It uploads nothing without a yes at a terminal.

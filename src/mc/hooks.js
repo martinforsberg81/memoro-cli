@@ -278,6 +278,15 @@ export const BASH_RULES = [
     reason: 'Use `mc test dev --here --url` for a server for this worktree (started if down, restarted when its tree moved or was edited), or `mc shot dev …` to look at the app. `npm run dev` is for a person at a terminal.',
   },
   {
+    // A raw simulator build hand-rolled the project, the packages and the
+    // wait, and sat at "Resolve Package Graph" for half an hour (2026-10-25).
+    // Only a build or an archive: -version, -list and -showBuildSettings
+    // read and pass.
+    id: 'xcodebuild-sim',
+    test: /(^|[;&|(]\s*|\s)(xcrun\s+)?xcodebuild\b(?=[^\n;&|]*\s-(?:sdk\s+['"]?iphonesimulator|destination\s+['"]?[^\n;&|]*[Ss]imulator))(?=[^\n;&|]*\s(?:build|archive)(?=\s|$|[;&|)]))(?![^\n;&|]*\s-(?:version|list|showBuildSettings)\b)/u,
+    reason: 'Use `mc asc build --sim [--release-check]` from the worktree — it runs the declared setup and sync, seeds the packages, prefetches and verifies the binary artifacts, builds in the build lane one at a time, and stops a build that is silent for 5 minutes, naming the stage.',
+  },
+  {
     // One simulator, reused (2026-10-24): every session that made its own
     // left a device behind, one of them 2.3 GB. Only the device named `mc`
     // is ever created; a fresh phone is that device erased, not a new one.

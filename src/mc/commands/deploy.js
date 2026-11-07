@@ -785,6 +785,22 @@ export async function waitForGate(job, deps = {}) {
   if (said) stdout.write(deploy ? 'mc: the gate is free — deploying alone; the merge queue goes on after it\n' : 'mc: the gate is free — building with the heavy lane held\n');
 }
 
+/** Who holds the build lane, in words: its mode (a deploy, an iOS build) and pid. */
+export function laneHolder(running) {
+  const what = running?.mode || running?.repo || 'a round';
+  return `${what}${running?.pr != null ? ` #${running.pr}` : ''}${running?.pid ? ` pid ${running.pid}` : ''}`;
+}
+
+/** How long it has held the lane: `40 s`, `3 min`, `2 h 5 min`; `age unknown` without a start. */
+export function laneAge(since, now = new Date()) {
+  const ms = now.getTime() - Date.parse(since || '');
+  if (!Number.isFinite(ms) || ms < 0) return 'age unknown';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return `${Math.floor(ms / 1000)} s`;
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
 /**
  * The deploy holds the heavy lane while it builds (Martin, 2026-10-18:
  * *"Deploy ska ta tung lease"*). Waiting for the rounds in flight was not
@@ -798,17 +814,26 @@ export async function waitForGate(job, deps = {}) {
  * could not be written is no reason not to deploy.
  *
  * An iOS build holds it the same way, as `deps.mode` `'ios-build'`
- * (`buildIos`, ios-build.js): the two exclude each other through this lock.
+ * (`buildIos`, ios-build.js; `buildSim`, ios-sim-build.js): they exclude each
+ * other through this lock, and one that finds it held says once who holds it
+ * and for how long (`waiting for the build lane (<holder>, <age>)`).
  */
 export async function holdBuildLane(job, deps = {}) {
   const take = deps.takeGateLock || takeGateLock;
   const root = job.lockRoot || mcHome(deps.env || process.env);
   const mode = deps.mode ?? DEPLOY_MODE;
+  const stdout = deps.stdout || process.stdout;
+  let said = false;
   for (;;) {
     await waitForGate(job, deps);
     const held = take({ repo: mode, pr: null, mode, root, lane: BUILD_LANE });
     if (held.ok) return held.took;
     if (held.error) throw new Error(held.error);
+    // Who holds it, once: a build waiting behind another looks like a hang otherwise.
+    if (held.running && !said) {
+      stdout.write(`mc: waiting for the build lane (${laneHolder(held.running)}, ${laneAge(held.running.since, (deps.now || (() => new Date()))())})\n`);
+      said = true;
+    }
     // A round that took the lane between the wait and the take: without this, a busy loop.
     await (deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); })))(GATE_POLL_MS);
   }

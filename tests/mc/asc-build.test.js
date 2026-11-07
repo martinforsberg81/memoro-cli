@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -226,5 +226,54 @@ describe('mc asc build --shipped', () => {
     assert.equal(shipped.sha, first);
     assert.equal(shipped.outcome, 'uploaded');
     assert.equal(shipped.ended, shipped.started);
+  });
+});
+
+describe('mc asc build --sim — the asking side', () => {
+  /** `mc asc build --sim` from inside `repo`, Xcode answering, the builder caught instead of started. */
+  async function simAsk({ repo, scratch = null, argv = ['build', '--sim'] }) {
+    const env = {
+      MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-work-')),
+      MC_HOME: mkdtempSync(join(tmpdir(), 'mc-ios-home-')),
+      ...(scratch ? { MC_SCRATCH: scratch } : {}),
+    };
+    const started = [];
+    const stderr = capture();
+    const code = await run(argv, {
+      env, stdout: capture(), stderr, cwd: join(repo, 'cap-config'),
+      run: (cmd) => (cmd[1] === 'xcodebuild' ? { code: 0, stdout: 'Xcode 26.6\n', stderr: '' } : { code: 1, stdout: '', stderr: 'unexpected' }),
+      startBuilder: (job) => { started.push(job); return { pid: null, error: 'test' }; },
+    });
+    return { code, env, started, err: stderr.text };
+  }
+
+  it('builds in $MC_SCRATCH/DerivedData in a runner session, and the shared place outside one', async () => {
+    const { repo, second } = makeRepo();
+    const scratch = mkdtempSync(join(tmpdir(), 'mc-ios-scratch-'));
+    const inSession = await simAsk({ repo, scratch });
+    const [job] = inSession.started;
+    assert.equal(job.kind, 'sim');
+    assert.equal(job.worktree, realpathSync(repo), 'the worktree the caller stands in, from a directory inside it');
+    assert.equal(job.sha, second);
+    assert.equal(job.paths.derived, join(scratch, 'DerivedData'));
+    assert.equal(job.log, `${join(scratch, 'DerivedData')}.log`);
+    assert.equal(readIosBuilds(inSession.env)[0].artifact, join(scratch, 'DerivedData'));
+
+    const outside = await simAsk({ repo });
+    assert.equal(outside.started[0].paths.derived, join(outside.env.MC_HOME, 'build', 'ios-sim-derived'));
+    assert.equal(outside.started[0].paths.seed, join(outside.env.MC_HOME, 'build', 'ios-spm'));
+  });
+
+  it('refuses outside a memoro worktree, and flags that are not its own', async () => {
+    const bare = mkdtempSync(join(tmpdir(), 'mc-ios-nogit-'));
+    sh(bare, 'init', '-q');
+    mkdirSync(join(bare, 'cap-config'));
+    const none = await simAsk({ repo: bare });
+    assert.equal(none.code, 1);
+    assert.match(none.err, /has no \.mc\/ios\.json — mc asc build --sim builds a memoro worktree/u);
+    const { repo } = makeRepo();
+    assert.equal((await simAsk({ repo, argv: ['build', '--sim', '--device'] })).code, 2);
+    assert.equal((await simAsk({ repo, argv: ['build', '--sim', '--sha', 'HEAD'] })).code, 2);
+    assert.equal((await simAsk({ repo, argv: ['build', '--release-check'] })).code, 2);
   });
 });

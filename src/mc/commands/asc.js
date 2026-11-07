@@ -22,6 +22,11 @@
  * and ^C stops the watching, not the build. `--follow` alone watches the
  * build that is running.
  *
+ * `--sim [--release-check]` builds the worktree the caller stands in for the
+ * simulator (`simPreflight`, `buildSim`, ios-sim-build.js): no production
+ * commit, no signing, no phone; the builder is started and followed the same
+ * way, its log beside its derived data.
+ *
  * `--testflight` runs the same preflights with an `Apple Distribution`
  * identity and no phone, asks App Store Connect for the next build number
  * (`listBuilds`), and asks at the terminal before anything is built whether
@@ -58,6 +63,7 @@ import {
 import { processAlive } from '../lease-owner.js';
 import { workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
+import { runningSimBuild, SIM, simLogPath, simPreflight } from '../ios-sim-build.js';
 import { followLog, startDetached } from './deploy.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
@@ -104,7 +110,7 @@ export function parseBuildArgs(argv) {
     words.splice(at, 3);
   }
   const scanned = scanArgs(words, {
-    booleans: ['--device', '--testflight', '--no-upload', '--yes', '--follow', '--json'],
+    booleans: ['--device', '--testflight', '--sim', '--release-check', '--no-upload', '--yes', '--follow', '--json'],
     strictValues: ['--sha', '--device-id'],
   });
   if (scanned.error) return { error: scanned.error };
@@ -113,6 +119,8 @@ export function parseBuildArgs(argv) {
   return {
     device: flags.device,
     testflight: flags.testflight,
+    sim: flags.sim,
+    releaseCheck: flags['release-check'],
     noUpload: flags['no-upload'],
     yes: flags.yes,
     follow: flags.follow,
@@ -174,6 +182,9 @@ async function runBuild(argv, deps) {
   }
   const misplaced = [
     opts.device && opts.testflight && '--device and --testflight are two builds — one at a time',
+    opts.sim && (opts.device || opts.testflight) && '--sim is a build of its own — not with --device or --testflight',
+    opts.sim && (opts.sha || opts.deviceId || opts.noUpload || opts.yes) && '--sim builds the worktree you stand in — it takes only --release-check',
+    opts.releaseCheck && !opts.sim && '--release-check goes with --sim',
     opts.noUpload && !opts.testflight && '--no-upload goes with --testflight',
     opts.yes && !opts.testflight && '--yes goes with --testflight',
     opts.yes && opts.noUpload && '--yes and --no-upload contradict each other — one or the other',
@@ -185,6 +196,7 @@ async function runBuild(argv, deps) {
     stderr.write(usage());
     return 2;
   }
+  if (opts.sim) return buildSimulator(opts, deps);
   if (opts.device) return buildDevice(opts, deps);
   if (opts.testflight) return buildTestflight(opts, deps);
   if (opts.follow) return followRunning(deps);
@@ -304,8 +316,8 @@ function short(sha) {
 /** The builder, started detached with its log emptied — `startDetached`, as the deployer is. */
 export function startBuilderDefault(job, { env = process.env } = {}) {
   return startDetached(job, {
-    script: join('src', 'mc', 'ios-build-run.js'), fallback: BUILDER_RUN, log: iosBuildLogPath(job.root),
-    cwd: job.repoPath, env,
+    script: join('src', 'mc', 'ios-build-run.js'), fallback: BUILDER_RUN, log: job.log || iosBuildLogPath(job.root),
+    cwd: job.worktree || job.repoPath, env,
   });
 }
 
@@ -332,9 +344,9 @@ async function followRunning({ env, stdout, ...deps }) {
     stdout.write('mc: no iOS build is running\n');
     return 0;
   }
-  stdout.write(`mc: following the build of memoro ${short(running.sha)} (pid ${running.pid}) — ^C stops watching, not the build\n`);
+  stdout.write(`mc: following the ${running.kind === SIM ? 'simulator ' : ''}build of memoro ${short(running.sha)} (pid ${running.pid}) — ^C stops watching, not the build\n`);
   return followBuild({
-    log: iosBuildLogPath(workRoot(env)), pid: Number(running.pid), key: running, env, stdout, deps,
+    log: running.kind === SIM ? simLogPath(running.artifact) : iosBuildLogPath(workRoot(env)), pid: Number(running.pid), key: running, env, stdout, deps,
   });
 }
 
@@ -365,6 +377,34 @@ async function buildDevice(opts, deps) {
   const key = recordStart({ sha, kind: DEVICE, live_commit: live, pid: '' }, env);
   const job = { key, sha, live, repoPath, declaration, device };
   return startAndFollow(job, `for ${device.name}`, deps);
+}
+
+/**
+ * `mc asc build --sim`: the worktree here checked, the row (its derived data
+ * in `artifact` while it runs), the builder started in its own process with
+ * its log beside the derived data, and this terminal following it. A second
+ * build in the same derived data is refused; one elsewhere waits for the
+ * build lane in its builder.
+ */
+async function buildSimulator(opts, deps) {
+  const { env, stderr } = deps;
+  const alive = deps.alive || processAlive;
+  const pre = simPreflight({ cwd: deps.cwd || process.cwd(), env, run: deps.run, git: deps.git });
+  if (!pre.ok) {
+    for (const line of pre.lines) stderr.write(`mc: ${line}\n`);
+    return pre.code;
+  }
+  const { worktree, sha, declaration, paths } = pre;
+  const here = runningSimBuild(env, paths.derived, { alive });
+  if (here) {
+    stderr.write(`mc: a simulator build is running in ${paths.derived} (pid ${here.pid}) — mc asc build --follow\n`);
+    return 2;
+  }
+  const key = recordStart({ sha, kind: SIM, artifact: paths.derived, note: worktree, pid: '' }, env);
+  const job = {
+    key, kind: SIM, sha, worktree, declaration, paths, releaseCheck: Boolean(opts.releaseCheck), log: paths.log,
+  };
+  return startAndFollow(job, `for the simulator from ${worktree}${opts.releaseCheck ? ' (and Release)' : ''}`, deps);
 }
 
 /**

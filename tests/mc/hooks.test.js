@@ -142,6 +142,9 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['xcrun simctl create "iPhone 16 (one-camera)" com.apple.CoreSimulator.SimDeviceType.iPhone-16', 'simulator', /device named `mc`/u],
       ['cd ios && xcrun simctl clone mc mc-2', 'simulator', /erase mc/u],
       ['simctl create mcx "iPhone 17"', 'simulator', /create exactly that one/u],
+      ['xcodebuild -sdk iphonesimulator build', 'xcodebuild-sim', /mc asc build --sim/u],
+      ['cd ios/App && xcodebuild -project App.xcodeproj -scheme App -destination "platform=iOS Simulator,name=mc" build 2>&1 | tail', 'xcodebuild-sim', /mc asc build --sim/u],
+      ['xcrun xcodebuild -scheme App -sdk iphonesimulator -derivedDataPath build/dd archive', 'xcodebuild-sim', /stops a build that is silent for 5 minutes/u],
     ];
     for (const [command, id, said] of cases) {
       const decision = preToolDecision(bash(command));
@@ -159,6 +162,8 @@ describe('mc hook — shell commands that have an mc verb', () => {
       'npm run ci -- --list --json',
       'xcrun simctl create mc "iPhone 17"', "xcrun simctl create 'mc' 'iPhone 17'", 'xcrun simctl boot mc', 'xcrun simctl erase mc',
       'xcrun simctl list devices',
+      'xcodebuild -version', 'xcodebuild -list -project ios/App/App.xcodeproj', 'xcodebuild -sdk iphonesimulator -showBuildSettings -scheme App',
+      'xcodebuild -project ios/App/App.xcodeproj -scheme App -destination generic/platform=iOS build', 'xcodebuild -showsdks | grep -i simulator',
       'npm install pako', 'npm i -D @types/node', 'npm install --save-dev foo', 'npm install --package-lock-only --ignore-scripts',
       'npm run deps:ensure', 'npm install-test', 'npm ci-info', `${ALLOW_MARK} npm ci`,
     ]) {
