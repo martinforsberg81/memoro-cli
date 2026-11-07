@@ -80,7 +80,7 @@ among usable subscriptions before capacity headroom; `auto` keeps the existing
 candidate ranking. Interactive `mc plan` sessions keep their explicit selection.
 
 Every invocation has `MC_ROLE=plan`. `MC_PLAN_REASON` and the prompt say why
-it started: `finish`, `blocked`, `one_goal_remaining`, `no_goals_remaining` or
+it started: `finish`, `blocked`, `no_goals_remaining` or
 `daily_proposals`. Simultaneously due programme triggers share one invocation.
 The runner uses its normal lanes and admits at most one plan session per
 programme, including a live interactive or draining planning owner.
@@ -129,7 +129,6 @@ These invocations have no MC_GOAL. Read README.md, PLAN.md, current goals and
 logs, proposals/ and proposals/archive/, and actual prerequisite delivery
 evidence, including relevant cross-programme dependencies.
 
-- `one_goal_remaining`: prepare justified follow-up while one goal remains.
 - `no_goals_remaining`: reconsider the next step and previously unmet dependencies.
 - `daily_proposals`: decide whether open proposals should advance, wait for a
   named condition, or be archived with a reason. This runs at most once per

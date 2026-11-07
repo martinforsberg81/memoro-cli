@@ -2905,9 +2905,8 @@ test('a goal with a current file is not started twice', async () => {
 
   delete f.files[`${GOALS}/free/GOAL.json`];
   const r = await runner.pass({ repo: 'memoro' });
-  assert.equal(r.name, 'plan:prog', 'the new one-goal checkpoint can replenish while busy continues');
-  assert.equal(f.calls.sessions.length, 2);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_GOAL ?? null), ['prog/free', null], 'busy never gets another goal session');
+  assert.equal(r.ran, 0, 'one goal left, and it is running: nothing to start');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_GOAL ?? null), ['prog/free'], 'busy never gets another goal session');
 });
 
 test('two lanes picking in one moment do not start one goal twice', async () => {
@@ -3841,25 +3840,20 @@ test('next-step planning yields to existing builds even with higher programme pr
   assert.equal(runner.nextWork().name, 'plan:prog');
 });
 
-test('programme planning triggers: one remaining goal gets one top-up across restarts and rearms after another delivery', async () => {
+test('programme planning triggers: one remaining goal starts no plan session; its completion starts one, once', async () => {
   const f = goalFixture({ waiting: { stage: 'plan', status: 'Martin' } }, { unplanned: true });
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0, 'one unfinished goal is no trigger');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(where(f, 'waiting'), 'plan · Martin');
+  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'done' });
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'plan');
-  assert.equal(call.env.MC_PLAN_REASON, 'one_goal_remaining');
+  assert.equal(call.env.MC_PLAN_REASON, 'no_goals_remaining');
   assert.equal('MC_GOAL' in call.env, false);
   assert.equal(call.cwd, '/w/programs/prog');
-  assert.equal(where(f, 'waiting'), 'plan · Martin', 'top-up never clears a personal decision');
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'build', status: 'ready' });
-  f.files[`${GOALS}/waiting/LOG.md`] += '\n## 2026-08-29T11:00Z · claude opus · build · ready\n\nDone: planned\n';
-  assert.equal(createRunner({ deps: f.deps }).nextWork({ passed: new Set(['goal:prog/waiting']) }), null, 'ordinary stage/status/log changes do not re-arm a top-up');
-  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'plan', status: 'Martin' });
-  f.files[`${GOALS}/another/GOAL.json`] = goalJson({ stage: 'plan', title: 'another' });
-  assert.equal(createRunner({ deps: f.deps }).nextWork(), null, 'two plans need no top-up');
-  f.files[`${GOALS}/another/GOAL.json`] = withGoal(f.files[`${GOALS}/another/GOAL.json`], { stage: 'done' });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'one_goal_remaining');
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0, 'the completion is consumed across restarts');
+  assert.equal(f.calls.sessions.length, 1);
 });
 
 test('programme planning triggers: direct proposals have a rolling daily cadence even with multiple unfinished goals', async () => {
@@ -3902,24 +3896,23 @@ test('programme planning triggers: dropped and empty programmes get the zero-goa
 });
 
 test('programme planning triggers: coalesced reasons and failed sessions consume one launch, not an immediate retry', async () => {
-  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  const f = goalFixture({ done: { stage: 'done' } });
   f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
   f.answer = () => ({ status: 1, stdout: '', stderr: 'provider failed', timedOut: false });
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
   const record = JSON.parse(f.files['/w/runner/programme-plan/prog.json']);
-  assert.deepEqual(record.triggers, ['one_goal_remaining', 'daily_proposals']);
+  assert.deepEqual(record.triggers, ['no_goals_remaining', 'daily_proposals']);
   assert.equal(record.outcome, 'no-json');
   assert.equal(record.status, 1);
-  assert.deepEqual(record.remaining, ['waiting']);
+  assert.deepEqual(record.remaining, []);
   assert.deepEqual(record.proposals, ['new.md']);
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
   assert.equal(f.calls.sessions.length, 1);
   assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/programme-plan/prog.json']).triggers, record.triggers);
-  assert.equal(where(f, 'waiting'), 'plan · ready', 'programme failure is not goal recovery');
 });
 
 test('programme planning triggers: foreground and draining plan owners hold all triggers without consuming them', async () => {
-  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true, livePids: [555] });
+  const f = goalFixture({ done: { stage: 'done' } }, { livePids: [555] });
   const foreground = '/w/runner/foreground/555.json';
   f.files[foreground] = JSON.stringify({ verb: 'plan', programme: 'prog', pid: 555 });
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
@@ -3934,7 +3927,7 @@ test('programme planning triggers: foreground and draining plan owners hold all 
 });
 
 test('programme planning triggers: missing launch prerequisites leave work unconsumed and an interrupted invocation remains recorded', async () => {
-  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  const f = goalFixture({ done: { stage: 'done' } });
   const role = f.deps.role;
   f.deps.role = () => null;
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
@@ -3947,7 +3940,7 @@ test('programme planning triggers: missing launch prerequisites leave work uncon
 });
 
 test('programme planning triggers: a final disk admission refusal does not consume either coalesced trigger', async () => {
-  const f = goalFixture({ waiting: { stage: 'plan' } }, { unplanned: true });
+  const f = goalFixture({ done: { stage: 'done' } });
   f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
   let available = 40 * 1e9;
   f.deps.freeBytes = () => available;
@@ -3959,7 +3952,7 @@ test('programme planning triggers: a final disk admission refusal does not consu
   f.deps.mkdir = mkdir;
   available = 40 * 1e9;
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.deepEqual(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).triggers, ['one_goal_remaining', 'daily_proposals']);
+  assert.deepEqual(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).triggers, ['no_goals_remaining', 'daily_proposals']);
 });
 
 test('programme planning triggers: legacy completion receipts survive upgrade while a new proposal can still be reviewed', async () => {
