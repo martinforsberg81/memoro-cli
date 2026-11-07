@@ -47,12 +47,28 @@ function listUnder(store, path) {
  * the repositories `KNOWN`, and a `git` fake that records each call and answers
  * with `git(cwd, args)`. No real file or git process is touched.
  */
-function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [] } = {}) {
+function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [], keys = {}, replies = [], timer = () => new Promise(() => {}) } = {}) {
   const store = { [`${HOME}/mc/PLAN.json`]: '{}', ...files };
   const calls = [];
   const out = [];
   const err = [];
+  // jev's boundary: the keys source, the transport (each request answered by the next of `replies`), its waits and the ledger.
+  const requests = [];
+  const sleeps = [];
+  const ledger = [];
   const deps = {
+    readKeys: () => keys,
+    jev: {
+      transport: (url, init) => {
+        requests.push({ url, init });
+        const next = replies.shift();
+        if (!next) throw new Error('no jev reply left in the fixture');
+        return typeof next === 'function' ? next(init) : next;
+      },
+      sleep: async (ms) => { sleeps.push(ms); },
+      timer,
+    },
+    ledger: (line) => { ledger.push(line); },
     home: HOME,
     env,
     now: () => new Date('2026-11-01T20:00:00Z'),
@@ -69,8 +85,11 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     mainCheck: () => ({ fetch: { ok: true, text: '' }, paths: [] }),
     exists: (path) => !absent.includes(path),
   };
-  return { deps, store, calls, out: () => out.join(''), err: () => err.join('') };
+  return { deps, store, calls, requests, sleeps, ledger: () => ledger.map((line) => JSON.parse(line)), out: () => out.join(''), err: () => err.join('') };
 }
+
+/** A well-formed `mc goal martin` call: the question, two options, the first recommended. */
+const martinCall = (reason, ...goal) => ['martin', ...goal, '--reason', reason, '--option', 'widen: widen the contract to allow the fix', '--option', 'keep: keep the contract and drop the criterion', '--recommend', 'widen'];
 
 /** A goal already made: GOAL.json and LOG.md under its directory. */
 function seededGoal(extra = {}) {
@@ -303,7 +322,7 @@ test('mc goal log --status and --stage rewrite GOAL.json and log the entry with 
 });
 
 test('mc goal blocked, ready, done and drop set their one field and log the reason; a blocked goal set ready keeps its stage', async () => {
-  for (const [verb, stage, status] of [['martin', 'build', 'Martin'], ['blocked', 'build', 'blocked'], ['done', 'done', 'ready'], ['drop', 'dropped', 'ready']]) {
+  for (const [verb, stage, status] of [['blocked', 'build', 'blocked'], ['done', 'done', 'ready'], ['drop', 'dropped', 'ready']]) {
     const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } });
     assert.equal(await run([verb, '--reason', `because ${verb}`], f.deps), 0, f.err());
     const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
@@ -1131,11 +1150,11 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
   assert.match(f.err(), /a session does not move a goal back/u);
   assert.equal(await run(['stage', 'mc/plain', 'merge'], f.deps), 0, f.err());
   assert.equal(stateOf(f), 'merge · ready');
-  assert.equal(await run(['martin', 'mc/plain', '--reason', 'choose scope; recommend keeping it'], f.deps), 0, f.err());
+  assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 0, f.err());
   assert.equal(stateOf(f), 'merge · Martin');
   for (const role of ['build-session:goal', 'review-session:goal']) {
     const rejected = fixture({ files: inStage('build'), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
-    assert.equal(await run(['martin', '--reason', 'question'], rejected.deps), 2);
+    assert.equal(await run(martinCall('question'), rejected.deps), 2);
     assert.match(rejected.err(), /only plan, finish, mend or a person sets Martin/u);
   }
 });
@@ -1154,7 +1173,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
   assert.equal(await run(['stage', 'merge'], merged.deps), 0, merged.err());
   assert.equal(stateOf(merged), 'merge · ready');
   assert.equal(parseLog(merged.store[`${DIR}/LOG.md`]).at(-1).role, 'finish', 'the entry names its writer');
-  for (const [status, argv] of [['blocked', ['blocked', '--reason', 'the fixture is broken']], ['Martin', ['martin', '--reason', 'the contract forbids the fix; recommend widening it']]]) {
+  for (const [status, argv] of [['blocked', ['blocked', '--reason', 'the fixture is broken']], ['Martin', martinCall('the contract forbids the fix; recommend widening it')]]) {
     const f = fixture({ files: inStage('finish'), env: FINISH });
     assert.equal(await run(argv, f.deps), 0, f.err());
     assert.equal(stateOf(f), `finish · ${status}`);
@@ -1176,7 +1195,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
 });
 
 test('a mend session sets ready, blocked or Martin and requeues merge, and is refused every stage move and the goal\'s text', async () => {
-  for (const [from, status, argv] of [['build', 'ready', ['ready', '--reason', 'fixture repaired']], ['review', 'Martin', ['martin', '--reason', 'the goal names a file that no longer exists; recommend rewriting criterion 2']], ['finish', 'blocked', ['blocked', '--reason', 'still red']]]) {
+  for (const [from, status, argv] of [['build', 'ready', ['ready', '--reason', 'fixture repaired']], ['review', 'Martin', martinCall('the goal names a file that no longer exists; recommend rewriting criterion 2')], ['finish', 'blocked', ['blocked', '--reason', 'still red']]]) {
     const f = fixture({ files: inStage(from, 'blocked'), env: MEND });
     assert.equal(await run(argv, f.deps), 0, f.err());
     assert.equal(stateOf(f), `${from} · ${status}`);
@@ -1199,5 +1218,168 @@ test('a mend session sets ready, blocked or Martin and requeues merge, and is re
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
     assert.match(f.err(), said);
     assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+  }
+});
+
+/*
+ * `mc goal martin` asks jev before Martin (docs/technical/mc-jev.md). The
+ * call carries its options; a session's question goes to jev through the
+ * transport the fixture stands in for (no network), and only what jev does not
+ * settle reaches Martin.
+ */
+const TIMER = ['martin', 'mc/plain', '--reason', 'Which timer should the timeout test use?'];
+const FAKE = ['--option', 'fake_timer: inject a timer that fires at once'];
+const REAL = ['--option', 'real_wait: wait the full 15 seconds'];
+const ASK = [...TIMER, ...FAKE, ...REAL, '--recommend', 'fake_timer'];
+const KEYS = { TYPESAFE_API_KEY: 'ts-key-0123456789abcdef' };
+
+/** A transport's answer: `status`, a body (an object is sent as JSON), and headers by lower-case name. */
+const reply = (status, body, headers = {}) => ({
+  status,
+  headers: { get: (name) => headers[name.toLowerCase()] ?? null },
+  text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+});
+/** jev's 200, shaped as the live call returned it (LOG.md, 2026-11-07T22:41Z). */
+const jevSays = ({ choice = 'fake_timer', p = 0.99, fits = 0.95, settled = 0.95, model = 'jev-1.14.0' } = {}) => reply(200, {
+  model,
+  answers: {
+    answer: { type: 'choice', choice, confidence: 0.98, probabilities: { fake_timer: choice === 'fake_timer' ? p : 1 - p, real_wait: choice === 'real_wait' ? p : 1 - p } },
+    fits: { type: 'noul', noul: fits },
+    settled: { type: 'noul', noul: settled },
+  },
+  usage: { input_tokens: 539, output_tokens: 70 },
+});
+/** A finish session's fixture on a goal in finish, with the key in the keys source. */
+const asking = (options = {}) => fixture({ files: inStage('finish'), env: FINISH, keys: KEYS, ...options });
+const lastComment = (f) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment;
+
+for (const [refusal, argv, said] of [
+  ['no --option', [...TIMER, '--recommend', 'fake_timer'], /--option is given 2 to 4 times, not 0/u],
+  ['one option', [...TIMER, ...FAKE, '--recommend', 'fake_timer'], /--option is given 2 to 4 times, not 1/u],
+  ['five options', [...TIMER, ...FAKE, ...REAL, '--option', 'c: c', '--option', 'd: d', '--option', 'e: e', '--recommend', 'fake_timer'], /--option is given 2 to 4 times, not 5/u],
+  ['a malformed key', [...TIMER, ...FAKE, '--option', 'Real-Wait: wait', '--recommend', 'fake_timer'], /option key "Real-Wait" is not a lower-case letter/u],
+  ['an option with no text', [...TIMER, ...FAKE, '--option', 'real_wait', '--recommend', 'fake_timer'], /--option "real_wait" is not "<key>: <text>"/u],
+  ['a duplicate key', [...TIMER, ...FAKE, '--option', 'fake_timer: again', '--recommend', 'fake_timer'], /option key "fake_timer" is given twice/u],
+  ['--recommend not among the keys', [...TIMER, ...FAKE, ...REAL, '--recommend', 'sleep'], /--recommend sleep is not one of the option keys \(fake_timer, real_wait\)/u],
+  ['no --recommend', [...TIMER, ...FAKE, ...REAL], /--recommend <key> is required/u],
+  ['no --reason', ['martin', 'mc/plain', ...FAKE, ...REAL, '--recommend', 'fake_timer'], /--reason "<the question>" is required/u],
+  ['an unknown --reserved act', [...ASK, '--reserved', 'billing'], /--reserved is deploy, production-data, credentials, admin, not billing/u],
+  ['state core over budget', [...ASK, '--evidence', 'x'.repeat(240_001)], /alone are \d+ characters serialized, over jev's budget of 240000: shorten/u],
+  ['mc goal log --status Martin', ['log', 'mc/plain', '--status', 'Martin', '--comment', 'which timer?'], /^mc: log is not written — mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin/u],
+]) {
+  test(`mc goal martin refuses ${refusal}: exit 2, GOAL.json and LOG.md byte-identical, stderr says what is wrong and gives a complete example call`, async () => {
+    const f = asking();
+    const before = { goal: f.store[`${DIR}/GOAL.json`], log: f.store[`${DIR}/LOG.md`] };
+    assert.equal(await run(argv, f.deps), 2, f.err());
+    assert.equal(f.store[`${DIR}/GOAL.json`], before.goal, 'GOAL.json unchanged');
+    assert.equal(f.store[`${DIR}/LOG.md`], before.log, 'LOG.md unchanged');
+    assert.match(f.err(), said);
+    assert.match(f.err(), /mc goal martin mc\/plain --reason "[^"]+" \\\n {4}--option "fake_timer: [^"]+" \\\n {4}--option "real_wait: [^"]+" \\\n {4}--recommend fake_timer/u, 'a complete example call');
+    assert.match(f.err(), /Call mc goal martin again/u);
+    assert.deepEqual([f.requests.length, f.ledger().length, f.out()], [0, 0, ''], 'no request, no ledger line, nothing on stdout');
+  });
+}
+
+test('mc goal martin accepts a well-formed call: a person\'s goes to Martin with no request, the entry and the ledger saying so', async () => {
+  const f = fixture({ files: seededGoal(), env: {}, keys: KEYS });
+  assert.equal(await run(ASK, f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'build · Martin');
+  assert.equal(f.requests.length, 0);
+  assert.equal(lastComment(f), [
+    'Martin is asked: Which timer should the timeout test use?',
+    'Option fake_timer: inject a timer that fires at once', 'Option real_wait: wait the full 15 seconds', 'Recommended: fake_timer',
+    'jev not asked: person',
+  ].join('\n'));
+  const [line] = f.ledger();
+  assert.deepEqual([line.goal, line.tool, line.outcome, line.reason, line.recommend], ['mc/plain', 'person', 'martin', 'jev not asked: person', 'fake_timer']);
+});
+
+test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >= 0.70 keeps the status, prints its answer and logs it with one ledger line', async () => {
+  const f = asking({ replies: [jevSays({ p: 0.90, fits: 0.70, settled: 0.70 })] });
+  assert.equal(await run(ASK, f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'finish · ready', 'the status is unchanged');
+  assert.equal(f.out(), 'mc: jev answered fake_timer (p 0.90, fits 0.70, settled 0.70, jev-1.14.0) — continue with: inject a timer that fires at once\n');
+  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+  assert.deepEqual([last.stage, last.status, last.role], ['finish', 'ready', 'finish']);
+  assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
+  const lines = f.ledger();
+  assert.equal(lines.length, 1);
+  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'model', 'answers', 'outcome', 'reason']);
+  assert.deepEqual([lines[0].outcome, lines[0].model, lines[0].answers.answer.choice, lines[0].answers.fits, lines[0].answers.settled], ['answered', 'jev-1.14.0', 'fake_timer', 0.70, 0.70]);
+  assert.match(lines[0].state_sha256, /^[0-9a-f]{64}$/u);
+});
+
+for (const [miss, says, reading] of [
+  ['p below 0.90', { p: 0.89 }, /jev: fake_timer \(p 0\.89, fits 0\.95, settled 0\.95, jev-1\.14\.0\) — not answered: p 0\.89 < 0\.90$/u],
+  ['fits below 0.70', { fits: 0.69 }, /jev: fake_timer \(p 0\.99, fits 0\.69, settled 0\.95, jev-1\.14\.0\) — not answered: fits 0\.69 < 0\.70$/u],
+  ['settled below 0.70', { settled: 0.69 }, /jev: fake_timer \(p 0\.99, fits 0\.95, settled 0\.69, jev-1\.14\.0\) — not answered: settled 0\.69 < 0\.70$/u],
+  ['another option chosen', { choice: 'real_wait' }, /jev: real_wait \(p 0\.99, fits 0\.95, settled 0\.95, jev-1\.14\.0\) — not answered: chose real_wait, not the recommendation fake_timer$/u],
+]) {
+  test(`jev's ${miss} sets Martin, its reading in the entry`, async () => {
+    const f = asking({ replies: [jevSays(says)] });
+    assert.equal(await run(ASK, f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'finish · Martin');
+    assert.match(lastComment(f), /^Martin is asked: Which timer should the timeout test use\?\n[\s\S]*Recommended: fake_timer\n/u);
+    assert.match(lastComment(f), reading);
+    assert.doesNotMatch(f.out(), /jev answered/u);
+    assert.deepEqual(f.ledger().map((line) => line.outcome), ['martin']);
+  });
+}
+
+for (const [route, options, argv, reason] of [
+  ['--reserved', {}, [...ASK, '--reserved', 'deploy'], 'jev not asked: reserved act deploy'],
+  ['MC_TOOL=person', { env: { ...FINISH, MC_TOOL: 'person' } }, ASK, 'jev not asked: person'],
+  ['MC_TOOL unset', { env: { MC_GOAL: 'mc/plain', MC_ROLE: FINISH_ROLE } }, ASK, 'jev not asked: person'],
+]) {
+  test(`${route} sets Martin with no jev request, the reason in the entry`, async () => {
+    const f = asking({ replies: [jevSays()], ...options });
+    assert.equal(await run(argv, f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'finish · Martin');
+    assert.equal(f.requests.length, 0, 'no request made');
+    assert.match(lastComment(f), new RegExp(`\\n${reason}$`, 'u'));
+    assert.deepEqual(f.ledger().map((line) => [line.outcome, line.reason, line.state_length]), [['martin', reason, null]]);
+  });
+}
+
+for (const [failure, options, reason, requests] of [
+  ['a missing key', { keys: { OTHER: 'value-of-another-key' } }, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source', 0],
+  ['an unreadable keys source', { keys: undefined, readKeys: () => { throw new Error('missing'); } }, 'jev unavailable: the mc keys source cannot be read', 0],
+  ['401', { replies: [reply(401, { detail: 'bad key' })] }, 'jev unavailable: HTTP 401', 1],
+  ['500 twice', { replies: [reply(500, 'oops'), reply(503, 'oops')] }, 'jev unavailable: HTTP 503 after one retry', 2],
+  ['a timeout', { replies: [() => new Promise(() => {})], timer: async () => {} }, 'jev unavailable: no answer in 15 seconds', 1],
+  ['a network error', { replies: [() => Promise.reject(new Error('getaddrinfo ENOTFOUND'))] }, 'jev unavailable: network error (getaddrinfo ENOTFOUND)', 1],
+  ['a body that is not JSON', { replies: [reply(200, '<html>')] }, 'jev unavailable: malformed response (not JSON)', 1],
+  ['a malformed body', { replies: [reply(200, { model: 'jev-1.14.0', answers: { answer: { choice: 'fake_timer' } } })] }, 'jev unavailable: malformed response (no model, answer, fits or settled)', 1],
+  ['an unknown choice', { replies: [jevSays({ choice: 'sleep' })] }, 'jev unavailable: unknown choice "sleep"', 1],
+]) {
+  test(`${failure} sets Martin with '${reason}' and exits 0`, async () => {
+    const f = asking(options);
+    if (options.readKeys) f.deps.readKeys = options.readKeys;
+    assert.equal(await run(ASK, f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'finish · Martin');
+    assert.match(lastComment(f), new RegExp(`\\n${reason.replace(/[()]/gu, '\\$&')}$`, 'u'));
+    assert.equal(f.requests.length, requests);
+    assert.deepEqual(f.ledger().map((line) => [line.outcome, line.reason]), [['martin', reason]]);
+  });
+}
+
+test('429 then 200 retries once, after the retry-after it names, and answers', async () => {
+  const f = asking({ replies: [reply(429, { detail: 'slow down' }, { 'retry-after': '2' }), jevSays()] });
+  assert.equal(await run(ASK, f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'finish · ready');
+  assert.equal(f.requests.length, 2);
+  assert.deepEqual(f.sleeps, [2000], 'retry-after honoured, through the injected sleep');
+  assert.match(f.out(), /^mc: jev answered fake_timer /u);
+  const long = asking({ replies: [reply(503, '', { 'retry-after': '60' }), jevSays()] });
+  assert.equal(await run(ASK, long.deps), 0, long.err());
+  assert.deepEqual(long.sleeps, [10_000], 'a retry-after over 10 seconds waits 10');
+});
+
+test('a build or review session is still refused Martin before jev is asked', async () => {
+  for (const env of [BUILD, REVIEW]) {
+    const f = fixture({ files: inStage('build'), env, keys: KEYS, replies: [jevSays()] });
+    assert.equal(await run(ASK, f.deps), 2);
+    assert.match(f.err(), /only plan, finish, mend or a person sets Martin/u);
+    assert.deepEqual([f.requests.length, f.ledger().length, f.store[`${DIR}/LOG.md`]], [0, 0, LOG_TEXT]);
   }
 });

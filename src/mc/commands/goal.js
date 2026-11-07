@@ -66,14 +66,19 @@ import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { NAME_RE } from '../plan-schema.js';
-import { programsHome } from '../paths.js';
+import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
+import { appendLedgerLine, askJev, buildState, documentPath, judge, JEV_KEY, ledgerPath, LOG_ENTRIES, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256 } from '../jev.js';
+import { readKeysDotenv } from '../keys-dotenv.js';
 import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--evidence', '--evidence-file', '--reserved'];
+/** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
+const REPEATABLE_FLAGS = ['--option', '--document'];
+const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
   new: ['--repo', '--class', '--title', '--phase', '--stage'],
@@ -90,6 +95,7 @@ const VERB_FLAGS = {
   log: ['--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--stage', '--status'],
   stage: ['--reason'],
   status: ['--reason'],
+  martin: ['--reason', '--option', '--recommend', '--evidence', '--evidence-file', '--document', '--reserved'],
   pr: [],
   archive: [],
   show: [],
@@ -100,21 +106,28 @@ const STATUS_VERBS = ['blocked', 'martin', 'ready', 'done', 'drop'];
 const STATUS_VERB_FIELDS = { martin: { status: 'Martin' }, blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
 /** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
 export const ROUTES = Object.fromEntries([
-  ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
-  ...STATUS_VERBS.map((verb) => [verb, VERB_FLAGS.status]),
-].map(([verb, names]) => [verb, only({ strictValues: VALUE_FLAGS }, names)]));
+  ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status' && verb !== 'martin'),
+  ...STATUS_VERBS.map((verb) => [verb, verbFlagsOf(verb)]),
+].map(([verb, names]) => [verb, only(SCAN, names)]));
+
+/** The flags verb `verb` takes, or null when it is not one: a status verb takes --reason, and martin its call's. */
+function verbFlagsOf(verb) {
+  if (verb === 'martin') return VERB_FLAGS.martin;
+  if (STATUS_VERBS.includes(verb)) return VERB_FLAGS.status;
+  return Object.hasOwn(VERB_FLAGS, verb) ? VERB_FLAGS[verb] : null;
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
-  const scanned = scanArgs(argv, { strictValues: VALUE_FLAGS });
+  const scanned = scanArgs(argv, SCAN);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   let [verb, ...rest] = scanned.positional;
   // `document` and `criterion` take a second word: the form is both.
   if ((verb === 'document' || verb === 'criterion') && rest.length) verb = `${verb} ${rest.shift()}`;
 
-  const verbFlags = STATUS_VERBS.includes(verb) ? VERB_FLAGS.status : (Object.hasOwn(VERB_FLAGS, verb) ? VERB_FLAGS[verb] : null);
+  const verbFlags = verb === 'status' || verb === undefined ? null : verbFlagsOf(verb);
   if (!verbFlags) { stderr.write(usage()); return 2; }
   const extra = onlyFlags(scanned, verbFlags);
   if (extra) { stderr.write(`mc: ${verb} takes no ${extra}\n`); return 2; }
@@ -138,6 +151,10 @@ export async function run(argv, deps = {}) {
     appendText: deps.appendText || appendText,
     remove: deps.remove || unlinkSync,
     readFile: deps.readFile || readEntryFile,
+    // jev (`mc goal martin`): the keys source's values, the transport and its timers, and the ledger. A test stands in for each.
+    readKeys: deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values),
+    jev: deps.jev || {},
+    ledger: deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)),
   };
   const { flags } = scanned;
 
@@ -152,6 +169,10 @@ export async function run(argv, deps = {}) {
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
   if (verb === 'log') {
+    if (flags.status === 'Martin') {
+      stderr.write(returnInstruction(['mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin, with its options and your recommendation'], rest[0] ?? env.MC_GOAL, 'mc: log is not written'));
+      return 2;
+    }
     const texts = entryTexts(flags, ctx);
     if (texts.error) { stderr.write(`mc: ${texts.error}\n`); return texts.code; }
     return logEntry(rest, { stage: flags.stage, status: flags.status, ...texts.fields }, ctx);
@@ -161,6 +182,7 @@ export async function run(argv, deps = {}) {
     const stage = rest.pop();
     return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null }, ctx);
   }
+  if (verb === 'martin') return askMartin(rest, flags, ctx);
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
   if (verb === 'pr') return carryPrs(rest, ctx);
@@ -315,6 +337,132 @@ function logEntry(args, fields, ctx) {
   }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
   return 0;
+}
+
+/**
+ * `mc goal martin [<programme>/<goal>] --reason "<question>" --option "<key>: <text>"…
+ * --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]…
+ * [--reserved <act>]` — ask Martin, jev first (`jev.js`, docs/technical/mc-jev.md).
+ *
+ * A call that is not well formed exits 2 with a return instruction and writes
+ * nothing; so does one whose question, options, evidence and goal alone are
+ * over jev's budget. Who may set Martin is `refusedMove`'s. A reserved act, or
+ * a person (MC_TOOL unset or `person`), goes to Martin with no request. A
+ * session's question goes to jev once: when jev answers, the status is kept,
+ * stdout says the answer and the session continues with it; anything else —
+ * a miss or a failure — sets Martin as before, jev's reading or why in the
+ * entry. jev never fails the verb. Every call appends one line to the ledger.
+ */
+async function askMartin(args, flags, ctx) {
+  const { stdout, stderr, env, read } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const named = args[0] ?? env.MC_GOAL;
+  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, reserved: flags.reserved });
+  const problems = [...(call.problems ?? [])];
+  if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
+  let evidence = flags.evidence ?? '';
+  if (!problems.length && flags['evidence-file'] !== null) {
+    try { evidence = ctx.readFile(flags['evidence-file']).replace(/\n$/u, ''); }
+    catch (error) { problems.push(`--evidence-file ${flags['evidence-file']} cannot be read (${error.message})`); }
+  }
+  if (problems.length) { stderr.write(returnInstruction(problems, named)); return 2; }
+
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env, dir: target.dir });
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+
+  const tool = env.MC_TOOL || 'person';
+  const { question, options, recommend } = call;
+  let secrets = [];
+  let sent = { documents: [], trimmed: [], length: null, sha256: null };
+  let asked = null;
+  if (call.reserved) asked = { martin: `jev not asked: reserved act ${call.reserved}` };
+  else if (tool === 'person') asked = { martin: 'jev not asked: person' };
+  else {
+    let values = null;
+    try { values = ctx.readKeys(); } catch { values = null; }
+    secrets = secretsOf(values);
+    const context = jevContext(target, goal, flags.document, ctx);
+    const built = buildState({ question, options, evidence, ...context }, { secrets });
+    if (built.problems) { stderr.write(returnInstruction(built.problems, named)); return 2; }
+    sent = { documents: context.documents.map((item) => item.path), trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
+    const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+    const answer = values === null ? { unavailable: 'the mc keys source cannot be read' }
+      : await askJev({ body: requestBody(built.state, built.state.options), key, ...ctx.jev });
+    const parsed = answer.unavailable ? answer : readAnswers(answer.response, options);
+    if (parsed.unavailable) asked = { martin: `jev unavailable: ${parsed.unavailable}` };
+    else {
+      const judged = judge(parsed.answers, recommend);
+      asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
+      if (judged.outcome !== 'answered') asked.martin = `jev: ${asked.reading} — not answered: ${judged.misses.join('; ')}`;
+    }
+  }
+
+  const clean = (value) => redactText(value, secrets);
+  const lines = [...Object.entries(options).map(([key, option]) => `Option ${key}: ${oneLine(option)}`), `Recommended: ${recommend}`];
+  const answered = asked.outcome === 'answered';
+  const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}` : asked.martin;
+  const comment = clean([`${answered ? 'jev was asked' : 'Martin is asked'}: ${oneLine(question)}`, ...lines, answered ? said : asked.martin].join('\n'));
+  const ledger = redactValue({
+    at: ctx.now.toISOString(), goal: target.name, tool, role: writerRole(env),
+    question, options, recommend, reserved: call.reserved,
+    documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256,
+    model: asked.model ?? null, answers: asked.answers ?? null,
+    outcome: answered ? 'answered' : 'martin', reason: answered ? `jev answered ${asked.reading}` : asked.martin,
+  }, secrets);
+  try { ctx.ledger(`${JSON.stringify(ledger)}\n`); }
+  catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
+
+  if (!answered) return logEntry(args, { stage: null, status: 'Martin', done: null, comment, next: null }, ctx);
+  const entry = { at: logStamp(ctx.now), tool, model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: null, stage: goal.stage, status: goal.status };
+  appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
+  stdout.write(`mc: ${clean(said)}\n`);
+  return 0;
+}
+
+/**
+ * What jev reads beside the question: the goal (its text, criteria with met,
+ * stage and status), the programme's README and each repository's
+ * `docs/project/<programme>/rulings.md` when present, the goal's documents and
+ * each `--document` (path and text; one that cannot be read is said and not
+ * sent), and the last LOG.md entries.
+ */
+function jevContext(target, goal, extra, ctx) {
+  const { read, env } = ctx;
+  const rulings = goal.repos.map((repo) => {
+    const path = `${repo}/docs/project/${target.programme}/rulings.md`;
+    const text = read(join(target.dir, path));
+    return text === null ? null : { path, text };
+  }).filter(Boolean);
+  const documents = [];
+  const seen = new Set();
+  for (const { label, path } of [...goal.documents, ...extra.map((path) => ({ label: null, path }))]) {
+    const at = documentPath(path, { goalDir: target.dir, home: env.HOME || process.env.HOME });
+    if (seen.has(at)) continue;
+    seen.add(at);
+    const text = read(at);
+    if (text === null) { ctx.stderr.write(`mc: ${path} cannot be read — not sent to jev\n`); continue; }
+    documents.push({ path, ...(label ? { label } : {}), text });
+  }
+  const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '').slice(-LOG_ENTRIES).map((entry) => renderEntry(entry));
+  return {
+    goal: {
+      title: goal.title, goal: goal.goal.join('\n\n'), contract: goal.contract.join('\n\n'), out_of_scope: goal.out_of_scope.join('\n\n'),
+      criteria: goal.success_criteria.map((item) => ({ criterion: item.criterion, check: item.check, met: item.met })),
+      stage: goal.stage, status: goal.status,
+    },
+    programme: { readme: read(join(ctx.home, target.programme, 'README.md')), rulings },
+    documents,
+    log,
+  };
 }
 
 /**
