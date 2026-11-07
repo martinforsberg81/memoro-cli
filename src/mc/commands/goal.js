@@ -10,6 +10,7 @@
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
  *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a build or review session
+ *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a build or review session
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
  *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
  *                                  and every goal that started after others given a phase (`phaseGoals`)
@@ -79,6 +80,7 @@ const VERB_FLAGS = {
   'document add': ['--label', '--path'],
   'criterion add': ['--criterion', '--check'],
   'criterion set': ['--criterion', '--check'],
+  'criterion remove': ['--reason'],
   'criterion met': [],
   'criterion unmet': [],
   convert: [],
@@ -143,6 +145,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'document add') return addDocument(rest, flags, ctx);
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
+  if (verb === 'criterion remove') return removeCriterion(rest, flags, ctx);
   if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
@@ -524,6 +527,43 @@ function setCriterion(args, flags, ctx) {
     const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment: `criterion ${n} rewritten, unmet — ${changed.join('; ')}`, next: null, stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
     if (check !== null) warnAbsentTests(goal, target, check, ctx);
+  });
+}
+
+/**
+ * `mc goal criterion remove [<programme>/<goal>] <n> --reason "…"` — criterion
+ * `n` taken out, the later ones moved up one number with their text, check and
+ * met kept. Logged with the removed text, its check, whether it was met and the
+ * reason; the stage and status kept. Acceptance is written by plan or a person:
+ * a build or review session is refused. Every refusal exits 2 and writes nothing:
+ * no reason or a blank one, a number that is not one, a number past the criteria,
+ * and the only criterion (its replacement is added first).
+ */
+function removeCriterion(args, flags, ctx) {
+  const { stderr, env, read } = ctx;
+  if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
+  const role = writerRole(env);
+  if (role === 'build' || role === 'review') { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan or a person\n`); return 2; }
+  if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: criterion remove needs --reason "…" with text in it — why the criterion is obsolete\n'); return 2; }
+  const reason = oneLine(flags.reason.trim());
+  const [named, number] = args.length === 2 ? args : [undefined, args[0]];
+  const n = Number(number);
+  if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${number} is not a criterion's number — 1, 2, …\n`); return 2; }
+  const target = goalNamed(named, ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  const criteria = text === null ? null : parseGoal(text).success_criteria;
+  if (criteria && n > criteria.length) { stderr.write(`mc: ${target.name}: it has ${criteria.length} criteria, no criterion ${n}\n`); return 2; }
+  if (criteria?.length === 1) { stderr.write(`mc: criterion ${n} is the goal's only criterion — add its replacement first, or drop the goal\n`); return 2; }
+  let removed = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`] };
+    removed = goal.success_criteria[n - 1];
+    return { ...goal, success_criteria: goal.success_criteria.filter((_, i) => i !== n - 1) };
+  }, (goal) => `criterion ${n} removed · ${criteriaWords(goal)}`, (goal, target) => {
+    const comment = `criterion ${n} removed — "${oneLine(removed.criterion)}", check "${oneLine(removed.check)}", was ${removed.met ? 'met' : 'not met'}; reason: ${reason}`;
+    const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment, next: null, stage: goal.stage, status: goal.status };
+    appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
   });
 }
 

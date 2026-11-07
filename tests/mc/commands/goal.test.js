@@ -704,6 +704,57 @@ test('mc goal criterion set is refused for a build session and a review session,
   assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], plan.deps), 0, plan.err());
 });
 
+const THREE = [{ criterion: 'first', check: 'a test', met: true }, { criterion: 'second', check: 'another test', met: false }, { criterion: 'third', check: 'a third test', met: true }];
+const threeCriteria = () => seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', status: 'ready', success_criteria: THREE }) });
+
+test('mc goal criterion remove takes criterion 2 out, renumbers the rest with their met state, logs the removed text, check, met and reason, and keeps stage and status', async () => {
+  const f = fixture({ files: threeCriteria() });
+  assert.equal(await run(['criterion', 'remove', 'mc/plain', '2', '--reason', 'the decision made it obsolete'], f.deps), 0, f.err());
+  assert.equal(f.out(), 'mc: mc/plain · criterion 2 removed · criteria 2/2\n');
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria, [
+    { criterion: 'first', check: 'a test', met: true },
+    { criterion: 'third', check: 'a third test', met: true },
+  ]);
+  assert.equal(stateOf(f), 'build · ready');
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · person · build · ready\n\nComment: criterion 2 removed — "second", check "another test", was not met; reason: the decision made it obsolete\n'), f.store[`${DIR}/LOG.md`]);
+});
+
+test('mc goal criterion remove refuses a build or review session, no reason or a blank one, a bad number and a number past the criteria, and writes nothing', async () => {
+  const refusals = [
+    [{}, ['criterion', 'remove', 'mc/plain', '2'], /criterion remove needs --reason/u],
+    [{}, ['criterion', 'remove', 'mc/plain', '2', '--reason', '  '], /criterion remove needs --reason/u],
+    [{}, ['criterion', 'remove', 'mc/plain', '0', '--reason', 'r'], /0 is not a criterion's number/u],
+    [{}, ['criterion', 'remove', 'mc/plain', 'x', '--reason', 'r'], /x is not a criterion's number/u],
+    [{}, ['criterion', 'remove', 'mc/plain', '9', '--reason', 'r'], /mc\/plain: it has 3 criteria, no criterion 9/u],
+    [BUILD, ['criterion', 'remove', 'mc/plain', '2', '--reason', 'r'], /a build session does not remove a criterion/u],
+    [REVIEW, ['criterion', 'remove', 'mc/plain', '2', '--reason', 'r'], /a review session does not remove a criterion/u],
+  ];
+  for (const [env, argv, words] of refusals) {
+    const f = fixture({ files: threeCriteria(), env });
+    const before = f.store[`${DIR}/GOAL.json`];
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), words, argv.join(' '));
+    assert.equal(f.store[`${DIR}/GOAL.json`], before, `${argv.join(' ')}: GOAL.json byte-identical`);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, `${argv.join(' ')}: no entry`);
+  }
+});
+
+test('mc goal criterion remove refuses the only criterion, naming its replacement, and writes nothing', async () => {
+  const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', status: 'ready', success_criteria: MET }) }) });
+  const before = f.store[`${DIR}/GOAL.json`];
+  assert.equal(await run(['criterion', 'remove', 'mc/plain', '1', '--reason', 'r'], f.deps), 2);
+  assert.equal(f.err(), 'mc: criterion 1 is the goal\'s only criterion — add its replacement first, or drop the goal\n');
+  assert.equal(f.store[`${DIR}/GOAL.json`], before, 'GOAL.json byte-identical');
+  assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry');
+});
+
+test('mc goal criterion remove by a plan session removes the criterion and logs it with the plan role', async () => {
+  const f = fixture({ files: threeCriteria(), env: PLAN });
+  assert.equal(await run(['criterion', 'remove', 'mc/plain', '1', '--reason', 'superseded'], f.deps), 0, f.err());
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.map((c) => c.criterion), ['second', 'third']);
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · claude opus · build · ready · by plan\n\nComment: criterion 1 removed — "first", check "a test", was met; reason: superseded\n'), f.store[`${DIR}/LOG.md`]);
+});
+
 /** `git cat-file -e origin/main:<path>` answers for `ON_MAIN` only; any other path gets git's own "does not exist in"; `gitFails` makes every answer a git failure. */
 const ON_MAIN = ['tests/mc/present.test.js'];
 const onMain = (gitFails = false) => (cwd, args) => {
