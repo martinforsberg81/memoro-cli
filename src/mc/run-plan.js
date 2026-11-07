@@ -638,7 +638,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     output: pick(usage.output_tokens),
     cacheRead: pick(usage.cache_read_input_tokens),
     cacheWrite: pick(usage.cache_creation_input_tokens),
-    note: quota ? 'quota' : (interrupted ? 'interrupted' : (json.is_error ? 'failed' : pick(json.subtype ?? '-'))),
+    note: quota ? 'quota' : (interrupted ? (interrupted.kind === 'offline' ? 'offline' : 'interrupted') : (json.is_error ? 'failed' : pick(json.subtype ?? '-'))),
     quota,
     quotaReset: quota ? quotaResetAt(text, now) : null,
   };
@@ -721,12 +721,22 @@ export function quotaSeen(text) {
  * key` (measured 2026-10-11: `terminal_reason: 'api_error'`, `subtype:
  * 'success'`, exit 1).
  *
+ * `offline` is the API server not answering at all: `api_error:
+ * 'connection_failed'` with `API Error: Can't reach the API server — check your
+ * internet or DNS (ENOTFOUND)`, after ten retries, 2026-11-06 and 2026-11-07
+ * (~740 sessions in one evening, each 180–290 s, zero tokens). It is read after
+ * the quota and login tests, so the words of a limit still win, and before
+ * `server`: the runner holds new launches for it (run.js, `offlineHold`) rather
+ * than relaunching at once.
+ *
  * A spent workspace limit is the same credit (2026-10-17, ruling 45 § 1):
  * `API Error: 400 You have reached your specified workspace API usage limits.
  * You will regain access on 2026-11-01 at 00:00 UTC.` It is read before the
  * quota test, which its `usage limit` would otherwise match, and `until` is the
  * instant the refusal names (`creditsResetAt`).
  */
+const OFFLINE_WORDS = /can['’]t reach the api server|\bENOTFOUND\b|\bECONNREFUSED\b|\bETIMEDOUT\b/iu;
+
 export function apiInterruption(json) {
   if (!json || json.terminal_reason !== 'api_error') return null;
   const said = String(json.result ?? '').trim().split('\n')[0].slice(0, 200);
@@ -735,6 +745,7 @@ export function apiInterruption(json) {
   if (/invalid api key/iu.test(said)) return { kind: 'key', said };
   if (json.api_error_status === 429 || quotaSeen(said)) return { kind: 'quota', said };
   if (/not logged in|\/login/iu.test(said)) return { kind: 'login', said };
+  if (json.api_error === 'connection_failed' || OFFLINE_WORDS.test(String(json.result ?? ''))) return { kind: 'offline', said };
   return { kind: 'server', said };
 }
 
