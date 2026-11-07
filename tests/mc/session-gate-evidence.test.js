@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
-import { captureWorktree, findPublicationReceipt, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
+import { captureWorktree, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
@@ -681,4 +681,38 @@ it('receipt: a timeout the batch was not launched with, a missing batch, a chang
       execution: { tests: null, commands: [{ packageScript: 'lint', exit: 0, ok: true, state: 'completed' }] }, members: { files: [], commands: [] } } });
   assert.equal(commandsOnly.outcome, 'green', 'commands only need no batch');
   assert.equal(commandsOnly.coverage.execution.timeoutMs, 1000);
+});
+
+it('resume and cache reads refuse a prior green whose batch ran another timeout, has no batch, or has no identity', (t) => {
+  const { request } = fixture(t);
+  const req = request();
+  const { root, measurement } = { root: req.gate.root, measurement: req.measurement };
+  const flags = ['--import', './x.mjs', '--test-timeout=1000'];
+  const plan = resolveTestPlan({ flags });
+  const coverage = { kind: 'affected', files: ['a.test.js'], commands: [], flags, pattern: null, selector: 'selector', execution: executionIdentity(plan) };
+  const members = { files: [{ file: 'a.test.js', how: 'ran', from: null, outcome: 'passed' }], commands: [] };
+  // A prior attempt on this exact content, with the batch it launched, or none, or one that disagrees.
+  const persist = (run, { batches = [spawnedBatch({ plan, files: ['a.test.js'] })], cover = coverage } = {}) => persistGateReceipt({ root, receipt: gateReceipt({
+    measurement: { ...measurement, run }, before: measurement.candidate, after: measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
+    result: { ok: true, code: 0, coverage: cover, execution: { tests: { exit: 0, finished: true, totals: { tests: 1, pass: 1, fail: 0 }, batches }, commands: [] }, members } }) });
+  const resumedFrom = () => findResumable({ root, measurement: { ...measurement, run: 'gate-next' }, flags, pattern: null }).files.get('a.test.js')?.from ?? null;
+  // Requested 1000, executed 600000: the launch carries the default timeout.
+  const dropped = spawnedBatch({ plan, files: ['a.test.js'] });
+  dropped.argv = dropped.argv.map((word) => (word === '--test-timeout=1000' ? '--test-timeout=600000' : word));
+  dropped.timeoutMs = executedTimeoutOf(dropped.argv);
+  assert.equal(dropped.timeoutMs, 600000);
+
+  persist('gate-dropped', { batches: [dropped] });
+  persist('gate-unbatched', { batches: [] });
+  persist('gate-anonymous', { cover: { ...coverage, execution: undefined } });
+  assert.equal(resumedFrom(), null, 'no prior receipt with a wrong, missing or identity-less launch donates a passed file');
+  const good = persist('gate-good');
+  assert.equal(resumedFrom(), 'gate-good', 'the consistent launch resumes');
+  const receipt = JSON.parse(readFileSync(good, 'utf8'));
+  const read = () => readGreenReceipt({ root, repo: 'repo', repository: receipt.repository, run: receipt.run, sessionRun: receipt.session_run,
+    goalRevision: receipt.goal_revision, configuration: receipt.configuration });
+  assert.equal(read()?.run, 'gate-good');
+  writeFileSync(good, JSON.stringify({ ...receipt, execution: { ...receipt.execution, tests: { ...receipt.execution.tests, batches: [dropped] } } }));
+  assert.equal(read(), null, 'a version-5 green whose only launch ran another timeout is never read');
 });
