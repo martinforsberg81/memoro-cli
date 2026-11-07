@@ -75,13 +75,13 @@ lane as soon as every registered PR is queued; nothing follows that command.
    - Not OK: write `REVIEW.md` in the goal's directory first — the head sha
      you judged, then what is wrong and where (file and line, the check that
      failed and its output) — then `mc goal stage finish`. mc refuses
-     `finish` without REVIEW.md. A plan session reads it and finishes the
-     goal; it is not reviewed again. Nobody reads a review that went to
-     `merge`, so then you write no REVIEW.md.
+     `finish` without REVIEW.md. A finish session reads it, fixes what you
+     found and sends the goal to merge; it is not reviewed again. Nobody
+     reads a review that went to `merge`, so then you write no REVIEW.md.
 2. **One proposal, always** — whichever stage: one file in
    `~/mc/programs/<programme>/proposals/`, in the proposals skill's form,
    with what you noticed beyond this goal: observations, and improvements to
-   make. The programme's plan session takes a stand on it.
+   make. The programme's interactive plan session takes a stand on it.
 3. **One line in LOG.md** — the stage verb's `--reason` naming the files you
    wrote: `mc goal stage merge --reason "proposal <file>"`, or `mc goal
    stage finish --reason "REVIEW.md, proposal <file>"`.
@@ -90,9 +90,11 @@ Nothing else: no comment on the pull request, no long LOG.md entry, no
 `--next`, no status. You never move the goal anywhere but `merge` or
 `finish`.
 
-If the review itself cannot run, use `mc goal blocked --reason "…"` so plan
-can resolve the obstacle and retry review. This is distinct from a completed
-review finding work not OK, which goes to finish with REVIEW.md.
+If the review itself cannot run — a check you cannot execute, a worktree you
+cannot read — use `mc goal blocked --reason "…"` naming the obstacle, so a
+mend session resolves it and sets the goal ready for a review again. This is
+distinct from a completed review finding work not OK, which goes to finish
+with REVIEW.md.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what

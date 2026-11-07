@@ -9,8 +9,8 @@
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
  *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
- *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a build or review session
- *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a build or review session
+ *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a goal session (build, review, finish, mend)
+ *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a goal session
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
  *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json,
  *                                  and every goal that started after others given a phase (`phaseGoals`)
@@ -39,8 +39,10 @@
  * A goal's stage only moves forward (`goals.js` `STAGES`); only a person moves
  * it back (`refusedMove`). A build session moves `build` to `review` — not
  * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
- * review session moves `review` to `merge` or `finish`; a plan session any
- * stage forward.
+ * review session moves `review` to `merge` or `finish`; a finish session
+ * moves `finish` to `merge`, or sets `blocked` or `Martin`; a mend session
+ * sets a status and requeues `merge`, and moves no stage; the interactive
+ * plan session any stage forward.
  *
  * A goal's phase is not its stage: a goal in a later phase keeps the stage
  * it has, and the runner does not pick it until every goal of the programme in
@@ -59,7 +61,7 @@ import { archiveGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
@@ -234,7 +236,7 @@ function newGoal(args, flags, ctx) {
  * that is not one token (it holds whitespace, or is empty) is left out, and the entry is written without the
  * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. A person writes none.
  */
-const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
+const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'mend', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
 function writerRole(env) {
   const role = env.MC_ROLE || '';
   if (!role || (env.MC_TOOL || 'person') === 'person') return null;
@@ -308,7 +310,7 @@ function logEntry(args, fields, ctx) {
   // Queueing is complete before the runner may end this session. A failed or
   // partial enqueue leaves no receipt, so the session can repair and retry.
   if (fields.stage === 'merge' && env.MC_HEADLESS === '1' && env.MC_GOAL === target.name
-      && [REVIEW_ROLE, PLAN_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
+      && [REVIEW_ROLE, FINISH_ROLE, MEND_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
     write(join(env.MC_SCRATCH, MERGE_HANDOFF_FILE), JSON.stringify({ goal: target.name }));
   }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
@@ -508,15 +510,15 @@ function markCriterion(args, met, ctx) {
  * `mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]`
  * — criterion `n`'s text and/or check rewritten, and the criterion unmet, its
  * check to be run again. Logged with the old and new text; the stage and status
- * kept. Acceptance is written by plan or a person: a build or review session is
- * refused, and so is a call with no flag. A check given is read for the test
+ * kept. Acceptance is written by plan or a person: a goal session (build,
+ * review, finish, mend) is refused, and so is a call with no flag. A check given is read for the test
  * files it names (`warnAbsentTests`).
  */
 function setCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
-  if (role === 'build' || role === 'review') { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan or a person\n`); return 2; }
+  if (goalSessionWord(env)) { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan or a person\n`); return 2; }
   const given = ['criterion', 'check'].filter((key) => flags[key] !== null);
   if (!given.length) { stderr.write('mc: criterion set needs --criterion "…" or --check "…" — what is rewritten\n'); return 2; }
   const blank = given.filter((key) => !flags[key].trim()).map((key) => `--${key}`);
@@ -549,7 +551,7 @@ function setCriterion(args, flags, ctx) {
  * `n` taken out, the later ones moved up one number with their text, check and
  * met kept. Logged with the removed text, its check, whether it was met and the
  * reason; the stage and status kept. Acceptance is written by plan or a person:
- * a build or review session is refused. Every refusal exits 2 and writes nothing:
+ * a goal session (build, review, finish, mend) is refused. Every refusal exits 2 and writes nothing:
  * no reason or a blank one, a number that is not one, a number past the criteria,
  * and the only criterion (its replacement is added first).
  */
@@ -557,7 +559,7 @@ function removeCriterion(args, flags, ctx) {
   const { stderr, env, read } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
-  if (role === 'build' || role === 'review') { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan or a person\n`); return 2; }
+  if (goalSessionWord(env)) { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan or a person\n`); return 2; }
   if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: criterion remove needs --reason "…" with text in it — why the criterion is obsolete\n'); return 2; }
   const reason = oneLine(flags.reason.trim());
   const [named, number] = args.length === 2 ? args : [undefined, args[0]];
@@ -866,18 +868,34 @@ function goalNamed(arg, { env, home }) {
  * move) or set `status` (null: none), or null when it may. A session is a
  * caller with MC_GOAL set and an MC_TOOL that is not `person`; anyone else is
  * a person, who may make any move, backward too (logged by `logEntry`). No
- * session moves a stage backward. A plan session makes any forward move: it
- * writes goals, finishes them and drops them (`canon/roles/plan-session.md`).
- * A review session moves a goal in `review` to `merge` (OK) or `finish`
- * (not OK, REVIEW.md written first), and sets no status. A build session
- * moves `build` to `review` or sets `blocked`, nothing else.
+ * session moves a stage backward. The interactive plan session makes any
+ * forward move: it writes goals, finishes them and drops them
+ * (`canon/roles/plan-session.md`). A finish session moves a goal in `finish`
+ * to `merge`, and sets `blocked` or `Martin` (`canon/roles/finish-session.md`).
+ * A mend session sets `ready`, `blocked` or `Martin` and requeues a goal in
+ * `merge` with `mc goal stage merge`; it moves no stage
+ * (`canon/roles/mend-session.md`). A review session moves a goal in `review`
+ * to `merge` (OK) or `finish` (not OK, REVIEW.md written first), and sets no
+ * status. A build session moves `build` to `review` or sets `blocked`,
+ * nothing else.
  */
 export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
   if (!isSession(env)) return null;
   const moves = to !== null && to !== from;
   if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
   if ([PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return null;
-  if (status === 'Martin') return 'only plan or a person sets Martin — set blocked for a plan session';
+  if (env.MC_ROLE === FINISH_ROLE) {
+    if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked (a mend session takes it) or Martin, not ${status}`;
+    if (!moves) return null;
+    if (from !== 'finish') return `a finish session moves only a goal in finish, and this one is ${from}`;
+    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is Martin's (mc goal martin --reason "…")`;
+    return null;
+  }
+  if (env.MC_ROLE === MEND_ROLE) {
+    if (moves) return `a mend session moves no stage (${from} → ${to}): it retries the stage with mc goal ready, or requeues merge with mc goal stage merge; a goal to move is Martin's`;
+    return null;
+  }
+  if (status === 'Martin') return 'only plan, finish, mend or a person sets Martin — set blocked for a mend session';
   if (env.MC_ROLE === REVIEW_ROLE) {
     if (status !== null && status !== 'blocked') return 'a review sets no status — it ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
     if (!moves) return null;
@@ -889,7 +907,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (to === 'done') return 'a session does not set done — move it to review; the merger sets done when the pull request lands';
   if (to === 'dropped') return 'only plan or a person drops a goal — set it blocked with the question';
   if (moves && !(from === 'build' && to === 'review')) return `a build session moves a goal only from build to review, not ${from} → ${to}`;
-  if (status === 'ready') return 'a build session does not set a goal ready — plan or a person does';
+  if (status === 'ready') return 'a build session does not set a goal ready — a mend session or a person does';
   return null;
 }
 
@@ -898,9 +916,20 @@ function isSession(env) {
   return Boolean(env.MC_GOAL || env.MC_ROLE) && (env.MC_TOOL || 'person') !== 'person';
 }
 
-/** Whether the caller is a session (MC_GOAL set, MC_TOOL not `person`) that is not plan's. */
+/** Whether the caller is a session (MC_GOAL set, MC_TOOL not `person`) that is not the interactive plan session's. */
 function sessionNotPlan(env) {
   return isSession(env) && ![PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE);
+}
+
+/**
+ * Whether the caller is a headless goal session — build, review, finish or
+ * mend — which never writes the goal's acceptance: a criterion's text or check
+ * is the goal's, and a change to the goal is plan's or a person's
+ * (`canon/roles/finish-session.md`, `canon/roles/mend-session.md`).
+ */
+function goalSessionWord(env) {
+  const role = writerRole(env);
+  return ['build', 'review', 'finish', 'mend'].includes(role) ? role : null;
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */

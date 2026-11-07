@@ -69,7 +69,8 @@ Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
 used. A tight rounded frame encloses just this live session data, with green
-borders for build, blue for plan and magenta for review. Long activity wraps
+borders for build, magenta for review, blue for finish (and for the
+interactive plan session) and yellow for mend. Long activity wraps
 inside the frame within the terminal width. Positive check-in counts appear
 at the end of the activity inside the frame, in yellow, and its yellow clock
 remains visible without expansion; repository, advisor, pid and zero check-ins
@@ -78,12 +79,12 @@ with no matching goal appears under UNASSIGNED ACTIVITY, including its name
 and PR references, so removing SESSIONS cannot hide it. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
 
-Foreground plan/programme sessions and runner programme planning turns appear
-directly below their programme heading, including programmes that otherwise
-count as dormant. Programme turns show their trigger (for example
-`daily_proposals`) and omit the redundant `plan:<programme>` location.
-Goal recovery still appears under its goal, or as unassigned activity when the
-goal is missing. Each open Manager session has its own rounded activity frame
+Foreground plan sessions appear directly below their programme heading,
+including programmes that otherwise count as dormant. (Until 2026-11-07 the
+runner's programme planning turns appeared there too, with their trigger; the
+runner starts none now, and a lane file from then is still drawn as it was.)
+A finish or mend session appears under its goal, or as unassigned activity
+when the goal is missing. Each open Manager session has its own rounded activity frame
 directly below the hero, with its trigger when recorded; the hero keeps the
 `mc manager` entry point. Quiet dormant
 programmes fold into a single count; `a` shows every programme. The collector's
@@ -241,6 +242,8 @@ that every word has a row on today's page.
 | `manager` | cyan |
 | `brief` | cyan |
 | `plan` | blue |
+| `finish` | blue |
+| `mend` | yellow |
 | `gate` | green |
 | `wait` | grey |
 | `red` | red |
@@ -567,7 +570,8 @@ sessions by kind, and goals by status and stage (including zero counts and
 terminal stages). Goal totals cover the current programme goals, excluding
 archives. Waiting proposals include programmes and the root; the daily cost
 uses the existing list-price estimate. Throughput shows completed build,
-review and plan sessions and merged PRs over the last 24 hours, followed by
+review, finish and mend sessions (and plan, for rows from before 2026-11-07)
+and merged PRs over the last 24 hours, followed by
 the latest successful deploy date in UTC (or `none recorded`). Complete fields
 wrap within the frame on narrow terminals. `mc manager` (or `m` at the page
 prompt) opens the session for priorities,

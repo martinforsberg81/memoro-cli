@@ -60,15 +60,18 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: three roles, each one file, and the three that stay
-apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what the
-session is for; a verb file says how a verb is used).
+What canon holds today: five goal roles, each one file, and the three that
+stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
+the session is for; a verb file says how a verb is used). Plan is interactive
+only, and finish and mend took its headless goal work (Martin, 2026-11-07).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | fable | `plan-session` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; and `mc run`, one headless session on a goal in finish, or in merge after a red ([mc-goals.md](mc-goals.md) § *Finish and a red merge: a plan session*) |
-| `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal |
+| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; never the runner |
+| `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
+| `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
+| `mend-session` | opus | `mend-session` | `mc run`, one headless session on a blocked goal in any stage, or on a red merge ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
 | `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
@@ -165,14 +168,14 @@ Four paths launch a session with instructions, and all four call it:
 |---|---|
 | `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
-| `run.js` (`runGoal`) | a goal build, review or headless plan session |
+| `run.js` (`runGoal`) | a goal build, review, finish or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
 
 Each of them used to write the join out by hand.
 
 ## The verb files
 
-`canon/verbs/goal.md` holds the goal manual. The plan and manager role files name
+`canon/verbs/goal.md` holds the goal manual. The plan, finish, mend and manager role files name
 it with `@verb goal`. `expandRoleIncludes`, called by `instructionsFor`, turns
 that line into a short instruction to read the installed `mc/verbs/goal.md`
 before using `mc goal`. It never pastes the manual into the launch context.
@@ -195,12 +198,25 @@ builds. `roles.test.js` holds the selected parts and their shared instructions.
 aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). It has, in
 principle, full freedom to move the programme toward it, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
-build session. Interactive, it has no restrictions; headless, it never does
-Martin's acts — `mc deploy`, production data, credentials, `--admin`. A goal
+build session. It is interactive only (Martin, 2026-11-07): Martin is at the
+terminal and it has no restrictions; the runner never starts one. It names
+the headless roles and what each owns, so it knows the goal's text is its
+own and a headless session's `Martin` is a question for it. A goal
 is what the runner builds, a means toward the aim. `refusedMove`
 (`commands/goal.js`) still enforces forward stage moves for plan sessions. Before 2026-11-03 the
 role was `plan.md`, which forbade a headless plan session code, commits, a
 publish and `review`/`done`, and listed three allowed ends; both are gone.
+Until 2026-11-07 the same file had headless sections (`### finish`, `### blocked`,
+programme planning, `MC_PLAN_REASON`); those are gone too.
+
+**The finish session** (`finish-session.md`) and **the mend session**
+(`mend-session.md`) each state one job, their inputs, what they may change,
+their exits and what they hand to whom. Finish takes `finish · ready` to
+`merge`, or sets `blocked` (an obstacle: mend's) or `Martin` (a change to
+the goal, contract or scope). Mend takes every blocked goal and every red
+merge, resolves the obstacle and retries the stage, and sets `Martin` for
+what only a person decides. Neither changes the goal's text: `refusedMove`
+and the criterion verbs refuse them, as they refuse build and review.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
 frontmatter — and `tests/mc/roles.test.js` § *every canon role has a body* is
 the guard that keeps that from coming back, for every part of every role.
@@ -355,10 +371,11 @@ verified by opening a real planning session with it (2026-09-05, #614).
 ## Session identity is not only an instruction argument
 
 Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
-accompanies programme-owned launches; `MC_GOAL` identifies a goal. Runner
-roles are `build-session:goal`, `review-session:goal` and `plan-session`;
-desks are `manager`, `helper` and `intake`. The launch clears inherited session
+accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
+`manager`, `helper` and `intake`. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
+Runner roles are `build-session:goal`, `review-session:goal`, `finish-session`
+and `mend-session`; `plan` is the interactive plan session's.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
 MC_GOAL, then cwd. Programme directories identify plan sessions; their
@@ -368,5 +385,5 @@ SessionStart hook prints what it found even outside a repository.
 
 `mc plan` refuses recognised sessions and Claude/Codex agent markers before
 creating anything. A session writes a goal through `mc goal`, not by opening
-another interactive plan session. The runner's headless plan sessions on
-finish and merger reds use the same role, not that person's entrance.
+another interactive plan session. The runner's finish and mend sessions have
+roles of their own and never use the plan role or that person's entrance.

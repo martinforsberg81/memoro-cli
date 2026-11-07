@@ -2,7 +2,7 @@
  * `mc run` — the decisions the runner makes without starting anything.
  *
  * Everything here is a function of text and small objects: the prompts a
- * goal's build, review and plan session is given; the headless argument list
+ * goal's build, review, finish and mend session is given; the headless argument list
  * per tool; what a finished session's output means; when the helper, intake
  * and nightly chores are due; and the runs.tsv row. The process-touching half
  * (git, gh, the session itself) is run.js, and it calls in here so that the
@@ -287,7 +287,7 @@ export function intakeNote(turn) {
 
 /**
  * The goal as text (`renderGoalText`, what `mc goal show` prints), after a
- * prompt: the brief a goal's build, review and plan session is given.
+ * prompt: the brief every session on a goal is given.
  */
 function withBrief(prompt, brief) {
   return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
@@ -311,34 +311,61 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
   return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`, brief);
 }
 
+/** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */
+function lastWord(why) {
+  return [why?.done, why?.comment].filter(Boolean).join(' — ');
+}
+
 /**
- * What a headless plan session on a goal is told: the goal, the stage it
- * takes it in — `finish` (a review found it not OK, or the build could not
- * end it) or `merge` (the merger answered red, or its head moved) — the
- * runner's last word on it, and where its worktree is, which it works in
- * itself. The rest is `canon/roles/plan-session.md`'s.
+ * What a goal's finish session is told: the goal in `finish · ready` (a
+ * review found it not OK and wrote REVIEW.md, or the runner sent it there),
+ * the last word on it, and where its worktree is. The rest is
+ * `canon/roles/finish-session.md`'s.
  */
-export function goalPlanPrompt({ name, dir, worktree, branch, stage = 'finish', reason: cause = 'finish', why = null, brief = null }) {
-  const reason = [why?.done, why?.comment].filter(Boolean).join(' — ');
-  const task = cause === 'blocked'
-    ? `it is blocked in ${stage}: read LOG.md and REVIEW.md when present, resolve the obstacle, then retry the same stage with mc goal ready; in merge, mc goal stage merge executes the retry`
-    : stage === 'merge'
-    ? 'it is in merge and the merger did not land it: take the red in its worktree, publish, and queue it again'
-    : 'it is in finish: read its REVIEW.md, when there is one, and LOG.md, fix it in its worktree, publish, and move it to merge';
+export function goalFinishPrompt({ name, dir, worktree, branch, why = null, brief = null }) {
+  const reason = lastWord(why);
   return withBrief([
-    `The goal ${name} is yours, headless (reason: ${cause}) — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
+    `You finish the goal ${name}, headless: it is in finish. Read REVIEW.md in its directory when there is one, and LOG.md; fix what review found in its worktree, gate, publish, and move it to merge.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
   ].join('\n'), brief);
 }
 
-/** `checkInPrompt` for a headless plan session on a goal. */
-export function goalPlanCheckInPrompt({ minutes, count }) {
+/**
+ * What a goal's mend session is told: the goal, the stage it is blocked in —
+ * or `merge`, where the merger answered red or its head moved — the last
+ * word on it, and where its worktree is. The rest is
+ * `canon/roles/mend-session.md`'s.
+ */
+export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null }) {
+  const reason = lastWord(why);
+  const task = stage === 'merge'
+    ? `it is in merge${status === 'blocked' ? ' · blocked' : ''} and the merger did not land it: read LOG.md and the merger's red, resolve it in its worktree, gate, publish, and queue it again with mc goal stage merge`
+    : `it is blocked in ${stage}: read LOG.md and REVIEW.md when present, diagnose and resolve the obstacle, then retry the same stage with mc goal ready`;
+  return withBrief([
+    `You mend the goal ${name}, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
+    `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
+  ].join('\n'), brief);
+}
+
+/** `checkInPrompt` for a goal's finish session. */
+export function goalFinishCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
-    'You retain planning and implementation authority: resolve technical choices, missing planning detail and bounded test scope yourself within the promised outcome and Martin\'s explicit constraints. Preserve acceptance and gate requirements.',
-    'Block only for a decision or act reserved for Martin: `mc goal martin --reason "<what only Martin can decide or do, what you tried, and your recommendation>"`. If the goal is wrong, use your role\'s drop/replacement path.',
+    'Your job is what review found: fix it, gate, publish, and `mc goal stage merge`. Preserve acceptance and gate requirements.',
+    'An obstacle you cannot resolve within the goal as written: `mc goal blocked --reason "…"` (a mend session takes it). A change to the goal, contract or product scope: `mc goal martin --reason "<the question, what you tried, and your recommendation>"`.',
+  ].join('\n');
+}
+
+/** `checkInPrompt` for a goal's mend session. */
+export function goalMendCheckInPrompt({ minutes, count }) {
+  return [
+    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
+    'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
+    '',
+    'Your job is the obstacle: diagnose it, resolve it, and retry the goal\'s current stage (`mc goal ready`; in merge, `mc goal stage merge`). Preserve acceptance and gate requirements.',
+    'Only a change to the goal, contract or product scope waits on Martin: `mc goal martin --reason "<the question, what you tried, and your recommendation>"`.',
   ].join('\n');
 }
 

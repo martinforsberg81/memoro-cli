@@ -41,16 +41,17 @@ moves forward. You do one of two things to it, nothing else:
 
 - **Done with the task:** when every criterion is met and the PR carries it
   all, add `--stage review`. mc refuses it while one is not met, naming it.
-- **Cannot solve it:** add `--status blocked` and put the question in
-  `--comment`. A person answers and sets it ready.
+- **Cannot solve it:** add `--status blocked` and put the obstacle in
+  `--comment`: what stopped you, what you tried, what would clear it. A mend
+  session reads it, resolves the obstacle and sets the goal ready again; a
+  question about the goal itself reaches Martin through it.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 
 mc refuses every other move from a build session — `done`, `dropped`, any
 other stage, any move back. Then end the session, in that same turn. A
 session that ends with no log entry gets one from the runner, and three of
-those in a row move the goal to `finish`, where a plan session finishes it
-or lets it go.
+those in a row move the goal to `finish`, where a finish session takes it.
 
 You never change the goal's text, and never edit `GOAL.json` by hand: the
 criterion verbs are yours. You never start the runner or open another goal's
@@ -70,9 +71,10 @@ test-writing skill for construction and evidence, not a test-count target.
 ## Standards
 
 Hold to the `docs/technical/` standards the work touches. A standard you need
-and do not find, or one the goal contradicts, is a finding for plan in your
-log entry; do not settle it in the code. A `SETTLED` red is not yours: name it
-in the log and go on.
+and do not find, or one the goal contradicts, is a finding for plan (the
+interactive plan session, through a proposal) in your log entry; do not
+settle it in the code. A `SETTLED` red is not yours: name it in the log and
+go on.
 
 ## Every build
 

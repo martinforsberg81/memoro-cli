@@ -3,17 +3,19 @@
  *
  * The runner starts goal sessions: a free lane takes the next goal that could
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
- * session on an open goal, a review session on a goal in review, or the plan
- * session a blocked goal wakes — runs it, and picks again. One session is one
- * fresh headless process in the goal's worktree (a plan session stands in the
- * programme's directory). The runner decides nothing with a model: it reads
- * files, runs git and gh, starts the session through the launch adapter and
- * waits for it. It is the parent of the process it starts.
+ * session on an open goal, a review session on a goal in review, a finish
+ * session on a goal in finish, or the mend session a blocked goal or a red
+ * merge wakes — runs it, and picks again. One session is one fresh headless
+ * process in the goal's worktree. The runner never starts a plan session:
+ * plan is interactive, `mc plan` (Martin, 2026-11-07). The runner decides
+ * nothing with a model: it reads files, runs git and gh, starts the session
+ * through the launch adapter and waits for it. It is the parent of the
+ * process it starts.
  *
  * Where a goal stands is its own GOAL.json and LOG.md (goals.js). A session
  * writes its entry with `mc goal log`; one that ends without a word gets a
- * runner entry, and three of those in a row block the goal (`goalWithoutWord`).
- * A review or plan session sends its goal to merge;
+ * runner entry, and three of those in a row send the goal to finish (`goalWithoutWord`).
+ * A review or finish session sends its goal to merge;
  * a goal whose pull requests have all landed is set done (`settleLanded`); a
  * goal waiting on `after` is opened when those have landed (`releaseWaiting`).
  *
@@ -68,7 +70,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, PLAN_ROLE, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, MEND_ROLE, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -91,7 +93,6 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { pickWork } from './lane-pick.js';
-import { isProgrammePlan, programmePlanning, programmePlanningReceipt, programmePlanPrompt } from './programme-plan.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
@@ -111,7 +112,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalFinishCheckInPrompt, goalFinishPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -123,11 +124,8 @@ const ADMISSION_RETRY_MS = 1000;
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
-/** Headless planning candidates, independent of the build/review catalog. */
-const HEADLESS_PLAN_CANDIDATES = Object.freeze([
-  Object.freeze({ tool: 'claude', model: 'opus', effort: 'medium' }),
-  Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }),
-]);
+/** The role each goal session kind runs with (`goalSession`). */
+const GOAL_ROLES = Object.freeze({ build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE });
 
 /*
  * Disk: no session starts unless the shared policy admits it
@@ -1310,7 +1308,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The goals a lane could start now, as `pickWork` candidates: those the
    * runner starts a session on (`goalSession`: `build · ready`, `review ·
-   * ready`, `finish · ready`, and `merge · ready` after a red while its pull
+   * ready`, `finish · ready`, every `blocked` goal, and `merge · ready` after a red while its pull
    * request is out of the merger's line), on one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
@@ -1338,75 +1336,27 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const all = goals();
     return all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal)
-        && (goalSession(goal, merge) !== 'plan' || !programmePlanHeld(goal.programme)))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
-        return { name: goalName(goal), repo: goal.repos[0], kind, variant: kind === 'plan' ? null : 'goal', since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
+        return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
       });
+  }
+
+  /** A build or review is `goal`'s variant (a project's was the other); a finish or a mend has none (`session-kind.js`). */
+  function goalVariant(kind) {
+    return kind === 'build' || kind === 'review' ? 'goal' : null;
   }
 
   /**
-   * The session a goal gets, by its stage (`goalSession`): `review` in
-   * review, `plan` in finish or merge, else `build`. Only a candidate of
+   * The session a goal gets (`goalSession`): `mend` when blocked or in merge,
+   * `review` in review, `finish` in finish, else `build`. Only a candidate of
    * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
-    if (goal.status === 'blocked' || isProgrammePlan(goal)) return 'plan';
+    if (goal.status === 'blocked' || goal.stage === 'merge') return 'mend';
     if (goal.stage === 'review') return 'review';
-    return goal.stage === 'finish' || goal.stage === 'merge' ? 'plan' : 'build';
-  }
-
-  /** One plan session at a time per programme, including a predecessor runner. */
-  function programmePlanHeld(programme) {
-    const foreground = join(root, 'runner', 'foreground');
-    const interactive = deps.list(foreground).some((file) => {
-      if (!/^\d+\.json$/u.test(file)) return false;
-      let held;
-      try { held = JSON.parse(deps.read(join(foreground, file)) ?? 'null'); } catch { return false; }
-      return held?.verb === 'plan' && held.programme === programme && Number.isInteger(held.pid) && alive(held.pid);
-    });
-    return interactive || claims.has(`plan:${programme}`) || stepsHeld().some((held) => held.programme === programme && held.kind === 'plan');
-  }
-
-  const planReceipt = (programme) => join(root, 'runner', 'programme-plan', `${programme}.json`);
-
-  /** One/zero remaining goals and daily direct proposals share one programme-owned lane. */
-  function programmeWork(names, passed) {
-    const home = programsHome(deps.env);
-    const all = goals();
-    const out = [];
-    for (const programme of deps.list(home)) {
-      const name = `plan:${programme}`;
-      if (passed.has(name) || programmePlanHeld(programme)) continue;
-      const own = all.filter((goal) => goal.programme === programme);
-      const archive = join(home, programme, 'goals', '.archive');
-      const completed = deps.list(archive).flatMap((name) => {
-        const raw = deps.read(join(archive, name, GOAL_FILE));
-        if (raw === null) return [];
-        const parsed = parseGoal(raw);
-        return [{ ...parsed, goal: name, log: parseLog(deps.read(join(archive, name, LOG_FILE)) ?? '') }];
-      });
-      const proposals = deps.files(join(home, programme, 'proposals')).filter((file) => file.endsWith('.md')).sort();
-      if (!own.length && !completed.length && !proposals.length && !deps.exists(join(home, programme, 'README.md'))) continue;
-      let receipt;
-      try { receipt = JSON.parse(deps.read(planReceipt(programme)) ?? 'null'); } catch { continue; }
-      if (receipt !== null && (typeof receipt !== 'object' || Array.isArray(receipt))) continue;
-      const decision = programmePlanning({ goals: [...own, ...completed], proposals, receipt, now: deps.now() });
-      if (!decision) continue;
-      // A proposal-only or empty programme has no repository worktree to choose a lane from.
-      const repo = [...own, ...completed].flatMap((goal) => goal.repos ?? []).find((repo) => names.includes(repo))
-        ?? (!own.length && !completed.length ? names[0] : null);
-      if (!repo) continue;
-      const goal = { programme, goal: null, dir: join(home, programme), reason: decision.reason, stage: null, status: 'ready', repos: [repo], class: 'large', log: [], planningDecision: decision };
-      out.push({ name, repo, kind: 'plan', variant: null, since: receipt?.at ?? '', resumed: false, goal });
-    }
-    return out;
-  }
-
-  /** Planning uses the available Opus/Sol medium candidate with most headroom. */
-  function planRoute() {
-    return { ...routeClass('large', { catalog: { large: HEADLESS_PLAN_CANDIDATES } }), class: 'plan' };
+    return goal.stage === 'finish' ? 'finish' : 'build';
   }
 
   /**
@@ -1414,18 +1364,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * or `{ ran: 0 }` when it did not start.
    */
   async function goalPass(goal, { lane, label }) {
-    const name = isProgrammePlan(goal) ? `plan:${goal.programme}` : goalName(goal);
-    const planning = goalKind(goal) === 'plan';
+    const name = goalName(goal);
     claims.add(name);
     claimRepos.set(name, goal.repos[0]);
-    if (planning) claims.add(`plan:${goal.programme}`);
     let outcome;
     try {
       outcome = await runGoal(goal, { lane });
     } finally {
       claims.delete(name);
       claimRepos.delete(name);
-      if (planning) claims.delete(`plan:${goal.programme}`);
     }
     if (outcome === 'stop') return { ran: 0, stop: true };
     if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
@@ -1572,84 +1519,56 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const dirty = dirtyWorktrees(goal);
     const left = dirty.length ? `; worktree not clean — ${dirtySentence(dirty)}` : '';
     if (reviewDiedBefore(log)) {
-      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a blocked plan session takes it${left}` });
+      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a mend session takes it${left}` });
       return;
     }
     goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again${left}` });
   }
 
   /**
-   * After a headless plan session on `finish` or on a red in `merge`. In
-   * `finish` it publishes and moves the goal to `merge`, drops it, or sets
-   * it blocked; one that ends with the goal still `finish · ready` sets it
-   * `finish · blocked`, so no second one starts. In `merge` it takes the
-   * red and queues the pull request again: one in the merger's line gets the
-   * runner's entry (the red is taken, so it wakes no session again); one not
-   * in line sets `merge · blocked`.
+   * After a finish session (`canon/roles/finish-session.md`). It publishes
+   * and moves the goal to `merge`, or sets it `blocked` (a mend session takes
+   * it) or `Martin`; the runner adds nothing then. One that ends with the goal
+   * still `finish · ready` sets it `finish · blocked`, so no second finish
+   * starts on the same evidence: a mend session reads why it ended.
    */
-  function afterPlan(goal, name, { stage, reason }) {
+  function afterFinish(goal, name) {
     const now = stateNow(goal);
-    if (reason === 'blocked' && now.stage === stage && stage !== 'merge' && now.status === 'ready') {
-      say(`${name}: plan resolved the blocker; retry ${stage}`);
-      return;
-    }
-    if (reason === 'blocked' && now.stage === stage && now.status === 'blocked') {
-      goalState(goal, name, { status: 'Martin' }, { comment: 'plan left the obstacle unresolved; Martin needs to inspect LOG.md and the session log' });
-      return;
-    }
-    if (now.stage !== stage || now.status !== 'ready') { say(`${name}: plan left it ${now.stage} · ${now.status}`); return; }
-    if (stage === 'finish') {
-      goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — a blocked plan session takes it' });
-      return;
-    }
-    const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const queued = (goal.prs ?? []).some((item) => merge.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
-    if (queued) goalState(goal, name, {}, { done: 'plan session took the red; the pull request is in the merger\'s line again' });
-    else goalState(goal, name, { status: reason === 'blocked' ? 'Martin' : 'blocked' }, { comment: 'the plan session on the red ended with nothing in the merger\'s line — inspect its log before retrying' });
+    if (now.stage !== 'finish' || now.status !== 'ready') { say(`${name}: finish left it ${now.stage} · ${now.status}`); return; }
+    goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — a mend session takes it' });
   }
 
   /**
-   * Every repository's planning checkout of a programme is there on
-   * `plan/<programme>`, or the reason one is not. A plan session stands beside
-   * them (`canon/roles/plan-session.md`), so they are made before it starts,
-   * as `mc plan` makes them: from origin/main, or on the branch as it is. Only
-   * the add holds the runner lock; dependencies are attached after it is let
-   * go, awaited, so a cold install does not hold the event loop. Non-fatal: a
-   * checkout that cannot be made is said, and the session starts without it.
+   * After a mend session (`canon/roles/mend-session.md`) on a goal blocked in
+   * `stage`, or in `merge` after a red. Outside merge it resolves the obstacle
+   * and sets the goal ready, so the stage runs again; one that leaves it
+   * blocked sets `Martin` (the recovery guard: no retry loop). In `merge` it
+   * queues the pull request again: one in the merger's line gets the runner's
+   * entry (the red is taken, so it wakes no session again); one not in line
+   * sets `Martin` when the goal was blocked, else `merge · blocked` for one
+   * mend session (a legacy `merge · ready` red, `mergeRetryDue`).
    */
-  async function placePlanCheckouts(programmeDir, programme, name) {
-    const branch = `plan/${programme}`;
-    for (const repo of repos) {
-      const path = join(programmeDir, repo.name);
-      if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) continue;
-      if (!deps.exists(repo.path)) { say(`${name}: no ${repo.name} checkout at ${repo.path} — planning without it`); continue; }
-      if (!deps.git(repo.path, ['fetch', '-q', 'origin']).ok) say(`${name}: git fetch in ${repo.path} failed — origin/main may be stale`);
-      let added;
-      try {
-        added = deps.lock(root, () => {
-          // Another session may have made it since the check above.
-          if (deps.exists(path) && deps.git(path, ['rev-parse', '--is-inside-work-tree']).ok) return { ok: true, existed: true, reused: true };
-          return addBranchWorktree({ git: deps.git, bare: repo.path, path, branch });
-        }, { strict: true });
-      } catch (error) {
-        added = { ok: false, stderr: error?.message || String(error) };
-      }
-      if (!added.ok) {
-        say(`${name}: ${repo.name}'s planning checkout ${path} is not made — ${String(added.stderr ?? '').trim() || 'git failed'}; the session starts without it`);
-        continue;
-      }
-      if (added.reused) continue;
-      say(`${name}: ${path} made on ${branch}${added.existed ? ', as it was' : ' from origin/main'}`);
-      const attached = await deps.attachDeps(path);
-      if (!attached.ok) say(`${name}: dependencies could not be attached in ${path} — ${attached.why}`);
+  function afterMend(goal, name, { stage, status }) {
+    const now = stateNow(goal);
+    if (now.stage === stage && stage !== 'merge' && now.status === 'ready') {
+      say(`${name}: mend resolved the obstacle; retry ${stage}`);
+      return;
     }
+    if (now.stage === stage && now.status === 'blocked') {
+      goalState(goal, name, { status: 'Martin' }, { comment: 'mend left the obstacle unresolved; Martin needs to inspect LOG.md and the session log' });
+      return;
+    }
+    if (now.stage !== stage || now.status !== 'ready') { say(`${name}: mend left it ${now.stage} · ${now.status}`); return; }
+    const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
+    const queued = (goal.prs ?? []).some((item) => merge.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
+    if (queued) goalState(goal, name, {}, { done: 'mend session took the red; the pull request is in the merger\'s line again' });
+    else goalState(goal, name, { status: status === 'blocked' ? 'Martin' : 'blocked' }, { comment: 'the mend session on the red ended with nothing in the merger\'s line — inspect its log before retrying' });
   }
 
   /**
    * Every repository's worktree of a goal is there, or the reason one is not.
    * Anyone may work in a goal's worktree, so one that has gone is made again
-   * rather than refused. Made before a goal's first session of any kind but a
-   * programme turn, which has no goal (`runGoal`).
+   * rather than refused. Made before a goal's first session of any kind (`runGoal`).
    */
   function placeGoalWorktrees(goal, name) {
     for (const repoName of goal.repos) {
@@ -1697,9 +1616,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The runner's own log entry, for a build session that left none: stage
    * and status unchanged. Three of them in a row in `build` move the goal to
-   * `finish · ready`, for a plan session to finish or let go — the guard
-   * against a session that fails the same way for ever (the loop that ran
-   * 2 803 times); there is no attempt counter, only the log.
+   * `finish · ready`, for a finish session — the guard against a session that
+   * fails the same way for ever (the loop that ran 2 803 times); there is no
+   * attempt counter, only the log.
    */
   function goalWithoutWord(goal, name, comment) {
     const { dir } = goal;
@@ -1708,7 +1627,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${name}: ${comment}`);
     const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').slice(-3);
     if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
-    goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a plan session finishes it' });
+    goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a finish session takes it' });
   }
 
   /**
@@ -1717,8 +1636,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * or a `skipped` word. A goal in `review` gets a review
    * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head (MC_REVIEW_HEAD), and `mc goal stage
-   * merge` executes its decision, with `afterReview` after it. A goal in `finish`, or in
-   * `merge` after a red, gets a headless plan session and `afterPlan`.
+   * merge` executes its decision, with `afterReview` after it. A goal in `finish`
+   * gets a finish session (`finish-session`) and `afterFinish`; a blocked goal
+   * in any stage, or one in `merge` after a red, gets a mend session
+   * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree
+   * on the goal's class.
    *
    * A session cut off by the API is not resumed: it ends, its goal is picked
    * again, and the next session reads `LOG.md` and the branch. The worktree
@@ -1727,16 +1649,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * committed here for the same reason.
    */
   async function runGoal(goal, { lane = 0 } = {}) {
-    const programmeTurn = isProgrammePlan(goal);
-    const reason = programmeTurn ? goal.reason : goal.status === 'blocked' || goal.stage === 'merge' ? 'blocked' : 'finish';
-    const name = programmeTurn ? `plan:${goal.programme}` : goalName(goal);
+    const name = goalName(goal);
     const logPath = join(goal.dir, LOG_FILE);
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const kind = goalKind(goal);
     const review = kind === 'review';
-    const planning = kind === 'plan';
-    if (planning && reason === 'blocked') {
+    const finish = kind === 'finish';
+    const mend = kind === 'mend';
+    // The recovery guard: three mends in one stage without a person's `ready` between them wait on Martin.
+    if (mend && goal.status === 'blocked') {
       const entries = inStage(parseLog(deps.read(logPath) ?? ''), goal.stage);
       const reset = entries.findLastIndex((entry) => entry.tool === 'person' && entry.status === 'ready');
       if (entries.slice(reset + 1).filter((entry) => entry.comment === 'starting blocked recovery').length >= 3) {
@@ -1744,19 +1666,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return 'skipped:recovery-limit';
       }
     }
-    const roleName = review ? REVIEW_ROLE : planning ? PLAN_ROLE : BUILD_ROLES.goal;
+    const roleName = GOAL_ROLES[kind];
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routed = review ? reviewRoute(goal) : { route: planning ? planRoute() : routeClass(goal.class) };
+    const routed = review ? reviewRoute(goal) : { route: routeClass(goal.class) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routed.settings ?? routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
-    // A plan session stands in the programme's directory, beside the goal; it
-    // may go into the goal's worktree and finish it (`canon/roles/plan-session.md`).
-    const cwd = programmeTurn ? goal.dir : planning ? dirname(dirname(goal.dir)) : worktree;
+    // Every session on a goal stands in its first repository's worktree.
+    const cwd = worktree;
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
@@ -1776,61 +1697,58 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return 'skipped:disk';
     }
     try {
-      if (!programmeTurn) {
-        const lost = placeGoalWorktrees(goal, name);
-        if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
-        // A review starts on a clean tree only: a dirty one holds a fault or work nobody has judged (a dead review's fault replay was left there, 2026-11-06).
-        const dirty = review ? dirtyWorktrees(goal) : [];
-        if (dirty.length) {
-          goalState(goal, name, { status: 'blocked' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; plan inspects it` });
-          return 'skipped:dirty';
-        }
+      const lost = placeGoalWorktrees(goal, name);
+      if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      // A review starts on a clean tree only: a dirty one holds a fault or work nobody has judged (a dead review's fault replay was left there, 2026-11-06).
+      const dirty = review ? dirtyWorktrees(goal) : [];
+      if (dirty.length) {
+        goalState(goal, name, { status: 'blocked' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; a mend session inspects it` });
+        return 'skipped:dirty';
       }
-      // A plan session stands in the programme's directory (`cwd`), beside the planning checkouts.
-      if (planning) await placePlanCheckouts(cwd, goal.programme, name);
       // A goal's branch is made when it can start: one made at `mc goal new` in a
       // later phase is remade from origin/main before its first build, if unbuilt.
       if (kind === 'build' && !lastBuildEntry(goal.log)) {
         remakeUnbuiltBranches({ git: deps.git, dir: goal.dir, goal: goal.goal, repos: goal.repos, say: (repo, text) => say(`${name}: ${repo} ${text}`) });
       }
-      const branch = programmeTurn ? null : goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
+      const branch = goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
       const repo = repos.find((item) => item.name === repoName);
       let pr = null;
       if (review) {
         pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
         if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
         if (!pr) {
-          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a plan session finishes it` });
+          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a finish session takes it` });
           return 'skipped:no-pr';
         }
       }
-      const attached = planning ? { ok: true } : await deps.attachDeps(worktree);
+      const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
       const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
-      const prompt = programmeTurn
-        ? programmePlanPrompt({ programme: goal.programme, dir: cwd, decision: goal.planningDecision })
-        : review
-        ? goalReviewPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, pr: pr.number, head: pr.head, brief })
-        : planning
-        ? goalPlanPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, stage: goal.stage, reason, why: goal.log.at(-1), brief })
-        : goalPrompt({ name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief });
+      const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief };
+      const prompt = review
+        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head })
+        : finish
+        ? goalFinishPrompt({ ...told, why: goal.log.at(-1) })
+        : mend
+        ? goalMendPrompt({ ...told, stage: goal.stage, status: goal.status, why: goal.log.at(-1) })
+        : goalPrompt(told);
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
       const ts = stamp().replace(/[-:]/gu, '');
       // A goal's name holds a `/`, which a file stem may not.
-      const stem = programmeTurn ? `plan-${goal.programme}-${reason.replaceAll('_', '-')}-${ts}` : `goal-${goal.programme}-${goal.goal}-${ts}`;
+      const stem = `goal-${goal.programme}-${goal.goal}-${ts}`;
       const out = join(paths.log, stem);
-      // Before anything a launch leaves behind (the in-flight file, the scratch directory, a receipt, a log entry).
+      // Before anything a launch leaves behind (the in-flight file, the scratch directory, a log entry).
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
-      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${planning ? 'plan' : `class ${goal.class}`}: ${route.basis} (${route.why})`);
+      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       // There exactly as long as the session is, so in flight and slot are one
       // fact, and the eligibility of this goal is that same fact.
       const currentPath = paths.currentFor(repoName, lane);
       const current = {
-        name, ...(planning ? { reason } : {}), step: null, kind, variant: planning ? null : 'goal', programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        name, step: null, kind, variant: goalVariant(kind), programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
         check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
@@ -1850,9 +1768,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         say(`${name}: no scratch directory (${scratch}): ${error.message} — starting without MC_SCRATCH`);
       }
       let result;
-      let programmeReceipt;
       try {
-        if (planning && reason === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+        if (mend && goal.status === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
         const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
         const rechecked = await admission.recheck?.();
         if (rechecked && !rechecked.admitted) {
@@ -1865,13 +1782,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
-        const canHandoff = !programmeTurn && (review || planning) && scratchEnv.MC_SCRATCH;
+        // A session whose `mc goal stage merge` ends it: review, finish, and a mend in merge.
+        const canHandoff = (review || finish || mend) && scratchEnv.MC_SCRATCH;
         if (canHandoff) remove(handoffPath);
-        if (programmeTurn) {
-          const previous = JSON.parse(deps.read(planReceipt(goal.programme)) ?? 'null');
-          programmeReceipt = programmePlanningReceipt(previous, goal.planningDecision, stamp());
-          writeJson(planReceipt(goal.programme), programmeReceipt);
-        }
         const pendingSession = deps.session({
           bin: tool.bin,
           args: tool.args,
@@ -1883,15 +1796,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             catch { return false; }
           } : null,
           ...watchFor(launch, settings, {
-            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : goalCheckInPrompt,
+            prompt, name, checkInText: finish ? goalFinishCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
             onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
           }),
           env: {
             // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES).
             MC_HEADLESS: '1',
-            MC_ROLE: roleName, MC_PROGRAMME: goal.programme, ...(planning ? { MC_PLAN_REASON: reason } : {}),
-            // A plan session is in no worktree: neither MC_REPO nor MC_WORKAREA.
-            ...(programmeTurn ? {} : { MC_GOAL: `${goal.programme}/${goal.goal}` }), ...(planning ? {} : { MC_REPO: repoName, MC_WORKAREA: worktree }), MC_TOOL: settings.tool,
+            MC_ROLE: roleName, MC_PROGRAMME: goal.programme,
+            MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
             // The review uses this head as context; the Stop hook reads when it began.
             ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
@@ -1917,14 +1829,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
-      if (programmeTurn) writeJson(planReceipt(goal.programme), { ...programmeReceipt, finished: stamp(), outcome: read.note, status: result.status, timed_out: Boolean(result.timedOut) });
-      else if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
-      else if (planning && !read.quota && !read.interrupted) afterPlan(goal, name, { stage: goal.stage, reason });
+      if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
+      // A quota or API ending answers nothing about the goal: the next pick takes it again.
+      else if (finish && !read.quota && !read.interrupted) afterFinish(goal, name);
+      else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
-      const note = programmeTurn || spoke ? read.note : `${read.note},no-log`;
-      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: planning ? null : 'goal' }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: planning ? '-' : goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      const note = spoke ? read.note : `${read.note},no-log`;
+      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
     } finally { admission.release?.(); dropSlot(); }
@@ -2035,7 +1948,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...programmeWork(names, passed)];
+    const items = goalWork({ repos: names, passed });
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
@@ -2130,7 +2043,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (offlineHeld()) return { ran: 0 };
       const pick = nextWork({ repo, passed, carry: last?.name });
       if (!pick) return { ran: 0 };
-      // A goal's build or review, or the plan session a blocked goal wakes: the only work a lane takes.
+      // A goal's build, review or finish, or the mend session a blocked goal or a red merge wakes: the only work a lane takes.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = await goalPass(pick.goal, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;

@@ -445,11 +445,11 @@ export async function landJob(batch, {
   const answers = [];
   const answer = async (job, landed, report) => {
     // A goal's head moved past the one its review judged: not OK any more.
-    // It leaves the queue, and the goal stays in merge for one plan session (`tellGoal`).
+    // It leaves the queue, and the goal stays in merge for one mend session (`tellGoal`).
     const moved = !landed && Boolean(job.goal) && (report?.stopped_at === 'pushed' || report?.stopped_at === 'moved');
     // A round the watch stopped for a new push: back in line at its place.
     const back = !landed && !moved && report?.stopped_at === 'pushed';
-    // A red goes where it goes without a mend: a goal's to one plan session (`tellGoal`).
+    // A red is not repaired here: a goal's goes to one mend session (`tellGoal`).
     const requeued = !landed && !back && !moved && mayRequeue(job, report);
     // The network stopped the round: back in line after a backoff, until the sixth in a row, which is answered as it stands.
     const offline = !landed && !back && !moved && !requeued && mayOffline(job, report);
@@ -755,7 +755,7 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
       return;
     }
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: 'blocked', entry: entry(red, `${why} — a plan session resolves the obstacle`) };
+      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: 'blocked', entry: entry(red, `${why} — a mend session resolves the obstacle`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);

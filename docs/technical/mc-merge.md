@@ -982,7 +982,7 @@ current round's name, mode and phase come from — `runningMerge` in
 `src/mc/merges-collect.js` joins the lock to the repository's name and its
 lease's holder, so the page reads a sentence rather than a slug and a pid.
 
-**Goals, not an execution register.** A review or plan session sends all of a goal's
+**Goals, not an execution register.** A review or finish session sends all of a goal's
 registered pull requests to merge. Phases hold later goals back until lower phases are done
 or dropped; there is no chain of execution branches for the merger to restack.
 The queue orders runnable jobs by arrival within each repository lane.
@@ -1056,7 +1056,7 @@ threw.
 **Where a red goes.** A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
 answered red on #<pr>` entry (`tellGoal`): every failure in `merge` sets
-`merge · blocked` immediately and wakes plan recovery ([`mc-goals.md`](mc-goals.md) § *Finish and a red merge: a plan session*).
+`merge · blocked` immediately and wakes a mend session ([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
 A pull request is a goal's when the job carries the goal (its review's `mc goal stage merge`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal
@@ -1097,7 +1097,7 @@ gate cuts these blocks out of the suite's TAP and out of the selected files'
 TAP (`redTests` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js)) after the
 killed and cancelled files are taken out of the red. The path is on the report
 as `red_detail`, and it goes into the round's `gate-rounds.jsonl` line with
-`red_files`. The goal's plan session reads the merger's reason and this red file, then
+`red_files`. The goal's mend session reads the merger's reason and this red file, then
 reruns the named files with `mc gate <files> --test-name-pattern '<names>'`,
 not the whole suite (ruling 52). A merge round keeps the gate's verdict under `gate`;
 `runMergeRound` lifts `red_files` and `main_red` up to the top when the gate

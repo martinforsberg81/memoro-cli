@@ -93,9 +93,9 @@ content on main (or its tip a merged pull request's head). Removed with
 for all of them; an lsof that fails keeps every one.
 
 **I — a planning area's own checkouts** (`memoro/`, `memoro-cli/`, made by
-`mc plan` or by the runner before a plan session) go when no planning session of
-their programme is running — a foreground `mc plan` record whose process lives,
-a runner plan session in flight, or a process standing in the programme's
+`mc plan`; until 2026-11-07 also by the runner before a headless plan session)
+go when no planning session of their programme is running — a foreground
+`mc plan` record whose process lives, or a process standing in the programme's
 directory — and they have been untouched for 72 hours (younger only in a
 pressure pass). Whether the programme has open goals does not matter. The
 checkout is judged by the release verdict as X judges it, but no process may

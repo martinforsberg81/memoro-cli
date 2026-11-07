@@ -29,7 +29,8 @@ over.
 
 - Headless, there is nobody to ask: your role says where the question goes (a
   blocked step or a pull request). A goal needing Martin uses status
-  `Martin`; build and review report `blocked` to plan for recovery.
+  `Martin`; build and review report an obstacle as `blocked`, which a mend
+  session takes.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.

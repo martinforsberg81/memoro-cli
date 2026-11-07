@@ -41,7 +41,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   }
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
-    const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a plan session resolves the obstacle');
+    const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
     lines.push(line(c, wide, 10, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']));
   }
   for (const session of sessions) lines.push(...activityLines(c, wide, session, { expand }));

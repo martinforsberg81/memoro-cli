@@ -69,17 +69,18 @@ order without a model call:
    runner's own environment. Convert older goal status/dependency records
    before judging them. An unreadable goal is not runnable.
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
-   or `merge · ready` after its first red or moved head and once it is no
-   longer in the merger's line. A blocked goal wakes a recovery plan session;
-   `Martin` waits for the person. `plan · ready`, `done` and `dropped` do not
-   start a goal session.
+   every `blocked` goal, or `merge · ready` after its first red or moved head
+   and once it is no longer in the merger's line. A blocked goal and a red
+   merge wake a mend session; `finish · ready` a finish session. `Martin`
+   waits for the person. `plan · ready`, `done` and `dropped` do not start a
+   goal session; the runner never starts a plan session.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
 4. Exclude goals already claimed or named by a live current file, and goals
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take blocked recovery first, then finish/merge, review, build, and finally
-   programme replenishment/proposal planning. Within the earliest runnable rank, repository fairness
+5. Take the mend of a blocked goal first, then finish and the mend of a red
+   merge, then review, then build. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -156,14 +157,16 @@ role tells the session to read LOG.md first.
   never builds: `mc goal stage merge` sends all registered PRs to merge, or it
   writes REVIEW.md and moves to finish. A review that dies still in review
   is retried once, then blocked if that happens again.
-- A plan session uses `MC_ROLE=plan`, selected with the current unattended
-  provider priority. Goal finish/recovery starts in the programme directory
-  with access to the goal worktree. Programme planning has no MC_GOAL and is
-  triggered by one remaining goal, no remaining goals (done/dropped finished),
-  or open direct proposals due for their rolling 24-hour review. Simultaneous
-  reasons coalesce; durable receipts suppress repeated low-work decisions and
-  immediate failed-session retries. Live interactive/draining plan owners
-  exclude another programme plan. See [headless planning](mc-goals.md#headless-planning-reasons-2026-11-05).
+- A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
+  review found, gates, publishes and `mc goal stage merge`. One that ends
+  with the goal still `finish · ready` is set `finish · blocked`.
+- A mend uses `mend-session` on every blocked goal and every red merge: it
+  resolves the obstacle and retries the stage (`mc goal ready`; in merge
+  `mc goal stage merge`). A mend left blocked, or three in one stage, set
+  `Martin`. Both run in the goal's worktree on the goal's class, like a
+  build, and write the merge handoff when they queue. See
+  [finish and mend](mc-goals.md#finish-and-mend). The runner starts no plan
+  session and no programme planning turn (Martin, 2026-11-07).
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment
@@ -183,8 +186,8 @@ A session that ends because the API server cannot be reached (`apiInterruption`
 kind `offline`: `connection_failed`, or the result says `Can't reach the API
 server`, ENOTFOUND, ECONNREFUSED or ETIMEDOUT) is no answer about its goal: it
 writes no runner entry and records no refusal, and its `runs.tsv` note is
-`offline`. It holds every new model session of any kind — build, review, plan,
-programme planning, the helper and the intake — for `offlineBackoffMs(n)`: a
+`offline`. It holds every new model session of any kind — build, review, finish,
+mend, the helper and the intake — for `offlineBackoffMs(n)`: a
 minute, doubling, at most fifteen, with `n` the offline endings in a row. The
 hold is in memory, so a restart starts without one. A session that ends any
 other way clears it and resets `n`. Sessions already running are untouched.
@@ -281,10 +284,10 @@ are recorded separately for the next launch.
 Every MC session starts on its selected provider's subscription. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
-This applies to every current MC session path: build, review, plan, helper, and
-interactive sessions. An ordinary interactive `mc plan` still lets Martin
-choose the tool and model; billing follows that choice. A headless plan session
-on a goal in finish or merge runs on opus at high effort and is billed as any other
+This applies to every current MC session path: build, review, finish, mend,
+helper, and interactive sessions. An ordinary interactive `mc plan` still lets
+Martin choose the tool and model; billing follows that choice. A finish or
+mend session runs on the goal's class routing and is billed as any other
 session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 

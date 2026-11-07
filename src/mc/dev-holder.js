@@ -26,11 +26,11 @@
  */
 import { execFileSync } from 'node:child_process';
 
-import { PLAN_ROLE, REVIEW_ROLE } from './goals.js';
+import { FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from './goals.js';
 import { BUILD_ROLES } from './run-plan.js';
 
 /** The session kinds whose ending a page should say: a holder of these whose pid is gone is `holder gone`. */
-export const SESSION_HOLDERS = Object.freeze(['build', 'review', 'plan', 'brief', 'helper', 'intake', 'gate', 'session']);
+export const SESSION_HOLDERS = Object.freeze(['build', 'review', 'finish', 'mend', 'plan', 'brief', 'helper', 'intake', 'gate', 'session']);
 
 /** The command names a coding agent's process has. */
 const AGENT = /(?:^|\/)(?:claude|codex)(?:$|[\s.-])/u;
@@ -91,6 +91,12 @@ export function leaseHolder({ env = process.env, verb = 'mc', pid = process.pid,
     name = text(env.MC_GATE_ROUND);
   } else if (role === REVIEW_ROLE || role?.startsWith('review-session')) {
     kind = 'review';
+    name = goal;
+  } else if (role === FINISH_ROLE) {
+    kind = 'finish';
+    name = goal;
+  } else if (role === MEND_ROLE) {
+    kind = 'mend';
     name = goal;
   } else if ([PLAN_ROLE, 'plan-session'].includes(role)) {
     kind = 'plan';

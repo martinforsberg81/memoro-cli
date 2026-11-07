@@ -1,21 +1,27 @@
 /**
- * The kinds of headless session the runner runs: `plan`, `build` and
- * `review` (Martin, 2026-11-02). A build has two variants, `project` (one
- * step of a project) and `goal`; a review is of a project (its review step)
- * or of a goal. A plan session has no variant.
+ * The kinds of headless session the runner runs: `build` and `review`
+ * (Martin, 2026-11-02), and `finish` and `mend` (Martin, 2026-11-07). A build
+ * has two variants, `project` (one step of a project) and `goal`; a review is
+ * of a project (its review step) or of a goal. A finish and a mend are always
+ * a goal's and have no variant. `plan` is read for the rows and lane files the
+ * runner wrote while it started headless plan sessions (until 2026-11-07),
+ * and for the interactive plan session the page shows; the runner starts none.
  *
  * Everything a person reads names a session this way: the page, `mc --json`,
  * the runner's lane files and `runs.tsv`. `runs.tsv` has one `kind` column
  * and a header written once when the file was made, so the variant rides in
  * the cell — `build-project`, `build-goal`, `review-project`, `review-goal`,
- * `plan` — rather than in a column an old file's header would not have.
+ * `finish`, `mend`, `plan` — rather than in a column an old file's header
+ * would not have.
  *
  * Rows and lane files from before carry the old words, and are still read:
  * `step` was a project's build, `goal` a goal's session (a build, or until
  * then its review too), and `review` a project's review step.
  */
-export const SESSION_KINDS = Object.freeze(['plan', 'build', 'review']);
+export const SESSION_KINDS = Object.freeze(['plan', 'build', 'review', 'finish', 'mend']);
 export const BUILD_VARIANTS = Object.freeze(['project', 'goal']);
+/** The kinds without a variant: one way to start each. */
+const PLAIN_KINDS = Object.freeze(['plan', 'finish', 'mend']);
 
 const OLD = Object.freeze({
   step: { kind: 'build', variant: 'project' },
@@ -30,7 +36,7 @@ const OLD = Object.freeze({
  */
 export function sessionKind(kind, variant = null) {
   const word = String(kind ?? '');
-  if (word === 'plan') return { kind: 'plan', variant: null };
+  if (PLAIN_KINDS.includes(word)) return { kind: word, variant: null };
   if ((word === 'build' || word === 'review') && BUILD_VARIANTS.includes(variant)) return { kind: word, variant };
   const cell = /^(build|review)-(project|goal)$/u.exec(word);
   if (cell) return { kind: cell[1], variant: cell[2] };
@@ -38,7 +44,7 @@ export function sessionKind(kind, variant = null) {
   return OLD[word] ?? null;
 }
 
-/** The `runs.tsv` cell for a session: `build-project`, `review-goal`, `plan`. */
+/** The `runs.tsv` cell for a session: `build-project`, `review-goal`, `finish`, `mend`. */
 export function runsKind({ kind, variant = null }) {
   return variant ? `${kind}-${variant}` : kind;
 }
