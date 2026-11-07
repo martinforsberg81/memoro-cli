@@ -15,6 +15,7 @@ import { BUILD_LANE } from './gate-lock.js';
 import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, touchedTests } from './test-times.js';
 import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
 import { commandIdentity } from './gate-greens.js';
+import { settleRed } from './gate-settle.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
 
@@ -80,7 +81,7 @@ export async function runSessionGate(request, {
         else signal.addEventListener('abort', stop, { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, prior, signal, track: tracker.track, complete: tracker.complete, read: tracker.read,
+        executeSessionGate(request, { ...deps, prior, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
@@ -128,7 +129,9 @@ export async function runSessionGate(request, {
         return { file, how: 'reused', from: reused[file], outcome: 'passed', seconds: source?.seconds ?? null, tests: kept(file, source?.tests || []) };
       }
       const one = outcome.get(file);
-      return { file, how: 'ran', from: null, outcome: one.outcome, seconds: one.seconds, tests: kept(file, one.tests) };
+      // Red in the round and green run alone in this attempt (`gate-settle.js`): it passed here.
+      const passedAlone = result.settled?.alone?.includes(file);
+      return { file, how: 'ran', from: null, outcome: passedAlone ? 'passed' : one.outcome, seconds: one.seconds, tests: kept(file, one.tests) };
     });
     const commands = (result.execution?.commands || []).map((command) => ({
       packageScript: command.packageScript, how: command.state === 'reused' ? 'reused' : 'ran', from: command.from ?? null,
@@ -171,8 +174,8 @@ export async function runSessionGate(request, {
 
 async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
-  write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, onPhase = () => {}, onProgress = () => {},
-  prior = null,
+  write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, outcomes = null, onPhase = () => {}, onProgress = () => {},
+  prior = null, settle = settleRed,
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   let selection = { files: request.files || [], commands: [], classes: {} };
@@ -212,6 +215,9 @@ async function executeSessionGate(request, {
   let code = 0;
   let details = [];
   let testResult = null;
+  // Whose red the test half's red was (`gate-settle.js`): null when nothing was settled.
+  let settled = null;
+  const testFlags = [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])];
   const commands = selectedCommands.map((command) => {
     const source = prior?.commands?.get(commandIdentity(command));
     return { id: command.id || command.packageScript, packageScript: command.packageScript,
@@ -238,7 +244,8 @@ async function executeSessionGate(request, {
     return { ok: code === 0 && unavailable.length === 0, process_ok: code === 0, complete: code === 0 && unavailable.length === 0,
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
       ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed,
-      coverage, execution: { tests: testResult, commands }, resumed };
+      coverage, execution: { tests: testResult, commands }, resumed,
+      ...(settled && (settled.alone.length || settled.main.length) ? { settled: { alone: settled.alone, main: settled.main, base: settled.base, red: settled.red } } : {}) };
   };
   const progress = () => onProgress(snapshot());
   progress();
@@ -249,7 +256,7 @@ async function executeSessionGate(request, {
     testResult = { exit: null, finished: false, totals: {} };
     progress();
     try {
-      const run = await tests({ cwd, files, flags: [...flags, ...(request.pattern == null ? [] : [`--test-name-pattern=${request.pattern}`])], classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
+      const run = await tests({ cwd, files, flags: testFlags, classes: selection.classes || {}, env, signal, times: request.gate ? { ...request.gate, track, complete } : undefined });
       write(`${run.tap || ''}\n${run.stderr || ''}`);
       timed = [...touchedTests(run.tests || [], request.timed || {}), ...reusedTimed];
       details = redTests(run.tap, files, { cwd });
@@ -262,11 +269,27 @@ async function executeSessionGate(request, {
       testResult = { exit: run.code ?? null, finished: totals.finished && !run.error && !run.timedOut && !run.aborted && !cut.length, totals,
         ...(cut.length ? { cut } : {}) };
       if (run.error || run.timedOut || run.aborted || !totals.finished || cut.length || !totals.tests || !totals.pass || run.code !== 0 || totals.fail > 0 || totals.cancelled > 0) {
-        code = 1;
         const reason = run.error || (run.timedOut ? 'tests exceeded their time limit' : run.aborted ? 'tests interrupted'
           : !totals.finished ? 'tests did not finish' : cut.length ? `output cut: ${cut.join(', ')}` : !totals.tests || !totals.pass ? 'no passing tests executed'
             : run.code == null ? 'test exit is unknown' : null);
         if (reason) write(`Error: ${reason}\n`);
+        // Only failed files, every one of them finished: whose red it is is
+        // asked before it is called the change's (`gate-settle.js`).
+        const seen = !reason && read && outcomes ? fileOutcomes(files, { progress: read(), outcomes: outcomes() }) : null;
+        const failed = seen?.filter((one) => one.outcome !== 'passed') || [];
+        if (seen && failed.length && failed.every((one) => one.outcome === 'failed') && !signal?.aborted) {
+          try {
+            settled = await settle({ cwd, base: request.measurement?.base || base, red: failed.map((one) => one.file), failing: details,
+              flags: testFlags, classes: selection.classes || {}, env, signal, tests,
+              times: request.gate ? { ...request.gate, track, complete } : undefined });
+          } catch (error) {
+            settled = { alone: [], main: [], red: failed.map((one) => one.file), base: null, notes: [`could not settle the red: ${error.message}`] };
+          }
+          for (const note of settled.notes) write(`${note}\n`);
+          details = details.filter((test) => settled.red.includes(test.file));
+          testResult = { ...testResult, settled: { alone: settled.alone, main: settled.main, base: settled.base } };
+        }
+        if (!settled || settled.red.length) code = 1;
       }
       for (const test of details) write(`✖ ${test.name}\n${test.at ? `    at ${test.at}\n` : ''}${test.error.map((line) => `    ${line}\n`).join('')}`);
     } catch (error) {

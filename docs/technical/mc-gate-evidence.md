@@ -46,6 +46,27 @@ selected, to have completed successfully with known exits and unchanged
 content. The ceiling does not make a selected test set smaller or claim to
 solve the study selector's test-selection ceiling.
 
+## Settling a red
+
+A session's gate shares the machine with the runner's sessions and the merger,
+and a test red on main is red in every branch's gate. A red whose only cause is
+failed files, every one of them finished, is therefore settled before it is
+called the change's (`src/mc/gate-settle.js`, called from
+`session-gate-run.js`): the red files run once more alone, one file at a time
+(`lanes: 1`), with the same flags and per-test limit, through the same tracker.
+A file that passes there is `green alone`. A file still red that the change
+does not touch (`git diff --name-only <base>` and untracked files) runs alone at
+the frozen base in a temporary detached worktree under
+`<work root>/runner/gate-base/`, with its dependencies attached, removed
+afterwards. When every test it failed on the candidate fails there by name, it
+is main's. What remains is the change's red. A crash, unknown exit, cut or
+unfinished file, an unattributed failure, more than `SETTLE_FILES_MAX` red
+files or a test over its limit alone is never settled. The verdict says
+`SETTLED` and names both groups; the result and `--json` carry `settled`. A
+settled attempt exits 0 but its receipt is not `green` (its round had a
+failure), so it grants no reuse beyond its members: files that passed alone
+are `passed` members and resume, main's red files stay `failed` and run again.
+
 ## Waiting and recovery
 
 Three mechanisms are distinct:

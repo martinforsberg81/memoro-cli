@@ -839,3 +839,35 @@ it('failed, cancelled, timed-out, unfinished and never-started files and failed 
   assert.equal(second.reused, `reused 1 file and 0 commands from ${first.run}; running 7`);
   assert.equal(second.receipt.outcome, 'green');
 });
+
+it('a file red under load and green alone settles the gate green, says so and resumes as passed', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-session-settle-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const red = `TAP version 13\nok 1 - passes\n# Subtest: scans\nnot ok 2 - scans\n  ---\n  location: '/work/a.test.js:3:1'\n  failureType: 'testTimeoutFailure'\n  error: 'test timed out after 1000ms'\n  ...\n1..2\n# tests 2\n# pass 1\n# fail 1\n`;
+  const calls = [];
+  let output = '';
+  const lines = { pass: await reporterLines('a.test.js', 'pass'), timeout: await reporterLines('a.test.js', 'timeout'), b: await reporterLines('b.test.js', 'pass') };
+  const result = await runSessionGate({ cwd: '/work', select: 'selector', files: null, flags: [], base: BASE, gate: { root, repo: 'repo' },
+    measurement: { repo: 'repo', run: 'run-settle', base: BASE, candidate: CONTENT, configuration: 'config' } }, {
+    snapshot: () => CONTENT, record: () => {}, now: () => new Date(Date.UTC(2026, 10, 7, 12, 0, calls.length)).toISOString(),
+    write: (text) => { output += text; },
+    select: async () => ({ ok: true, files: ['a.test.js', 'b.test.js'], commands: [] }),
+    tests: async ({ files, lanes, times }) => {
+      calls.push({ files, lanes });
+      const path = join(root, `times-${calls.length}.jsonl`);
+      times.track(path);
+      const first = calls.length === 1;
+      writeFileSync(path, first ? `${lines.timeout}${lines.b}` : lines.pass);
+      times.complete(path);
+      return first ? { code: 1, tap: red } : { code: 0, tap: GREEN };
+    },
+  });
+  assert.deepEqual(calls, [{ files: ['a.test.js', 'b.test.js'], lanes: undefined }, { files: ['a.test.js'], lanes: 1 }]);
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.settled, { alone: ['a.test.js'], main: [], base: null, red: [] });
+  assert.match(output, /green alone — red in the round under load, passed run by themselves: a\.test\.js/u);
+  const receipt = JSON.parse(readFileSync(result.evidence.path, 'utf8'));
+  assert.notEqual(receipt.outcome, 'green', 'a settled run is not a green receipt: its round had a failure');
+  assert.deepEqual(receipt.members.files.map(({ file, outcome }) => ({ file, outcome })),
+    [{ file: 'a.test.js', outcome: 'passed' }, { file: 'b.test.js', outcome: 'passed' }], 'the next attempt reuses both');
+});

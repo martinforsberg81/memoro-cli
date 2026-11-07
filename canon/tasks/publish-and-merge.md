@@ -17,9 +17,9 @@ in it and say why in the reply.
   the same RUNNING request. Named reruns, deferred green, red, timeout,
   interruption or incomplete results are not acceptance. Direct landing adds no
   gate or base/head validation.
-- A rerun on identical content reuses each file and command gate that passed
-  there and runs the rest; a resumed whole selection is a completed GREEN. Any
-  content change means a new whole selection. `--fresh` forces a full run.
+- A rerun on identical content reuses each file and command gate that passed there and runs
+  the rest; a resumed whole selection is a completed GREEN. Any content change means a new whole
+  selection; `--fresh` forces a full run. Red files green alone, or untouched and red alike at the base, are `SETTLED`.
 - It answers within 540 s with GREEN/RED, failing lines and log path; give the
   Bash call `timeout: 600000`. Past budget: `RUNNING`, exit 3; `mc gate --wait`
   reads the same log. Do not poll or run in the background. Red: fix, then run
