@@ -624,6 +624,25 @@ it('a reused member that did not pass, or names no source, never makes a receipt
   }
 });
 
+it('receipt: a green measured under the pre-contract measurement version 4 is never read as bound evidence', (t) => {
+  const { request } = fixture(t);
+  const req = { ...request(), files: ['a.test.js'], select: undefined };
+  const root = req.gate.root;
+  // A complete, valid green under the current version is read back for its own run and configuration.
+  const path = persistGateReceipt({ root, receipt: gateReceipt({ measurement: req.measurement, before: req.measurement.candidate, after: req.measurement.candidate,
+    started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z',
+    result: { ok: true, code: 0, coverage: { kind: 'named', files: ['a.test.js'], commands: [], flags: [], pattern: null, execution: executionIdentity(resolveTestPlan({})) },
+      execution: { tests: { exit: 0, finished: true, totals: { tests: 1, pass: 1, fail: 0 }, batches: [spawnedBatch({ files: ['a.test.js'] })] }, commands: [] },
+      members: { files: [{ file: 'a.test.js', how: 'ran', from: null, outcome: 'passed' }], commands: [] } } }) });
+  const receipt = JSON.parse(readFileSync(path, 'utf8'));
+  const read = (over = {}) => readGreenReceipt({ root, repo: 'repo', repository: receipt.repository, run: receipt.run, sessionRun: receipt.session_run,
+    goalRevision: receipt.goal_revision, configuration: receipt.configuration, ...over });
+  assert.equal(read()?.run, receipt.run, 'the current measurement is read');
+  // The same receipt written as the pre-contract version: a green that did not bind its executed timeout is never read.
+  writeFileSync(path, JSON.stringify({ ...receipt, gate_version: 4 }));
+  assert.equal(read(), null, 'version 4 is refused');
+});
+
 it('receipt: a timeout the batch was not launched with, a missing batch, a changed Node or a missing identity never mint green', (t) => {
   const { request } = fixture(t);
   const measurement = request().measurement;
