@@ -80,10 +80,12 @@ export async function run(argv, deps = {}) {
   const remoteIsAncestor = remoteHead ? git(['merge-base', '--is-ancestor', remoteHead, 'HEAD']) !== null : true;
   const why = refusal({ branch, dirty, remoteHead, localHead, remoteIsAncestor });
   if (why) { stderr.write(`mc: ${why}\n`); return 1; }
-  // A branch whose merge with origin/main conflicts is not published (memoro-cli#1369): asked after a fetch.
-  const checked = (deps.mainCheck || ((dir) => checkAgainstMain(dir)))(cwd);
-  if (!checked.fetch.ok) stderr.write(`mc: warning: git fetch origin failed (${checked.fetch.text}) — checked against the origin/main already held\n`);
-  if (checked.paths.length) { stderr.write(`mc: ${conflictReason(checked.paths)}\n`); return 1; }
+  // A branch whose merge with origin/<base> conflicts is not published (memoro-cli#1369): asked after a fetch.
+  // `--base` names that base; without it, main.
+  const base = flags.base || 'main';
+  const checked = (deps.mainCheck || ((dir, opts) => checkAgainstMain(dir, opts)))(cwd, { base });
+  if (!checked.fetch.ok) stderr.write(`mc: warning: git fetch origin failed (${checked.fetch.text}) — checked against the origin/${base} already held\n`);
+  if (checked.paths.length) { stderr.write(`mc: ${conflictReason(checked.paths, base)}\n`); return 1; }
   const env = deps.env || process.env;
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }

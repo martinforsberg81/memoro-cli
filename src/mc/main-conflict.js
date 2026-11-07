@@ -36,13 +36,16 @@ export function mainConflicts(cwd, { run = runGit, base = 'origin/main', head = 
   return { paths };
 }
 
-/** The check both callers make: `{ fetch: { ok, text }, paths }` for the worktree at `cwd`. */
-export function checkAgainstMain(cwd, { run = runGit } = {}) {
+/**
+ * The check both callers make: `{ fetch: { ok, text }, paths }` for the worktree at `cwd`, against
+ * `origin/<base>` — main, unless `publish --base` names another branch.
+ */
+export function checkAgainstMain(cwd, { run = runGit, base = 'main' } = {}) {
   const fetch = fetchOrigin(cwd, { run });
-  return { fetch, paths: mainConflicts(cwd, { run }).paths };
+  return { fetch, paths: mainConflicts(cwd, { run, base: `origin/${base}` }).paths };
 }
 
-/** The reason a conflicting branch is not sent on, naming its paths: one sentence, for `mc:` and the goal's refusal. */
-export function conflictReason(paths) {
-  return `the branch conflicts with origin/main in ${paths.join(', ')} — rebase onto origin/main, then run this again`;
+/** The reason a conflicting branch is not sent on, naming its paths and its base: one sentence, for `mc:` and the goal's refusal. */
+export function conflictReason(paths, base = 'main') {
+  return `the branch conflicts with origin/${base} in ${paths.join(', ')} — rebase onto origin/${base}, then run this again`;
 }
