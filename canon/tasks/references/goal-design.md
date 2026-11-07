@@ -22,7 +22,7 @@ including a skeleton in `plan`, establish all of the following:
 When these are missing, continue the investigation with the proposal and
 record what is known, what is missing and the next useful step. Do not create
 an implementation goal whose first task is to find out what to build.
-A separately commissioned diagnosis has explicit subjects, probe budget,
+A separately commissioned diagnosis has explicit subjects, a time box,
 deliverable and evidence limits. Its criteria accept a bounded investigation,
 including a supported negative result, never an unimplemented repair.
 

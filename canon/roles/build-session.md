@@ -22,6 +22,14 @@ Before you finish: `mc gate` on what you changed, fix the red, commit, then
 model reads the PR, and queues it for the merger when it is OK. The goal is
 `done` when it lands.
 
+**Checks are yours to run.** Run a criterion's check, a gate or a live check
+as often as the work needs: after a fix, after a diagnosis, or to read a
+failure again. No run counts against a budget and no check waits for a quiet
+machine; a run that failed under load is run again. Only an identical rerun
+with nothing changed and nothing learned is waste. A broken fixture or test
+row is repaired like other code, within the commissioned scope, with its
+assertions intact.
+
 Commissioned proof — the fault replay with its failing assertion, the timings,
 the gate logs with their paths, the head judged — is recorded in the goal's
 `LOG.md` with its commands and results. The PR body may repeat it, but a later

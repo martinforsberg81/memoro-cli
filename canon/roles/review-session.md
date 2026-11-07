@@ -31,18 +31,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    with `--fresh` to measure your own. A criterion whose check does not hold is
    not met, whatever its ✓ says: `met` is the build session's claim, and what it
    wrote in `LOG.md` or the pull request is a claim too, never evidence.
-   For bounded live evidence, check the commissioned total runs, per-run
-   duration, serial/concurrency limits, stage allocations, prerequisites and
-   run-consumption rule. A live attempt, including a failed or timed-out one,
-   consumes its allocated run; account or binary availability is not a new
-   prerequisite run. Use only a review run reserved before build. If none
-   remains, execute only the goal's explicitly commissioned offline
-   reconciliation (not a live run) and report its evidence limits. A build trace you inspect
-   is an inspected observation, never an independently reproduced live fact.
-   Do not retry, expand the budget or treat missing essential proof as
-   acceptance. Send unresolved proof to finish/plan under the existing
-   authority; preserve the goal's acceptance boundary and the finish/plan
-   resolution route.
+   A live check (a running app, a browser) runs as its check says, within its
+   per-run ceiling; no run count or stage allocation limits it. A failed run is
+   read: a failure under load or a broken fixture is diagnosed and run again,
+   not counted. A build trace you inspect is an inspected observation, never an
+   independently reproduced live fact. Missing essential proof is not
+   acceptance; it goes to finish with REVIEW.md.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.
