@@ -45,6 +45,7 @@ import {
   UPLOADED,
 } from './ios-builds.js';
 import { mcHome } from './paths.js';
+import { defaultPackageCache, packageManifests, prefetchArtifacts } from './swiftpm.js';
 
 /** The repository this is about, by its name in `defaultRepos`. */
 export const REPO = 'memoro';
@@ -99,17 +100,22 @@ export function readIosDeclaration(repoPath, { git = gitRead } = {}) {
   if (text === null || text === '') {
     return { ok: false, reason: `memoro has no ${DECLARATION_PATH} on origin/main yet (memoro project ios-build-declaration)` };
   }
+  return checkIosDeclaration(text, 'on origin/main');
+}
+
+/** A declaration's text, checked: `{ ok, declaration }` or `{ ok: false, reason }` naming `where` it was read. */
+export function checkIosDeclaration(text, where) {
   let declaration;
   try { declaration = JSON.parse(text); } catch (error) {
-    return { ok: false, reason: `memoro's ${DECLARATION_PATH} on origin/main is not JSON (${error.message})` };
+    return { ok: false, reason: `memoro's ${DECLARATION_PATH} ${where} is not JSON (${error.message})` };
   }
   if (declaration?.schema_version !== 1) {
-    return { ok: false, reason: `memoro's ${DECLARATION_PATH} on origin/main is schema_version ${declaration?.schema_version ?? 'none'}; mc reads 1` };
+    return { ok: false, reason: `memoro's ${DECLARATION_PATH} ${where} is schema_version ${declaration?.schema_version ?? 'none'}; mc reads 1` };
   }
   for (const key of DECLARATION_KEYS) {
     const value = valueAt(declaration, key);
     const missing = LIST_KEYS.has(key) ? !Array.isArray(value) : (value === undefined || value === null || value === '');
-    if (missing) return { ok: false, reason: `memoro's ${DECLARATION_PATH} on origin/main has no ${key}` };
+    if (missing) return { ok: false, reason: `memoro's ${DECLARATION_PATH} ${where} has no ${key}` };
   }
   return { ok: true, declaration };
 }
@@ -294,6 +300,9 @@ const MIN = 60 * 1000;
 
 /** How much of a step's output is kept for the failure note; the whole of it is in the log. */
 export const OUTPUT_KEEP = 64 * 1024;
+
+/** How long a build's output may be silent before the build is stopped as stalled. */
+export const STALL_MS = 5 * MIN;
 
 /** How long a step that timed out is given between SIGTERM and SIGKILL. */
 export const KILL_GRACE_MS = 10 * 1000;
@@ -650,14 +659,26 @@ export function readBack({
  * The one way the builder runs a command: `▸ <label>` (unless `quiet`), the
  * output streamed to the log, the last `OUTPUT_KEEP` of it kept. Past
  * `timeoutMs` the command gets SIGTERM, and SIGKILL `KILL_GRACE_MS` later.
- * Resolves `{ ok, code, signal, timedOut, error, output }`; never rejects.
- * `step.stop(signal)` passes a signal the builder received on to the command
- * running now, and every step after it fails without starting.
+ * Resolves `{ ok, code, signal, timedOut, stalled, error, output }`; never
+ * rejects. `step.stop(signal)` passes a signal the builder received on to the
+ * command running now, and every step after it fails without starting.
+ *
+ * `silenceMs` is the stall stop: a command whose output has been silent that
+ * long is stopped the same way, and `stalled` says where it stood
+ * (`stallPoint`) — an `xcodebuild` that hangs at "Resolve Package Graph"
+ * fails in minutes, named, instead of looking like a slow build until
+ * something kills it. `group` starts the command in its own process group,
+ * and both stops then go to the whole tree (`killTree`): `xcodebuild`'s
+ * SwiftPM and compiler children would outlive a signal to it alone.
  */
-export function makeStep({ stdout = process.stdout, spawnProcess = spawn, graceMs = KILL_GRACE_MS } = {}) {
+export function makeStep({
+  stdout = process.stdout, spawnProcess = spawn, graceMs = KILL_GRACE_MS, killTree = killProcessTree,
+} = {}) {
   let current = null;
   let halted = null;
-  const step = (label, argv, { cwd, env = process.env, timeoutMs = 10 * MIN, quiet = false } = {}) => new Promise((resolve) => {
+  const step = (label, argv, {
+    cwd, env = process.env, timeoutMs = 10 * MIN, quiet = false, silenceMs = 0, group = false,
+  } = {}) => new Promise((resolve) => {
     if (halted) {
       resolve({ ok: false, code: 1, signal: halted, timedOut: false, error: `stopped by ${halted}`, output: '' });
       return;
@@ -665,28 +686,45 @@ export function makeStep({ stdout = process.stdout, spawnProcess = spawn, graceM
     if (!quiet) stdout.write(`▸ ${label}\n`);
     let output = '';
     let timedOut = false;
+    let stalled = null;
     let killer = null;
     let timer = null;
+    let silence = null;
     let settled = false;
     const settle = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(killer);
+      clearTimeout(silence);
       current = null;
-      resolve({ ok: false, signal: null, error: null, ...result, timedOut, output });
+      resolve({ ok: false, signal: null, error: null, ...result, timedOut, stalled, output });
     };
     let child;
     try {
-      child = spawnProcess(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnProcess(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], ...(group ? { detached: true } : {}) });
     } catch (error) {
       settle({ code: 127, error: error?.message || String(error) });
       return;
     }
     current = child;
+    const kill = (signal) => { if (group) killTree(child, signal); else { try { child.kill(signal); } catch { /* gone */ } } };
+    const stop = () => {
+      kill('SIGTERM');
+      killer = setTimeout(() => kill('SIGKILL'), graceMs);
+    };
+    const watch = () => {
+      if (!silenceMs || stalled || timedOut) return;
+      clearTimeout(silence);
+      silence = setTimeout(() => {
+        stalled = stallPoint(output);
+        stop();
+      }, silenceMs);
+    };
     const keep = (chunk) => {
       if (!quiet) stdout.write(chunk);
       output = (output + chunk).slice(-OUTPUT_KEEP);
+      watch();
     };
     for (const stream of [child.stdout, child.stderr]) {
       stream?.setEncoding('utf8');
@@ -694,17 +732,49 @@ export function makeStep({ stdout = process.stdout, spawnProcess = spawn, graceM
     }
     timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill('SIGTERM'); } catch { /* gone */ }
-      killer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, graceMs);
+      clearTimeout(silence);
+      stop();
     }, timeoutMs);
+    watch();
     child.on('error', (error) => settle({ code: 127, error: error?.message || String(error) }));
-    child.on('close', (code, signal) => settle({ ok: code === 0 && !timedOut, code: code ?? 1, signal: signal || null }));
+    child.on('close', (code, signal) => settle({ ok: code === 0 && !timedOut && !stalled, code: code ?? 1, signal: signal || null }));
   });
   step.stop = (signal = 'SIGTERM') => {
     halted = signal;
     try { current?.kill(signal); } catch { /* gone */ }
   };
   return step;
+}
+
+/** A signal to a command started in its own process group, and so to every process under it; to the command alone when there is no group. */
+export function killProcessTree(child, signal) {
+  try { process.kill(-child.pid, signal); } catch {
+    try { child.kill(signal); } catch { /* gone */ }
+  }
+}
+
+/**
+ * The headings `xcodebuild` prints for the stages before it compiles, which
+ * are where a network wait sits.
+ */
+const XCODE_STAGES = /^(Resolve Package Graph|Resolved source packages|Prepare packages|Computing target dependency graph|ComputeTargetDependencyGraph|Create build description|Building targets in dependency order|Command line invocation)\b/u;
+
+/**
+ * Where silent output stood: `{ stage, line }` — the stage the last heading
+ * or build task named (`Resolve Package Graph`, `CompileSwift`, …; `xcodebuild`
+ * when none did) and the last line printed.
+ */
+export function stallPoint(output) {
+  const lines = stripAnsi(String(output || '')).split('\n').map((line) => line.trimEnd()).filter((line) => line.trim());
+  let stage = '';
+  for (const line of lines.toReversed()) {
+    const heading = XCODE_STAGES.exec(line);
+    if (heading) { stage = heading[1]; break; }
+    const task = /^([A-Z][a-z]+(?:[A-Z][a-z0-9]*)+)\s/u.exec(line);
+    if (task) { stage = task[1]; break; }
+  }
+  const last = (lines.at(-1) || '').trim();
+  return { stage: stage || 'xcodebuild', line: last.length > 300 ? `${last.slice(0, 297)}…` : last };
 }
 
 /** The line of a step's output that says most about why it failed. */
@@ -726,7 +796,9 @@ export function xcodeHint(output) {
   return null;
 }
 
-function stepNote(label, r, timeoutMs) {
+/** The one line a failed step's row and terminal get. */
+export function stepNote(label, r, timeoutMs) {
+  if (r.stalled) return `${label} stalled at ${r.stalled.stage}: ${r.stalled.line || '(no output)'} — silent for ${Math.round(STALL_MS / MIN)} min, stopped`;
   let why = `exited ${r.code}`;
   if (r.timedOut) why = `timed out after ${Math.round(timeoutMs / MIN)} min`;
   else if (r.error) why = `could not start (${r.error})`;
@@ -976,6 +1048,17 @@ export async function buildIos(job, deps = {}) {
     else delete syncEnv[declaration.env.build_number];
     const sync = await run(declaration.sync, ['sh', '-c', declaration.sync], { env: syncEnv, timeoutMs: 20 * MIN });
     if (!sync.ok) return failed(declaration.sync, sync, 20 * MIN);
+
+    // (e′) Capacitor's binary artifacts, fetched by curl and verified into
+    // the SwiftPM cache the build already reads (swiftpm.js) — never left to
+    // xcodebuild's own download, which stalled.
+    at = 'prefetch';
+    const fetched = await prefetchArtifacts({
+      manifests: packageManifests({ worktree, project: declaration.project, spm }),
+      cachePath: defaultPackageCache(env), step: (label, argv, options) => run(label, argv, { ...options, stoppedAt: 'prefetch' }),
+      cwd: worktree, env, stdout,
+    });
+    if (!fetched.ok) return fail('prefetch', fetched.line);
 
     if (testflight) return await shipTestflight();
 
