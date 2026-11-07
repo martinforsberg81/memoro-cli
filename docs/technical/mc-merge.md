@@ -763,11 +763,34 @@ is not the change's red. Its failures are kept under
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
-**A test that never ends is a red by name** (`TEST_TIMEOUT_MS` in
-`src/mc/repo-gate.js`). Every selected file runs with `--test-timeout=300000
---test-force-exit` unless the repository declares its own `--test-timeout`; a
-test that runs past ten minutes is a red named `test timed out after 600000ms`,
-not a 60-minute stop that names nothing (memoro #14067, 95 minutes, 2026-10-23).
+**A test that never ends is a red by name.** Every selected, previous-red and
+own test file runs with `--test-force-exit` and one `--test-timeout`, resolved
+from the tree actually measured — the session's worktree, or the round's final
+candidate after the base merge and derived regeneration, read before any test
+starts (`declarationFor(repo, { contentDir })` in `src/mc/repo-gate-table.js`).
+The repository is named by its identity (`memoro` for a bare `memoro.git`);
+the `.mc/test.json` read is the measured tree's, never the common directory's.
+
+1. **Reference.** The `--test-timeout` in the measured tree's `.mc/test.json`
+   `pr_tests_flags`, else a parseable one in its `package.json` `test` script
+   (memoro declares 1000 ms in `.mc/test.json`).
+2. **Floor.** The winning `pr_tests_flags` (shipped < repository < operator,
+   field by field) keeps its loaders. If it states no `--test-timeout`, the
+   reference is appended and the gate prints one line,
+   `timeout policy: --test-timeout=<ms> from <reference> — pr_tests_flags from
+   <layer> states no --test-timeout`. An equal or tighter value stands. A
+   larger value, `0`, `Infinity`, a non-number or more than one
+   `--test-timeout` stops the gate or round before any test process is
+   spawned, naming both sources and values. Arrays are never unioned.
+3. **Default.** With no reference, the declared flags (or, with none, the
+   script's own flags, its `--test-timeout` included) run as written, and a run
+   without any `--test-timeout` gets `--test-timeout=600000` (`TEST_TIMEOUT_MS`
+   in `src/mc/repo-gate.js`): a test that runs past ten minutes is a red named
+   `test timed out after 600000ms`, not a 60-minute stop that names nothing
+   (memoro #14067, 95 minutes, 2026-10-23).
+
+A malformed `.mc/test.json` in the measured tree is a stop too; it never falls
+through to the shipped table or the test script.
 A per-test timeout is not run again by `retry_once`: the verdict says
 `too slow — rebuild` with the test name and timeout duration, so a timed-out
 test is rebuilt by a session rather than consuming another round.

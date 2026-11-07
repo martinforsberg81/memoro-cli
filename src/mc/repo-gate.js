@@ -71,6 +71,7 @@ import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from '
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
+import { nodeTestScript, scriptTimeoutAt } from './gate-local.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -740,8 +741,20 @@ export async function runGate({
       }
     }
 
-    const flags = declared.declaration.pr_tests_flags || [];
-    const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
+    // The test flags of the tree this round measures: the final candidate's
+    // own `.mc/test.json`, read now — after the base merge and the derived
+    // regeneration, before the previous red, the selection or the own tests
+    // run — under the repository's identity, never under the directory's
+    // name (`candidate`). Everything else in the declaration was read before
+    // the lane was taken and stays as it was read; only the flags, and the
+    // configuration a receipt is matched by, come from here. A refusal —
+    // a malformed file, an override that loosens or drops the timeout
+    // ambiguously — is a stop before any test is spawned.
+    const measured = declarationFor(repoPath, { root, env, contentDir: headDir });
+    if (!measured.ok) return finish('declaration', measured.reason);
+    if (measured.notice) say(measured.notice);
+    const flags = measured.declaration.pr_tests_flags || [];
+    const is =facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
 
     // What each pull request changed against the base, asked of git once a
     // round: the red that is main's needs it to know the change left a red
@@ -969,7 +982,7 @@ export async function runGate({
     // still are, below. Only a single pull request's round: a batch candidate
     // is a tree no session stood in, and `--full` asks for a measurement.
     const receiptContext = await bindReceiptRepository(askGit, repoPath, evidence === null ? null : { ...evidence,
-      configuration: gateConfiguration(declared.declaration, flags) });
+      configuration: gateConfiguration(measured.declaration, flags) });
     let reused = null;
     if (selection && facts.pr && !batch) {
       const tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
@@ -1180,7 +1193,7 @@ export async function runGate({
     // A list of directories would fix yesterday's hole and make tomorrow's.
     if (facts.pr && !batch) {
       const own = await timed('pr tests', async () => ownTests({
-        tests: runTests, cwd: headDir, changed: await changedBy('HEAD'), say, flags: declared.declaration.pr_tests_flags || [],
+        tests: runTests, cwd: headDir, changed: await changedBy('HEAD'), say, flags,
       }));
       report.pr_tests = own.result;
       if (!own.ok) return finish('pr-tests', own.reason);
@@ -1192,7 +1205,7 @@ export async function runGate({
       for (const [index, item] of all.entries()) {
         say(`#${item.number}'s own tests`);
         const own = await timed('pr tests', async () => ownTests({
-          tests: runTests, cwd: headDir, changed: await changedBy(item.head_sha), say, flags: declared.declaration.pr_tests_flags || [],
+          tests: runTests, cwd: headDir, changed: await changedBy(item.head_sha), say, flags,
         }));
         report.prs[index].pr_tests = own.result;
         if (!own.ok) return finish('pr-tests', `#${item.number}: ${own.reason}`);
@@ -2152,16 +2165,20 @@ function testScriptShape(cwd) {
  * since the files are the point. A script that is not a `node --test` line
  * gets bare `node --test`, and the report names the files either way.
  */
-function nodeTestFlags(cwd) {
+export function nodeTestFlags(cwd) {
   let script = '';
   try {
     script = String(JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).scripts?.test || '');
   } catch { return []; }
-  if (!/^node\s+(?:.*\s)?--test(?:\s|$)/u.test(script)) return [];
+  if (!nodeTestScript(script)) return [];
   const tokens = script.slice(4).trim().split(/\s+/u);
   const flags = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
+    // The script's own per-test timeout is policy, not runner noise: kept,
+    // the same way `mc gate`'s fallback keeps it (`scriptTimeoutAt`).
+    const timeout = scriptTimeoutAt(tokens, i);
+    if (timeout) { if (timeout.flag) flags.push(timeout.flag); i += timeout.length - 1; continue; }
     if (token === '--test' || !token.startsWith('--')) continue;
     if (token.startsWith('--test-reporter') || token.startsWith('--test-')) continue;
     if (token.includes('=')) { flags.push(token); continue; }
