@@ -142,10 +142,14 @@ Comment: what a reader should know
 Next: what the next session should do
 ```
 
-- The heading is `## <at> · <tool> [<model>] · <stage> · <status>`: `<at>` is UTC to the
+- The heading is `## <at> · <tool> [<model>] · <stage> · <status>[ · by <role>]`: `<at>` is UTC to the
   minute; `<tool>` is `MC_TOOL`, `person` or `runner`; `<model>` is `MC_MODEL`
   when set; `<stage> · <status>` is where the goal is after the entry. An entry
   written before stages has `· <status>` alone, and is read with no stage.
+  `· by <role>` names the session that wrote it, from `MC_ROLE`: `build`, `review`,
+  `plan`, `manager`, else the role's name before its `:`. A person's entry, or one
+  with no `MC_ROLE`, has none; so does a runner's. It is not the stage: a build
+  session that moves a goal to `review` writes `· review · ready · by build`.
 - The labels are `Done:`, `Comment:` and `Next:`, in English like the rest of
   the goal. A log written before 2026-11-03 has `Gjort:`, `Kommentar:` and
   `Nästa:`; the parser reads those as the same fields, so no log is rewritten.
