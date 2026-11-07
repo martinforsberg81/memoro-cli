@@ -39,14 +39,13 @@ network, repeated process launches and whole-system setup for local decisions.
 
 Run each new or changed test through `mc gate <file>` and record its printed
 `test <file> › <name> — 0.xyz s` timings. Over 1 s is the slow-test indicator,
-not red: a new or changed test over it is rebuilt, or the PR says why its cost is
-warranted and review judges that; rerunning is no fix. Only the stall guard (the
-run's `--test-timeout`, 30 s) is red. `~/mc/runner/too-slow/<repo>.tsv` keeps slow
-and cut tests until they pass under their row's limit. Also measure file/fixture
-startup and the affected round: moving work outside the timed callback does not
-make the suite cheaper. Preserve existing gate thresholds.
-
-The 1 s indicator is per test; file fixture cost is reported separately, with the timings.
+per test and not red: a new or changed test over it is rebuilt, or the PR says why
+its cost is warranted and review judges that; rerunning is no fix. Only the stall
+guard (the run's `--test-timeout`, 30 s) is red. `~/mc/runner/too-slow/<repo>.tsv`
+keeps slow and cut tests until they pass under their row's limit. Report file and
+fixture startup and the affected round separately, with the timings: moving work
+outside the timed callback does not make the suite cheaper. Preserve existing
+gate thresholds.
 Usage and help examples in tests use placeholders such as `<programme>/<goal>`, never a real goal name.
 
 Classify existing checks as keep, rebuild, consolidate or retire using the
