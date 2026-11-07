@@ -26,7 +26,9 @@
  * nobody can work on.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +41,7 @@ import {
 } from './dev-servers.js';
 import { leaseHolder } from './dev-holder.js';
 import { addReservationPid, devPoolPath, disownReservation } from './dev-reservations.js';
+import { KEYS_CHILD_FILE, readKeysChild } from './keys-run.js';
 import { log } from './logger.js';
 import { devServersRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
@@ -531,11 +534,15 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     started = false;
   } else {
     let child;
+    // Where keys-run writes the server's pid as it starts, and its exit as it leaves. The wrapper's pid is
+    // not the server's, and a server can die while its wrapper lives (see keys-run.js).
+    const serverFile = join(tmpdir(), `mc-keys-child-${randomUUID()}.json`);
     try {
       child = (deps.spawn || spawn)(process.execPath, [
         fileURLToPath(new URL('../mc-cli.js', import.meta.url)), 'keys', 'serve', ...start.argv,
       ], {
-        cwd: worktree, detached: true, shell: false, stdio: 'ignore', env: { ...env, MC_DEV_ADMITTED: reservation || '' },
+        cwd: worktree, detached: true, shell: false, stdio: 'ignore',
+        env: { ...env, MC_DEV_ADMITTED: reservation || '', [KEYS_CHILD_FILE]: serverFile },
       });
       child.unref?.();
     } catch (error) {
@@ -545,14 +552,23 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
 
     // Stage one: has it said where it will serve? One window, and one more if the
     // wrapper spawned here is still alive when the first lapses — see REGISTER_TIMEOUT_MS.
+    // Two processes are watched. The wrapper is the pid spawned here; its server is the
+    // child that builds and serves, which keys-run records in `serverFile`. A wrapper can
+    // outlive a dead server while a grandchild holds its stdio, so a server that is gone
+    // will not register, whatever its wrapper is still doing.
     const alive = deps.pidAlive || pidAlive;
-    const childPid = Number.isInteger(child?.pid) ? child.pid : null;
+    const wrapperPid = Number.isInteger(child?.pid) ? child.pid : null;
+    const wrapperGone = () => wrapperPid !== null && !alive(wrapperPid);
+    const serverGone = () => {
+      const record = readKeysChild(serverFile);
+      return record && (record.exited || !alive(record.pid)) ? record : null;
+    };
     // The child may create the server after this process has gone: it holds the slot too.
-    if (reservation && childPid !== null) {
+    if (reservation && wrapperPid !== null) {
       try {
-        addReservationPid({ file: pool, id: reservation, pid: childPid });
+        addReservationPid({ file: pool, id: reservation, pid: wrapperPid });
       } catch (error) {
-        log('dev-reservation-hand-failed', { reservation, child_pid: childPid, error: error.message });
+        log('dev-reservation-hand-failed', { reservation, child_pid: wrapperPid, error: error.message });
       }
     }
     let registerBy = now() + registerMs;
@@ -561,13 +577,13 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       while (!server && now() < registerBy) {
         await sleep(1000);
         server = fresh();
-        // A wrapper that is gone will not register: the poll that sees it says so, not the end of the window.
-        if (!server && childPid !== null && !alive(childPid)) break;
+        // A process that is gone will not register: the poll that sees it says so, not the end of the window.
+        if (!server && (wrapperGone() || serverGone())) break;
       }
-      if (server || extended || childPid === null || !alive(childPid)) break;
+      if (server || extended || wrapperPid === null || wrapperGone() || serverGone()) break;
       extended = true;
       registerBy = now() + registerMs;
-      const line = `mc: ${start.service} (pid ${childPid}) is still starting after ${seconds(registerMs)}`
+      const line = `mc: ${start.service} (pid ${wrapperPid}) is still starting after ${seconds(registerMs)}`
         + ` — waiting another ${seconds(registerMs)}; its log is under .wrangler/dev-server/logs/`;
       // Its own callback: `onWaiting` is handed admission verdicts, and a line
       // given to it reached `waitingLine` as a verdict and threw (2026-11-02).
@@ -575,28 +591,44 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       else process.stderr.write(`${line}\n`);
     }
     if (!server) {
-      const stillAlive = childPid !== null && alive(childPid);
-      if (!stillAlive && childPid !== null) {
+      const gone = serverGone();
+      const tail = newestLogTail(worktree);
+      const logEnd = tail ? `; the end of ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/';
+      if (wrapperGone()) {
         // Gone, and it will not register: the slot is freed now, and the end of its log says why.
-        letGo([process.pid, childPid]);
-        const tail = newestLogTail(worktree);
+        letGo([process.pid, wrapperPid, ...(gone ? [gone.pid] : [])]);
         return {
           ok: false,
-          error: `${start.service} (pid ${childPid}) exited before it registered for ${worktree}`
-            + (tail ? `; the end of ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/'),
+          error: `${start.service} (pid ${wrapperPid}) exited before it registered for ${worktree}`
+            + (gone ? ` — its server (pid ${gone.pid}) ${exitWord(gone)}` : '') + logEnd,
         };
       }
-      // A child still alive may still register: the slot stays held by it, and goes when it does.
+      if (gone) {
+        // Its server is gone and will not register, but its wrapper is alive: the slot is freed, and the
+        // wrapper is named, not stopped — mc does not stop a process it did not see leave.
+        letGo([process.pid, ...(wrapperPid !== null ? [wrapperPid] : []), gone.pid]);
+        return {
+          ok: false,
+          error: `${start.service}'s server (pid ${gone.pid}) ${exitWord(gone)} before it registered for ${worktree}`
+            + (wrapperPid !== null ? `; its wrapper (pid ${wrapperPid}) is still alive` : '') + logEnd,
+        };
+      }
+      // Neither is known to have died: the window lapsed with what was spawned still there, or nothing recorded yet.
+      // The slot stays held by a wrapper still alive, and goes when it does.
       letGo([process.pid]);
+      const record = readKeysChild(serverFile);
+      const silent = tail ? ` — the log has been silent for ${seconds(Math.max(0, now() - tail.mtimeMs))}` : '';
       return {
         ok: false,
         error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
-          + ' — its log is under .wrangler/dev-server/logs/'
-          + (stillAlive && extended ? ` (pid ${childPid} is still alive and keeps its slot — mc dev stop it, or wait for it and run this again)` : ''),
+          + ` — wrapper ${wrapperPid === null ? 'has no pid' : `pid ${wrapperPid} is alive`}`
+          + `, ${record ? `server pid ${record.pid} is alive` : 'no server pid is recorded yet'}${silent}`
+          + (wrapperPid !== null && extended ? ` (pid ${wrapperPid} is still alive and keeps its slot — mc dev stop it, or wait for it and run this again)` : '')
+          + (tail ? `; its last lines, from ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/'),
       };
     }
     // Registered: the record counts now, and the registration fulfilled the reservation.
-    letGo([process.pid, ...(childPid !== null ? [childPid] : [])]);
+    letGo([process.pid, ...(wrapperPid !== null ? [wrapperPid] : [])]);
   }
   deps.onRegistered?.(server);
 
@@ -696,6 +728,13 @@ function seconds(ms) {
   return value >= 120 ? `${Math.round(value / 60)} minutes` : `${value}s`;
 }
 
+/** How a server's exit reads in an error: its code, the signal that ended it, or that nothing recorded it. */
+function exitWord(record) {
+  if (!record.exited) return 'is gone with no exit recorded';
+  if (record.exit !== null) return `exited with code ${record.exit}`;
+  return `was killed by ${record.signal ?? 'a signal'}`;
+}
+
 /**
  * The end of the newest log a worktree's dev server wrote, or null when it wrote none. The last
  * twenty lines: what a wrapper printed on its way out is the reason its start failed.
@@ -723,7 +762,7 @@ export function newestLogTail(worktree, { lines = 20 } = {}) {
   if (!newest) return null;
   try {
     const text = readFileSync(newest.path, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
-    return { file: newest.path, text };
+    return { file: newest.path, text, mtimeMs: newest.mtimeMs };
   } catch {
     return null;
   }

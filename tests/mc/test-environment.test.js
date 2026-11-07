@@ -15,7 +15,7 @@
  * another — leaves no trace at all.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -1695,5 +1695,100 @@ describe('a restart keeps its slot, and a dead start is named at once', () => {
     assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
     rmSync(base, { recursive: true, force: true });
     rmSync(worktree, { recursive: true, force: true });
+  });
+});
+
+describe('a server that dies behind its wrapper', () => {
+  // Measured 2026-11-06: two memoro starts stopped after `worker options`, and mc reported only that nothing
+  // registered within ten minutes. The wrapper outlived its server, so the start waited out the whole window.
+  const T0 = Date.parse('2026-11-07T10:00:00Z');
+  const WRAPPER = 4242;
+  const SERVER = 5151;
+
+  /** The worktree's newest log, last written at `mtime`: what the server said last. */
+  function logIn(worktree, lines, mtime) {
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'dev-2026-11-07.log');
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    utimesSync(file, new Date(mtime), new Date(mtime));
+    return file;
+  }
+
+  /** A spawn as keys-run leaves things: the server's pid in the file mc named, the wrapper's pid returned. */
+  function spawnWrapper(tracked) {
+    return (_command, _args, options) => {
+      tracked.file = options.env.MC_KEYS_CHILD_FILE;
+      writeFileSync(tracked.file, JSON.stringify({ pid: SERVER }));
+      return { pid: WRAPPER, unref() {} };
+    };
+  }
+
+  it('a server that dies while its wrapper lives is named at the next poll, with its exit and the end of its log', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const log = logIn(worktree, ['worker options: {"port":8900}', 'the last line before the exit'], T0 + 1_000);
+    const tracked = {};
+    let t = 0;
+    let diedAt = null;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => T0 + t,
+      sleep: async (ms) => {
+        t += ms;
+        // The server exits at 2 s with code 1; its wrapper holds the stdio and stays alive.
+        if (diedAt === null && t >= 2_000) {
+          diedAt = t;
+          writeFileSync(tracked.file, JSON.stringify({ pid: SERVER, exit: 1, signal: null }));
+        }
+      },
+      spawn: spawnWrapper(tracked),
+      pidAlive: (pid) => pid === WRAPPER || (pid === SERVER && diedAt === null),
+      fetch: async () => ({ ok: false }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.ok(t - diedAt <= 1_000, `named ${t - diedAt}ms after the server died, not at the end of the register window`);
+    assert.match(ensured.error, /memoro-worker's server \(pid 5151\) exited with code 1 before it registered/u);
+    assert.match(ensured.error, /its wrapper \(pid 4242\) is still alive/u);
+    assert.ok(ensured.error.includes(log), 'the newest log is named');
+    assert.match(ensured.error, /the last line before the exit$/mu, 'the end of the log is in the error');
+    assert.deepEqual(readReservations(devPoolPath(root)), [], 'a start whose server is gone frees its slot');
+
+    rmSync(tracked.file, { force: true });
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('a window that lapses with both alive says so: both pids, how long the log has been silent, and its last line', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    logIn(worktree, ['worker options: {"port":8900}', 'css build: 40%'], T0 + 1_000);
+    const tracked = {};
+    let t = 0;
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now: () => T0 + t,
+      sleep: async (ms) => { t += ms; },
+      registerTimeoutMs: 5_000,
+      spawn: spawnWrapper(tracked),
+      pidAlive: () => true,
+      onSlowStart: () => {},
+      fetch: async () => ({ ok: false }),
+    });
+
+    assert.equal(ensured.ok, false);
+    assert.equal(t, 10_000, 'both windows, and no more');
+    assert.match(ensured.error, /within 5s — wrapper pid 4242 is alive, server pid 5151 is alive — the log has been silent for 9s/u);
+    assert.match(ensured.error, /css build: 40%$/mu, 'the last log line is in the error');
+    assert.match(ensured.error, /pid 4242 is still alive and keeps its slot/u);
+
+    rmSync(tracked.file, { force: true });
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 });
