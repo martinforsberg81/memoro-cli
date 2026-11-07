@@ -660,6 +660,88 @@ test('the goal verbs refuse what would not validate, and write nothing', async (
   assert.equal(f.store[`${DIR}/GOAL.json`], before, 'nothing written');
 });
 
+const TWO = [{ criterion: 'first', check: 'a test', met: true }, { criterion: 'second', check: 'another test', met: true }];
+const twoCriteria = () => seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', status: 'ready', success_criteria: TWO }) });
+
+test('mc goal criterion set rewrites criterion 2 unmet, keeps the others, logs the old and new text, and keeps stage and status', async () => {
+  const f = fixture({ files: twoCriteria() });
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--criterion', 'the second, reworded', '--check', 'mc gate tests/mc/commands/goal.test.js'], f.deps), 0, f.err());
+  assert.match(f.out(), /mc\/plain · criterion 2 rewritten, unmet · criteria 1\/2/u);
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria, [
+    { criterion: 'first', check: 'a test', met: true },
+    { criterion: 'the second, reworded', check: 'mc gate tests/mc/commands/goal.test.js', met: false },
+  ]);
+  assert.equal(stateOf(f), 'build · ready');
+  assert.ok(f.store[`${DIR}/LOG.md`].endsWith('## 2026-11-01T20:00Z · person · build · ready\n\nComment: criterion 2 rewritten, unmet — criterion was "second", now "the second, reworded"; check was "another test", now "mc gate tests/mc/commands/goal.test.js"\n'), f.store[`${DIR}/LOG.md`]);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'a new check'], f.deps), 0, f.err());
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.slice(0, 1), [{ criterion: 'first', check: 'a new check', met: false }]);
+});
+
+test('mc goal criterion set refuses no flag, a blank text, a criterion that is not there and a bad number, and writes nothing', async () => {
+  const f = fixture({ files: twoCriteria() });
+  const before = f.store[`${DIR}/GOAL.json`];
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '2'], f.deps), 2);
+  assert.match(f.err(), /criterion set needs --criterion "…" or --check "…"/u);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--check', '  '], f.deps), 2);
+  assert.match(f.err(), /criterion set needs --check with text in it/u);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '9', '--check', 'x'], f.deps), 1);
+  assert.match(f.err(), /it has 2 criteria, no criterion 9/u);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', 'x', '--check', 'x'], f.deps), 2);
+  assert.equal(f.store[`${DIR}/GOAL.json`], before, 'GOAL.json byte-identical');
+  assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry either');
+});
+
+test('mc goal criterion set is refused for a build session and a review session, and a plan session may rewrite', async () => {
+  for (const [env, word] of [[BUILD, 'build'], [REVIEW, 'review']]) {
+    const f = fixture({ files: twoCriteria(), env });
+    const before = f.store[`${DIR}/GOAL.json`];
+    assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], f.deps), 2);
+    assert.match(f.err(), new RegExp(`a ${word} session does not rewrite a criterion`, 'u'));
+    assert.equal(f.store[`${DIR}/GOAL.json`], before, `${word}: file unchanged`);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, `${word}: no entry`);
+  }
+  const plan = fixture({ files: twoCriteria(), env: PLAN });
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], plan.deps), 0, plan.err());
+});
+
+/** `git cat-file -e origin/main:<path>` answers for `ON_MAIN` only; any other path gets git's own "does not exist in"; `gitFails` makes every answer a git failure. */
+const ON_MAIN = ['tests/mc/present.test.js'];
+const onMain = (gitFails = false) => (cwd, args) => {
+  if (args[0] === 'show-ref') return failed('');
+  if (args[0] !== 'cat-file') return ok();
+  if (gitFails) return failed('fatal: not a git repository');
+  const path = args[2].replace('origin/main:', '');
+  return ON_MAIN.includes(path) ? ok() : failed(`fatal: path '${path}' does not exist in 'origin/main'`);
+};
+const ABSENT_WARNING = 'mc: warning: tests/mc/absent.test.js is not on origin/main of memoro-cli — a new file the build creates, or a wrong name?\n';
+
+test('criterion add warns once for a test file its check names that is not on origin/main, and writes and exits as before', async () => {
+  const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { success_criteria: [] }) }), git: onMain() });
+  const check = 'mc gate tests/mc/absent.test.js tests/mc/present.test.js tests/mc/absent.test.js';
+  assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'it runs', '--check', check], f.deps), 0, f.err());
+  assert.equal(f.err(), ABSENT_WARNING, 'exactly one warning line, naming the absent file and the repositories');
+  const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
+  assert.deepEqual(goal.success_criteria, [{ criterion: 'it runs', check, met: false }]);
+});
+
+test('criterion set warns once for a test file its check names that is not on origin/main, and writes and exits as before', async () => {
+  const f = fixture({ files: twoCriteria(), git: onMain() });
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'mc gate tests/mc/absent.test.js tests/mc/present.test.js'], f.deps), 0, f.err());
+  assert.equal(f.err(), ABSENT_WARNING, 'exactly one warning line');
+  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].check, 'mc gate tests/mc/absent.test.js tests/mc/present.test.js');
+});
+
+test('a git failure asking after a test file warns nothing, and the add and the set write and exit 0', async () => {
+  const add = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { success_criteria: [] }) }), git: onMain(true) });
+  assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'it runs', '--check', 'mc gate tests/mc/absent.test.js'], add.deps), 0, add.err());
+  assert.equal(add.err(), '');
+  assert.equal(parseGoal(add.store[`${DIR}/GOAL.json`]).success_criteria.length, 1);
+  const set = fixture({ files: twoCriteria(), git: onMain(true) });
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'mc gate tests/mc/absent.test.js'], set.deps), 0, set.err());
+  assert.equal(set.err(), '');
+  assert.equal(parseGoal(set.store[`${DIR}/GOAL.json`]).success_criteria[0].check, 'mc gate tests/mc/absent.test.js');
+});
+
 test('mc goal show prints the status line, the goal as text with each criterion\'s ✓/✗ and check, the last three entries, and each worktree\'s state', async () => {
   const git = (cwd, args) => {
     if (cwd === `${DIR}/memoro` && args[0] === 'status') return failed('not a worktree');
@@ -753,7 +835,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|martin\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal criterion set', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|martin\\|ready', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];

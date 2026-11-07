@@ -16,6 +16,7 @@ with ✓/✗ and its check, and each worktree's state.
   <p>/<g> --criterion "…" --check "…"`. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
   it back. Every write is validated; an invalid one is refused and not written.
+  `mc goal criterion set <p>/<g> <n> [--criterion "…"] [--check "…"]` rewrites a criterion's text or check and leaves it unmet, logged with the old and new text; a build or review session cannot.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the

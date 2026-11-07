@@ -68,6 +68,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal document add <programme>/<goal> --label \"…\" --path \"…\"   a document the goal sends its reader to\n",
     "        mc goal criterion add <programme>/<goal> --criterion \"…\" --check \"…\"   a success criterion and how it is checked, not met\n",
     "        mc goal criterion met [<programme>/<goal>] <n>   record that criterion <n> holds, after running its check\n",
+    "        mc goal criterion set [<programme>/<goal>] <n> [--criterion \"…\"] [--check \"…\"]   rewrite criterion <n>'s text and/or check; it is unmet again, and the rewrite is logged with the old and new text (a build or review session does not)\n",
     "        mc goal criterion unmet [<programme>/<goal>] <n>   take that back\n",
     "        mc goal convert [<programme>]   every goal still in markdown, outside goals/.archive/, turned into GOAL.json, every goal written with after given its phase, and every goal written with one status given its stage\n",
     "        mc goal from-project <programme>/<project>   a live project's steps not done turned into goals, once: <project>-<n> each one phase after the one before, or one goal on the project's branch for a branch-flow project; a finished project is refused\n",
