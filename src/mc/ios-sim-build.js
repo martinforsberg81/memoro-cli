@@ -18,7 +18,7 @@
  *   of the shared `ios-spm` the device build keeps warm, its package cache is
  *   its own (never `~/Library/Caches/org.swift.swiftpm`), the binary
  *   artifacts are prefetched and verified (swiftpm.js), and resolution is
- *   switched off when `Package.resolved` pins what the seed holds.
+ *   switched off when `Package.resolved` pins what the build's cloned packages hold.
  * - **A stall stop.** Five minutes of silence stops the xcodebuild tree and
  *   names the stage it stood at (`makeStep`'s `silenceMs`).
  * - **The build lane.** One build at a time machine-wide, the device build's
@@ -42,7 +42,7 @@ import {
 import { BUILT, FAILED, RUNNING, readIosBuilds, recordEnd } from './ios-builds.js';
 import { processAlive } from './lease-owner.js';
 import { mcHome } from './paths.js';
-import { prefetchArtifacts, packageManifests, resolvedMatchesSeed, seedPackages } from './swiftpm.js';
+import { prefetchArtifacts, packageManifests, resolvedMatchesClone, seedPackages } from './swiftpm.js';
 
 const MIN = 60 * 1000;
 
@@ -219,10 +219,10 @@ export async function buildSim(job, deps = {}) {
       cwd: worktree, env, stdout,
     });
     if (!fetched.ok) return fail('prefetch', fetched.line);
-    const offline = resolvedMatchesSeed({ worktree, project: declaration.project, seed: paths.seed });
+    const offline = resolvedMatchesClone({ worktree, project: declaration.project, spm: paths.spm });
     stdout.write(offline
-      ? 'mc: Package.resolved pins what the seed holds — package resolution off\n'
-      : 'mc: Package.resolved is missing or differs from the seed — SwiftPM resolves\n');
+      ? 'mc: Package.resolved pins what the cloned packages hold — package resolution off\n'
+      : 'mc: Package.resolved is missing or differs from the cloned packages — SwiftPM resolves\n');
 
     // (e) The builds, each stopped after five silent minutes.
     const configurations = job.releaseCheck ? ['Debug', 'Release'] : ['Debug'];

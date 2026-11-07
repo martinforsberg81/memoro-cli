@@ -347,8 +347,10 @@ and no build number; (e) the seed and the prefetch; (f) `xcodebuild -project
 <derived>/PackageCache build`, with `-disableAutomaticPackageResolution
 -skipPackageUpdates` when the project's
 `project.xcworkspace/xcshareddata/swiftpm/Package.resolved` pins exactly the
-packages and revisions the seed's `workspace-state.json` holds. A missing or
-different `Package.resolved` resolves as usual. (g) With `--release-check`,
+packages and revisions the build's own `<derived>/SourcePackages/workspace-state.json`
+holds: the copy xcodebuild reads, made from the seed once and then kept, so a
+seed refreshed since does not reach it. A missing or different
+`Package.resolved`, or a kept copy that differs from it, resolves as usual. (g) With `--release-check`,
 the same for `-configuration Release` with `CODE_SIGNING_ALLOWED=NO` into
 the same derived data. Each `xcodebuild` prints how long it took, and the
 row is completed `built` with `Debug-iphonesimulator/App.app` as its
@@ -361,7 +363,9 @@ stood at and its last line: `xcodebuild Debug stalled at Resolve Package
 Graph: Fetching from https://… — silent for 5 min, stopped`. The stage is
 the last heading `xcodebuild` printed (`Resolve Package Graph`, `Prepare
 packages`, …) or build task (`CompileSwift`, `PhaseScriptExecution`, …).
-The wall-clock limit of 60 minutes stays behind it.
+The wall-clock limit of 60 minutes stays behind it. The builder's own stop
+(SIGTERM, SIGINT or SIGHUP) reaches the same group the same way: the signal to
+the group, then SIGKILL after the grace.
 
 **The hook.** `mc hook pre-tool` refuses a raw `xcodebuild … build` or
 `archive` whose `-sdk` or `-destination` names the simulator and points at

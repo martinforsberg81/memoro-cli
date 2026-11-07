@@ -10,7 +10,7 @@ import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -591,9 +591,61 @@ describe('makeStep — the stall stop', () => {
   });
 });
 
+describe('makeStep — the builder\'s own stop', () => {
+  it('sends a grouped command\'s stop to its whole tree, and SIGKILL to the tree after the grace', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const child = fakeChild();
+    const alone = [];
+    const kills = [];
+    child.kill = (signal) => { alone.push(signal); return true; };
+    const step = makeStep({
+      stdout: capture(), graceMs: 1000,
+      spawnProcess: () => child,
+      killTree: (target, signal) => kills.push([target.pid, signal]),
+    });
+    const pending = step('xcodebuild Debug', ['xcodebuild', 'build'], { group: true });
+    step.stop('SIGTERM');
+    assert.deepEqual(kills, [[777, 'SIGTERM']], 'the tree, not xcodebuild alone');
+    t.mock.timers.tick(999);
+    assert.equal(kills.length, 1, 'the grace is not over');
+    t.mock.timers.tick(1);
+    assert.deepEqual(kills, [[777, 'SIGTERM'], [777, 'SIGKILL']]);
+    child.emit('close', null, 'SIGKILL');
+    const r = await pending;
+    assert.equal(r.ok, false);
+    assert.equal(r.signal, 'SIGKILL');
+    assert.deepEqual(alone, [], 'the child alone is not signalled');
+  });
+
+  it('sends an ungrouped command\'s stop to the command alone, and SIGKILL after the grace', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const child = fakeChild();
+    const alone = [];
+    const trees = [];
+    child.kill = (signal) => { alone.push(signal); return true; };
+    const step = makeStep({
+      stdout: capture(), graceMs: 1000,
+      spawnProcess: () => child,
+      killTree: (target, signal) => trees.push(signal),
+    });
+    const pending = step('echo', ['echo', 'x']);
+    step.stop('SIGINT');
+    assert.deepEqual(alone, ['SIGINT']);
+    t.mock.timers.tick(1000);
+    assert.deepEqual(alone, ['SIGINT', 'SIGKILL']);
+    assert.deepEqual(trees, []);
+    child.emit('close', null, 'SIGKILL');
+    assert.equal((await pending).ok, false);
+  });
+});
+
 describe('buildSim — the simulator builder', () => {
-  /** A worktree, a seed holding capacitor-swift-pm at `seedRevision`, and a Package.resolved pinning `resolvedRevision`. */
-  function sim({ resolvedRevision = 'aaa', seedRevision = 'aaa', releaseCheck = false, projectExists = true } = {}) {
+  /** A `workspace-state.json` holding capacitor-swift-pm at `revision`, as a seed or a cloned-packages directory keeps it. */
+  function workspaceState(revision) {
+    return JSON.stringify({ object: { dependencies: [{ packageRef: { identity: 'capacitor-swift-pm' }, state: { checkoutState: { revision } } }] } });
+  }
+  /** A worktree, a seed holding capacitor-swift-pm at `seedRevision`, a build's kept copy at `keptRevision` when given, and a Package.resolved pinning `resolvedRevision`. */
+  function sim({ resolvedRevision = 'aaa', seedRevision = 'aaa', keptRevision = null, releaseCheck = false, projectExists = true } = {}) {
     const env = {
       MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-ios-sim-work-')),
       MC_HOME: mkdtempSync(join(tmpdir(), 'mc-ios-sim-home-')),
@@ -607,11 +659,15 @@ describe('buildSim — the simulator builder', () => {
         pins: [{ identity: 'capacitor-swift-pm', kind: 'remoteSourceControl', state: { revision: resolvedRevision, version: '8.5.3' } }], version: 3,
       }));
     }
-    put(join(paths.seed, 'workspace-state.json'), JSON.stringify({
-      object: { dependencies: [{ packageRef: { identity: 'capacitor-swift-pm' }, state: { checkoutState: { revision: seedRevision } } }] },
-    }));
+    put(join(paths.seed, 'workspace-state.json'), workspaceState(seedRevision));
+    if (keptRevision) put(join(paths.spm, 'workspace-state.json'), workspaceState(keptRevision));
     const key = recordStart({ sha: SHA, kind: 'sim', artifact: paths.derived, pid: '' }, env);
-    const step = fakeStep();
+    const fake = fakeStep();
+    const step = async (label, argv, options) => {
+      if (argv[0] === 'cp') cpSync(argv[3], argv[4], { recursive: true }); // the seed's APFS clone, as `cp -c -R` makes it
+      return fake(label, argv, options);
+    };
+    step.calls = fake.calls;
     const lane = [];
     const stdout = capture();
     const stderr = capture();
@@ -626,7 +682,7 @@ describe('buildSim — the simulator builder', () => {
   }
   const flagsOf = (s, label = 'xcodebuild Debug') => s.step.calls.find((c) => c.label === label).argv;
 
-  it('builds Debug for the simulator in the build lane, packages seeded, resolution off when Package.resolved matches the seed', async () => {
+  it('builds Debug for the simulator in the build lane, packages seeded, resolution off when Package.resolved matches the cloned packages', async () => {
     const s = sim();
     assert.equal(await buildSim(s.job, s.deps), 0, s.stderr.text);
     assert.deepEqual(s.lane, [['take', 'ios-build', 'memoro'], ['release', 'memoro']]);
@@ -648,14 +704,28 @@ describe('buildSim — the simulator builder', () => {
     assert.equal(row.artifact, simApp(s.paths.derived));
   });
 
-  it('lets SwiftPM resolve when Package.resolved differs from the seed or is missing', async () => {
+  it('lets SwiftPM resolve when Package.resolved differs from the cloned packages or is missing', async () => {
     for (const s of [sim({ resolvedRevision: 'bbb' }), sim({ resolvedRevision: null })]) {
       assert.equal(await buildSim(s.job, s.deps), 0, s.stderr.text);
       const xcode = flagsOf(s);
       assert.equal(xcode.includes('-disableAutomaticPackageResolution'), false);
       assert.equal(xcode.includes('-skipPackageUpdates'), false);
-      assert.match(s.stdout.text, /Package\.resolved is missing or differs from the seed — SwiftPM resolves/u);
+      assert.match(s.stdout.text, /Package\.resolved is missing or differs from the cloned packages — SwiftPM resolves/u);
     }
+  });
+
+  it('turns resolution off only when Package.resolved pins what the build\'s own packages hold, not the seed', async () => {
+    // The seed was refreshed to ccc and pins Package.resolved; the build's kept copy still holds the older bbb.
+    const stale = sim({ resolvedRevision: 'ccc', seedRevision: 'ccc', keptRevision: 'bbb' });
+    assert.equal(await buildSim(stale.job, stale.deps), 0, stale.stderr.text);
+    assert.equal(flagsOf(stale).includes('-disableAutomaticPackageResolution'), false);
+    assert.equal(flagsOf(stale).includes('-skipPackageUpdates'), false);
+    assert.match(stale.stdout.text, /Package\.resolved is missing or differs from the cloned packages — SwiftPM resolves/u);
+
+    const kept = sim({ resolvedRevision: 'ccc', seedRevision: 'ccc', keptRevision: 'ccc' });
+    assert.equal(await buildSim(kept.job, kept.deps), 0, kept.stderr.text);
+    assert.ok(flagsOf(kept).includes('-disableAutomaticPackageResolution') && flagsOf(kept).includes('-skipPackageUpdates'));
+    assert.match(kept.stdout.text, /pins what the cloned packages hold — package resolution off/u);
   });
 
   it('runs the setup only for a project not there yet, and --release-check builds Release unsigned too', async () => {

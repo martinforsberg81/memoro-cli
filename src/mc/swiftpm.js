@@ -14,10 +14,10 @@
  * would take it.
  *
  * The simulator build also seeds its cloned packages from the shared
- * `<mcHome>/build/ios-spm` with an APFS clone (`seedPackages`), and passes
- * `-disableAutomaticPackageResolution -skipPackageUpdates` only when the
- * worktree's `Package.resolved` pins exactly what the seed holds
- * (`resolvedMatchesSeed`).
+ * `<mcHome>/build/ios-spm` with an APFS clone, once (`seedPackages`); it keeps
+ * that copy after, and passes `-disableAutomaticPackageResolution
+ * -skipPackageUpdates` only when the worktree's `Package.resolved` pins exactly
+ * what the copy xcodebuild reads holds (`resolvedMatchesClone`).
  *
  * Every process boundary is a parameter: the download is a `step` (the
  * builder's one way to run a command), the file system is node's.
@@ -164,7 +164,7 @@ export function resolvedPins(text) {
 }
 
 /** `{ <identity>: <revision> }` for the source-control checkouts a cloned-packages directory holds, or null. */
-export function seedPins(spm) {
+export function clonedPins(spm) {
   const text = readText(join(spm, 'workspace-state.json'));
   if (text === null) return null;
   let json;
@@ -184,14 +184,16 @@ export function resolvedPath(worktree, project) {
 
 /**
  * Whether the worktree's `Package.resolved` pins exactly the packages, at
- * exactly the revisions, the seed holds. False when either is missing: with
- * no `Package.resolved` there is nothing for SwiftPM to build from without
- * resolving.
+ * exactly the revisions, the build's cloned packages in `spm` hold: the copy
+ * xcodebuild reads (`-clonedSourcePackagesDirPath`). That is the seed's copy
+ * made once and kept, so a seed refreshed since does not reach it. False when
+ * either is missing: with no `Package.resolved` there is nothing for SwiftPM
+ * to build from without resolving.
  */
-export function resolvedMatchesSeed({ worktree, project, seed }) {
+export function resolvedMatchesClone({ worktree, project, spm }) {
   const text = readText(resolvedPath(worktree, project));
   const pins = text === null ? null : resolvedPins(text);
-  const held = seedPins(seed);
+  const held = clonedPins(spm);
   if (!pins || !held || !Object.keys(pins).length) return false;
   const names = Object.keys(pins).sort();
   return names.length === Object.keys(held).length && names.every((name) => held[name] === pins[name]);
