@@ -1,0 +1,3 @@
+section: Fixed
+
+- **A plan's stage entry is no build entry, and a closed pull request no longer holds a goal in merge.** A plan session's `· by plan` entry counted as the goal's build, so the runner skipped remaking a later-phase goal's branch from origin/main before its first build; the branch then ran without its phase-1 prerequisite. The runner's merge recovery and `mc goal stage merge` now skip a pull request GitHub says is closed without merging, and a goal whose other pull requests landed is done with the closed one named in its comment. Before, the closed pull request was queued, the merger answered red, and the goal stayed merge · blocked.
