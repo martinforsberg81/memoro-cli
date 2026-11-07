@@ -236,9 +236,9 @@ async function executeSessionGate(request, {
   const runPlan = request.pattern == null ? plan : { ...plan, flags: [...plan.flags, `--test-name-pattern=${request.pattern}`] };
   // Every batch as it launches (`realTests`' onBatch, into `launched`): what the receipt
   // says ran, including a run the ceiling or an interrupt cuts before it returns.
-  // Settle's own runs count too.
+  // Settle's runs on this candidate count too; its run at the base does not (not the candidate).
   const onBatch = (batch) => { launched.push(batch); };
-  const settleTests = (options) => tests({ ...options, onBatch });
+  const settleTests = (options) => tests({ ...options, onBatch: options.cwd === cwd ? onBatch : undefined });
   const commands = selectedCommands.map((command) => {
     const source = prior?.commands?.get(commandIdentity(command));
     return { id: command.id || command.packageScript, packageScript: command.packageScript,

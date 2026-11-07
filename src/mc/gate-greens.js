@@ -174,10 +174,8 @@ export function executionComplete(coverage, execution, members = null) {
       const at = argv.indexOf(flags[i]);
       if (at < 0 || at >= first) return false;
     }
-    for (const file of batch.files) {
-      if (covered.has(file)) return false;
-      covered.add(file);
-    }
+    // A file may be launched twice: a red file the round settles runs alone (`gate-settle.js`).
+    for (const file of batch.files) covered.add(file);
   }
   const asked = new Set(coverage.files);
   return [...covered].every((file) => asked.has(file)) && ran.every((file) => covered.has(file));

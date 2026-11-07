@@ -33,18 +33,19 @@ import { runSessionGate } from '../../src/mc/session-gate-run.js';
 import { spawnedBatch } from './_helpers/spawned-batch.js';
 
 /**
- * One real `runSessionGate` over `files` in `cwd`, its receipt returned. The candidate
- * is a fixed identity (no git is asked), and the work root is the temporary directory.
+ * One real `runSessionGate` over `files` in `cwd`: its receipt, and the run's result
+ * (which names the red tests; the receipt keeps only the members and the identity).
+ * The candidate is a fixed identity (no git is asked), and the work root is temporary.
  */
 async function receiptThrough(cwd, files, flags, run) {
   const candidate = { repository: '/repo/.git', tree: 'c'.repeat(40), fingerprint: 'bytes' };
   const work = join(cwd, 'work');
   let saved = null;
-  await runSessionGate({ cwd, files, flags, gate: { root: work, repo: 'repo' }, measurement: { repo: 'repo', run, base: 'b'.repeat(40), candidate } }, {
+  const result = await runSessionGate({ cwd, files, flags, gate: { root: work, repo: 'repo' }, measurement: { repo: 'repo', run, base: 'b'.repeat(40), candidate } }, {
     snapshot: () => candidate, write: () => {}, record: () => {}, env: { PATH: process.env.PATH, MC_WORK_ROOT: work, MC_HOME: work },
     persist: ({ receipt }) => { saved = receipt; return join(work, `${run}.json`); },
   });
-  return saved;
+  return { receipt: saved, result };
 }
 import { fileOutcomes, outputCut, progressTracker } from '../../src/mc/test-times.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
@@ -3023,19 +3024,19 @@ describe('the selected files run in their resource classes', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('realTests: a test that never ends is a red by name, and the run ends', async () => {
+  it('a test that never ends is a red by name in a real child\'s receipt, and the run ends', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-hang-'));
     try {
       writeFileSync(join(dir, 'hang.test.js'), "import { test } from 'node:test';\ntest('hangs', async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\ntest('after', () => {});\n");
       writeFileSync(join(dir, 'ok.test.js'), "import { test } from 'node:test'; test('ok', () => {});\n");
-      const run = await realTests({ cwd: dir, files: ['hang.test.js', 'ok.test.js'], flags: ['--no-warnings', '--test-timeout=300'], env: { PATH: process.env.PATH } });
-      assert.equal(run.timedOut, false, 'the run ends on its own, not at the whole-run timer');
-      assert.deepEqual(redNames(run.tap), ['hangs']);
-      assert.equal(tapTotals(run.tap).pass, 2, 'the other tests, in both files, still pass');
-      // What the child was launched with, from the spawn boundary: one batch, the requested 300 ms
-      // before the file paths, the loader and forced exit beside it, this Node, the standard class.
-      assert.equal(run.batches.length, 1);
-      const [batch] = run.batches;
+      // The real short hanging child, through the receipt mechanism (one child, no round ceiling):
+      // red by name, the two quick tests pass, and the batch record says what the child was given.
+      const { receipt: hung, result: hungRun } = await receiptThrough(dir, ['hang.test.js', 'ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'hang-run');
+      assert.equal(hung.outcome, 'red', 'a test that never ends is red in the receipt');
+      assert.equal(hung.stopped_at, null, 'the child closed on its own, not at the round ceiling');
+      assert.deepEqual(hungRun.red_tests.map((test) => test.name), ['hangs']);
+      assert.equal(hung.execution.tests.totals.pass, 2, 'the other tests, in both files, still pass');
+      const [batch, ...settled] = hung.execution.tests.batches;
       assert.deepEqual(batch.files, ['hang.test.js', 'ok.test.js']);
       assert.equal(batch.timeoutMs, 300);
       assert.equal(batch.timeoutSource, 'declaration');
@@ -3043,17 +3044,24 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(batch.resource, 'standard');
       assert.ok(batch.argv.indexOf('--test-timeout=300') < batch.argv.indexOf('hang.test.js'), batch.argv.join(' '));
       assert.ok(batch.argv.includes('--test-force-exit') && batch.argv.includes('--no-warnings'), batch.argv.join(' '));
-      // The same real child through the receipt mechanism: red, and the record names the timeout it ran with.
-      const hung = await receiptThrough(dir, ['hang.test.js', 'ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'hang-run');
-      assert.equal(hung.outcome, 'red', 'a test that never ends is red in the receipt');
-      assert.equal(hung.execution.tests.batches[0].timeoutMs, 300);
+      // The red file is settled alone on the candidate, a second real launch under the same policy, and it is recorded.
+      assert.deepEqual(settled.map((one) => one.files), [['hang.test.js']]);
+      assert.deepEqual(settled.map((one) => one.timeoutMs), [300]);
       assert.equal(hung.coverage.execution.timeoutMs, 300);
-      // The restored quick child: complete green, with matching metadata.
-      const quick = await receiptThrough(dir, ['ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'quick-run');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('a quick real child under the same declared timeout is a complete green receipt with matching metadata', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-quick-'));
+    try {
+      writeFileSync(join(dir, 'ok.test.js'), "import { test } from 'node:test'; test('ok', () => {});\n");
+      const { receipt: quick } = await receiptThrough(dir, ['ok.test.js'], ['--no-warnings', '--test-timeout=300'], 'quick-run');
       assert.equal(quick.outcome, 'green');
       assert.equal(quick.exit, 0);
       assert.deepEqual(quick.coverage.execution, { timeoutMs: 300, timeoutSource: 'declaration', forceExit: true, nodeVersion: process.version });
+      assert.equal(quick.execution.tests.batches.length, 1);
       assert.equal(quick.execution.tests.batches[0].timeoutMs, 300);
+      assert.deepEqual(quick.execution.tests.batches[0].files, ['ok.test.js']);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
 
