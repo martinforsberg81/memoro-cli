@@ -49,23 +49,28 @@ describe('the plan role', () => {
 
   /**
    * What the body is for (Martin, 2026-11-03): the programme's aim in its
-   * README, and full freedom toward it, a goal's branch included. Interactive,
-   * no restrictions; headless, never Martin's acts. The ban a headless plan
-   * session had — no code, no commit, no publish, no `review` or `done` — and
-   * its list of three allowed ends are gone.
+   * README, and full freedom toward it, a goal's branch included. Interactive
+   * only (Martin, 2026-11-07): the runner never starts a plan session, and the
+   * role names the headless roles that took its goal work — finish and mend —
+   * so a plan session knows what it owns. The ban a headless plan session had
+   * — no code, no commit, no publish, no `review` or `done` — and its list of
+   * three allowed ends are gone, and so are the headless sections.
    */
-  it('says the session drives the programme toward the README aim, interactive and headless', () => {
+  it('says the session drives the programme toward the README aim, interactive only, and names the headless owners', () => {
     const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /full freedom/u);
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
-    assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what `mc build goal` runs\. It is a means toward the aim, not the aim itself/u);
-    assert.match(told, /\*\*Interactive\.\*\*.*you have no restrictions/u);
-    assert.match(told, /`mc deploy`, production data, credentials and `--admin` are Martin's acts and happen only in an interactive session\. A headless session never does them/u);
+    assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
+    assert.match(told, /\*\*Interactive, always\.\*\*.*you have no restrictions/u);
+    assert.match(told, /The runner never starts a plan session/u);
+    assert.match(told, /A \*\*finish session\*\* takes `finish · ready`/u);
+    assert.match(told, /A \*\*mend session\*\* takes every `blocked` goal and every red merge/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /not a runner area/u);
-    for (const ban of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u]) {
-      assert.doesNotMatch(told, ban);
+    for (const gone of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u,
+      /\*\*Headless\.\*\*/u, /MC_PLAN_REASON/u, /no_goals_remaining/u, /daily_proposals/u, /### finish/u, /### blocked/u, /Programme planning/u]) {
+      assert.doesNotMatch(told, gone);
     }
   });
 

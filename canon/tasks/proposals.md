@@ -6,8 +6,8 @@ description: What to do with something you found that is not your job in mc (mem
 
 What you found that is not your job is a proposal: one file per finding,
 `<date>-<system>-<slug>.md`, in the programme that owns the question:
-`~/mc/programs/<programme>/proposals/`. That programme's plan session takes a
-stand on it, with the whole programme as context. When no programme owns it,
+`~/mc/programs/<programme>/proposals/`. That programme's interactive plan
+session takes a stand on it, with the whole programme as context. When no programme owns it,
 it goes in `~/mc/proposals/`, the proposals without an owner. The date, the
 system and the `.md` are mc's: it counts what is there by system and orders by
 name.

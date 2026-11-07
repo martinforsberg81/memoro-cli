@@ -12,7 +12,6 @@ import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
 import { mcCheckout } from '../../src/mc/run-control.js';
-import { programmeWorkKey } from '../../src/mc/programme-plan.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -595,13 +594,6 @@ function goalFixture(goals, options = {}) {
     f.files[`${GOALS}/${name}/GOAL.json`] = after === null ? text : `${JSON.stringify({ ...legacy, status: old, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
     if (worktree) for (const repo of repos.split(',')) f.dirs.add(`${GOALS}/${name}/${repo.trim()}`);
-  }
-  // Goal-lifecycle fixtures already had their initial one-goal planning decision.
-  // Trigger tests opt into an unplanned programme; this keeps goal ownership
-  // assertions about the goal's sessions rather than unrelated replenishment.
-  const parsed = Object.keys(goals).map((name) => ({ ...parseGoal(f.files[`${GOALS}/${name}/GOAL.json`]), goal: name, log: parseLog(f.files[`${GOALS}/${name}/LOG.md`]) }));
-  if (!options.unplanned && parsed.filter((goal) => !['done', 'dropped'].includes(goal.stage)).length === 1) {
-    f.files['/w/runner/programme-plan/prog.json'] = JSON.stringify({ version: 2, work_key: programmeWorkKey(parsed), at: options.now ?? '2026-08-29T10:00:00Z', outcome: 'success' });
   }
   return f;
 }
@@ -2923,7 +2915,7 @@ test('two lanes picking in one moment do not start one goal twice', async () => 
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a build session that writes no log entry gets a runner entry, and three in a row move the goal to finish for one plan session', async () => {
+test('a build session that writes no log entry gets a runner entry, and three in a row move the goal to finish for one finish session', async () => {
   const f = goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } });
   f.answer = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
   const runner = createRunner({ deps: f.deps });
@@ -2941,14 +2933,16 @@ test('a build session that writes no log entry gets a runner entry, and three in
   assert.equal(where(), 'build · ready', 'two are not three');
   await runner.pass({ repo: 'memoro' });
   assert.equal(where(), 'finish · ready');
-  assert.match(entries().at(-1).comment, /^three sessions ended without a word — see the logs under runner\/log; a plan session finishes it$/u);
+  assert.match(entries().at(-1).comment, /^three sessions ended without a word — see the logs under runner\/log; a finish session takes it$/u);
 
-  // In finish it wakes one plan session; that one ends with the goal still in
-  // finish, so the runner sets it blocked, and nothing starts again.
+  // In finish it wakes one finish session; that one ends with the goal still in
+  // finish, so the runner sets it blocked. A mend session takes the blocked
+  // goal; it leaves it blocked too, so the goal waits on Martin and nothing starts again.
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'finish-session');
   assert.equal(where(), 'finish · blocked');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'mend-session');
   assert.equal(where(), 'finish · Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(runRows(f.files).length, 5);
@@ -3065,26 +3059,26 @@ test('a goal the archive refuses stays, and the refusal is written into its log 
   assert.match(runnerLines[0].comment, /^not archived — memoro's worktree has uncommitted changes \(/u);
 });
 
-/* ------------------------------------------------------- plan on finish, and on a red in merge */
+/* ------------------------------------------------------- finish on finish, mend on blocked and on a red in merge */
 
-/** A plan session that writes its entry and leaves the goal in `stage` · `status`, as `mc goal stage` does. */
+/** A finish or mend session that writes its entry and leaves the goal in `stage` · `status`, as `mc goal stage` does. */
 const plans = (f, name, stage, status = 'ready', inner = okSession()) => (call) => {
   const dir = `${GOALS}/${name}`;
   f.files[`${dir}/LOG.md`] = `${f.files[`${dir}/LOG.md`]}\n## 2026-08-29T11:00Z · claude opus · ${stage} · ${status}\n\nComment: finished it\n`;
   f.files[`${dir}/GOAL.json`] = withGoal(f.files[`${dir}/GOAL.json`], { stage, status });
   return inner(call);
 };
-const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one plan session takes it and queues it again\n`;
+const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one mend session takes it and queues it again\n`;
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
-test('headless planning chooses Opus or Sol by capacity, always at medium, for finish and red merge', async () => {
-  for (const stage of ['finish', 'merge']) {
+test('a finish and a mend session route on the goal\'s class like a build, by capacity, and run in the goal\'s worktree', async () => {
+  for (const [stage, role] of [['finish', 'finish-session'], ['merge', 'mend-session']]) {
     for (const tool of ['claude', 'codex']) {
       const f = goalFixture({ stuck: { stage, ...(stage === 'merge' ? { log: redMerge } : {}) } });
       let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
       capacity = applyObservation(capacity, 'codex', {
         windows: { primary: windowAt(tool === 'codex' ? 0.1 : 0.9) },
-        models: [{ id: 'gpt-6.1-sol', efforts: ['medium'] }],
+        models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }],
       }, ROUTING_NOW);
       f.deps.capacity.write(capacity);
       const launch = f.deps.launch;
@@ -3095,18 +3089,20 @@ test('headless planning chooses Opus or Sol by capacity, always at medium, for f
       };
       f.answer = plans(f, 'stuck', stage, 'blocked');
       const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
-      assert.equal(result.ran, 1);
+      assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
-      assert.equal(call.env.MC_ROLE, 'plan');
+      assert.equal(call.env.MC_ROLE, role);
+      // The goal's class is `large`: claude opus medium, or codex gpt-6.1-sol high (DEFAULT_CATALOG), whichever has room.
       assert.equal(call.env.MC_MODEL, tool === 'claude' ? 'opus' : 'gpt-6.1-sol');
       assert.equal(call.env.MC_TOOL, tool);
-      if (tool === 'claude') assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
-      else assert.ok(call.args.includes('model_reasoning_effort=medium'));
+      assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree, not the programme directory');
+      assert.deepEqual([call.env.MC_REPO, call.env.MC_WORKAREA], ['memoro', `${GOALS}/stuck/memoro`]);
+      assert.equal('MC_PLAN_REASON' in call.env, false, 'no headless plan reason any more');
     }
   }
 });
 
-test('a goal in finish starts one plan session: the plan role, opus, the programme directory, no worktree, told to finish it', async () => {
+test('a goal in finish starts one finish session: the finish role, in the goal\'s worktree, told to finish it', async () => {
   const f = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: REVIEW.md\n' } });
   const finish = plans(f, 'stuck', 'finish', 'Martin');
   f.answer = (call) => {
@@ -3119,44 +3115,38 @@ test('a goal in finish starts one plan session: the plan role, opus, the program
   assert.equal(r.ran, 1);
   assert.equal(r.name, 'goal:prog/stuck');
   const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'plan');
-  assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s plan session is headless');
+  assert.equal(call.env.MC_ROLE, 'finish-session');
+  assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s finish session is headless');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
-  assert.ok(call.args.some((arg, i) => arg === '--effort' && call.args[i + 1] === 'medium'));
-  assert.equal(call.env.MC_MODEL, 'opus', 'a headless plan runs on opus medium (2026-11-04), not the role\'s fable');
-  assert.equal(call.cwd, '/w/programs/prog', 'beside the goal, not in its worktree');
-  assert.equal('MC_WORKAREA' in call.env, false);
+  assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree');
+  assert.equal(call.env.MC_WORKAREA, `${GOALS}/stuck/memoro`);
   assert.equal('MC_REVIEW_HEAD' in call.env, false);
-  assert.match(call.args.join('\n'), /ROLE plan/u);
-  assert.match(call.prompt, /it is in finish: read its REVIEW\.md, when there is one, and LOG\.md, fix it in its worktree, publish, and move it to merge/u);
+  assert.match(call.args.join('\n'), /ROLE finish-session/u);
+  assert.match(call.prompt, /^You finish the goal prog\/stuck, headless: it is in finish\. Read REVIEW\.md in its directory when there is one, and LOG\.md; fix what review found in its worktree, gate, publish, and move it to merge\. The last word on it: REVIEW\.md\./u);
   assert.match(call.prompt, /its worktree is `\/w\/programs\/prog\/goals\/stuck\/memoro`/u);
   const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
-  assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'plan', null]);
-  assert.equal(runRows(f.files)[0].kind, 'plan');
-  // It set the goal blocked itself: the runner adds nothing, and no second session starts.
+  assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'finish', null]);
+  assert.equal(runRows(f.files)[0].kind, 'finish');
+  // It set the goal Martin itself: the runner adds nothing, and no second session starts.
   assert.equal(where(f, 'stuck'), 'finish · Martin');
   assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
 });
 
-test('one runner applies changed priority to finish, blocked and programme plan launches', async () => {
+test('one runner applies changed provider priority to finish and mend launches', async () => {
   const f = goalFixture({ stuck: { stage: 'finish' } });
   let priority = 'codex';
   f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
   let capacity = capacityWith({ claude: 0.1 });
-  capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.1-sol', efforts: ['medium'] }] }, ROUTING_NOW);
+  capacity = applyObservation(capacity, 'codex', { windows: { primary: windowAt(0.9) }, models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }] }, ROUTING_NOW);
   f.deps.capacity.write(capacity);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['finish', 'codex', 'gpt-6.1-sol']);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['finish-session', 'codex', 'gpt-6.1-sol']);
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'build', status: 'blocked' });
   priority = 'claude';
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['blocked', 'claude', 'opus']);
-  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'done', status: 'ready' });
-  priority = 'codex';
-  await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_PLAN_REASON, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['no_goals_remaining', 'codex', 'gpt-6.1-sol']);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['mend-session', 'claude', 'opus']);
 });
 
 test('a finish session that moves the goal to merge hands it to the merger: no session starts after it', async () => {
@@ -3169,7 +3159,7 @@ test('a finish session that moves the goal to merge hands it to the merger: no s
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'in merge the runner starts nothing');
 });
 
-test('a red in merge starts one plan session; queued again it gets the runner\'s entry and waits for the merger, not queued it is merge · blocked', async () => {
+test('a red in merge starts one mend session; queued again it gets the runner\'s entry and waits for the merger, not queued it is merge · blocked', async () => {
   const f = goalFixture({ red: { stage: 'merge', log: redMerge } });
   f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
   let line = [];
@@ -3177,18 +3167,22 @@ test('a red in merge starts one plan session; queued again it gets the runner\'s
   f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return okSession()(call); };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'plan');
-  assert.match(f.calls.sessions[0].prompt, /retry.*The last word on it: merger answered red on #31/u);
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'mend-session');
+  assert.match(f.calls.sessions[0].prompt, /^You mend the goal prog\/red, headless — it is in merge and the merger did not land it: .*queue it again with mc goal stage merge\. The last word on it: merger answered red on #31/u);
   assert.equal(where(f, 'red'), 'merge · ready');
-  assert.equal(parseLog(f.files[`${GOALS}/red/LOG.md`]).at(-1).done, 'plan session took the red; the pull request is in the merger\'s line again');
+  assert.equal(parseLog(f.files[`${GOALS}/red/LOG.md`]).at(-1).done, 'mend session took the red; the pull request is in the merger\'s line again');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'the red is taken: no second session');
 
   const g = goalFixture({ red: { stage: 'merge', log: redMerge } });
   g.files[`${GOALS}/red/GOAL.json`] = withGoal(g.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
   g.deps.pendingMerges = () => [];
   await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
-  assert.equal(where(g, 'red'), 'merge · Martin');
+  assert.equal(where(g, 'red'), 'merge · blocked', 'a legacy merge · ready red left unqueued blocks the goal for one mend');
   assert.match(parseLog(g.files[`${GOALS}/red/LOG.md`]).at(-1).comment, /nothing in the merger's line/u);
+  // The mend of the blocked goal that leaves it unqueued waits on Martin: no loop.
+  await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
+  assert.equal(where(g, 'red'), 'merge · Martin');
+  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
 });
 
 test('a Martin goal, in any stage, and a goal in plan, start nothing', async () => {
@@ -3388,7 +3382,7 @@ test('a build session on a goal with no worktree makes it on goal/<goal> before 
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a finish session on a goal with no worktree makes the goal\'s worktree and the planning checkouts, before it starts', async () => {
+test('a finish session on a goal with no worktree makes the goal\'s worktree before it starts, and no planning checkout', async () => {
   const f = goalFixture({ stuck: { stage: 'finish', worktree: false } });
   noBranches(f);
   f.dirs.add('/home/memoro');
@@ -3397,7 +3391,8 @@ test('a finish session on a goal with no worktree makes the goal\'s worktree and
   const goalAdd = adds.find((add) => add.path === `${GOALS}/stuck/memoro`);
   assert.deepEqual(goalAdd?.args, ['worktree', 'add', '-q', '-b', 'goal/stuck', `${GOALS}/stuck/memoro`, 'origin/main']);
   assert.equal(goalAdd.sessionsBefore, 0);
-  assert.equal(f.calls.sessions[0].cwd, '/w/programs/prog', 'a plan session still stands beside the goal');
+  assert.equal(adds.some((add) => add.path === '/w/programs/prog/memoro'), false, 'the runner makes no plan/<programme> checkout: mc plan does');
+  assert.equal(f.calls.sessions[0].cwd, `${GOALS}/stuck/memoro`, 'the finish session stands in the goal\'s worktree');
 });
 
 test('a released goal worktree comes back on its own existing branch, as it was: added without -b, after a prune', async () => {
@@ -3410,19 +3405,6 @@ test('a released goal worktree comes back on its own existing branch, as it was:
   assert.deepEqual(goalAdd.args, ['worktree', 'add', '-q', `${GOALS}/lost/memoro`, 'goal/lost']);
 });
 
-test('a programme planning turn makes no goal worktree, but the programme\'s planning checkouts before it starts', async () => {
-  const f = goalFixture({ a: { stage: 'done', worktree: false } });
-  noBranches(f);
-  f.dirs.add('/home/memoro');
-  const adds = sessionsAtAdd(f);
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions[0].env.MC_PLAN_REASON, 'no_goals_remaining');
-  assert.equal(adds.some((add) => add.path?.startsWith(`${GOALS}/`)), false, 'no goal worktree');
-  const planAdd = adds.find((add) => add.path === '/w/programs/prog/memoro');
-  assert.deepEqual(planAdd?.args, ['worktree', 'add', '-q', '-b', 'plan/prog', '/w/programs/prog/memoro', 'origin/main']);
-  assert.equal(planAdd.sessionsBefore, 0);
-});
-
 test('a goal whose worktree cannot be added starts no session, and its log says why', async () => {
   const f = goalFixture({ lost: { worktree: false } });
   const { git } = f.deps;
@@ -3432,38 +3414,6 @@ test('a goal whose worktree cannot be added starts no session, and its log says 
   assert.equal(f.calls.sessions.length, 0);
   const last = parseLog(f.files[`${GOALS}/lost/LOG.md`]).at(-1);
   assert.deepEqual([last.tool, last.comment], ['runner', 'no session started: memoro\'s worktree could not be made (branch in use)']);
-});
-
-test('a plan session makes the programme\'s planning checkouts on plan/<programme> before it launches, and attaches the new ones', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
-  noBranches(f);
-  f.dirs.add('/home/memoro');
-  const adds = sessionsAtAdd(f);
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  const planAdd = adds.find((add) => add.path === '/w/programs/prog/memoro');
-  assert.deepEqual(planAdd?.args, ['worktree', 'add', '-q', '-b', 'plan/prog', '/w/programs/prog/memoro', 'origin/main']);
-  assert.equal(planAdd.sessionsBefore, 0, 'added before the session launched');
-  assert.ok(f.calls.attached.some((item) => item.worktree === '/w/programs/prog/memoro' && item.sessionsBefore === 0), 'attached through the async door, before launch');
-});
-
-test('an existing planning checkout is reused, not added again', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
-  f.dirs.add('/w/programs/prog/memoro');
-  const adds = sessionsAtAdd(f);
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(adds.some((add) => add.path === '/w/programs/prog/memoro'), false);
-  assert.equal(f.calls.attached.some((item) => item.worktree === '/w/programs/prog/memoro'), false);
-});
-
-test('a planning checkout that cannot be added is named in the runner\'s line, and the plan session starts without it', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
-  noBranches(f);
-  f.dirs.add('/home/memoro');
-  const { git } = f.deps;
-  f.deps.git = (cwd, args) => (args[0] === 'worktree' && args.includes('/w/programs/prog/memoro') ? { ok: false, stdout: '', stderr: 'branch in use' } : git(cwd, args));
-  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.length, 1, 'the session launches all the same');
-  assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/stuck: memoro's planning checkout \/w\/programs\/prog\/memoro is not made — branch in use; the session starts without it/u);
 });
 
 test('a goal whose worktree was deleted is pruned from git before its branch is added again', async () => {
@@ -3675,7 +3625,7 @@ test('a review decides: merge is the merger\'s — the runner queues nothing and
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a review that sends the goal to finish hands it to one plan session, which builds nothing', async () => {
+test('a review that sends the goal to finish hands it to one finish session, never back to a build', async () => {
   const f = reviewFixture();
   f.answer = judges(f, 'finish');
   const runner = createRunner({ deps: f.deps });
@@ -3683,7 +3633,7 @@ test('a review that sends the goal to finish hands it to one plan session, which
   assert.equal(where(f, 'judged'), 'finish · ready');
   f.answer = plans(f, 'judged', 'merge');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'plan');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'finish-session');
   assert.equal(f.calls.sessions.some((call) => call.env.MC_ROLE === 'build-session:goal'), false, 'never back to a build session');
 });
 
@@ -3697,9 +3647,9 @@ test('a review that dies leaves review · ready and a review runs again; a secon
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
   assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'review-session:goal');
   assert.equal(where(f, 'judged'), 'review · blocked');
-  assert.match(goalEntries(f).at(-1).comment, /a second time — a blocked plan session takes it$/u);
+  assert.match(goalEntries(f).at(-1).comment, /a second time — a mend session takes it$/u);
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'blocked');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'mend-session');
   assert.equal(where(f, 'judged'), 'review · Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 3);
@@ -3751,7 +3701,7 @@ test('a goal in review with no open pull request goes to finish, and no review s
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(f.calls.sessions.filter((call) => call.env.MC_ROLE === 'review-session:goal').length, 0);
   assert.equal(where(f, 'judged'), 'finish · ready');
-  assert.match(goalEntries(f).at(-1).comment, /^in review, but goal\/judged has no open pull request — a plan session finishes it$/u);
+  assert.match(goalEntries(f).at(-1).comment, /^in review, but goal\/judged has no open pull request — a finish session takes it$/u);
 });
 
 /* ---------------------------------------------------------------- no loop */
@@ -3782,7 +3732,7 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
   f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return plans(f, 'judged', 'merge')(call); };
   await runner.pass({ repo: 'memoro' }); note();
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'in the merger\'s line, nothing starts');
-  // 4. The merger answers red: one plan session takes it and queues again.
+  // 4. The merger answers red: one mend session takes it and queues again.
   mergerAnswers('red'); note();
   f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return okSession()(call); };
   await runner.pass({ repo: 'memoro' }); note();
@@ -3790,17 +3740,17 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
   mergerAnswers('moved'); note();
   f.answer = plans(f, 'judged', 'merge', 'Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'blocked');
+  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'mend-session');
   assert.equal(where(f, 'judged'), 'merge · Martin');
   for (let i = 0; i < 5; i += 1) assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `pass ${i + 1} after it starts nothing`);
 
   assert.deepEqual(seen, ['review · ready', 'finish · ready', 'merge · ready', 'merge · ready', 'merge · ready', 'merge · blocked']);
   const stages = parseLog(f.files[`${GOALS}/judged/LOG.md`]).map((entry) => entry.stage).filter(Boolean);
   for (let i = 1; i < stages.length; i += 1) assert.ok(rank(stages[i]) >= rank(stages[i - 1]), `${stages[i - 1]} → ${stages[i]} goes back`);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'plan', 'plan', 'plan'], 'finish and two merge recoveries, without moving a stage backward');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'finish-session', 'mend-session', 'mend-session'], 'a finish and two mends, without moving a stage backward');
 });
 
-test('blocked work wakes plan with its reason and retries the same stage; Martin never wakes it', async () => {
+test('blocked work in any stage wakes a mend session, which retries the same stage; Martin never wakes it', async () => {
   for (const stage of ['plan', 'build', 'review', 'finish', 'merge']) {
     const f = goalFixture({ stuck: { stage, status: 'blocked' } });
     if (stage === 'merge') {
@@ -3811,12 +3761,14 @@ test('blocked work wakes plan with its reason and retries the same stage; Martin
     const runner = createRunner({ deps: f.deps });
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, stage);
     const [call] = f.calls.sessions;
-    assert.equal(call.env.MC_ROLE, 'plan', stage);
-    assert.equal(call.env.MC_PLAN_REASON, 'blocked', stage);
+    assert.equal(call.env.MC_ROLE, 'mend-session', stage);
+    assert.match(call.prompt, stage === 'merge'
+      ? /it is in merge · blocked and the merger did not land it/u
+      : new RegExp(`it is blocked in ${stage}: read LOG\\.md and REVIEW\\.md when present, diagnose and resolve the obstacle, then retry the same stage with mc goal ready`, 'u'), stage);
     assert.equal(call.env.MC_GOAL, 'prog/stuck', stage);
     assert.equal(where(f, 'stuck'), `${stage} · ready`, stage);
     assert.equal(runner.nextWork({ repo: 'memoro' })?.kind ?? null,
-      { plan: null, build: 'build', review: 'review', finish: 'plan', merge: null }[stage], stage);
+      { plan: null, build: 'build', review: 'review', finish: 'finish', merge: null }[stage], stage);
     f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { status: 'Martin' });
     assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, stage);
   }
@@ -3845,62 +3797,23 @@ test('repeated blocked recoveries are bounded across restarts, and a person can 
   assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
 });
 
-test('all goals done invokes programme planning once across lanes, restarts and archive moves, without MC_GOAL', async () => {
-  const f = goalFixture({ a: { stage: 'done' }, b: { stage: 'done' } });
-  let release;
-  f.answer = () => new Promise((resolve) => { release = () => resolve(okSession()()); });
-  const runner = createRunner({ deps: f.deps });
-  const first = runner.pass({ repo: 'memoro', lane: 1 });
-  assert.equal((await runner.pass({ repo: 'memoro', lane: 2 })).ran, 0);
-  for (let turn = 0; !release && turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(typeof release, 'function');
-  const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'plan');
-  assert.equal(call.env.MC_PLAN_REASON, 'no_goals_remaining');
-  assert.equal(call.cwd, '/w/programs/prog');
-  assert.equal('MC_GOAL' in call.env, false);
-  const current = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
-  assert.deepEqual([current.name, current.reason], ['plan:prog', 'no_goals_remaining']);
-  release();
-  assert.equal((await first).ran, 1);
-  f.answer = okSession();
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  for (const file of ['GOAL.json', 'LOG.md']) {
-    f.files[`${GOALS}/.archive/a/${file}`] = f.files[`${GOALS}/a/${file}`];
-    delete f.files[`${GOALS}/a/${file}`];
-  }
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  f.files[`${GOALS}/c/GOAL.json`] = goalJson({ stage: 'build', title: 'next' });
-  assert.equal(createRunner({ deps: f.deps }).nextWork()?.kind, 'build');
-  f.files[`${GOALS}/c/GOAL.json`] = withGoal(f.files[`${GOALS}/c/GOAL.json`], { stage: 'done' });
-  f.answer = okSession();
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'no_goals_remaining');
-});
-
-test('programme planning suppresses invalid goals and corrupt receipts instead of guessing readiness', () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  const runner = createRunner({ deps: f.deps });
-  f.files[`${GOALS}/broken/GOAL.json`] = 'invalid';
-  assert.equal(runner.nextWork(), null);
-  delete f.files[`${GOALS}/broken/GOAL.json`];
-  for (const receipt of ['invalid', '[]', '42']) {
-    f.files['/w/runner/programme-plan/prog.json'] = receipt;
-    assert.equal(runner.nextWork(), null, receipt);
-  }
-});
-
-test('two blocked goals in one programme share one planning session at a time', async () => {
+test('two blocked goals in one programme are mended side by side: a mend holds no programme-wide planning claim', async () => {
   const f = goalFixture({ a: { status: 'blocked' }, b: { status: 'blocked' } });
+  f.deps.laneCount = () => ({ lanes: 2 });
   let release;
-  f.answer = plans(f, 'a', 'build', 'Martin', () => new Promise((resolve) => { release = () => resolve(okSession()()); }));
+  f.answer = (call) => {
+    if (call.env.MC_GOAL === 'prog/a') return plans(f, 'a', 'build', 'Martin', () => new Promise((resolve) => { release = () => resolve(okSession()()); }))(call);
+    return plans(f, 'b', 'build', 'ready')(call);
+  };
   const runner = createRunner({ deps: f.deps });
   const first = runner.pass({ lane: 1 });
-  assert.equal((await runner.pass({ lane: 2 })).ran, 0);
   for (let turn = 0; !release && turn < 50; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  const second = await runner.pass({ lane: 2 });
+  assert.equal(second.ran, 1, 'the second lane mends b while a is being mended');
+  assert.equal(second.name, 'goal:prog/b');
   release();
   assert.equal((await first).ran, 1);
-  assert.equal(runner.nextWork()?.name, 'goal:prog/b');
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['mend-session', 'mend-session']);
 });
 
 test('programme priority is reread live within a stage; blocked recovery, review and phase eligibility take precedence', () => {
@@ -3924,140 +3837,4 @@ test('programme priority is reread live within a stage; blocked recovery, review
   delete f.files[`${base}/goals/first/GOAL.json`];
   f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { phase: 1, status: 'ready' });
   assert.equal(runner.nextWork().name, 'goal:prog/older', 'reset restores oldest first');
-});
-
-test('next-step planning yields to existing builds even with higher programme priority', () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  f.files['/w/programs/prog/PRIORITY.json'] = JSON.stringify({ priority: 100 });
-  f.files['/w/programs/other/goals/build/GOAL.json'] = goalJson({ repos: ['memoro'] });
-  const runner = createRunner({ deps: f.deps });
-  assert.equal(runner.nextWork().name, 'goal:other/build');
-  delete f.files['/w/programs/other/goals/build/GOAL.json'];
-  assert.equal(runner.nextWork().name, 'plan:prog');
-});
-
-test('programme planning triggers: one remaining goal starts no plan session; its completion starts one, once', async () => {
-  const f = goalFixture({ waiting: { stage: 'plan', status: 'Martin' } }, { unplanned: true });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0, 'one unfinished goal is no trigger');
-  assert.equal(f.calls.sessions.length, 0);
-  assert.equal(where(f, 'waiting'), 'plan · Martin');
-  f.files[`${GOALS}/waiting/GOAL.json`] = withGoal(f.files[`${GOALS}/waiting/GOAL.json`], { stage: 'done' });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'plan');
-  assert.equal(call.env.MC_PLAN_REASON, 'no_goals_remaining');
-  assert.equal('MC_GOAL' in call.env, false);
-  assert.equal(call.cwd, '/w/programs/prog');
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0, 'the completion is consumed across restarts');
-  assert.equal(f.calls.sessions.length, 1);
-});
-
-test('programme planning triggers: direct proposals have a rolling daily cadence even with multiple unfinished goals', async () => {
-  const f = goalFixture({ a: { stage: 'plan' }, b: { stage: 'plan' } });
-  let now = Date.parse('2026-08-29T10:00:00Z');
-  f.deps.now = () => new Date(now);
-  f.files['/w/programs/prog/proposals/archive/old.md'] = '# old';
-  f.files['/w/programs/prog/proposals/draft.md/inside.txt'] = 'a directory, not a proposal';
-  f.files['/w/programs/prog/proposals/readme.txt'] = 'not Markdown';
-  assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
-  f.files['/w/programs/prog/proposals/new.md'] = '# work';
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'daily_proposals');
-  f.files['/w/programs/prog/proposals/new.md'] += '\nchanged';
-  f.files['/w/programs/prog/proposals/second.md'] = '# more';
-  now += 24 * 60 * 60_000 - 1;
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  now += 1;
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.length, 2);
-  delete f.files['/w/programs/prog/proposals/new.md'];
-  delete f.files['/w/programs/prog/proposals/second.md'];
-  now += 24 * 60 * 60_000;
-  assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
-});
-
-test('programme planning triggers: dropped and empty programmes get the zero-goal checkpoint without repeated archive wakeups', async () => {
-  const f = goalFixture({ dropped: { stage: 'dropped' } });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'no_goals_remaining');
-  for (const file of ['GOAL.json', 'LOG.md']) {
-    f.files[`${GOALS}/.archive/dropped/${file}`] = f.files[`${GOALS}/dropped/${file}`];
-    delete f.files[`${GOALS}/dropped/${file}`];
-  }
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  f.files['/w/programs/empty/README.md'] = '# approved aim';
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PROGRAMME, 'empty');
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-});
-
-test('programme planning triggers: coalesced reasons and failed sessions consume one launch, not an immediate retry', async () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
-  f.answer = () => ({ status: 1, stdout: '', stderr: 'provider failed', timedOut: false });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  const record = JSON.parse(f.files['/w/runner/programme-plan/prog.json']);
-  assert.deepEqual(record.triggers, ['no_goals_remaining', 'daily_proposals']);
-  assert.equal(record.outcome, 'no-json');
-  assert.equal(record.status, 1);
-  assert.deepEqual(record.remaining, []);
-  assert.deepEqual(record.proposals, ['new.md']);
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  assert.equal(f.calls.sessions.length, 1);
-  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/programme-plan/prog.json']).triggers, record.triggers);
-});
-
-test('programme planning triggers: foreground and draining plan owners hold all triggers without consuming them', async () => {
-  const f = goalFixture({ done: { stage: 'done' } }, { livePids: [555] });
-  const foreground = '/w/runner/foreground/555.json';
-  f.files[foreground] = JSON.stringify({ verb: 'plan', programme: 'prog', pid: 555 });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
-  delete f.files[foreground];
-  f.files['/w/runner/current-memoro-1.json'] = JSON.stringify({ programme: 'prog', kind: 'plan', name: 'goal:prog/recovery', repo: 'memoro', pid: 555, lane: 1 });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
-  delete f.files['/w/runner/current-memoro-1.json'];
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.length, 1);
-});
-
-test('programme planning triggers: missing launch prerequisites leave work unconsumed and an interrupted invocation remains recorded', async () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  const role = f.deps.role;
-  f.deps.role = () => null;
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
-  f.deps.role = role;
-  f.answer = () => { throw new Error('transport disappeared'); };
-  await assert.rejects(createRunner({ deps: f.deps }).pass(), /transport disappeared/u);
-  assert.equal(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).outcome, 'started');
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-});
-
-test('programme planning triggers: a final disk admission refusal does not consume either coalesced trigger', async () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
-  let available = 40 * 1e9;
-  f.deps.freeBytes = () => available;
-  const mkdir = f.deps.mkdir;
-  f.deps.mkdir = (path) => { mkdir(path); if (path.includes('/scratch/plan-')) available = null; };
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  assert.equal(f.calls.sessions.length, 0);
-  assert.equal(f.files['/w/runner/programme-plan/prog.json'], undefined);
-  f.deps.mkdir = mkdir;
-  available = 40 * 1e9;
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.deepEqual(JSON.parse(f.files['/w/runner/programme-plan/prog.json']).triggers, ['no_goals_remaining', 'daily_proposals']);
-});
-
-test('programme planning triggers: legacy completion receipts survive upgrade while a new proposal can still be reviewed', async () => {
-  const f = goalFixture({ done: { stage: 'done' } });
-  const goal = JSON.parse(f.files[`${GOALS}/done/GOAL.json`]);
-  f.files['/w/runner/programme-plan/prog.json'] = JSON.stringify({ key: JSON.stringify([['done', goal.created, null]]), at: '2026-08-29T09:00:00Z', outcome: 'success' });
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
-  f.files['/w/programs/prog/proposals/new.md'] = '# proposal';
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_PLAN_REASON, 'daily_proposals');
-  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
 });

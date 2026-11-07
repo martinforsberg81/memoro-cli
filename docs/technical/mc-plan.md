@@ -109,12 +109,11 @@ or prompt content. Session ownership and headless restrictions are unchanged.
 
 The plan session has full freedom toward the programme's aim: investigate,
 write goals, build and land work itself, or take over a goal's branch when
-that costs less than a new build session. Interactive, Martin is at the
-terminal. Headless, it never performs his acts: deploy, production data,
-credentials or an admin merge. The runner starts a headless plan session
-only for a goal in `finish`, or in `merge` after its first red or moved head.
-That session starts in the programme directory and can enter the goal's
-worktree to finish it; the runner does not place it in a programme checkout.
+that costs less than a new build session. It is interactive only: Martin is
+at the terminal. The runner never starts a plan session (Martin, 2026-11-07);
+a goal in `finish` gets a finish session and a blocked goal or a red merge a
+mend session, each with its own role ([mc-goals.md](mc-goals.md) § *Finish
+and mend*).
 See [mc-goals.md](mc-goals.md).
 
 ## Writing goals

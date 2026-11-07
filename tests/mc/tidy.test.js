@@ -356,7 +356,7 @@ function checkoutsOf(m, programme = 'mc') {
   return area;
 }
 
-/** A planning session of `programme` on record as running: a foreground `mc plan` (`pid`) or a runner plan session in flight. */
+/** A planning session of `programme` on record: a foreground `mc plan` (`pid`), or a lane file from before 2026-11-07 naming a runner plan session. */
 function planRecord(m, { foreground = null, runner = null }) {
   if (foreground) m.write(join(m.work, 'runner', 'foreground', `${foreground.pid}.json`), JSON.stringify({ verb: 'plan', programme: foreground.programme, pid: foreground.pid }), NOW);
   if (runner) m.write(join(m.work, 'runner', `current-${runner.repo ?? 'memoro'}.json`), JSON.stringify({ kind: 'plan', programme: runner.programme, session_pid: runner.pid }), NOW);
@@ -421,21 +421,23 @@ describe('(I) a planning area\'s own checkouts, while no planning session of the
     } finally { m.cleanup(); }
   });
 
-  it('a live foreground plan record, or a runner plan session in flight, keeps both, and says which', () => {
-    for (const [label, record, why] of [
-      ['foreground', { foreground: { pid: process.pid, programme: 'mc' } }, 'a foreground plan session of it is running'],
-      ['runner', { runner: { pid: process.pid, programme: 'mc' } }, 'a runner plan session of it is running'],
-    ]) {
-      const m = machine();
-      try {
-        const area = checkoutsOf(m);
-        planRecord(m, record);
-        const { list } = runTidy(m.doors());
-        assert.deepEqual(ruled(list, 'I'), [], label);
-        assert.equal(keptOf(list, join(area, 'memoro')).why, why, label);
-        assert.equal(keptOf(list, join(area, 'memoro-cli')).why, why, label);
-      } finally { m.cleanup(); }
-    }
+  it('a live foreground plan record keeps both, and says so; a runner lane file names no planning session (the runner starts none since 2026-11-07)', () => {
+    const m = machine();
+    try {
+      const area = checkoutsOf(m);
+      planRecord(m, { foreground: { pid: process.pid, programme: 'mc' } });
+      const { list } = runTidy(m.doors());
+      assert.deepEqual(ruled(list, 'I'), []);
+      assert.equal(keptOf(list, join(area, 'memoro')).why, 'a foreground plan session of it is running');
+      assert.equal(keptOf(list, join(area, 'memoro-cli')).why, 'a foreground plan session of it is running');
+    } finally { m.cleanup(); }
+    const n = machine();
+    try {
+      const area = checkoutsOf(n);
+      planRecord(n, { runner: { pid: process.pid, programme: 'mc' } });
+      const { list } = runTidy(n.doors());
+      assert.deepEqual(paths(ruled(list, 'I')).sort(), [join(area, 'memoro'), join(area, 'memoro-cli')].sort(), 'a lane file from before, naming a plan kind, holds nothing');
+    } finally { n.cleanup(); }
   });
 
   it('a plan record of a dead process, or of another programme, holds nothing', () => {
@@ -793,7 +795,7 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
       assert.equal(list.targets.find((item) => item.path === martin.path).why, 'clean inactive goal checkout, status Martin, which waits on a person, untouched for 72 hours');
       assert.equal(list.targets.find((item) => item.path === later.path).why, 'clean inactive goal checkout, phase 2 is above the programme\'s lowest unfinished phase 1, untouched for 72 hours');
       assert.equal(keptOf(list, current.path).why, 'goal stage is build, not plan, and a session can start it');
-      assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays for the plan session that resolves it');
+      assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays for the mend session that resolves it');
       assert.equal(keptOf(list, review.path).why, 'goal stage is review, not plan, and a session can start it');
     } finally { m.cleanup(); }
   });

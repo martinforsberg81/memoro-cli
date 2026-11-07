@@ -34,11 +34,11 @@
  *     runs in them, through `git worktree remove` in the repository that
  *     owns each one.
  *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when no
- *     planning session of their programme is running (a foreground `mc plan`, a
- *     runner plan session in flight, or a process standing in the programme's
- *     directory) and they have been untouched for 72 hours (younger only in
- *     pressure), judged as (X) judges an extra worktree: nothing uncommitted and
- *     nothing main lacks. `mc plan` and the runner's plan sessions add them back.
+ *     planning session of their programme is running (a foreground `mc plan`, or
+ *     a process standing in the programme's directory) and they have been
+ *     untouched for 72 hours (younger only in pressure), judged as (X) judges an
+ *     extra worktree: nothing uncommitted and nothing main lacks. `mc plan` adds
+ *     them back.
  *   - (P) A clean inactive registered goal checkout may go after 72 hours
  *     (younger only in pressure) when its goal cannot start a build or review
  *     session now: in `stage: plan`, or with `status: Martin`, or in a phase
@@ -725,9 +725,9 @@ function gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, r
 
 /**
  * The planning sessions running now, by programme: a foreground `mc plan` whose
- * process lives (`runner/foreground/<pid>.json`), and a runner plan session
- * whose record names a live session (`runner/current-*.json`, written while the
- * session runs). A record of a dead process is nothing. The reason says which.
+ * process lives (`runner/foreground/<pid>.json`). The runner starts no plan
+ * session (2026-11-07), so a lane file never holds a planning checkout. A
+ * record of a dead process is nothing.
  */
 function runningPlanSessions(root) {
   const running = new Map();
@@ -736,14 +736,6 @@ function runningPlanSessions(root) {
     const held = readJsonOrNull(join(foreground, file));
     if (held?.verb === 'plan' && typeof held.programme === 'string' && pidAlive(held.pid)) {
       running.set(held.programme, 'a foreground plan session of it is running');
-    }
-  }
-  const runner = join(root, 'runner');
-  for (const file of listNames(runner)) {
-    if (!/^current-.+\.json$/u.test(file)) continue;
-    const record = readJsonOrNull(join(runner, file));
-    if (record?.kind === 'plan' && typeof record.programme === 'string' && pidAlive(record.session_pid ?? record.pid)) {
-      running.set(record.programme, 'a runner plan session of it is running');
     }
   }
   return running;
@@ -1275,7 +1267,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
 /**
  * (P) A registered goal checkout that may go: its goal cannot start a build or
  * review session now (`goalCannotStart`), or it is in `plan` (as before). A
- * blocked goal keeps its checkout: a plan session is what resolves it.
+ * blocked goal keeps its checkout: a mend session is what resolves it.
  */
 export function planGoalWorktree(item, { now, pressure = false } = {}) {
   if (item.error) return { target: false, why: `error: ${item.error}` };
@@ -1283,7 +1275,7 @@ export function planGoalWorktree(item, { now, pressure = false } = {}) {
   const cannot = item.stage === 'plan' ? 'plan' : item.status === 'blocked' ? null : goalCannotStart(item);
   if (!cannot) {
     if (FINISHED.includes(item.stage)) return { target: false, why: `goal stage is ${item.stage}, which no session starts on` };
-    if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays for the plan session that resolves it' };
+    if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays for the mend session that resolves it' };
     return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not plan, and a session can start it` };
   }
   if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };

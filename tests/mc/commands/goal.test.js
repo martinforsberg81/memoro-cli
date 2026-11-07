@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, GOAL_FILE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { goalField, goalJson, withGoal } from '../_helpers/goal-file.js';
@@ -433,7 +433,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
     ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
     ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['plan', ['stage', 'build'], /a build session moves a goal only from build to review, not plan → build/u],
-    ['build', ['ready'], /a build session does not set a goal ready — plan or a person does/u],
+    ['build', ['ready'], /a build session does not set a goal ready — a mend session or a person does/u],
   ]) {
     const f = fixture({ files: inStage(from), env: BUILD });
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -1125,6 +1125,68 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
   for (const role of ['build-session:goal', 'review-session:goal']) {
     const rejected = fixture({ files: inStage('build'), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
     assert.equal(await run(['martin', '--reason', 'question'], rejected.deps), 2);
-    assert.match(rejected.err(), /only plan or a person sets Martin/u);
+    assert.match(rejected.err(), /only plan, finish, mend or a person sets Martin/u);
+  }
+});
+
+/**
+ * The two headless roles that took over what headless plan did (Martin,
+ * 2026-11-07): a finish session moves `finish` to `merge` and sets `blocked`
+ * or `Martin`, nothing else; a mend session sets a status and requeues a goal
+ * in `merge`, and moves no stage. Neither writes the goal's acceptance.
+ */
+const FINISH = { ...SESSION, MC_ROLE: FINISH_ROLE };
+const MEND = { ...SESSION, MC_ROLE: MEND_ROLE };
+
+test('a finish session moves finish to merge, sets blocked or Martin, and is refused every other move and the goal\'s text', async () => {
+  const merged = reviewed({ files: inStage('finish'), env: FINISH });
+  assert.equal(await run(['stage', 'merge'], merged.deps), 0, merged.err());
+  assert.equal(stateOf(merged), 'merge · ready');
+  assert.equal(parseLog(merged.store[`${DIR}/LOG.md`]).at(-1).role, 'finish', 'the entry names its writer');
+  for (const [status, argv] of [['blocked', ['blocked', '--reason', 'the fixture is broken']], ['Martin', ['martin', '--reason', 'the contract forbids the fix; recommend widening it']]]) {
+    const f = fixture({ files: inStage('finish'), env: FINISH });
+    assert.equal(await run(argv, f.deps), 0, f.err());
+    assert.equal(stateOf(f), `finish · ${status}`);
+  }
+  for (const [from, argv, said] of [
+    ['finish', ['stage', 'done'], /a finish session ends in merge, not done/u],
+    ['finish', ['drop', '--reason', 'x'], /a finish session ends in merge, not dropped/u],
+    ['finish', ['stage', 'review'], /a session does not move a goal back — finish → review/u],
+    ['build', ['stage', 'merge'], /a finish session moves only a goal in finish, and this one is build/u],
+    ['finish', ['ready'], /a finish session sets blocked \(a mend session takes it\) or Martin, not ready/u],
+    ['finish', ['criterion', 'set', '1', '--check', 'y'], /a finish session does not rewrite a criterion/u],
+    ['finish', ['criterion', 'remove', '1', '--reason', 'x'], /a finish session does not remove a criterion/u],
+  ]) {
+    const f = fixture({ files: inStage(from), env: FINISH });
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), said);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+  }
+});
+
+test('a mend session sets ready, blocked or Martin and requeues merge, and is refused every stage move and the goal\'s text', async () => {
+  for (const [from, status, argv] of [['build', 'ready', ['ready', '--reason', 'fixture repaired']], ['review', 'Martin', ['martin', '--reason', 'the goal names a file that no longer exists; recommend rewriting criterion 2']], ['finish', 'blocked', ['blocked', '--reason', 'still red']]]) {
+    const f = fixture({ files: inStage(from, 'blocked'), env: MEND });
+    assert.equal(await run(argv, f.deps), 0, f.err());
+    assert.equal(stateOf(f), `${from} · ${status}`);
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).role, 'mend');
+  }
+  const red = inStage('merge', 'blocked');
+  red[`${DIR}/GOAL.json`] = withGoal(red[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31'] });
+  const requeued = reviewed({ files: red, env: MEND });
+  assert.equal(await run(['stage', 'merge'], requeued.deps), 0, requeued.err());
+  assert.equal(stateOf(requeued), 'merge · ready', 'the requeue is no stage move');
+  assert.deepEqual(requeued.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]], 'every registered pull request is queued again');
+  for (const [from, argv, said] of [
+    ['build', ['stage', 'review'], /a mend session moves no stage \(build → review\)/u],
+    ['finish', ['stage', 'merge'], /a mend session moves no stage \(finish → merge\)/u],
+    ['build', ['drop', '--reason', 'x'], /a mend session moves no stage \(build → dropped\)/u],
+    ['merge', ['stage', 'build'], /a session does not move a goal back — merge → build/u],
+    ['build', ['criterion', 'set', '1', '--check', 'y'], /a mend session does not rewrite a criterion/u],
+  ]) {
+    const f = fixture({ files: inStage(from, 'blocked'), env: MEND });
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), said);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
   }
 });

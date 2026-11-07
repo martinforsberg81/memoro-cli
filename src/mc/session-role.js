@@ -13,7 +13,7 @@ export const MERGE_HANDOFF_FILE = '.mc-merge-handoff.json';
  * MC_HEADLESS is the runner's and the intake turn's mark on a session nobody
  * watches; an interactive session opened from inside one must not inherit it.
  */
-export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS', 'MC_PLAN_REASON'];
+export const SESSION_IDENTITY_ENV = ['MC_ROLE', 'MC_PROGRAMME', 'MC_GOAL', 'MC_STEP', 'MC_PROJECT', 'MC_HEADLESS'];
 
 export function withoutSessionIdentity(env) {
   const next = { ...env };
@@ -58,7 +58,8 @@ export function sessionRoleLine(identity, { cwd = process.cwd(), env = process.e
 
 /**
  * A role's name as a sentence says it: `build-session:goal` is the build
- * session (goal), `plan-session` the plan session. A name of another shape —
+ * session (goal), `finish-session` the finish session, `mend-session` the mend
+ * session, `plan-session` the plan session. A name of another shape —
  * `brief`, `helper`, a catalogue's own — is that name's session.
  */
 export function roleLabel(role) {

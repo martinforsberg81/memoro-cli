@@ -1465,7 +1465,7 @@ describe('the page', () => {
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
     // Sessions and goal statuses have separate summaries in the header.
-    assert.match(text, /1 in flight · 1 build · 0 review · 0 plan/u);
+    assert.match(text, /1 in flight · 1 build · 0 review · 0 finish · 0 mend/u);
     assert.match(text, /Goals: 3 total · status: 2 ready · 0 blocked · 1 Martin/u);
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     assert.match(text, /runner pid 4242/u);
@@ -2388,9 +2388,10 @@ describe('the palette', () => {
   });
 
   it('gives a session kind one colour wherever a kind is printed', () => {
-    // The runner's three kinds, `step` as the build it was before, and the
-    // foreground verbs a lane file could name.
-    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['plan', 'blue'], ['triage', 'blue'], ['brief', 'cyan']]) {
+    // The runner's four kinds, `step` as the build it was before, `plan` as a
+    // lane file from before 2026-11-07 names it, and the foreground verbs a
+    // lane file could name.
+    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['finish', 'blue'], ['mend', 'yellow'], ['plan', 'blue'], ['triage', 'blue'], ['brief', 'cyan']]) {
       const data = pageData({
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
@@ -2404,7 +2405,7 @@ describe('the palette', () => {
       });
       const lines = paintedPage(data);
       const label = kind === 'step' ? 'BUILD' : kind.toUpperCase();
-      const code = { green: 32, magenta: 35, blue: 34, cyan: 36 }[tone];
+      const code = { green: 32, magenta: 35, blue: 34, cyan: 36, yellow: 33 }[tone];
       assert.ok(rowWith(lines, label).includes(`\x1b[${code}m${label}\x1b[0m`), `activity says ${kind} in ${tone}`);
     }
   });

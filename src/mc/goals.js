@@ -33,17 +33,17 @@ export const GOALS_DIR = 'goals';
 /**
  * Where a goal is in the process: its `stage`, in this order, which only
  * moves forward (`backward`). Each stage has one owner
- * (`docs/technical/mc-goals.md`): a plan session writes the goal in `plan`
- * and moves it to `build`; a build session moves it to `review`; a review
- * session to `merge` (OK, all registered PRs sent to merge) or `finish` (not
- * OK, with REVIEW.md); a headless plan session finishes it to `merge`; the
+ * (`docs/technical/mc-goals.md`): the interactive plan session writes the goal
+ * in `plan` and moves it to `build`; a build session moves it to `review`; a
+ * review session to `merge` (OK, all registered PRs sent to merge) or `finish`
+ * (not OK, with REVIEW.md); a finish session finishes it to `merge`; the
  * merger sets `done` when it lands. `dropped` is a goal let go without
  * landing, from any stage. Only a person moves a stage backward.
  */
 export const STAGES = ['plan', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
 /**
  * Whether a goal's stage can run now: `ready`, or `blocked` — waiting on a
- * plan session, in any stage. `Martin` waits on Martin and wakes nothing.
+ * mend session, in any stage. `Martin` waits on Martin and wakes nothing.
  * Setting a goal ready keeps its stage.
  */
 export const STATUSES = ['ready', 'blocked', 'Martin'];
@@ -394,7 +394,7 @@ export function lastBuildEntry(log) {
 /**
  * The runner's entry for the merger's answer on a goal in `merge` that did
  * not land (`merger.js`): `red`, or `moved` — the head is no longer the one
- * its review judged. Either stays in `merge` for one plan session.
+ * its review judged. Either stays in `merge` for one mend session.
  */
 export function redMergeText(pr, kind = 'red') {
   return `merger answered ${kind} on #${pr}`;
@@ -413,8 +413,8 @@ export function inStage(log, stage) {
 }
 
 /**
- * Compatibility for an older merger's `merge · ready` failure: start plan
- * recovery while its last entry is the merger's answer and no PR is queued.
+ * Compatibility for an older merger's `merge · ready` failure: start a mend
+ * session while its last entry is the merger's answer and no PR is queued.
  * New merger failures set `merge · blocked` immediately and use the ordinary
  * blocked recovery path in goalSession.
  */
@@ -449,24 +449,29 @@ export function waitsOnPerson(goal) {
   return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
-/** The role every plan session runs with, `mc plan`'s and the runner's: `canon/roles/plan-session.md`. */
+/** The role the interactive plan session runs with, `mc plan`'s: `canon/roles/plan-session.md`. The runner never starts one. */
 export const PLAN_ROLE = 'plan';
+/** The role a goal's finish session runs with: `canon/roles/finish-session.md`. It takes a goal in `finish · ready` to `merge`. */
+export const FINISH_ROLE = 'finish-session';
+/** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It takes every blocked goal and every red merge. */
+export const MEND_ROLE = 'mend-session';
 
 /**
  * The session the runner starts on `goal`, or null: a build session on
  * `build · ready` (with a criterion), a review session on `review · ready`, a
- * headless plan session on `finish · ready` and on `merge · ready` after a
- * red (`mergeRetryDue`). Blocked goals wake plan in their current stage. Never on `Martin` or a goal
- * that does not parse. `inLine` is the merger's line.
+ * finish session on `finish · ready`, and a mend session on every `blocked`
+ * goal, in its current stage, and on `merge · ready` after a red
+ * (`mergeRetryDue`). Never on `plan · ready`, on `Martin` or on a goal that
+ * does not parse. `inLine` is the merger's line.
  */
 export function goalSession(goal, inLine = []) {
   if (goal.problems?.length || FINISHED.includes(goal.stage) || goal.status === 'Martin') return null;
-  if (goal.status === 'blocked') return 'plan';
+  if (goal.status === 'blocked') return 'mend';
   if (goal.status !== 'ready') return null;
   if (goal.stage === 'build') return noCriteria(goal) ? null : 'build';
   if (goal.stage === 'review') return 'review';
-  if (goal.stage === 'finish') return 'plan';
-  if (mergeRetryDue(goal, inLine)) return 'plan';
+  if (goal.stage === 'finish') return 'finish';
+  if (mergeRetryDue(goal, inLine)) return 'mend';
   return null;
 }
 

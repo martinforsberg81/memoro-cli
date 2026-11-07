@@ -298,9 +298,10 @@ function dayLine(lines, c, wide, day) {
   const kinds = day.by_kind || {};
   const dot = { text: ' · ', styles: ['grey'] };
   const parts = [{ text: '24 h', styles: ['grey'] }];
-  for (const kind of ['build', 'review', 'plan']) {
+  // `plan` is kept for rows written while the runner started headless plan sessions (until 2026-11-07).
+  for (const kind of ['build', 'review', 'finish', 'mend', 'plan']) {
     const counted = kinds[kind];
-    if (!counted || (kind === 'plan' && !counted.sessions)) continue;
+    if (!counted || (['finish', 'mend', 'plan'].includes(kind) && !counted.sessions)) continue;
     parts.push(dot, { text: `${kind} ${counted.sessions}`, styles: kindTone(kind) });
     const outcomes = DAY_OUTCOMES.filter(([key]) => counted[key]);
     outcomes.forEach(([key, label, styles], index) => {
@@ -726,7 +727,7 @@ function headerLines(lines, c, wide, data, version) {
     { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
   ]);
   const sessions = data.runner?.sessions || [];
-  const kinds = ['build', 'review', 'plan'];
+  const kinds = ['build', 'review', 'finish', 'mend'];
   const inFlight = Object.fromEntries(kinds.map(kind => [kind, 0]));
   for (const session of sessions) {
     const kind = session.kind || 'unknown';

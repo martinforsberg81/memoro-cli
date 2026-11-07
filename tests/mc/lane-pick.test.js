@@ -67,16 +67,12 @@ test('pickWork: with one lane, the repositories take turns by their wait', () =>
   assert.equal(pickWork({ items: [], lanes: 4 }), null);
 });
 
-test('pickWork: blocked, finish/merge, review, build, next-step, before programme preference or carry', () => {
+test('pickWork: the mend of a blocked goal, then finish and the mend of a red merge, review, build, before programme preference or carry', () => {
   const items = [
-    { ...build('new-plan', 'memoro'), kind: 'plan', priority: 99, goal: { reason: 'next_step' } },
-    { ...build('top-up', 'memoro'), kind: 'plan', priority: 100, goal: { reason: 'one_goal_remaining' } },
-    { ...build('empty', 'memoro'), kind: 'plan', priority: 98, goal: { reason: 'no_goals_remaining' } },
-    { ...build('proposals', 'memoro'), kind: 'plan', priority: 97, goal: { reason: 'daily_proposals' } },
     { ...goal('build', 'memoro'), priority: 98 },
     { ...review('review', 'memoro'), priority: 97 },
-    { ...build('finish', 'memoro'), kind: 'plan', priority: 1, goal: { stage: 'finish' } },
-    { ...build('blocked', 'memoro'), kind: 'plan', goal: { status: 'blocked' } },
+    { ...build('finish', 'memoro'), kind: 'finish', variant: null, priority: 1, goal: { stage: 'finish' } },
+    { ...build('blocked', 'memoro'), kind: 'mend', variant: null, goal: { status: 'blocked' } },
   ];
   assert.equal(pickWork({ items, held: ['memoro'], lanes: 2 }).name, 'blocked', 'existing sessions do not demote recovery');
   const taken = [];
@@ -85,8 +81,8 @@ test('pickWork: blocked, finish/merge, review, build, next-step, before programm
     taken.push(next.name);
     items.splice(items.indexOf(next), 1);
   }
-  assert.deepEqual(taken, ['blocked', 'finish', 'review', 'build', 'top-up', 'new-plan', 'empty', 'proposals']);
-  assert.equal(pickWork({ items: [review('r', 'memoro'), { ...build('merge', 'memoro'), kind: 'plan', goal: { stage: 'merge' } }] }).name, 'merge');
+  assert.deepEqual(taken, ['blocked', 'finish', 'review', 'build']);
+  assert.equal(pickWork({ items: [review('r', 'memoro'), { ...build('merge', 'memoro'), kind: 'mend', variant: null, goal: { stage: 'merge', status: 'ready' } }] }).name, 'merge', 'a red merge ranks with finish, before review');
 });
 
 test('pickWork: higher programme priority wins within a rank, with fairness and old tie rules intact', () => {
@@ -100,6 +96,6 @@ test('pickWork: higher programme priority wins within a rank, with fairness and 
 });
 
 test('pickWork: stage order precedes repository shares when another repository has only new builds', () => {
-  const items = [goal('new-build', 'memoro-cli'), { ...review('stuck-review', 'memoro'), goal: { status: 'blocked' }, kind: 'plan' }];
+  const items = [goal('new-build', 'memoro-cli'), { ...review('stuck-review', 'memoro'), goal: { status: 'blocked' }, kind: 'mend', variant: null }];
   assert.equal(pickWork({ items, held: ['memoro'], lanes: 2 }).name, 'stuck-review');
 });

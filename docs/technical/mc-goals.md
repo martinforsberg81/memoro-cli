@@ -1,21 +1,24 @@
 # mc goals
 
-**Status:** current · 2026-11-03 · derived from `src/mc/goals.js`,
+**Status:** current · 2026-11-07 · derived from `src/mc/goals.js`,
 `src/mc/criteria.js`, `src/mc/goal-convert.js`, `src/mc/project-convert.js`, `src/mc/commands/goal.js` (`refusedMove`,
 `queueGoal`), `src/mc/run.js` (`goalPass`, `runGoal`, `goalWork`,
-`reviewRoute`, `afterReview`, `afterPlan`, `goalWithoutWord`, `convertAfter`,
-`planRoute`), `src/mc/goal-archive.js`, `src/mc/merger.js` (`landJob`, `tellGoal`),
+`reviewRoute`, `afterReview`, `afterFinish`, `afterMend`, `goalWithoutWord`, `convertAfter`),
+`src/mc/goal-archive.js`, `src/mc/merger.js` (`landJob`, `tellGoal`),
 `src/mc/hooks.js` (`reviewStopDecision`), `canon/roles/build-session.md`
 (its `goal` part), `canon/roles/review-session.md` (its `goal` part),
-`canon/roles/plan-session.md` and `canon/roles/goal-verb.md`
+`canon/roles/finish-session.md`, `canon/roles/mend-session.md`,
+`canon/roles/plan-session.md` and `canon/verbs/goal.md`
 
 A goal is mc's one unit of work, two files and a worktree: `GOAL.json`, the brief as
 data, and `LOG.md`. It has no steps, no register and no owner. A build session
 does the work, records each criterion it has checked as met, and publishes its
 pull request; a review session on another model runs the checks and decides;
-OK queues it for the merger, not OK sends it to a plan session that finishes
-it; the goal is `done` when it lands, and it lands only with every criterion
-met.
+OK queues it for the merger, not OK sends it to a finish session that fixes
+what review found and sends it on; the goal is `done` when it lands, and it
+lands only with every criterion met. A blocked goal, in any stage, and a red
+merge go to a mend session (Martin, 2026-11-07). Plan is interactive only:
+the runner never starts a plan session.
 
 A goal has two fields where it had one status (Martin, 2026-11-03: *"Status
 måste innehålla även processen så att den inte går tillbaka."* *"Det kan
@@ -23,13 +26,13 @@ aldrig gå bakåt i ordningen."*): its **stage**, where in the process it is,
 which only moves forward, and its **status**, whether that stage can run now.
 A goal passes each stage once, so the sessions a goal can start are bounded:
 planning, builds while they make progress, reviews and finish, then merge.
-Blocked stages receive planning recovery with a bounded retry budget.
+A blocked stage gets a mend session, with a bounded retry budget.
 
 ```
 stage:  plan → build → review → finish → merge → done      (and dropped, from any)
 status: ready | blocked | Martin
 
-plan     ── a plan session moves it ──────────────────────────▶ build
+plan     ── the interactive plan session moves it ────────────▶ build
 build    ── build session: done with the task ────────────────▶ review
 build    ── build session: cannot solve it ───────────────────▶ build · blocked
 build    ── three sessions without a word (runner) ───────────▶ finish
@@ -38,11 +41,14 @@ review   ── review: not OK, REVIEW.md, mc goal stage finish ──▶ finish
 review   ── no open pull request (runner) ────────────────────▶ finish
 review   ── the review died (runner) ─────────────────────────▶ review · ready, reviewed again
 review   ── a second review died (runner) ────────────────────▶ review · blocked
-finish   ── plan session: fixed, published ───────────────────▶ merge
-finish   ── plan session ended still in finish (runner) ──────▶ finish · blocked
-merge  ── merger landed ────────────────────────────────────▶ done
-merge  ── merger red, or the head moved ────────────────────▶ merge · blocked, plan recovery
-any      ── blocked wakes plan; Martin waits; ready keeps the stage ─▶ the same stage
+finish   ── finish session: fixed, published ─────────────────▶ merge
+finish   ── finish session: an obstacle ──────────────────────▶ finish · blocked
+finish   ── finish session ended still in finish (runner) ────▶ finish · blocked
+merge    ── merger landed ────────────────────────────────────▶ done
+merge    ── merger red, or the head moved ────────────────────▶ merge · blocked
+any      ── blocked wakes a mend session, which sets ready ───▶ the same stage
+any      ── a mend left it blocked, or three mends in a stage ▶ the same stage · Martin
+any      ── Martin waits and wakes nothing; ready keeps the stage
 any      ── only a person moves a stage backward, logged ─────▶ an earlier stage
 ```
 
@@ -58,11 +64,11 @@ any      ── only a person moves a stage backward, logged ─────▶ 
 ```
 
 One worktree per repository the goal names, made at the goal's first use: the
-runner makes it before the first session on the goal that needs it (build,
-review, or plan), and `mc goal new` makes none. `mc tidy` releases a checkout no
+runner makes it before the first session on the goal (build, review, finish
+or mend), and `mc goal new` makes none. `mc tidy` releases a checkout no
 session can use; its branch stays, and the next use re-adds it on that branch.
-Anyone may work in one: a person, a plan session, or the runner's build and
-review sessions on the goal. `<programme>` must be a directory under
+Anyone may work in one: a person, the interactive plan session, or the
+runner's sessions on the goal. `<programme>` must be a directory under
 `~/mc/programs/`; `<programme>` and `<goal>` are lower-case letters, digits and
 hyphens. mc keeps nothing else for a goal.
 
@@ -95,7 +101,7 @@ written, and a write that would make one is refused with the field named.
 - `stage` — `plan`, `build`, `review`, `finish`, `merge`, `done` or
   `dropped` (*Stages*). A goal starts in `plan`, or `build` with `mc goal new
   --stage build`.
-- `status` — `ready`, `blocked` (planning recovery), or `Martin` (waiting for Martin). An unknown stage or status is refused with
+- `status` — `ready`, `blocked` (a mend session takes it), or `Martin` (waiting for Martin). An unknown stage or status is refused with
   its field named. A GOAL.json from before stages has one `status` (`open`,
   `review`, `blocked`, …) and no `stage`; it does not parse, and says `mc
   goal convert` gives it one (*Converting a status into a stage*).
@@ -208,8 +214,8 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   also set them. The goal is `MC_GOAL`'s when none is named.
 - **`stage [<p>/<g>] <stage> [--reason "…"]`** — moves the stage
   (`log --stage <stage> --comment <reason>`); a stage moved to is `ready`.
-  `merge` records the review or plan session's decision and queues every
-  registered PR, without head or criteria checks. A queue failure preserves
+  `merge` records the review's or finish session's decision (or a mend
+  session's requeue) and queues every registered PR, without head or criteria checks. A queue failure preserves
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|martin|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
@@ -256,8 +262,12 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   stage backward: `mc: a session does not move a goal back — merge → review;
   only a person does (mc goal stage <programme>/<goal> review, MC_TOOL=person)`,
   with nothing written. A person may, and the entry says `moved back from
-  merge to review by a person`. A plan session (`MC_ROLE=plan`)
-  makes any forward move and sets any status. A build session
+  merge to review by a person`. The interactive plan session (`MC_ROLE=plan`)
+  makes any forward move and sets any status. A finish session
+  (`finish-session`) moves `finish` to `merge` and sets `blocked` or `Martin`,
+  nothing else. A mend session (`mend-session`) sets `ready`, `blocked` or
+  `Martin` and requeues a goal already in `merge` with `mc goal stage merge`;
+  every stage move is refused it. A build session
   (`build-session:goal`) moves `build` to `review` or sets `blocked`, and is
   refused anything else — `done`, `dropped`, `ready`, another stage. A review
   session (`review-session:goal`) moves a goal in `review` to `merge` or
@@ -421,10 +431,11 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
 1. **Pick.** After goals written with `after` or one status are converted
    (*Converting …*), of the goals the runner starts a session on
    (`goalSession`, `goals.js`) — `build · ready` with a criterion (a build),
-   `review · ready` (a review), `finish · ready` (a plan session), and
-   legacy `merge · ready` whose last entry is the merger's red and none of whose
-   pull requests is in the merger's line (a plan session) — never `plan · ready` or `Martin`. Blocked goals wake plan in their
-   current stage; eligible work is in the phase their programme is in or an earlier one
+   `review · ready` (a review), `finish · ready` (a finish session), every
+   `blocked` goal in its current stage (a mend session), and legacy `merge ·
+   ready` whose last entry is the merger's red and none of whose pull requests
+   is in the merger's line (a mend session) — never `plan · ready` or
+   `Martin`. Eligible work is in the phase their programme is in or an earlier one
    (*Phases*), and not held, on any repository (a lane serves them all), the
    one whose last entry is oldest. A review that cannot run now (step 3) is
    left out of the pick, so it does not stand in front of every other goal;
@@ -449,15 +460,17 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    request and head: the open pull request on `goal/<goal>`, asked of GitHub
    before the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
    `MC_SESSION_STARTED` are set for it. With none, the goal goes to
-   `finish · ready` with a runner entry. A goal in `finish`, or in `merge`
-   after a red, gets a headless plan session (*Finish and a red merge: a plan
-   session*). `MC_ROLE`, `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are
-   set. If the role's file is missing on the machine, the goal is skipped.
+   `finish · ready` with a runner entry. A goal in `finish` gets a finish
+   session (`finish-session`); a blocked goal, or one in `merge` after a red,
+   gets a mend session (`mend-session`) — both in the goal's worktree on the
+   goal's class routing, like a build (*Finish and mend*). `MC_ROLE`,
+   `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set for every kind.
+   If the role's file is missing on the machine, the goal is skipped.
 4. **Silent build.** A build session that leaves no entry gets one from the
    runner: tool `runner`, stage and status unchanged, `Comment: session ended
    without a log entry (exit <n>, <s> s)`. A worktree that could not be made
    gets one too. When the last three entries in `build` are all the runner's,
-   the goal goes to `finish · ready`, for a plan session to finish or let go.
+   the goal goes to `finish · ready`, for a finish session.
    That is the guard against a session that fails the same way every time;
    there is no attempt counter.
 5. **After a review** (`afterReview`). The review decides, with `mc goal stage
@@ -466,31 +479,70 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `review` died (a crash, a limit): the runner writes `the review ended with
    the goal still in review — a review runs again`, and the goal stays
    `review · ready`. A second that dies in the same `review` sets `review ·
-   blocked`, for planning recovery.
-6. **After a plan session** (`afterPlan`). In `finish`: one that ends with the
-   goal still `finish · ready` sets it `finish · blocked`. In `merge`: one
-   whose pull request is in the merger's line again gets the runner's entry
-   `plan session took the red; the pull request is in the merger's line
-   again`, so the red wakes nothing again; one whose is not sets `merge ·
-   Martin` after unsuccessful blocked recovery.
+   blocked`, for a mend session.
+6. **After a finish session** (`afterFinish`). It moved the goal to `merge`,
+   or set `blocked` or `Martin`: the runner adds nothing. One that ends with
+   the goal still `finish · ready` sets it `finish · blocked`, so a mend
+   session reads why rather than a second finish running on the same evidence.
+7. **After a mend session** (`afterMend`). Outside `merge`: one that set the
+   goal ready is done (`mend resolved the obstacle; retry <stage>`), and the
+   stage's own session runs again; one that left it blocked sets `Martin`
+   (`mend left the obstacle unresolved`). In `merge`: one whose pull request is
+   in the merger's line again gets the runner's entry `mend session took the
+   red; the pull request is in the merger's line again`, so the red wakes
+   nothing again; one whose is not sets `Martin` when the goal was blocked,
+   and `merge · blocked` for one mend when it was a legacy `merge · ready` red.
+   Before a mend starts on a blocked goal, the runner writes `starting blocked
+   recovery`; three of those in one stage since a person's last `ready` set
+   `Martin` instead of a fourth (`three blocked recoveries in this stage did
+   not keep it moving`).
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
-`build-goal`, `review-goal` or `plan`; rows from before say `goal`, and are
-read as the build they were. On the page it is a `BUILD`, `REVIEW` or `PLAN`
-row in SESSIONS working on `<p>/<g>`. A build waits behind every review for a
-free lane; a plan session ranks with the reviews
-([mc-run.md](mc-run.md) § *Lanes*).
+`build-goal`, `review-goal`, `finish` or `mend`; rows from before say `goal`
+(read as the build they were) or `plan` (a headless plan session, until
+2026-11-07). On the page it is a `BUILD`, `REVIEW`, `FINISH` or `MEND` row
+under its goal. A build waits behind every review for a free lane; a finish
+and the mend of a red merge rank with each other before the reviews, and the
+mend of a blocked goal before everything ([mc-run.md](mc-run.md) § *The pick*).
 
-## Headless plan sessions
+## Finish and mend
 
-The unified plan role is `MC_ROLE=plan`, read from
-`canon/roles/plan-session.md`. It runs beside the goals in the programme's
-directory, on the available Opus/Sol medium candidate with most headroom.
-`MC_PLAN_REASON` distinguishes finishing work, recovering blocked work, and
-choosing the next programme step. See *Headless planning reasons* below for
-the triggers, authority, retry guards and persistent completion receipt.
-No headless session performs Martin's acts: deploy, production data,
-credentials or admin override.
+Headless plan is gone (Martin, 2026-11-07: the plan role did not work as one
+overarching role the runner woke at different moments). Plan is interactive,
+`mc plan`; the goal work it did headless is two roles with one job each:
+
+- **A finish session** (`MC_ROLE=finish-session`,
+  `canon/roles/finish-session.md`) takes a goal in `finish · ready`: a review
+  found it not OK and wrote REVIEW.md, or the runner sent it there. It fixes
+  what review found, runs the criteria's checks and `mc gate`, publishes, and
+  `mc goal stage merge`. It may change the code in the goal's worktree within
+  the contract, never the goal's text (`mc goal set`, `criterion set|remove`
+  are refused it) and never product scope. An obstacle it cannot resolve is
+  `blocked` (a mend takes it); a change to the goal, contract or scope, or a
+  reserved act, is `Martin`.
+- **A mend session** (`MC_ROLE=mend-session`, `canon/roles/mend-session.md`)
+  takes every `blocked` goal, in any stage, and every red or blocked merge. It
+  diagnoses the obstacle, resolves it — repairing the goal's own fixtures,
+  conflicts and reds in the worktree when they are the obstacle — and retries
+  the current stage: `mc goal ready` in build, review and finish; `mc goal
+  stage merge` in merge, which requeues every registered pull request. A
+  `SETTLED` red (red alike at the base) becomes a proposal to the programme
+  that owns the failing file, and the retry goes on. It moves no stage. A
+  change to the goal, contract or product scope is `Martin`. In `plan`, the
+  obstacle is the brief, which is plan's or a person's: it sets `Martin`.
+  The recovery guards carry over unchanged: a mend left blocked becomes
+  `Martin`; three mends in one stage without sustained progress become
+  `Martin`; a person's `ready` restarts the budget.
+
+Both run in the goal's first repository's worktree, on the goal's class
+routing and billing like a build, with `MC_GOAL`, `MC_REPO` and
+`MC_WORKAREA` set; their `mc goal stage merge` writes the merge handoff file
+that ends the session and releases its lane. Neither performs Martin's acts:
+deploy, production data, credentials or admin override. The programme turns
+headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
+disabled: their instructions were too poor to use (Martin, 2026-11-07), and
+`programme-plan.js` is removed; a later goal may bring programme planning
+back with new instructions. `MC_PLAN_REASON` is gone with them.
 
 ## What a build session does
 
@@ -538,7 +590,7 @@ output som ingen läser."* Its output is exactly three things:
   writes no REVIEW.md then.
 - **One proposal, always** — whichever stage, one file in
   `~/mc/programs/<programme>/proposals/` with what it noticed beyond the goal.
-  The programme's plan session takes a stand on it.
+  The programme's interactive plan session takes a stand on it.
 - **One line in LOG.md**, the stage verb's `--reason`, naming the files it wrote.
 
 Nothing else: no comment on the pull request, no long entry. **A review never
@@ -594,8 +646,8 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 A session sends a goal to `merge`. Every registered PR is merged directly,
 without another gate, criterion check or reviewed-head check. Each landing is
 recorded in LOG.md under the shared lock; when the last PR lands the goal is
-`done`. The first failure sets `merge · blocked` and wakes plan recovery.
-An unresolved recovery waits on Martin under the normal recovery guards.
+`done`. The first failure sets `merge · blocked` and wakes a mend session.
+An unresolved mend waits on Martin under the normal recovery guards.
 The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
@@ -604,14 +656,14 @@ existing decision and does not move a goal to `merge` on its own.
 
 Each stage has one owner, and a goal passes each once:
 
-- `plan` — a plan session writes the goal; nothing happens to it, and the
-  runner never takes it. The plan session moves it to `build` when it is
-  ready to be built.
+- `plan` — the interactive plan session writes the goal; nothing happens to
+  it, and the runner never takes it. The plan session moves it to `build`
+  when it is ready to be built.
 - `build` — the runner's build sessions, while it is `ready`.
 - `review` — one review session decides; one that dies is run again once.
-- `finish` — one headless plan session finishes it to `merge`.
-- `merge` — the merger's; the runner starts no session, except one plan
-  session for blocked merge recovery.
+- `finish` — one finish session finishes it to `merge`.
+- `merge` — the merger's; the runner starts no session, except one mend
+  session for a red or blocked merge.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
 - `dropped` — let go without landing (`mc goal drop`), by a person or plan,
@@ -638,64 +690,10 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
   candidate can run on its plan.
 - **No merge by a build session.** A build session publishes with
   `--no-merge`; a review session publishes nothing. A review's `mc goal stage
-  merge` executes its decision for all registered PRs; plan uses the same verb.
+  merge` executes its decision for all registered PRs; a finish session uses
+  the same verb, and a mend session requeues a red merge with it.
 - **No close-out document.** `mc goal archive` moves a finished goal aside
   and writes one row; nothing is written into a repository.
 
-Programme planning runs separately from goal builds: low remaining work and
-daily open proposals can wake a plan session without assigning MC_GOAL.
-
-
-## Headless planning reasons (2026-11-05)
-
-The plan identity is `MC_ROLE=plan`, for both interactive and headless
-sessions. Its canonical file remains `canon/roles/plan-session.md`; the old
-`plan-session` identity is accepted for sessions already running.
-`MC_PLAN_REASON` carries the runner's reason:
-
-- `finish`: `finish · ready`, to finish the work and authorize merge.
-- `blocked`: any unfinished goal with status blocked, or a merge failure
-  handed back ready by an older merger. Diagnose, repair and retry the same stage
-  (`mc goal ready`; `mc goal stage merge` re-executes merge). A review may
-  report an obstacle with blocked without pretending to have judged the work.
-- `no_goals_remaining`: reconsider next work and previously unmet dependencies
-  when no unfinished goal remains. Done and dropped both count as finished.
-- `daily_proposals`: review direct open `.md` proposals at most once per rolling
-  24 hours. Nested/archive proposals and directories are not open proposals.
-
-The last two are programme sessions with no MC_GOAL. Their prompt lists all
-simultaneously due triggers, remaining goals and open proposals. Read README,
-PLAN.md, current/completed goal evidence and proposals, inspect dependencies,
-commission justified work within the approved direction and record the decision
-or named waiting condition in PLAN.md. Preserve Martin decisions and existing
-work ownership; do not interpret a top-up as permission to clear them.
-
-`mc goal martin --reason "…"` is plan's escalation to Martin: the exact
-question or reserved act, attempted remedies and recommendation. It is not
-runnable. Build and review report blocked to plan rather than setting Martin.
-An unresolved recovery waits on Martin; three recoveries in the same stage
-also wait rather than loop. A person's ready resets that recovery budget.
-A finish session left ready first becomes blocked, allowing recovery.
-
-The runner serializes planning per programme, including live foreground plan
-sessions and draining runners, and uses the ordinary provider, lane and
-admission policy. Programme replenishment/review yields to already commissioned
-recovery, finish, review and build work; it is not blocked recovery.
-
-`runner/programme-plan/<programme>.json` records the low-work identity,
-proposal-review start, trigger list and session outcome. Low-work identity
-includes goal creation identities and finished-stage entries, with active and
-archived goals reconciled together. Archive moves, phase renumbering and ordinary
-unfinished stage/status/log changes do not wake another session. Newly completed
-or dropped work can re-arm the one/zero checkpoint. Empty programmes qualify
-once; invalid goals suppress automatic programme planning. Existing all-done
-`next_step` receipts suppress repeating that same completion after upgrade.
-
-The receipt is written after admission succeeds, immediately before provider
-invocation. Refused admission/capacity leaves the trigger available. Failures
-and interrupted/unknown outcomes stay consumed and inspectable, avoiding an
-immediate unattended retry loop. A later genuinely new low-work event or the
-next due proposal review can still run. Coalesced low-work/proposal reviews
-consume both reasons in one launch. Changing/adding proposals within the
-24-hour period does not bypass the cadence. README changes alone do not wake
-planning. These triggers run programme plan sessions, never Manager sessions.
+Programme planning does not run headless (Martin, 2026-11-07): what a
+programme does next is decided in the interactive plan session, `mc plan`.
