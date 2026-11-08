@@ -134,6 +134,10 @@ export async function prepareCandidate({
   const entry = join(cacheDir, key);
   const target = join(headDir, 'node_modules');
   if (exists(join(entry, 'node_modules')) && readMeta(entry, read)?.key === key) {
+    // A borrowed checkout may already have a dependency tree. cp would nest
+    // the cache inside it; replace it just as npm ci does. rm removes a
+    // symlink itself, never the shared tree it points at.
+    rmSync(target, { recursive: true, force: true });
     const cloned = await run('cp', ['-cR', join(entry, 'node_modules'), target]);
     if (cloned.status === 0) {
       try {

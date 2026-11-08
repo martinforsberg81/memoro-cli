@@ -94,6 +94,22 @@ describe('the prepare cache', () => {
     assert.ok(fx.said.includes(`prepare: cloned node_modules from the cache (${result.key})`));
   });
 
+  it('a cache hit replaces an existing checkout tree instead of nesting inside it', async () => {
+    const fx = fixture();
+    try {
+      await fx.go();
+      let destinationWasAbsent = false;
+      const run = fx.run;
+      const result = await fx.go('npm ci', { run: (command, args) => {
+        destinationWasAbsent = !existsSync(args[2]);
+        return run(command, args);
+      } });
+      assert.equal(result.cached, true);
+      assert.equal(destinationWasAbsent, true, 'cp must receive an absent destination');
+      assert.equal(existsSync(join(fx.headDir, 'node_modules', 'node_modules')), false);
+    } finally { rmSync(fx.headDir, { recursive: true, force: true }); }
+  });
+
   it('a hit renews meta.at to now and counts the hit', async () => {
     const fx = fixture();
     const first = await fx.go();

@@ -300,7 +300,7 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
 const staged = (stage, status = 'ready', log = [], extra = {}) => ({ programme: 'p', goal: 'g', stage, status, repos: ['memoro'], problems: [], prs: [], log, success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra });
 const said = (tool, stage, done, comment = null) => ({ at: '2026-11-02T10:00Z', tool, model: null, stage, status: 'ready', done, comment, next: null });
 
-test('goalSession: build · ready is a build, review · ready a review, finish · ready a finish, merge · ready after a red a mend, blocked in any stage a mend; never draft · ready, never Martin', () => {
+test('goalSession: build · ready is a build, review · ready a review, finish · ready a finish, merge · ready after a red a mend, blocked merge only a mend; never draft · ready, never Martin', () => {
   assert.equal(goalSession(staged('build')), 'build');
   assert.equal(goalSession(staged('build', 'ready', [], { success_criteria: [] })), null, 'no criterion yet: not started');
   assert.equal(goalSession(staged('review')), 'review');
@@ -312,7 +312,7 @@ test('goalSession: build · ready is a build, review · ready a review, finish �
   assert.equal(goalSession(red('red'), [{ repo: 'memoro', pr: 12, state: 'queued' }]), null, 'queued again: the merger\'s');
   for (const stage of STAGES) {
     assert.equal(goalSession(staged(stage, 'Martin')), null, `${stage} · Martin`);
-    assert.equal(goalSession(staged(stage, 'blocked')), ['done', 'dropped'].includes(stage) ? null : 'mend', `${stage} · blocked`);
+    assert.equal(goalSession(staged(stage, 'blocked')), stage === 'merge' ? 'mend' : null, `${stage} · blocked`);
   }
   for (const stage of ['draft', 'done', 'dropped']) assert.equal(goalSession(staged(stage)), null, stage);
   assert.equal(goalSession({ ...staged('build'), problems: ['x'] }), null);

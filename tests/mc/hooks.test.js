@@ -536,7 +536,7 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
       assert.equal(reviewStopDecision({ env, ...world('review') }), null);
     }
     assert.equal(reviewStopDecision({ env: REVIEW, ...world('review'), read: () => { throw new Error('gone'); } }), null, 'a goal it cannot read lets go');
-    assert.equal(reviewStopDecision({ env: REVIEW, ...world('review'), read: () => JSON.stringify({ stage: 'review', status: 'blocked' }) }), null, 'an obstacle can go to plan without a completed review or proposal');
+    for (const status of ['blocked', 'Martin']) assert.equal(reviewStopDecision({ env: REVIEW, ...world('review'), read: () => JSON.stringify({ stage: 'review', status }) }), null, `a review ${status} may end without a completed review or proposal`);
   });
 
   it('answers Claude Code\'s Stop hook with decision block and the reason, and nothing when the review may end', async () => {

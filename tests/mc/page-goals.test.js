@@ -241,7 +241,7 @@ describe('a goal\'s stage and status on the page, and one waiting on a person', 
     assert.deepEqual([byQuestion.stage, byQuestion.status, byQuestion.person, byQuestion.question], ['build', 'Martin', true, 'which table?']);
     assert.deepEqual([byRunner.person, byRunner.question], [true, died.comment]);
     assert.deepEqual([judged.stage, judged.status, judged.person, judged.question], ['merge', 'ready', false, null]);
-    assert.deepEqual([blocked.person, blocked.question, blocked.runnable], [false, null, true]);
+    assert.deepEqual([blocked.person, blocked.question, blocked.runnable], [false, null, false]);
   });
 
   it('uses quiet stage labels, canonical ready status and red blockers', () => {

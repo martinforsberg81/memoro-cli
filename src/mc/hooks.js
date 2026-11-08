@@ -547,7 +547,8 @@ export const MC_HOOKS = Object.freeze([
  * once the goal has left `review` — `mc goal stage merge` or `finish` —
  * and it has written one proposal, a `.md` in its programme's `proposals/`
  * written since the session began (MC_SESSION_STARTED, which the runner
- * sets). Each thing missing is named. A goal that does not read, or a
+ * sets). Each thing missing is named. A goal blocked or waiting on Martin is not
+ * held: its review has asked, and the question is Martin's. A goal that does not read, or a
  * session with no start, is not held: a hook that cannot tell lets go.
  */
 export function reviewStopDecision({ env = process.env, home, read = (path) => readFileSync(path, 'utf8'), list = readdirSync, mtimeMs = (path) => statSync(path).mtimeMs } = {}) {
@@ -557,7 +558,7 @@ export function reviewStopDecision({ env = process.env, home, read = (path) => r
   let stage;
   try {
     const record = JSON.parse(read(join(home, programme, 'goals', goal, 'GOAL.json')));
-    if (record.status === 'blocked') return null;
+    if (record.status === 'blocked' || record.status === 'Martin') return null;
     stage = record.stage;
   } catch { return null; }
   const started = Date.parse(env.MC_SESSION_STARTED ?? '');

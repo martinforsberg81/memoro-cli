@@ -75,6 +75,14 @@ function normalise(entry) {
     // Rounds the network stopped in a row for this job (`markOffline`): not a requeue, not an attempt.
     offline: Number.isInteger(entry.offline) && entry.offline > 0 ? entry.offline : 0,
     not_before: entry.state === 'queued' && typeof entry.not_before === 'string' ? entry.not_before : null,
+    // Optional retry evidence is additive: old queues may have a deadline but
+    // no explanation. Keep only bounded, typed diagnostic fields.
+    retry_diagnostic: entry.state === 'queued' && plain(entry.retry_diagnostic)
+      ? {
+        category: typeof entry.retry_diagnostic.category === 'string' ? entry.retry_diagnostic.category.slice(0, 80) : null,
+        explanation: typeof entry.retry_diagnostic.explanation === 'string' ? entry.retry_diagnostic.explanation.slice(0, 1000) : null,
+      }
+      : null,
     // A red answer's words and when it came (`markRed`).
     reason: entry.state === 'red' && typeof entry.reason === 'string' ? entry.reason : null,
     answered: entry.state === 'red' ? entry.answered ?? null : null,
@@ -216,7 +224,7 @@ export function nextBatch(entries, {
 
 /** The entry back in line, as `queued`, its place (`since`) kept. */
 export function markQueued(entries, job) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null, merger: null, offline: 0 } : entry));
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'queued', started: null, merger: null, offline: 0, not_before: null, retry_diagnostic: null } : entry));
 }
 
 /**
@@ -225,9 +233,9 @@ export function markQueued(entries, job) {
  * instant). No session is started for it and no attempt counted: there is
  * nothing in the change to fix (gate-round-under-load, 2026-10-19).
  */
-export function markRequeued(entries, job, { notBefore = null } = {}) {
+export function markRequeued(entries, job, { notBefore = null, retryDiagnostic = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, merger: null, requeues: (entry.requeues || 0) + 1, offline: 0, not_before: notBefore }
+    ? { ...entry, state: 'queued', started: null, merger: null, requeues: (entry.requeues || 0) + 1, offline: 0, not_before: notBefore, retry_diagnostic: retryDiagnostic }
     : entry));
 }
 
@@ -237,9 +245,9 @@ export function markRequeued(entries, job, { notBefore = null } = {}) {
  * Not a requeue: nothing in the change was measured, so the requeue budget
  * stays for the change's own reds, and no session is started.
  */
-export function markOffline(entries, job, { notBefore = null } = {}) {
+export function markOffline(entries, job, { notBefore = null, retryDiagnostic = null } = {}) {
   return entries.map((entry) => (samePr(entry, job)
-    ? { ...entry, state: 'queued', started: null, merger: null, offline: (entry.offline || 0) + 1, not_before: notBefore }
+    ? { ...entry, state: 'queued', started: null, merger: null, offline: (entry.offline || 0) + 1, not_before: notBefore, retry_diagnostic: retryDiagnostic }
     : entry));
 }
 
@@ -248,7 +256,7 @@ export function markOffline(entries, job, { notBefore = null } = {}) {
  * is the pid of the merger process landing it; another live merger leaves it alone (`heldBy`).
  */
 export function markLanding(entries, job, started, merger = null) {
-  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'landing', started, merger } : entry));
+  return entries.map((entry) => (samePr(entry, job) ? { ...entry, state: 'landing', started, merger, not_before: null, retry_diagnostic: null } : entry));
 }
 
 /**

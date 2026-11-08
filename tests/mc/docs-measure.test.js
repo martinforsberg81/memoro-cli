@@ -39,14 +39,22 @@ function recorder() {
 function gitWith(log, answer = () => null) {
   return async (args, { cwd }) => {
     log.git.push({ args, cwd });
-    if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args[3], { recursive: true });
-    return answer(args) || OK;
+    const explicit = answer(args);
+    if (explicit) return explicit;
+    if (args[0] === 'worktree' && args[1] === 'list') {
+      mkdirSync(DIR, { recursive: true });
+      return { ...OK, stdout: `worktree ${DIR}\0HEAD f00ba4\0branch refs/heads/docs/msr\0\0` };
+    }
+    if (args[0] === 'rev-parse' && args.includes('--verify')) return { ...OK, status: 1 };
+    if (args[0] === 'rev-parse') return { ...OK, stdout: 'f00ba4' };
+    return OK;
   };
 }
 
 function fakes(log) {
   return {
     declaration: () => DECLARED,
+    candidateCwds: () => [],
     git: gitWith(log),
     shell: async (command, { cwd }) => { log.shell.push({ command, cwd }); return OK; },
     select: async (args) => { log.select.push(args); return SELECTED; },
@@ -81,7 +89,7 @@ describe('measureDocs — the tests the selector draws for a documents-only pull
       declaration: () => ({ ok: true, declaration: { select: 'select' } }),
       takeLane: async ({ lane }) => { assert.equal(lane, LANE); events.push('reserved'); },
       select: async () => { assert.deepEqual(events, ['reserved']); throw new Error('selector crashed'); },
-      releaseLane: ({ lane }) => { assert.equal(lane, LANE); assert.equal(existsSync(DIR), false); events.push('released'); },
+      releaseLane: ({ lane }) => { assert.equal(lane, LANE); assert.equal(existsSync(DIR), true); events.push('released'); },
     });
     assert.equal(result.ok, false);
     assert.deepEqual(events, ['reserved', 'released']);
@@ -103,7 +111,7 @@ not ok 1 - a link resolves
 `;
     const result = await measure(log, { tests: async () => ({ tap, code: 1 }) });
     assert.equal(result.ok, false);
-    assert.equal(existsSync(DIR), false);
+    assert.equal(existsSync(DIR), true);
     assert.match(readFileSync(result.log, 'utf8'), /missing docs\/target.md/u);
     assert.deepEqual(result.red_files, [FILES[0]]);
     assert.equal(result.red_tests[0].file, FILES[0]);
@@ -140,8 +148,9 @@ not ok 1 - a link resolves
     assert.equal(log.tests[0].cwd, DIR);
     assert.deepEqual(log.tests[0].files, FILES);
     assert.deepEqual(log.tests[0].flags, ['--import', './tests/_isolate-home.mjs']);
-    assert.deepEqual(log.git.at(-1), { args: ['worktree', 'remove', '--force', DIR], cwd: REPO });
-    assert.equal(existsSync(DIR), false);
+    assert.deepEqual(log.git.at(-1), { args: ['checkout', '--no-guess', 'docs/msr'], cwd: DIR });
+    assert.equal(log.git.some(({ args }) => args[0] === 'worktree' && ['add', 'remove'].includes(args[1])), false);
+    assert.equal(existsSync(DIR), true);
   });
 
   it('all green is ok, with the files it ran', async () => {
@@ -154,7 +163,7 @@ not ok 1 - a link resolves
     assert.deepEqual(result.red, []);
     assert.deepEqual(result.commands, []);
     assert.equal(log.tests.length, 1);
-    assert.equal(existsSync(DIR), false);
+    assert.equal(existsSync(DIR), true);
   });
 
   it('a merge that does not go clean stops before the selection', async () => {
@@ -167,7 +176,7 @@ not ok 1 - a link resolves
     assert.equal(result.reason, '#14188 does not merge cleanly with main — merge main in and push');
     assert.equal(log.select.length, 0);
     assert.equal(log.tests.length, 0);
-    assert.equal(existsSync(DIR), false);
+    assert.equal(existsSync(DIR), true);
   });
 
   it('a prepare that fails stops before the selection, and every line it says carries the prefix', async () => {

@@ -112,12 +112,12 @@ Decision logs record requested and identified role/programme, evidence source,
 conversation id and resume/exclude/fresh/refusal, without copying transcript
 or prompt content. Session ownership and headless restrictions are unchanged.
 
-The plan session has full freedom toward the programme's aim: investigate,
+The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; every finished brief moves to build in its assigned phase. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. It is interactive only: Martin is
 at the terminal. The runner never starts a plan session (Martin, 2026-11-07);
-a goal in `finish` gets a finish session and a blocked goal or a red merge a
-mend session, each with its own role ([mc-goals.md](mc-goals.md) § *Finish
+a goal in `finish` gets a finish session and a red merge a mend session (a
+merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
 See [mc-goals.md](mc-goals.md).
 
@@ -133,6 +133,16 @@ its goals — its README (`canon/tasks/references/programme-readme.md`), the
 decisions put to Martin in one sitting, the cut into phases, and every
 finished goal set in `build` in its phase rather than parked in `draft` — is
 `canon/tasks/designing-a-programme.md` (Martin, 2026-11-08).
+
+A plan session writes a review or build follow-up as a goal without asking
+Martin when its investigation is complete and its change applies a decided
+standard (a `docs/technical/` document or a programme ruling) or repairs a
+defect against one (Martin, 2026-11-08). What it still asks him is a new
+product or policy choice, an exception to a decided standard, or a reserved
+act, through `mc goal martin`, as `canon/tasks/asking-martin.md` says. The
+reason: plan sessions put "write this goal now" questions to jev, which could
+not settle them (on 2026-11-08, 67 jev calls showed `settled` below 0.70 on 20
+such questions).
 
 A goal names a work class (`fast` or `large`), not a pinned provider. The
 catalog and observed capacity choose tool, model and effort at launch. Review

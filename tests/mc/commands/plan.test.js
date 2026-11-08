@@ -60,13 +60,14 @@ describe('the plan role', () => {
   it('says the session drives the programme toward the README aim, interactive only, and names the headless owners', () => {
     const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
-    assert.match(told, /full freedom/u);
+    assert.match(told, /primary deliverable/u);
+    assert.match(told, /subordinate to this planning responsibility/u);
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /\*\*Interactive, always\.\*\*.*you have no restrictions/u);
     assert.match(told, /The runner never starts a plan session/u);
     assert.match(told, /A \*\*finish session\*\* takes `finish · ready`/u);
-    assert.match(told, /A \*\*mend session\*\* takes every `blocked` goal and every red merge/u);
+    assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /not a runner area/u);
     for (const gone of [/Never write code/u, /no `git commit`/u, /no `mc publish`/u, /Never `--status done`/u, /end with exactly one of/u, /read it, never write in it/u,

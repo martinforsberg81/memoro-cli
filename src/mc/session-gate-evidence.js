@@ -129,6 +129,7 @@ export function gateReceipt({ measurement, before, after, result, started, ended
   // content and its own work completed (`filesComplete`).
   const members = result.members ?? null;
   const complete = Boolean(coverage && (coverage.files.length || coverage.commands.length)
+    && !(result.commands || []).some((command) => command.settled)
     && filesComplete(coverage, execution, members) && executionComplete(coverage, execution, members)
     && commands.length === coverage.commands.length
     && commands.every((command) => command.exit === 0 && command.ok === true && !command.error

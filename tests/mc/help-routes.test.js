@@ -106,7 +106,18 @@ for (const [verb, path] of Object.entries(VERB_MODULES)) {
   const { ROUTES } = await import(new URL(`../../src/${path}`, import.meta.url));
   assert.ok(ROUTES, `${verb} has neither a parser here nor exported ROUTES`);
   ROUTED[verb] = ROUTES;
-  PARSERS[verb] = (argv) => routed(ROUTES, argv);
+  PARSERS[verb] = (argv) => routed(ROUTES, verb === 'shot' ? normalizeShotCompare(argv) : argv);
+}
+
+/** The command consumes an optional compare value before its boolean flag scan. */
+function normalizeShotCompare(argv) {
+  const normalized = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    normalized.push(arg);
+    if (arg === '--compare' && argv[index + 1] && !argv[index + 1].startsWith('--')) index += 1;
+  }
+  return normalized;
 }
 
 /** The page's own flags, as mc-cli.js routes them; --version is answered before it. */

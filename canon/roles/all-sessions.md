@@ -31,8 +31,7 @@ programme's own work; a ruling that reaches beyond it belongs in
 contradicts them. Where one of them answers a question, apply it without
 asking.
 
-A standard the work needs and none of them holds is a gap, and the gap is the
-finding: it is decided once, where it belongs, never only inside one goal.
+Before asking, read the relevant technical contracts and programme README/design/rulings. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. Every decision for Martin is a design-level amendment ready for `docs/technical/`: evidence, remaining uncertainty, alternatives/tradeoffs, recommendation, proposed normative wording and exact destination/section. A technical gap within existing direction is resolved in planning and recorded; only an unapproved product/privacy choice or reserved act is Martin's. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md.
 Plan writes a technical standard into `docs/technical/` within the app's
 existing direction. A product or policy choice — what users see or are
 promised, a cost or privacy line, the test strategy — is Martin's, and his

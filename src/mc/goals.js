@@ -55,8 +55,8 @@ export function readStage(stage) {
   return Object.hasOwn(LEGACY_STAGE_WORDS, stage) ? LEGACY_STAGE_WORDS[stage] : stage;
 }
 /**
- * Whether a goal's stage can run now: `ready`, or `blocked` — waiting on a
- * mend session, in any stage. `Martin` waits on Martin and wakes nothing.
+ * Whether a goal's stage can run now: `ready`, or a blocked merge — waiting
+ * on merge recovery. Legacy blocked work outside merge is reconciled to Martin.
  * Setting a goal ready keeps its stage.
  */
 export const STATUSES = ['ready', 'blocked', 'Martin'];
@@ -376,6 +376,28 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
   return goals;
 }
 
+/** Active and archived goal references, used to enforce PR ownership after archival. */
+export function goalReferences({ home = programsHome(), list = listDirsOf, read = readTextOrNull } = {}) {
+  const refs = programsGoals({ home, list, read });
+  for (const programme of list(home)) {
+    const archive = join(home, programme, GOALS_DIR, ARCHIVE_DIR);
+    for (const name of list(archive)) {
+      const dir = join(archive, name);
+      const text = read(join(dir, GOAL_FILE));
+      if (text === null) continue;
+      const log = parseLog(read(join(dir, LOG_FILE)) ?? '');
+      const parsed = parseGoal(text);
+      // `archiveGoal` adds this timestamp suffix only when an older archived
+      // directory already occupies the original goal's name.
+      const goal = name.replace(/-\d{8}T\d{4}$/u, '');
+      refs.push(parsed.problems
+        ? { programme, goal, dir, log, stage: null, status: null, prs: [], problems: parsed.problems }
+        : { ...parsed, programme, goal, dir, log, problems: [] });
+    }
+  }
+  return refs;
+}
+
 /** A goal record of `programsGoals` as the shape `parseGoal` gives, for `renderGoalText`. */
 export function goalOfRecord(record) {
   return { ...record, goal: record.goal_text ?? [] };
@@ -418,6 +440,15 @@ export function mergeAnswered(entry) {
   return entry?.tool === 'runner' && /^merger answered (red|moved) on #\d+/u.test(String(entry.done ?? ''));
 }
 
+/** Failed merge results in this merge stage since an interactive ready entry.
+ * Mend sessions and their ready entries do not reset the result count. */
+export function mergeFailures(log = []) {
+  const entries = inStage(log, 'merge');
+  const resumed = entries.findLastIndex((entry) => entry.status === 'ready'
+    && (entry.tool === 'person' || entry.role === 'plan'));
+  return entries.slice(resumed + 1).filter(mergeAnswered).length;
+}
+
 /** The entries at the end of `log` written in `stage`: since the goal last came to it. */
 export function inStage(log, stage) {
   const out = [];
@@ -428,8 +459,7 @@ export function inStage(log, stage) {
 /**
  * Compatibility for an older merger's `merge · ready` failure: start a mend
  * session while its last entry is the merger's answer and no PR is queued.
- * New merger failures set `merge · blocked` immediately and use the ordinary
- * blocked recovery path in goalSession.
+ * New merger failures set `merge · blocked` immediately.
  */
 export function mergeRetryDue(goal, inLine = []) {
   if (goal.stage !== 'merge' || goal.status !== 'ready' || !mergeAnswered(goal.log.at(-1))) return false;
@@ -466,20 +496,24 @@ export function waitsOnPerson(goal) {
 export const PLAN_ROLE = 'plan';
 /** The role a goal's finish session runs with: `canon/roles/finish-session.md`. It takes a goal in `finish · ready` to `merge`. */
 export const FINISH_ROLE = 'finish-session';
-/** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It takes every blocked goal and every red merge. */
+/** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
 
 /**
  * The session the runner starts on `goal`, or null: a build session on
  * `build · ready` (with a criterion), a review session on `review · ready`, a
- * finish session on `finish · ready`, and a mend session on every `blocked`
- * goal, in its current stage, and on `merge · ready` after a red
+ * finish session on `finish · ready`, and a mend session only on an unqueued
+ * blocked merge or `merge · ready` after a red
  * (`mergeRetryDue`). Never on `draft · ready`, on `Martin` or on a goal that
  * does not parse. `inLine` is the merger's line.
  */
 export function goalSession(goal, inLine = []) {
   if (goal.problems?.length || FINISHED.includes(goal.stage) || goal.status === 'Martin') return null;
-  if (goal.status === 'blocked') return 'mend';
+  if (goal.status === 'blocked') {
+    if (goal.stage !== 'merge') return null;
+    const queued = (goal.prs ?? []).some((item) => inLine.some((entry) => samePr(entry, item)));
+    return queued ? null : 'mend';
+  }
   if (goal.status !== 'ready') return null;
   if (goal.stage === 'build') return noCriteria(goal) ? null : 'build';
   if (goal.stage === 'review') return 'review';

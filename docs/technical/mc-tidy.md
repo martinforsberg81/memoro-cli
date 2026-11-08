@@ -5,18 +5,30 @@ archive pull request for the goal's own records.
 
 ## Goal archive
 
-`mc goal archive <programme>/<goal>` uses `archiveGoal`
-(`src/mc/goal-archive.js`). Only a `done` or `dropped` goal can leave. It
-refuses uncommitted work, an open pull request, unknown repositories or
-GitHub state, and a dropped branch with unpushed commits. It checks the goal's
-carried PRs as well as its branch.
+`mc goal archive <programme>/<goal>` uses the shared archive safety checks in
+`src/mc/goal-archive.js`. Only a `done` or `dropped` goal can leave. It refuses
+uncommitted work, an open pull request, unknown repositories or GitHub state,
+and a dropped branch with unpushed commits. It checks the goal's carried PRs as
+well as its branch.
+
+Dropping persists `dropped` first, then a retryable finalizer closes PRs owned
+only by that goal and removes their queued/red merge rows under the merge lock.
+An unfinished co-owner keeps the PR open and queued; its ownership is recorded.
+Branch-discovered PRs are included. A live runner session, GitHub uncertainty,
+close failure or unsafe worktrees retain the active dropped goal and the
+explicit refusal; cleanup is
+retried on drop or ordinary runner reconciliation, without a mend/build wake.
+Archived goal references continue to count when deciding ownership.
 
 The worktrees are removed through git, the local branch deleted, and the
 goal directory moved to `goals/.archive/`. One row is appended to
 `goals/goal_log.md`; phases are renumbered so there are no gaps. Nothing is
-written into a repository. The runner calls the same operation once a goal
-has been done or dropped for 24 hours, counted from its stage-setting log
-entry, and in a disk pressure pass without the 24 hours (§ Disk pressure). A refusal is recorded once in LOG.md, not every chore pass.
+written into a repository. Dropped goals are finalized and archived as soon as
+safe, including on the next ordinary runner reconciliation even when their log
+has no stage timestamp. Done goals retain the 24-hour hold, counted from their
+stage-setting log entry; disk pressure may still archive done goals without the
+hold (§ Disk pressure). A refusal is recorded once in LOG.md, not every chore
+pass.
 
 Projects went on 2026-11-03; their migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project). Old execution
@@ -152,17 +164,6 @@ inside touched within `--days` is a leftover and goes.
 (`/private/tmp/claude-*`, `memoro/.claude/worktrees/agent-*`) are listed with
 the rule `foreign-worktree` and never removed. After an apply,
 `git worktree prune` runs on both repositories.
-
-**C — `mc shot --compare` trees.** The detached worktrees `shot-compare.js`
-makes under `~/.memoro/mc/compare/` (`tidyRoots().compare`, under mc's home,
-not the work root). One goes when it has not been used for `COMPARE_KEEP_MS`
-(a day) and no live dev server stands in it (`serversFor`). Last use is the
-directory's mtime, and that is only true because `compareTree` touches the
-directory when it reuses one (a reuse writes nothing in it). The tree is
-removed with `git worktree remove`, without `--force`, run in the repository
-git names as its owner (`rev-parse --git-common-dir`), read again at the
-apply. A tree with edits, or one whose server started after the list was
-written, stays. These trees are no longer listed as `foreign-worktree`.
 
 **K — slug directories no repository mc knows has.** The gate's directories
 (`~/mc/gate/<slug>/` and `~/mc/gate/<slug>-freshen/`), its dependency cache

@@ -265,7 +265,8 @@ it('classifies only an exact declared command exit as unavailable and keeps late
     });
     assert.equal(result.code, failing === 'test' || failing === 'command' ? 1 : 0);
     assert.equal(result.verdict, failing === 'test' || failing === 'command' ? 'red' : 'incomplete');
-    assert.deepEqual(calls, ["npm run 'db:postgres'", "npm run 'lint:after'"]);
+    // A red command in the round runs once more alone, after both halves: `command` only.
+    assert.deepEqual(calls, ["npm run 'db:postgres'", "npm run 'lint:after'", ...(failing === 'command' ? ["npm run 'lint:after'"] : [])]);
     assert.deepEqual(result.unavailable_commands.map(({ id, exit }) => ({ id, exit })), [{ id: 'db:postgres', exit: 69 }]);
     assert.deepEqual(result.execution.commands.map(({ id, exit, state }) => ({ id, exit, state })), [
       { id: 'db:postgres', exit: 69, state: 'unavailable' }, { id: 'lint:after', exit: failing === 'command' ? 3 : 0, state: 'completed' },
@@ -282,7 +283,8 @@ it('both concurrent halves contribute failures and thrown failures settle the co
     shell: async () => { calls.push('command'); return { status: 2 }; },
   });
   assert.equal(failed.ok, false);
-  assert.deepEqual(calls, ['tests', 'command']);
+  // The red command runs once more alone, after the tests half has finished.
+  assert.deepEqual(calls, ['tests', 'command', 'command']);
   assert.equal(failed.execution.tests.exit, 1);
   assert.equal(failed.execution.commands[0].exit, 2);
 
@@ -893,6 +895,107 @@ it('a file red under load and green alone settles the gate green, says so and re
   assert.notEqual(receipt.outcome, 'green', 'a settled run is not a green receipt: its round had a failure');
   assert.deepEqual(receipt.members.files.map(({ file, outcome }) => ({ file, outcome })),
     [{ file: 'a.test.js', outcome: 'passed' }, { file: 'b.test.js', outcome: 'passed' }], 'the next attempt reuses both');
+});
+
+it('a command gate red in the round and green alone is settled: no fail line, a passed member, not a green receipt', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-session-command-settle-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const pass = await reporterLines('a.test.js', 'pass');
+  const order = [];
+  const shellResults = [{ status: 1 }, { status: 0 }];
+  const shellCalls = [];
+  let output = '';
+  const result = await runSessionGate({ cwd: '/work', select: 'selector', files: null, flags: [], base: BASE, gate: { root, repo: 'repo' },
+    measurement: { repo: 'repo', run: 'run-command-settle', base: BASE, candidate: CONTENT, configuration: 'config' } }, {
+    snapshot: () => CONTENT, record: () => {}, write: (text) => { output += text; },
+    select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }),
+    tests: async ({ times }) => {
+      const path = join(root, 'times-tests.jsonl');
+      times.track(path);
+      writeFileSync(path, pass);
+      times.complete(path);
+      order.push('tests');
+      return { code: 0, tap: GREEN };
+    },
+    shell: async (command) => { order.push('command'); shellCalls.push(command); return shellResults.shift(); },
+  });
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.settled.commands_alone, ['lint']);
+  assert.equal(shellCalls.length, 2);
+  assert.deepEqual(shellCalls, ["npm run 'lint'", "npm run 'lint'"]);
+  assert.deepEqual(order.slice(-1), ['command'], 'the second run is after the tests half has finished');
+  assert.ok(order.indexOf('tests') < order.lastIndexOf('command'));
+  const evidence = result.execution.commands[0];
+  assert.equal(evidence.exit, 0);
+  assert.equal(evidence.ok, true);
+  assert.equal(evidence.state, 'completed');
+  assert.equal(evidence.settled, 'alone');
+  assert.equal(output.split('\n').some((line) => /^command \S+: fail/u.test(line)), false, 'no fail line: the verdict would say command gates failed');
+  assert.match(output, /^command lint: red in the round \(exit 1\)/mu);
+  assert.match(output, /^command lint: pass \(green alone — red in the round under load\)$/mu);
+  const receipt = JSON.parse(readFileSync(result.evidence.path, 'utf8'));
+  assert.notEqual(receipt.outcome, 'green', 'a settled run is not a green receipt');
+  assert.deepEqual(receipt.members.commands.map(({ packageScript, outcome }) => ({ packageScript, outcome })), [{ packageScript: 'lint', outcome: 'passed' }]);
+});
+
+it('a command gate red alone too is red after exactly two runs; an unavailable, thrown, killed or aborted one is not rerun', async () => {
+  const run = async ({ command = { packageScript: 'lint' }, shell, signal = undefined }) => {
+    const calls = [];
+    const output = [];
+    const result = await runSessionGate({ cwd: '/work', select: 'selector' }, {
+      write: (line) => output.push(line), signal, select: async () => ({ ok: true, files: [], commands: [command] }),
+      shell: async () => { calls.push(true); return shell(calls.length); },
+    });
+    return { result, calls: calls.length, output: output.join('') };
+  };
+  // Red twice: the second run's exit is the verdict, and the line says it ran alone too.
+  const redTwice = await run({ shell: () => ({ status: 2 }) });
+  assert.equal(redTwice.calls, 2);
+  assert.equal(redTwice.result.code, 1);
+  assert.equal(redTwice.result.execution.commands[0].exit, 2);
+  assert.match(redTwice.output, /^command lint: fail \(red alone too, exit 2\)$/mu);
+  // Not rerun: the declared exit, a timeout or a kill (both resolve a signal), a shell that threw, an abort.
+  const unavailable = await run({ command: { packageScript: 'lint', unavailableExitCode: 69 }, shell: () => ({ status: 69 }) });
+  assert.equal(unavailable.calls, 1);
+  assert.equal(unavailable.result.execution.commands[0].state, 'unavailable');
+  const killed = await run({ shell: () => ({ status: null, signal: 'SIGTERM' }) });
+  assert.equal(killed.calls, 1);
+  assert.equal(killed.result.code, 1);
+  const thrown = await run({ shell: () => { throw new Error('spawn exploded'); } });
+  assert.equal(thrown.calls, 1);
+  assert.equal(thrown.result.code, 1);
+  assert.match(thrown.output, /^command lint: fail \(spawn exploded\)$/mu);
+  const controller = new AbortController();
+  const aborted = await run({ signal: controller.signal, shell: () => { controller.abort(); return { status: 1 }; } });
+  assert.equal(aborted.calls, 1);
+  assert.equal(aborted.result.code, 1);
+});
+
+it('--command runs one command gate of the selection, no files, and an unknown id is refused naming the known ones', async () => {
+  const selected = { ok: true, files: ['a.test.js', 'b.test.js'], commands: [{ packageScript: 'lint' }, { packageScript: 'typecheck' }] };
+  const calls = [];
+  const output = [];
+  const ran = await runSessionGate({ cwd: '/work', select: 'selector', files: null, commands: ['lint'], fresh: true, defer: false }, {
+    write: (line) => output.push(line), select: async () => selected,
+    tests: async () => { calls.push('tests'); return { code: 0, tap: GREEN }; },
+    shell: async (command) => { calls.push(command); return { status: 0 }; },
+  });
+  assert.deepEqual(calls, [`npm run 'lint'`]);
+  assert.equal(ran.code, 0);
+  assert.deepEqual({ kind: ran.coverage.kind, files: ran.coverage.files, commands: ran.coverage.commands },
+    { kind: 'named', files: [], commands: [{ packageScript: 'lint' }] });
+
+  const refused = [];
+  calls.length = 0;
+  const none = await runSessionGate({ cwd: '/work', select: 'selector', files: null, commands: ['nope'] }, {
+    write: (line) => refused.push(line), select: async () => selected,
+    tests: async () => { calls.push('tests'); return { code: 0, tap: GREEN }; },
+    shell: async (command) => { calls.push(command); return { status: 0 }; },
+  });
+  assert.equal(none.code, 2);
+  assert.equal(none.stopped_at, 'no-command');
+  assert.deepEqual(calls, []);
+  assert.match(refused.join(''), /^Error: no command gate nope in this change's selection — the selector named: lint, typecheck$/mu);
 });
 
 // The selector output a session gate reads through the real `selectFiles`, from a

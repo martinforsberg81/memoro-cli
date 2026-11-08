@@ -331,16 +331,14 @@ export function goalFinishPrompt({ name, dir, worktree, branch, why = null, brie
 }
 
 /**
- * What a goal's mend session is told: the goal, the stage it is blocked in —
- * or `merge`, where the merger answered red or its head moved — the last
+ * What a goal's mend session is told: the goal in merge, where the merger
+ * failed its candidate check or the judged head moved — the last
  * word on it, and where its worktree is. The rest is
  * `canon/roles/mend-session.md`'s.
  */
 export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'blocked', why = null, brief = null }) {
   const reason = lastWord(why);
-  const task = stage === 'merge'
-    ? `it is in merge${status === 'blocked' ? ' · blocked' : ''} and the merger did not land it: read LOG.md and the merger's red, resolve it in its worktree, gate, publish, and queue it again with mc goal stage merge`
-    : `it is blocked in ${stage}: read LOG.md and REVIEW.md when present, diagnose and resolve the obstacle, then retry the same stage with mc goal ready`;
+  const task = `it is in merge${status === 'blocked' ? ' · blocked' : ''} and the merger did not land it: read LOG.md and the merger's red, resolve it in its worktree, gate, publish, and queue it again with mc goal stage merge`;
   return withBrief([
     `You mend the goal ${name}, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
@@ -354,7 +352,7 @@ export function goalFinishCheckInPrompt({ minutes, count }) {
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
     'Your job is what review found: fix it, gate, publish, and `mc goal stage merge`. Preserve acceptance and gate requirements.',
-    'An obstacle you cannot resolve within the goal as written: `mc goal blocked --reason "…"` (a mend session takes it). A change to the goal, contract or product scope: `mc goal martin --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> --evidence "<what you tried>"`; when jev answers, continue with its answer.',
+    'Repair in-scope acceptance obstacles yourself. For an actual design choice or reserved act, ask directly with `mc ask`; continue if jev answers, otherwise wait on Martin. Ordinary implementation detail is resolved from technical standards and programme design.',
   ].join('\n');
 }
 
@@ -364,8 +362,8 @@ export function goalMendCheckInPrompt({ minutes, count }) {
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
-    'Your job is the obstacle: diagnose it, resolve it, and retry the goal\'s current stage (`mc goal ready`; in merge, `mc goal stage merge`). Preserve acceptance and gate requirements.',
-    'Only a change to the goal, contract or product scope waits on Martin: `mc goal martin --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> --evidence "<what you tried>"`; when jev answers, continue with its answer.',
+    'Your job is the merge failure: diagnose it, resolve it within the contract, and requeue the merge with `mc goal stage merge`. Preserve acceptance and gate requirements.',
+    'Mend is merge recovery only. Resolve merge failures within the contract, or ask directly with `mc ask` for an actual design choice or reserved act; continue when jev answers, otherwise wait on Martin.',
   ].join('\n');
 }
 

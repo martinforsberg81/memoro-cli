@@ -7,10 +7,19 @@ lands what it cleared. A second implementation is the thing this arrangement
 exists to prevent — two measurements drift, and the one that drifts is always
 the one the merge trusted.
 
+Drop is a cancellation boundary. Merge admission refuses a PR owned only by a
+dropped goal, including a manual job with no goal pointer. The merger rechecks
+ownership before a queued round and immediately before the GitHub merge call;
+a drop during a gate therefore cannot land afterward. Finalization removes the
+abandoned PR's queued/red row under the queue lock. A PR still owned by another
+unfinished goal is neither closed nor dequeued. An old merger answer never
+reactivates a dropped goal; close/read uncertainty leaves cleanup pending for
+retry.
+
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
-- **the gate round** — lease, **one** worktree holding the pull request's head
+- **the gate round** — lease, the pull request's **existing** checkout holding its head
   with main merged into it, the test files the change reaches run there, the
   command gates the same selection named run beside them, squash. This is what
   `mc repo merge` was; only the name moved.
@@ -59,8 +68,8 @@ before `gh` is asked anything
 ## The gate form
 
 Unchanged, deliberately: `mc merge` calls the same `gate()` in `repo.js`, which
-calls the same `runGate` and `runMergeRound`. The round, its lease, its one
-throwaway worktree, the red names read out of it by name, the deploy pull and
+calls the same `runGate` and `runMergeRound`. The round, its lease, its borrowed
+checkout, the red names read out of it by name, the deploy pull and
 the merge-log line are all described where they live —
 [`src/mc/repo-merge.js`](../../src/mc/repo-merge.js),
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js) and
@@ -101,18 +110,57 @@ incomplete test requests contribute unfinished files: a command-gate timeout
 cannot relabel the already-completed selection as unfinished. Own-test
 requests are tracked separately and name their own pending files.
 
+## Reuse the existing checkout
+
+Martin, 2026-11-08: a merge must reuse the checkout the work already has;
+creating and deleting another worktree wastes time and disk. This applies to
+ordinary and documents-only PR measurements, batch candidates and branch
+freshening before landing. Direct goal landing keeps its existing procedure.
+
+`existingCandidate` locates the registered checkout of the exact PR branch.
+It requires the pushed head, a clean index and working tree (including
+untracked files), no unfinished Git operation, and complete process cwd
+evidence that nobody else is working there. A synchronous requesting process
+and its waiting ancestors may hand over their own checkout. A missing, dirty, busy or mismatched
+checkout stops with its reason; it never triggers another checkout.
+
+The measurement temporarily detaches HEAD in that directory, merges the
+current fetched base, prepares and tests that combined tree, then returns to
+the original branch without moving it. A batch starts from its fetched base
+in the first PR's existing checkout. Branch freshening uses the same mechanism
+and pushes only the named branch, then advances its local branch to that pushed
+head with an expected-old-head check. The installation's main checkout is never
+used as a PR candidate. Standalone measurements of main without a PR retain
+their separate candidate; they are not merge attempts.
+
+A conflict is aborted during restoration. Restoration never resets or cleans
+files: unexpected changes are retained and reported, and the round cannot
+return green. It never removes the borrowed checkout. An uncatchable process
+kill can leave detached HEAD; recovery must inspect that checkout and return
+to the original branch before retrying.
+
+Protection for this change is bounded to the existing gate, docs-measure,
+freshen, merge integration and preparation-cache fixtures (including the
+existing Git model for NUL worktree listings and local-only checkout): correct checkout and merged state,
+no worktree creation/removal, refusal before mutation on unsafe inputs, and
+branch restoration on successful, red and exceptional exits. No new suite,
+scanner or framework is commissioned.
+
 ## The door
 
 Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-**A session decides when a goal merges.** Before a review or finish session
+**A session decides when a goal merges.** Before a review, finish or mend session
 authorizes direct goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
 completed green `mc gate --whole-selection` on the final judged worktree. The
-session records scope, frozen base, judged revision and log. This is a human
-session requirement, not merger enforcement. `mc goal stage merge` records
+session records scope, frozen base, judged revision and log. A content-changing
+mend establishes acceptance for the repaired worktree; an unchanged delivery
+retry may retain still-valid evidence under the existing reuse rules. Explicit
+verification exceptions keep their approved scope. These are session
+requirements, not merger enforcement. `mc goal stage merge` records
 that decision and queues every PR registered on the goal. `landJob` executes
 it with `gh pr merge --squash`, without another gate, criteria check,
 reviewed-head/base validation or automatic conflict resolution. It reads GitHub's merge
@@ -192,8 +240,8 @@ whole of it. It takes a repository path and a number and:
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
    then it reads the head again, and a head that moved since step 1 is `drift`:
    not merged, because the files checked are not the files that would land;
-4. measures the documents before anything is squashed. It builds a candidate of
-   the head with `origin/<base>` merged in, under `<work root>/gate/<repo>/docs-<n>`,
+4. measures the documents before anything is squashed. It borrows the branch's
+   existing clean, idle checkout and merges `origin/<base>` into a detached head there,
    prepares it as a round does, asks the repository's selector (`selectFiles`,
    the gate round's own) which tests read the files, runs those files and the
    command gates it names, and refuses on any red: `red`, with the names. A
@@ -224,7 +272,7 @@ opinion about.
 
 The docs measurement reserves the repository's gate lane before creating or
 preparing its candidate and releases it after cleanup, including on failure.
-It uses one worktree and the selector's files and commands, with no model or
+It reuses the branch's checkout and the selector's files and commands, with no model or
 deploy pull. Raw test and command output survives candidate cleanup under
 `~/.memoro/mc/gate-output/`. A failed result names the log, failing files,
 assertion locations and a focused rerun command; JSON retains the details.
@@ -318,28 +366,17 @@ longer mentions it. The gate form's argument errors live with the gate, in
 
 ## Where the candidate's dependencies come from
 
-The candidate is a fresh worktree with no `node_modules` in it, and a suite run
+The candidate reuses the branch's checkout and its existing dependency location. A suite run
 where the declared packages cannot be resolved does not fail — it runs the
 tests that happen to need nothing and prints a number with the right shape
 (D-0152: 2162 tests and 30 failures, where 206 tests never ran and were not
 counted as skipped; 2368 of 2368 once the tree was linked). A number from such
 a run is not low, it is invalid, and nothing about the number says so.
 
-**So the candidate stands where the tree already is.** It is built at
-`<work root>/gate/<repo>/candidate` — `WORK_GATE` beside `SHARED_DEPS` in
-[`src/mc/paths.js`](../../src/mc/paths.js) — which puts `~/mc/node_modules` two
-parents above it, found by node's own walk up the directory chain. That is the
-same one tree every workarea resolves through, described in
-[`mc-shared-deps.md`](mc-shared-deps.md) § *Where a checkout's dependencies come from*: one
-copy for the workareas and the rounds together, no `npm ci` in the round, and
-nothing inside the checkout for git or the selector to trip over. The gate
-directory used to live under `mcHome()`, and moving it is the whole of that
-half. The round calls the same `ensureSharedDeps` on the **candidate** rather
-than on the repository's checkout, so a pull request that changes
-`package-lock.json` is measured against a tree installed from *its* lockfile;
-the shared tree then stands at that lockfile until the next workarea or round
-moves it, which is the one-tree-one-lockfile trade the work root already makes,
-said out loud.
+The round calls `ensureSharedDeps` on the borrowed checkout, then runs the
+repository's declared preparation. A cached dependency clone replaces any
+existing checkout-local `node_modules`; it must never nest inside it or write
+through a link into the shared tree.
 
 **And the round measures the resolution instead of believing a declaration.**
 After the prepare step and before the suite, `dependencyTree(candidate)` asks
@@ -767,6 +804,25 @@ is not the change's red. Its failures are kept under
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
+The queued retry record retains `not_before`, retry counts and a bounded
+`retry_diagnostic` (`category` from the actual report's `stopped_at`, and
+`explanation` from its actual `reason`). The diagnostic is not an inference
+that a check proved machine overload. Offline backoff uses the same durable
+shape, with the offline report as evidence. Queue parsing preserves these
+additive fields; older entries remain compatible. A legacy queued entry with a
+valid future `not_before` is still deferred, but its cause is displayed as
+unknown when no diagnostic exists. A deadline is an eligibility time, not a
+guaranteed start time. Only a valid future deadline is an active timed pause;
+expired, malformed and absent deadlines are due and must not be presented as
+delayed. Explicit requeue/new queueing and landing clear obsolete delay
+diagnostics for current display. The normal MERGE & DEPLOY panel shows the
+cause, local eligibility time with timezone, remaining delay, automatic retry
+step and `mc merge <repo> <pr>` retry-now command. An all-deferred queue is
+intentional even without a live merger process; a due job without an owner is
+still stopped. Mixed queues keep each job's delay attached to its own PR and
+repository. Current deploy/gate/lease observations remain separate, and a
+completed failed deploy is historical rather than an active merge blocker.
+
 **A test that never ends is a red by name.** Every selected, previous-red and
 own test file runs with `--test-force-exit` and one `--test-timeout`, resolved
 from the tree actually measured — the session's worktree, or the round's final
@@ -1116,8 +1172,10 @@ threw.
 
 **Where a red goes.** A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
-answered red on #<pr>` entry (`tellGoal`): every failure in `merge` sets
-`merge · blocked` immediately and wakes a mend session ([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
+answered red on #<pr>` entry (`tellGoal`). Failure one or two sets
+`merge · blocked` and wakes mend; its completed repair returns `merge · ready`
+for delivery again. Failure three sets `merge · Martin`
+([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
 A pull request is a goal's when the job carries the goal (its review's `mc goal stage merge`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal

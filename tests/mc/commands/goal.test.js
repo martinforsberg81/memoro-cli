@@ -47,7 +47,7 @@ function listUnder(store, path) {
  * the repositories `KNOWN`, and a `git` fake that records each call and answers
  * with `git(cwd, args)`. No real file or git process is touched.
  */
-function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [], keys = {}, replies = [], timer = () => new Promise(() => {}) } = {}) {
+function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [], keys = {}, replies = [], timer = () => new Promise(() => {}), alive = () => false } = {}) {
   const store = { [`${HOME}/mc/PLAN.json`]: '{}', ...files };
   const calls = [];
   const out = [];
@@ -78,6 +78,8 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     realpath: (path) => path,
     write: (path, text) => { store[path] = text; },
     list: (path) => listUnder(store, path),
+    listFiles: (path) => Object.keys(store).filter((key) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/')).map((key) => key.slice(path.length + 1)),
+    alive,
     known: () => known,
     git: (cwd, args) => {
       calls.push({ cwd, args });
@@ -87,6 +89,20 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     exists: (path) => !absent.includes(path),
   };
   return { deps, store, calls, requests, sleeps, ledger: () => ledger.map((line) => JSON.parse(line)), out: () => out.join(''), err: () => err.join('') };
+}
+
+/** Boundary fakes for the drop finalizer; archive moves the fixture's files, never the real filesystem. */
+function dropFixture(f) {
+  f.deps.gh = (_cwd, args) => {
+    assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'dropped', 'drop is durable before GitHub cleanup');
+    return args[1] === 'list' ? ok('[]') : ok('{"state":"CLOSED"}');
+  };
+  f.deps.lock = (_root, fn) => fn();
+  f.deps.appendText = (path, text) => { f.store[path] = `${f.store[path] ?? ''}${text}`; };
+  f.deps.move = (from, to) => {
+    for (const key of Object.keys(f.store)) if (key.startsWith(`${from}/`)) { f.store[`${to}${key.slice(from.length)}`] = f.store[key]; delete f.store[key]; }
+  };
+  return f;
 }
 
 /** A well-formed `mc goal martin` call: the question, two options, the first recommended. */
@@ -322,8 +338,8 @@ test('mc goal log --status and --stage rewrite GOAL.json and log the entry with 
   }
 });
 
-test('mc goal blocked, ready, done and drop set their one field and log the reason; a blocked goal set ready keeps its stage', async () => {
-  for (const [verb, stage, status] of [['blocked', 'build', 'blocked'], ['done', 'done', 'ready'], ['drop', 'dropped', 'ready']]) {
+test('mc goal blocked, ready and done set their one field and log the reason; a blocked goal set ready keeps its stage', async () => {
+  for (const [verb, stage, status] of [['blocked', 'build', 'blocked'], ['done', 'done', 'ready']]) {
     const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } });
     assert.equal(await run([verb, '--reason', `because ${verb}`], f.deps), 0, f.err());
     const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
@@ -331,6 +347,14 @@ test('mc goal blocked, ready, done and drop set their one field and log the reas
     const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
     assert.deepEqual([last.stage, last.status, last.comment], [stage, status, `because ${verb}`]);
   }
+  const dropped = dropFixture(fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } }));
+  assert.equal(await run(['drop', '--reason', 'abandoned'], dropped.deps), 0, dropped.err());
+  assert.equal(dropped.store[`${HOME}/mc/goals/plain/GOAL.json`], undefined, 'the active record is archived in the same call');
+  assert.equal(goalField(dropped.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped');
+  assert.match(dropped.store[`${HOME}/mc/goals/goal_log.md`], /\| dropped \|/u);
+  const viaLog = dropFixture(fixture({ files: seededGoal() }));
+  assert.equal(await run(['log', 'mc/plain', '--stage', 'dropped', '--comment', 'abandoned'], viaLog.deps), 0, viaLog.err());
+  assert.equal(goalField(viaLog.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped', 'log --stage uses the same finalizer');
   const held = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'merge', status: 'blocked' }) }) });
   assert.equal(await run(['ready', 'mc/plain', '--reason', 'answered'], held.deps), 0, held.err());
   assert.deepEqual(['stage', 'status'].map((key) => goalField(held.store[`${DIR}/GOAL.json`], key)), ['merge', 'ready']);
@@ -339,6 +363,20 @@ test('mc goal blocked, ready, done and drop set their one field and log the reas
   assert.match(f.err(), /drop needs --reason/u);
   assert.equal(await run(['blocked', '--done', 'x'], f.deps), 2);
   assert.match(f.err(), /blocked takes no --done/u);
+});
+
+test('dropping refuses to archive while a live current-*.json owns the goal', async () => {
+  const root = '/work';
+  const f = dropFixture(fixture({
+    files: { ...seededGoal(), [`${root}/runner/current-memoro.json`]: JSON.stringify({ name: 'mc/plain', pid: 777 }) },
+    env: { MC_GOAL: 'mc/plain', MC_WORK_ROOT: root },
+    alive: (pid) => pid === 777,
+  }));
+  assert.equal(await run(['drop', '--reason', 'abandoned'], f.deps), 1);
+  assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'dropped', 'drop is persisted');
+  assert.equal(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], undefined, 'live-owned work is not moved');
+  assert.equal(f.store[`${HOME}/mc/goals/goal_log.md`], undefined, 'no archive success is recorded');
+  assert.match(f.err(), /live session still owns mc\/plain/u);
 });
 
 /**
@@ -406,10 +444,14 @@ test('every move of the order, by its owner: draft → build by plan, build → 
     ['finish', 'merge', PLAN], ['merge', 'done', {}], ['draft', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
   ];
   for (const [from, to, env] of moves) {
-    const f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n' }), env });
+    let f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n' }), env });
+    if (to === 'dropped') f = dropFixture(f);
     assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), to], f.deps), 0, `${from} → ${to}: ${f.err()}`);
-    assert.equal(stateOf(f), `${to} · ready`, `${from} → ${to}`);
-    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).stage, to);
+    if (to === 'dropped') assert.equal(goalField(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped');
+    else {
+      assert.equal(stateOf(f), `${to} · ready`, `${from} → ${to}`);
+      assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).stage, to);
+    }
   }
 });
 
@@ -466,7 +508,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
     ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
     ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['draft', ['stage', 'build'], /a build session moves a goal only from build to review, not draft → build/u],
-    ['build', ['ready'], /a build session does not set a goal ready — a mend session or a person does/u],
+    ['build', ['ready'], /a build session does not set a goal ready — a person does/u],
   ]) {
     const f = fixture({ files: inStage(from), env: BUILD });
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -643,7 +685,7 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
   assert.equal(stateOf(f), 'finish · ready');
   assert.equal(f.queued.length, 0, 'nothing queued for a finish');
   for (const [from, argv, said] of [
-    ['review', ['ready', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merge \(OK to land\) or finish/u],
+    ['review', ['ready', '--reason', 'x'], /a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge \(OK to land\) or finish/u],
     ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
     ['build', ['stage', 'merge'], /a review moves only a goal in review, and this one is build/u],
   ]) {
@@ -1174,9 +1216,10 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
   assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 0, f.err());
   assert.equal(stateOf(f), 'merge · Martin');
   for (const role of ['build-session:goal', 'review-session:goal']) {
-    const rejected = fixture({ files: inStage('build'), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
-    assert.equal(await run(martinCall('question'), rejected.deps), 2);
-    assert.match(rejected.err(), /only plan, finish, mend or a person sets Martin/u);
+    const stage = role === 'review-session:goal' ? 'review' : 'build';
+    const allowed = fixture({ files: inStage(stage), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
+    assert.equal(await run(martinCall('question'), allowed.deps), 0, role);
+    assert.equal(stateOf(allowed), `${stage} · Martin`, 'the valid unresolved goal question escalates directly');
   }
 });
 
@@ -1204,7 +1247,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
     ['finish', ['drop', '--reason', 'x'], /a finish session ends in merge, not dropped/u],
     ['finish', ['stage', 'review'], /a session does not move a goal back — finish → review/u],
     ['build', ['stage', 'merge'], /a finish session moves only a goal in finish, and this one is build/u],
-    ['finish', ['ready'], /a finish session sets blocked \(a mend session takes it\) or Martin, not ready/u],
+    ['finish', ['ready'], /a finish session sets blocked or Martin, not ready/u],
     ['finish', ['criterion', 'set', '1', '--check', 'y'], /a finish session does not rewrite a criterion/u],
     ['finish', ['criterion', 'remove', '1', '--reason', 'x'], /a finish session does not remove a criterion/u],
   ]) {
@@ -1215,13 +1258,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
   }
 });
 
-test('a mend session sets ready, blocked or Martin and requeues merge, and is refused every stage move and the goal\'s text', async () => {
-  for (const [from, status, argv] of [['build', 'ready', ['ready', '--reason', 'fixture repaired']], ['review', 'Martin', martinCall('the goal names a file that no longer exists; recommend rewriting criterion 2')], ['finish', 'blocked', ['blocked', '--reason', 'still red']]]) {
-    const f = fixture({ files: inStage(from, 'blocked'), env: MEND });
-    assert.equal(await run(argv, f.deps), 0, f.err());
-    assert.equal(stateOf(f), `${from} · ${status}`);
-    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).role, 'mend');
-  }
+test('a mend session repairs and requeues only a merge failure, and is refused every other stage and the goal\'s text', async () => {
   const red = inStage('merge', 'blocked');
   red[`${DIR}/GOAL.json`] = withGoal(red[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31'] });
   const requeued = reviewed({ files: red, env: MEND });
@@ -1229,9 +1266,12 @@ test('a mend session sets ready, blocked or Martin and requeues merge, and is re
   assert.equal(stateOf(requeued), 'merge · ready', 'the requeue is no stage move');
   assert.deepEqual(requeued.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]], 'every registered pull request is queued again');
   for (const [from, argv, said] of [
-    ['build', ['stage', 'review'], /a mend session moves no stage \(build → review\)/u],
-    ['finish', ['stage', 'merge'], /a mend session moves no stage \(finish → merge\)/u],
-    ['build', ['drop', '--reason', 'x'], /a mend session moves no stage \(build → dropped\)/u],
+    ['build', ['ready', '--reason', 'fixture repaired'], /mend session is only for merge/u],
+    ['review', ['martin', 'mc/plain', '--reason', 'the contract forbids the fix', '--option', 'widen: widen it', '--option', 'keep: keep it', '--recommend', 'widen'], /mend session is only for merge/u],
+    ['finish', ['blocked', '--reason', 'still red'], /mend session is only for merge/u],
+    ['build', ['stage', 'review'], /a mend session is only for merge failures/u],
+    ['finish', ['stage', 'merge'], /a mend session is only for merge failures/u],
+    ['build', ['drop', '--reason', 'x'], /a mend session is only for merge failures/u],
     ['merge', ['stage', 'build'], /a session does not move a goal back — merge → build/u],
     ['build', ['criterion', 'set', '1', '--check', 'y'], /a mend session does not rewrite a criterion/u],
   ]) {
@@ -1421,11 +1461,11 @@ test('a refused call redacts a key-source value embedded in its option', async (
   assert.doesNotMatch(f.err(), new RegExp(KEYS.TYPESAFE_API_KEY, 'u'));
 });
 
-test('a build or review session is still refused Martin before jev is asked', async () => {
+test('a build or review session may ask Martin directly after one jev consultation', async () => {
   for (const env of [BUILD, REVIEW]) {
-    const f = fixture({ files: inStage('build'), env, keys: KEYS, replies: [jevSays()] });
-    assert.equal(await run(ASK, f.deps), 2);
-    assert.match(f.err(), /only plan, finish, mend or a person sets Martin/u);
-    assert.deepEqual([f.requests.length, f.ledger().length, f.store[`${DIR}/LOG.md`]], [0, 0, LOG_TEXT]);
+    const f = fixture({ files: inStage(env === REVIEW ? 'review' : 'build'), env, keys: KEYS, replies: [jevSays()] });
+    assert.equal(await run(ASK, f.deps), 0);
+    assert.equal(stateOf(f), `${env === REVIEW ? 'review' : 'build'} · ready`);
+    assert.deepEqual([f.requests.length, f.ledger().length], [1, 1]);
   }
 });

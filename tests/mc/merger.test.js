@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { mergesSection } from '../../src/mc/page-collect.js';
 import {
   landerFor, landJob, MAX_REQUEUES, mayOffline, mergerPath, OFFLINE_BLOCK_AFTER, offlineBackoffMs, queueMerge, readMerger, releaseMerger,
   serve, startMerger, SUBJECT_POLL_MS, succeed,
@@ -96,6 +97,42 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(answer.report.reason, '2 tests red: a › b');
     assert.equal(m.rows[0].note, 'red,red');
     assert.ok(m.said.includes('memoro-cli #671: not merged — red: 2 tests red: a › b'), m.said.join('\n'));
+  });
+
+  it('a manual job with no goal pointer is refused when its only owner was dropped', async () => {
+    const calls = [];
+    const sets = [];
+    const dropped = { programme: 'prog', goal: 'gone', dir: '/goals/.archive/gone', stage: 'dropped', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], { goalsOf: () => [dropped], setGoal: (change) => sets.push(change), gh: (...args) => { calls.push(args); return { stdout: '{}' }; } });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.report.stopped_at, 'dropped');
+    assert.equal(m.rounds.length, 0, 'the gate round never starts');
+    assert.equal(calls.some(([args]) => args[1] === 'merge'), false, 'no direct GitHub merge');
+    assert.deepEqual(sets, [], 'a late callback cannot reactivate an archived dropped goal');
+  });
+
+  it('a shared PR stays eligible when a different unfinished goal carries it', async () => {
+    const dropped = { programme: 'prog', goal: 'gone', dir: '/goals/gone', stage: 'dropped', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const live = { programme: 'prog', goal: 'live', dir: '/goals/live', stage: 'build', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], { goalsOf: () => [dropped, live] });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.landed, true);
+    assert.equal(m.rounds.length, 1, 'shared ownership does not cancel merge work');
+  });
+
+  it('a drop during the gate is rechecked by the round immediately before merge', async () => {
+    const owner = { programme: 'prog', goal: 'gone', dir: '/goals/gone', stage: 'build', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], {
+      goalsOf: () => [owner],
+      mergeRound: async (options) => {
+        owner.stage = 'dropped'; // The drop occurs while the gate is in flight.
+        assert.equal(await options.beforeMerge(), false, 'the live ownership read observes the persisted drop');
+        return { ok: false, merged: false, stopped_at: 'dropped', reason: 'abandoned' };
+      },
+    });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.stopped_at, 'dropped');
   });
 
   // A merge round red on two tests in one file, the way `runMergeRound`
@@ -295,7 +332,44 @@ describe('an offline round is put back in line, not answered red', () => {
     assert.equal(entry.requeues, 0);
     assert.equal(entry.since, '2026-11-06T11:00:00Z');
     assert.equal(entry.not_before, '2026-11-06T12:01:00.000Z');
+    assert.deepEqual(entry.retry_diagnostic, {
+      category: 'offline', explanation: OFFLINE.reason,
+    });
     assert.equal(m.rounds.length, 1, 'no second round before the backoff has passed');
+  });
+
+  it('writeAnswer preserves a real red-under-load diagnostic through parse and merge collection', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: '2026-11-08T11:00:00Z' }]));
+    const now = () => new Date('2026-11-08T12:00:00Z');
+    const report = {
+      ok: false, merged: false, stopped_at: 'red-under-load',
+      reason: 'tests/x.test.js red in the round, green alone on base and candidate',
+    };
+    let written = false;
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, now, sweep: async () => {},
+      stopping: () => written,
+      land: async ([job], _lane, { onAnswer }) => {
+        const answer = { job, landed: false, report, requeued: true };
+        await onAnswer(answer);
+        written = true;
+        return [answer];
+      },
+    });
+    const [entry] = parseQueue(readFileSync(mergesPath(root), 'utf8'));
+    assert.equal(entry.not_before, '2026-11-08T12:15:00.000Z');
+    assert.equal(entry.requeues, 1);
+    assert.deepEqual(entry.retry_diagnostic, { category: 'red-under-load', explanation: report.reason });
+    const section = mergesSection({ queued: parseQueue(readFileSync(mergesPath(root), 'utf8')),
+      now: new Date('2026-11-08T12:00:00Z'), merger: null });
+    assert.deepEqual(section.repos[1].waiting[0].retry, {
+      eligible_at: '2026-11-08T12:15:00.000Z', remaining_seconds: 900,
+      category: 'red-under-load', explanation: report.reason, requeues: 1, offline: 0,
+      next: 'The merger will retry automatically when eligible; start time is not guaranteed.',
+      retry_now: 'mc merge memoro-cli 671',
+    });
+    assert.equal(section.repos[1].merger_stopped, false);
   });
 
   it('serve: a later reachable round lands once the backoff has passed', async () => {
@@ -1374,7 +1448,7 @@ describe('a session decision to merge a goal', () => {
     assert.equal(d.calls.some(({ args }) => args.includes('headRefOid')), false);
   });
 
-  it('blocks a content conflict on the first attempt and keeps repeated failures blocked', async () => {
+  it('repeats merge and mend twice, then the third failed merge waits on Martin', async () => {
     const d = decision({ conflict: true });
     await landJob(jobs[0], d.m.deps);
     const [answer] = await landJob(jobs[1], d.m.deps);
@@ -1383,8 +1457,20 @@ describe('a session decision to merge a goal', () => {
     assert.deepEqual(d.pulled, [90], 'a failed merge does not update the installation');
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
     assert.equal(d.goal().log.at(-1).done, 'merger answered red on #14804');
+    const mendReady = () => d.m.deps.setGoal({ stage: 'merge', status: 'ready',
+      entry: { tool: 'codex', role: 'mend', done: 'repair complete' } });
+    mendReady();
     await landJob(jobs[1], d.m.deps);
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    mendReady();
+    // The goal/log are the persisted input; no session counter is kept in memory.
+    await landJob(jobs[1], d.m.deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'Martin']);
+    assert.deepEqual(d.goal().log.filter((entry) => /^merger answered/u.test(entry.done ?? '')).map((entry) => entry.status),
+      ['blocked', 'blocked', 'Martin']);
+    d.m.deps.setGoal({ stage: 'merge', status: 'ready', entry: { tool: 'person', done: 'resume after decision' } });
+    await landJob(jobs[1], d.m.deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked'], 'an interactive resume starts a new failure cycle');
     assert.deepEqual(d.m.rounds, []);
   });
 
