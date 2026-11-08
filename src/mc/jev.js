@@ -54,7 +54,14 @@ export const INSTRUCTIONS = Object.freeze({
   settled: 'The goal, its contract, the programme\'s rulings or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
 });
 
-/** The ledger: one JSON line per `mc goal martin` call. */
+/** Goal-less sessions use the same questions, phrased for the work at hand. */
+export const WORK_INSTRUCTIONS = Object.freeze({
+  answer: 'Which option is the right way for this work to proceed, given the evidence and decided standards in the state',
+  fits: 'One of the options in `options` is a correct way for this work to proceed',
+  settled: 'The programme or technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
+});
+
+/** The ledger: one JSON line per `mc ask` or `mc goal martin` call. */
 export function ledgerPath(mcHomeDir) {
   return join(mcHomeDir, 'jev', 'decisions.jsonl');
 }
@@ -151,8 +158,9 @@ const size = (value) => JSON.stringify(value).length;
  * The state sent to jev, within `budget` characters serialized:
  * `{ state, text, trimmed }`, or `{ problems }` when the core alone — question,
  * options, evidence, goal — is over it. Trimmed in this order: the oldest log
- * entries, then the documents largest first (cut, ending `[truncated]`), then
- * the programme (its README, then its rulings). `trimmed` names each part cut.
+ * entries, then documents largest first (cut, ending `[truncated]`), then the
+ * programme (its README, then its rulings), then documents dropped whole,
+ * largest first if still needed. `trimmed` names each part cut or dropped.
  * Every string is redacted first, so the budget holds for what is sent.
  */
 export function buildState({ question, options, evidence, goal, programme, documents, log }, { secrets = [], budget = STATE_BUDGET } = {}) {
@@ -185,20 +193,25 @@ export function buildState({ question, options, evidence, goal, programme, docum
   for (const document of bySize) cut(document, 'text', `document ${document.path} truncated`);
   cut(state.programme, 'readme', 'programme README truncated');
   for (const ruling of state.programme.rulings) cut(ruling, 'text', `rulings ${ruling.path} truncated`);
+  for (const document of bySize) {
+    if (size(state) <= budget) break;
+    state.documents.splice(state.documents.indexOf(document), 1);
+    trimmed.push(`document ${document.path} dropped`);
+  }
   const text = JSON.stringify(state);
   if (text.length > budget) return { problems: [`the state is ${text.length} characters serialized after trimming, over jev's budget of ${budget}: shorten the question, the options or the evidence`] };
   return { state, text, trimmed };
 }
 
 /** The request body: the pinned model, the state, and the three questions. */
-export function requestBody(state, options) {
+export function requestBody(state, options, instructions = INSTRUCTIONS) {
   return {
     model: JEV_MODEL,
     state,
     questions: {
-      answer: { type: 'choice', instructions: INSTRUCTIONS.answer, criteria: { ...options } },
-      fits: { type: 'noul', instructions: INSTRUCTIONS.fits },
-      settled: { type: 'noul', instructions: INSTRUCTIONS.settled },
+      answer: { type: 'choice', instructions: instructions.answer, criteria: { ...options } },
+      fits: { type: 'noul', instructions: instructions.fits },
+      settled: { type: 'noul', instructions: instructions.settled },
     },
   };
 }
@@ -242,9 +255,16 @@ export async function askJev({ body, key, transport = defaultTransport, sleep = 
     const controller = new AbortController();
     let answer;
     try {
+      const timed = Promise.resolve(timer(TIMEOUT_MS)).then(() => TIMED_OUT);
       answer = await Promise.race([
-        Promise.resolve(transport(JEV_URL, { ...init(), signal: controller.signal })),
-        Promise.resolve(timer(TIMEOUT_MS)).then(() => TIMED_OUT),
+        Promise.resolve(transport(JEV_URL, { ...init(), signal: controller.signal })).then(async (response) => {
+          if (Number(response?.status) >= 200 && Number(response?.status) < 300) {
+            try { return { status: response.status, headers: response.headers, bodyText: await response.text() }; }
+            catch (error) { return { status: response.status, bodyError: oneLine(error?.message || error) }; }
+          }
+          return response;
+        }),
+        timed,
       ]);
     } catch (error) {
       return { unavailable: `network error (${oneLine(error?.message || error)})` };
@@ -252,9 +272,8 @@ export async function askJev({ body, key, transport = defaultTransport, sleep = 
     if (answer === TIMED_OUT) { controller.abort(); return { unavailable: `no answer in ${TIMEOUT_MS / 1000} seconds` }; }
     const status = Number(answer?.status);
     if (status >= 200 && status < 300) {
-      let text;
-      try { text = await answer.text(); } catch (error) { return { unavailable: `malformed response (${oneLine(error?.message || error)})` }; }
-      try { return { response: JSON.parse(text) }; } catch { return { unavailable: 'malformed response (not JSON)' }; }
+      if (answer.bodyError) return { unavailable: `malformed response (${answer.bodyError})` };
+      try { return { response: JSON.parse(answer.bodyText) }; } catch { return { unavailable: 'malformed response (not JSON)' }; }
     }
     const retryable = status === 429 || (status >= 500 && status < 600);
     if (!retryable || attempt > 1) return { unavailable: `HTTP ${status || 'no status'}${attempt > 1 ? ' after one retry' : ''}` };

@@ -8,11 +8,13 @@ A question for Martin is one thing: what you found, what it costs, what you
 would do. Never a question without its options. Never ask while the question
 is unclear or reading would settle it: then read.
 
-A goal's question goes through `mc goal martin`, and jev reads it first
-(docs/technical/mc-jev.md):
+Every question with options goes to jev first (docs/technical/mc-jev.md).
+For a goal's question, use `mc goal martin`; it asks jev itself, so do not also
+call `mc ask`. From any other session, call `mc ask` before asking Martin in
+chat:
 
 ```
-mc goal martin [<programme>/<goal>] --reason "<the question>" \
+mc ask [<programme>/<goal>] --reason "<the question>" \
   --option "<key>: <text>" --option "<key>: <text>" --recommend <key> \
   [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]… \
   [--reserved deploy|production-data|credentials|admin]
@@ -22,9 +24,14 @@ mc goal martin [<programme>/<goal>] --reason "<the question>" \
   each once. They are not a menu: `--recommend` is your proposal among them;
   evidence is what you found and tried. A malformed call is refused with an
   example: fix it, call again.
-- When mc prints `mc: jev answered <key> (…) — continue with: <text>`, the
-  status stays: continue with that answer as if Martin had given it.
-  Otherwise the goal is `Martin` with jev's reading; end as your role says.
+- For a goal question, when `mc goal martin` prints `mc: jev answered <key>
+  (…) — continue with: <text>`, continue with that answer as if Martin had given
+  it. Otherwise the goal is `Martin` with jev's reading; end as your role says.
+- In an interactive session, when `mc ask` answers, continue and name its answer
+  in your end-of-session account. Otherwise ask Martin in chat with the options,
+  your recommendation and jev's reading line. A build or review session may use
+  `mc ask` when the goal may settle its question; continue on an answer,
+  otherwise block as its role says.
 - A reserved act goes with `--reserved <act>`, never to jev. No user data or
   passwords in a question: key redaction is only the guard.
 

@@ -1,0 +1,1 @@
+`mc ask` asks jev for a decision reading from any session, with or without a goal, without changing goal state. Its documents are confined to the relevant repositories; the shared jev ledger records the verb and programme.
