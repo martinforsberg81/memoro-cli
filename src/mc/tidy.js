@@ -1267,7 +1267,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
 /**
  * (P) A registered goal checkout that may go: its goal cannot start a build or
  * review session now (`goalCannotStart`), or it is in `draft` (as before). A
- * blocked goal keeps its checkout: a mend session is what resolves it.
+ * blocked goal keeps its checkout while its obstacle awaits an owner.
  */
 export function planGoalWorktree(item, { now, pressure = false } = {}) {
   if (item.error) return { target: false, why: `error: ${item.error}` };
@@ -1275,7 +1275,7 @@ export function planGoalWorktree(item, { now, pressure = false } = {}) {
   const cannot = item.stage === 'draft' ? 'draft' : item.status === 'blocked' ? null : goalCannotStart(item);
   if (!cannot) {
     if (FINISHED.includes(item.stage)) return { target: false, why: `goal stage is ${item.stage}, which no session starts on` };
-    if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays for the mend session that resolves it' };
+    if (item.status === 'blocked') return { target: false, why: 'goal is blocked: its checkout stays while its obstacle awaits an owner' };
     return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not draft, and a session can start it` };
   }
   if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };

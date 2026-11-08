@@ -145,3 +145,60 @@ test('goal-bound mc ask ledger records only documents retained in the trimmed re
   assert.deepEqual(f.ledger[0].documents, state.documents.map((item) => item.path));
   assert.ok(f.ledger[0].trimmed.some((item) => item.endsWith('dropped')));
 });
+
+test('an unresolved goal-bound ask records safe evidence and sets Martin directly', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'unsettled');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json');
+  const log = join(goal, 'LOG.md');
+  writeFileSync(file, goalJson({ stage: 'build', title: 'Unsettled goal', goal: ['Ask once.'], repos: ['memoro-cli'] }));
+  writeFileSync(log, '');
+  const f = fixture({ response: reply(0.5, 'one'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/unsettled', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const argv = ['--reason', 'Which design?', '--option', 'one: keep current rule', '--option', 'two: change rule', '--recommend', 'one', '--evidence', 'The standard is silent.'];
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 1, f.err());
+  assert.equal(f.requests.length, 1, 'one consultation sequence');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
+  const logged = readFileSync(log, 'utf8');
+  for (const text of ['Which design?', 'Option one: keep current rule', 'Option two: change rule', 'Recommended: one', 'The standard is silent.', 'not answered', 'take it to Martin']) assert.ok(logged.includes(text), text);
+  assert.equal(f.ledger[0].goal, 'jev/unsettled');
+});
+
+test('a reserved goal-bound ask sets Martin without a jev request', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'reserved');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json');
+  writeFileSync(file, goalJson({ stage: 'build', title: 'Reserved goal', goal: ['Reserved act.'], repos: ['memoro-cli'] }));
+  writeFileSync(join(goal, 'LOG.md'), '');
+  const f = fixture({ env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/reserved', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  assert.equal(await run(['--reason', 'Deploy?', '--option', 'yes: deploy', '--option', 'no: do not', '--recommend', 'no', '--reserved', 'deploy'], { ...f.deps, read, write: writeFileSync }), 1);
+  assert.equal(f.requests.length, 0);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
+});
+
+test('goal-bound ask refuses role/goal mismatches and finished goals without mutation', async () => {
+  const mismatch = join(programmeHome, 'jev', 'goals', 'mismatch');
+  mkdirSync(mismatch, { recursive: true });
+  const mismatchFile = join(mismatch, 'GOAL.json');
+  writeFileSync(mismatchFile, goalJson({ stage: 'build', title: 'Mismatch', goal: ['Do not cross goals.'], repos: ['memoro-cli'] }));
+  const mismatchLog = join(mismatch, 'LOG.md');
+  writeFileSync(mismatchLog, '');
+  const f = fixture({ env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/other', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const argv = ['jev/mismatch', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 2);
+  assert.equal(f.requests.length, 0);
+  assert.equal(JSON.parse(readFileSync(mismatchFile, 'utf8')).status, 'ready');
+  assert.equal(readFileSync(mismatchLog, 'utf8'), '');
+
+  const finished = join(programmeHome, 'jev', 'goals', 'closed-ask');
+  mkdirSync(finished, { recursive: true });
+  const finishedFile = join(finished, 'GOAL.json');
+  writeFileSync(finishedFile, goalJson({ stage: 'done', title: 'Finished', goal: ['Stay closed.'], repos: ['memoro-cli'] }));
+  writeFileSync(join(finished, 'LOG.md'), '');
+  const closed = fixture();
+  assert.equal(await run(['jev/closed-ask', ...argv.slice(1)], { ...closed.deps, read, write: writeFileSync }), 1);
+  assert.equal(closed.requests.length, 0);
+  assert.equal(JSON.parse(readFileSync(finishedFile, 'utf8')).stage, 'done');
+});

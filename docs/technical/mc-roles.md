@@ -71,7 +71,7 @@ only, and finish and mend took its headless goal work (Martin, 2026-11-07).
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
-| `mend-session` | opus | `mend-session` | `mc run`, one headless session on a blocked goal in any stage, or on a red merge ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
+| `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
 | `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
@@ -212,10 +212,8 @@ programme planning, `MC_PLAN_REASON`); those are gone too.
 **The finish session** (`finish-session.md`) and **the mend session**
 (`mend-session.md`) each state one job, their inputs, what they may change,
 their exits and what they hand to whom. Finish takes `finish · ready` to
-`merge`, or sets `blocked` (an obstacle: mend's) or `Martin` (a change to
-the goal, contract or scope). Mend takes every blocked goal and every red
-merge, resolves the obstacle and retries the stage, and sets `Martin` for
-what only a person decides. Neither changes the goal's text: `refusedMove`
+`merge`, or resolves its own acceptance obstacle or sets `Martin` directly (a change to
+the goal, contract or scope). Mend exists only after a merge failure, repairs it and requeues; bounded failure waits on Martin. Neither changes the goal's text: `refusedMove`
 and the criterion verbs refuse them, as they refuse build and review.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
 frontmatter — and `tests/mc/roles.test.js` § *every canon role has a body* is

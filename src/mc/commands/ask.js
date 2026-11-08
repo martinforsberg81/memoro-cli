@@ -8,7 +8,7 @@ import { appendLedgerLine, askJev, buildState, documentPath, INSTRUCTIONS, judge
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
-import { appendEntry, goalDirIn, GOAL_FILE, parseGoal } from '../goals.js';
+import { appendEntry, goalDirIn, GOAL_FILE, parseGoal, setGoalState } from '../goals.js';
 import { knownRepositories } from '../work-area.js';
 import { jevContext } from './goal.js';
 import { only, scanArgs } from './flags.js';
@@ -54,6 +54,11 @@ export async function run(argv, deps = {}) {
     if (text === null) { stderr.write(clean(`mc: no goal ${named} — ${target.dir} has no ${GOAL_FILE}\n`)); return 1; }
     goal = parseGoal(text);
     if (goal.problems) { for (const problem of goal.problems) stderr.write(clean(`mc: ${named}: ${problem}\n`)); return 1; }
+    if (['done', 'dropped'].includes(goal.stage)) { stderr.write(clean(`mc: ${named} is ${goal.stage} — a finished goal cannot be changed by mc ask\n`)); return 1; }
+    if (env.MC_GOAL && env.MC_GOAL !== named) { stderr.write(clean(`mc: goal session ${env.MC_GOAL} cannot ask for ${named}\n`)); return 2; }
+    if (env.MC_ROLE && !['build-session:goal', 'review-session:goal', 'finish-session', 'mend-session', 'plan'].includes(env.MC_ROLE)) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot change a goal through mc ask\n`)); return 2; }
+    const roleStage = { 'build-session:goal': 'build', 'review-session:goal': 'review', 'finish-session': 'finish', 'mend-session': 'merge' }[env.MC_ROLE];
+    if (roleStage && goal.stage !== roleStage) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot ask for ${named} in ${goal.stage}\n`)); return 2; }
   }
   const programme = target?.programme || env.MC_PROGRAMME || programmeFromCwd(env.cwd || process.cwd(), home);
   if (call.reserved) {
@@ -64,6 +69,7 @@ export async function run(argv, deps = {}) {
       model: null, answers: null, outcome: 'reserved', reason: said }, secrets);
     try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
     catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
+    if (target) recordGoalAsk({ target, goal, status: 'Martin', entry: { at: now, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: said.replace(/^mc: /u, ''), comment: clean([`Martin is asked: ${call.question}`, ...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${option}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`, said].join('\n')), next: 'wait for Martin' }, read, write: deps.write || writeFileAtomic });
     stdout.write(`${clean(said)}\n`);
     return 1;
   }
@@ -102,16 +108,19 @@ export async function run(argv, deps = {}) {
     model: asked.model ?? null, answers: asked.answers ?? null, outcome: answered ? 'answered' : (asked.outcome || 'unavailable'), reason: said.replace(/^mc: /u, '') }, secrets);
   try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
   catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
-  if (answered && target) {
-    const logPath = join(target.dir, 'LOG.md');
-    const old = read(logPath) || '';
-    const lines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${String(option).replace(/\s*\n\s*/gu, ' ')}`), `Recommended: ${call.recommend}`];
-    const comment = clean([`jev was asked: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}`, ...lines, said].join('\n'));
-    const entry = { at: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: clean(`jev answered ${asked.reading}`), comment, next: clean(`continue with: ${call.options[asked.answers.answer.choice]}`), stage: goal.stage, status: goal.status };
-    appendEntry({ dir: target.dir, entry, read, write: deps.write || writeFileAtomic });
+  if (target) {
+    const lines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${String(option).replace(/\s*\n\s*/gu, ' ')}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`];
+    const comment = clean([`${answered ? 'jev was asked' : 'Martin is asked'}: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}`, ...lines, said].join('\n'));
+    const entry = { at: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: answered ? clean(`jev answered ${asked.reading}`) : clean(`Martin is asked: ${asked.reading || asked.unavailable}`), comment, next: answered ? clean(`continue with: ${call.options[asked.answers.answer.choice]}`) : 'wait for Martin', stage: goal.stage, status: goal.status };
+    recordGoalAsk({ target, goal, status: answered ? goal.status : 'Martin', entry, read, write: deps.write || writeFileAtomic });
   }
   stdout.write(`${clean(said)}\n`);
   return answered ? 0 : 1;
+}
+
+function recordGoalAsk({ target, goal, status, entry, read, write }) {
+  if (status === 'Martin') setGoalState({ dir: target.dir, status, entry, read, write });
+  else appendEntry({ dir: target.dir, entry: { ...entry, stage: goal.stage, status: goal.status }, read, write });
 }
 
 function noGoalContext(programme, extra, ctx) {

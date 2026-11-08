@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- Planning now owns a coherent programme README/design and complete goal
+  briefs; every finished brief moves directly to `build` in its assigned
+  phase. Build, review and finish resolve in-scope acceptance obstacles or
+  ask directly; only merge failures start mend. Goal-bound `mc ask` records a
+  single jev trace, continues on an answer, and otherwise puts the goal
+  directly on Martin with sanitized evidence.
 - `mc gate` and the merge round take their test timeout from the tree they
   measure: the worktree's or the final candidate's own `.mc/test.json`, not
   the bare common directory's (absent), so Memoro's declared 1000 ms is no

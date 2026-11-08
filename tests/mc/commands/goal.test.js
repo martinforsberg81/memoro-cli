@@ -456,7 +456,7 @@ test('a build session moves build to review or sets blocked, and nothing else', 
     ['build', ['drop', '--reason', 'x'], /only plan or a person drops a goal/u],
     ['build', ['stage', 'merge'], /a build session moves a goal only from build to review, not build → merge/u],
     ['draft', ['stage', 'build'], /a build session moves a goal only from build to review, not draft → build/u],
-    ['build', ['ready'], /a build session does not set a goal ready — a mend session or a person does/u],
+    ['build', ['ready'], /a build session does not set a goal ready — a person does/u],
   ]) {
     const f = fixture({ files: inStage(from), env: BUILD });
     assert.equal(await run(argv, f.deps), 2, argv.join(' '));
@@ -633,7 +633,7 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
   assert.equal(stateOf(f), 'finish · ready');
   assert.equal(f.queued.length, 0, 'nothing queued for a finish');
   for (const [from, argv, said] of [
-    ['review', ['ready', '--reason', 'x'], /a review sets no status — it ends with mc goal stage merge \(OK to land\) or finish/u],
+    ['review', ['ready', '--reason', 'x'], /a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge \(OK to land\) or finish/u],
     ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
     ['build', ['stage', 'merge'], /a review moves only a goal in review, and this one is build/u],
   ]) {
@@ -1154,9 +1154,10 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
   assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 0, f.err());
   assert.equal(stateOf(f), 'merge · Martin');
   for (const role of ['build-session:goal', 'review-session:goal']) {
-    const rejected = fixture({ files: inStage('build'), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
-    assert.equal(await run(martinCall('question'), rejected.deps), 2);
-    assert.match(rejected.err(), /only plan, finish, mend or a person sets Martin/u);
+    const stage = role === 'review-session:goal' ? 'review' : 'build';
+    const allowed = fixture({ files: inStage(stage), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
+    assert.equal(await run(martinCall('question'), allowed.deps), 0, role);
+    assert.equal(stateOf(allowed), `${stage} · Martin`, 'the valid unresolved goal question escalates directly');
   }
 });
 
@@ -1184,7 +1185,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
     ['finish', ['drop', '--reason', 'x'], /a finish session ends in merge, not dropped/u],
     ['finish', ['stage', 'review'], /a session does not move a goal back — finish → review/u],
     ['build', ['stage', 'merge'], /a finish session moves only a goal in finish, and this one is build/u],
-    ['finish', ['ready'], /a finish session sets blocked \(a mend session takes it\) or Martin, not ready/u],
+    ['finish', ['ready'], /a finish session sets blocked or Martin, not ready/u],
     ['finish', ['criterion', 'set', '1', '--check', 'y'], /a finish session does not rewrite a criterion/u],
     ['finish', ['criterion', 'remove', '1', '--reason', 'x'], /a finish session does not remove a criterion/u],
   ]) {
@@ -1195,13 +1196,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
   }
 });
 
-test('a mend session sets ready, blocked or Martin and requeues merge, and is refused every stage move and the goal\'s text', async () => {
-  for (const [from, status, argv] of [['build', 'ready', ['ready', '--reason', 'fixture repaired']], ['review', 'Martin', martinCall('the goal names a file that no longer exists; recommend rewriting criterion 2')], ['finish', 'blocked', ['blocked', '--reason', 'still red']]]) {
-    const f = fixture({ files: inStage(from, 'blocked'), env: MEND });
-    assert.equal(await run(argv, f.deps), 0, f.err());
-    assert.equal(stateOf(f), `${from} · ${status}`);
-    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).role, 'mend');
-  }
+test('a mend session repairs and requeues only a merge failure, and is refused every other stage and the goal\'s text', async () => {
   const red = inStage('merge', 'blocked');
   red[`${DIR}/GOAL.json`] = withGoal(red[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31'] });
   const requeued = reviewed({ files: red, env: MEND });
@@ -1209,9 +1204,12 @@ test('a mend session sets ready, blocked or Martin and requeues merge, and is re
   assert.equal(stateOf(requeued), 'merge · ready', 'the requeue is no stage move');
   assert.deepEqual(requeued.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]], 'every registered pull request is queued again');
   for (const [from, argv, said] of [
-    ['build', ['stage', 'review'], /a mend session moves no stage \(build → review\)/u],
-    ['finish', ['stage', 'merge'], /a mend session moves no stage \(finish → merge\)/u],
-    ['build', ['drop', '--reason', 'x'], /a mend session moves no stage \(build → dropped\)/u],
+    ['build', ['ready', '--reason', 'fixture repaired'], /mend session is only for merge/u],
+    ['review', ['martin', 'mc/plain', '--reason', 'the contract forbids the fix', '--option', 'widen: widen it', '--option', 'keep: keep it', '--recommend', 'widen'], /mend session is only for merge/u],
+    ['finish', ['blocked', '--reason', 'still red'], /mend session is only for merge/u],
+    ['build', ['stage', 'review'], /a mend session is only for merge failures/u],
+    ['finish', ['stage', 'merge'], /a mend session is only for merge failures/u],
+    ['build', ['drop', '--reason', 'x'], /a mend session is only for merge failures/u],
     ['merge', ['stage', 'build'], /a session does not move a goal back — merge → build/u],
     ['build', ['criterion', 'set', '1', '--check', 'y'], /a mend session does not rewrite a criterion/u],
   ]) {
@@ -1401,11 +1399,11 @@ test('a refused call redacts a key-source value embedded in its option', async (
   assert.doesNotMatch(f.err(), new RegExp(KEYS.TYPESAFE_API_KEY, 'u'));
 });
 
-test('a build or review session is still refused Martin before jev is asked', async () => {
+test('a build or review session may ask Martin directly after one jev consultation', async () => {
   for (const env of [BUILD, REVIEW]) {
-    const f = fixture({ files: inStage('build'), env, keys: KEYS, replies: [jevSays()] });
-    assert.equal(await run(ASK, f.deps), 2);
-    assert.match(f.err(), /only plan, finish, mend or a person sets Martin/u);
-    assert.deepEqual([f.requests.length, f.ledger().length, f.store[`${DIR}/LOG.md`]], [0, 0, LOG_TEXT]);
+    const f = fixture({ files: inStage(env === REVIEW ? 'review' : 'build'), env, keys: KEYS, replies: [jevSays()] });
+    assert.equal(await run(ASK, f.deps), 0);
+    assert.equal(stateOf(f), `${env === REVIEW ? 'review' : 'build'} · ready`);
+    assert.deepEqual([f.requests.length, f.ledger().length], [1, 1]);
   }
 });

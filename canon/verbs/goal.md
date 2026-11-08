@@ -35,12 +35,10 @@ with ✓/✗ and its check, and each worktree's state.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `draft → build
   → review → finish → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, each stage with one owner: the
   interactive plan session writes it in `draft` and moves it to `build`; a build
-  session moves it to `review` or sets `blocked`; a review session moves it to
+  session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
-  `done`. `blocked`, in any stage, wakes a mend session, which resolves the
-  obstacle and retries the stage (`mc goal ready`; in `merge`, `mc goal stage
-  merge` requeues). `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
+  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and requeues merge. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
   first: `mc goal martin --reason "<the question>" --option "<key>: <text>"
   --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
   <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys
@@ -67,10 +65,7 @@ with ✓/✗ and its check, and each worktree's state.
   `blocked` or moving the goal back to hand the work to the runner does not
   resolve it. A goal in `Martin` carries a question only a person answers:
   answer it by amending the goal with the verbs, then set it ready.
-  In a headless session, follow the assigned role: a build or review that
-  cannot run its stage sets `blocked` for a mend session; a finish or mend
-  that needs a change to the goal, contract or product scope, or a person's
-  act, calls `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
+  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. Calls use `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session a backward move, naming both stages

@@ -90,11 +90,13 @@ Nothing else: no comment on the pull request, no long LOG.md entry, no
 `--next`, no status. You never move the goal anywhere but `merge` or
 `finish`.
 
-If the review itself cannot run — a check you cannot execute, a worktree you
-cannot read — use `mc goal blocked --reason "…"` naming the obstacle, so a
-mend session resolves it and sets the goal ready for a review again. This is
-distinct from a completed review finding work not OK, which goes to finish
-with REVIEW.md.
+If the review itself cannot continue — an unavailable check, missing worktree or
+other unrecoverable in-role obstacle — wait directly on Martin, retaining the
+evidence. The first review crash retry remains bounded; the second waits on
+Martin. A dirty-review refusal also waits directly on Martin; do not reset the
+tree or launch pre-merge mend. For an actual undecided design choice or
+reserved act, use `mc ask`; continue on a jev answer. Apply technical standards
+and programme design to ordinary implementation/review details.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what

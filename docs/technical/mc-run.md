@@ -69,9 +69,8 @@ order without a model call:
    runner's own environment. Convert older goal status/dependency records
    before judging them. An unreadable goal is not runnable.
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
-   every `blocked` goal, or `merge · ready` after its first red or moved head
-   and once it is no longer in the merger's line. A blocked goal and a red
-   merge wake a mend session; `finish · ready` a finish session. `Martin`
+   `merge · blocked`, or `merge · ready` after its first red or moved head
+   and once it is no longer in the merger's line. Only a merge failure wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
    waits for the person. `draft · ready`, `done` and `dropped` do not start a
    goal session; the runner never starts a plan session.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
@@ -79,8 +78,7 @@ order without a model call:
 4. Exclude goals already claimed or named by a live current file, and goals
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take the mend of a blocked goal first, then finish and the mend of a red
-   merge, then review, then build. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend first, then finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -156,14 +154,11 @@ role tells the session to read LOG.md first.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
   never builds: `mc goal stage merge` sends all registered PRs to merge, or it
   writes REVIEW.md and moves to finish. A review that dies still in review
-  is retried once, then blocked if that happens again.
+  is retried once, then waits directly on Martin if it dies again.
 - A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
   review found, gates, publishes and `mc goal stage merge`. One that ends
-  with the goal still `finish · ready` is set `finish · blocked`.
-- A mend uses `mend-session` on every blocked goal and every red merge: it
-  resolves the obstacle and retries the stage (`mc goal ready`; in merge
-  `mc goal stage merge`). A mend left blocked, or three in one stage, set
-  `Martin`. Both run in the goal's worktree on the goal's class, like a
+  with the goal still `finish · ready` is set `finish · Martin`.
+- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. Bounded merge recovery remains. Both run in the goal's worktree on the goal's class, like a
   build, and write the merge handoff when they queue. See
   [finish and mend](mc-goals.md#finish-and-mend). The runner starts no plan
   session and no programme planning turn (Martin, 2026-11-07).

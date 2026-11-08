@@ -41,10 +41,13 @@ moves forward. You do one of two things to it, nothing else:
 
 - **Done with the task:** when every criterion is met and the PR carries it
   all, add `--stage review`. mc refuses it while one is not met, naming it.
-- **Cannot solve it:** add `--status blocked` and put the obstacle in
-  `--comment`: what stopped you, what you tried, what would clear it. A mend
-  session reads it, resolves the obstacle and sets the goal ready again; a
-  question about the goal itself reaches Martin through it.
+- **Acceptance obstacle:** investigate and repair it within the goal and its
+  commission. If it cannot be resolved in this role, set Martin directly with
+  the obstacle/evidence; do not use pre-merge mend.
+- **Unresolved choice:** read relevant technical standards and programme design;
+  ordinary details are settled there. Ask directly through `mc ask` only for an
+  actual design choice or reserved act; continue on a jev answer, otherwise wait
+  on Martin. Follow asking-martin for evidence and proposed design wording.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 

@@ -107,7 +107,7 @@ Decision logs record requested and identified role/programme, evidence source,
 conversation id and resume/exclude/fresh/refusal, without copying transcript
 or prompt content. Session ownership and headless restrictions are unchanged.
 
-The plan session has full freedom toward the programme's aim: investigate,
+The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; every finished brief moves to build in its assigned phase. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. It is interactive only: Martin is
 at the terminal. The runner never starts a plan session (Martin, 2026-11-07);
