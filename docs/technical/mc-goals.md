@@ -249,8 +249,8 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: stage
   `dropped`, never `done`; it is finished as a `done` goal is, so it holds no
-  later phase back. The reason is required. Only a person or a plan session
-  drops a goal.
+  later phase back. The reason is required. Only a person, the plan session or
+  interactive Martin drops a goal.
 - **`pr <p>/<g> <repo>#<n>…`** — the pull requests named carry the goal: each
   is added to `prs` once, with an entry `Done: carries <repo>#<n>`. For work
   published before `mc publish` wrote `prs`, or from where it could not tell

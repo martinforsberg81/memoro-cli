@@ -48,7 +48,9 @@ with ✓/✗ and its check, and each worktree's state.
   <option text>`, the status stays, and the session continues with that answer;
   otherwise the goal is `Martin` with jev's reading in the entry. A reserved
   act (`--reserved deploy|production-data|credentials|admin`) and a person's
-  call never go to jev. `mc goal log --status Martin` is refused: use
+  call never go to jev. Interactive Martin may use `mc ask` for a newly
+  synthesized question after investigating the standards; do not repeat jev for
+  the same recorded live question. `mc goal log --status Martin` is refused: use
   `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
@@ -63,8 +65,10 @@ with ✓/✗ and its check, and each worktree's state.
   within the current stage, including implementation, checks and publication
   when needed; then follow that stage's normal transition. Merely clearing
   `blocked` or moving the goal back to hand the work to the runner does not
-  resolve it. A goal in `Martin` carries a question only a person answers:
-  answer it by amending the goal with the verbs, then set it ready.
+  resolve it. A goal in `Martin` carries the source question for Martin's
+  interactive decision desk. That role investigates it against technical and
+  programme design, resolves settled details, records actual decisions
+  canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
   In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
@@ -80,4 +84,4 @@ with ✓/✗ and its check, and each worktree's state.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
-  --reason "…"` lets one go without landing; plan's or a person's.
+  --reason "…"` lets one go without landing; plan, interactive Martin or a person's.

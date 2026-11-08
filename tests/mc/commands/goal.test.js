@@ -717,8 +717,15 @@ test('headless goal sessions cannot rewrite the brief or acceptance criteria; in
     }
   }
   const martin = fixture({ files: inStage('build'), env: { MC_ROLE: 'martin', MC_TOOL: 'claude' } });
+  assert.equal(await run(['set', 'mc/plain', 'title', '--text', 'Martin revised title'], martin.deps), 0, martin.err());
+  assert.equal(await run(['set', 'mc/plain', 'contract', '--text', 'Martin revised contract'], martin.deps), 0, martin.err());
   assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'new outcome', '--check', 'a test'], martin.deps), 0, martin.err());
-  assert.equal(parseGoal(martin.store[`${DIR}/GOAL.json`]).success_criteria.length, 2);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--criterion', 'rewritten outcome', '--check', 'revised check'], martin.deps), 0, martin.err());
+  const rewritten = parseGoal(martin.store[`${DIR}/GOAL.json`]);
+  assert.equal(rewritten.title, 'Martin revised title');
+  assert.deepEqual(rewritten.contract, ['Martin revised contract']);
+  assert.equal(rewritten.success_criteria.length, 2);
+  assert.deepEqual(rewritten.success_criteria[0], { criterion: 'rewritten outcome', check: 'revised check', met: false });
   assert.equal(parseLog(martin.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
 });
 
