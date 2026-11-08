@@ -37,14 +37,11 @@
  * line.
  */
 import { isNetworkFailure } from './network-failure.js';
-import { rmSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { runShell } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { gateRoot } from './repo-gate.js';
+import { existingCandidate } from './existing-candidate.js';
 import { regenerateDerived } from './repo-derived.js';
-import { repoFileSlug } from './repo-snapshot.js';
 
 /**
  * One branch, freshened for its landing inside a batch (A3's found limit).
@@ -73,21 +70,32 @@ import { repoFileSlug } from './repo-snapshot.js';
  * branch has to be given the same commit before its squash.
  */
 export async function freshenBranchForLanding({
-  repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {},
+  repoPath, branch, base, declaration = null, env = process.env, git = null, shell = null, say = () => {}, candidateCwds = undefined,
 } = {}) {
   const askGit = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askShell = shell || ((command, options = {}) => runShell(command, { cwd: options.cwd, env }));
-  const workspace = join(gateRoot(env), `${repoFileSlug(repoPath)}-freshen`);
   // A fetch that fails read nothing: the network's, not the branch's (`offline`).
   const fetched = await askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
   if (fetched && Number.isInteger(fetched.status) && fetched.status !== 0) {
     return { ok: false, offline: true, reason: `git fetch origin --prune failed before freshening ${branch} (${trim(fetched.stderr) || `exit ${fetched.status}`})` };
   }
-  rmSync(workspace, { recursive: true, force: true });
-  await askGit(['worktree', 'prune'], { cwd: repoPath });
-  const added = await askGit(['worktree', 'add', '--detach', workspace, `origin/${branch}`], { cwd: repoPath });
-  if (added.status !== 0) return { ok: false, reason: trim(added.stderr) || `could not check out origin/${branch}` };
+  const head = await askGit(['rev-parse', `origin/${branch}`], { cwd: repoPath });
+  if (head.status !== 0) return { ok: false, reason: trim(head.stderr) || `could not read origin/${branch}` };
+  const borrowed = await existingCandidate({ repoPath, branch, sha: trim(head.stdout), git: askGit, cwds: candidateCwds });
+  if (!borrowed.ok) return borrowed;
+  const workspace = borrowed.dir;
+  let result;
   try {
+    result = await freshen();
+  } finally {
+    const restored = await borrowed.restore({ advanceTo: result?.ok ? result.sha : null });
+    if (!restored.ok) result = { ok: false, reason: restored.reason };
+  }
+  return result;
+
+  async function freshen() {
+    const ready = await borrowed.start();
+    if (!ready.ok) return ready;
     const merged = await askGit(['merge', '--no-edit', `origin/${base}`], { cwd: workspace });
     if (merged.status !== 0) {
       const conflicted = trim((await askGit(['diff', '--name-only', '--diff-filter=U'], { cwd: workspace })).stdout).split('\n').filter(Boolean);
@@ -119,9 +127,6 @@ export async function freshenBranchForLanding({
     const at = sha.slice(0, 7);
     say(`freshened ${branch} for its landing: ${base} merged in at ${at}`);
     return { ok: true, at, sha };
-  } finally {
-    rmSync(workspace, { recursive: true, force: true });
-    await askGit(['worktree', 'prune'], { cwd: repoPath });
   }
 }
 

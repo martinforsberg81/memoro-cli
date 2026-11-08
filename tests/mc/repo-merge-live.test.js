@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, watch, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,15 +110,14 @@ function build({ branchBreaksSuite = false, standingRed = false, hangingBranch =
     "import { test } from 'node:test';",
     "import assert from 'node:assert/strict';",
     ...(hangingBranch ? ["import { writeFileSync } from 'node:fs';"] : []),
-    `test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`,
-    ...(hangingBranch ? ["test('never settles', async () => { writeFileSync(process.env.MC_TEST_HANG_FLAG, ''); await new Promise(() => {}); });"] : []),
+    ...(!hangingBranch ? [`test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`] : []),
+    ...(hangingBranch ? ["test('never settles', async () => { writeFileSync(process.env.MC_TEST_HANG_FLAG, ''); await new Promise(() => { setInterval(() => {}, 1000); }); });"] : []),
     '',
   ].join('\n'));
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'Add the change']);
   git(repo, ['push', '-q', 'origin', 'feature']);
   const head = git(repo, ['rev-parse', 'HEAD']).trim();
-  git(repo, ['checkout', '-q', 'main']);
 
   writeFileSync(join(root, 'pr.json'), JSON.stringify({
     number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: head, state: 'OPEN', title: 'the change',
@@ -198,7 +197,7 @@ describe('the merge round, with modelled git', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
       assert.match(report.reason, /ceiling.*tests\/b\.test\.js/u);
-      assert.deepEqual(report.red_files, ['tests/b.test.js']);
+      assert.deepEqual(report.red_files, ['tests/b.test.js'], JSON.stringify(report));
       assert.deepEqual(report.gate.red_files, ['tests/b.test.js'], 'the gate verdict handed to the round log names the file');
       assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the next job can claim the released lane');
       assert.equal(fx.mainAt(), git(fx.repo, ['rev-parse', 'refs/remotes/origin/main']).trim(), 'a red round does not land');
@@ -384,12 +383,15 @@ describe('what a repository declares, the round does', () => {
     try {
       // A prepare that leaves a trace, so "did it run, and where" is a question
       // about the file system rather than about a mock.
-      declare(fx, { prepare: 'touch PREPARED', extra_gates: [], merge_log: null });
+      fx.env.MC_TEST_PREPARED = join(fx.root, 'prepared-in');
+      const prepare = 'pwd > "$MC_TEST_PREPARED"';
+      declare(fx, { prepare, extra_gates: [], merge_log: null });
       const report = await runMergeRound({
         repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
       });
       assert.equal(report.ok, true, report.reason || '');
-      assert.equal(report.gate.declaration.prepare, 'touch PREPARED');
+      assert.equal(report.gate.declaration.prepare, prepare);
+      assert.equal(readFileSync(fx.env.MC_TEST_PREPARED, 'utf8').trim(), realpathSync(fx.repo));
       assert.equal(report.gate.declaration.source, 'declared');
     } finally { fx.cleanup(); }
   });
@@ -532,7 +534,6 @@ describe('the pull request\'s own tests, for real', () => {
     git(fx.repo, ['commit', '-q', '-m', 'Add the proof']);
     git(fx.repo, ['push', '-q', 'origin', 'feature']);
     const head = git(fx.repo, ['rev-parse', 'HEAD']).trim();
-    git(fx.repo, ['checkout', '-q', 'main']);
     const pr = JSON.parse(readFileSync(join(fx.root, 'pr.json'), 'utf8'));
     writeFileSync(join(fx.root, 'pr.json'), JSON.stringify({ ...pr, headRefOid: head }));
   };
