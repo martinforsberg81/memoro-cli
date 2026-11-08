@@ -48,12 +48,18 @@ solve the study selector's test-selection ceiling.
 
 ## Settling a red
 
-A command gate that exits nonzero in the round runs once more alone after both
-halves have finished. A pass is named `command gates green alone` in the
-SETTLED line and is a passed member of a receipt whose outcome is not green.
-A command cut by timeout, killed, unavailable or aborted is not rerun.
-`mc gate --command <id>` runs one command gate named by this change's selection
-alone, reusing nothing; its red is counted at once.
+A command gate that exits nonzero in the round is not called red at once. Its
+round line says `red in the round` and no `command <id>: fail` line is written,
+so a green verdict never names it failed. Once both halves have finished, it
+runs once more alone, with the same invocation, environment and timeout, and
+nothing else of the gate beside it. A pass there is `command gates green alone`
+in the SETTLED line and a passed member of the receipt; the receipt is not
+green, because its round had a failure. A command still red alone is red after
+its second run, and the verdict names it `command <id>: fail`. A command cut by
+its timeout, killed by a signal, unavailable at its declared exit, whose shell
+threw, or whose gate was aborted is not run again, and stays red as it was. No
+command runs at the base. `mc gate --command <id>` runs one command gate of this
+change's selection alone, reusing nothing, and a red there is counted at once.
 
 A session's gate shares the machine with the runner's sessions and the merger,
 and a test red on main is red in every branch's gate. A red whose only cause is

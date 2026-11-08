@@ -194,7 +194,8 @@ export async function runSessionGate(request, {
     }));
     return { ...result, members: { files, commands } };
   };
-  if (!request.fresh) {
+  // A `--command` request reuses nothing, as `--fresh` does: it is a reviewer's own measurement.
+  if (!request.fresh && !request.commands) {
     try { prior = findResumable({ root: request.gate?.root, measurement: request.measurement, flags: request.flags || [], pattern: request.pattern ?? null }); }
     catch { /* nothing to resume from: the whole selection runs */ }
   }
@@ -365,7 +366,7 @@ async function executeSessionGate(request, {
   // Every passed test over the slow-test indicator (`slowTests`): named in the verdict, never its red.
   const reusedSlow = Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || []).map((test) => ({ ...test, file })));
   let slow = slowTests(reusedSlow);
-  const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
+  const coverage = { kind: request.files || request.commands ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
     flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null };
   const snapshot = () => {
     const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
@@ -434,10 +435,13 @@ async function executeSessionGate(request, {
       progress();
     }
   };
+  // The commands cut by their timeout, killed by a signal, or whose shell threw: red, and not run again.
+  const cut = new Set();
   const runCommands = async () => {
     for (let index = 0; index < selectedCommands.length; index++) {
       const command = selectedCommands[index];
       const evidence = commands[index];
+      const id = command.id || command.packageScript;
       if (evidence.state === 'reused') continue;
       if (signal?.aborted) { code = 1; break; }
       evidence.state = 'running';
@@ -450,17 +454,20 @@ async function executeSessionGate(request, {
         write(`${result.stdout || ''}${result.stderr || ''}`);
         const unavailable = !result.error && !result.signal && command.unavailableExitCode != null && result.status === command.unavailableExitCode;
         const ok = !result.error && !result.signal && result.status === 0;
+        // Cut by its timeout, killed or unable to start: it stays red and is never run again (`commandsAlone`).
+        if (result.error || result.signal) cut.add(index);
         Object.assign(evidence, { exit: result.status ?? null, ok, state: unavailable ? 'unavailable' : 'completed',
           ...(unavailable ? { unavailable: true } : {}), ...(result.error ? { error: result.error.code || result.error.message } : {}) });
-        write(`command ${command.id || command.packageScript}: ${unavailable ? `unavailable (exit ${result.status})` : ok ? 'pass' : 'fail'}\n`);
-        if (!ok && !unavailable) {
-          if (request.commands || result.error || result.signal) { code = 1; write(`command ${command.id || command.packageScript}: fail\n`); }
-          else write(`command ${command.id || command.packageScript}: red in the round (exit ${result.status}) — runs alone once when the round is over\n`);
-        }
+        if (unavailable) write(`command ${id}: unavailable (exit ${result.status})\n`);
+        else if (ok) write(`command ${id}: pass\n`);
+        // A red in the round is no failure line yet: `summarizeGate` reads `command <id>: fail` as one.
+        else if (request.commands || result.error || result.signal) { code = 1; write(`command ${id}: fail\n`); }
+        else write(`command ${id}: red in the round (exit ${result.status}) — runs alone once when the round is over\n`);
       } catch (error) {
         Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
+        cut.add(index);
         code = 1;
-        write(`command ${command.id || command.packageScript}: fail (${error.message})\n`);
+        write(`command ${id}: fail (${error.message})\n`);
       } finally {
         closeSpan(clock, spans.commands[index]);
         onPhase(phase, false);
@@ -469,22 +476,30 @@ async function executeSessionGate(request, {
     }
   };
   await Promise.all([runTests(), runCommands()]);
+  // Each ordinary red command runs once more alone, one at a time, with nothing else of this gate
+  // beside it. `--command` has no round beside it, so its red is red at once.
   const commandsAlone = [];
   if (!request.commands && !signal?.aborted) {
     for (let index = 0; index < selectedCommands.length; index++) {
       const command = selectedCommands[index];
       const evidence = commands[index];
-      if (evidence.state !== 'completed' || evidence.ok || evidence.unavailable || evidence.error) continue;
+      const id = command.id || command.packageScript;
+      if (evidence.state !== 'completed' || evidence.ok || evidence.unavailable || evidence.error || cut.has(index)) continue;
       if (signal?.aborted) { code = 1; break; }
+      evidence.state = 'running';
+      progress();
       try {
         const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
         write(`${result.stdout || ''}${result.stderr || ''}`);
         const ok = !result.error && !result.signal && result.status === 0;
         Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(ok ? { settled: 'alone' } : {}) });
-        const id = command.id || command.packageScript;
         if (ok) { commandsAlone.push(id); write(`command ${id}: pass (green alone — red in the round under load)\n`); }
         else { code = 1; write(`command ${id}: fail (red alone too, exit ${result.status})\n`); }
-      } catch (error) { evidence.error = error.message; code = 1; write(`command ${command.id || command.packageScript}: fail (${error.message})\n`); }
+      } catch (error) {
+        Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
+        code = 1;
+        write(`command ${id}: fail (${error.message})\n`);
+      }
       progress();
     }
   }

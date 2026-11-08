@@ -117,4 +117,8 @@ it('the verdict names what was settled, and nothing when nothing was', () => {
     'SETTLED — green alone (red in the round under load): a.test.js; red on main fffffff too, untouched by this change: b.test.js c.test.js');
   assert.equal(settledLine({}), null);
   assert.equal(settledLine({ settled: { alone: [], main: [], red: ['a.test.js'] } }), null);
+  assert.equal(settledLine({ settled: { alone: [], main: [], commands_alone: ['lint', 'test:db'], red: [] } }),
+    'SETTLED — command gates green alone (red in the round under load): lint test:db');
+  assert.equal(settledLine({ settled: { alone: ['a.test.js'], main: [], commands_alone: ['lint'], red: [] } }),
+    'SETTLED — green alone (red in the round under load): a.test.js; command gates green alone (red in the round under load): lint');
 });
