@@ -1,0 +1,4 @@
+section: Changed
+
+- **The plan session writes standard follow-ups without asking, and a proposal that reports an incident carries its source.**
+  The first rule is in `canon/roles/plan-session.md` (the list "Yours without asking") and `docs/technical/mc-plan.md` § Writing goals: a review or build follow-up whose investigation is complete, and whose change applies a decided standard or repairs a defect against one, is written as a goal without asking Martin; what is asked is what `canon/tasks/asking-martin.md` names. The second is in `canon/tasks/proposals.md`: a proposal that reports an incident from an app review or a user's report carries the task id, or the timestamp and build, of the original, and one that carries neither is closed at the next plan pass. Plan sessions could not act on "write this goal now" questions that jev left unsettled (Martin, 2026-11-08).

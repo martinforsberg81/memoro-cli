@@ -28,3 +28,7 @@ name.
   again from less than you had.
 - Never touch a proposal already waiting unless your task is to consume it.
   The same rule holds for every writer: build, review, plan, helper and brief.
+- A proposal that reports an incident from an app review or a user's report
+  carries the task id, or the timestamp and build, of the original. A proposal
+  that carries neither is closed at the next plan pass with a one-line
+  `Utfall`, and is reopened only by a report that carries them.

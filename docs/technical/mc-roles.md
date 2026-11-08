@@ -207,7 +207,7 @@ is what the runner builds, a means toward the aim. `refusedMove`
 role was `plan.md`, which forbade a headless plan session code, commits, a
 publish and `review`/`done`, and listed three allowed ends; both are gone.
 Until 2026-11-07 the same file had headless sections (`### finish`, `### blocked`,
-programme planning, `MC_PLAN_REASON`); those are gone too.
+programme planning, `MC_PLAN_REASON`); those are gone too. What it writes unasked is in [mc-plan.md](mc-plan.md) § *Writing goals*.
 
 **The finish session** (`finish-session.md`) and **the mend session**
 (`mend-session.md`) each state one job, their inputs, what they may change,
