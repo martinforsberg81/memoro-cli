@@ -588,8 +588,8 @@ const runnerEntry = (at) => `## ${at} · runner · build · ready\n\nComment: se
 function goalFixture(goals, options = {}) {
   const f = fixture({ capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call), ...options });
   f.answer = okSession();
-  for (const [name, { stage = 'build', status = 'ready', legacy: old = null, log = '', repos = 'memoro', worktree = true, phase = 1, after = null }] of Object.entries(goals)) {
-    const text = goalJson({ stage, status, phase, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [] });
+  for (const [name, { stage = 'build', status = 'ready', legacy: old = null, log = '', repos = 'memoro', worktree = true, phase = 1, after = null, prs = [] }] of Object.entries(goals)) {
+    const text = goalJson({ stage, status, phase, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [], prs });
     const { phase: _phase, stage: _stage, ...legacy } = JSON.parse(text);
     f.files[`${GOALS}/${name}/GOAL.json`] = after === null ? text : `${JSON.stringify({ ...legacy, status: old, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
@@ -1108,7 +1108,7 @@ test('the chore pass runs the reaper every pass and says what it removed', async
   };
   const runner = createRunner({ deps: f.deps });
   await runner.chores();
-  await runner.chores();
+  await createRunner({ deps: f.deps }).chores(); // A fresh runner process reconciles the persisted goal.
   assert.equal(passes, 2);
   assert.match(f.files['/w/runner/log/runner.log'], /reap: 2 orphaned dev process\(es\) removed/u);
 });
@@ -3015,13 +3015,15 @@ test('an unreachable API holds every launch with a growing wait, writes no goal 
 const finishedLog = (at, stage) => `## ${at} · claude opus · ${stage} · ready\n\nDone: arbete\n`;
 const ARCHIVE_NOW = '2026-09-01T10:00:00Z';
 
-test('the chores archive a goal done or dropped for 24 hours, and leave one finished 23 hours to the hold', async () => {
+test('the chores archive done goals after 24 hours and dropped goals immediately, including without a stage timestamp', async () => {
   const f = goalFixture({
     late: { stage: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
     early: { stage: 'done', log: finishedLog('2026-08-31T11:00Z', 'done') },
-    'dropped-one': { stage: 'dropped', log: finishedLog('2026-08-30T09:00Z', 'dropped') },
+    'dropped-one': { stage: 'dropped', log: '' },
   }, { now: ARCHIVE_NOW });
-  await createRunner({ deps: f.deps }).chores();
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
   assert.equal(f.files[`${GOALS}/late/GOAL.json`], undefined, 'the goal left the goals');
   assert.equal(goalField(f.files['/w/programs/prog/goals/.archive/late/GOAL.json'], 'stage'), 'done', 'in goals/.archive/');
   assert.equal(f.files[`${GOALS}/late/memoro`], undefined, 'its worktree is gone with it');
@@ -3029,6 +3031,7 @@ test('the chores archive a goal done or dropped for 24 hours, and leave one fini
   assert.ok(f.calls.git.some((call) => call[0] === '/home/memoro' && call.slice(1).join(' ') === 'branch -D goal/late'), 'its branch is deleted through git');
   assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| late \| done \|/mu, 'one row in goal_log.md');
   assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| dropped-one \| dropped \|/mu, 'a dropped goal the same');
+  assert.equal((f.files['/w/programs/prog/goals/goal_log.md'].match(/dropped-one/gu) ?? []).length, 1, 'repeat reconciliation does not duplicate archive history');
   assert.equal(goalField(f.files[`${GOALS}/early/GOAL.json`], 'stage'), 'done', 'done 23 hours: it stays');
   assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
 });

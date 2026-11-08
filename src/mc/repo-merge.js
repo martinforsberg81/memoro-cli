@@ -98,6 +98,7 @@ export async function runMergeRound({
   signals = true,
   // Stops the round from outside (`runGate`'s signal): the round ends `gone`.
   signal = null,
+  beforeMerge = async () => true,
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
@@ -335,6 +336,9 @@ export async function runMergeRound({
       } else {
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
       }
+      let allowed = false;
+      try { allowed = await beforeMerge({ repo: repoPath, pr: number }); } catch { allowed = false; }
+      if (!allowed) return finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,

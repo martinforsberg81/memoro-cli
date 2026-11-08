@@ -98,6 +98,42 @@ describe('landJob — one job, landed or answered', () => {
     assert.ok(m.said.includes('memoro-cli #671: not merged — red: 2 tests red: a › b'), m.said.join('\n'));
   });
 
+  it('a manual job with no goal pointer is refused when its only owner was dropped', async () => {
+    const calls = [];
+    const sets = [];
+    const dropped = { programme: 'prog', goal: 'gone', dir: '/goals/.archive/gone', stage: 'dropped', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], { goalsOf: () => [dropped], setGoal: (change) => sets.push(change), gh: (...args) => { calls.push(args); return { stdout: '{}' }; } });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.report.stopped_at, 'dropped');
+    assert.equal(m.rounds.length, 0, 'the gate round never starts');
+    assert.equal(calls.some(([args]) => args[1] === 'merge'), false, 'no direct GitHub merge');
+    assert.deepEqual(sets, [], 'a late callback cannot reactivate an archived dropped goal');
+  });
+
+  it('a shared PR stays eligible when a different unfinished goal carries it', async () => {
+    const dropped = { programme: 'prog', goal: 'gone', dir: '/goals/gone', stage: 'dropped', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const live = { programme: 'prog', goal: 'live', dir: '/goals/live', stage: 'build', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], { goalsOf: () => [dropped, live] });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.landed, true);
+    assert.equal(m.rounds.length, 1, 'shared ownership does not cancel merge work');
+  });
+
+  it('a drop during the gate is rechecked by the round immediately before merge', async () => {
+    const owner = { programme: 'prog', goal: 'gone', dir: '/goals/gone', stage: 'build', prs: [{ repo: JOB.repo, pr: JOB.pr }] };
+    const m = machine([green], {
+      goalsOf: () => [owner],
+      mergeRound: async (options) => {
+        owner.stage = 'dropped'; // The drop occurs while the gate is in flight.
+        assert.equal(await options.beforeMerge(), false, 'the live ownership read observes the persisted drop');
+        return { ok: false, merged: false, stopped_at: 'dropped', reason: 'abandoned' };
+      },
+    });
+    const [answer] = await landJob({ ...JOB, goal: null }, m.deps);
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.stopped_at, 'dropped');
+  });
+
   // A merge round red on two tests in one file, the way `runMergeRound`
   // answers: the gate's verdict under `gate`, its red files lifted beside it.
   const twoRed = () => ({
