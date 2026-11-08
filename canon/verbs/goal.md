@@ -56,8 +56,8 @@ with ✓/✗ and its check, and each worktree's state.
   `draft` uses [plan-session](../roles/plan-session.md), `build` uses
   [build-session](../roles/build-session.md), `review` uses
   [review-session](../roles/review-session.md), `finish` uses
-  [finish-session](../roles/finish-session.md), and a blocked goal or a red
-  `merge` uses [mend-session](../roles/mend-session.md) with
+  [finish-session](../roles/finish-session.md), and a red
+  `merge` (a merge failure, the only case mend takes) uses [mend-session](../roles/mend-session.md) with
   [publish-and-merge](../tasks/publish-and-merge.md). Do this on every
   takeover, even in an existing conversation. Resolve the blocker yourself
   within the current stage, including implementation, checks and publication
@@ -65,7 +65,7 @@ with ✓/✗ and its check, and each worktree's state.
   `blocked` or moving the goal back to hand the work to the runner does not
   resolve it. A goal in `Martin` carries a question only a person answers:
   answer it by amending the goal with the verbs, then set it ready.
-  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. Calls use `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
+  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session a backward move, naming both stages

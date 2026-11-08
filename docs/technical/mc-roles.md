@@ -195,8 +195,14 @@ fresh session. A review judges the goal's criteria and PR head; it never
 builds. `roles.test.js` holds the selected parts and their shared instructions.
 
 **The plan session** (`plan-session.md`) is written around the programme's
-aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). It has, in
-principle, full freedom to move the programme toward it, a goal's branch
+aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
+deliverable is the programme's planning: the README and design, the resolved
+prerequisite and policy decisions, the goal decomposition and phases, and
+complete goal briefs with contracts, exclusions, documents, success criteria and
+executable checks. Every complete brief moves from draft to build at once in its
+phase, including one waiting on an earlier phase; a brief with unresolved
+planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
+principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. It is interactive only (Martin, 2026-11-07): Martin is at the
 terminal and it has no restrictions; the runner never starts one. It names

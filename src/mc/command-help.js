@@ -114,8 +114,8 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   ask: [
     'usage — mc ask [<programme>/<goal>] --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]\n',
-    'A goal-bound valid unresolved ask logs evidence and sets that goal Martin directly; jev answers leave its stage/status unchanged. A no-goal ask is chat-only.\n',
-    '        Ask jev for a decision reading without changing a goal. Without a goal, uses MC_PROGRAMME or the programme containing the working directory.\n',
+    'A goal-bound valid unresolved ask logs evidence and sets that goal Martin directly; jev answers leave its stage/status unchanged. A no-goal ask changes no goal.\n',
+    'Without a goal, asks jev and prints its reading (the jev ledger records it); uses MC_PROGRAMME or the programme containing the working directory.\n',
   ].join(''),
   tidy: [
     "usage — mc tidy [--apply] [--json] [--days <n>] [--docker]\n",

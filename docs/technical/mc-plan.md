@@ -111,8 +111,8 @@ The plan session owns the coherent programme README/design, prerequisite investi
 write goals, build and land work itself, or take over a goal's branch when
 that costs less than a new build session. It is interactive only: Martin is
 at the terminal. The runner never starts a plan session (Martin, 2026-11-07);
-a goal in `finish` gets a finish session and a blocked goal or a red merge a
-mend session, each with its own role ([mc-goals.md](mc-goals.md) § *Finish
+a goal in `finish` gets a finish session and a red merge a mend session (a
+merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
 See [mc-goals.md](mc-goals.md).
 

@@ -362,7 +362,7 @@ export function goalMendCheckInPrompt({ minutes, count }) {
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
-    'Your job is the obstacle: diagnose it, resolve it, and retry the goal\'s current stage (`mc goal ready`; in merge, `mc goal stage merge`). Preserve acceptance and gate requirements.',
+    'Your job is the merge failure: diagnose it, resolve it within the contract, and requeue the merge with `mc goal stage merge`. Preserve acceptance and gate requirements.',
     'Mend is merge recovery only. Resolve merge failures within the contract, or ask directly with `mc ask` for an actual design choice or reserved act; continue when jev answers, otherwise wait on Martin.',
   ].join('\n');
 }

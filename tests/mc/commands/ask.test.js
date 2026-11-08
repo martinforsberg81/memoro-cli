@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/ask.js';
+import { parseLog } from '../../../src/mc/goals.js';
 import { goalJson } from '../_helpers/goal-file.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'mc-ask-'));
@@ -161,6 +162,9 @@ test('an unresolved goal-bound ask records safe evidence and sets Martin directl
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
   const logged = readFileSync(log, 'utf8');
   for (const text of ['Which design?', 'Option one: keep current rule', 'Option two: change rule', 'Recommended: one', 'The standard is silent.', 'not answered', 'take it to Martin']) assert.ok(logged.includes(text), text);
+  const entry = parseLog(logged).at(-1);
+  assert.deepEqual([entry.at, entry.stage, entry.status], ['2026-11-08T00:00:00Z', 'build', 'Martin'], 'the entry parses, so the question reads back from the goal');
+  assert.match(entry.comment, /Option two: change rule/u);
   assert.equal(f.ledger[0].goal, 'jev/unsettled');
 });
 
@@ -175,6 +179,50 @@ test('a reserved goal-bound ask sets Martin without a jev request', async () => 
   assert.equal(await run(['--reason', 'Deploy?', '--option', 'yes: deploy', '--option', 'no: do not', '--recommend', 'no', '--reserved', 'deploy'], { ...f.deps, read, write: writeFileSync }), 1);
   assert.equal(f.requests.length, 0);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
+  const entry = parseLog(readFileSync(join(goal, 'LOG.md'), 'utf8')).at(-1);
+  assert.deepEqual([entry.at, entry.stage, entry.status], ['2026-11-08T00:00:00Z', 'build', 'Martin']);
+  assert.match(entry.comment, /Deploy\?/u);
+  assert.match(entry.comment, /Option yes: deploy/u);
+});
+
+test('a goal finished or moved by a person while jev is asked is not set over by the answer', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'raced');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json');
+  const log = join(goal, 'LOG.md');
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const argv = ['jev/raced', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
+  const env = { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/raced', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const build = (fields) => goalJson({ stage: 'build', title: 'Raced', goal: ['Move while asked.'], repos: ['memoro-cli'], ...fields });
+
+  // Finished while the model is out, and jev does not answer: nothing is written to the finished goal.
+  writeFileSync(file, build({}));
+  writeFileSync(log, '');
+  const finishing = fixture({ env });
+  finishing.deps.jev.transport = () => {
+    writeFileSync(file, build({ stage: 'done' }));
+    return { status: 400, text: async () => '' };
+  };
+  assert.equal(await run(argv, { ...finishing.deps, read, write: writeFileSync }), 1, finishing.err());
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).stage, 'done');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'ready', 'a finished goal is not set Martin');
+  assert.equal(readFileSync(log, 'utf8'), '', 'a finished goal gets no log entry from the ask');
+  assert.match(finishing.err(), /is done — the ask is not recorded/u);
+  assert.equal(finishing.ledger.length, 1, 'the jev ledger still records the ask');
+
+  // A person blocks it while jev answers: the answer is logged as the goal now is, and the person's status stands.
+  writeFileSync(file, build({}));
+  writeFileSync(log, '');
+  const moving = fixture({ env });
+  moving.deps.jev.transport = () => {
+    writeFileSync(file, build({ status: 'blocked' }));
+    return reply(0.95, 'one');
+  };
+  assert.equal(await run(argv, { ...moving.deps, read, write: writeFileSync }), 0, moving.err());
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'blocked', 'the person\'s status stands');
+  const entry = parseLog(readFileSync(log, 'utf8')).at(-1);
+  assert.deepEqual([entry.stage, entry.status], ['build', 'blocked']);
+  assert.match(entry.done, /^jev answered /u);
 });
 
 test('goal-bound ask refuses role/goal mismatches and finished goals without mutation', async () => {

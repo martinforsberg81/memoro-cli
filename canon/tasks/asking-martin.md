@@ -23,7 +23,7 @@ mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<k
   answer leaves stage/status unchanged, appends its trace and continues. A valid
   unresolved, unavailable or reserved result logs safe question/options/recommendation/
   evidence/reading and sets that goal directly to Martin. Do not call `mc goal martin`
-  again or route through mend. Invalid calls exit 2 with no mutation; no-goal asks stay chat-only.
+  again or route through mend. Invalid calls exit 2 with no mutation; a no-goal ask changes no goal.
 - Reserved acts use `--reserved <act>`, never jev. Never send user data or passwords: key redaction is only the guard.
 
 ## What reaches Martin

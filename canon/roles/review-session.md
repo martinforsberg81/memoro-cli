@@ -100,5 +100,7 @@ and programme design to ordinary implementation/review details.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what
-is missing. Then end the session, in the turn the stage is set.
+is missing. A goal you have set `blocked` or `Martin` is not held: the question
+is Martin's, so end the session in that turn. Otherwise end it in the turn the
+stage is set.
 @end

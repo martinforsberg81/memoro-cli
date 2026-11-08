@@ -550,7 +550,13 @@ stop. It runs each criterion's check and records the ones that hold with
 `mc goal criterion met <n>`. It runs `mc gate`, commits, and publishes with
 `mc publish --no-merge`. It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
-them, or `--status blocked` when it cannot solve it. A build session
+them, or, when it cannot go on, asks Martin directly. An acceptance obstacle it
+cannot repair within its scope goes to Martin with `mc goal martin` and its
+evidence. An actual design choice or reserved act goes through goal-bound
+`mc ask`: a jev answer continues the session; otherwise the same call sets the
+goal Martin. No build exit goes through pre-merge mend. `blocked` is for
+compatibility only: a `blocked` goal before merge, left by an older session, is
+reconciled to Martin by the runner without a session and wakes no mend. A build session
 publishes, and never merges, sets `done` or moves the goal anywhere else.
 
 ## What a review session does
@@ -589,8 +595,8 @@ ends in `review`.** Claude Code's Stop hook runs `mc hook stop`
 (`reviewStopDecision`, `hooks.js`): for a session with `MC_ROLE=review-session:goal`
 it refuses the end — `{ "decision": "block", "reason": … }` — while the goal is in
 `review` or no `.md` has been written in the programme's `proposals/` since
-`MC_SESSION_STARTED`, naming what is missing. Any other session ends as it
-will. A review that dies anyway leaves the goal `review · ready` (*How the
+`MC_SESSION_STARTED`, naming what is missing. A goal `blocked` or in `Martin` is not held: the review
+has asked, and the question is Martin's. Any other session ends as it will. A review that dies anyway leaves the goal `review · ready` (*How the
 runner takes a goal*, step 5).
 
 ## Done when its work has landed
