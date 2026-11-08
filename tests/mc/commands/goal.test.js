@@ -47,7 +47,7 @@ function listUnder(store, path) {
  * the repositories `KNOWN`, and a `git` fake that records each call and answers
  * with `git(cwd, args)`. No real file or git process is touched.
  */
-function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [], keys = {}, replies = [], timer = () => new Promise(() => {}) } = {}) {
+function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = [], keys = {}, replies = [], timer = () => new Promise(() => {}), alive = () => false } = {}) {
   const store = { [`${HOME}/mc/PLAN.json`]: '{}', ...files };
   const calls = [];
   const out = [];
@@ -78,6 +78,8 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     realpath: (path) => path,
     write: (path, text) => { store[path] = text; },
     list: (path) => listUnder(store, path),
+    listFiles: (path) => Object.keys(store).filter((key) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/')).map((key) => key.slice(path.length + 1)),
+    alive,
     known: () => known,
     git: (cwd, args) => {
       calls.push({ cwd, args });
@@ -361,6 +363,20 @@ test('mc goal blocked, ready and done set their one field and log the reason; a 
   assert.match(f.err(), /drop needs --reason/u);
   assert.equal(await run(['blocked', '--done', 'x'], f.deps), 2);
   assert.match(f.err(), /blocked takes no --done/u);
+});
+
+test('dropping refuses to archive while a live current-*.json owns the goal', async () => {
+  const root = '/work';
+  const f = dropFixture(fixture({
+    files: { ...seededGoal(), [`${root}/runner/current-memoro.json`]: JSON.stringify({ name: 'mc/plain', pid: 777 }) },
+    env: { MC_GOAL: 'mc/plain', MC_WORK_ROOT: root },
+    alive: (pid) => pid === 777,
+  }));
+  assert.equal(await run(['drop', '--reason', 'abandoned'], f.deps), 1);
+  assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'dropped', 'drop is persisted');
+  assert.equal(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], undefined, 'live-owned work is not moved');
+  assert.equal(f.store[`${HOME}/mc/goals/goal_log.md`], undefined, 'no archive success is recorded');
+  assert.match(f.err(), /live session still owns mc\/plain/u);
 });
 
 /**

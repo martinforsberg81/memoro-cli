@@ -24,13 +24,14 @@ function goal(extra = {}) {
  * The context `archiveGoal` is given: `git` and `gh` answer what the test says
  * (`git(cwd, args)`, `gh(cwd, args)`), and every call and move is recorded.
  */
-function ctxOf({ git = () => ok(), gh = () => ok('[]'), move, now = new Date(NOW) } = {}) {
+function ctxOf({ git = () => ok(), gh = () => ok('[]'), move, now = new Date(NOW), exists = () => true } = {}) {
   const calls = { git: [], gh: [], moved: [], appended: [] };
   const ctx = {
     home: '/w/programs',
     git: (cwd, args) => { calls.git.push([cwd, ...args]); return git(cwd, args); },
     gh: (cwd, args) => { calls.gh.push([cwd, ...args]); return gh(cwd, args); },
     known: () => ['/home/memoro'],
+    exists,
     move: move ?? ((from, to) => { calls.moved.push([from, to]); }),
     appendText: (path, text) => { calls.appended.push([path, text]); },
     read: () => null,
@@ -186,6 +187,25 @@ test('a dropped worktree whose Git status is unknown is retained, not treated as
   const result = finalizeDroppedGoal(goal({ stage: 'dropped' }), { ...ctx, allGoals: () => [] });
   assert.match(result.refused, /could not be inspected/u);
   assert.equal(calls.moved.length, 0);
+});
+
+test('a positively absent dropped worktree is safe to archive, including retry after removal before a failed move', () => {
+  let present = false;
+  let failMove = true;
+  const { ctx, calls } = ctxOf({
+    exists: () => present,
+    git: (cwd, args) => args[0] === 'status' ? { ok: false, stdout: '', stderr: 'path does not exist' }
+      : args[0] === 'rev-parse' ? { ok: false, stdout: '', stderr: 'not a worktree' }
+        : args[0] === 'show-ref' ? { ok: false, stdout: '', stderr: 'no branch' } : ok(),
+    move: () => { if (failMove) { failMove = false; throw new Error('archive move interrupted'); } calls.moved.push(['retry']); },
+  });
+  const dropped = goal({ stage: 'dropped' });
+  const first = finalizeDroppedGoal(dropped, { ...ctx, allGoals: () => [] });
+  assert.match(first.refused, /could not be moved .*archive move interrupted/u);
+  assert.equal(calls.moved.length, 0);
+  const second = finalizeDroppedGoal(dropped, { ...ctx, allGoals: () => [] });
+  assert.deepEqual(second, { to: '/w/programs/mc/goals/.archive/g', renumbered: [] });
+  assert.deepEqual(calls.moved, [['retry']]);
 });
 
 test('archiveGoal of a done goal with nothing open: worktree and branch removed through git, the directory moved, one row written', () => {

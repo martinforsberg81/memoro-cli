@@ -54,7 +54,7 @@
  * with no holes.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
@@ -70,7 +70,7 @@ import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
 import { realLock } from '../runner-lock.js';
 import { mergesPath, parseQueue } from '../merge-queue.js';
-import { pidAlive } from '../status-collect.js';
+import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -151,12 +151,12 @@ export async function run(argv, deps = {}) {
     alive: deps.alive || pidAlive,
     active: (goal) => {
       const root = workRoot(env);
-      return (deps.list || listDirsOf)(join(root, 'runner')).some((file) => {
-        if (!/^current-.+\.json$/u.test(file)) return false;
-        let current;
-        try { current = JSON.parse((deps.read || readTextOrNull)(join(root, 'runner', file)) ?? ''); } catch { return false; }
-        return current?.name === `${goal.programme}/${goal.goal}` && Number.isInteger(Number(current.pid)) && (deps.alive || pidAlive)(Number(current.pid));
-      });
+      const read = deps.read || readTextOrNull;
+      const currents = readCurrents(join(root, 'runner'), (path) => {
+        try { return JSON.parse(read(path) ?? ''); } catch { return null; }
+      }, deps.listFiles || readdirSync);
+      return currents.some((current) => current?.name === `${goal.programme}/${goal.goal}`
+        && Number.isInteger(Number(current.pid)) && (deps.alive || pidAlive)(Number(current.pid)));
     },
     read: deps.read || readTextOrNull,
     realpath: deps.realpath,

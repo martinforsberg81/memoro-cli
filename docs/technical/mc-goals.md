@@ -59,7 +59,7 @@ any      ── only a person moves a stage backward, logged ─────▶ 
 ~/mc/programs/<programme>/goals/<goal>/REVIEW.md  what a review that sent it to finish found, for the finish session
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
-~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner 24 h after done or dropped), its worktrees gone
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive; dropped immediately when safe, done after 24 h), its worktrees gone
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 

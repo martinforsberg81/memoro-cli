@@ -3015,15 +3015,25 @@ test('an unreachable API holds every launch with a growing wait, writes no goal 
 const finishedLog = (at, stage) => `## ${at} · claude opus · ${stage} · ready\n\nDone: arbete\n`;
 const ARCHIVE_NOW = '2026-09-01T10:00:00Z';
 
-test('the chores archive done goals after 24 hours and dropped goals immediately, including without a stage timestamp', async () => {
+test('the chores archive done goals after 24 hours and dropped goals immediately, including without a stage timestamp', async (t) => {
   const f = goalFixture({
     late: { stage: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
     early: { stage: 'done', log: finishedLog('2026-08-31T11:00Z', 'done') },
     'dropped-one': { stage: 'dropped', log: '' },
   }, { now: ARCHIVE_NOW });
+  let at = performance.now();
   const runner = createRunner({ deps: f.deps });
+  const firstStartupMs = performance.now() - at;
+  at = performance.now();
   await runner.chores();
-  await runner.chores();
+  const firstRoundMs = performance.now() - at;
+  at = performance.now();
+  const restarted = createRunner({ deps: f.deps });
+  const restartStartupMs = performance.now() - at;
+  at = performance.now();
+  await restarted.chores(); // A new runner instance reconciles the persisted dropped goal after restart.
+  const restartRoundMs = performance.now() - at;
+  t.diagnostic(`fixture timing: startup ${firstStartupMs.toFixed(3)} ms; archive round ${firstRoundMs.toFixed(3)} ms; restart startup ${restartStartupMs.toFixed(3)} ms; restart archive round ${restartRoundMs.toFixed(3)} ms`);
   assert.equal(f.files[`${GOALS}/late/GOAL.json`], undefined, 'the goal left the goals');
   assert.equal(goalField(f.files['/w/programs/prog/goals/.archive/late/GOAL.json'], 'stage'), 'done', 'in goals/.archive/');
   assert.equal(f.files[`${GOALS}/late/memoro`], undefined, 'its worktree is gone with it');

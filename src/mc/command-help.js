@@ -84,7 +84,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal done [<programme>/<goal>] [--reason \"…\"]   stage done, by hand; the merger sets it when the pull request lands\n",
     "        mc goal drop [<programme>/<goal>] --reason \"…\"   abandon delivery: persist dropped, close exclusive PRs, cancel merge rows and archive immediately when safe; only plan or a person may drop\n",
     "        mc goal pr <programme>/<goal> <repo>#<n>...   the pull requests that carry the goal; done when every one has landed or closed\n",
-    "        mc goal archive <programme>/<goal>... | <programme>   safely archive done or dropped goals; the runner archives dropped goals immediately and done goals after 24 hours\n",
+    "        mc goal archive <programme>/<goal>... | <programme>   safely archive done or dropped goals; dropped goals finalize immediately when safe, done goals after 24 hours\n",
     "        mc goal show <programme>/<goal>   the goal as text — each criterion with ✓/✗ and its check — its last three log entries, and each worktree's state\n",
     "        mc goal list [<programme>]   every goal, one line each, grouped by phase, with the phase in progress named\n",
     "\n",

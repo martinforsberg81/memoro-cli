@@ -142,7 +142,7 @@ export function moveDir(from, to) {
  * (throws when it fails), `appendText(path, text)`, `read(path)`, `list(path)`,
  * `write(path, text)` and `now`, a Date.
  */
-export function archiveGoal(goal, { home, git, gh, known, move = moveDir, appendText, read, list = listDirsOf, write = writeFileAtomic, now, sharedPrs = [], active = () => false }) {
+export function archiveGoal(goal, { home, git, gh, known, move = moveDir, appendText, read, list = listDirsOf, write = writeFileAtomic, exists = existsSync, now, sharedPrs = [], active = () => false }) {
   const refuse = (refused) => ({ refused });
   if (goal.problems.length) return refuse(`its GOAL.json does not parse (${goal.problems[0]})`);
   const name = `${goal.programme}/${goal.goal}`;
@@ -154,7 +154,7 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
   for (const repo of goal.repos) {
     const path = join(goal.dir, repo);
     const status = git(path, ['status', '--porcelain']);
-    if (goal.stage === 'dropped' && !status.ok) return refuse(`${repo}'s worktree could not be inspected (${path}); its edits are retained`);
+    if (goal.stage === 'dropped' && !status.ok && exists(path)) return refuse(`${repo}'s worktree could not be inspected (${path}); its edits are retained`);
     if (status.ok && status.stdout.trim()) return refuse(`${repo}'s worktree has uncommitted changes (${path})`);
     const bare = bareOf(repo);
     if (!bare) return refuse(`${repo} is not a repository mc knows, so its worktree cannot be removed`);
