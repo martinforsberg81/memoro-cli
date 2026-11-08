@@ -163,6 +163,21 @@ status and concise failure reasons remain visible. The phase bar marks prepare
 Pauses, stopped mergers and batch membership retain their own rows. Direct
 goal merges use the live merger's queue record; dead owners remain waiting.
 
+A queued entry with a valid future `not_before` is a scheduled retry, not a
+ready job or evidence that the merger is stopped. The normal panel names its
+PR, recorded retry category and explanation, local eligibility time with
+timezone, remaining delay, retry counts, automatic next step and `mc merge
+<repo> <pr>` retry-now command. Eligibility is not a guaranteed start time.
+Only a future valid deadline activates this display; at or after the deadline,
+or for a malformed/absent deadline, the job is due and no timed pause is shown.
+Legacy entries with a future deadline remain visibly delayed, with the cause
+honestly labelled unknown when no diagnostic was persisted. An all-deferred
+queue does not imply a stopped merger merely because no process is alive; due
+unowned work still does. Mixed queues attribute each delay to its own PR and
+repository. Current deploy, gate and lease pauses remain visible alongside
+retry details. A completed failed deploy is historical evidence, not a current
+merge blocker.
+
 DEPLOY uses an orange subsection heading, LIVE and RECORDED version evidence,
 and a rounded attempt frame: green while running, red after failure, yellow
 for a refusal or missing end record. Expanded details include builds and

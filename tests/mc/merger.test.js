@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { mergesSection } from '../../src/mc/page-collect.js';
 import {
   landerFor, landJob, MAX_REQUEUES, mayOffline, mergerPath, OFFLINE_BLOCK_AFTER, offlineBackoffMs, queueMerge, readMerger, releaseMerger,
   serve, startMerger, SUBJECT_POLL_MS, succeed,
@@ -331,7 +332,44 @@ describe('an offline round is put back in line, not answered red', () => {
     assert.equal(entry.requeues, 0);
     assert.equal(entry.since, '2026-11-06T11:00:00Z');
     assert.equal(entry.not_before, '2026-11-06T12:01:00.000Z');
+    assert.deepEqual(entry.retry_diagnostic, {
+      category: 'offline', explanation: OFFLINE.reason,
+    });
     assert.equal(m.rounds.length, 1, 'no second round before the backoff has passed');
+  });
+
+  it('writeAnswer preserves a real red-under-load diagnostic through parse and merge collection', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: '2026-11-08T11:00:00Z' }]));
+    const now = () => new Date('2026-11-08T12:00:00Z');
+    const report = {
+      ok: false, merged: false, stopped_at: 'red-under-load',
+      reason: 'tests/x.test.js red in the round, green alone on base and candidate',
+    };
+    let written = false;
+    await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE, now, sweep: async () => {},
+      stopping: () => written,
+      land: async ([job], _lane, { onAnswer }) => {
+        const answer = { job, landed: false, report, requeued: true };
+        await onAnswer(answer);
+        written = true;
+        return [answer];
+      },
+    });
+    const [entry] = parseQueue(readFileSync(mergesPath(root), 'utf8'));
+    assert.equal(entry.not_before, '2026-11-08T12:15:00.000Z');
+    assert.equal(entry.requeues, 1);
+    assert.deepEqual(entry.retry_diagnostic, { category: 'red-under-load', explanation: report.reason });
+    const section = mergesSection({ queued: parseQueue(readFileSync(mergesPath(root), 'utf8')),
+      now: new Date('2026-11-08T12:00:00Z'), merger: null });
+    assert.deepEqual(section.repos[1].waiting[0].retry, {
+      eligible_at: '2026-11-08T12:15:00.000Z', remaining_seconds: 900,
+      category: 'red-under-load', explanation: report.reason, requeues: 1, offline: 0,
+      next: 'The merger will retry automatically when eligible; start time is not guaranteed.',
+      retry_now: 'mc merge memoro-cli 671',
+    });
+    assert.equal(section.repos[1].merger_stopped, false);
   });
 
   it('serve: a later reachable round lands once the backoff has passed', async () => {

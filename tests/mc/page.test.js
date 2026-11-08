@@ -894,8 +894,8 @@ describe('MERGES', () => {
   };
   const job = (pr, extra = {}) => ({ repo: 'memoro', pr, since: '2026-08-29T11:50:00Z', state: 'queued', ...extra });
   const section = (extra = {}) => mergesSection({ now: NOW, merger: { pid: 4242 }, ...extra });
-  const drawing = (merges, columns = 120, colour = false) => {
-    const lines = renderPageLines(pageData({ merges }), { columns, colour });
+  const drawing = (merges, columns = 120, colour = false, expand = false) => {
+    const lines = renderPageLines(pageData({ merges }), { columns, colour, expand });
     const start = lines.findIndex((line) => /MERGE/u.test(line));
     const end = lines.findIndex((line, i) => i > start && line.startsWith('  └'));
     return lines.slice(start, end);
@@ -974,6 +974,65 @@ describe('MERGES', () => {
     const row = drawing(merges, 120, true).find((line) => strip(line).includes('#10'));
     assert.match(strip(row), /Queue: #10/u);
     assert.doesNotMatch(strip(row), /⏸|↻|→/u);
+  });
+
+  it('explains only future retry deadlines in the normal panel and keeps due work stopped', () => {
+    const deadline = '2026-08-29T12:15:00.000Z';
+    const queued = [
+      job(71, { repo: 'memoro', not_before: deadline, requeues: 1,
+        retry_diagnostic: { category: 'red-under-load', explanation: 'green alone on base and candidate; red in two rounds' } }),
+      job(72, { repo: 'memoro-cli', not_before: deadline, offline: 2,
+        retry_diagnostic: { category: 'offline', explanation: 'origin/main could not be re-checked' } }),
+      job(73, { repo: 'memoro-cli' }),
+    ];
+    const merges = mergesSection({ now: NOW, merger: null, queued });
+    for (const columns of [60, 80, 120, 160]) {
+      const lines = drawing(merges, columns);
+      const text = lines.join('\n').replace(/\s+/gu, ' ');
+      assert.ok(lines.every((line) => width(line) <= columns));
+      assert.match(text, /#71 retry delayed[\s\S]*red-under-load[\s\S]*green alone on base and candidate; red in two rounds/u);
+      assert.match(text, /#72 retry delayed[\s\S]*offline[\s\S]*origin\/main could not be re-checked/u);
+      assert.match(text, /Retry now: mc merge memoro 71/u);
+      assert.match(text, /Retry now: mc merge memoro-cli 72/u);
+      assert.match(text, /Eligible/u);
+      assert.match(text, /scheduled retry +deferred until retry eligibility/u);
+      assert.match(text, /merger stopped +queue waiting/u, 'the due unowned PR remains a blocker');
+      const expanded = drawing(merges, columns, false, true);
+      assert.ok(expanded.every((line) => width(line) <= columns));
+      assert.match(expanded.join('\n'), /Retry now: mc merge memoro-cli 72/u);
+      assert.doesNotMatch(expanded.join('\n'), /#(?:71|72) +stopped/u,
+        'deferred PRs must not inherit another PR\'s stopped state');
+      assert.match(expanded.join('\n'), /#73 +stopped/u, 'only due unowned work is stopped');
+    }
+    assert.equal(merges.repos[0].waiting[0].retry.remaining_seconds, 900);
+    assert.equal(merges.repos[0].merger_stopped, false, 'deferred-only repo is not reported stopped');
+    assert.equal(merges.repos[1].merger_stopped, true, 'mixed repo remains stopped for its due PR');
+    assert.deepEqual(merges.repos[1].waiting.map((item) => ({ pr: item.pr, state: item.state, prs: item.prs })), [
+      { pr: 72, state: 'queued', prs: [{ number: 72, repo: 'memoro-cli', merging: 'queued' }] },
+      { pr: 73, state: 'stopped', prs: [{ number: 73, repo: 'memoro-cli' }] },
+    ], 'JSON state and PR flags follow each item\'s eligibility, not the repository warning');
+    assert.deepEqual(merges.repos[1].prs, merges.repos[1].waiting.flatMap((item) => item.prs));
+
+    for (const now of [new Date(deadline), new Date(Date.parse(deadline) + 1)]) {
+      const expired = mergesSection({ now, merger: null, queued: [queued[0]] });
+      assert.equal(expired.repos[0].waiting[0].retry, null);
+      assert.equal(expired.repos[0].merger_stopped, true);
+      const text = drawing(expired, 80, false, true).join('\n');
+      assert.doesNotMatch(text, /retry delayed|Eligible/u);
+      assert.match(text, /merger stopped/u);
+    }
+  });
+
+  it('shows a legacy future deadline as unknown and malformed deadlines never pause', () => {
+    const legacy = job(74, { not_before: '2026-08-29T12:15:00.000Z' });
+    const old = section({ merger: null, queued: [legacy] });
+    assert.equal(old.repos[0].waiting[0].retry.category, 'unknown');
+    assert.match(drawing(old).join('\n'), /#74 retry delayed · unknown: Reason not recorded \(legacy queue entry\)/u);
+    for (const not_before of ['bad', '2026-08-29T11:00:00Z', null]) {
+      const current = section({ merger: null, queued: [job(75, { not_before })] });
+      assert.equal(current.repos[0].waiting[0].retry, null);
+      assert.equal(current.repos[0].merger_stopped, true);
+    }
   });
 
   it('keeps a red inline, in red with grey detail; an entry an older merger left mending is waiting', () => {
