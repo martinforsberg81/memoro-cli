@@ -76,7 +76,7 @@ seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
 **Every gate round has a repository ceiling.** `round_timeout_ms` and its
-`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 15
+`round_timeout_why` live in `repo-gate-table.js`: 20 minutes for memoro and 15
 minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
 247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
 ordinary-load rounds red). The deadline bounds the complete round, from the
@@ -849,7 +849,7 @@ is not an exception the round grants or detects.
 and each hook from when it starts. It does not bound a file's startup (module
 loading, top-level `await`), which is outside every callback clock, nor the
 whole file, batch or round: those are the round's ceiling (`round_timeout_ms`,
-15 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
+20 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
 that does not yield cannot be interrupted by any timer, so a blocked callback is
 measured as long as it ran, not cut at its limit. None of these is an absolute
 synchronous CPU cap, and no repository scanner enforces that every explicit

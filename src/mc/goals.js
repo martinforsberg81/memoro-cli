@@ -13,7 +13,7 @@
  * The readers take `list` and `read` as arguments, so the tests use a file
  * model.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
@@ -619,10 +619,11 @@ export function goalBranch({ git, dir, goal, repo }) {
  * changes `git reset --keep` will not carry. `say(repo, text)` is told what
  * happened per repository; nothing here fails.
  */
-export function remakeUnbuiltBranches({ git, dir, goal, repos, say }) {
+export function remakeUnbuiltBranches({ git, dir, goal, repos, say, exists = existsSync }) {
   for (const repo of repos) {
     const path = join(dir, repo);
     const tell = (text) => say(repo, `goal/${goal} ${text}`);
+    if (!exists(path)) { tell('no worktree yet — the runner remakes the branch from origin/main at the first session'); continue; }
     const fetched = git(path, ['fetch', '-q', 'origin']);
     if (!fetched.ok) { tell(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
     const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
@@ -753,7 +754,7 @@ export function setGoalState({ dir, stage, status, entry, read = readTextOrNull,
 
 /**
  * Changes a goal's GOAL.json by `change(goal)`, which returns the goal as it
- * is to be, or `{ problems }` to refuse. The result is validated before it is
+ * is to be, or `{ problems, code, prefix }` to refuse. The result is validated before it is
  * written, so an invalid GOAL.json is never written. Returns `{ goal }` or
  * `{ problems }`.
  */
@@ -764,7 +765,7 @@ export function updateGoal({ dir, change, read = readTextOrNull, write = writeFi
   const parsed = parseGoal(text);
   if (parsed.problems) return { problems: parsed.problems };
   const next = change(parsed);
-  if (next?.problems) return { problems: next.problems };
+  if (next?.problems) return { problems: next.problems, code: next.code, prefix: next.prefix };
   let rendered;
   try { rendered = renderGoal(next); } catch (error) { return { problems: [error.message] }; }
   write(path, rendered);

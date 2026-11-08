@@ -263,14 +263,14 @@ function newGoal(args, flags, ctx) {
 }
 
 /**
- * The word a session's log entry names its writer by: from `MC_ROLE`, as the role's name before its `:`. A word
+ * The word a log entry names its writer by: from `MC_ROLE`, as the role's name before its `:`. A word
  * that is not one token (it holds whitespace, or is empty) is left out, and the entry is written without the
- * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. A person writes none.
+ * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. With no role, none is written.
  */
 const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'mend', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
 function writerRole(env) {
   const role = env.MC_ROLE || '';
-  if (!role || (env.MC_TOOL || 'person') === 'person') return null;
+  if (!role) return null;
   const word = Object.hasOwn(WRITER_WORDS, role) ? WRITER_WORDS[role] : role.split(':')[0];
   return /^\S+$/u.test(word) ? word : null;
 }
@@ -586,8 +586,8 @@ function prStateOf(ctx, repoPath, pr) {
 }
 
 /** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */
-function remakeBranches(target, goal, { stdout, git }) {
-  remakeUnbuiltBranches({ git, dir: target.dir, goal: target.goal, repos: goal.repos, say: (repo, text) => stdout.write(`  ${repo}  ${text}\n`) });
+function remakeBranches(target, goal, { stdout, git, exists }) {
+  remakeUnbuiltBranches({ git, dir: target.dir, goal: target.goal, repos: goal.repos, exists, say: (repo, text) => stdout.write(`  ${repo}  ${text}\n`) });
 }
 
 /**
@@ -682,7 +682,7 @@ function markCriterion(args, met, ctx) {
   const n = Number(given);
   if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${given} is not a criterion's number — 1, 2, …\n`); return 2; }
   return changeGoal(named, ctx, (goal) => {
-    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`] };
+    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`], code: 2 };
     return { ...goal, success_criteria: goal.success_criteria.map((item, i) => (i === n - 1 ? { ...item, met } : item)) };
   }, (goal) => `criterion ${n} ${met ? 'met' : 'unmet'} · ${criteriaWords(goal)}`);
 }
@@ -711,7 +711,7 @@ function setCriterion(args, flags, ctx) {
   const check = flags.check === null ? null : flags.check.trim();
   let was = null;
   return changeGoal(named, ctx, (goal) => {
-    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`] };
+    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`], code: 2 };
     was = goal.success_criteria[n - 1];
     return { ...goal, success_criteria: goal.success_criteria.map((item, i) => (i === n - 1
       ? { criterion: criterion ?? item.criterion, check: check ?? item.check, met: false }
@@ -737,7 +737,7 @@ function setCriterion(args, flags, ctx) {
  * and the only criterion (its replacement is added first).
  */
 function removeCriterion(args, flags, ctx) {
-  const { stderr, env, read } = ctx;
+  const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
   if (goalSessionWord(env)) { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan or a person\n`); return 2; }
@@ -746,15 +746,10 @@ function removeCriterion(args, flags, ctx) {
   const [named, number] = args.length === 2 ? args : [undefined, args[0]];
   const n = Number(number);
   if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${number} is not a criterion's number — 1, 2, …\n`); return 2; }
-  const target = goalNamed(named, ctx);
-  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
-  const text = read(join(target.dir, GOAL_FILE));
-  const criteria = text === null ? null : parseGoal(text).success_criteria;
-  if (criteria && n > criteria.length) { stderr.write(`mc: ${target.name}: it has ${criteria.length} criteria, no criterion ${n}\n`); return 2; }
-  if (criteria?.length === 1) { stderr.write(`mc: criterion ${n} is the goal's only criterion — add its replacement first, or drop the goal\n`); return 2; }
   let removed = null;
   return changeGoal(named, ctx, (goal) => {
-    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`] };
+    if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`], code: 2 };
+    if (goal.success_criteria.length === 1) return { problems: [`criterion ${n} is the goal's only criterion — add its replacement first, or drop the goal`], code: 2, prefix: false };
     removed = goal.success_criteria[n - 1];
     return { ...goal, success_criteria: goal.success_criteria.filter((_, i) => i !== n - 1) };
   }, (goal) => `criterion ${n} removed · ${criteriaWords(goal)}`, (goal, target) => {
@@ -809,8 +804,8 @@ function changeGoal(named, ctx, change, said, after = null) {
   if (read(join(target.dir, GOAL_FILE)) === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
   const outcome = updateGoal({ dir: target.dir, change, read, write });
   if (outcome.problems) {
-    for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
-    return 1;
+    for (const problem of outcome.problems) stderr.write(`mc: ${outcome.prefix === false ? '' : `${target.name}: `}${problem}\n`);
+    return outcome.code ?? 1;
   }
   if (after) after(outcome.goal, target);
   stdout.write(`mc: ${target.name} · ${said(outcome.goal)}\n`);

@@ -278,7 +278,9 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   nor one with uncommitted changes `--keep` will not carry; each repository
   says which (`remade from origin/main — it had no commits of its own, and
   main has 12 more`, `left as it is — 3 commits of its own`), and nothing
-  here fails the move (`remakeUnbuiltBranches`, `goals.js`).
+  here fails the move (`remakeUnbuiltBranches`, `goals.js`). A repository
+  without a worktree says `no worktree yet — the runner remakes the branch
+  from origin/main at the first session`; it makes no git call.
 - **Forward only, each stage its owner** (`refusedMove`). A session is a
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. No session moves a
   stage backward: `mc: a session does not move a goal back — merge → review;
@@ -539,7 +541,8 @@ overarching role the runner woke at different moments). Plan is interactive,
   what review found, runs the criteria's checks and `mc gate`, publishes, and
   `mc goal stage merge`. It may change the code in the goal's worktree within
   the contract, never the goal's text (`mc goal set`, `criterion set|remove`
-  are refused it) and never product scope. An obstacle it cannot resolve is
+  are refused it) and never product scope. A criterion verb's refusal of its
+  arguments exits 2 and writes nothing. An obstacle it cannot resolve is
   `blocked` (a mend takes it); a change to the goal, contract or scope, or a
   reserved act, is `Martin`.
 - **A mend session** (`MC_ROLE=mend-session`, `canon/roles/mend-session.md`)
