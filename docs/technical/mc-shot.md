@@ -41,7 +41,19 @@ mc shot logout prod
 
 - **The target** is a path starting with `/app`, or a name from
   `.mc/shot.json` `targets[].name`. An unknown name is an error that lists the
-  known ones.
+  known ones. A **public page** (`/sv`, `/en`, `/da`, later `/sv/about`) is a
+  target only when `.mc/shot.json` declares it: a `targets[]` entry with
+  `"public": true`, its exact `path` (outside `/app` and `/admin`), and
+  optionally `locale`, `viewport` (its default when `--viewport` is not given)
+  and `settled`. It is named by that path or by its name, and pictured signed
+  out in the locale its URL carries — never with the app's locale or theme
+  injected. Any other path outside `/app` and `/admin` is refused with
+  `no public target at <path> — a public page is pictured only when
+  .mc/shot.json declares it (targets[] with "public": true); …`, before a
+  server starts. `--account`, `--onboarding`, `--locale`, `--shell`, `--me`,
+  `--keep` and `--compare` are refused with a public target, each in one line
+  naming the flag (`--locale is not for a public target — the URL carries the
+  locale (/sv)`), exit 2.
 - **`--viewport`** is a name from `viewports`, or `WxH[@dpr]`, which becomes
   `{ width, height, dpr, mobile }` with dpr 2 unless you give one and `mobile`
   true below 600 px wide. Without it the viewport is `default_viewport`.
@@ -420,6 +432,7 @@ through `readDeclaration`. A memoro without `.mc/shot.json` gets the error
 | `dev` | the app tier, started if it is down, through `ensureAppServer` — the same function `mc test dev` calls | the table's `default_account` (`seeded`), or `--account <name>` | `{ kind: "url", url: "<base><path>" }`, where the path is the `accounts` table's entry for the account and state |
 | `prod` | `.mc/test.json` `environments.prod.base_url` | `seeded` | `{ kind: "url", url: "<base><account.route>/<token>" }`, with the token from `tokenFor` (environment, then keychain) |
 | `prod --me` | the same | `me` | `{ kind: "session", cookie }`, from the keychain entry `MEMORO_SHOT_SESSION` |
+| public target (dev or prod) | the same base URL | none | `{ kind: "none" }` — no `/dev/login`, no token, no session is read or built |
 
 When the token is missing, mc says `no test-account token — printf %s <token> | mc test token --set`.
 When no session is stored, it says `no session of yours is stored — mc shot login prod`.
@@ -437,6 +450,16 @@ script only through the request file. Capture mode sends `mode`, `base_url`,
 `account`, `sign_in`, `target`, `element`, `shell`, `full_page`, `viewport`,
 `theme`, `locale` and `out`. Login mode sends `mode`, `base_url`, `account` and
 `profile_dir`. The request shape is the capture protocol described here.
+For a public target the request carries `sign_in: { kind: "none" }`, no
+`account` field at all, `locale: null` and `target: { name }`; memoro accepts
+`none` only for a target it declares `"public": true`, and refuses a public
+target with any other sign-in and in `open` or `session` mode. The script then
+skips the sign-in and the locale and theme injection (it imports nothing into
+the page), loads the page's own URL and waits for `load`,
+`document.readyState === "complete"`, the fonts and the target's `settled`
+(else `body`). A page that answers 400 or more is the failure
+`{ ok: false, code: "public-page", error: "<path> answered <status>" }`, never
+a picture.
 
 Capture mode also sends `click` and `actions`. `actions` is every acting flag in
 the order given, one object each: `{ kind, selector }`, with `text` on a `fill`

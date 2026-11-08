@@ -67,6 +67,12 @@ const SHOT_JSON = {
   ],
 };
 
+/** The same declaration with one public page, as memoro declares its landings. */
+const PUBLIC_SHOT_JSON = {
+  ...SHOT_JSON,
+  targets: [...SHOT_JSON.targets, { name: 'landing-sv', path: '/sv', public: true, locale: 'sv-SE' }],
+};
+
 const TEST_JSON = {
   schema_version: 1,
   environments: { dev: { service: 'memoro-worker' }, prod: { base_url: 'https://meetmemoro.app/' } },
@@ -169,6 +175,65 @@ it('receipt: a thrown eval keeps its line and exits 1', async () => {
 
 const sideOf = (fx) => JSON.parse(readFileSync(fx.side, 'utf8'));
 
+const NO_SERVER = { ensureDevServer: async () => { throw new Error('a server was started'); } };
+
+it('a declared public target is pictured without sign-in and without a locale, by path and by name, on dev and on prod', async () => {
+  const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+  const signedOut = (request, baseUrl, label) => {
+    assert.deepEqual(request.sign_in, { kind: 'none' }, label);
+    assert.equal(Object.hasOwn(request, 'account'), false, `${label}: no account`);
+    assert.equal(request.account, undefined, label);
+    assert.equal(request.locale, null, label);
+    assert.deepEqual(request.target, { name: 'landing-sv' }, label);
+    assert.equal(request.base_url, baseUrl, label);
+    assert.ok(!JSON.stringify(request).includes('/dev/login'), `${label}: no /dev/login`);
+  };
+  for (const word of ['/sv', 'landing-sv']) {
+    const result = await shot(['dev', word], fx);
+    assert.equal(result.code, 0, `${word}: ${result.stderr}`);
+    const { request } = sideOf(fx);
+    signedOut(request, 'http://127.0.0.1:8787', `dev ${word}`);
+    assert.equal(result.stdout.split('\n')[0], request.out);
+  }
+  const doorShut = async () => { throw new Error('a public target read a token or a session'); };
+  const prod = await shot(['prod', '/sv'], fx, { ...NO_SERVER, tokenFor: doorShut, getSecret: doorShut });
+  assert.equal(prod.code, 0, prod.stderr);
+  const { request } = sideOf(fx);
+  signedOut(request, 'https://meetmemoro.app', 'prod /sv');
+  assert.equal(prod.stdout.split('\n')[0], request.out);
+});
+
+it('an undeclared public path is refused naming .mc/shot.json, before a server starts', async () => {
+  const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+  const result = await shot(['dev', '/da'], fx, NO_SERVER);
+  assert.equal(result.code, 2, result.stderr);
+  assert.match(result.stderr, /no public target at \/da — .*\.mc\/shot\.json.*"public": true/u);
+  assert.equal(existsSync(fx.side), false, 'the script never ran');
+});
+
+it('--locale, --account, --onboarding, --shell, --me, --keep and --compare are refused with a public target', async () => {
+  const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+  const forms = [
+    ['dev', '/sv', '--locale', 'en-US'],
+    ['dev', '/sv', '--account', 'new'],
+    ['dev', 'landing-sv', '--onboarding'],
+    ['dev', '/sv', '--shell', 'base'],
+    ['prod', '/sv', '--me'],
+    ['dev', '/sv', '--keep'],
+    ['dev', '/sv', '--compare', 'main'],
+  ];
+  for (const argv of forms) {
+    const flag = argv.find((word) => word.startsWith('--'));
+    const result = await shot(argv, fx, { ...NO_SERVER, getSecret: async () => { throw new Error('a session was read'); } });
+    assert.equal(result.code, 2, `${argv.join(' ')}: ${result.stderr}`);
+    const lines = result.stderr.split('\n').filter(Boolean);
+    assert.equal(lines.length, 1, argv.join(' '));
+    assert.ok(lines[0].includes(flag) && lines[0].includes('public target'), `${argv.join(' ')}: ${lines[0]}`);
+  }
+  assert.match((await shot(['dev', '/sv', '--locale', 'en-US'], fx, NO_SERVER)).stderr, /the URL carries the locale \(\/sv\)/u);
+  assert.equal(existsSync(fx.side), false, 'no refusal ran the script');
+});
+
 describe('mc shot — the surface', () => {
   it('usage starts with usage and names every form', () => {
     assert.match(usage(), /^usage/u);
@@ -233,6 +298,8 @@ describe('mc shot — the pieces', () => {
     assert.equal(resolveTarget('/admin', SHOT_JSON).ok, true);
     assert.match(resolveTarget('/administrator', SHOT_JSON).error, /a path under \/app or \/admin/u);
     assert.equal(slug('/app/'), 'app');
+    assert.deepEqual(resolveTarget('/sv', PUBLIC_SHOT_JSON), { ok: true, target: { name: 'landing-sv' }, label: 'sv', public: true });
+    assert.equal(resolveTarget('/da', PUBLIC_SHOT_JSON).ok, false);
   });
 
   it('parses a viewport', () => {
