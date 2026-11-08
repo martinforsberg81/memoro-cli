@@ -526,6 +526,7 @@ describe('admit — waiting for a slot', () => {
       logEvent: (event, fields) => events.push({ event, fields }),
     });
     assertReserved(verdict);
+    assert.equal(verdict.waited_ms, 20_000, 'the wait the event log reads as waited_s: 20');
     assert.equal(waiting.length, 1);
     assert.deepEqual(waiting[0].holders.map((holder) => holder.instance_id), ['measure-a', 'measure-b']);
     assert.deepEqual(events, [{
@@ -785,6 +786,7 @@ describe('main: the main server is not evicted or counted, and a kept browser ho
     });
     const first = await admit({ ...opts, pid: DEAD_PID });
     assertReserved(first, 'admitted at once, though the cap is full and one waits');
+    assert.equal(first.waited_ms, 0, 'a yes on the first turn waited for nothing');
     assert.deepEqual(JSON.parse(readFileSync(queue, 'utf8')).tickets.map((item) => item.id), ['ahead'], 'no ticket taken');
     const short = await admit({ ...opts, waitSeconds: 0, freeMemory: () => 5 });
     assert.equal(short.reason, 'memory');
@@ -935,7 +937,7 @@ describe('queue: admission in order', () => {
       service: 'memoro-worker', worktree: '/w/mine', waitSeconds: 900, env: {}, root, now: () => T0,
       sleep: async () => { throw new Error('must not wait'); }, freeMemory: () => 50, logEvent: () => {},
     });
-    assert.deepEqual(verdict, { ok: true, reuse: 'measure-mine' }, 'reused, and no slot reserved');
+    assert.deepEqual(verdict, { ok: true, reuse: 'measure-mine', waited_ms: 0 }, 'reused, and no slot reserved');
     assert.deepEqual(queued(queue).map((item) => item.id), ['ahead'], 'no ticket was taken');
     rmSync(base, { recursive: true, force: true });
   });
@@ -1244,7 +1246,8 @@ describe('reservations: the slot is held from yes to registration', () => {
       ...ASK, worktree, root, waitSeconds: 900,
       sleep: async () => { polls += 1; if (polls === 2) registerManifest(writeSource(worktree, { instance_id: 'dev-a', reservation_id: first.reservation }), { root }); },
     });
-    assert.deepEqual(waited, { ok: true, reuse: 'dev-a' }, 'it waited for the first and took it');
+    assert.deepEqual([waited.ok, waited.reuse], [true, 'dev-a'], 'it waited for the first and took it');
+    assert.equal(typeof waited.waited_ms, 'number', 'and says how long it waited');
     rmSync(base, { recursive: true, force: true });
   });
 

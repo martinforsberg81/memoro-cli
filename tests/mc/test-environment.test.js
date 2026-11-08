@@ -668,6 +668,7 @@ describe('bringing one up', () => {
 
     assert.equal(ensured.ok, true, ensured.error);
     assert.equal(ensured.started, true);
+    assert.equal(ensured.waited_ms, 0, 'admitted on the first turn: nothing waited for a slot');
     assert.ok(now() >= 181_000, `gave up after ${now()}ms`);
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -697,6 +698,31 @@ describe('bringing one up', () => {
     assert.equal(spawned, 0);
     assert.equal(stopped, 0);
 
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('the admission\'s wait is on the result, and a slot taken after a wait says how long', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const { now, sleep } = clock();
+
+    const ensured = await ensureDevServer(worktree, DECLARATION, {
+      root,
+      processCwd: () => null,
+      freeMemory: () => null,
+      now,
+      sleep,
+      // The slot came after a wait, and the server it was given registered meanwhile.
+      admit: async () => {
+        registerServer(root, worktree, { port: 8900 });
+        return { ok: true, reuse: 'dev-8900', waited_ms: 405_000 };
+      },
+      fetch: async () => ({ ok: true }),
+    });
+
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.started, false);
+    assert.equal(ensured.waited_ms, 405_000);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
@@ -1639,6 +1665,23 @@ describe('ensureAppServer', () => {
     const sink = { write: (text) => answer.push(text) };
     await ensureAppServer('/w', DECLARATION, { json: true, stdout: sink, answer: sink, deps });
     assert.deepEqual(answer, []);
+  });
+
+  it('timing: the slot wait from admission, and the rest of the start, on a clock the stub moves', async () => {
+    let t = 1_000;
+    const ensured = await ensureAppServer('/w', DECLARATION, {
+      stdout: { write: () => {} },
+      deps: {
+        clock: () => t,
+        ensureDevServer: async () => {
+          t += 419_000;
+          return { ok: true, server: { url: 'http://127.0.0.1:8900/', instance_id: 'dev-8900' }, started: true, waited_ms: 405_000 };
+        },
+      },
+    });
+    assert.equal(ensured.ok, true, ensured.error);
+    assert.equal(ensured.baseUrl, 'http://127.0.0.1:8900');
+    assert.deepEqual(ensured.timing, { slot_wait_ms: 405_000, server_ms: 14_000 });
   });
 });
 

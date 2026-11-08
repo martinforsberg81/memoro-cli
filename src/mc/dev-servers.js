@@ -631,8 +631,12 @@ export async function admit({
   let said = null;
   let ticket = null;
   let placeAtJoin = null;
+  // Turns taken. A yes on the first turn is no wait, and says 0 whatever the clock reads.
+  let turn = 0;
+  const waitedMs = () => (turn > 1 ? clock() - startedAt : 0);
   try {
     for (;;) {
+      turn += 1;
       // The wrapper this admission is for (`owner`, its MC_DEV_OWNER_PID) has gone while it waited: nobody is
       // left to use the slot, so each poll says so and none is reserved.
       if (owner !== null && owner !== process.pid && !alive(owner)) {
@@ -644,7 +648,7 @@ export async function admit({
       }
       const snapshot = pool((held, servers) => ({ result: { held, servers } }));
       const own = without(snapshot.servers).find((server) => server.live !== false && isOwn(server, { service, worktree }));
-      if (own) return { ok: true, reuse: own.instance_id };
+      if (own) return { ok: true, reuse: own.instance_id, waited_ms: waitedMs() };
       const starting = snapshot.held.some((item) => reservationFor(item, { service, worktree }));
       // Where this request stands: null when it is not queued at all. The queue
       // orders the capped slots; MAIN takes none, and a start already in
@@ -723,7 +727,7 @@ export async function admit({
             ...(asked.reuse ? { reuse: asked.reuse } : {}),
           });
         }
-        return asked;
+        return { ...asked, waited_ms: waitedMs() };
       }
       const verdict = {
         ...asked,

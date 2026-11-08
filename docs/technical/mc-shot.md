@@ -56,7 +56,14 @@ mc shot logout prod
 - **The output** is the file path, alone on the first stdout line, so
   `$(mc shot … | head -1)` is the path. The page URL comes next, then any
   warning as `mc: warning — …`; what the shot met in between is § *What comes
-  back*. The dev-server progress lines go to stderr.
+  back*. The dev-server progress lines go to stderr. One timing line follows the
+  capture on stderr, `mc: timing — slot wait <w> s, server start <s> s, shot <c> s`
+  (prod: `mc: timing — shot <c> s`): the wait for a dev-server slot (`admit`), the
+  rest of getting a server (starting it and waiting for it to answer, or finding
+  it already answering), and the capture script's own run, each in whole seconds,
+  so a slow shot can be told from a slow app. It is not printed for `--keep`,
+  `--compare` or `mc shot next`. `--json` carries it as `timing`
+  (`{ slot_wait_s, server_start_s, shot_s }`, prod `{ shot_s }`) and prints no such line.
   `--json` prints the script's result object instead, and `--open` opens the
   file with the platform's opener (`open`, `xdg-open`, `start`), detached.
 

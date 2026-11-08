@@ -179,6 +179,9 @@ export async function run(argv, deps = {}) {
   let who = flags.account || 'seeded';
   let served = null;
   let serverId = null;
+  // The slot wait and server start of a dev shot (ensureAppServer's timing), and the clock the capture is timed on.
+  let serverTiming = null;
+  const clock = deps.clock || (() => performance.now());
   let resolved = null;
   const secrets = [];
   if (where === 'dev') {
@@ -188,6 +191,7 @@ export async function run(argv, deps = {}) {
     const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
+    serverTiming = app.timing ?? { slot_wait_ms: 0, server_ms: 0 };
     served = (deps.servedTree || servedTree)(worktree, app.server);
     serverId = app.server?.instance_id ?? null;
     if (!flags.json) stderr.write(`mc: ${flags.compare ? 'here: ' : ''}serving ${served.line}\n`);
@@ -282,12 +286,39 @@ export async function run(argv, deps = {}) {
       deps,
     });
   }
+  const shotStart = clock();
   const ran = (deps.runCapture || runCapture)({ worktree, declaration: declared, request, env: withoutToken(env, declaration), deps });
-  if (!ran.ok) { stderr.write(`mc: ${scrub(ran.error)}\n`); return 1; }
-  return answer(ran.result, {
+  // The timing line is stderr only, after the capture has been answered; `--json` carries it as `timing` instead.
+  const timing = timingOf(serverTiming, clock() - shotStart);
+  if (!ran.ok) {
+    stderr.write(`mc: ${scrub(ran.error)}\n`);
+    if (!flags.json) stderr.write(`mc: timing — ${timingText(timing)}\n`);
+    return 1;
+  }
+  const code = answer(ran.result, {
     request, served, who, json: flags.json, open: flags.open, scrub, stdout, stderr, deps,
-    worktree, script: declared.argv.join(' '),
+    worktree, script: declared.argv.join(' '), timing,
   });
+  if (!flags.json) stderr.write(`mc: timing — ${timingText(timing)}\n`);
+  return code;
+}
+
+/**
+ * The shot's own time in whole seconds: the slot wait and the server start where there was a server (ensureAppServer's
+ * `timing`, in ms), then the capture's run. Prod has no server, so it is the capture alone.
+ */
+function timingOf(server, shotMs) {
+  const seconds = (ms) => Math.round(ms / 1000);
+  return server
+    ? { slot_wait_s: seconds(server.slot_wait_ms), server_start_s: seconds(server.server_ms), shot_s: seconds(shotMs) }
+    : { shot_s: seconds(shotMs) };
+}
+
+/** The timing line's words, after `mc: timing — `. */
+function timingText(timing) {
+  return 'slot_wait_s' in timing
+    ? `slot wait ${timing.slot_wait_s} s, server start ${timing.server_start_s} s, shot ${timing.shot_s} s`
+    : `shot ${timing.shot_s} s`;
 }
 
 /**
@@ -300,7 +331,7 @@ export async function run(argv, deps = {}) {
  * which answers without the path line.
  */
 export function answer(result, {
-  request, served = null, who = null, json = false, open = false, picture = true,
+  request, served = null, who = null, json = false, open = false, picture = true, timing = null,
   scrub = (text) => String(text), stdout, stderr, deps = {}, worktree = '<unknown worktree>', script = '<unknown script>',
 }) {
   if (predatesWaitFor(request, result)) {
@@ -328,7 +359,8 @@ export function answer(result, {
   // failed step (pictured as the page stood) or thrown eval makes the exit 1.
   const report = reportLines(result);
   if (json) {
-    stdout.write(`${scrub(JSON.stringify(served ? { ...result, served } : result, null, 2))}\n`);
+    const shown = { ...result, ...(served ? { served } : {}), ...(timing ? { timing } : {}) };
+    stdout.write(`${scrub(JSON.stringify(shown, null, 2))}\n`);
   } else {
     if (picture) stdout.write(`${result.file}\n`);
     if (result.url) stdout.write(`${scrub(result.url)}\n`);
