@@ -113,8 +113,8 @@ export const COMMAND_USAGE = Object.freeze({
     "show includes the goal's stage · status and phase. list includes repositories, stage · status, criteria met/all, session count and the last entry's next action.\n",
   ].join(''),
   ask: [
-    'A goal-bound valid unresolved ask logs evidence and sets that goal Martin directly; jev answers leave its stage/status unchanged. A no-goal ask is chat-only.\n',
     'usage — mc ask [<programme>/<goal>] --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]\n',
+    'A goal-bound valid unresolved ask logs evidence and sets that goal Martin directly; jev answers leave its stage/status unchanged. A no-goal ask is chat-only.\n',
     '        Ask jev for a decision reading without changing a goal. Without a goal, uses MC_PROGRAMME or the programme containing the working directory.\n',
   ].join(''),
   tidy: [

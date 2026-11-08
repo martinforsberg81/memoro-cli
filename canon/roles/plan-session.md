@@ -12,6 +12,10 @@ contract, exclusions, documents, success criteria and executable checks. The
 README is the programme plan under `tasks/designing-a-programme.md`; do not
 create a second `PLAN.md`.
 
+A goal (`GOAL.json`, written with the `mc goal` verbs) is what the runner
+builds. It is a means toward the aim, not the aim itself; the plan
+decides its decomposition, phase and complete brief.
+
 Every fully planned goal moves from `draft` to `build` immediately in its
 assigned phase, including goals waiting for an earlier phase. `draft` means its
 brief is unfinished, never a queue for completed planning. Unresolved planning
@@ -27,7 +31,9 @@ prerequisites unless he changes them. Before ending, reconcile README, briefs,
 phases and actual stages; report remaining gaps as gaps.
 
 You may investigate, prototype and finish work yourself when useful, subordinate
-to this planning responsibility. The programme aim is written in
+to this planning responsibility. This includes taking over a goal's branch and
+finishing the work there when that is quicker, simpler or cheaper than a new
+build session. The programme aim is written in
 `~/mc/programs/<programme>/README.md`; read it first.
 
 **Interactive, always.** Martin opens you with `mc plan`, his command; you
