@@ -18,6 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1577,6 +1578,19 @@ describe('a repository that selects by diff', () => {
         assert.equal(gates.ran[0].command, 'npm run sql:pr-ci -- --base-ref base1111');
         assert.ok(wall >= 300, 'the gates were not awaited');
         assert.ok(report.timings['selected gates'] >= 300, 'the gates\' own time is still measured');
+        // The intervals as they ran, not their sum: the suite and a gate overlap, and the gates
+        // beside the suite enclose both. Ordering is asserted, not the clock's values.
+        const at = (step) => report.intervals.filter((one) => one.step === step);
+        const [beside] = at('gates beside suite');
+        const [suite] = at('suite');
+        const gatesRan = at('selected gates');
+        assert.equal(gatesRan.length, 2, 'each serial gate has its own interval');
+        assert.ok(suite && beside, 'the suite and the gates beside it are intervals');
+        assert.ok(gatesRan.every((one) => one.start_ms >= beside.start_ms && one.end_ms <= beside.end_ms), 'each gate lies within the gates-beside interval');
+        assert.ok(suite.start_ms >= beside.start_ms && suite.end_ms <= beside.end_ms, 'the suite lies within it too');
+        assert.ok(gatesRan[0].start_ms < suite.end_ms, 'a gate started before the suite ended: they overlap');
+        assert.ok(report.intervals.every((one) => one.end_ms >= one.start_ms && one.ms === one.end_ms - one.start_ms
+          && Date.parse(one.start_wall) <= Date.parse(one.end_wall)), 'every interval has an ordered start and end, wall and monotonic');
       } finally { fx.cleanup(); }
     });
 
@@ -3390,4 +3404,44 @@ describe('the round ceiling holds in every phase, whatever child is stuck', () =
       assert.match(report.reason, /no test file was named as unfinished/u);
     } finally { fx.cleanup(); }
   });
+});
+
+// A selector's stdout as the repository's selector prints it: two reasons on one
+// file, a binding, impacts, a deferred member, a resource class, a pass-base gate
+// and a gate that is unavailable without Docker. The normalised view is asserted
+// separately from the raw bytes and the whole parsed content.
+const SELECTOR_OUTPUT = {
+  files: ['a.test.js', 'b.test.js', 'c.test.js'],
+  deferred: ['e.test.js'],
+  resourceClasses: { 'a.test.js': 'sqlite', 'b.test.js': 'standard', 'c.test.js': 'heavy' },
+  impacts: { 'src/a.js': ['a.test.js'] },
+  bindings: { 'a.test.js': { binding: 'src/a.js', matchedBy: 'path-prefix' } },
+  why: { reason: null, selected_by: { 'a.test.js': ['imports:src/a.js', 'binding:src/a.js'], 'b.test.js': ['changed-test-file'] } },
+  commands: [
+    { id: 'lint', packageScript: 'lint', passBaseRef: true, selectedBy: ['changed:src/a.js'], needs: [] },
+    { id: 'db', packageScript: 'check:db', selectedBy: ['binding:db'], needs: ['docker'], allowUnavailable: true, unavailableExitCode: 69 },
+  ],
+};
+
+it('a selection keeps the selector output exactly, whole, independently of its normalised members', async () => {
+  const text = `${JSON.stringify(SELECTOR_OUTPUT, null, 2)}\n`;
+  const selected = await selectFiles({ command: 'selector', cwd: tmpdir(), env: process.env, say: () => {}, mainOnly: ['b.test.js'],
+    run: async () => ({ status: 0, stdout: text, stderr: '' }) });
+  assert.equal(selected.ok, true);
+  // Raw: the bytes, their digest, and every field the selector said.
+  assert.equal(selected.raw.text, text);
+  assert.equal(selected.raw.sha256, createHash('sha256').update(text).digest('hex'));
+  assert.deepEqual(selected.raw.content, SELECTOR_OUTPUT);
+  // Normalised: what this gate runs, and what the pull-request filter took out.
+  assert.deepEqual(selected.files, ['a.test.js', 'c.test.js']);
+  assert.deepEqual(selected.mainOnlyExcluded, ['b.test.js']);
+  assert.deepEqual(selected.classes, SELECTOR_OUTPUT.resourceClasses);
+  assert.deepEqual(selected.commands, [
+    { id: 'lint', packageScript: 'lint', passBaseRef: true, resourceClass: null, selectedBy: ['changed:src/a.js'], unavailableExitCode: null, needs: [] },
+    { id: 'db', packageScript: 'check:db', passBaseRef: false, resourceClass: null, selectedBy: ['binding:db'], unavailableExitCode: 69, needs: ['docker'] },
+  ]);
+  // A selection that cannot be read keeps no raw output and runs nothing.
+  const unreadable = await selectFiles({ command: 'selector', cwd: tmpdir(), env: process.env, say: () => {}, run: async () => ({ status: 0, stdout: '{"files":', stderr: '' }) });
+  assert.equal(unreadable.ok, false);
+  assert.equal(unreadable.raw, undefined);
 });

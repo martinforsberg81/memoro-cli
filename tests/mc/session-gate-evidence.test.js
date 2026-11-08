@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
-import { captureWorktree, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, sameContent } from '../../src/mc/session-gate-evidence.js';
+import { captureWorktree, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, sameContent, selectorSidecar } from '../../src/mc/session-gate-evidence.js';
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
@@ -715,4 +716,47 @@ it('resume and cache reads refuse a prior green whose batch ran another timeout,
   assert.equal(read()?.run, 'gate-good');
   writeFileSync(good, JSON.stringify({ ...receipt, execution: { ...receipt.execution, tests: { ...receipt.execution.tests, batches: [dropped] } } }));
   assert.equal(read(), null, 'a version-5 green whose only launch ran another timeout is never read');
+});
+
+const SELECTOR_CANDIDATE = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
+
+it('a selector sidecar is created whole and exclusively; a different content for the same run is refused, never overwritten', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mc-selector-persist-'));
+  try {
+    const bytes = '{"schema":"mc-selector-evidence"}\n';
+    const first = persistSelectorEvidence({ root: dir, run: 'run-1', bytes });
+    assert.equal(first.file, 'run-1.selector.json');
+    assert.equal(readFileSync(first.path, 'utf8'), bytes);
+    assert.equal(first.sha256, createHash('sha256').update(bytes).digest('hex'));
+    assert.equal(persistSelectorEvidence({ root: dir, run: 'run-1', bytes }).sha256, first.sha256, 'a byte-identical retry is accepted');
+    assert.throws(() => persistSelectorEvidence({ root: dir, run: 'run-1', bytes: '{"other":1}\n' }), /EEXIST/u);
+    assert.equal(readFileSync(first.path, 'utf8'), bytes, 'the first sidecar is not overwritten');
+    assert.deepEqual(readdirSync(join(dir, 'gate-evidence')).filter((name) => name.endsWith('.tmp')), [], 'no temporary file is left behind');
+    assert.throws(() => persistSelectorEvidence({ root: dir, run: '../escape', bytes }), /invalid gate run id/u);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it('a selector sidecar refuses output that does not parse to its own parsed content', () => {
+  const source = { command: 'selector', base: 'origin/main', cwd: '/work' };
+  const text = '{"files":["a.test.js"]}\n';
+  assert.throws(() => selectorSidecar({ run: 'r', repo: 'work', source, content: SELECTOR_CANDIDATE, raw: { text, content: { files: ['b.test.js'] } } }),
+    /disagree/u);
+  const bytes = selectorSidecar({ run: 'r', repo: 'work', source, content: SELECTOR_CANDIDATE, raw: { text, content: { files: ['a.test.js'] } } });
+  const sidecar = JSON.parse(bytes);
+  assert.equal(sidecar.raw.text, text);
+  assert.equal(sidecar.raw.sha256, createHash('sha256').update(text).digest('hex'));
+  assert.deepEqual(sidecar.parsed, { files: ['a.test.js'] });
+});
+
+it('a selector reference never completes a receipt: a pending selected command stays incomplete', () => {
+  const selector = { status: 'recorded', file: 'pending.selector.json', sha256: 'x'.repeat(64), bytes: 1, raw_sha256: 'y'.repeat(64) };
+  const receipt = gateReceipt({
+    measurement: { repo: 'work', run: 'pending', base: 'b'.repeat(40), candidate: SELECTOR_CANDIDATE },
+    before: SELECTOR_CANDIDATE, after: SELECTOR_CANDIDATE, started: '2026-11-08T00:00:00Z', ended: '2026-11-08T00:00:01Z', selector,
+    result: { ok: true, code: 0, coverage: { kind: 'affected', files: [], commands: [{ packageScript: 'lint' }, { packageScript: 'check:db' }], flags: [], execution: null, pattern: null, selector: 'selector' },
+      execution: { commands: [{ packageScript: 'lint', exit: 0, ok: true, state: 'completed' }] }, members: null, phases: null },
+  });
+  assert.equal(receipt.outcome, 'incomplete', 'one selected command never ran: not green, whatever the reference says');
+  assert.deepEqual(receipt.selector, selector);
+  assert.equal(receipt.phases, null, 'a receipt without phase intervals is still a receipt');
 });

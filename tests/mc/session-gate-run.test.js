@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,7 +14,7 @@ const runSessionGate = (request, deps = {}) => sessionGate(request, deps.tests ?
 import { run as gateCommand } from '../../src/mc/commands/gate.js';
 import { readGreenReceipt } from '../../src/mc/gate-greens.js';
 import { runningRounds } from '../../src/mc/gate-lock.js';
-import { realTests } from '../../src/mc/repo-gate.js';
+import { realTests, selectFiles } from '../../src/mc/repo-gate.js';
 import timesReporter from '../../src/mc/test-times-reporter.mjs';
 
 const GREEN = 'TAP version 13\nok 1 - works\n1..1\n# tests 1\n# pass 1\n# fail 0\n';
@@ -892,4 +893,145 @@ it('a file red under load and green alone settles the gate green, says so and re
   assert.notEqual(receipt.outcome, 'green', 'a settled run is not a green receipt: its round had a failure');
   assert.deepEqual(receipt.members.files.map(({ file, outcome }) => ({ file, outcome })),
     [{ file: 'a.test.js', outcome: 'passed' }, { file: 'b.test.js', outcome: 'passed' }], 'the next attempt reuses both');
+});
+
+// The selector output a session gate reads through the real `selectFiles`, from a
+// controlled child: the same shape as the repo-gate fixture, so the same retention is
+// proven on the session route.
+const SESSION_SELECTOR = {
+  files: ['a.test.js', 'b.test.js', 'c.test.js', 'd.test.js'],
+  deferred: ['e.test.js'],
+  resourceClasses: { 'a.test.js': 'sqlite', 'b.test.js': 'standard', 'c.test.js': 'heavy' },
+  impacts: { 'src/a.js': ['a.test.js'] },
+  bindings: { 'a.test.js': { binding: 'src/a.js', matchedBy: 'path-prefix' } },
+  why: { reason: null, selected_by: { 'a.test.js': ['imports:src/a.js', 'binding:src/a.js'], 'b.test.js': ['changed-test-file'] } },
+  commands: [
+    { id: 'lint', packageScript: 'lint', passBaseRef: true, selectedBy: ['changed:src/a.js'], needs: [] },
+    { id: 'db', packageScript: 'check:db', selectedBy: ['binding:db'], needs: ['docker'], allowUnavailable: true, unavailableExitCode: 69 },
+  ],
+};
+const SESSION_CANDIDATE = { repository: '/repo/.git', tree: 'a'.repeat(40), fingerprint: 'bytes' };
+const SESSION_BASE = 'b'.repeat(40);
+
+// The reporter's lines for each file, read by the real tracker (`times.track`), so the
+// files count as run and not cut short.
+function reportRun({ files, times, dir }) {
+  if (!files.length || !times) return;
+  const lines = files.flatMap((file) => [{ file: `/work/${file}`, started: true }, { file: `/work/${file}`, done: true, ms: 1 }, { file: `/work/${file}`, ended: true, ok: true }]);
+  const path = join(dir, `report-${files.join('+')}.jsonl`);
+  writeFileSync(path, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  times.track(path);
+  times.complete(path);
+}
+
+// One measured session attempt whose selector prints `text` through a controlled child.
+async function selectorAttempt({ root, run, text = `${JSON.stringify(SESSION_SELECTOR, null, 2)}\n`, select = null, mainOnly = ['b.test.js'] }) {
+  const ran = { tests: [], shell: [] };
+  const result = await runSessionGate({ cwd: '/work', select: 'selector', mainOnly, gate: { root, repo: 'work' },
+    measurement: { repo: 'work', run, base: SESSION_BASE, configuration: 'cfg', candidate: SESSION_CANDIDATE } }, {
+    write: () => {}, snapshot: () => SESSION_CANDIDATE, record: () => {},
+    select: select ?? ((args) => selectFiles({ ...args, say: () => {}, run: async () => ({ status: 0, stdout: text, stderr: '' }) })),
+    tests: async ({ files, times }) => { ran.tests.push(...files); reportRun({ files, times, dir: root }); return { tap: GREEN, code: 0 }; },
+    shell: async (invocation) => { ran.shell.push(invocation); return { status: invocation.includes('check:db') ? 69 : 0 }; },
+  });
+  return { result, ran, receipt: JSON.parse(readFileSync(result.evidence.path, 'utf8')) };
+}
+
+it('a session gate keeps the selector output it read beside its receipt: exact bytes, the whole parsed content, and the plan it ran', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-selector-sidecar-'));
+  try {
+    const text = `${JSON.stringify(SESSION_SELECTOR, null, 2)}\n`;
+    const { result, ran, receipt } = await selectorAttempt({ root, run: 'sidecar', text });
+    const sidecarPath = join(root, 'gate-evidence', 'sidecar.selector.json');
+    const bytes = readFileSync(sidecarPath, 'utf8');
+    const sidecar = JSON.parse(bytes);
+    // Member totals are the normalised selection, with the main-only file removed and the unavailable gate reported.
+    assert.equal(result.verdict, 'incomplete');
+    assert.deepEqual(ran.tests, ['a.test.js', 'c.test.js', 'd.test.js']);
+    assert.deepEqual(ran.shell, ["npm run 'lint' -- --base-ref 'origin/main'", "npm run 'check:db'"]);
+    assert.deepEqual(receipt.coverage.files, ['a.test.js', 'c.test.js', 'd.test.js']);
+    // Raw: the exact stdout, its digest, and every field the selector said.
+    assert.equal(sidecar.raw.text, text);
+    assert.equal(sidecar.raw.sha256, createHash('sha256').update(text).digest('hex'));
+    assert.deepEqual(sidecar.parsed, SESSION_SELECTOR, 'the full parsed content, field for field');
+    assert.deepEqual({ schema: sidecar.schema, version: sidecar.version, run: sidecar.run, configuration: sidecar.configuration },
+      { schema: 'mc-selector-evidence', version: 1, run: 'sidecar', configuration: 'cfg' });
+    assert.deepEqual(sidecar.source, { command: 'selector', base: 'origin/main', cwd: '/work' });
+    assert.deepEqual(sidecar.content, { repository: SESSION_CANDIDATE.repository, tree: SESSION_CANDIDATE.tree, fingerprint: SESSION_CANDIDATE.fingerprint });
+    // The plan: what ran, and what was excluded and why, kept apart from the raw output.
+    assert.deepEqual(sidecar.plan.selected, ['a.test.js', 'c.test.js', 'd.test.js']);
+    assert.deepEqual(sidecar.plan.main_only_excluded, ['b.test.js']);
+    assert.deepEqual(sidecar.plan.run_files, ['a.test.js', 'c.test.js', 'd.test.js']);
+    assert.deepEqual(sidecar.plan.commands.map((entry) => [entry.packageScript, entry.passBaseRef, entry.selectedBy, entry.needs, entry.unavailableExitCode]),
+      [['lint', true, ['changed:src/a.js'], [], null], ['check:db', false, ['binding:db'], ['docker'], 69]]);
+    // The receipt names the sidecar by its digest and raw digest. It is a reference, not an executed check.
+    assert.deepEqual(receipt.selector, { status: 'recorded', file: 'sidecar.selector.json', sha256: createHash('sha256').update(bytes).digest('hex'),
+      bytes: Buffer.byteLength(bytes), raw_sha256: sidecar.raw.sha256 });
+    assert.equal(receipt.outcome, 'incomplete', 'the unavailable gate stays non-green; the sidecar adds nothing');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('an evidence gap is recorded and changes neither the selected work nor the verdict', async () => {
+  // Separate roots: a later attempt on the same content would resume what an earlier one proved.
+  const root = mkdtempSync(join(tmpdir(), 'mc-selector-gap-'));
+  const gapRoot = mkdtempSync(join(tmpdir(), 'mc-selector-refused-'));
+  const missingRoot = mkdtempSync(join(tmpdir(), 'mc-selector-missing-'));
+  try {
+    const baseline = await selectorAttempt({ root, run: 'baseline' });
+    // The sidecar's own path is taken by a directory, so the exclusive write is refused.
+    mkdirSync(join(gapRoot, 'gate-evidence', 'refused.selector.json'), { recursive: true });
+    const refused = await selectorAttempt({ root: gapRoot, run: 'refused' });
+    assert.equal(refused.receipt.selector.status, 'unavailable');
+    assert.match(refused.receipt.selector.reason, /EISDIR|EEXIST/u);
+    assert.equal(refused.receipt.selector.raw_sha256, baseline.receipt.selector.raw_sha256, 'the raw output was read the same way');
+    assert.deepEqual(refused.ran, baseline.ran, 'every selected test and gate still ran');
+    assert.equal(refused.receipt.outcome, baseline.receipt.outcome);
+    assert.deepEqual(refused.receipt.coverage, baseline.receipt.coverage);
+    assert.deepEqual(refused.receipt.execution.commands.map(({ exit, ok, state }) => ({ exit, ok, state })),
+      baseline.receipt.execution.commands.map(({ exit, ok, state }) => ({ exit, ok, state })));
+    // Missing output: the selector gave no retained raw text. Nothing is invented, and the run still executes what it selected.
+    const missing = await selectorAttempt({ root: missingRoot, run: 'missing', select: async () => ({ ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }) });
+    assert.equal(missing.receipt.selector.status, 'unavailable');
+    assert.equal(missing.receipt.selector.reason, 'the selector output was not retained');
+    assert.deepEqual(missing.ran.tests, ['a.test.js']);
+    assert.deepEqual(missing.ran.shell, ["npm run 'lint'"]);
+    assert.equal(missing.receipt.outcome, 'green', 'a missing attribution is not a failed check');
+  } finally {
+    for (const dir of [root, gapRoot, missingRoot]) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('phase intervals overlap honestly: the execution total is the enclosing interval, never the sum of its children', async () => {
+  // A deterministic clock the fakes move: selection 0–5, tests 5–50, lint 5–30.
+  const timeline = { now: 0 };
+  const clock = { monotonic: () => timeline.now, wall: () => new Date(Date.UTC(2026, 10, 8) + timeline.now).toISOString() };
+  const root = mkdtempSync(join(tmpdir(), 'mc-phase-intervals-'));
+  let commandDone;
+  const commandFinished = new Promise((resolve) => { commandDone = resolve; });
+  try {
+    const result = await runSessionGate({ cwd: '/work', select: 'selector', gate: { root, repo: 'work' },
+      measurement: { repo: 'work', run: 'phases', base: SESSION_BASE, candidate: SESSION_CANDIDATE } }, {
+      clock, write: () => {}, snapshot: () => SESSION_CANDIDATE, record: () => {},
+      select: async () => { timeline.now = 5; return { ok: true, files: ['a.test.js'], commands: [{ packageScript: 'lint' }] }; },
+      // The tests end only after the serial command has ended, at 50.
+      tests: async ({ files, times }) => { await commandFinished; timeline.now = 50; reportRun({ files, times, dir: root }); return { tap: GREEN, code: 0 }; },
+      shell: async () => { timeline.now = 30; setTimeout(commandDone, 0); return { status: 0 }; },
+    });
+    const receipt = JSON.parse(readFileSync(result.evidence.path, 'utf8'));
+    const phases = receipt.phases;
+    const byName = Object.fromEntries(phases.children.map((one) => [one.name, one]));
+    assert.equal(result.verdict, 'green');
+    assert.equal(phases.execution.start_ms, 0);
+    assert.equal(phases.execution.end_ms, 50);
+    assert.equal(phases.total_ms, 50, 'the total is the enclosing execution interval');
+    assert.deepEqual([byName.selection.start_ms, byName.selection.end_ms, byName.selection.ms], [0, 5, 5]);
+    assert.deepEqual([byName.tests.start_ms, byName.tests.end_ms, byName.tests.ms], [5, 50, 45]);
+    assert.deepEqual([byName['command lint'].start_ms, byName['command lint'].end_ms, byName['command lint'].ms], [5, 30, 25]);
+    assert.equal(byName.tests.start_wall, new Date(Date.UTC(2026, 10, 8) + 5).toISOString());
+    assert.deepEqual(phases.overlaps, [['tests', 'command lint']], 'only the concurrent pair overlaps');
+    assert.deepEqual(phases.unobserved, ['caller', 'fixture'], 'the clocks this process did not observe are named as unknown');
+    // The children add to more than the enclosing interval, which is why the total is not their sum.
+    const sum = phases.children.reduce((total, one) => total + (one.ms ?? 0), 0);
+    assert.ok(sum > phases.total_ms, `children add to ${sum} ms over a ${phases.total_ms} ms interval`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
