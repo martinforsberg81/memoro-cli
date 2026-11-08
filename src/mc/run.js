@@ -779,17 +779,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * model session of any kind starts until the hold lapses. Its length is
    * `offlineBackoffMs(n)` — a minute, doubling, at most fifteen — with `n` the
    * offline endings in a row. A session that ends any other way clears it and
-   * resets `n`; a running session is untouched. It is held in memory, so a
-   * restart starts without one. The tick writes nothing while it holds.
+   * resets `n` only when it started after the hold was set; an earlier-started
+   * session does not clear it. A running session is untouched. It is held in
+   * memory, so a restart starts without one. The tick writes nothing while it holds.
    */
   let offlineHold = null;
   const untilText = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/u, 'Z');
   function offlineHeld() {
     return Boolean(offlineHold) && deps.now().getTime() < offlineHold.until;
   }
-  function noteOfflineEnding(name, kind) {
+  function noteOfflineEnding(name, kind, { startedAt } = {}) {
     if (kind !== 'offline') {
       if (!offlineHold) return;
+      if (startedAt < offlineHold.since) {
+        say(`${name}: started before the offline hold was set — its ending does not clear the hold`);
+        return;
+      }
       offlineHold = null;
       say(`${name}: the API answers again — the offline hold is cleared`);
       return;
@@ -797,7 +802,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const n = (offlineHold?.n ?? 0) + 1;
     const wait = offlineBackoffMs(n);
     const until = deps.now().getTime() + wait;
-    offlineHold = { n, until };
+    offlineHold = { n, until, since: deps.now().getTime() };
     say(`${name}: the API server cannot be reached — no session starts until ${untilText(until)} (n=${n}, ${wait / 1000} s)`);
   }
 
@@ -1824,7 +1829,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
       if (result.handedOff) read.note = 'success,queued';
-      noteOfflineEnding(name, read.interrupted);
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
