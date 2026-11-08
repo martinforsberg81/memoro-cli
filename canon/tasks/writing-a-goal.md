@@ -39,8 +39,8 @@ renumbered; a `draft` goal holds later phases back too. The cut into goals and p
   partial, skipped or unavailable evidence is not green. Mark criteria met only after the whole check
   holds. Follow writing-tests.md for costs; moving work between clocks is not a saving.
 - **Live evidence:** a live check (app, browser) gives its command and prerequisites; read the
-  ceiling from evidence: the verdict's wall time is under N s, not enforced by a wrapper. Never a
-  run count, stage allocation, reserved run or load condition: a check that holds only on a quiet
+  ceiling from evidence: the verdict's wall time is under N s, not enforced by a wrapper. Do not
+  set a run count, stage allocation, reserved run or load condition: a check that holds only on a quiet
   machine is a defect to repair. Rerun after a change or diagnosis; failure is evidence, not budget.
 - **Standards:** list the `docs/technical/` documents it holds to; criteria apply them, never set new.
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build.
