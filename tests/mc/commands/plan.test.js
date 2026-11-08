@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -26,6 +26,7 @@ import { withoutSessionIdentity } from '../../../src/mc/session-role.js';
 import { PLAN_ROLE } from '../../../src/mc/goals.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
+import { canonRoot } from '../../../src/mc/canon.js';
 
 function sink() {
   const out = { text: '' };
@@ -427,6 +428,71 @@ describe('a planning area nothing could be checked out into', () => {
 });
 
 describe('a standing planning checkout', () => {
+  it('a new programme gets its README from the programme template', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-template-'));
+    const programme = 'new-programme';
+    const checkout = join(root, 'plan', programme, 'memoro');
+    mkdirSync(checkout, { recursive: true });
+    // A real checkout: `inspectWorktree` asks git whether it is one.
+    spawnSync('git', ['init', '-q', checkout]);
+    const stdout = sink();
+    const result = ensurePlanArea(programme, {
+      repos: [{ name: 'memoro', path: join(root, 'no-such-repo') }],
+      env: { MC_WORK_ROOT: root }, stdout, stderr: sink(), attach: () => ({ ok: true }),
+    });
+    const readmePath = join(root, 'plan', programme, 'README.md');
+    const source = readFileSync(join(canonRoot(), 'tasks', 'references', 'programme-readme.md'), 'utf8');
+    const template = source.match(/^```markdown\r?\n([\s\S]*?)\r?\n```/mu)?.[1];
+    const expected = template.replace(/^# <programme>/mu, `# ${programme}`);
+    assert.equal(result.ok, true);
+    assert.equal(result.readme, 'written');
+    assert.equal(readFileSync(readmePath, 'utf8'), expected);
+    assert.deepEqual([...expected.matchAll(/^## .+$/gmu)].map(([heading]) => heading), [
+      '## Aim', '## Now', '## Phases', "## Martin's", '## Where things are',
+    ]);
+    assert.match(stdout.out.text, /written from the programme template/u);
+    const role = readCanonRole(PLAN_ROLE);
+    const withTemplate = planLaunch({ programme, repos: ['memoro'], role, env: { MC_WORK_ROOT: root }, readmeWritten: true }).prompt;
+    const withoutTemplate = planLaunch({ programme, repos: ['memoro'], role, env: { MC_WORK_ROOT: root } }).prompt;
+    assert.match(withTemplate, /template/u);
+    assert.match(withTemplate, /designing-a-programme/u);
+    assert.match(withTemplate, /written just now/u);
+    assert.match(withTemplate, /placeholder text/u);
+    assert.ok(!/template|designing-a-programme/u.test(withoutTemplate), withoutTemplate);
+  });
+
+  it('an existing README is left as it is', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-existing-readme-'));
+    const programme = 'standing';
+    const area = join(root, 'plan', programme);
+    const checkout = join(area, 'memoro');
+    mkdirSync(checkout, { recursive: true });
+    // A real checkout: `inspectWorktree` asks git whether it is one.
+    spawnSync('git', ['init', '-q', checkout]);
+    const readmePath = join(area, 'README.md');
+    const original = '# standing\n\nmy own words\n';
+    let fileAppearedAfterAbsenceCheck = false;
+    const result = ensurePlanArea(programme, {
+      repos: [{ name: 'memoro', path: join(root, 'no-such-repo') }],
+      env: { MC_WORK_ROOT: root }, stdout: sink(), stderr: sink(), attach: () => ({ ok: true }),
+      // A concurrent planner creates the page after our absence check but
+      // before the exclusive open. The real wx write must leave its bytes alone.
+      exists: (path) => {
+        if (path === readmePath && !fileAppearedAfterAbsenceCheck) {
+          fileAppearedAfterAbsenceCheck = true;
+          writeFileSync(readmePath, original);
+          return false;
+        }
+        return existsSync(path);
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(readFileSync(readmePath, 'utf8'), original);
+    assert.equal(result.readme, 'kept');
+    const prompt = planLaunch({ programme, repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env: { MC_WORK_ROOT: root } }).prompt;
+    assert.ok(!/template|designing-a-programme/u.test(prompt), prompt);
+  });
+
   it('is attached again when the programme is reopened, and a failed attach is said and not fatal', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-plan-reattach-'));
     const checkout = join(root, 'plan', 'reopened', 'memoro');

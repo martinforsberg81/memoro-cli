@@ -2397,7 +2397,8 @@ export function suiteEnv(env) {
   const clean = { ...env };
   const home = env.MC_HOME;
   for (const key of ['NODE_TEST_CONTEXT', 'MC_WORK_ROOT', 'MC_HOME']) delete clean[key];
-  const direct = directGitDir({ home });
+  // A test-started round must keep its model/counting shim first on PATH.
+  const direct = env.MC_GIT_CALLS ? null : directGitDir({ home });
   if (direct && clean.PATH) clean.PATH = `${direct}:${clean.PATH}`;
   return clean;
 }

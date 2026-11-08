@@ -542,9 +542,9 @@ test('a partial merge enqueue does not release its session before all PRs are ha
   assert.deepEqual(JSON.parse(f.store['/scratch/.mc-merge-handoff.json']), { goal: 'mc/plain' });
 });
 
-describe('mc goal stage against a real origin/main', () => {
+describe('mc goal stage against a modelled origin/main', () => {
   // One origin, main at its first commit. Goal g's worktree edits shared.md, which main then edits: a conflict.
-  // Goal h's worktree edits only other.md, so it is behind main and merges cleanly. Real git and real files.
+  // Goal h's worktree edits only other.md, so it is behind main and merges cleanly. Modelled history and real files.
   let root;
   const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
   const goalDir = (goal) => join(root, 'home', 'prog', 'goals', goal);

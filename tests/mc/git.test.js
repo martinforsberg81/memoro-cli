@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { useGitProcess } from '../../src/lib/git-process.js';
 import { commitsAhead, git as mcGit, GIT_TIMEOUT_MS, resolveDefaultBranch, run, runAsync, tryGit, useGitRunner } from '../../src/mc/git.js';
 
 const GIT_ENV = {
@@ -118,31 +119,10 @@ test('counts against a custom resolved default branch and preserves unknown', (t
   assert.equal(commitsAhead(repo.dir, 'does-not-exist'), null);
 });
 
-/**
- * A clone of a bare remote whose default branch is `defaultBranch`, its
- * remote named `remote`; with `backup`, a second bare beside it at
- * `<root>/backup.git` whose default branch is that, added to the clone as the
- * remote `backup`, fetched, with `refs/remotes/backup/HEAD` naming it; with
- * `work`, a branch of that name carrying one commit the default branch lacks,
- * while the default branch stays checked out. Each shape is built once per
- * file, with real git, and copied per test: building one, or setting it up
- * in the test, took five or six git processes a test (2026-11-03).
- */
-const templates = new Map();
+/** Each test builds its own model repository, with isolated refs and remotes. */
 function makeClonedRepo({ defaultBranch, remote = 'origin', backup = null, work = null }) {
-  const key = JSON.stringify([defaultBranch, remote, backup, work]);
-  if (!templates.has(key)) templates.set(key, buildClonedRepo({ defaultBranch, remote, backup, work }));
-  const template = templates.get(key);
-  const root = mkdtempSync(join(tmpdir(), 'mc-default-branch-'));
-  cpSync(template, root, { recursive: true });
-  const dir = join(root, 'clone');
-  const config = join(dir, '.git', 'config');
-  writeFileSync(config, readFileSync(config, 'utf8').split(template).join(root));
-  return {
-    root,
-    dir,
-    cleanup() { rmSync(root, { recursive: true, force: true }); },
-  };
+  const root = buildClonedRepo({ defaultBranch, remote, backup, work });
+  return { root, dir: join(root, 'clone'), cleanup() { rmSync(root, { recursive: true, force: true }); } };
 }
 
 function buildClonedRepo({ defaultBranch, remote, backup, work }) {
@@ -165,13 +145,6 @@ function buildClonedRepo({ defaultBranch, remote, backup, work }) {
   }
   return root;
 }
-
-// Built while the file loads, outside any test's time.
-for (const shape of [
-  { defaultBranch: 'main' }, { defaultBranch: 'master' }, { defaultBranch: 'trunk', remote: 'upstream' },
-  { defaultBranch: 'develop' }, { defaultBranch: 'stable' }, { defaultBranch: 'main', backup: 'trunk' },
-  { defaultBranch: 'trunk', remote: 'upstream', work: 'sess/work' },
-]) makeClonedRepo(shape).cleanup();
 
 function makeBareRemote({ root, name, defaultBranch }) {
   const source = join(root, `${name}-source`);
@@ -199,27 +172,23 @@ function git(cwd, args, { allowFailure = false } = {}) {
   }
 }
 
-// A git that does not finish — a credential helper waiting on a locked
-// keychain's modal — is stopped, and the error names what timed out. The fake
-// sleeps 3 s and then succeeds, so without the limit the call returns cleanly
-// and the assertion fails rather than hanging the suite.
-function slowGit(t) {
+// Exercise the real sync/async process boundary with a slow non-git program.
+// Without the deadline it prints "late" successfully after 3 s, so the timeout
+// assertions fail rather than leaving a hung child. No PATH replacement.
+function slowProgram(t) {
   const dir = mkdtempSync(join(tmpdir(), 'mc-git-slow-'));
-  const bin = join(dir, 'bin');
-  mkdirSync(bin);
-  writeFileSync(join(bin, 'git'), '#!/bin/sh\nsleep 3\necho late\n');
-  chmodSync(join(bin, 'git'), 0o755);
-  const path = process.env.PATH;
-  process.env.PATH = `${bin}:${path}`;
-  t.after(() => {
-    process.env.PATH = path;
-    rmSync(dir, { recursive: true, force: true });
+  const script = "setTimeout(() => console.log('late'), 3000)";
+  const restoreRunner = useGitRunner(null);
+  const restoreProcess = useGitProcess({
+    spawn: (_git, args, options) => spawn(process.execPath, ['-e', script, '--', ...args], options),
+    spawnSync: (_git, args, options) => spawnSync(process.execPath, ['-e', script, '--', ...args], options),
   });
+  t.after(() => { restoreProcess(); restoreRunner(); rmSync(dir, { recursive: true, force: true }); });
   return dir;
 }
 
 test('git() stops a call that does not finish and says what timed out', (t) => {
-  const dir = slowGit(t);
+  const dir = slowProgram(t);
   const started = Date.now();
   assert.throws(
     () => mcGit(dir, ['fetch', '-q', 'origin'], { timeoutMs: 300 }),
@@ -229,11 +198,11 @@ test('git() stops a call that does not finish and says what timed out', (t) => {
       return true;
     },
   );
-  assert.ok(Date.now() - started < 2500, 'stopped before the fake git finished');
+  assert.ok(Date.now() - started < 2500, 'stopped before the slow program finished');
 });
 
 test('tryGit() answers null for a call that timed out', (t) => {
-  const dir = slowGit(t);
+  const dir = slowProgram(t);
   assert.equal(tryGit(dir, ['ls-remote', 'origin', 'HEAD'], { timeoutMs: 300 }), null);
 });
 
@@ -258,7 +227,7 @@ test('useGitRunner() stands in for every git call in the process, sync and async
     assert.deepEqual(calls[3].options, { env: { A: '1' }, input: 'x', timeoutMs: 7, maxBuffer: 9, encoding: 'utf8' });
     assert.equal(calls[4].options.timeoutMs, GIT_TIMEOUT_MS);
   } finally { restore(); }
-  // Restored: a real git answers, in the shape spawnSync gives.
+  // Restored: the default repository model answers --version, in the spawnSync shape.
   const real = run(process.cwd(), ['--version']);
   assert.equal(real.status, 0);
   assert.match(real.stdout, /^git version /u);
@@ -271,9 +240,9 @@ test('runAsync() reports a failing status, a missing cwd and a timeout the way s
   const failed = await runAsync(process.cwd(), ['rev-parse', '--verify', 'refs/heads/no-such-branch-ever']);
   assert.equal(failed.status, 128);
   assert.match(failed.stderr, /fatal/u);
+  const dir = slowProgram(t);
   const missing = await runAsync('/no/such/dir', ['status']);
   assert.ok(missing.error, 'a cwd that does not exist is an error, not a status');
-  const dir = slowGit(t);
   const slow = await runAsync(dir, ['fetch'], { timeoutMs: 300 });
   assert.equal(slow.error?.code, 'ETIMEDOUT');
 });

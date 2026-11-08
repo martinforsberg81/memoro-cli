@@ -46,8 +46,9 @@ its last row should read `0%`.
   Test authority is assigned by the canonical session roles.
 - Tests mirror `src/` under `tests/`. `tests/_isolate-home.mjs` answers every
   git a test spawns from the model in `tests/mc/_helpers/fake-git.js`; a file
-  that reaches real git ends red. Files that need git's own behaviour are named
-  in `tests/_real-git-files.mjs`, a list that only shrinks.
+  that reaches real git ends red, with no exemptions. The model proves mc's
+  decisions against modelled answers, not git's merge/conflict/hook semantics.
+  The production merge round remains the check of git semantics.
 - `src/adapters/index.js` is the launch adapter every verb that starts a tool
   goes through (`resolveLaunch`), so no verb spells out `claude` or `codex`.
 - Don't add a verb nothing reaches, or leave a module nothing reaches. Don't

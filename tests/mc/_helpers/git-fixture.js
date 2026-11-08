@@ -1,9 +1,9 @@
 /**
- * Spin up a throwaway git repo + worktrees for lifecycle command tests.
+ * Build a throwaway model repository and worktrees for lifecycle tests.
  *
  * Each test gets its own tmpdir; teardown removes it. Repos are
- * configured with a quiet local identity so `git commit` doesn't error
- * on missing user.email.
+ * answered by the default repository model, never by a git process. The
+ * identity is retained in the fixture environment for child compatibility.
  */
 import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';

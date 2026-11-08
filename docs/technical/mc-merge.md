@@ -434,9 +434,11 @@ re-pinned.
 **A suite finds the toolchain's git first** (`directGitDir` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
 shim that asks xcrun on every call, 67 ms against 23 ms for the git behind it
-(2026-11-01), and memoro-cli's autonomy tests make about 400 calls each. `suiteEnv`
+(2026-11-01), before model migration, autonomy tests made about 400 calls each. `suiteEnv`
 puts `$MC_HOME/direct-git`, a directory holding one link, first on the suite's
-PATH. Off macOS, or when no link can be made, PATH is unchanged.
+PATH for production rounds. A round started by a test (MC_GIT_CALLS is set)
+keeps its model/counting shim first; off macOS, or when no link can be made,
+PATH is unchanged.
 
 **A merge round runs at least four lanes.** `realTests` passes
 `--test-concurrency=<testLanes()>` — unless the repository's own flags already

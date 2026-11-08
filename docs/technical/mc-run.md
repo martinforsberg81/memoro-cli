@@ -190,7 +190,9 @@ writes no runner entry and records no refusal, and its `runs.tsv` note is
 mend, the helper and the intake — for `offlineBackoffMs(n)`: a
 minute, doubling, at most fifteen, with `n` the offline endings in a row. The
 hold is in memory, so a restart starts without one. A session that ends any
-other way clears it and resets `n`. Sessions already running are untouched.
+other way clears it and resets `n` only when it started after the hold was set.
+A session that started before the hold ends without clearing it, and the runner
+says so in one line. Sessions already running are otherwise untouched.
 
 ### Launch settings
 

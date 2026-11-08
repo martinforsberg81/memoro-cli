@@ -8,8 +8,8 @@
 import { FakeGit } from './fake-git.js';
 
 const file = process.env.MC_FAKE_GIT_STATE;
-if (file) {
-  const model = FakeGit.load(file);
+export const model = file ? FakeGit.load(file) : null;
+if (model) {
   model.install();
   process.prependOnceListener('exit', () => { try { model.snapshot(file); } catch { /* the parent reads what it can */ } });
 }

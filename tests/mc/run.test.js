@@ -3009,6 +3009,54 @@ test('an unreachable API holds every launch with a growing wait, writes no goal 
   assert.equal(holdLines().length, 4, 'three set lines and one clear line, nothing else');
 });
 
+test('a session that started before the offline hold ends without clearing it; one started after the hold clears it', async t => {
+  const f = goalFixture({ a: {}, b: {} });
+  let clock = Date.parse('2026-11-07T12:00:00Z');
+  f.deps.now = () => new Date(clock);
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  f.answer = async call => {
+    const name = call.env.MC_GOAL.split('/')[1];
+    if (name === 'a' && f.calls.sessions.length === 1) {
+      await held;
+      return logsItself(f, 'a')(call);
+    }
+    return UNREACHABLE(call);
+  };
+  t.after(() => { f.files['/w/runner/STOP'] = ''; release(); });
+  const runner = createRunner({ deps: f.deps });
+  const runnerLog = () => f.files['/w/runner/log/runner.log'] || '';
+  const holdLines = () => runnerLog().split('\n').filter(line => /API server cannot be reached|API answers again|started before the offline hold was set/u.test(line));
+
+  const first = runner.pass({ repo: 'memoro', lane: 0 });
+  await turns();
+  assert.equal(f.calls.sessions.length, 1, 'lane 0 has started a and is held open');
+  clock += 1_000;
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 1 })).ran, 1, 'lane 1 ends b offline');
+  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(holdLines().filter(line => /\(n=1, 60 s\)$/u.test(line)).length, 1);
+
+  release();
+  await first;
+  assert.equal(holdLines().filter(line => /API answers again/u.test(line)).length, 0);
+  assert.equal(holdLines().filter(line => /started before the offline hold was set — its ending does not clear the hold/u.test(line)).length, 1);
+  const count = f.calls.sessions.length;
+  clock += 30_000;
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 0 })).ran, 0);
+  assert.equal(f.calls.sessions.length, count, 'a tick inside the hold launches nothing');
+
+  clock = Date.parse('2026-11-07T12:01:01Z');
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 0 })).ran, 1);
+  assert.equal(f.calls.sessions.length, count + 1);
+  assert.equal(holdLines().filter(line => /\(n=2, 120 s\)$/u.test(line)).length, 1, 'the count was not reset by the older session');
+
+  clock = Date.parse('2026-11-07T12:03:02Z');
+  f.answer = logsItself(f, 'a');
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 0 })).ran, 1);
+  assert.equal(holdLines().filter(line => /API answers again/u.test(line)).length, 1);
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 0 })).ran, 1, 'the next tick launches at once');
+});
+
 /* ------------------------------------------------------- archive a finished goal */
 
 /** A goal's one entry, made by a session, with the status it set. */

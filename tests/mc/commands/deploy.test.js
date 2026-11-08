@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1372,15 +1372,10 @@ describe('what the script said', () => {
 });
 
 describe('a deploy that was stopped', () => {
-  // A real repository: what counts as a stamp is read from git's own diff,
-  // and a stub could only agree with the regex it was written against.
-  // Built once per file and copied per test (three git processes a test).
-  const STAMPED = buildStampedRepo();
-  function stampedRepo() {
-    const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-stamps-'));
-    cpSync(STAMPED, dir, { recursive: true });
-    return dir;
-  }
+  // Build each fixture in the repository model: the parser reads zero-context
+  // hunks derived from these files, not a diff tailored to STAMP_LINE. This
+  // protects our stamp decision, not git's own diff formatting.
+  const stampedRepo = () => buildStampedRepo();
 
   function buildStampedRepo() {
     const dir = mkdtempSync(join(tmpdir(), 'mc-deploy-stamps-'));
