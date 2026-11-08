@@ -1,168 +1,70 @@
 /**
- * `mc shot dev <target> --compare <ref>` — the same picture and the same
- * numbers on this worktree and on `<ref>`, and what moved between them.
- *
- * The other tree is a detached worktree of `<ref>` under
- * `~/.memoro/mc/compare/`, kept and reused while its commit is the asked one
- * and pruned once unused for a day with no server — here, and by `mc tidy`.
- * A directory's mtime does not move when it is reused, so a reuse touches it. Each tree runs its own server; both
- * captures run with this worktree's script and declaration, because the script
- * is only a browser client and the ref's own may not know a measurement or a
- * request field this tree declares.
+ * `mc shot dev <target> --compare` compares this worktree with MAIN or an
+ * existing memoro worktree. Both captures use this worktree's browser script.
  */
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, statSync, utimesSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
 
-import { serversUnder, stopServer } from './dev-servers.js';
 import { run as runGit } from './git.js';
-import { log } from './logger.js';
-import { mcHome } from './paths.js';
 import { actionGap, errorLines, reportLines, runCapture } from './shot.js';
-import { ensureAppServer, readDeclaration, serversFor } from './test-environment.js';
+import { ensureAppServer, NO_SHARED_WORKTREE, readDeclaration, sharedWorktree } from './test-environment.js';
+import { defaultRepos } from './repos.js';
+import { workRoot } from './paths.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** How long the ref side of a compare waits for a slot: a minute, not the quarter of an hour a plain start waits. */
+/** How long the other side waits for a worktree server slot. */
 export const COMPARE_ADMIT_WAIT_SECONDS = 60;
-/** A compare tree unused this long is not in the middle of a capture, and its server may be stopped to free a slot. */
-export const COMPARE_IDLE_MS = 15 * 60 * 1000;
 
-/** The fields compared besides `element` and the keys of `rect` and `scroll`. */
+/** The fields compared besides element and the keys of rect and scroll. */
 const FIELDS = ['position', 'padding', 'margin', 'overflow_y', 'z_index', 'visible'];
-/** Fields a capture script may not report yet: compared only when both trees carry them. */
 const OPTIONAL_FIELDS = ['background_color', 'color'];
 
-/**
- * The tree `<ref>` is checked out in, made or reused. Refuses a ref git does
- * not know, and a ref that is this tree's HEAD with nothing edited — the two
- * pictures would be the same picture.
- */
-export function compareTree(worktree, ref, deps = {}) {
-  const git = deps.git || ((args) => runGit(undefined, args));
-  const root = deps.root || join(mcHome(deps.env || process.env), 'compare');
-  const sha = String(git(['-C', worktree, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).stdout || '').trim();
-  if (!sha) return { ok: false, code: 2, error: `no commit ${ref} in ${worktree} (git fetch origin?)` };
-  const head = String(git(['-C', worktree, 'rev-parse', 'HEAD']).stdout || '').trim();
-  if (head === sha && !String(git(['-C', worktree, 'status', '--porcelain']).stdout || '').trim()) {
-    return { ok: false, code: 2, error: `${ref} is this tree's HEAD and nothing is edited — nothing to compare` };
+/** Resolve only MAIN or one registered memoro worktree beneath the mc work root. */
+export function compareSide(value, { env = process.env, cwd = process.cwd(), git = null, exists = existsSync, realpath = realpathSync } = {}) {
+  const asked = String(value || 'main');
+  if (asked === 'main' || asked === 'origin/main') {
+    const worktree = sharedWorktree(env);
+    return worktree ? { ok: true, kind: 'main', worktree } : { ok: false, code: 1, error: NO_SHARED_WORKTREE };
   }
-
-  const dir = join(root, `${basename(worktree)}-${sha.slice(0, 10)}`);
-  const reused = existsSync(dir) && String(git(['-C', dir, 'rev-parse', 'HEAD']).stdout || '').trim() === sha;
-  if (reused) {
-    // Last use is the directory's mtime, for the prune below and `mc tidy`'s (C).
-    const at = deps.now ? deps.now() : new Date();
-    try { (deps.touch || utimesSync)(dir, at, at); } catch { /* an untouched tree is pruned a day early, at worst */ }
-  } else {
-    mkdirSync(root, { recursive: true });
-    prune(worktree, root, { git, keep: dir, deps });
-    if (existsSync(dir)) git(['-C', worktree, 'worktree', 'remove', '--force', dir]);
-    const added = git(['-C', worktree, 'worktree', 'add', '--detach', dir, sha]);
-    if ((added.status ?? 1) !== 0) {
-      return { ok: false, code: 1, error: `git worktree add ${dir} failed: ${String(added.stderr || '').trim() || `exit ${added.status}`}` };
-    }
-  }
-  if (!existsSync(join(dir, 'node_modules'))) {
-    // npm's own lines go to stderr: stdout's first line is the picture's path.
-    const prepared = (deps.spawnSync || spawnSync)('npm', ['run', 'deps:prepare'], { cwd: dir, stdio: ['ignore', 2, 'inherit'] });
-    if (prepared.error || (prepared.status ?? 1) !== 0) {
-      return { ok: false, code: 1, error: `npm run deps:prepare in ${dir} failed: ${prepared.error?.message || `exit ${prepared.status}`}` };
-    }
-  }
-  return { ok: true, dir, commit: sha, reused };
-}
-
-/**
- * Old compare trees go: a directory directly under `root`, untouched for a day,
- * with no live server. Nothing outside `root` is ever named to git.
- */
-function prune(worktree, root, { git, keep, deps }) {
-  const now = deps.now ? deps.now().getTime() : Date.now();
-  const live = deps.serversFor || serversFor;
-  let entries = [];
-  try { entries = readdirSync(root, { withFileTypes: true }); } catch { return; }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const dir = join(root, entry.name);
-    if (dirname(resolve(dir)) !== resolve(root) || resolve(dir) === resolve(keep)) continue;
-    let mtime;
-    try { mtime = statSync(dir).mtimeMs; } catch { continue; }
-    if (now - mtime <= DAY_MS) continue;
-    if (live(dir).length) continue;
-    git(['-C', worktree, 'worktree', 'remove', '--force', dir]);
-  }
-}
-
-/** The compare root, as `compareTree` names it. */
-function compareRootOf(deps) {
-  return deps.compareRoot || join(mcHome(deps.env || process.env), 'compare');
-}
-
-/**
- * The other compare servers of this worktree name: live, not `light`, each in
- * a tree `<name>-<sha>` directly under the root, and not the `keep` tree.
- */
-function siblings(worktree, keep, deps) {
-  const root = resolve(compareRootOf(deps));
-  const prefix = `${basename(worktree)}-`;
-  return (deps.serversUnder || serversUnder)(root)
-    .filter((server) => server.live !== false
-      && server.resource_class !== 'light'
-      && server.worktree_path
-      && dirname(resolve(server.worktree_path)) === root
-      && basename(server.worktree_path).startsWith(prefix)
-      && resolve(server.worktree_path) !== resolve(keep))
-    .map((server) => ({ server, sha: basename(server.worktree_path).slice(prefix.length) }));
-}
-
-/**
- * Stops the compare servers of this worktree name, for other commits, that are
- * idle for more than `COMPARE_IDLE_MS`, so the ref side finds a slot. A compare
- * tree is per commit, so after main moved its previous server held one of the
- * two slots; a server in use is not touched. An asked tree that is already
- * served needs no slot, so nothing is stopped for it.
- */
-export function stopSuperseded(worktree, keep, deps = {}) {
-  if ((deps.serversFor || serversFor)(keep).some((server) => server.resource_class !== 'light')) {
-    return { stopped: [], lines: [] };
-  }
-  const stopped = [];
-  const lines = [];
-  const now = deps.now ? deps.now().getTime() : Date.now();
-  for (const { server, sha } of siblings(worktree, keep, deps)) {
-    let mtimeMs;
-    try { mtimeMs = (deps.statSync || statSync)(server.worktree_path).mtimeMs; } catch { continue; }
-    const idle = now - mtimeMs;
-    if (idle <= COMPARE_IDLE_MS) continue;
-    let stop;
-    try { stop = (deps.stopServer || stopServer)(server); } catch (error) { stop = { ok: false, error: error.message }; }
-    log('dev-server-stopped', {
-      instance_id: server.instance_id,
-      service: server.service ?? null,
-      worktree_path: server.worktree_path,
-      reason: 'compare-superseded',
-      ok: stop.ok,
+  const root = resolve(workRoot(env));
+  const candidate = resolve(cwd, asked);
+  const callGit = git || ((args) => runGit(undefined, args));
+  const repos = defaultRepos(env);
+  const memoro = repos.find((repo) => repo.name === 'memoro');
+  const list = memoro ? callGit(['-C', memoro.path, 'worktree', 'list', '--porcelain']) : { stdout: '' };
+  const registered = String(list?.stdout || '').split(/\n(?=worktree )/u).map((block) => {
+    const line = block.split('\n').find((entry) => entry.startsWith('worktree '));
+    return line ? line.slice('worktree '.length).trim() : null;
+  }).filter(Boolean);
+  let matches = [];
+  if (exists(candidate)) {
+    let real;
+    try { real = realpath(candidate); } catch { real = candidate; }
+    matches = registered.filter((path) => {
+      try { return realpath(path) === real; } catch { return resolve(path) === resolve(candidate); }
     });
-    if (stop.ok) {
-      stopped.push(server.instance_id);
-      lines.push(`stopped ${server.instance_id}, the compare server of ${sha} idle ${Math.round(idle / 60_000)} min, to free its slot`);
-    } else {
-      lines.push(`could not stop ${server.instance_id}, the compare server of ${sha}: ${stop.error}`);
-    }
+  } else {
+    const rel = asked.replaceAll('\\', '/').replace(/^\.\//u, '');
+    matches = registered.filter((path) => {
+      const pathRel = relative(root, path).split(sep).join('/');
+      const parts = pathRel.split('/');
+      return pathRel === rel || (parts.length >= 5 && parts[0] === 'programs' && parts[2] === 'goals' && parts.at(-1) === 'memoro' && parts.at(-2) === rel);
+    });
   }
-  return { stopped, lines };
-}
-
-/**
- * The line that names the compare servers already running for this worktree
- * name, idle or not, and which `--compare <sha>` reuses. Null when there are none.
- */
-export function runningCompares(worktree, keep, deps = {}) {
-  const list = siblings(worktree, keep, deps);
-  if (!list.length) return null;
-  return `running compare servers: ${list.map(({ server, sha }) => `${sha} (${server.url})`).join(', ')}`
-    + ` — --compare ${list[0].sha} reuses one, with its tree and its database`;
+  const unique = [...new Set(matches)];
+  if (unique.length > 1) return { ok: false, code: 2, error: `${asked} matches more than one memoro worktree: ${unique.join(', ')}` };
+  if (unique.length !== 1) return { ok: false, code: 2, error: `mc: --compare takes main (the MAIN slot, the shared checkout's server) or a memoro worktree under ~/mc by path or name, not ${asked}` };
+  let real;
+  try { real = realpath(unique[0]); } catch { real = resolve(unique[0]); }
+  let realRoot;
+  try { realRoot = realpath(root); } catch { realRoot = root; }
+  if (!(real === realRoot || real.startsWith(`${realRoot}${sep}`)) || !exists(`${unique[0]}/.mc/shot.json`)) {
+    return { ok: false, code: 2, error: `mc: --compare takes main (the MAIN slot, the shared checkout's server) or a memoro worktree under ~/mc by path or name, not ${asked}` };
+  }
+  const here = resolve(cwd);
+  let realHere;
+  try { realHere = realpath(here); } catch { realHere = here; }
+  if (real === realHere) return { ok: false, code: 2, error: `${asked} is this tree — nothing to compare` };
+  return { ok: true, kind: 'worktree', worktree: unique[0] };
 }
 
 /** Rounded as the capture script rounds, so 0.04 of drift is not a difference. */
@@ -213,83 +115,55 @@ export function refOutPath(out, commit) {
   return out.replace(/\.png$/u, `-${commit.slice(0, 7)}.png`);
 }
 
-/**
- * Both captures and the diff, printed. Called by `mc shot` once it has started
- * this tree's server and built this tree's request; returns the exit code.
- */
+/** Compare two already-running sides and print their captures and differences. */
 export async function runCompare({
-  worktree, ref, declared, request, signInPath, served, servedTree, env, json, open, scrub = String,
+  worktree, ref, side: selectedSide = null, declared, request, signInPath, served, servedTree, env, json, open, scrub = String,
   stdout, stderr, openFile, deps = {},
 }) {
-  const tree = (deps.compareTree || compareTree)(worktree, ref, deps);
-  if (!tree.ok) { stderr.write(`mc: ${tree.error}\n`); return tree.code; }
-
-  const read = (deps.readDeclaration || readDeclaration)(tree.dir);
+  const side = selectedSide || (deps.compareSide || compareSide)(ref, { env: deps.env || process.env, cwd: deps.cwd || process.cwd(), git: deps.git });
+  if (!side.ok) { stderr.write(`${side.error.startsWith('mc:') ? '' : 'mc: '}${side.error}\n`); return side.code; }
+  const read = (deps.readDeclaration || readDeclaration)(side.worktree);
   if (!read.ok) { stderr.write(`mc: ${ref}: ${read.error}\n`); return 1; }
-  const freed = (deps.stopSuperseded || stopSuperseded)(worktree, tree.dir, deps);
-  for (const line of freed.lines) stderr.write(`mc: ${line}\n`);
-  const app = await (deps.ensureAppServer || ensureAppServer)(tree.dir, read.declaration, {
+  const app = await (deps.ensureAppServer || ensureAppServer)(side.worktree, read.declaration, {
     json, stdout: stderr, deps: { holderVerb: 'shot', ...deps, admitWaitSeconds: deps.admitWaitSeconds ?? COMPARE_ADMIT_WAIT_SECONDS },
   });
-  if (!app.ok) {
-    stderr.write(`mc: ${ref}: ${app.error}\n`);
-    if (app.refused?.reason === 'cap') {
-      const hint = runningCompares(worktree, tree.dir, deps);
-      if (hint) stderr.write(`mc: ${hint}\n`);
-    }
-    return 1;
-  }
-  const refServed = servedTree(tree.dir, app.server);
-  if (!json) stderr.write(`mc: ${ref}: serving ${refServed.line}\n`);
-
+  if (!app.ok) { stderr.write(`mc: ${side.kind === 'main' ? 'main' : side.worktree}: ${app.error}\n`); return 1; }
+  const refServed = servedTree(side.worktree, app.server, deps);
+  let behind = null;
+  if (side.kind === 'main') {
+    const result = (deps.git || ((args) => runGit(side.worktree, args)))(['rev-list', '--count', 'HEAD..origin/main']);
+    const parsed = Number.parseInt(String(result?.stdout || '').trim(), 10);
+    if ((result?.status ?? 0) === 0 && Number.isInteger(parsed) && parsed >= 0) behind = parsed;
+    if (!json) stderr.write(`mc: main: serving ${refServed.line}; ${behind === null ? 'behind origin/main: unknown' : behind === 0 ? 'at origin/main' : `${behind} commits behind origin/main`}\n`);
+  } else if (!json) stderr.write(`mc: ${side.worktree}: serving ${refServed.line}\n`);
   const capture = deps.runCapture || runCapture;
-  const refRequest = {
-    ...request,
-    base_url: app.baseUrl,
-    sign_in: { kind: 'url', url: `${app.baseUrl}${signInPath}` },
-    out: refOutPath(request.out, tree.commit),
-  };
+  const refRequest = { ...request, base_url: app.baseUrl, sign_in: { kind: 'url', url: `${app.baseUrl}${signInPath}` }, out: refOutPath(request.out, refServed.commit) };
   const results = {};
-  for (const [side, label, req] of [['here', 'here', request], ['ref', ref, refRequest]]) {
+  const label = side.kind === 'main' ? 'main' : side.worktree;
+  for (const [key, sideLabel, req] of [['here', 'here', request], ['ref', label, refRequest]]) {
     const ran = capture({ worktree, declaration: declared, request: req, env, deps });
-    if (!ran.ok) { stderr.write(`mc: ${label}: ${scrub(ran.error)}\n`); return 1; }
+    if (!ran.ok) { stderr.write(`mc: ${sideLabel}: ${scrub(ran.error)}\n`); return 1; }
     const { result } = ran;
-    if (!result.ok) {
-      stderr.write(`mc: ${label}: ${scrub(result.error || result.code || 'the capture failed')}\n`);
-      for (const line of errorLines(result)) stderr.write(`${label}: ${scrub(line)}\n`);
-      return 1;
-    }
-    if (typeof result.file !== 'string' || !result.file) {
-      stderr.write(`mc: ${label}: the capture script said ok and named no file\n`);
-      return 1;
-    }
+    if (!result.ok) { stderr.write(`mc: ${sideLabel}: ${scrub(result.error || result.code || 'the capture failed')}\n`); for (const line of errorLines(result)) stderr.write(`${sideLabel}: ${scrub(line)}\n`); return 1; }
+    if (typeof result.file !== 'string' || !result.file) { stderr.write(`mc: ${sideLabel}: the capture script said ok and named no file\n`); return 1; }
     const gap = actionGap(req, result, { worktree, script: declared.argv.join(' ') });
-    if (gap) { stderr.write(`mc: ${label}: ${scrub(gap)}\n`); return 1; }
-    results[side] = result;
+    if (gap) { stderr.write(`mc: ${sideLabel}: ${scrub(gap)}\n`); return 1; }
+    results[key] = result;
   }
-
   const diff = diffMeasure(results.ref.measure, results.here.measure);
-  // Each side's errors, evals and failed step, labelled with its side.
   const reports = { here: reportLines(results.here), ref: reportLines(results.ref) };
-  const labels = { here: 'here', ref };
-  if (json) {
-    stdout.write(`${scrub(JSON.stringify({
-      here: { ...results.here, served },
-      ref: { ref, commit: tree.commit, result: { ...results.ref, served: refServed } },
-      diff,
-    }, null, 2))}\n`);
-  } else {
+  const labels = { here: 'here', ref: label };
+  if (json) stdout.write(`${scrub(JSON.stringify({
+    here: { ...results.here, served },
+    ref: { ref, kind: side.kind, worktree: side.worktree, commit: refServed.commit, behind_origin_main: behind, result: { ...results.ref, served: refServed } },
+    diff,
+  }, null, 2))}\n`);
+  else {
     stdout.write(`${results.here.file}\n${results.ref.file}\n`);
-    for (const item of diff) {
-      stdout.write(`diff  ${item.element}  ${item.field}  ${shown(item.ref)} → ${shown(item.here)}\n`);
-    }
+    for (const item of diff) stdout.write(`diff  ${item.element}  ${item.field}  ${shown(item.ref)} → ${shown(item.here)}\n`);
     if (!diff.length && request.measure) stdout.write('mc: the measured numbers are the same on both trees\n');
-    for (const side of ['here', 'ref']) {
-      for (const line of reports[side].lines) stdout.write(`${labels[side]}: ${scrub(line)}\n`);
-    }
-    for (const side of ['here', 'ref']) {
-      for (const warning of results[side].warnings || []) stdout.write(`mc: warning — ${side}: ${scrub(warning)}\n`);
-    }
+    for (const key of ['here', 'ref']) for (const line of reports[key].lines) stdout.write(`${labels[key]}: ${scrub(line)}\n`);
+    for (const key of ['here', 'ref']) for (const warning of results[key].warnings || []) stdout.write(`mc: warning — ${labels[key]}: ${scrub(warning)}\n`);
   }
   if (open) { openFile(results.here.file); openFile(results.ref.file); }
   return reports.here.failed || reports.ref.failed ? 1 : 0;

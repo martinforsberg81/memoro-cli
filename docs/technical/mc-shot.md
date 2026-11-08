@@ -106,22 +106,22 @@ gave no numbers. Each of these is now one flag, and the capture script does it:
   is the onboarding, the same every time. A target may declare `"onboarding":
   "fresh"` itself. Without a table (an older memoro) the paths are
   `account=<name>&ready=1`, or `reseed=1` for `fresh`.
-- **`--compare <ref>`** (dev only) pictures and measures the same surface on
-  `<ref>` too, in one call: the ref is checked out detached under
-  `~/.memoro/mc/compare/<worktree>-<sha10>` (reused while it is at that commit,
-  `npm run deps:prepare` when it has no `node_modules`, pruned after 24 h
-  without a server), served by its own server, and captured with the same
-  request and this worktree's script. Line 1 is this tree's PNG, line 2 the
-  ref's (`-<sha7>` before `.png`), then one `diff  <element>  <field>  <ref> →
-  <here>` line per measured value that moved, or that none did. With `--json`:
-  `{ here, ref: { ref, commit, result }, diff }`. Refused with `--out` and with
-  a ref that is HEAD while nothing is edited. A compare tree is per commit, so
-  `--compare origin/main` after main moved needs a new tree and a new server.
-  The compare server of an older commit of the same worktree name, unused for
-  15 minutes, is stopped first to free its slot (`mc: stopped <id>, the compare
-  server of <sha> idle <n> min, to free its slot`). The ref side waits at most
-  60 s for a slot. A refusal names the compare servers still running, and
-  `--compare <sha>` reuses one of them, with its tree and its database.
+- **`--compare [main|<worktree>]`** (dev only) pictures and measures the same
+  surface on another existing server. Omitted, `main` and `origin/main` mean
+  the MAIN slot: the shared checkout's standing server, with no extra lease or
+  tree. The stderr line names the served commit and says how many commits it is
+  behind origin/main (`at origin/main` when current; unknown if git cannot
+  answer). A path under `~/mc` or a registered goal worktree name selects that
+  worktree's own server and takes one lease. Anything else — including a SHA,
+  `HEAD`, tag, branch or path outside `~/mc` — is refused before a server is
+  asked for, naming these two forms. No compare tree or directory is made and
+  `--compare` never fetches. Line 1 is this tree's PNG, line 2 the other
+  server's (`-<served-commit-sha7>` before `.png`), then one
+  `diff  <element>  <field>  <ref> → <here>` line per measured value that
+  moved, or the line that the measured numbers are the same. With `--json`,
+  `{ here, ref: { ref, kind, worktree, commit, behind_origin_main, result }, diff }`.
+  The captures use this worktree's script and declaration. Refused with
+  `--out`; production and `--keep` are also incompatible.
 - `--click <selector>`, repeatable: the capture script presses each selector in
   order, after the page and its window are open and in the order of the acting flags,
   `--scroll` and `--el`. The request carries them as `click`. A result that does

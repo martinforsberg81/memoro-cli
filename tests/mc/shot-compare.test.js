@@ -6,15 +6,13 @@
  * lists pair up, and the lines a caller reads.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/shot.js';
-import {
-  COMPARE_IDLE_MS, compareTree, diffMeasure, refOutPath, runningCompares, stopSuperseded,
-} from '../../src/mc/shot-compare.js';
+import { diffMeasure, refOutPath } from '../../src/mc/shot-compare.js';
 
 const HERE_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const REF_SHA = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -91,112 +89,6 @@ describe('diffMeasure', () => {
   });
 });
 
-/** A fake git answering from a table, recording every call. */
-function fakeGit({ refs = { 'origin/main': REF_SHA }, head = HERE_SHA, status = '', heads = {}, failAdd = false } = {}) {
-  const calls = [];
-  const git = (args) => {
-    calls.push(args);
-    const [, dir, verb, ...rest] = args;
-    if (verb === 'rev-parse' && rest[0] === '--verify') return { status: 0, stdout: refs[rest[2].replace('^{commit}', '')] || '' };
-    if (verb === 'rev-parse' && rest[0] === 'HEAD') return { status: 0, stdout: heads[dir] ?? head };
-    if (verb === 'status') return { status: 0, stdout: status };
-    if (verb === 'worktree' && rest[0] === 'add') {
-      if (failAdd) return { status: 128, stderr: 'fatal: nope' };
-      mkdirSync(join(rest[2], 'node_modules'), { recursive: true });
-      return { status: 0 };
-    }
-    return { status: 0, stdout: '' };
-  };
-  return { git, calls };
-}
-
-function roots() {
-  const home = mkdtempSync(join(tmpdir(), 'mc-shot-compare-'));
-  const root = join(home, 'compare');
-  const worktree = join(home, 'memoro-fix');
-  mkdirSync(root, { recursive: true });
-  mkdirSync(worktree, { recursive: true });
-  return { home, root, worktree };
-}
-
-const removes = (calls) => calls.filter((args) => args[2] === 'worktree' && args[3] === 'remove').map((args) => args.at(-1));
-
-describe('compareTree', () => {
-  it('an unknown ref names the fetch', () => {
-    const { root, worktree } = roots();
-    const { git } = fakeGit();
-    const tree = compareTree(worktree, 'origin/nope', { git, root });
-    assert.equal(tree.ok, false);
-    assert.equal(tree.error, `no commit origin/nope in ${worktree} (git fetch origin?)`);
-  });
-
-  it('HEAD with nothing edited is refused; HEAD with an edit is not', () => {
-    const { root, worktree } = roots();
-    const clean = fakeGit({ refs: { HEAD: HERE_SHA } });
-    const tree = compareTree(worktree, 'HEAD', { git: clean.git, root });
-    assert.equal(tree.error, "HEAD is this tree's HEAD and nothing is edited — nothing to compare");
-    const edited = fakeGit({ refs: { HEAD: HERE_SHA }, status: ' M public/css/x.css\n' });
-    assert.equal(compareTree(worktree, 'HEAD', { git: edited.git, root, serversFor: () => [] }).ok, true);
-  });
-
-  it('a tree already at the commit is reused, and no worktree is added', () => {
-    const { root, worktree } = roots();
-    const dir = join(root, `memoro-fix-${REF_SHA.slice(0, 10)}`);
-    mkdirSync(join(dir, 'node_modules'), { recursive: true });
-    const { git, calls } = fakeGit({ heads: { [dir]: REF_SHA } });
-    const tree = compareTree(worktree, 'origin/main', { git, root, spawnSync: () => assert.fail('no deps:prepare') });
-    assert.deepEqual(tree, { ok: true, dir, commit: REF_SHA, reused: true });
-    assert.equal(calls.some((args) => args[3] === 'add'), false);
-  });
-
-  it('a reuse touches the directory, so its mtime is its last use (mc tidy reads it)', () => {
-    const { root, worktree } = roots();
-    const dir = join(root, `memoro-fix-${REF_SHA.slice(0, 10)}`);
-    mkdirSync(join(dir, 'node_modules'), { recursive: true });
-    const old = new Date('2026-10-01T00:00:00Z');
-    utimesSync(dir, old, old);
-    const at = new Date('2026-10-18T10:00:00Z');
-    compareTree(worktree, 'origin/main', { git: fakeGit({ heads: { [dir]: REF_SHA } }).git, root, now: () => at });
-    assert.equal(statSync(dir).mtimeMs, at.getTime());
-  });
-
-  it('otherwise the tree is added detached at the commit, and deps:prepare runs without node_modules', () => {
-    const { root, worktree } = roots();
-    const dir = join(root, `memoro-fix-${REF_SHA.slice(0, 10)}`);
-    const { calls } = fakeGit();
-    const git = (args) => (args[2] === 'worktree' && args[3] === 'add'
-      ? (calls.push(args), mkdirSync(args[5], { recursive: true }), { status: 0 })
-      : fakeGit().git(args));
-    const spawned = [];
-    const tree = compareTree(worktree, 'origin/main', {
-      git, root, serversFor: () => [], spawnSync: (cmd, args, opts) => { spawned.push([cmd, args, opts.cwd, opts.stdio[1]]); return { status: 0 }; },
-    });
-    assert.equal(tree.ok, true);
-    assert.deepEqual(calls, [['-C', worktree, 'worktree', 'add', '--detach', dir, REF_SHA]]);
-    assert.deepEqual(spawned, [['npm', ['run', 'deps:prepare'], dir, 2]], 'npm writes to stderr, never stdout');
-    const failed = compareTree(worktree, 'origin/main', { git: fakeGit({ failAdd: true }).git, root: join(root, 'x'), serversFor: () => [] });
-    assert.match(failed.error, /git worktree add .* failed: fatal: nope/u);
-  });
-
-  it('prune removes only an old directory with no server, and never one outside the root', () => {
-    const { home, root, worktree } = roots();
-    const old = join(root, 'memoro-other-1111111111');
-    const served = join(root, 'memoro-served-2222222222');
-    const fresh = join(root, 'memoro-fresh-3333333333');
-    const outside = join(home, 'memoro-outside');
-    for (const dir of [old, served, fresh, outside]) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(root, 'a-file'), 'x');
-    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-    for (const dir of [old, served, outside]) utimesSync(dir, twoDaysAgo, twoDaysAgo);
-    const { git, calls } = fakeGit();
-    const tree = compareTree(worktree, 'origin/main', {
-      git, root, serversFor: (dir) => (dir === served ? [{ live: true }] : []),
-    });
-    assert.equal(tree.ok, true);
-    assert.deepEqual(removes(calls), [old]);
-  });
-});
-
 const SHOT_JSON = {
   schema_version: 1,
   argv: [process.execPath, 'fake-shot.mjs'],
@@ -221,47 +113,52 @@ function sink() {
 }
 
 async function compare(argv, {
-  measures = {}, warnings = {}, refuse = null, running = [], clicked = {}, extra = {},
+  measures = {}, warnings = {}, refuse = null, clicked = {}, extra = {}, ambiguous = false,
 } = {}) {
   const waits = [];
+  const holders = [];
   const home = mkdtempSync(join(tmpdir(), 'mc-shot-compare-cmd-'));
-  const worktree = join(home, 'memoro');
-  const refDir = join(home, 'compare', `memoro-${REF_SHA.slice(0, 10)}`);
+  const worktree = join(home, 'programs', 'x', 'goals', 'here', 'memoro');
+  const shared = join(home, 'self', 'memoro');
+  const other = join(home, 'programs', 'x', 'goals', 'other', 'memoro');
+  const repo = join(home, 'repos', 'memoro.git');
+  const ambiguousOther = join(home, 'programs', 'y', 'goals', 'other', 'memoro');
+  const refDir = other;
   mkdirSync(join(worktree, '.mc'), { recursive: true });
+  mkdirSync(join(other, '.mc'), { recursive: true });
+  if (ambiguous) mkdirSync(join(ambiguousOther, '.mc'), { recursive: true });
+  mkdirSync(shared, { recursive: true });
+  mkdirSync(repo, { recursive: true });
   writeFileSync(join(worktree, '.mc', 'shot.json'), JSON.stringify(SHOT_JSON));
   writeFileSync(join(worktree, '.mc', 'test.json'), JSON.stringify(TEST_JSON));
+  writeFileSync(join(other, '.mc', 'shot.json'), JSON.stringify(SHOT_JSON));
+  writeFileSync(join(other, '.mc', 'test.json'), JSON.stringify(TEST_JSON));
+  if (ambiguous) writeFileSync(join(ambiguousOther, '.mc', 'shot.json'), JSON.stringify(SHOT_JSON));
+  argv = argv.map((arg) => arg === '<other-path>' ? other : arg);
   const stdout = sink();
   const stderr = sink();
   const captures = [];
   const servers = [];
+  const gitCalls = [];
   const code = await run(argv, {
     stdout,
     stderr,
-    env: { ...process.env, MC_REPOS_HOME: home },
+    env: { ...process.env, MC_REPOS_HOME: home, MC_WORK_ROOT: home },
     cwd: home,
     callerWorktree: () => worktree,
-    compareRoot: join(home, 'compare'),
     serversFor: () => [],
     stopServer: () => ({ ok: true }),
-    serversUnder: () => running.map((sha) => ({
-      instance_id: `srv-${sha}`,
-      service: 'memoro-worker',
-      worktree_path: join(home, 'compare', `memoro-${sha}`),
-      url: 'http://127.0.0.1:8930',
-      resource_class: 'standard',
-      live: true,
-    })),
-    now: () => new Date(2026, 9, 15, 9, 0, 0),
-    compareTree: (tree, ref) => ({ ok: true, dir: refDir, commit: REF_SHA, ref, from: tree }),
+    git: (args) => (gitCalls.push(args), args.includes('worktree') ? { status: 0, stdout: `worktree ${worktree}\nHEAD ${HERE_SHA}\n\nworktree ${other}\nHEAD ${REF_SHA}\n${ambiguous ? `\nworktree ${ambiguousOther}\nHEAD ${REF_SHA}\n` : ''}` } : args[0] === 'rev-list' ? { status: 0, stdout: '2\n' } : { status: 0, stdout: '' }),
     readDeclaration: () => ({ ok: true, declaration: TEST_JSON }),
     ensureAppServer: async (dir, declaration, opts) => {
       servers.push(dir);
       waits.push(opts?.deps?.admitWaitSeconds);
+      holders.push(opts?.deps?.holderVerb);
       if (refuse && dir !== worktree) return { ok: false, error: refuse.error, refused: refuse.verdict };
-      const port = dir === worktree ? 8787 : 8788;
-      return { ok: true, baseUrl: `http://127.0.0.1:${port}`, server: { url: `http://127.0.0.1:${port}/` } };
+      const port = dir === worktree ? 8787 : dir === shared ? 8788 : 8789;
+      return { ok: true, baseUrl: `http://127.0.0.1:${port}`, server: { url: `http://127.0.0.1:${port}/`, built_from: { commit: dir === shared ? 'maincommit' : REF_SHA } } };
     },
-    servedTree: (dir) => ({ worktree: dir, branch: 'b', commit: 'c', line: dir === worktree ? 'here-tree' : 'ref-tree' }),
+    servedTree: (dir, server) => ({ worktree: dir, branch: 'b', commit: server.built_from.commit.slice(0, 10), line: dir === worktree ? 'here-tree' : 'ref-tree' }),
     runCapture: ({ worktree: ran, request }) => {
       captures.push({ ran, request });
       const side = request.base_url.endsWith('8787') ? 'here' : 'ref';
@@ -275,110 +172,8 @@ async function compare(argv, {
       };
     },
   });
-  return { code, stdout: stdout.text, stderr: stderr.text, captures, servers, worktree, refDir, waits };
+  return { code, stdout: stdout.text, stderr: stderr.text, captures, servers, worktree, refDir, shared, other, waits, holders, gitCalls, home };
 }
-
-describe('a superseded compare server', () => {
-  const NOW = new Date(2026, 9, 18, 12, 0, 0);
-  const MIN = 60 * 1000;
-  const ago = (minutes) => new Date(NOW.getTime() - minutes * MIN);
-
-  /**
-   * A compare root with an idle tree of this name, a recent one, the kept one,
-   * a light one and another name's idle one, and the servers standing in them.
-   */
-  function layout() {
-    const home = mkdtempSync(join(tmpdir(), 'mc-shot-supersede-'));
-    const root = join(home, 'compare');
-    for (const name of ['memoro-1111111111', 'memoro-2222222222', 'memoro-3333333333', 'memoro-5555555555', 'other-4444444444']) {
-      mkdirSync(join(root, name), { recursive: true });
-    }
-    for (const name of ['memoro-1111111111', 'other-4444444444', 'memoro-5555555555']) utimesSync(join(root, name), ago(20), ago(20));
-    utimesSync(join(root, 'memoro-2222222222'), ago(5), ago(5));
-    const servers = ['1111111111', '2222222222', '5555555555'].map((sha) => ({
-      instance_id: `srv-${sha}`,
-      service: 'memoro-worker',
-      worktree_path: join(root, `memoro-${sha}`),
-      url: `http://127.0.0.1:89${sha[0]}0`,
-      resource_class: sha === '5555555555' ? 'light' : 'standard',
-      live: true,
-    })).concat([{
-      instance_id: 'srv-other',
-      service: 'memoro-worker',
-      worktree_path: join(root, 'other-4444444444'),
-      url: 'http://127.0.0.1:8944',
-      resource_class: 'standard',
-      live: true,
-    }]);
-    return { home, root, servers };
-  }
-
-  it('stops only an idle compare server of the same worktree name, through its own stop', () => {
-    const { home, root, servers } = layout();
-    try {
-      const stops = [];
-      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
-        compareRoot: root,
-        now: () => NOW,
-        serversUnder: () => servers,
-        serversFor: () => [],
-        stopServer: (server) => { stops.push(server.instance_id); return { ok: true }; },
-      });
-      assert.equal(COMPARE_IDLE_MS, 15 * 60 * 1000);
-      assert.deepEqual(stops, ['srv-1111111111']);
-      assert.deepEqual(freed.stopped, ['srv-1111111111']);
-      assert.deepEqual(freed.lines, ['stopped srv-1111111111, the compare server of 1111111111 idle 20 min, to free its slot']);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it('stops nothing when the asked tree is already served', () => {
-    const { home, root, servers } = layout();
-    try {
-      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
-        compareRoot: root,
-        now: () => NOW,
-        serversUnder: () => servers,
-        serversFor: () => [{ live: true, resource_class: 'standard' }],
-        stopServer: () => { throw new Error('nothing is stopped for a served tree'); },
-      });
-      assert.deepEqual(freed, { stopped: [], lines: [] });
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it('a stop that fails is said, not counted', () => {
-    const { home, root, servers } = layout();
-    try {
-      const freed = stopSuperseded(join(home, 'memoro'), join(root, 'memoro-3333333333'), {
-        compareRoot: root,
-        now: () => NOW,
-        serversUnder: () => servers,
-        serversFor: () => [],
-        stopServer: () => ({ ok: false, error: 'no stop command' }),
-      });
-      assert.deepEqual(freed.stopped, []);
-      assert.deepEqual(freed.lines, ['could not stop srv-1111111111, the compare server of 1111111111: no stop command']);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it('runningCompares names every running compare server of the name, idle or not', () => {
-    const { home, root, servers } = layout();
-    try {
-      assert.equal(
-        runningCompares(join(home, 'memoro'), join(root, 'memoro-3333333333'), { compareRoot: root, serversUnder: () => servers }),
-        'running compare servers: 1111111111 (http://127.0.0.1:8910), 2222222222 (http://127.0.0.1:8920) — --compare 1111111111 reuses one, with its tree and its database',
-      );
-      assert.equal(runningCompares(join(home, 'memoro'), join(root, 'memoro-3333333333'), { compareRoot: root, serversUnder: () => [] }), null);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-});
 
 describe('mc shot dev --compare', () => {
   it('serves both trees, captures both with this tree\'s script, prints two paths then the diff', async () => {
@@ -390,22 +185,22 @@ describe('mc shot dev --compare', () => {
       warnings: { ref: ['2 elements match'] },
     });
     assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual(result.servers, [result.worktree, result.refDir]);
+    assert.deepEqual(result.servers, [result.worktree, result.shared]);
     assert.match(result.stderr, /mc: here: serving here-tree/u);
-    assert.match(result.stderr, /mc: origin\/main: serving ref-tree/u);
+    assert.match(result.stderr, /mc: main: serving ref-tree; 2 commits behind origin\/main/u);
     assert.deepEqual(result.captures.map((item) => item.ran), [result.worktree, result.worktree], 'both run with this tree\'s script');
     const [here, ref] = result.captures.map((item) => item.request);
     assert.equal(here.sign_in.url, 'http://127.0.0.1:8787/dev/login?account=seeded&ready=1');
     assert.equal(ref.sign_in.url, 'http://127.0.0.1:8788/dev/login?account=seeded&ready=1');
     assert.equal(ref.measure, here.measure);
-    assert.equal(ref.out, refOutPath(here.out, REF_SHA));
-    assert.match(ref.out, /-bbbbbbb\.png$/u);
+    assert.equal(ref.out, refOutPath(here.out, 'maincommit'));
+    assert.match(ref.out, /-maincom\.png$/u);
     const lines = result.stdout.trimEnd().split('\n');
     assert.deepEqual(lines, [
       here.out,
       ref.out,
       'diff  footer.assistant-layout__footer  rect.bottom  810 → 776',
-      'mc: warning — ref: 2 elements match',
+      'mc: warning — main: 2 elements match',
     ]);
   });
 
@@ -420,7 +215,7 @@ describe('mc shot dev --compare', () => {
       clicked: { here: true },
     });
     assert.equal(refOnly.code, 1);
-    assert.match(refOnly.stderr, /mc: origin\/main: the picture at /u);
+    assert.match(refOnly.stderr, /mc: main: the picture at /u);
     assert.equal(refOnly.stdout, '');
   });
 
@@ -430,7 +225,7 @@ describe('mc shot dev --compare', () => {
         clicked: side === 'ref' ? { here: true } : {},
       });
       assert.equal(result.code, 1);
-      const label = side === 'here' ? 'here' : 'origin/main';
+      const label = side === 'here' ? 'here' : 'main';
       assert.ok(result.stderr.includes(`mc: ${label}: the picture at `), result.stderr);
       assert.ok(result.stderr.includes(`this installed mc does not understand the result from ${SHOT_JSON.argv.join(' ')} in ${result.worktree}`), result.stderr);
       assert.doesNotMatch(result.stderr, /<unknown worktree>|<unknown script>/u);
@@ -455,7 +250,7 @@ describe('mc shot dev --compare', () => {
       assert.equal(result.code, 1, result.stderr);
       assert.deepEqual(result.stdout.trimEnd().split('\n'), [
         ...result.captures.map(({ request }) => request.out),
-        `${side === 'here' ? 'here' : 'origin/main'}: eval 1  threw: Error: bad`,
+        `${side === 'here' ? 'here' : 'main'}: eval 1  threw: Error: bad`,
       ]);
     }
   });
@@ -471,7 +266,7 @@ describe('mc shot dev --compare', () => {
     assert.deepEqual(result.stdout.trimEnd().split('\n').slice(2), [
       'here: error  console  boom ×2',
       'here: eval 1  "Memoro"',
-      'origin/main: failed  step 1 (eval): ReferenceError: x is not defined',
+      'main: failed  step 1 (eval): ReferenceError: x is not defined',
     ]);
   });
 
@@ -492,7 +287,10 @@ describe('mc shot dev --compare', () => {
     const json = JSON.parse(result.stdout);
     assert.equal(json.here.served.line, 'here-tree');
     assert.equal(json.ref.ref, 'origin/main');
-    assert.equal(json.ref.commit, REF_SHA);
+    assert.equal(json.ref.commit, 'maincommit');
+    assert.equal(json.ref.kind, 'main');
+    assert.equal(json.ref.worktree, result.shared);
+    assert.equal(json.ref.behind_origin_main, 2);
     assert.equal(json.ref.result.served.line, 'ref-tree');
     assert.deepEqual(json.diff, [{ index: 0, element: FOOTER.element, field: 'visible', ref: true, here: false }]);
   });
@@ -510,26 +308,56 @@ describe('mc shot dev --compare', () => {
     }
   });
 
-  it('a refused ref server waits at most 60 s and names the running compare servers', async () => {
-    const result = await compare(['dev', 'assistant', '--compare', 'origin/main'], {
-      running: ['6a4cb31e83'],
-      refuse: {
-        error: '2 of 2 app servers already running — srv-a (/x), srv-b (/y); stop one with mc test dev --stop in its worktree',
-        verdict: { ok: false, reason: 'cap', holders: [] },
-      },
-    });
-    assert.equal(result.code, 1, result.stderr);
-    assert.deepEqual(result.waits, [undefined, 60]);
-    assert.match(result.stderr, /mc: origin\/main: 2 of 2 app servers already running/u);
-    assert.match(result.stderr, /mc: running compare servers: 6a4cb31e83 \(http:\/\/127\.0\.0\.1:8930\) — --compare 6a4cb31e83 reuses one, with its tree and its database\n/u);
-    assert.equal(result.stdout, '');
 
-    const memory = await compare(['dev', 'assistant', '--compare', 'origin/main'], {
-      running: ['6a4cb31e83'],
-      refuse: { error: 'only 9% memory free (floor 15%)', verdict: { ok: false, reason: 'memory', holders: [], free_percent: 9 } },
-    });
-    assert.equal(memory.code, 1, memory.stderr);
-    assert.match(memory.stderr, /mc: origin\/main: only 9% memory free/u);
-    assert.doesNotMatch(memory.stderr, /running compare servers/u);
+
+  it('pooled: --compare main serves the shared checkout as the other side, makes no tree and no directory', async () => {
+    for (const args of [['main'], ['origin/main'], []]) {
+      const argv = ['dev', 'assistant', '--measure', '@layout', '--compare', ...args];
+      const result = await compare(argv, { measures: { ref: [FOOTER], here: [{ ...FOOTER, visible: false }] } });
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(result.servers, [result.worktree, result.shared]);
+      assert.deepEqual(result.holders, ['shot', 'shot']);
+      assert.equal(result.gitCalls.some((args) => args.includes('worktree')), false);
+      assert.equal(result.stdout.trimEnd().split('\n')[0], result.captures[0].request.out);
+      assert.equal(result.stdout.trimEnd().split('\n')[1], result.captures[1].request.out);
+      assert.match(result.stdout, /\ndiff  footer\.assistant-layout__footer  visible  true → false/u);
+      assert.match(result.stderr, /mc: main: serving ref-tree; (\d+ commits behind origin\/main|at origin\/main)/u);
+      assert.equal(existsSync(join(result.home, 'compare')), false);
+      assert.equal(existsSync(join(result.home, '.memoro')), false);
+      if (args.length === 0) {
+        const json = await compare(['dev', 'assistant', '--compare', '--json']);
+        assert.equal(JSON.parse(json.stdout).ref.kind, 'main');
+      }
+    }
   });
+
+  it('pooled: --compare <worktree> takes exactly one more lease, on that worktree, by path and by name', async () => {
+    for (const target of ['<other-path>', 'other']) {
+      const result = await compare(['dev', 'assistant', '--measure', '@layout', '--compare', target, '--json']);
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(result.servers, [result.worktree, result.other]);
+      assert.deepEqual(result.holders, ['shot', 'shot']);
+      const json = JSON.parse(result.stdout);
+      assert.equal(json.ref.kind, 'worktree');
+      assert.equal(json.ref.worktree, result.other);
+      assert.match(result.captures[1].request.out, /-bbbbbbb\.png$/u);
+    }
+  });
+
+  it('pooled: a sha, HEAD, a tag, a branch or a path outside ~/mc is refused naming the two forms, before a server starts', async () => {
+    for (const value of ['bbbbbbbbbb', 'HEAD', 'v1', 'feature/x', '/tmp/elsewhere']) {
+      const result = await compare(['dev', 'assistant', '--compare', value]);
+      assert.equal(result.code, 2, value);
+      assert.match(result.stderr, /--compare takes main .* or a memoro worktree under ~\/mc by path or name/u);
+      assert.equal(result.stderr.trimEnd().split('\n').length, 1);
+      assert.deepEqual(result.servers, []);
+      assert.equal(existsSync(join(result.home, 'compare')), false);
+      assert.equal(existsSync(join(result.home, '.memoro')), false);
+    }
+    const ambiguous = await compare(['dev', 'assistant', '--compare', 'other'], { ambiguous: true });
+    assert.equal(ambiguous.code, 2);
+    assert.match(ambiguous.stderr, /matches more than one memoro worktree/u);
+    assert.deepEqual(ambiguous.servers, []);
+  });
+
 });
