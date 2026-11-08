@@ -376,6 +376,28 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
   return goals;
 }
 
+/** Active and archived goal references, used to enforce PR ownership after archival. */
+export function goalReferences({ home = programsHome(), list = listDirsOf, read = readTextOrNull } = {}) {
+  const refs = programsGoals({ home, list, read });
+  for (const programme of list(home)) {
+    const archive = join(home, programme, GOALS_DIR, ARCHIVE_DIR);
+    for (const name of list(archive)) {
+      const dir = join(archive, name);
+      const text = read(join(dir, GOAL_FILE));
+      if (text === null) continue;
+      const log = parseLog(read(join(dir, LOG_FILE)) ?? '');
+      const parsed = parseGoal(text);
+      // `archiveGoal` adds this timestamp suffix only when an older archived
+      // directory already occupies the original goal's name.
+      const goal = name.replace(/-\d{8}T\d{4}$/u, '');
+      refs.push(parsed.problems
+        ? { programme, goal, dir, log, stage: null, status: null, prs: [], problems: parsed.problems }
+        : { ...parsed, programme, goal, dir, log, problems: [] });
+    }
+  }
+  return refs;
+}
+
 /** A goal record of `programsGoals` as the shape `parseGoal` gives, for `renderGoalText`. */
 export function goalOfRecord(record) {
   return { ...record, goal: record.goal_text ?? [] };

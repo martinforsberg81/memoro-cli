@@ -262,8 +262,12 @@ ts name kind exit seconds pr turns input output cache_read cache_write session n
 ```
 
 The page reads these files, not a transcript to infer the goal's state.
-Finished goals are archived through `archiveGoal` after 24 hours, with one
-row in `goals/goal_log.md`; archive refusals are logged once. Every five
+Dropped goals are finalized and archived immediately through the shared drop
+operation on ordinary reconciliation, even without a stage timestamp. It
+closes exclusively owned PRs, cancels their queue rows, preserves PRs with an
+unfinished co-owner, and retains failed/unsafe cleanup for retry without
+starting a recovery session. Done goals retain the 24-hour archive hold, with
+one row in `goals/goal_log.md`; archive refusals are recorded once. Every five
 minutes at most, `settleLanded` checks carried PRs and sets done once all are
 merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 

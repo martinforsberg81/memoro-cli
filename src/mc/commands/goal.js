@@ -54,20 +54,23 @@
  * with no holes.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
-import { archiveGoal, moveDir } from '../goal-archive.js';
+import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
+import { realLock } from '../runner-lock.js';
+import { mergesPath, parseQueue } from '../merge-queue.js';
+import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -144,6 +147,17 @@ export async function run(argv, deps = {}) {
     stdout, stderr, env,
     home: deps.home || programsHome(env),
     now: deps.now ? deps.now() : new Date(),
+    lock: deps.lock || realLock,
+    alive: deps.alive || pidAlive,
+    active: (goal) => {
+      const root = workRoot(env);
+      const read = deps.read || readTextOrNull;
+      const currents = readCurrents(join(root, 'runner'), (path) => {
+        try { return JSON.parse(read(path) ?? ''); } catch { return null; }
+      }, deps.listFiles || readdirSync);
+      return currents.some((current) => current?.name === `${goal.programme}/${goal.goal}`
+        && Number.isInteger(Number(current.pid)) && (deps.alive || pidAlive)(Number(current.pid)));
+    },
     read: deps.read || readTextOrNull,
     realpath: deps.realpath,
     write: deps.write || writeFileAtomic,
@@ -336,6 +350,29 @@ function logEntry(args, fields, ctx) {
     const queued = queueGoal(target, now, ctx);
     if (queued.error) { stderr.write(`mc: ${target.name} · merge — ${queued.error}; run mc goal stage merge again to retry\n`); return 1; }
     done = queued.text;
+  }
+  if (now.stage === 'dropped') {
+    const root = workRoot(env);
+    const active = ctx.active;
+    const allGoals = () => goalReferences({ home: ctx.home, list: ctx.list, read: ctx.read });
+    const result = finalizeDroppedGoal({ ...now, dir: target.dir, programme: target.programme, goal: target.goal, log: parseLog(read(join(target.dir, LOG_FILE)) ?? ''), problems: [] }, {
+      ...ctx, allGoals, root, lock: ctx.lock, active,
+      readQueue: (path) => ctx.read(path),
+      writeQueue: (path, entries) => ctx.write(path, `${JSON.stringify(entries, null, 2)}\n`),
+    });
+    if (result.refused) {
+      const comment = `drop finalization pending — ${result.refused}`;
+      const currentLog = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
+      if (currentLog.at(-1)?.tool !== 'runner' || currentLog.at(-1)?.comment !== comment) {
+        appendEntry({ dir: target.dir, entry: { at: logStamp(ctx.now), tool: 'runner', model: null, stage: 'dropped', status: now.status, done: null, comment, next: null }, read, write });
+      }
+      stderr.write(`mc: ${target.name} is dropped but not finalized — ${result.refused}; retry with mc goal drop --reason "…"\n`);
+      return 1;
+    }
+    stdout.write(`mc: ${target.name} · dropped — archived to ${result.to}\n`);
+    for (const { pr, owners } of result.preserved ?? []) stdout.write(`mc: ${pr.repo}#${pr.pr} remains open and queued for ${owners.map((owner) => `${owner.programme}/${owner.goal}`).join(', ')}\n`);
+    for (const move of result.renumbered) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
+    return 0;
   }
   stdout.write(`mc: ${target.name} · ${stageWords(now)}${back ? ` — moved back from ${goal.stage}` : ''}\n`);
   if (done && done !== fields.done) stdout.write(`mc: ${done}\n`);

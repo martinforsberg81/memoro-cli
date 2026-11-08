@@ -165,6 +165,20 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
 }
 
 describe('a green gate lands the change', () => {
+  it('a dropped owner persisted while the real gate runs prevents the GitHub merge', async () => {
+    const fx = fixture();
+    const owner = { stage: 'review' };
+    try {
+      const report = await fx.run({
+        gate: async () => { owner.stage = 'dropped'; return green(); },
+        beforeMerge: async () => owner.stage !== 'dropped',
+      });
+      assert.equal(report.stopped_at, 'dropped');
+      assert.equal(report.merged, false);
+      assert.equal(fx.ran('gh').some(({ args }) => args[1] === 'merge'), false, 'the actual round stops before GitHub merge');
+    } finally { fx.cleanup(); }
+  });
+
   it('merges as a squash, records the commit, and reports it', async () => {
     const fx = fixture();
     try {

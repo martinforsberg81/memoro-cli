@@ -58,7 +58,7 @@ any      ── only a person moves a stage backward, logged ─────▶ 
 ~/mc/programs/<programme>/goals/<goal>/REVIEW.md  what a review that sent it to finish found, for the finish session
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
-~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner 24 h after done or dropped), its worktrees gone
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive; dropped immediately when safe, done after 24 h), its worktrees gone
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
@@ -242,10 +242,15 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   and so are the runner's own recovery settings of `Martin`.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
-- **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: stage
-  `dropped`, never `done`; it is finished as a `done` goal is, so it holds no
-  later phase back. The reason is required. Only a person or a plan session
-  drops a goal.
+- **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
+  `done`; it holds no later phase back. The reason is required. Only a person
+  or a plan session drops a goal. After persisting the stage, the command closes
+  open PRs owned only by this goal, removes their queued/red merge work, and
+  archives immediately when the shared archive safety checks pass. PRs carried
+  by another unfinished goal remain open and queued, with that ownership noted.
+  GitHub uncertainty, close failure, a live runner session, dirty worktrees, live owners or unpushed
+  commits retain the dropped goal and evidence for the next retry; no mend or
+  build session starts.
 - **`pr <p>/<g> <repo>#<n>…`** — the pull requests named carry the goal: each
   is added to `prs` once, with an entry `Done: carries <repo>#<n>`. For work
   published before `mc publish` wrote `prs`, or from where it could not tell
@@ -262,9 +267,10 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   date, goal, status, pull requests, the last `Done:`. Then the programme's
   phases are renumbered (*Phases*): when the goal was the last of the lowest
   phase, every goal left moves one phase down, and the line names each. The runner does the same
-  by itself for a goal that has been `done` or `dropped` for 24 hours
-  (`ARCHIVE_HOLD_MS`, in its chores),
-  counted from the log entry that set the stage (`stageSince`). A refusal the runner gets is
+  by itself immediately for dropped goals during every ordinary reconciliation,
+  including old dropped goals without a stage timestamp. Done goals retain the
+  24-hour hold (`ARCHIVE_HOLD_MS`), counted from the log entry that set the
+  stage (`stageSince`). A refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass. A programme is never archived by the runner.
 - **A goal's branch is made when the goal can start.** A goal in a later phase
@@ -662,9 +668,10 @@ Each stage has one owner, and a goal passes each once:
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
-- `dropped` — let go without landing (`mc goal drop`), by a person or plan,
-  from any stage. Final; it holds no later phase back, and is archived as a
-  `done` goal is.
+- `dropped` — delivery abandoned (`mc goal drop`), by a person or plan, from any
+  stage. Final; it holds no later phase back, and is immediately finalized and
+  archived when cleanup is safe. A dropped goal never wakes a mend session or
+  accepts an old merger answer.
 
 `Martin`, in any stage, waits on Martin and wakes nothing: `mc goal list` says `<stage> · Martin, waits on
 a person`, and the page leads the row's tail with `waits on a person` and the

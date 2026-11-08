@@ -69,7 +69,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, MEND_ROLE, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -80,7 +80,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { RUNNER_DISK, RUNNER_MEMORY, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
-import { archiveGoal, goalArchiveDue } from './goal-archive.js';
+import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
@@ -907,8 +907,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
-   * The finished goals (`done` or `dropped`) that have been finished for 24
-   * hours (`goalArchiveDue`), archived as `mc goal
+   * Dropped goals are finalized immediately; done goals retain the 24-hour
+   * hold (`goalArchiveDue`). Both use the archive safety checks (`mc goal
    * archive` archives one (`archiveGoal`): the worktrees and the branch go
    * through git, the directory moves to `goals/.archive/`, a row goes to
    * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
@@ -922,11 +922,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
-      const result = archiveGoal(goal, {
+      const archive = {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
-      });
+      };
+      const result = goal.stage === 'dropped' ? finalizeDroppedGoal(goal, {
+        ...archive, allGoals: () => goalReferences({ home: programsHome(deps.env), list: deps.list, read: deps.read }),
+        active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)), root, lock,
+        readQueue: deps.read,
+        writeQueue: (path, entries) => writeJson(path, entries),
+      }) : archiveGoal(goal, { ...archive, active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)) });
       if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
       answer.removed += 1;
       say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);

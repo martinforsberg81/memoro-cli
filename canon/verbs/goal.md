@@ -81,4 +81,8 @@ with ✓/✗ and its check, and each worktree's state.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
-  --reason "…"` lets one go without landing; plan's or a person's.
+  --reason "…"` abandons delivery; only plan or a person may drop. The stage is
+  persisted before cleanup. Exclusive open PRs are closed, their merge rows
+  cancelled, and the goal is archived immediately when safe. Shared PRs stay
+  open and queued. Failed or unsafe cleanup stays visible and retries through
+  the runner without starting a mend/build session.

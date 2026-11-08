@@ -91,6 +91,16 @@ describe('mc merge queues the pull request for the merger and returns (ruling 30
     assert.match(d.out.out, /^mc: the merger \(pid 777, just started\) lands it; follow it in .*merger\.log$/mu);
   });
 
+  it('a manual job with goal null is refused when the dropped goal is its only PR owner', async () => {
+    const d = deps({ head: 'goal/gone' });
+    d.io.goalsOf = () => [{ programme: 'prog', goal: 'gone', dir: '/goals/.archive/gone', stage: 'dropped', repos: ['memoro-cli'], prs: [{ repo: 'memoro-cli', pr: 671 }] }];
+    const code = await gate({ repo: 'memoro-cli', pr: 671 }, d.io);
+    assert.equal(code, 1);
+    assert.match(d.out.err, /owned only by a dropped goal/u);
+    assert.deepEqual(queue(), []);
+    assert.equal(d.starts.length, 0);
+  });
+
   it('a bare repository is queued under its name, without .git', async () => {
     const d = deps({ head: 'some-branch' });
     d.io.resolveRepo = async () => '/mc/repos/memoro-cli.git';

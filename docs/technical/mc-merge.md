@@ -7,6 +7,15 @@ lands what it cleared. A second implementation is the thing this arrangement
 exists to prevent — two measurements drift, and the one that drifts is always
 the one the merge trusted.
 
+Drop is a cancellation boundary. Merge admission refuses a PR owned only by a
+dropped goal, including a manual job with no goal pointer. The merger rechecks
+ownership before a queued round and immediately before the GitHub merge call;
+a drop during a gate therefore cannot land afterward. Finalization removes the
+abandoned PR's queued/red row under the queue lock. A PR still owned by another
+unfinished goal is neither closed nor dequeued. An old merger answer never
+reactivates a dropped goal; close/read uncertainty leaves cleanup pending for
+retry.
+
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 

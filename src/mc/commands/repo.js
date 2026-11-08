@@ -22,7 +22,8 @@ import { existsSync } from 'node:fs';
 
 import { followMerge } from '../merge-watch.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
-import { workRoot } from '../paths.js';
+import { programsHome, workRoot } from '../paths.js';
+import { FINISHED, goalReferences } from '../goals.js';
 import { tryGit } from '../git.js';
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
@@ -376,6 +377,9 @@ function doorRefusal({ pr, mergeable, head, worktreeBranch, localHead, remoteHea
 async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stderr, deps }) {
   const env = deps.env || process.env;
   const repo = repoNameOf(repoPath);
+  const references = () => {
+    try { return deps.goalsOf ? deps.goalsOf() : goalReferences({ home: programsHome(env) }); } catch { return null; }
+  };
   const askGh = deps.gh || spawnTool('gh');
   let head = null;
   let mergeable = null;
@@ -384,6 +388,17 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
     head = view?.headRefName || null;
     mergeable = view?.mergeable || null;
   } catch { head = null; }
+  const isDroppedOnly = () => {
+    const refs = references();
+    if (!refs) return true;
+    const owning = refs.filter((goal) => (goal.prs ?? []).some((item) => item.repo === repo && Number(item.pr) === Number(opts.pr))
+      || (goal.stage === 'dropped' && goal.repos?.includes(repo) && head === `goal/${goal.goal}`));
+    return owning.some((goal) => goal.stage === 'dropped') && !owning.some((goal) => !FINISHED.includes(goal.stage));
+  };
+  if (isDroppedOnly()) {
+    stderr.write(`mc: #${opts.pr} is owned only by a dropped goal — delivery is abandoned; it was not queued\n`);
+    return 1;
+  }
   const io = { read: deps.read, write: deps.writeJson, lock: deps.lock };
   for (const key of Object.keys(io)) if (io[key] === undefined) delete io[key];
 
@@ -409,6 +424,7 @@ async function queueForMerger({ repoPath, opts, holder, mode, root, stdout, stde
     queued = queueMerge({
       root, repo, repoPath, pr: opts.pr, branch: head, holder,
       now: deps.now ? deps.now() : new Date(), env, ...io,
+      mayEnqueue: () => !isDroppedOnly(),
       ...(deps.startMerger ? { start: deps.startMerger } : {}),
     });
   } catch (error) {
