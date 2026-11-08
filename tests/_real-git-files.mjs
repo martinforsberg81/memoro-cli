@@ -8,17 +8,10 @@ export const REAL_GIT_FILES = new Set([
   // Git's own behaviour: errors, rebase, the shapes of its answers.
   'tests/mc/git.test.js',
   'tests/mc/branch-landed.test.js',
-  'tests/mc/merger.test.js',
   'tests/mc/repo-merge-live.test.js',
   'tests/mc/push-guard.test.js',
   // A real origin and clone for the merge against origin/main before publish and goal stage (main-conflict.js).
   'tests/mc/publish.test.js',
   'tests/mc/commands/goal.test.js',
-  // `git archive`, and worktree removal on disk.
-  'tests/mc/asc-build-testflight.test.js',
-  'tests/mc/work-layout.test.js',
   'tests/mc/work-area-add.test.js',
-  'tests/mc/commands/deploy.test.js',
-  // Installs a model of its own, and starts no git.
-  'tests/mc/fake-git.test.js',
 ]);

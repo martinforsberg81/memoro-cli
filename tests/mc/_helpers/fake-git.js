@@ -350,7 +350,11 @@ export class FakeGit {
     const tree = repo.trees.get(repo.commits.get(sha).tree);
     const current = this.headTree(repo, state);
     for (const path of current.keys()) {
-      if (!tree.has(path)) rmSync(join(worktree, path), { force: true });
+      if (!tree.has(path)) {
+        rmSync(join(worktree, path), { force: true });
+        // Checkout removes now-empty tracked directories, not untracked files.
+        for (let parent = dirname(join(worktree, path)); parent !== worktree && !readdirSync(parent).length; parent = dirname(parent)) rmSync(parent, { recursive: true });
+      }
     }
     for (const [path, blob] of tree) {
       const full = join(worktree, path);
@@ -811,7 +815,7 @@ export class FakeGit {
   }
 
   cmd_diff({ dir, gitDir, argv }) {
-    const flags = parse(argv, [], ['name-only', 'no-renames', 'z', 'cached', 'staged', 'quiet', 'exit-code', 'stat']);
+    const flags = parse(argv, { unified: 1 }, ['name-only', 'no-renames', 'z', 'cached', 'staged', 'quiet', 'exit-code', 'stat']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
     const revs = flags.rest.filter((arg) => arg !== '--' && (arg.includes('..') || (!arg.includes('/') && this.resolveRev(repo, state, arg))));
     const pathspecs = flags.rest.filter((arg) => arg !== '--' && !revs.includes(arg));
@@ -833,7 +837,17 @@ export class FakeGit {
       .filter((path) => !pathspecs.length || pathspecs.some((spec) => path === spec || path.startsWith(`${spec.replace(/\/$/u, '')}/`))).sort();
     if (flags.quiet || flags['exit-code']) { if (changed.length) this.die('', 1); return ''; }
     if (flags['name-only']) return changed.map((path) => `${path}${flags.z ? '\0' : '\n'}`).join('');
-    return changed.map((path) => `diff --git a/${path} b/${path}\n`).join('');
+    if (flags.unified !== undefined && flags.unified !== '0') return this.refuse(['diff', ...argv], 'only --unified=0 hunks are modelled');
+    return changed.map((path) => {
+      const header = `diff --git a/${path} b/${path}\n`;
+      if (flags.unified === undefined) return header;
+      const lines = (blob) => {
+        if (!blob) return [];
+        const text = repo.blobs.get(blob).toString('utf8');
+        return text.endsWith('\n') ? text.slice(0, -1).split('\n') : text ? text.split('\n') : [];
+      };
+      return `${header}--- ${left.has(path) ? `a/${path}` : '/dev/null'}\n+++ ${right.has(path) ? `b/${path}` : '/dev/null'}\n${zeroContextDiff(lines(left.get(path)), lines(right.get(path)))}`;
+    }).join('');
   }
 
   cmd_diff_tree({ dir, gitDir, argv }) {
@@ -1045,7 +1059,7 @@ export class FakeGit {
     }
     if (verb === 'remove') {
       const flags = parse(rest, [], ['force', 'f']);
-      const path = real(resolve(dir, flags.rest[0]));
+      const path = real(resolve(dir, flags.rest.filter((arg) => arg !== '--')[0]));
       const state = repo.worktrees.get(path);
       if (!state) this.die(`fatal: '${flags.rest[0]}' is not a working tree`);
       if (!flags.force && !flags.f && existsSync(path)) {
@@ -1187,7 +1201,36 @@ export class FakeGit {
     return '';
   }
 
-  cmd_archive() { return this.refuse(['archive'], 'archive is deploy-side'); }
+  /** A regular-file ustar stream, preserving the requested tree paths for tar -x. */
+  cmd_archive({ dir, gitDir, argv }) {
+    const flags = parse(argv, { format: 1 }, []);
+    if (flags.format !== 'tar') return this.refuse(['archive', ...argv], 'only --format=tar is modelled');
+    const { repo, worktree } = this.repoAt(dir, gitDir);
+    const state = worktree ? repo.worktrees.get(worktree) : null;
+    const [rev, ...paths] = flags.rest.filter((arg) => arg !== '--');
+    const sha = this.resolveRev(repo, state, rev);
+    if (!sha) this.die(`fatal: not a valid object name: ${rev}`);
+    const tree = repo.trees.get(repo.commits.get(sha)?.tree ?? sha);
+    const entries = [...tree].filter(([path]) => !paths.length || paths.some((spec) => pathspecMatches(spec, path)));
+    if (paths.some((spec) => !entries.some(([path]) => pathspecMatches(spec, path)))) this.die('fatal: pathspec did not match any files');
+    const blocks = [];
+    for (const [path, blob] of entries) {
+      if (Buffer.byteLength(path) > 100) return this.refuse(['archive', ...argv], 'tar path longer than 100 bytes');
+      const bytes = repo.blobs.get(blob);
+      const header = Buffer.alloc(512);
+      const octal = (offset, width, value) => header.write(`${value.toString(8).padStart(width - 1, '0')}\0`, offset, width, 'ascii');
+      header.write(path, 0, 100);
+      octal(100, 8, 0o644); octal(108, 8, 0); octal(116, 8, 0);
+      octal(124, 12, bytes.length); octal(136, 12, 0);
+      header.fill(32, 148, 156);
+      header.write('0', 156); header.write('ustar\0', 257); header.write('00', 263);
+      const checksum = header.reduce((sum, byte) => sum + byte, 0);
+      header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+      blocks.push(header, bytes, Buffer.alloc((512 - bytes.length % 512) % 512));
+    }
+    blocks.push(Buffer.alloc(1024));
+    return ok(Buffer.concat(blocks));
+  }
   /**
    * `git grep -l -F [--] <text> [-- <pathspec>…]`: the tracked files whose
    * working copy holds the text, exit 1 when none does. Anything else is refused.
@@ -1333,3 +1376,24 @@ function parse(argv, valued = {}, boolean = []) {
 }
 
 export { parse as parseGitArgs };
+
+/** Minimal line edit script via LCS; unchanged lines never become additions. */
+function zeroContextDiff(before, after) {
+  const lengths = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
+  for (let i = before.length - 1; i >= 0; i--) for (let j = after.length - 1; j >= 0; j--) {
+    lengths[i][j] = before[i] === after[j] ? lengths[i + 1][j + 1] + 1 : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+  }
+  let i = 0; let j = 0; let output = '';
+  while (i < before.length || j < after.length) {
+    if (i < before.length && j < after.length && before[i] === after[j]) { i++; j++; continue; }
+    const startI = i; const startJ = j; const edits = [];
+    while ((i < before.length || j < after.length) && !(i < before.length && j < after.length && before[i] === after[j])) {
+      if (j < after.length && (i === before.length || lengths[i][j + 1] > lengths[i + 1][j])) edits.push(`+${after[j++]}\n`);
+      else edits.push(`-${before[i++]}\n`);
+    }
+    const countI = i - startI; const countJ = j - startJ;
+    const range = (start, count) => count === 1 ? `${start + 1}` : `${count ? start + 1 : start},${count}`;
+    output += `@@ -${range(startI, countI)} +${range(startJ, countJ)} @@\n${edits.join('')}`;
+  }
+  return output;
+}

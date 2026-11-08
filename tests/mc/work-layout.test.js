@@ -15,7 +15,6 @@ const root = mkdtempSync(join(tmpdir(), 'mc-work-layout-'));
 const mc = join(root, 'mc');
 process.env.MC_WORK_ROOT = mc;
 process.env.MC_HOME = join(root, 'home');
-process.env.PATH = '/usr/bin:/bin';
 mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
 mkdirSync(join(mc, 'step', 'retention', 'memoro-cli', '.git'), { recursive: true });
 
@@ -52,7 +51,7 @@ describe('listStepAreas in layout 2', () => {
 });
 
 describe('a programme directory in layout 2 keeps everything but its worktrees', () => {
-  /** A programme's directory: one worktree of a real repository, and a project and a document beside it. */
+  /** A programme's directory: one worktree of a modelled repository, and a project and a document beside it. */
   function programmeFixture() {
     const home = mkdtempSync(join(tmpdir(), 'mc-programme-dir-'));
     const env = { MC_WORK_ROOT: home };

@@ -62,11 +62,13 @@ export function installFakeGitDefault(model = new FakeGit()) {
   let serial = 0;
   const dir = join(process.env.TMPDIR || tmpdir(), 'fake-git-state');
   const shared = (options) => {
+    // An explicit model (FakeGit.inChild) already owns its snapshot and reload.
+    if (options?.env?.MC_FAKE_GIT_STATE) return { file: null, options };
     mkdirSync(dir, { recursive: true });
     const file = model.snapshot(join(dir, `${process.pid}-${serial++}.json`));
     return { file, options: { ...options, env: FakeGit.childEnv(options?.env || process.env, file) } };
   };
-  const back = (file) => { try { model.reload(file); } catch { /* the child never wrote */ } };
+  const back = (file) => { if (!file) return; try { model.reload(file); } catch { /* the child never wrote */ } };
   const isGit = (file) => file === 'git' || /\/git$/u.test(String(file));
   const text = (value, options) => (options?.encoding && options.encoding !== 'buffer' ? value : Buffer.from(value ?? ''));
   childProcess.spawnSync = (file, args, options) => {
