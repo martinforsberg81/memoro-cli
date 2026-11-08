@@ -10,7 +10,7 @@ the one the merge trusted.
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
-- **the gate round** — lease, **one** worktree holding the pull request's head
+- **the gate round** — lease, the pull request's **existing** checkout holding its head
   with main merged into it, the test files the change reaches run there, the
   command gates the same selection named run beside them, squash. This is what
   `mc repo merge` was; only the name moved.
@@ -59,8 +59,8 @@ before `gh` is asked anything
 ## The gate form
 
 Unchanged, deliberately: `mc merge` calls the same `gate()` in `repo.js`, which
-calls the same `runGate` and `runMergeRound`. The round, its lease, its one
-throwaway worktree, the red names read out of it by name, the deploy pull and
+calls the same `runGate` and `runMergeRound`. The round, its lease, its borrowed
+checkout, the red names read out of it by name, the deploy pull and
 the merge-log line are all described where they live —
 [`src/mc/repo-merge.js`](../../src/mc/repo-merge.js),
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js) and
@@ -100,6 +100,41 @@ batch cleanup, so the slowest completed files remain visible. Only the active
 incomplete test requests contribute unfinished files: a command-gate timeout
 cannot relabel the already-completed selection as unfinished. Own-test
 requests are tracked separately and name their own pending files.
+
+## Reuse the existing checkout
+
+Martin, 2026-11-08: a merge must reuse the checkout the work already has;
+creating and deleting another worktree wastes time and disk. This applies to
+ordinary and documents-only PR measurements, batch candidates and branch
+freshening before landing. Direct goal landing keeps its existing procedure.
+
+`existingCandidate` locates the registered checkout of the exact PR branch.
+It requires the pushed head, a clean index and working tree (including
+untracked files), no unfinished Git operation, and complete process cwd
+evidence that nobody else is working there. A synchronous requesting process
+and its waiting ancestors may hand over their own checkout. A missing, dirty, busy or mismatched
+checkout stops with its reason; it never triggers another checkout.
+
+The measurement temporarily detaches HEAD in that directory, merges the
+current fetched base, prepares and tests that combined tree, then returns to
+the original branch without moving it. A batch starts from its fetched base
+in the first PR's existing checkout. Branch freshening uses the same mechanism
+and pushes only the named branch, then advances its local branch to that pushed
+head with an expected-old-head check. The installation's main checkout is never
+used as a PR candidate. Standalone measurements of main without a PR retain
+their separate candidate; they are not merge attempts.
+
+A conflict is aborted during restoration. Restoration never resets or cleans
+files: unexpected changes are retained and reported, and the round cannot
+return green. It never removes the borrowed checkout. An uncatchable process
+kill can leave detached HEAD; recovery must inspect that checkout and return
+to the original branch before retrying.
+
+Protection for this change is bounded to the existing gate, docs-measure,
+freshen and preparation-cache fixtures: correct checkout and merged state,
+no worktree creation/removal, refusal before mutation on unsafe inputs, and
+branch restoration on successful, red and exceptional exits. No new suite,
+scanner or framework is commissioned.
 
 ## The door
 
@@ -192,8 +227,8 @@ whole of it. It takes a repository path and a number and:
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
    then it reads the head again, and a head that moved since step 1 is `drift`:
    not merged, because the files checked are not the files that would land;
-4. measures the documents before anything is squashed. It builds a candidate of
-   the head with `origin/<base>` merged in, under `<work root>/gate/<repo>/docs-<n>`,
+4. measures the documents before anything is squashed. It borrows the branch's
+   existing clean, idle checkout and merges `origin/<base>` into a detached head there,
    prepares it as a round does, asks the repository's selector (`selectFiles`,
    the gate round's own) which tests read the files, runs those files and the
    command gates it names, and refuses on any red: `red`, with the names. A
@@ -224,7 +259,7 @@ opinion about.
 
 The docs measurement reserves the repository's gate lane before creating or
 preparing its candidate and releases it after cleanup, including on failure.
-It uses one worktree and the selector's files and commands, with no model or
+It reuses the branch's checkout and the selector's files and commands, with no model or
 deploy pull. Raw test and command output survives candidate cleanup under
 `~/.memoro/mc/gate-output/`. A failed result names the log, failing files,
 assertion locations and a focused rerun command; JSON retains the details.
@@ -318,28 +353,17 @@ longer mentions it. The gate form's argument errors live with the gate, in
 
 ## Where the candidate's dependencies come from
 
-The candidate is a fresh worktree with no `node_modules` in it, and a suite run
+The candidate reuses the branch's checkout and its existing dependency location. A suite run
 where the declared packages cannot be resolved does not fail — it runs the
 tests that happen to need nothing and prints a number with the right shape
 (D-0152: 2162 tests and 30 failures, where 206 tests never ran and were not
 counted as skipped; 2368 of 2368 once the tree was linked). A number from such
 a run is not low, it is invalid, and nothing about the number says so.
 
-**So the candidate stands where the tree already is.** It is built at
-`<work root>/gate/<repo>/candidate` — `WORK_GATE` beside `SHARED_DEPS` in
-[`src/mc/paths.js`](../../src/mc/paths.js) — which puts `~/mc/node_modules` two
-parents above it, found by node's own walk up the directory chain. That is the
-same one tree every workarea resolves through, described in
-[`mc-shared-deps.md`](mc-shared-deps.md) § *Where a checkout's dependencies come from*: one
-copy for the workareas and the rounds together, no `npm ci` in the round, and
-nothing inside the checkout for git or the selector to trip over. The gate
-directory used to live under `mcHome()`, and moving it is the whole of that
-half. The round calls the same `ensureSharedDeps` on the **candidate** rather
-than on the repository's checkout, so a pull request that changes
-`package-lock.json` is measured against a tree installed from *its* lockfile;
-the shared tree then stands at that lockfile until the next workarea or round
-moves it, which is the one-tree-one-lockfile trade the work root already makes,
-said out loud.
+The round calls `ensureSharedDeps` on the borrowed checkout, then runs the
+repository's declared preparation. A cached dependency clone replaces any
+existing checkout-local `node_modules`; it must never nest inside it or write
+through a link into the shared tree.
 
 **And the round measures the resolution instead of believing a declaration.**
 After the prepare step and before the suite, `dependencyTree(candidate)` asks

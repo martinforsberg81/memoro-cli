@@ -126,8 +126,19 @@ function fixture({
   writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
 
   const calls = [];
+  const candidateDir = join(workRoot, 'existing', 'candidate');
+  let detached = false;
+  const localSha = pushed || pr.headRefOid;
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
+    if (args[0] === 'worktree' && args[1] === 'list') {
+      mkdirSync(candidateDir, { recursive: true });
+      writeFileSync(join(candidateDir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
+      return { status: 0, stdout: `worktree ${candidateDir}\0HEAD ${localSha}\0branch refs/heads/${pr.headRefName}\0\0`, stderr: '' };
+    }
+    if (args[0] === 'checkout') { detached = args.includes('--detach'); return { status: 0, stdout: '', stderr: '' }; }
+    if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && (args[1]?.startsWith('refs/heads/') || (args[1] === 'HEAD' && !detached))) return { status: 0, stdout: localSha, stderr: '' };
     if (args[0] === 'worktree' && args[1] === 'add') {
       const dir = args[args.length - 2];
       mkdirSync(dir, { recursive: true });
@@ -188,6 +199,7 @@ function fixture({
     ran: (tool) => calls.filter((call) => call.tool === tool),
     run: (extra = {}) => runGate({
       repoPath,
+      candidateCwds: () => [],
       pr: 400,
       holder: AREA,
       root: mcHome,
@@ -284,7 +296,7 @@ describe('the round measures a state worth measuring', () => {
       await fx.run();
       const git = fx.ran('git').map((call) => call.args.join(' '));
       const fetched = git.findIndex((line) => line.startsWith('fetch origin'));
-      const built = git.findIndex((line) => line.startsWith('worktree add'));
+      const built = git.findIndex((line) => line.startsWith('checkout --detach'));
       assert.ok(fetched !== -1, 'it never fetched');
       assert.ok(fetched < built, 'the candidate was built from a remembered ref');
     } finally { fx.cleanup(); }
@@ -295,17 +307,55 @@ describe('the round measures a state worth measuring', () => {
    * memoro the second side was a second `npm ci` for a 492 MB tree and a
    * second 233.6 s of tests for every pull request.
    */
-  it('builds ONE worktree, detached, and runs the suite once', async () => {
+  it('reuses the existing checkout, restores its branch, and runs the suite once', async () => {
     const fx = fixture();
     try {
       await fx.run();
       const added = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
-      assert.equal(added.length, 1, 'a second worktree was built');
-      assert.ok(added[0].args.includes('--detach'), added[0].args.join(' '));
-      assert.ok(added[0].args[added[0].args.length - 2].endsWith('candidate'));
+      assert.deepEqual(added, [], 'no worktree is created');
+      assert.deepEqual(fx.ran('git').filter((call) => call.args[0] === 'checkout').map((call) => call.args), [
+        ['checkout', '--detach', 'abc1234'], ['checkout', '--no-guess', 'feature'],
+      ]);
+      assert.equal(fx.ran('git').some((call) => call.args[0] === 'worktree' && call.args[1] === 'remove'), false);
       const sides = fx.ran('suite').map((call) => call.cwd.split('/').pop());
       assert.deepEqual(sides, ['candidate']);
     } finally { fx.cleanup(); }
+  });
+
+  it('refuses an absent, busy, dirty or mismatched checkout before changing it', async () => {
+    for (const kind of ['absent', 'busy', 'unknown activity', 'dirty', 'wrong head']) {
+      const fx = fixture();
+      try {
+        const report = await fx.run({
+          candidateCwds: () => {
+            if (kind === 'unknown activity') throw new Error('lsof failed');
+            return kind === 'busy' ? [{ pid: 123, cwd: join(fx.workRoot, 'existing', 'candidate', 'src') }] : [];
+          },
+          git: (args, opts) => {
+            if (kind === 'absent' && args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '', stderr: '' };
+            if (kind === 'dirty' && args[0] === 'status') return { status: 0, stdout: ' M src/work.js\n', stderr: '' };
+            if (kind === 'wrong head' && args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: 'unpublished', stderr: '' };
+            return fx.git(args, opts);
+          },
+        });
+        assert.equal(report.stopped_at, 'worktree', kind);
+        assert.deepEqual(fx.ran('suite'), []);
+        assert.equal(fx.ran('git').some(({ args }) => ['checkout', 'merge', 'reset', 'clean'].includes(args[0]) || (args[0] === 'worktree' && args[1] !== 'list')), false, kind);
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('restores the original branch after a red verdict, a conflict and an exception', async () => {
+    for (const kind of ['red', 'conflict', 'exception']) {
+      const fx = fixture({ candidateRed: kind === 'red' ? ['broken'] : [], conflict: kind === 'conflict' });
+      try {
+        if (kind === 'exception') await assert.rejects(fx.run({ suite: () => { throw new Error('suite crashed'); } }), /suite crashed/u);
+        else assert.equal((await fx.run()).ok, false);
+        assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
+        assert.equal(fx.ran('git').some(({ args }) => args[0] === 'reset' || args[0] === 'clean' || (args[0] === 'worktree' && args[1] !== 'list')), false);
+        assert.equal(fx.lease().held, false);
+      } finally { fx.cleanup(); }
+    }
   });
 
   it('a conflict with the base stops the round before any suite runs', async () => {
@@ -699,15 +749,11 @@ describe('the dependency tree is checked before a suite is believed', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('builds the candidate under the work root, where that tree is above it', async () => {
+  it('runs in the registered checkout under the shared dependency tree', async () => {
     const fx = fixture();
     try {
       await fx.run();
-      const added = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
-      const dir = added.args[added.args.length - 2];
-      assert.equal(dir.startsWith(join(fx.workRoot, 'gate')), true, dir);
-      assert.equal(dir.endsWith('candidate'), true, dir);
-      assert.equal(dir.startsWith(fx.repoPath), false, 'the throwaway worktree must never be inside the repository');
+      assert.equal(fx.ran('suite')[0].cwd, join(fx.workRoot, 'existing', 'candidate'));
     } finally { fx.cleanup(); }
   });
 });
@@ -905,7 +951,7 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
   };
   /** A gh that answers per number, and a diff that answers per head. */
   function batchFixture({ conflictOn = null, ownRedOn = null, bases = {} } = {}) {
-    const fx = fixture();
+    const fx = fixture({ pr: prs[401] });
     const gh = (args, opts = {}) => {
       fx.calls.push({ tool: 'gh', args, cwd: opts.cwd });
       const pr = prs[Number(args[2])];
@@ -939,7 +985,8 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
       const report = await fx.run();
       assert.equal(report.ok, true, report.reason);
       const adds = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add').map((call) => call.args[call.args.length - 1]);
-      assert.deepEqual(adds, ['origin/main'], 'one worktree, starting from the base');
+      assert.deepEqual(adds, [], 'no new worktree');
+      assert.deepEqual(fx.ran('git').find((call) => call.args[0] === 'checkout').args, ['checkout', '--detach', 'origin/main']);
       const merges = fx.ran('git').filter((call) => call.args[0] === 'merge').map((call) => call.args[2]);
       assert.deepEqual(merges, ['sha401', 'sha402', 'sha403'], 'heads merged in the order given');
       assert.equal(fx.ran('suite').length, 1, 'one suite for the batch, not one per pull request');
@@ -1120,18 +1167,23 @@ describe('a repository that selects by diff', () => {
     });
 
     const runs = [];
+    let detached = false;
+    const candidateDir = join(root, 'existing', 'candidate');
     const git = (args, opts = {}) => {
       const also = gitAlso(args, opts);
       if (also !== undefined) return also;
-      if (args[0] === 'worktree' && args[1] === 'add') {
-        const dir = args[args.length - 2];
+      if (args[0] === 'checkout') { detached = args.includes('--detach'); return { status: 0, stdout: '', stderr: '' }; }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse' && (args[1]?.startsWith('refs/heads/') || (args[1] === 'HEAD' && !detached))) return { status: 0, stdout: 'abc1234', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        const dir = candidateDir;
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
         for (const file of files) {
           mkdirSync(join(dir, dirname(file)), { recursive: true });
           writeFileSync(join(dir, file), '');
         }
-        return { status: 0, stdout: '', stderr: '' };
+        return { status: 0, stdout: `worktree ${dir}\0HEAD abc1234\0branch refs/heads/feature\0\0`, stderr: '' };
       }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         rmSync(args[args.length - 1], { recursive: true, force: true });
@@ -1164,6 +1216,7 @@ describe('a repository that selects by diff', () => {
       repoPath,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
       report: (extra = {}) => runGate({
+        candidateCwds: () => [],
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
         env: { ...process.env, GATE_MARKS: marks },
         suite: ({ cwd, command }) => {
@@ -1859,7 +1912,7 @@ describe('a repository that selects by diff', () => {
       let at = 'candidate';
       let first = true;
       const gitAlso = (args) => {
-        if (args[0] === 'checkout') { [at] = args.slice(-1); if (at === 'cand2222') at = 'candidate'; return { status: 0, stdout: '', stderr: '' }; }
+        if (args[0] === 'checkout') { [at] = args.slice(-1); if (at === 'cand2222' || at === 'abc1234') at = 'candidate'; return { status: 0, stdout: '', stderr: '' }; }
         if (args[0] === 'diff') return { status: 0, stdout: touched.map((file) => `${file}\n`).join(''), stderr: '' };
         if (args[0] === 'rev-list') return { status: 0, stdout: `${history.join('\n')}\n`, stderr: '' };
         if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
@@ -1932,7 +1985,9 @@ describe('a repository that selects by diff', () => {
           const report = await fx.report({ tests: (args) => { runs++; return tests(args); } });
           assert.equal(report.ok, kind === 'exact', report.reason);
           assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
-          assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), []);
+          assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), [
+            ['checkout', '--detach', 'abc1234'], ['checkout', '--no-guess', 'feature'],
+          ]);
           assert.equal(report.timings['main red'], undefined);
           if (kind === 'exact') assert.deepEqual(report.main_red_files, [scanner]);
           else assert.equal(report.main_red_files, null);
@@ -2844,7 +2899,7 @@ describe('the round measures the branch as pushed, not as GitHub remembers it', 
     const fx = fixture({ pushed: 'f'.repeat(40) });
     const progress = [];
     await fx.run({ onProgress: (line) => progress.push(line) });
-    const checkout = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add' && call.args.includes('--detach'));
+    const checkout = fx.ran('git').find((call) => call.args[0] === 'checkout' && call.args.includes('--detach'));
     assert.ok(checkout, 'the candidate worktree was built');
     assert.equal(checkout.args.at(-1), 'f'.repeat(40), 'the candidate is the pushed head');
     assert.ok(progress.some((line) => /GitHub still says abc1234, origin\/feature is at fffffff: measuring the branch as pushed/u.test(line)), progress.join('\n'));
@@ -2853,7 +2908,7 @@ describe('the round measures the branch as pushed, not as GitHub remembers it', 
   it('keeps GitHub\'s word when the remote does not answer', async () => {
     const fx = fixture();
     await fx.run();
-    const checkout = fx.ran('git').find((call) => call.args[0] === 'worktree' && call.args[1] === 'add' && call.args.includes('--detach'));
+    const checkout = fx.ran('git').find((call) => call.args[0] === 'checkout' && call.args.includes('--detach'));
     assert.equal(checkout.args.at(-1), 'abc1234');
   });
 });
@@ -2862,8 +2917,8 @@ describe('a project log that carries a row twice', () => {
   /** The fixture's git, with the candidate's checkout carrying this log. */
   const withLog = (fx, text) => (args, opts = {}) => {
     const answer = fx.git(args, opts);
-    if (args[0] === 'worktree' && args[1] === 'add') {
-      const log = join(args[args.length - 2], 'docs', 'project', 'project_log.md');
+    if (args[0] === 'checkout' && args.includes('--detach')) {
+      const log = join(opts.cwd, 'docs', 'project', 'project_log.md');
       mkdirSync(dirname(log), { recursive: true });
       writeFileSync(log, text);
     }
@@ -2897,12 +2952,17 @@ describe('derived artifacts are regenerated after the base is merged in', () => 
     repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, derived },
   });
   /** The fixture's git, with `status` answering what the commands left. */
-  const withStatus = (fx, porcelain) => (args, opts = {}) => {
-    if (args[0] === 'status') {
-      fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
-      return { status: 0, stdout: porcelain, stderr: '' };
-    }
-    return fx.git(args, opts);
+  const withStatus = (fx, porcelain) => {
+    let statuses = 0;
+    let committed = false;
+    return (args, opts = {}) => {
+      if (args[0] === 'commit') committed = true;
+      if (args[0] === 'status') {
+        fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+        return { status: 0, stdout: statuses++ === 0 || committed ? '' : porcelain, stderr: '' };
+      }
+      return fx.git(args, opts);
+    };
   };
 
   it('runs the declared commands in the candidate after the merge, and commits dirt inside the paths', async () => {
@@ -2951,7 +3011,7 @@ describe('derived artifacts are regenerated after the base is merged in', () => 
     try {
       const result = await fx.run();
       assert.equal(result.derived, null);
-      assert.equal(fx.calls.some((call) => call.args?.[0] === 'status'), false);
+      assert.equal(fx.calls.some((call) => call.args?.[0] === 'commit'), false);
     } finally { fx.cleanup(); }
   });
 });
@@ -2967,7 +3027,7 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
       assert.equal(report.base.commit, 'base1111');
       assert.equal(report.candidate.commit, 'cand2222');
       assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
-      assert.ok(fx.ran('git').some((call) => call.args[0] === 'worktree' && call.args[1] === 'prune'), 'the workspace was cleared');
+      assert.ok(fx.ran('git').some((call) => call.args[0] === 'checkout' && call.args[1] === '--no-guess'), 'the original branch was restored');
     } finally { fx.cleanup(); }
   });
 

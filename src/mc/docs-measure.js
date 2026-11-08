@@ -16,16 +16,17 @@
  * answer is reused (`selectFiles` from repo-gate.js), not copied, so the two
  * cannot disagree about what a selection is.
  */
-import { appendFileSync, mkdirSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { runShell } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
+import { existingCandidate } from './existing-candidate.js';
 import { declarationFor } from './repo-gate-table.js';
 import { realTests, selectFiles } from './repo-gate.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
-import { mcHome, workGatePath } from './paths.js';
+import { mcHome } from './paths.js';
 import { takeLane } from './gate-lane-wait.js';
 import { releaseGateLock } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -61,7 +62,6 @@ export async function measureDocs({
     tests: deps.tests ?? realTests,
     prepare: deps.prepare ?? prepareCandidate,
     cacheDir: deps.cacheDir ?? prepareCacheDir({ repoPath, env }),
-    gateDir: deps.gateDir ?? workGatePath(env),
     clock: deps.clock ?? Date.now,
     takeLane: deps.takeLane ?? takeLane,
     releaseLane: deps.releaseLane ?? releaseGateLock,
@@ -76,15 +76,13 @@ export async function measureDocs({
     return finish({ ok: true, stopped_at: null, reason: 'no select declared — nothing to measure', files: 0, red: [], commands: [] });
   }
 
-  const dir = join(io.gateDir, repoFileSlug(repoPath), `docs-${pr}`);
+  let dir;
+  let borrowed;
   const lane = gateLaneOf(repoPath);
   const reservation = { root: mcHome(env), lane, repo: repoFileSlug(repoPath), mode: 'docs-gate' };
   const logPath = join(io.outputDir, `docs-${repoFileSlug(repoPath)}-${pr}-${randomUUID()}.log`);
   let holding = false;
   const save = (text) => { mkdirSync(io.outputDir, { recursive: true }); appendFileSync(logPath, String(text || '')); };
-  const removeWorktree = async () => {
-    try { await io.git(['worktree', 'remove', '--force', dir], { cwd: repoPath }); } catch { /* not there to remove */ }
-  };
 
   let result;
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, interrupted);
@@ -97,7 +95,12 @@ export async function measureDocs({
   } finally {
     try {
       if (holding) {
-        try { await removeWorktree(); rmSync(dir, { recursive: true, force: true }); }
+        try {
+          if (borrowed?.ok) {
+            const restored = await borrowed.restore();
+            if (!restored.ok) result = { ...result, ok: false, stopped_at: 'worktree-restore', reason: restored.reason };
+          }
+        }
         finally { io.releaseLane(reservation); }
       }
     } finally { for (const signal of ['SIGTERM', 'SIGINT']) process.removeListener(signal, interrupted); }
@@ -107,13 +110,17 @@ export async function measureDocs({
 
   /** The candidate's life: made, prepared, selected, run. Cleaned up by the caller. */
   async function measure() {
-    await removeWorktree();
-    rmSync(dir, { recursive: true, force: true });
-
-    for (const args of [['fetch', 'origin', '--prune'], ['fetch', 'origin', headRef], ['worktree', 'add', '--detach', dir, headSha]]) {
+    for (const args of [['fetch', 'origin', '--prune'], ['fetch', 'origin', headRef]]) {
       const run = await io.git(args, { cwd: repoPath });
       if (run.status !== 0) return { ok: false, stopped_at: 'candidate', reason: trim(run.stderr) || `git ${args[0]} exited ${run.status}` };
     }
+
+    borrowed = await existingCandidate({ repoPath, branch: headRef, sha: headSha, git: io.git, cwds: deps.candidateCwds });
+    if (!borrowed.ok) return { ok: false, stopped_at: 'candidate', reason: borrowed.reason };
+    dir = borrowed.dir;
+    const ready = await borrowed.start();
+    if (!ready.ok) return { ok: false, stopped_at: 'candidate', reason: ready.reason };
+    note(`using existing checkout ${dir} — no worktree created`);
 
     const merged = await io.git(['merge', '--no-edit', `origin/${base}`], { cwd: dir });
     if (merged.status !== 0) {
