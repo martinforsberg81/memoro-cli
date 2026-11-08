@@ -54,8 +54,8 @@
  * with no holes.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
 
@@ -122,8 +122,13 @@ function verbFlagsOf(verb) {
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
-  const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
+  const rawStderr = deps.stderr || process.stderr;
+  let refusalSecrets = [];
+  if (argv[0] === 'martin' || (argv[0] === 'log' && argv.includes('Martin'))) {
+    try { refusalSecrets = secretsOf((deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values))()); } catch { refusalSecrets = []; }
+  }
+  const stderr = { write: (text) => rawStderr.write(redactText(text, refusalSecrets)) };
   const scanned = scanArgs(argv, SCAN);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   let [verb, ...rest] = scanned.positional;
@@ -140,6 +145,7 @@ export async function run(argv, deps = {}) {
     home: deps.home || programsHome(env),
     now: deps.now ? deps.now() : new Date(),
     read: deps.read || readTextOrNull,
+    realpath: deps.realpath,
     write: deps.write || writeFileAtomic,
     list: deps.list || listDirsOf,
     git: deps.git || gitIn,
@@ -360,6 +366,10 @@ async function askMartin(args, flags, ctx) {
   const { stdout, stderr, env, read } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const named = args[0] ?? env.MC_GOAL;
+  let values = null;
+  try { values = ctx.readKeys(); } catch { values = null; }
+  const secrets = secretsOf(values);
+  const clean = (value) => redactText(value, secrets);
   const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, reserved: flags.reserved });
   const problems = [...(call.problems ?? [])];
   if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
@@ -368,7 +378,7 @@ async function askMartin(args, flags, ctx) {
     try { evidence = ctx.readFile(flags['evidence-file']).replace(/\n$/u, ''); }
     catch (error) { problems.push(`--evidence-file ${flags['evidence-file']} cannot be read (${error.message})`); }
   }
-  if (problems.length) { stderr.write(returnInstruction(problems, named)); return 2; }
+  if (problems.length) { stderr.write(clean(returnInstruction(problems, named))); return 2; }
 
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
@@ -384,20 +394,22 @@ async function askMartin(args, flags, ctx) {
 
   const tool = env.MC_TOOL || 'person';
   const { question, options, recommend } = call;
-  let secrets = [];
   let sent = { documents: [], trimmed: [], length: null, sha256: null };
   let asked = null;
   if (call.reserved) asked = { martin: `jev not asked: reserved act ${call.reserved}` };
   else if (tool === 'person') asked = { martin: 'jev not asked: person' };
   else {
-    let values = null;
-    try { values = ctx.readKeys(); } catch { values = null; }
-    secrets = secretsOf(values);
-    const context = jevContext(target, goal, flags.document, ctx);
+    const context = jevContext(target, goal, flags.document, { ...ctx, stderr: { write: (line) => stderr.write(clean(line)) } });
     const built = buildState({ question, options, evidence, ...context }, { secrets });
-    if (built.problems) { stderr.write(returnInstruction(built.problems, named)); return 2; }
-    sent = { documents: context.documents.map((item) => item.path), trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
+    if (built.problems?.[0]?.includes('alone are')) { stderr.write(clean(returnInstruction(built.problems, named))); return 2; }
+    if (built.problems) {
+      asked = { martin: 'jev unavailable: state over budget after trimming' };
+    }
+    if (built.problems) {
+      sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null };
+    } else {
     const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+    sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
     const answer = values === null ? { unavailable: 'the mc keys source cannot be read' }
       : await askJev({ body: requestBody(built.state, built.state.options), key, ...ctx.jev });
     const parsed = answer.unavailable ? answer : readAnswers(answer.response, options);
@@ -407,15 +419,15 @@ async function askMartin(args, flags, ctx) {
       asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
       if (judged.outcome !== 'answered') asked.martin = `jev: ${asked.reading} — not answered: ${judged.misses.join('; ')}`;
     }
+    }
   }
 
-  const clean = (value) => redactText(value, secrets);
   const lines = [...Object.entries(options).map(([key, option]) => `Option ${key}: ${oneLine(option)}`), `Recommended: ${recommend}`];
   const answered = asked.outcome === 'answered';
   const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}` : asked.martin;
   const comment = clean([`${answered ? 'jev was asked' : 'Martin is asked'}: ${oneLine(question)}`, ...lines, answered ? said : asked.martin].join('\n'));
   const ledger = redactValue({
-    at: ctx.now.toISOString(), goal: target.name, tool, role: writerRole(env),
+    at: ctx.now.toISOString(), goal: target.name, verb: 'goal martin', programme: target.programme, tool, role: writerRole(env),
     question, options, recommend, reserved: call.reserved,
     documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256,
     model: asked.model ?? null, answers: asked.answers ?? null,
@@ -438,7 +450,7 @@ async function askMartin(args, flags, ctx) {
  * each `--document` (path and text; one that cannot be read is said and not
  * sent), and the last LOG.md entries.
  */
-function jevContext(target, goal, extra, ctx) {
+export function jevContext(target, goal, extra, ctx) {
   const { read, env } = ctx;
   const rulings = goal.repos.map((repo) => {
     const path = `${repo}/docs/project/${target.programme}/rulings.md`;
@@ -447,11 +459,17 @@ function jevContext(target, goal, extra, ctx) {
   }).filter(Boolean);
   const documents = [];
   const seen = new Set();
-  for (const { label, path } of [...goal.documents, ...extra.map((path) => ({ label: null, path }))]) {
+  for (const { label, path, explicit } of [...goal.documents.map((item) => ({ ...item, explicit: false })), ...extra.map((path) => ({ label: null, path, explicit: true }))]) {
     const at = documentPath(path, { goalDir: target.dir, home: env.HOME || process.env.HOME });
     if (seen.has(at)) continue;
     seen.add(at);
-    const text = read(at);
+    const roots = goal.repos.map((repo) => join(target.dir, repo));
+    const safePath = explicit ? confinedDocumentPath(at, roots, ctx.realpath) : at;
+    if (!safePath) {
+      ctx.stderr.write(`mc: ${path} is outside the goal's and programme's repositories — not sent to jev\n`);
+      continue;
+    }
+    const text = read(safePath);
     if (text === null) { ctx.stderr.write(`mc: ${path} cannot be read — not sent to jev\n`); continue; }
     documents.push({ path, ...(label ? { label } : {}), text });
   }
@@ -466,6 +484,18 @@ function jevContext(target, goal, extra, ctx) {
     documents,
     log,
   };
+}
+
+function confinedDocumentPath(path, roots, realpath = realpathSync) {
+  try {
+    const actual = realpath(path);
+    const inside = roots.some((root) => {
+      const base = realpath(root);
+      const rel = relative(base, actual);
+      return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
+    });
+    return inside ? actual : null;
+  } catch { return false; }
 }
 
 /**

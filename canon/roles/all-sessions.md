@@ -21,6 +21,8 @@ search them when the work touches what they cover; never read one whole.
 
 ## Decided standards
 
+When a question has options, ask jev first as [asking-martin](../tasks/asking-martin.md) says.
+
 What the app does across programmes is decided once, in memoro's
 `docs/technical/`. Its contracts, rules and budgets hold for every programme.
 A programme's `docs/project/<programme>/rulings.md` decides only that

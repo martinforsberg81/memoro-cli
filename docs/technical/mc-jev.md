@@ -1,12 +1,54 @@
-# jev before Martin: `mc goal martin`
+# jev before Martin: `mc ask` and `mc goal martin`
 
 A goal's question for Martin is read by TypeSafe's Jev model first (Martin,
 2026-11-07; programme `jev`). Jev is a System One model: it generates no
 text; it takes a `state` and typed questions and returns probabilities. When
 jev settles the question with high probability, the answer goes back to the
 calling session, which keeps working. Otherwise the goal waits on Martin as
-before, with jev's reading attached. The code is `src/mc/jev.js`; the verb is
-`askMartin` in `src/mc/commands/goal.js`.
+before, with jev's reading attached. The shared code is `src/mc/jev.js`;
+`mc goal martin` is `askMartin` in `src/mc/commands/goal.js`, and `mc ask` is
+in `src/mc/commands/ask.js`.
+
+## Who asks jev
+
+Martin, 2026-11-08: jev is asked from any session, interactive or headless,
+with or without a goal, as decision support. An interactive session always
+asks jev before it puts a question with options to Martin in chat: when jev
+settles it, the session continues with jev's answer and names it in its
+account; otherwise Martin gets the question with its options, the session's
+recommendation and jev's reading. A goal's question goes through
+`mc goal martin`, which asks jev itself. A build or review session may ask
+jev about a question it believes the goal settles; a non-answer leaves it to
+block as its role says. Reserved acts never go to jev, from any session.
+
+The verb for a question outside `mc goal martin` is `mc ask`, built by goal
+`jev/ask-anywhere`; it is the executable route for this rule. `mc goal martin`
+from a caller with `MC_TOOL` unset still skips jev (*The flow*, step 1).
+
+## `mc ask`
+
+```
+mc ask [<programme>/<goal>] --reason "<the question>" \
+  --option "<key>: <text>" --option "<key>: <text>" [--option …] \
+  --recommend <key> [--evidence "…" | --evidence-file <path|->] \
+  [--document <path>]… [--reserved <act>]
+```
+
+It uses the same validation, request, thresholds and ledger as `mc goal martin`,
+but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. It
+never changes goal state. A named goal (or `MC_GOAL`) supplies exactly the
+`jevContext` state of `mc goal martin`. Without a goal, programme context is
+`MC_PROGRAMME`, otherwise the programme containing the working directory under
+`~/mc/programs/`; its README and repository planning-worktree rulings are sent,
+and `goal` is null. With no programme, it carries only question, options,
+evidence and documents. The questions say “this work” when there is no goal;
+the goal-bound instruction texts remain unchanged.
+
+Answered calls exit 0 and say `mc: jev answered … — continue with: …`. A miss,
+unavailable request or residual over-budget state exits 1; reserved acts exit 1
+with Martin's decision message. A malformed call exits 2. An answered call with
+a named goal appends the same kind of LOG.md entry as `mc goal martin`; other
+calls do not change a goal.
 
 ## Who asks jev
 
@@ -39,8 +81,12 @@ mc goal martin [<programme>/<goal>] --reason "<the question>" \
   and is unique, its text is not empty.
 - `--recommend` names one of the keys: the session's own choice.
 - `--evidence` (or `--evidence-file`, `-` for stdin) is what the session found
-  and tried; `--document` adds a file the question turns on, read under the
-  goal's directory (`<repo>/<path>`), `~/…` or absolute.
+  and tried; `--document` adds a file the question turns on. Paths resolve
+  relative to the goal or programme directory, `~/…` or absolute. An explicit
+  document is sent only if its real path is inside an allowed goal repository
+  worktree, programme planning worktree, or (without programme context) the
+  working directory's git top level. Escaping symlinks are refused with a
+  warning. Goal-listed documents are sent as plan wrote them.
 
 A call that breaks any of these — and one whose core (question, options,
 evidence, goal) alone is over the budget — exits 2, writes nothing, and
@@ -102,11 +148,11 @@ The state is one JSON object:
 - `log` — the last five LOG.md entries.
 
 The serialized state stays within 240,000 characters (`STATE_BUDGET`).
-Trimmed in this order: the oldest log entries, then the documents largest
+Trimmed in this order: the oldest log entries, then document text largest
 first (cut, ending `[truncated]`), then the programme README (then its
-rulings). The question, options, evidence and goal are never trimmed; if they
-alone exceed the budget, the call is refused with a return instruction to
-shorten them.
+rulings), then whole documents largest first if still necessary. The question,
+options, evidence and goal are never trimmed; if they alone exceed the budget,
+the call is refused with a return instruction to shorten them.
 
 ## The data rule
 
@@ -139,7 +185,8 @@ LOG.md, the ledger, stdout or stderr.
 
 Every call that passes validation appends one JSON line to
 `<mc home>/jev/decisions.jsonl` (`mcHome`: `MC_HOME`, else
-`~/.memoro/mc`): `at`, `goal`, `tool`, `role`, `question`, `options`,
+`~/.memoro/mc`): `at`, `verb` (`ask` or `goal martin`), `programme` (or null),
+`goal` (or null), `tool`, `role`, `question`, `options`,
 `recommend`, `reserved`, `documents` (the paths sent), `trimmed` (each part
 cut), `state_length`, `state_sha256`, `model` (the response's model id),
 `answers` (`answer` with choice, probabilities and confidence; `fits`;

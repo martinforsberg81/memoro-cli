@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { run } from '../../src/mc/commands/goal.js';
-import { buildState, defaultTransport, INSTRUCTIONS, JEV_MODEL, JEV_URL, judge, readMartinCall, retryAfterMs, STATE_BUDGET, THRESHOLDS, TRUNCATED } from '../../src/mc/jev.js';
+import { askJev, buildState, defaultTransport, INSTRUCTIONS, JEV_MODEL, JEV_URL, judge, readMartinCall, retryAfterMs, STATE_BUDGET, THRESHOLDS, TRUNCATED, TIMEOUT_MS } from '../../src/mc/jev.js';
 import { FINISH_ROLE, parseLog } from '../../src/mc/goals.js';
 import { goalJson } from './_helpers/goal-file.js';
 
@@ -71,6 +71,7 @@ function fixture(files = {}) {
     stdout: { write: (text) => out.push(text) },
     stderr: { write: (text) => err.push(text) },
     read: (path) => store[path] ?? null,
+    realpath: (path) => path,
     write: (path, text) => { store[path] = text; },
     list: () => [],
     known: () => [],
@@ -200,6 +201,21 @@ test('buildState trims in order: the log alone when that is enough; then documen
   assert.match(over.problems[0], /the question, options, evidence and goal alone are \d+ characters serialized, over jev's budget of 600/u);
 });
 
+test('documents whose path metadata keeps the state over budget are dropped whole and the trimmed state is still sent', async () => {
+  const documents = Array.from({ length: 100 }, (_, n) => ({ label: `doc ${n}`, path: `${String(n).padStart(3, '0')}-${'p'.repeat(3_000)}` }));
+  const files = { [`${DIR}/GOAL.json`]: goalJson({ stage: 'finish', documents }) };
+  for (const item of documents) files[`${DIR}/${item.path}`] = 'document text';
+  const f = fixture(files);
+  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(f.requests.length, 1, 'trimming does not refuse a state whose core fits');
+  const { state } = JSON.parse(f.requests[0].init.body);
+  assert.ok(JSON.stringify(state).length <= STATE_BUDGET);
+  assert.ok(state.documents.length < documents.length);
+  const ledger = f.ledger.map((line) => JSON.parse(line))[0];
+  assert.ok(ledger.trimmed.some((item) => item.endsWith('dropped')));
+  assert.deepEqual(ledger.documents, state.documents.map((item) => item.path), 'the ledger lists only documents included in the sent state');
+});
+
 test('the thresholds are 0.90, 0.70 and 0.70 and every one is required with agreement', () => {
   assert.deepEqual({ ...THRESHOLDS }, { choice: 0.90, fits: 0.70, settled: 0.70 });
   const at = (choice, p, fits, settled) => judge({ answer: { choice, probabilities: { [choice]: p } }, fits, settled }, 'a').outcome;
@@ -220,6 +236,15 @@ test('retry-after is read in seconds or as a date, at most 10 seconds; none wait
 
 test('the real transport makes no request in a test run', async () => {
   await assert.rejects(() => defaultTransport(JEV_URL, {}), /no live jev request in a test run/u);
+});
+
+test('a 2xx body read is under the attempt timer, so a stalled text() is unavailable without a real wait', async () => {
+  const result = await askJev({
+    body: {}, key: KEY,
+    transport: async () => ({ status: 200, text: () => new Promise(() => {}) }),
+    timer: async (ms) => { assert.equal(ms, TIMEOUT_MS); },
+  });
+  assert.deepEqual(result, { unavailable: 'no answer in 15 seconds' });
 });
 
 test('readMartinCall keeps the option texts by key and the recommendation', () => {

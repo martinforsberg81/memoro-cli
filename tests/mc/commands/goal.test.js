@@ -75,6 +75,7 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     stdout: { write: (text) => out.push(text) },
     stderr: { write: (text) => err.push(text) },
     read: (path) => store[path] ?? null,
+    realpath: (path) => path,
     write: (path, text) => { store[path] = text; },
     list: (path) => listUnder(store, path),
     known: () => known,
@@ -1304,7 +1305,7 @@ test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >=
   assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
   const lines = f.ledger();
   assert.equal(lines.length, 1);
-  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'model', 'answers', 'outcome', 'reason']);
+  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'verb', 'programme', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'model', 'answers', 'outcome', 'reason']);
   assert.deepEqual([lines[0].outcome, lines[0].model, lines[0].answers.answer.choice, lines[0].answers.fits, lines[0].answers.settled], ['answered', 'jev-1.14.0', 'fake_timer', 0.70, 0.70]);
   assert.match(lines[0].state_sha256, /^[0-9a-f]{64}$/u);
 });
@@ -1373,6 +1374,31 @@ test('429 then 200 retries once, after the retry-after it names, and answers', a
   const long = asking({ replies: [reply(503, '', { 'retry-after': '60' }), jevSays()] });
   assert.equal(await run(ASK, long.deps), 0, long.err());
   assert.deepEqual(long.sleeps, [10_000], 'a retry-after over 10 seconds waits 10');
+});
+
+test('a stalled 2xx response body times out and the goal asks Martin with that reason', async () => {
+  const f = asking({ replies: [() => ({ status: 200, text: () => new Promise(() => {}) })], timer: async () => {} });
+  assert.equal(await run(ASK, f.deps), 0, f.err());
+  assert.match(lastComment(f), /jev unavailable: no answer in 15 seconds/u);
+  assert.equal(stateOf(f), 'finish · Martin');
+});
+
+test('mc goal martin omits absolute and symlink-escaping --document paths, while sending in-repository paths', async () => {
+  const f = asking({ files: { ...inStage('finish'), '/outside.md': 'outside secret', [`${DIR}/memoro-cli/docs/extra.md`]: 'inside', [`${DIR}/memoro-cli/docs/link.md`]: 'linked outside' } });
+  f.deps.realpath = (path) => path === `${DIR}/memoro-cli/docs/link.md` ? '/outside.md' : path;
+  const argv = [...ASK, '--document', 'memoro-cli/docs/extra.md', '--document', '/outside.md', '--document', '~/outside.md', '--document', 'memoro-cli/docs/link.md'];
+  assert.equal(await run(argv, f.deps), 0, f.err());
+  const state = JSON.parse(f.requests[0].init.body).state;
+  assert.deepEqual(state.documents.map((item) => item.path), ['memoro-cli/docs/extra.md']);
+  assert.equal((f.err().match(/outside the goal's and programme's repositories/gu) || []).length, 3);
+});
+
+test('a refused call redacts a key-source value embedded in its option', async () => {
+  const f = asking();
+  const bad = ['martin', 'mc/plain', '--reason', 'question', '--option', `${KEYS.TYPESAFE_API_KEY}`, '--option', 'b: second', '--recommend', 'missing'];
+  assert.equal(await run(bad, f.deps), 2);
+  assert.match(f.err(), /\[redacted\]/u);
+  assert.doesNotMatch(f.err(), new RegExp(KEYS.TYPESAFE_API_KEY, 'u'));
 });
 
 test('a build or review session is still refused Martin before jev is asked', async () => {

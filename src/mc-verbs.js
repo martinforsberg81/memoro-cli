@@ -36,6 +36,7 @@ export const VERB_MODULES = {
   model: './mc/commands/model.js',
   log: './mc/commands/log.js',
   goal: './mc/commands/goal.js',
+  ask: './mc/commands/ask.js',
   programs: './mc/commands/programs.js',
   proposals: './mc/commands/proposals.js',
 };

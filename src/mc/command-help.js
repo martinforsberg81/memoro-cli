@@ -112,6 +112,10 @@ export const COMMAND_USAGE = Object.freeze({
     "show includes each worktree's changed files, commits past origin/main and last commit.\n",
     "show includes the goal's stage · status and phase. list includes repositories, stage · status, criteria met/all, session count and the last entry's next action.\n",
   ].join(''),
+  ask: [
+    'usage — mc ask [<programme>/<goal>] --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]\n',
+    '        Ask jev for a decision reading without changing a goal. Without a goal, uses MC_PROGRAMME or the programme containing the working directory.\n',
+  ].join(''),
   tidy: [
     "usage — mc tidy [--apply] [--json] [--days <n>] [--docker]\n",
     "\n",
