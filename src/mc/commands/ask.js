@@ -11,10 +11,12 @@ import { repoNameOf } from '../repos.js';
 import { appendEntry, goalDirIn, GOAL_FILE, parseGoal } from '../goals.js';
 import { knownRepositories } from '../work-area.js';
 import { jevContext } from './goal.js';
-import { scanArgs } from './flags.js';
+import { only, scanArgs } from './flags.js';
 
 const VALUE_FLAGS = ['--reason', '--option', '--recommend', '--evidence', '--evidence-file', '--document', '--reserved'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: ['--option', '--document'] };
+const ASK_ROUTE = only(SCAN, VALUE_FLAGS);
+export const ROUTES = { '': ASK_ROUTE, '*': ASK_ROUTE };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;

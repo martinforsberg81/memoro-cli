@@ -14,7 +14,7 @@ PLAN AND FOLLOW
   mc manager                      Person: manage work across all programmes
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
-  mc ask [<programme>/<goal>]       Ask jev for a decision reading, with or without a goal
+  mc ask [<programme>/<goal>]       Ask jev before asking Martin
   mc programs list [--json]        Every programme and its priority
   mc programs priority <p>... --set <n>  Set programme priorities
   mc proposals [--json]           Waiting proposals by programme and total
@@ -64,6 +64,8 @@ WHO USES THE VERBS
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
 ${commandReference('goal')}
+
+${commandReference('ask')}
 
 ${commandReference('programs')}
 

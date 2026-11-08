@@ -4,34 +4,25 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 ---
 # Asking Martin, and telling him
 
-A question for Martin is one thing: what you found, what it costs, what you
-would do. Never a question without its options. Never ask while the question
-is unclear or reading would settle it: then read.
+Never a question without its options. A question for Martin is what you found,
+what it costs, what you would do; read first when unclear or settled. Bring
+one proposal, not a menu.
 
 Every question with options goes to jev first (docs/technical/mc-jev.md).
-For a goal's question, use `mc goal martin`; it asks jev itself, so do not also
-call `mc ask`. From any other session, call `mc ask` before asking Martin in
-chat:
+For goal questions, use `mc goal martin` (it asks jev itself). Otherwise call
+`mc ask` before asking Martin in chat:
 
 ```
-mc ask [<programme>/<goal>] --reason "<the question>" \
-  --option "<key>: <text>" --option "<key>: <text>" --recommend <key> \
-  [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]… \
-  [--reserved deploy|production-data|credentials|admin]
+mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<key>: <text>" \
+  --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]
 ```
 
-- 2 to 4 options, each a whole way to proceed, keys `^[a-z][a-z0-9_]{0,31}$`
-  each once. They are not a menu: `--recommend` is your proposal among them;
-  evidence is what you found and tried. A malformed call is refused with an
-  example: fix it, call again.
-- For a goal question, when `mc goal martin` prints `mc: jev answered <key>
-  (…) — continue with: <text>`, continue with that answer as if Martin had given
-  it. Otherwise the goal is `Martin` with jev's reading; end as your role says.
-- In an interactive session, when `mc ask` answers, continue and name its answer
-  in your end-of-session account. Otherwise ask Martin in chat with the options,
-  your recommendation and jev's reading line. A build or review session may use
-  `mc ask` when the goal may settle its question; continue on an answer,
-  otherwise block as its role says.
+- 2–4 whole-way options, unique keys `^[a-z][a-z0-9_]{0,31}$`; recommend your
+  proposal and include evidence. A malformed call gives an example to fix.
+- On a `mc goal martin` answer, continue as if Martin gave it; otherwise the goal
+  is `Martin`. In chat, `mc ask` answers continue and go in your end account;
+  otherwise ask Martin with options, recommendation and jev's reading. Build or
+  review may use `mc ask`; continue on an answer, else block as the role says.
 - A reserved act goes with `--reserved <act>`, never to jev. No user data or
   passwords in a question: key redaction is only the guard.
 
