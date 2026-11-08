@@ -83,7 +83,7 @@ export const ROUTES = {
 function refuseShot({ flags, positional }) {
   const [where, , ...extra] = positional;
   if (!PLACES.includes(where)) return { error: `mc shot takes dev or prod first${where ? `, not ${where}` : ''}`, usage: true };
-  if (extra.length && !(flags.compare && extra.length === 1)) return { error: `one target at a time (${extra.join(' ')} is extra)` };
+  if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
   if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
   if (flags.here && where === 'prod') return { error: '--here is for dev — production has one app, not one per worktree' };
   if (flags.main && flags.here) return { error: '--main and --here name two trees — give one' };
@@ -200,8 +200,8 @@ export async function run(argv, deps = {}) {
     resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
     if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
     if (flags.compare) {
-      compareSelection = (deps.compareSide || compareSide)(compareRef || 'main', { env, cwd, git: deps.git });
-      if (!compareSelection.ok) { stderr.write(`mc: ${compareSelection.error}\n`); return compareSelection.code; }
+      compareSelection = (deps.compareSide || compareSide)(compareRef || 'main', { env, cwd, hereWorktree: worktree, git: deps.git });
+      if (!compareSelection.ok) { stderr.write(`${compareSelection.error.startsWith('mc:') ? '' : 'mc: '}${compareSelection.error}\n`); return compareSelection.code; }
     }
     const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }

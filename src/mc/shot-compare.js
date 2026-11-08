@@ -19,7 +19,7 @@ const FIELDS = ['position', 'padding', 'margin', 'overflow_y', 'z_index', 'visib
 const OPTIONAL_FIELDS = ['background_color', 'color'];
 
 /** Resolve only MAIN or one registered memoro worktree beneath the mc work root. */
-export function compareSide(value, { env = process.env, cwd = process.cwd(), git = null, exists = existsSync, realpath = realpathSync } = {}) {
+export function compareSide(value, { env = process.env, cwd = process.cwd(), hereWorktree = null, git = null, exists = existsSync, realpath = realpathSync } = {}) {
   const asked = String(value || 'main');
   if (asked === 'main' || asked === 'origin/main') {
     const worktree = sharedWorktree(env);
@@ -51,16 +51,17 @@ export function compareSide(value, { env = process.env, cwd = process.cwd(), git
     });
   }
   const unique = [...new Set(matches)];
-  if (unique.length > 1) return { ok: false, code: 2, error: `${asked} matches more than one memoro worktree: ${unique.join(', ')}` };
-  if (unique.length !== 1) return { ok: false, code: 2, error: `mc: --compare takes main (the MAIN slot, the shared checkout's server) or a memoro worktree under ~/mc by path or name, not ${asked}` };
+  const usage = `--compare takes main (the MAIN slot, the shared checkout's server) or a memoro worktree under ~/mc by path or name, not ${asked}`;
+  if (unique.length > 1) return { ok: false, code: 2, error: `${usage}; matches more than one memoro worktree: ${unique.join(', ')}` };
+  if (unique.length !== 1) return { ok: false, code: 2, error: usage };
   let real;
   try { real = realpath(unique[0]); } catch { real = resolve(unique[0]); }
   let realRoot;
   try { realRoot = realpath(root); } catch { realRoot = root; }
   if (!(real === realRoot || real.startsWith(`${realRoot}${sep}`)) || !exists(`${unique[0]}/.mc/shot.json`)) {
-    return { ok: false, code: 2, error: `mc: --compare takes main (the MAIN slot, the shared checkout's server) or a memoro worktree under ~/mc by path or name, not ${asked}` };
+    return { ok: false, code: 2, error: usage };
   }
-  const here = resolve(cwd);
+  const here = resolve(hereWorktree || cwd);
   let realHere;
   try { realHere = realpath(here); } catch { realHere = here; }
   if (real === realHere) return { ok: false, code: 2, error: `${asked} is this tree — nothing to compare` };

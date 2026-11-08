@@ -113,7 +113,7 @@ function sink() {
 }
 
 async function compare(argv, {
-  measures = {}, warnings = {}, refuse = null, clicked = {}, extra = {}, ambiguous = false,
+  measures = {}, warnings = {}, refuse = null, clicked = {}, extra = {}, ambiguous = false, cwd = null,
 } = {}) {
   const waits = [];
   const holders = [];
@@ -144,7 +144,7 @@ async function compare(argv, {
     stdout,
     stderr,
     env: { ...process.env, MC_REPOS_HOME: home, MC_WORK_ROOT: home },
-    cwd: home,
+    cwd: cwd ? cwd(worktree) : home,
     callerWorktree: () => worktree,
     serversFor: () => [],
     stopServer: () => ({ ok: true }),
@@ -350,14 +350,44 @@ describe('mc shot dev --compare', () => {
       assert.equal(result.code, 2, value);
       assert.match(result.stderr, /--compare takes main .* or a memoro worktree under ~\/mc by path or name/u);
       assert.equal(result.stderr.trimEnd().split('\n').length, 1);
+      assert.doesNotMatch(result.stderr, /mc: mc:/u);
       assert.deepEqual(result.servers, []);
       assert.equal(existsSync(join(result.home, 'compare')), false);
       assert.equal(existsSync(join(result.home, '.memoro')), false);
     }
     const ambiguous = await compare(['dev', 'assistant', '--compare', 'other'], { ambiguous: true });
     assert.equal(ambiguous.code, 2);
+    assert.match(ambiguous.stderr, /--compare takes main .* or a memoro worktree under ~\/mc by path or name/u);
     assert.match(ambiguous.stderr, /matches more than one memoro worktree/u);
+    assert.match(ambiguous.stderr, /goals\/other\/memoro/u);
+    assert.equal(ambiguous.stderr.trimEnd().split('\n').length, 1);
     assert.deepEqual(ambiguous.servers, []);
+  });
+
+  it('pooled: a relative path to the selected here worktree is refused from a subdirectory before either server starts', async () => {
+    const result = await compare(['dev', 'assistant', '--compare', '..'], { cwd: (worktree) => join(worktree, 'src') });
+    assert.equal(result.code, 2, result.stderr);
+    assert.equal(result.stderr.trim(), 'mc: .. is this tree — nothing to compare');
+    assert.deepEqual(result.servers, []);
+  });
+
+  it('pooled: compare does not excuse a second target, and a refused other server keeps admission coverage', async () => {
+    const extra = await compare(['dev', 'assistant', 'ignored', '--compare', 'main']);
+    assert.equal(extra.code, 2);
+    assert.match(extra.stderr, /one target at a time \(ignored is extra\)/u);
+    assert.deepEqual(extra.servers, []);
+
+    for (const error of [
+      '2 of 2 app servers already running — srv-a (/x), srv-b (/y); stop one with mc test dev --stop in its worktree',
+      'only 9% memory free (floor 15%)',
+    ]) {
+      const refused = await compare(['dev', 'assistant', '--compare', 'main'], { refuse: { error } });
+      assert.equal(refused.code, 1, refused.stderr);
+      assert.deepEqual(refused.servers, [refused.worktree, refused.shared]);
+      assert.deepEqual(refused.waits, [undefined, 60]);
+      assert.match(refused.stderr, new RegExp(error.startsWith('2 of') ? '2 of 2 app servers already running' : 'only 9% memory free', 'u'));
+      assert.doesNotMatch(refused.stderr, /running compare servers/u);
+    }
   });
 
 });
