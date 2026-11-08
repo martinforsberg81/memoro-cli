@@ -420,6 +420,27 @@ test('a session\'s backward move is refused naming both stages, whatever its rol
   }
 });
 
+test('interactive Martin can return, move backward/forward and drop with attribution; cannot mark done or use headless authority', async () => {
+  const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
+  for (const [from, to, expected] of [['merge', 'build', 'build · ready'], ['build', 'review', 'review · ready'], ['build', 'build', 'build · ready']]) {
+    const f = fixture({ files: inStage(from), env: MARTIN });
+    assert.equal(await run(['stage', to], f.deps), 0, f.err());
+    assert.equal(stateOf(f), expected);
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+    if (from === 'merge') assert.match(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, /moved back from merge to build by martin/u);
+  }
+  const drop = fixture({ files: inStage('build'), env: MARTIN });
+  assert.equal(await run(['drop', '--reason', 'superseded'], drop.deps), 0, drop.err());
+  assert.equal(stateOf(drop), 'dropped · ready'); assert.equal(parseLog(drop.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+  const returned = fixture({ files: inStage('review', 'Martin'), env: MARTIN });
+  assert.equal(await run(['ready'], returned.deps), 0, returned.err());
+  assert.equal(stateOf(returned), 'review · ready'); assert.equal(parseLog(returned.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+  const done = fixture({ files: inStage('merge'), env: MARTIN });
+  assert.equal(await run(['stage', 'done'], done.deps), 2); assert.match(done.err(), /does not mark a goal done administratively/u);
+  const unattended = fixture({ files: inStage('build'), env: { ...MARTIN, MC_HEADLESS: '1' } });
+  assert.equal(await run(['stage', 'review'], unattended.deps), 2); assert.match(unattended.err(), /interactive-only/u);
+});
+
 test('mc goal log and new name the session that wrote the entry by its role in the heading: build, review, plan; a person, or no role, writes none', async () => {
   const cases = [
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal }, ['--stage', 'review', '--done', 'x'], '· claude · review · ready · by build', 'review', 'build'],
@@ -679,6 +700,28 @@ test('mc goal set, document add and criterion add fill a goal through verbs; cri
   assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false);
 });
 
+test('headless goal sessions cannot rewrite the brief or acceptance criteria; interactive Martin may', async () => {
+  for (const [env, role] of [[BUILD, 'build'], [REVIEW, 'review'], [MEND, 'mend']]) {
+    for (const [argv, refusal] of [
+      [['set', 'mc/plain', 'contract', '--text', 'new rule'], /does not rewrite goal text/u],
+      [['document', 'add', 'mc/plain', '--label', 'A doc', '--path', 'docs/design.md'], /does not change goal documents/u],
+      [['criterion', 'add', 'mc/plain', '--criterion', 'new outcome', '--check', 'a test'], /does not add a criterion/u],
+    ]) {
+      const f = fixture({ files: inStage(role === 'mend' ? 'merge' : role), env });
+      const beforeGoal = f.store[`${DIR}/GOAL.json`];
+      const beforeLog = f.store[`${DIR}/LOG.md`];
+      assert.equal(await run(argv, f.deps), 2, `${role}: ${argv.join(' ')}`);
+      assert.match(f.err(), refusal);
+      assert.equal(f.store[`${DIR}/GOAL.json`], beforeGoal);
+      assert.equal(f.store[`${DIR}/LOG.md`], beforeLog);
+    }
+  }
+  const martin = fixture({ files: inStage('build'), env: { MC_ROLE: 'martin', MC_TOOL: 'claude' } });
+  assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'new outcome', '--check', 'a test'], martin.deps), 0, martin.err());
+  assert.equal(parseGoal(martin.store[`${DIR}/GOAL.json`]).success_criteria.length, 2);
+  assert.equal(parseLog(martin.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+});
+
 test('the goal verbs refuse what would not validate, and write nothing', async () => {
   const f = fixture({ files: seededGoal() });
   const before = f.store[`${DIR}/GOAL.json`];
@@ -736,6 +779,14 @@ test('mc goal criterion set is refused for a build session and a review session,
   }
   const plan = fixture({ files: twoCriteria(), env: PLAN });
   assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], plan.deps), 0, plan.err());
+  const martin = fixture({ files: twoCriteria(), env: { MC_ROLE: 'martin', MC_TOOL: 'claude' } });
+  assert.equal(await run(['set', 'mc/plain', 'contract', '--text', 'A general rule.'], martin.deps), 0, martin.err());
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'a new check'], martin.deps), 0, martin.err());
+  assert.equal(parseGoal(martin.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false, 'rewrite makes it unmet');
+  assert.ok(parseLog(martin.store[`${DIR}/LOG.md`]).slice(-2).every(entry => entry.role === 'martin'));
+  const stillUnmet = fixture({ files: twoCriteria(), env: { MC_ROLE: 'martin', MC_TOOL: 'claude' } });
+  assert.notEqual(await run(['stage', 'review'], stillUnmet.deps), 0, 'authority does not manufacture acceptance evidence');
+  assert.equal(stateOf(stillUnmet), 'build · ready');
 });
 
 const THREE = [{ criterion: 'first', check: 'a test', met: true }, { criterion: 'second', check: 'another test', met: false }, { criterion: 'third', check: 'a third test', met: true }];

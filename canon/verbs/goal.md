@@ -16,8 +16,8 @@ with ✓/✗ and its check, and each worktree's state.
   <p>/<g> --criterion "…" --check "…"`. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
   it back. Every write is validated; an invalid one is refused and not written.
-  `mc goal criterion set <p>/<g> <n> [--criterion "…"] [--check "…"]` rewrites a criterion's text or check and leaves it unmet, logged with the old and new text; a goal session (build, review, finish, mend) cannot.
-  `mc goal criterion remove <p>/<g> <n> --reason "…"` takes criterion `n` out, the later ones move up one number, and the removed text, check, met state and reason are logged; a goal session cannot.
+  `mc goal criterion set <p>/<g> <n> [--criterion "…"] [--check "…"]` rewrites a criterion's text or check and leaves it unmet, logged with the old and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin may.
+  `mc goal criterion remove <p>/<g> <n> --reason "…"` takes criterion `n` out, the later ones move up one number, and the removed text, check, met state and reason are logged; a goal session cannot, but interactive Martin may.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
@@ -68,9 +68,8 @@ with ✓/✗ and its check, and each worktree's state.
   In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
-- **Refused.** mc refuses every session a backward move, naming both stages
-  — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
-  logged. It refuses `done` and `dropped` from every session but plan, any
+- **Refused.** mc refuses every session except the interactive Martin role a backward move, naming both stages
+  — a person (`MC_TOOL=person`, or none) and interactive Martin may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin, any
   move but `build → review` from a build session, any but `review →
   merge|finish` from a review, `finish` without REVIEW.md, any but `finish →
   merge` from a finish session, every stage move from a mend session, and

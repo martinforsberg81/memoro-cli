@@ -58,7 +58,7 @@ export async function run(argv, deps = {}) {
     if (goal.problems) { for (const problem of goal.problems) stderr.write(clean(`mc: ${named}: ${problem}\n`)); return 1; }
     if (['done', 'dropped'].includes(goal.stage)) { stderr.write(clean(`mc: ${named} is ${goal.stage} — a finished goal cannot be changed by mc ask\n`)); return 1; }
     if (env.MC_GOAL && env.MC_GOAL !== named) { stderr.write(clean(`mc: goal session ${env.MC_GOAL} cannot ask for ${named}\n`)); return 2; }
-    if (env.MC_ROLE && !['build-session:goal', 'review-session:goal', 'finish-session', 'mend-session', 'plan'].includes(env.MC_ROLE)) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot change a goal through mc ask\n`)); return 2; }
+    if (env.MC_ROLE && !['build-session:goal', 'review-session:goal', 'finish-session', 'mend-session', 'plan', 'martin'].includes(env.MC_ROLE)) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot change a goal through mc ask\n`)); return 2; }
     roleStage = { 'build-session:goal': 'build', 'review-session:goal': 'review', 'finish-session': 'finish', 'mend-session': 'merge' }[env.MC_ROLE] ?? null;
     if (roleStage && goal.stage !== roleStage) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot ask for ${named} in ${goal.stage}\n`)); return 2; }
   }

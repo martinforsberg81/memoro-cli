@@ -27,6 +27,7 @@ export const VERB_MODULES = {
   deps: './mc/commands/deps.js',
   prs: './mc/commands/prs.js',
   manager: './mc/commands/manager.js',
+  martin: './mc/commands/martin.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
   plan: './mc/commands/plan.js',
@@ -69,7 +70,7 @@ export function retiredLines(verb) {
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',
     '    mc plan <programme>   plan a programme',
-    '    mc manager · mc helper  the two desks',
+    '    mc manager · mc helper · mc martin  the desks',
     '    mc tidy               what is left under ~/mc/work/, and whether it can go',
   ];
 }

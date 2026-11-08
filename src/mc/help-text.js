@@ -12,6 +12,8 @@ THE PAGE
 
 PLAN AND FOLLOW
   mc manager                      Person: manage work across all programmes
+  mc martin                       Person: resolve goals waiting on Martin
+  mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
   mc ask [<programme>/<goal>]       Ask jev before asking Martin
@@ -44,7 +46,7 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan, mc manager, mc helper open interactive sessions;
+  Person: mc plan, mc manager, mc helper, mc martin open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc goal new / set / criterion add writes goals; mc goal log
@@ -64,6 +66,8 @@ WHO USES THE VERBS
                                     asks GitHub, and without it the page says
                                     how old its PR cache is
 ${commandReference('goal')}
+
+${commandReference('martin')}
 
 ${commandReference('ask')}
 
@@ -147,7 +151,7 @@ WHAT IS NOT HERE
   share only the name: dev servers, and dependency updates.
 
   Nor is a session of nobody's. Every session belongs to a programme (plan,
-  build, review) or a desk (manager, helper); the verbs that opened folders of
+  build, review) or a desk (manager, helper, Martin); the verbs that opened folders of
   their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS

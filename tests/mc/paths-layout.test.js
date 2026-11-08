@@ -136,7 +136,7 @@ describe('areaKindOf', () => {
   });
 
   it('is null for a kind\'s root alone, for other runner tables, and for nothing', () => {
-    for (const name of ['', 'plan', 'programs', 'step', 'work', 'runner', 'runner/step', 'runner/deps', 'runner/log/2026', 'runner/log/x', 'intake', 'helper', '.git', '.mc.json']) {
+    for (const name of ['', 'plan', 'programs', 'step', 'work', 'runner', 'runner/step', 'runner/deps', 'runner/log/2026', 'runner/log/x', 'intake', 'helper', 'martin', '.git', '.mc.json']) {
       assert.equal(areaKindOf(name), null, name);
     }
   });

@@ -219,7 +219,7 @@ describe('openInWorkArea and the launch switches', () => {
 
 describe('openInWorkArea in a role area', () => {
   it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
-    for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'helper', 'intake']) {
+    for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'martin', 'helper', 'intake']) {
       const role = readCanonRole(name);
       assert.ok(role, name);
       for (const resumed of [false, true]) {
@@ -390,7 +390,7 @@ describe('openInWorkArea and the foreground register', () => {
       const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
       assert.equal(result.ok, false, JSON.stringify(owner));
       assert.equal(result.reason, 'no owner');
-      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc manager, mc helper\)/u);
+      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc manager, mc helper, mc martin\)/u);
       assert.deepEqual(calls, []);
     }
     assert.deepEqual(events, []);
@@ -527,13 +527,13 @@ describe('startInBackground and --model', () => {
 
 
 describe('foreground launch identity', () => {
-  it('sets the role for plan, brief and helper, on a new conversation and a resume', async () => {
-    for (const roleName of ['plan', 'manager', 'helper']) {
+  it('sets the role for plan, manager, Martin and helper, on a new conversation and a resume', async () => {
+    for (const roleName of ['plan', 'manager', 'martin', 'helper']) {
       for (const resumed of [false, true]) {
         const { areaRoot, worktree, env } = fixture(resumed ? { role: roleName, programme: roleName === 'plan' ? 'mc' : null, entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
         const { calls, options } = opening();
         Object.assign(env, { MC_ROLE: 'goal', MC_GOAL: 'wrong/g', MC_PROGRAMME: 'wrong', MC_STEP: 'wrong:0', MC_PROJECT: 'wrong' });
-        await openInWorkArea({ areaRoot, worktree, env, roleName, programme: roleName === 'plan' ? 'mc' : null, ...options });
+        await openInWorkArea({ areaRoot, worktree, env, ...options, roleName, verb: roleName, areaName: roleName === 'martin' ? 'martin' : undefined, programme: roleName === 'plan' ? 'mc' : null });
         assert.equal(calls[0].args.includes('--resume'), resumed);
         const child = calls[0].spawnOptions.env;
         assert.equal(child.MC_ROLE, roleName);

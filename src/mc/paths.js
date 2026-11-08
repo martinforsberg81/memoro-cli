@@ -386,12 +386,17 @@ export function sessionName(areaName) {
  */
 export const STATE_HOMES = new Set([
   'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
-  'node_modules', 'bin', 'npm', 'status', 'helper', 'pm',
+  'node_modules', 'bin', 'npm', 'status', 'helper', 'martin', 'pm',
 ]);
 
 /** Canonical Manager desk; legacy brief transcripts are discovered at launch. */
 export function managerDir(env = process.env) {
   return join(workRoot(env), 'manager');
+}
+
+/** Canonical Martin decision desk. */
+export function martinDir(env = process.env) {
+  return join(workRoot(env), 'martin');
 }
 
 /**

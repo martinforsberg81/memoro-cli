@@ -803,12 +803,13 @@ describe('SESSIONS', () => {
   };
 
   it('gives each desk its own slot, and says so when nobody is at one', () => {
-    const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
+    const s = sessionsSection({ foreground: [HELPER, PLAN, { verb: 'martin', area: 'martin', pid: 103, started: NOW }], now: NOW, alive: live });
     assert.equal(s.desks.helper.pid, 99);
     // A desk nobody is at is `null` rather than missing: the page draws the
     // row either way, and "is the helper running?" is answered both ways.
     assert.equal(s.desks.manager, null);
-    assert.equal(s.count, 2);
+    assert.equal(s.desks.martin.pid, 103);
+    assert.equal(s.count, 3);
   });
 
   // A planning session belongs to its programme, and PROGRAMMES draws it on
@@ -825,11 +826,12 @@ describe('SESSIONS', () => {
   // (goal mc/no-work).
   it('gives every session an owner that is a programme or a desk', () => {
     const PROJECT = { verb: 'project', area: 'step/ui', programme: 'mc', tool: 'codex', pid: 101, started: '2026-08-29T11:00:00Z' };
-    const s = sessionsSection({ foreground: [HELPER, PLAN, PROJECT, { verb: 'brief', pid: 102 }], now: NOW, alive: live });
+    const s = sessionsSection({ foreground: [HELPER, PLAN, PROJECT, { verb: 'brief', pid: 102 }, { verb: 'martin', area: 'martin', pid: 103 }], now: NOW, alive: live });
     assert.deepEqual(s.desks.helper.owner, { kind: 'desk', name: 'helper' });
     assert.deepEqual(s.desks.manager.owner, { kind: 'desk', name: 'manager' });
+    assert.deepEqual(s.desks.martin.owner, { kind: 'desk', name: 'martin' });
     assert.deepEqual(s.programme_sessions.mc.map((item) => [item.pid, item.owner]), [[101, { kind: 'programme', name: 'mc' }]]);
-    assert.equal(s.count, 4);
+    assert.equal(s.count, 5);
     assert.deepEqual(s.strays, []);
     assert.equal('others' in s, false);
   });

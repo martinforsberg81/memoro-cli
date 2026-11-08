@@ -11,11 +11,11 @@
  */
 import { areaKindOf } from './paths.js';
 
-/** The two singleton desks, drawn whether or not anybody is at them. */
-export const DESKS = Object.freeze(['helper', 'manager']);
+/** The singleton desks, drawn whether or not anybody is at them. */
+export const DESKS = Object.freeze(['helper', 'manager', 'martin']);
 
 /**
- * `{ kind: 'desk', name }` for `mc manager` and `mc helper`, `{ kind:
+ * `{ kind: 'desk', name }` for `mc manager`, `mc helper` and `mc martin`, `{ kind:
  * 'programme', name }` for a planning session in a programme's directory (or
  * one that names its programme) and for a project opened from the page, and
  * null for anything else.
@@ -33,4 +33,4 @@ export function ownerOf(item) {
 }
 
 /** What a launch with no owner is told: what it should belong to. */
-export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to a desk (mc manager, mc helper)';
+export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to a desk (mc manager, mc helper, mc martin)';
