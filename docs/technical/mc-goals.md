@@ -44,8 +44,9 @@ finish   ── finish session: fixed, published ──────────�
 finish   ── finish session: unresolved obstacle ────────────────▶ finish · Martin
 finish   ── finish session ended still in finish (runner) ────▶ finish · Martin
 merge    ── merger landed ────────────────────────────────────▶ done
-merge    ── merger red, or the head moved ────────────────────▶ merge · blocked
-merge    ── mend repairs, gates and requeues ─────────────────▶ merge
+merge    ── first/second failed merge ────────────────────────▶ merge · blocked
+merge    ── mend repairs, gates and returns ready ────────────▶ merge · ready
+merge    ── third failed merge ──────────────────────────────▶ merge · Martin
 any pre-merge blocked ── legacy migration, no session ─────────▶ the same stage · Martin
 any      ── Martin waits and wakes nothing; ready keeps the stage
 any      ── only a person moves a stage backward, logged ─────▶ an earlier stage
@@ -496,11 +497,14 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
 6. **After a finish session** (`afterFinish`). It moved to `merge` or set
    Martin, so the runner adds nothing. One that ends with `finish · ready` is
    set `finish · Martin`; finish recovery cannot continue in-role.
-7. **After a mend session** (`afterMend`) in merge only: a queued PR receives
-   the runner entry that retires the red so mend does not relaunch. If the PR
-   is not queued, the goal waits on Martin when recovery cannot requeue it.
-   Merge retries stay bounded. Pre-merge blocked records are migrated to
-   Martin with their prior obstacle/evidence intact and no session launch.
+7. **After a mend session** (`afterMend`) in merge only: a completed repair
+   returns `merge · ready`. An already queued PR remains with the merger; a
+   missing queue entry is restored by the runner, including a previous red job.
+   The first and second failed merge results set `merge · blocked` and start
+   mend. The third failed merge result sets `merge · Martin` without another
+   mend. Count actual merger failure entries in this merge stage, not mend
+   launches or ready handoffs; an interactive ready entry starts a new cycle.
+   Pre-merge blocked records migrate to Martin without a diagnostic launch.
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
 `build-goal`, `review-goal`, `finish` or `mend`; rows from before say `goal`
@@ -535,13 +539,14 @@ overarching role the runner woke at different moments). Plan is interactive,
   keep their exact scope; no later merger gate is assumed. It publishes repairs
   with `mc publish --no-merge`, records cause, repair and evidence, then requeues
   every registered PR with `mc goal stage merge` and ends in the same turn.
-  Plain `ready` is not a merge handoff. Before publishing or requeueing, it
-  rereads the goal and preserves any intervening person decision: it cannot
+  A `ready` completion lets the runner restore missing delivery. Before
+  publishing or requeueing, it rereads the goal and preserves any intervening person decision: it cannot
   clear Martin's hold or reactivate a completed/dropped goal. These are session
   obligations, not a claim that the requeue command enforces every boundary.
-  A queued PR remains the merger's. Repeated unchanged failures are not progress;
-  existing recovery bounds remain. An obstacle outside its authority is
-  escalated with evidence through goal-bound `mc ask`; a settled jev answer
+  A queued PR remains the merger's. The failure limit counts merger results:
+  failures one and two run mend and retry, failure three waits on Martin.
+  Mend's ready handoff does not reset that count. An obstacle outside its
+  authority is escalated with evidence through goal-bound `mc ask`; a settled jev answer
   continues work, otherwise the goal waits on Martin. Pre-merge blocked goals
   never start mend: legacy records are reconciled to Martin without a diagnostic
   launch. Build/review/finish own their acceptance repairs.
@@ -664,8 +669,12 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 A session sends a goal to `merge`. Every registered PR is merged directly,
 without another gate, criterion check or reviewed-head check. Each landing is
 recorded in LOG.md under the shared lock; when the last PR lands the goal is
-`done`. A merge failure sets `merge · blocked` and starts merge-only recovery when the pull request is not already queued.
-Unresolved merge recovery waits on Martin under the bounded recovery guard.
+`done`. A first or second failed merge sets `merge · blocked` and starts merge-only
+recovery when the PR is not already queued. Mend returns it to `merge · ready`
+for delivery again. The third failed merge sets `merge · Martin`. Failure
+counting uses merger results in LOG.md, not mend-session starts; an interactive
+ready entry starts a new cycle. An in-scope repair that cannot be completed
+still uses the existing escalation path.
 The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
