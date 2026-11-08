@@ -32,7 +32,7 @@
  * already being planned, and naming a new one.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { defaultRepos, listProgrammes } from '../brief-collect.js';
@@ -49,6 +49,7 @@ import { planSessionRefusal } from '../session-role.js';
 import { PLAN_ROLE } from '../goals.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
+import { canonRoot } from '../canon.js';
 
 function sh(cmd, args, { cwd } = {}) {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 });
@@ -170,7 +171,7 @@ export async function run(argv, deps = {}) {
   // incompatible history starts fresh, as does `--new` (Martin, 2026-09-13:
   // "Existerar det en
   // session, ska samma öppnas utan intro").
-  const launch = planLaunch({ programme, repos: ready.repos, role, env });
+  const launch = planLaunch({ programme, repos: ready.repos, role, env, readmeWritten: ready.readme === 'written' });
   const result = await (deps.open || openInWorkArea)({
     env,
     stderr,
@@ -256,7 +257,42 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
     stderr.write(`mc: no repository could be checked out for ${name} — nothing to plan in\n`);
     return { ok: false };
   }
-  return { ok: true, path: area.path, repos: held };
+  const readmePath = join(area.path, 'README.md');
+  let readme = 'kept';
+  if (!existsSync(readmePath)) {
+    const template = programmeReadmeTemplate(programme);
+    if (template === null) {
+      stderr.write(`mc: could not read the programme template for ${readmePath} — starting without a README\n`);
+      readme = 'unavailable';
+    } else {
+      try {
+        writeFileSync(readmePath, template, { flag: 'wx' });
+        stdout.write(`mc: ${readmePath} written from the programme template — a page to fill in\n`);
+        readme = 'written';
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          readme = 'kept';
+        } else {
+          stderr.write(`mc: could not write the programme template to ${readmePath} — starting without a README\n`);
+          readme = 'unavailable';
+        }
+      }
+    }
+  }
+  return { ok: true, path: area.path, repos: held, readme };
+}
+
+/** The programme page inside the packaged canon's fenced markdown block. */
+export function programmeReadmeTemplate(programme) {
+  let source;
+  try {
+    source = readFileSync(join(canonRoot(), 'tasks', 'references', 'programme-readme.md'), 'utf8');
+  } catch {
+    return null;
+  }
+  const block = source.match(/^```markdown\r?\n([\s\S]*?)\r?\n```/mu)?.[1];
+  if (block === undefined) return null;
+  return block.replace(/^# <programme>/mu, `# ${programme}`);
 }
 
 /* ------------------------------------------------------------- the choosing */
@@ -362,6 +398,9 @@ export function programmeLabel(row) {
  * first turn on an intro Martin had not asked for (Martin, 2026-09-13). What a
  * planning session *is* is the role's to say.
  *
+ * When this call wrote a README, it reports the directory's state, not a
+ * prediction about what the session will make.
+ *
  * This function used to read the shared role text and paste it into the
  * prompt, because a role with no overlay inherits nothing: `instructionsFor`
  * hangs the shared text on the overlay, and this role had none. It has one now
@@ -377,11 +416,12 @@ export function programmeLabel(row) {
  */
 export const BRANCH_LINE = 'A branch named `goal/<goal>` is that goal\'s worktree\'s; name yours `plan/<slug>`.';
 
-export function planLaunch({ programme, repos = [], role, env = process.env }) {
+export function planLaunch({ programme, repos = [], role, env = process.env, readmeWritten = false }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
   const layoutTwo = layoutVersion({ root: workRoot(env) }) === 2;
   const lines = [
     `You are the plan session for the \`${programme}\` programme. Its aim is in \`~/mc/${planArea(programme, env)}/README.md\`; read it first.`,
+    ...(readmeWritten ? ['This README is a template to fill in, as `tasks/designing-a-programme.md` says.'] : []),
     'With Martin at the terminal you have full freedom toward that aim: investigate, plan, build and land the work yourself.',
     '',
     `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,
