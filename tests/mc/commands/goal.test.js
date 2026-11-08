@@ -367,6 +367,7 @@ test('mc goal stage build remakes a branch with no commits of its own from origi
   assert.equal(await run(['stage', 'mc/plain', 'build'], absent.deps), 0, absent.err());
   assert.equal(absent.calls.some((call) => call.cwd === `${DIR}/memoro-cli`), false, 'no git call for a missing worktree');
   assert.match(absent.out(), /memoro-cli {2}goal\/plain no worktree yet — the runner remakes the branch from origin\/main at the first session/u);
+  assert.doesNotMatch(absent.out(), /could not fetch/u, 'a missing worktree is not reported as a fetch failure');
 
   const built = fixture({ files: planned, git: counts({ own: 3, behind: 7 }) });
   assert.equal(await run(['stage', 'mc/plain', 'build'], built.deps), 0, built.err());
