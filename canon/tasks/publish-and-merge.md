@@ -11,12 +11,12 @@ in it and say why in the reply.
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
-- Before review or finish authorizes `mc goal stage merge`, run `mc gate
-  --whole-selection` on the final judged worktree; require completed GREEN.
-  Record scope, frozen base, revision and log. `mc gate --wait` must complete
-  the same RUNNING request. Named reruns, deferred green, red, timeout,
-  interruption or incomplete results are not acceptance. Direct landing adds no
-  gate or base/head validation.
+- Before review, finish or mend authorizes `mc goal stage merge`, require
+  completed GREEN `mc gate --whole-selection` on the final judged worktree.
+  Record scope, frozen base, revision and log; finish RUNNING with `mc gate --wait`.
+  Partial, deferred or failed runs are not acceptance; direct landing adds no check.
+  Repairs need final-tree acceptance; unchanged retries may retain valid evidence
+  under the reuse rules below. Preserve approved verification exceptions.
 - A rerun on identical content reuses each file and command gate that passed there and runs
   the rest; a resumed whole selection is a completed GREEN. Any content change means a new whole
   selection; `--fresh` forces a full run. Red files green alone, or untouched and red alike at the base, are `SETTLED`.

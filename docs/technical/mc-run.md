@@ -158,7 +158,7 @@ role tells the session to read LOG.md first.
 - A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
   review found, gates, publishes and `mc goal stage merge`. One that ends
   with the goal still `finish · ready` is set `finish · Martin`.
-- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. Bounded merge recovery remains. Both run in the goal's worktree on the goal's class, like a
+- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree on the goal's class, like a
   build, and write the merge handoff when they queue. See
   [finish and mend](mc-goals.md#finish-and-mend). The runner starts no plan
   session and no programme planning turn (Martin, 2026-11-07).
@@ -262,8 +262,12 @@ ts name kind exit seconds pr turns input output cache_read cache_write session n
 ```
 
 The page reads these files, not a transcript to infer the goal's state.
-Finished goals are archived through `archiveGoal` after 24 hours, with one
-row in `goals/goal_log.md`; archive refusals are logged once. Every five
+Dropped goals are finalized and archived immediately through the shared drop
+operation on ordinary reconciliation, even without a stage timestamp. It
+closes exclusively owned PRs, cancels their queue rows, preserves PRs with an
+unfinished co-owner, and retains failed/unsafe cleanup for retry without
+starting a recovery session. Done goals retain the 24-hour archive hold, with
+one row in `goals/goal_log.md`; archive refusals are recorded once. Every five
 minutes at most, `settleLanded` checks carried PRs and sets done once all are
 merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 

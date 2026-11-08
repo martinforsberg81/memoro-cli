@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { programsGoals } from './goals.js';
+import { goalReferences } from './goals.js';
 import { landerFor, runsAppender, serve, succeed } from './merger.js';
 import { workRoot } from './paths.js';
 
@@ -73,6 +73,6 @@ const code = await serve({
   appendRun,
   // A red goes to the step's next session, or blocks the goal for plan.
   // A pull request that a goal's `prs` name answers to that goal, whoever queued it.
-  land: landerFor({ root, say, sleep, gh, appendRun, goalsOf: () => programsGoals() }),
+  land: landerFor({ root, say, sleep, gh, appendRun, goalsOf: () => goalReferences() }),
 });
 process.exit(code);

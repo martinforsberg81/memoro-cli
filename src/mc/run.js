@@ -69,7 +69,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalSession, MEND_ROLE, mergeAnswered, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, mergeAnswered, mergeFailures, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -80,7 +80,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { RUNNER_DISK, RUNNER_MEMORY, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
-import { archiveGoal, goalArchiveDue } from './goal-archive.js';
+import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
 } from './github-backoff.js';
@@ -907,8 +907,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
-   * The finished goals (`done` or `dropped`) that have been finished for 24
-   * hours (`goalArchiveDue`), archived as `mc goal
+   * Dropped goals are finalized immediately; done goals retain the 24-hour
+   * hold (`goalArchiveDue`). Both use the archive safety checks (`mc goal
    * archive` archives one (`archiveGoal`): the worktrees and the branch go
    * through git, the directory moves to `goals/.archive/`, a row goes to
    * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
@@ -922,11 +922,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
-      const result = archiveGoal(goal, {
+      const archive = {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
-      });
+      };
+      const result = goal.stage === 'dropped' ? finalizeDroppedGoal(goal, {
+        ...archive, allGoals: () => goalReferences({ home: programsHome(deps.env), list: deps.list, read: deps.read }),
+        active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)), root, lock,
+        readQueue: deps.read,
+        writeQueue: (path, entries) => writeJson(path, entries),
+      }) : archiveGoal(goal, { ...archive, active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)) });
       if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
       answer.removed += 1;
       say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);
@@ -1478,11 +1484,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       };
       // Recover the execution of an existing merge decision, including a
       // process that stopped after saving the stage but before queueing all PRs.
-      // Red jobs belong to a session and are never reset here.
+      // A red remains with mend until its ready handoff authorizes delivery again.
       if (goal.stage === 'merge' && goal.status === 'ready' && !mergeAnswered(goal.log.at(-1))) {
         const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+        const lastFailure = goal.log.findLastIndex(mergeAnswered);
+        const repaired = goal.log.slice(lastFailure + 1).some((entry) => entry.stage === 'merge'
+          && entry.status === 'ready' && entry.tool !== 'runner');
         for (const item of goal.prs) {
-          if (pending.some((job) => job.repo === item.repo && Number(job.pr) === Number(item.pr))) continue;
+          if (pending.some((job) => job.repo === item.repo && Number(job.pr) === Number(item.pr)
+            && (job.state !== 'red' || !repaired))) continue;
           if (goal.log.some((entry) => String(entry.done ?? '').startsWith(`${item.repo}#${item.pr} landed `))) continue;
           // Closed without merging: the merger has nothing to land, and would answer red.
           if (stateOf(item) === 'CLOSED') { say(`${goalName(goal)}: ${item.repo}#${item.pr} closed without merging — not queued`); continue; }
@@ -1552,14 +1562,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     goalState(goal, name, { status: 'Martin' }, { comment: 'the finish session ended with the goal still in finish — finish recovery cannot continue' });
   }
 
-  /**
-    * After a mend session (`canon/roles/mend-session.md`) on a merge failure.
-    * It queues the pull request again: one in the merger's line gets the runner's
-   * entry (the red is taken, so it wakes no session again); one not in line
-   * sets `Martin` when the goal was blocked, else `merge · blocked` for one
-   * mend session (a legacy `merge · ready` red, `mergeRetryDue`).
-   */
-  function afterMend(goal, name, { stage, status }) {
+  /** After mend, a ready repair belongs to delivery again. Missing queue
+   * entries are restored by settleLanded; an incomplete repair still escalates. */
+  function afterMend(goal, name, { stage }) {
     const now = stateNow(goal);
     if (now.stage === stage && now.status === 'blocked') {
       goalState(goal, name, { status: 'Martin' }, { comment: 'mend left the obstacle unresolved; Martin needs to inspect LOG.md and the session log' });
@@ -1569,7 +1574,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
     const queued = (goal.prs ?? []).some((item) => merge.some((entry) => entry.repo === item.repo && Number(entry.pr) === Number(item.pr)));
     if (queued) goalState(goal, name, {}, { done: 'mend session took the red; the pull request is in the merger\'s line again' });
-    else goalState(goal, name, { status: status === 'blocked' ? 'Martin' : 'blocked' }, { comment: 'the mend session on the red ended with nothing in the merger\'s line — inspect its log before retrying' });
+    else say(`${name}: mend completed — merge · ready; the runner will restore missing merge queue entries`);
   }
 
   /**
@@ -1644,8 +1649,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head (MC_REVIEW_HEAD), and `mc goal stage
    * merge` executes its decision, with `afterReview` after it. A goal in `finish`
-   * gets a finish session (`finish-session`) and `afterFinish`; a blocked goal
-   * in any stage, or one in `merge` after a red, gets a mend session
+   * gets a finish session (`finish-session`) and `afterFinish`; an unqueued
+   * merge failure gets a mend session
    * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree
    * on the goal's class.
    *
@@ -1664,14 +1669,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const review = kind === 'review';
     const finish = kind === 'finish';
     const mend = kind === 'mend';
-    // The recovery guard: three mends in one stage without a person's `ready` between them wait on Martin.
-    if (mend && goal.status === 'blocked') {
-      const entries = inStage(parseLog(deps.read(logPath) ?? ''), goal.stage);
-      const reset = entries.findLastIndex((entry) => entry.tool === 'person' && entry.status === 'ready');
-      if (entries.slice(reset + 1).filter((entry) => entry.comment === 'starting blocked recovery').length >= 3) {
-        goalState(goal, name, { status: 'Martin' }, { comment: 'three blocked recoveries in this stage did not keep it moving; inspect LOG.md before another retry' });
-        return 'skipped:recovery-limit';
-      }
+    // Count failed merge results, not how many sessions attempted a repair.
+    if (mend && mergeFailures(parseLog(deps.read(logPath) ?? '')) >= 3) {
+      goalState(goal, name, { status: 'Martin' }, { comment: 'three failed merges; inspect LOG.md before another retry' });
+      return 'skipped:recovery-limit';
     }
     const roleName = GOAL_ROLES[kind];
     const role = deps.role(roleName);

@@ -44,8 +44,9 @@ finish   ── finish session: fixed, published ──────────�
 finish   ── finish session: unresolved obstacle ────────────────▶ finish · Martin
 finish   ── finish session ended still in finish (runner) ────▶ finish · Martin
 merge    ── merger landed ────────────────────────────────────▶ done
-merge    ── merger red, or the head moved ────────────────────▶ merge · blocked
-merge    ── mend repairs, gates and requeues ─────────────────▶ merge
+merge    ── first/second failed merge ────────────────────────▶ merge · blocked
+merge    ── mend repairs, gates and returns ready ────────────▶ merge · ready
+merge    ── third failed merge ──────────────────────────────▶ merge · Martin
 any pre-merge blocked ── legacy migration, no session ─────────▶ the same stage · Martin
 any      ── Martin waits and wakes nothing; ready keeps the stage
 any      ── person or interactive Martin may move backward ───▶ an earlier stage
@@ -58,7 +59,7 @@ any      ── person or interactive Martin may move backward ───▶ an e
 ~/mc/programs/<programme>/goals/<goal>/REVIEW.md  what a review that sent it to finish found, for the finish session
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
-~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner 24 h after done or dropped), its worktrees gone
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive; dropped immediately when safe, done after 24 h), its worktrees gone
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
@@ -247,10 +248,15 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   and so are the runner's own recovery settings of `Martin`.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
-- **`drop [<p>/<g>] --reason "…"`** — lets a goal go without landing: stage
-  `dropped`, never `done`; it is finished as a `done` goal is, so it holds no
-  later phase back. The reason is required. Only a person, the plan session or
-  interactive Martin drops a goal.
+- **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
+  `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin
+  or a plan session drops a goal. After persisting the stage, the command closes
+  open PRs owned only by this goal, removes their queued/red merge work, and
+  archives immediately when the shared archive safety checks pass. PRs carried
+  by another unfinished goal remain open and queued, with that ownership noted.
+  GitHub uncertainty, close failure, a live runner session, dirty worktrees, live owners or unpushed
+  commits retain the dropped goal and evidence for the next retry; no mend or
+  build session starts.
 - **`pr <p>/<g> <repo>#<n>…`** — the pull requests named carry the goal: each
   is added to `prs` once, with an entry `Done: carries <repo>#<n>`. For work
   published before `mc publish` wrote `prs`, or from where it could not tell
@@ -267,9 +273,10 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   date, goal, status, pull requests, the last `Done:`. Then the programme's
   phases are renumbered (*Phases*): when the goal was the last of the lowest
   phase, every goal left moves one phase down, and the line names each. The runner does the same
-  by itself for a goal that has been `done` or `dropped` for 24 hours
-  (`ARCHIVE_HOLD_MS`, in its chores),
-  counted from the log entry that set the stage (`stageSince`). A refusal the runner gets is
+  by itself immediately for dropped goals during every ordinary reconciliation,
+  including old dropped goals without a stage timestamp. Done goals retain the
+  24-hour hold (`ARCHIVE_HOLD_MS`), counted from the log entry that set the
+  stage (`stageSince`). A refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
   every pass. A programme is never archived by the runner.
 - **A goal's branch is made when the goal can start.** A goal in a later phase
@@ -497,11 +504,14 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
 6. **After a finish session** (`afterFinish`). It moved to `merge` or set
    Martin, so the runner adds nothing. One that ends with `finish · ready` is
    set `finish · Martin`; finish recovery cannot continue in-role.
-7. **After a mend session** (`afterMend`) in merge only: a queued PR receives
-   the runner entry that retires the red so mend does not relaunch. If the PR
-   is not queued, the goal waits on Martin when recovery cannot requeue it.
-   Merge retries stay bounded. Pre-merge blocked records are migrated to
-   Martin with their prior obstacle/evidence intact and no session launch.
+7. **After a mend session** (`afterMend`) in merge only: a completed repair
+   returns `merge · ready`. An already queued PR remains with the merger; a
+   missing queue entry is restored by the runner, including a previous red job.
+   The first and second failed merge results set `merge · blocked` and start
+   mend. The third failed merge result sets `merge · Martin` without another
+   mend. Count actual merger failure entries in this merge stage, not mend
+   launches or ready handoffs; an interactive ready entry starts a new cycle.
+   Pre-merge blocked records migrate to Martin without a diagnostic launch.
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
 `build-goal`, `review-goal`, `finish` or `mend`; rows from before say `goal`
@@ -523,14 +533,30 @@ overarching role the runner woke at different moments). Plan is interactive,
   obstacles; an unresolved design choice/reserved act goes directly to Martin.
   If it ends with `finish · ready`, the runner changes it to `finish · Martin`.
 - **A mend session** (`MC_ROLE=mend-session`, `canon/roles/mend-session.md`)
-  exists only after a merge failure: conflict, failed candidate check or moved
-  judged head. It repairs within contract, gates, publishes and requeues every
-  registered PR with `mc goal stage merge`; it does not move stages or write
-  product/policy/goal text. Recovery is bounded and unresolved merge repair
-  waits on Martin. A PR already queued is not relaunched. Pre-merge blocked
-  goals never start mend: legacy records are reconciled to Martin while their
-  prior obstacle and evidence remain in LOG.md. Build/review/finish own their
-  acceptance repairs and may ask Martin directly for a remaining real choice.
+  owns the reported merge failure through its repair and final handoff. It
+  diagnoses from the current goal, merger evidence and judged revision, and
+  may change code, commissioned tests, fixtures and documentation within the
+  contract. A merger-reported conflict permits the existing conflict procedure;
+  a delivery retry may require no source change or commit. It does not change
+  goal text, acceptance, product/privacy policy or test protection scope.
+  After a content-changing repair it establishes affected criterion evidence
+  and completed whole-selection GREEN on the final judged worktree before
+  authorizing direct landing. An unchanged retry may retain still-valid evidence
+  under the existing reuse rules. Explicitly approved verification exceptions
+  keep their exact scope; no later merger gate is assumed. It publishes repairs
+  with `mc publish --no-merge`, records cause, repair and evidence, then requeues
+  every registered PR with `mc goal stage merge` and ends in the same turn.
+  A `ready` completion lets the runner restore missing delivery. Before
+  publishing or requeueing, it rereads the goal and preserves any intervening person decision: it cannot
+  clear Martin's hold or reactivate a completed/dropped goal. These are session
+  obligations, not a claim that the requeue command enforces every boundary.
+  A queued PR remains the merger's. The failure limit counts merger results:
+  failures one and two run mend and retry, failure three waits on Martin.
+  Mend's ready handoff does not reset that count. An obstacle outside its
+  authority is escalated with evidence through goal-bound `mc ask`; a settled jev answer
+  continues work, otherwise the goal waits on Martin. Pre-merge blocked goals
+  never start mend: legacy records are reconciled to Martin without a diagnostic
+  launch. Build/review/finish own their acceptance repairs.
 
 Both run in the goal's first repository's worktree, on the goal's class
 routing and billing like a build, with `MC_GOAL`, `MC_REPO` and
@@ -650,8 +676,12 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 A session sends a goal to `merge`. Every registered PR is merged directly,
 without another gate, criterion check or reviewed-head check. Each landing is
 recorded in LOG.md under the shared lock; when the last PR lands the goal is
-`done`. A merge failure sets `merge · blocked` and starts merge-only recovery when the pull request is not already queued.
-Unresolved merge recovery waits on Martin under the bounded recovery guard.
+`done`. A first or second failed merge sets `merge · blocked` and starts merge-only
+recovery when the PR is not already queued. Mend returns it to `merge · ready`
+for delivery again. The third failed merge sets `merge · Martin`. Failure
+counting uses merger results in LOG.md, not mend-session starts; an interactive
+ready entry starts a new cycle. An in-scope repair that cannot be completed
+still uses the existing escalation path.
 The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
@@ -669,9 +699,10 @@ Each stage has one owner, and a goal passes each once:
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
-- `dropped` — let go without landing (`mc goal drop`), by a person or plan,
-  from any stage. Final; it holds no later phase back, and is archived as a
-  `done` goal is.
+- `dropped` — delivery abandoned (`mc goal drop`), by a person or plan, from any
+  stage. Final; it holds no later phase back, and is immediately finalized and
+  archived when cleanup is safe. A dropped goal never wakes a mend session or
+  accepts an old merger answer.
 
 `Martin`, in any stage, waits on Martin and wakes nothing: `mc goal list` says `<stage> · Martin, waits on
 a person`, and the page leads the row's tail with `waits on a person` and the

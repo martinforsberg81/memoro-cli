@@ -38,7 +38,7 @@ with ✓/✗ and its check, and each worktree's state.
   session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
-  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and requeues merge. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
+  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
   first: `mc goal martin --reason "<the question>" --option "<key>: <text>"
   --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
   <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys
@@ -84,4 +84,8 @@ with ✓/✗ and its check, and each worktree's state.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
-  --reason "…"` lets one go without landing; plan, interactive Martin or a person's.
+  --reason "…"` abandons delivery; only plan, interactive Martin or a person may drop. The stage is
+  persisted before cleanup. Exclusive open PRs are closed, their merge rows
+  cancelled, and the goal is archived immediately when safe. Shared PRs stay
+  open and queued. Failed or unsafe cleanup stays visible and retries through
+  the runner without starting a mend/build session.

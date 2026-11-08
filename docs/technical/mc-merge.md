@@ -7,6 +7,15 @@ lands what it cleared. A second implementation is the thing this arrangement
 exists to prevent — two measurements drift, and the one that drifts is always
 the one the merge trusted.
 
+Drop is a cancellation boundary. Merge admission refuses a PR owned only by a
+dropped goal, including a manual job with no goal pointer. The merger rechecks
+ownership before a queued round and immediately before the GitHub merge call;
+a drop during a gate therefore cannot land afterward. Finalization removes the
+abandoned PR's queued/red row under the queue lock. A PR still owned by another
+unfinished goal is neither closed nor dequeued. An old merger answer never
+reactivates a dropped goal; close/read uncertainty leaves cleanup pending for
+retry.
+
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
@@ -143,12 +152,15 @@ Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-**A session decides when a goal merges.** Before a review or finish session
+**A session decides when a goal merges.** Before a review, finish or mend session
 authorizes direct goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
 completed green `mc gate --whole-selection` on the final judged worktree. The
-session records scope, frozen base, judged revision and log. This is a human
-session requirement, not merger enforcement. `mc goal stage merge` records
+session records scope, frozen base, judged revision and log. A content-changing
+mend establishes acceptance for the repaired worktree; an unchanged delivery
+retry may retain still-valid evidence under the existing reuse rules. Explicit
+verification exceptions keep their approved scope. These are session
+requirements, not merger enforcement. `mc goal stage merge` records
 that decision and queues every PR registered on the goal. `landJob` executes
 it with `gh pr merge --squash`, without another gate, criteria check,
 reviewed-head/base validation or automatic conflict resolution. It reads GitHub's merge
@@ -792,6 +804,25 @@ is not the change's red. Its failures are kept under
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
+The queued retry record retains `not_before`, retry counts and a bounded
+`retry_diagnostic` (`category` from the actual report's `stopped_at`, and
+`explanation` from its actual `reason`). The diagnostic is not an inference
+that a check proved machine overload. Offline backoff uses the same durable
+shape, with the offline report as evidence. Queue parsing preserves these
+additive fields; older entries remain compatible. A legacy queued entry with a
+valid future `not_before` is still deferred, but its cause is displayed as
+unknown when no diagnostic exists. A deadline is an eligibility time, not a
+guaranteed start time. Only a valid future deadline is an active timed pause;
+expired, malformed and absent deadlines are due and must not be presented as
+delayed. Explicit requeue/new queueing and landing clear obsolete delay
+diagnostics for current display. The normal MERGE & DEPLOY panel shows the
+cause, local eligibility time with timezone, remaining delay, automatic retry
+step and `mc merge <repo> <pr>` retry-now command. An all-deferred queue is
+intentional even without a live merger process; a due job without an owner is
+still stopped. Mixed queues keep each job's delay attached to its own PR and
+repository. Current deploy/gate/lease observations remain separate, and a
+completed failed deploy is historical rather than an active merge blocker.
+
 **A test that never ends is a red by name.** Every selected, previous-red and
 own test file runs with `--test-force-exit` and one `--test-timeout`, resolved
 from the tree actually measured — the session's worktree, or the round's final
@@ -1141,8 +1172,10 @@ threw.
 
 **Where a red goes.** A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
-answered red on #<pr>` entry (`tellGoal`): every failure in `merge` sets
-`merge · blocked` immediately and wakes a mend session ([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
+answered red on #<pr>` entry (`tellGoal`). Failure one or two sets
+`merge · blocked` and wakes mend; its completed repair returns `merge · ready`
+for delivery again. Failure three sets `merge · Martin`
+([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
 A pull request is a goal's when the job carries the goal (its review's `mc goal stage merge`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal

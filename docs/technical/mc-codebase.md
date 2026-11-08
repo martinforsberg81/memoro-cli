@@ -85,7 +85,7 @@ standing red name does not block an unrelated change and a new one does.
 
 Goal jobs take a different route: `mc goal stage merge` authorizes direct
 landing in `src/mc/merger.js`, without another gate or head/base validation.
-Before that decision, review or finish must complete the affected-selection
+Before that decision, review, finish or mend must complete the affected-selection
 measurement required by the canonical
 [publish-and-merge task](../../canon/tasks/publish-and-merge.md).
 See [mc-merge.md](mc-merge.md) for both landing routes and their bookkeeping.

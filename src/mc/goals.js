@@ -376,6 +376,28 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
   return goals;
 }
 
+/** Active and archived goal references, used to enforce PR ownership after archival. */
+export function goalReferences({ home = programsHome(), list = listDirsOf, read = readTextOrNull } = {}) {
+  const refs = programsGoals({ home, list, read });
+  for (const programme of list(home)) {
+    const archive = join(home, programme, GOALS_DIR, ARCHIVE_DIR);
+    for (const name of list(archive)) {
+      const dir = join(archive, name);
+      const text = read(join(dir, GOAL_FILE));
+      if (text === null) continue;
+      const log = parseLog(read(join(dir, LOG_FILE)) ?? '');
+      const parsed = parseGoal(text);
+      // `archiveGoal` adds this timestamp suffix only when an older archived
+      // directory already occupies the original goal's name.
+      const goal = name.replace(/-\d{8}T\d{4}$/u, '');
+      refs.push(parsed.problems
+        ? { programme, goal, dir, log, stage: null, status: null, prs: [], problems: parsed.problems }
+        : { ...parsed, programme, goal, dir, log, problems: [] });
+    }
+  }
+  return refs;
+}
+
 /** A goal record of `programsGoals` as the shape `parseGoal` gives, for `renderGoalText`. */
 export function goalOfRecord(record) {
   return { ...record, goal: record.goal_text ?? [] };
@@ -416,6 +438,15 @@ export function redMergeText(pr, kind = 'red') {
 /** Whether `entry` is the runner's `redMergeText` entry. */
 export function mergeAnswered(entry) {
   return entry?.tool === 'runner' && /^merger answered (red|moved) on #\d+/u.test(String(entry.done ?? ''));
+}
+
+/** Failed merge results in this merge stage since an interactive ready entry.
+ * Mend sessions and their ready entries do not reset the result count. */
+export function mergeFailures(log = []) {
+  const entries = inStage(log, 'merge');
+  const resumed = entries.findLastIndex((entry) => entry.status === 'ready'
+    && (entry.tool === 'person' || entry.role === 'plan'));
+  return entries.slice(resumed + 1).filter(mergeAnswered).length;
 }
 
 /** The entries at the end of `log` written in `stage`: since the goal last came to it. */

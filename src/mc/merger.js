@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setGoalState } from './goals.js';
+import { appendEntry, goalOfPr, logStamp, mergeFailures, prRef, redMergeText, setGoalState } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -231,7 +231,7 @@ export function queueMerge({
   root, repo, repoPath, pr, branch = null, holder = null, goal = null, sha = null,
   now = new Date(), env = process.env,
   read = realRead, write = (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
-  lock = realLock, start = startMerger,
+  lock = realLock, start = startMerger, mayEnqueue = () => true,
 } = {}) {
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
   const job = {
@@ -239,6 +239,7 @@ export function queueMerge({
     goal, sha,
   };
   const entries = lock(root, () => {
+    if (!mayEnqueue(job)) throw new Error(`${repo} #${pr} is owned only by a dropped goal — delivery is abandoned`);
     const next = enqueue(parseQueue(read(mergesPath(root))), job);
     write(mergesPath(root), next);
     return next;
@@ -440,9 +441,25 @@ export async function landJob(batch, {
   // A goal entry with no status change (goals.js `appendEntry`).
   noteGoal = appendEntry,
   afterLanding = null,
+  // A drop may happen during the gate. Recheck ownership at admission and
+  // immediately before the irreversible GitHub merge call.
+  mayMerge = async () => true,
 } = {}) {
   const t0 = now().getTime();
   const answers = [];
+  const allowedToMerge = async (job) => {
+    let extra = false;
+    try { extra = await mayMerge(job); } catch { extra = false; }
+    if (!extra) return false;
+    if (!goalsOf) return true;
+    let goals;
+    try { goals = goalsOf(); } catch { return false; }
+    const matching = (goals ?? []).filter((goal) =>
+      (job.goal && goal.programme === job.goal.programme && goal.goal === job.goal.goal)
+      || (goal.prs ?? []).some((pr) => pr.repo === job.repo && Number(pr.pr) === Number(job.pr)));
+    const dropped = matching.some((goal) => goal.stage === 'dropped');
+    return !dropped || matching.some((goal) => !['done', 'dropped'].includes(goal.stage));
+  };
   const answer = async (job, landed, report) => {
     // A goal's head moved past the one its review judged: not OK any more.
     // It leaves the queue, and the goal stays in merge for one mend session (`tellGoal`).
@@ -473,6 +490,11 @@ export async function landJob(batch, {
   // directly: no criteria, reviewed-head check, gate or automatic conflict fix.
   const ask = gh || realGh;
   for (const one of [...jobs]) {
+    if (!await allowedToMerge(one)) {
+      await answer(one, false, { ok: false, merged: false, stopped_at: 'dropped', reason: 'its goal was dropped; delivery is abandoned' });
+      jobs.splice(jobs.indexOf(one), 1);
+      continue;
+    }
     const goal = goalOfJob(one, goalsOf);
     if (!one.goal && goal?.stage !== 'merge') continue;
     let merged;
@@ -506,6 +528,12 @@ export async function landJob(batch, {
   // answered by itself and leaves the batch, rather than stopping the round
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
   for (const one of [...jobs]) {
+    const admitted = await allowedToMerge(one);
+    if (!admitted) {
+      await answer(one, false, { ok: false, merged: false, stopped_at: 'dropped', reason: 'its goal was dropped; delivery is abandoned' });
+      jobs.splice(jobs.indexOf(one), 1);
+      continue;
+    }
     const facts = await prStateOf(one, ask);
     if (facts?.state === 'MERGED') {
       const report = alreadyMerged(facts);
@@ -574,6 +602,7 @@ export async function landJob(batch, {
         ...(job.holder ? { holder: job.holder } : {}),
         onProgress: (message) => say(`${label}: ${message}`),
         signal: controller.signal,
+        beforeMerge: () => allowedToMerge(job),
       });
     } finally {
       stopWatch();
@@ -727,6 +756,10 @@ export function goalOfJob(job, goalsOf) {
  * A requeue or an offline answer says nothing yet: the next round answers it.
  */
 function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline }) {
+  if (goal.stage === 'dropped') {
+    say(`${job.repo} #${job.pr}: goal ${goal.programme}/${goal.goal} was dropped — its old merger answer cannot change it`);
+    return;
+  }
   if (requeued || offline) return;
   const label = `${job.repo} #${job.pr}`;
   const name = `${goal.programme}/${goal.goal}`;
@@ -754,8 +787,13 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
     }
+    const failures = mergeFailures([...(goal.log ?? []), { ...entry(red), stage: 'merge', status: 'blocked' }]);
+    const exhausted = !landed && goal.stage === 'merge' && failures >= 3;
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: 'blocked', entry: entry(red, `${why} — a mend session resolves the obstacle`) };
+      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: exhausted ? 'Martin' : 'blocked',
+        entry: entry(red, exhausted
+          ? `${why} — three failed merges; Martin needs to inspect the merge evidence`
+          : `${why} — a mend session resolves the obstacle`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);
@@ -919,16 +957,20 @@ export async function serve({
   const writeAnswer = async ({ job, landed: isLanded, report, requeued, back, moved, offline }) => {
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+    const retryDiagnostic = {
+      category: String(report?.stopped_at || (offline ? 'offline' : 'unknown')).slice(0, 80),
+      explanation: String(report?.reason || 'The round provided no explanation').slice(0, 1000),
+    };
     lock(root, () => {
       let entries = parseQueue(read(mergesPath(root)));
-      entries = (isLanded && report?.ok && report.merged) || moved
+      entries = (isLanded && report?.ok && report.merged) || moved || report?.stopped_at === 'dropped'
         ? dequeue(entries, job)
         : back
         ? markQueued(entries, job)
         : requeued
-        ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+        ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString(), retryDiagnostic })
         : offline
-        ? markOffline(entries, job, { notBefore: offlineNotBefore(job, now) })
+        ? markOffline(entries, job, { notBefore: offlineNotBefore(job, now), retryDiagnostic })
         : markRed(entries, job, { reason, answered: at });
       write(mergesPath(root), entries);
     }, { name: 'merges' });
@@ -1021,14 +1063,18 @@ export async function serve({
           let entries = parseQueue(read(mergesPath(root)));
           for (const { job: one, report, requeued, back, moved, offline } of left) {
             const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+            const retryDiagnostic = {
+              category: String(report?.stopped_at || (offline ? 'offline' : 'unknown')).slice(0, 80),
+              explanation: String(report?.reason || 'The round provided no explanation').slice(0, 1000),
+            };
             entries = (report?.ok && report.merged) || moved
               ? dequeue(entries, one)
               : back
               ? markQueued(entries, one)
               : requeued
-              ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+              ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString(), retryDiagnostic })
               : offline
-              ? markOffline(entries, one, { notBefore: offlineNotBefore(one, now) })
+              ? markOffline(entries, one, { notBefore: offlineNotBefore(one, now), retryDiagnostic })
               : markRed(entries, one, { reason, answered });
           }
           write(mergesPath(root), entries);
