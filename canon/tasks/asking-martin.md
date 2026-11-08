@@ -4,9 +4,11 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 ---
 # Asking Martin, and telling him
 
-Never a question without its options. A question for Martin is what you found,
-what it costs, what you would do; read first when unclear or settled. Bring
-one proposal, not a menu.
+Never a question without its options. When unclear or settled, read first.
+Read technical standards and programme design; apply answers without asking.
+Investigate details as general rules. Bring one proposal, not a menu: a design
+decision with evidence, costs/tradeoffs, alternatives, recommendation and proposed
+rule text/file/section in docs/technical/; see docs/technical/mc-jev.md.
 
 Every question with options goes to jev first (docs/technical/mc-jev.md).
 For goal questions, use `mc goal martin` (it asks jev itself). Otherwise call

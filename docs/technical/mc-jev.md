@@ -9,6 +9,20 @@ before, with jev's reading attached. The shared code is `src/mc/jev.js`;
 `mc goal martin` is `askMartin` in `src/mc/commands/goal.js`, and `mc ask` is
 in `src/mc/commands/ask.js`.
 
+## Decisions presented to Martin
+
+Martin, 2026-11-08: every decision presented for his consideration is written
+at design level, ready for `docs/technical/`. Normal build questions are
+answered by the technical standards and programme design. Apply those answers
+without asking; investigate a detail-level question as a possible missing
+general rule before escalating it.
+
+A remaining decision includes evidence, design alternatives and tradeoffs,
+one recommendation, and proposed normative text with the destination technical
+document and section. Preserve concrete action identifiers and evidence when
+needed. After the answer, reconcile the standard, programme design and affected
+goal contracts; recording it only in a goal log is insufficient.
+
 ## Who asks jev
 
 Martin, 2026-11-08: jev is asked from any session, interactive or headless,
