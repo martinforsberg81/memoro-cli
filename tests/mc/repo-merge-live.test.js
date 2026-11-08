@@ -1,21 +1,15 @@
 /**
- * The merge round against real git, a real suite, and a real squash.
+ * The application merge round with modelled git and real child suites.
  *
- * Everything else about this verb is asserted against injected commands, which
- * proves the decisions and nothing about the plumbing. This runs the whole
- * round for real — a full suite run in one throwaway worktree, a squash that
- * actually lands on a bare origin, a deploy pull that actually moves a checkout
- * — in a repository built for the purpose, because the one thing that must
- * never be used to test a verb that merges is a repository somebody needs.
- *
- * `gh` is a shell script here. The forge is the only part that cannot be real
- * without a network, so it answers `pr view` from a file and performs `pr merge
- * --squash` as the git commands GitHub would run.
+ * The forge is a shell script: its git commands also reach the model. Refs,
+ * content and lease decisions are asserted against modelled answers, never
+ * presented as proof of git's squash, conflict or lease semantics. The
+ * production merge round is the check of those (decided 2026-11-01).
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,8 +70,7 @@ after(() => { for (const dir of templates) rmSync(dir, { recursive: true, force:
  * `hangingBranch` adds a test that never settles, and that first touches the
  * file `$MC_TEST_HANG_FLAG` names, so a test can tell when the round reached it.
  *
- * Each variant's history is built once, when the file loads; every test gets
- * its own copy of it on disk (`repository`).
+ * Each test builds its own small model history (`repository`).
  */
 function build({ branchBreaksSuite = false, standingRed = false, hangingBranch = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
@@ -135,21 +128,9 @@ function build({ branchBreaksSuite = false, standingRed = false, hangingBranch =
   return { root, head };
 }
 
-const TEMPLATES = {
-  plain: build(),
-  branchBreaksSuite: build({ branchBreaksSuite: true }),
-  standingRed: build({ standingRed: true }),
-  hangingBranch: build({ hangingBranch: true }),
-};
-
-/** This test's own copy of a variant: its own origin, checkout, home and forge. */
+/** This test's own origin, checkout, home and forge. */
 function repository(options = {}) {
-  const variant = Object.keys(options).find((key) => options[key]) || 'plain';
-  const { root: from, head } = TEMPLATES[variant];
-  const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
-  cpSync(from, root, { recursive: true, verbatimSymlinks: true });
-  const config = join(root, 'repo', '.git', 'config');
-  writeFileSync(config, readFileSync(config, 'utf8').split(from).join(root));
+  const { root, head } = build(options);
   chmodSync(join(root, 'home'), 0o700);
   const repo = join(root, 'repo');
   const bare = join(root, 'origin.git');
@@ -192,7 +173,7 @@ function ceilingAtTheStuckChild() {
   };
 }
 
-describe('the merge round, for real', () => {
+describe('the merge round, with modelled git', () => {
   it('a round ceiling kills a hanging test red and releases its lane', async () => {
     const fx = repository({ hangingBranch: true });
     writeFileSync(fx.logPath, '| Datum | PR | Kontroller | Klass | Beslut | Anteckning |\n|---|---|---|---|---|---|\n');
@@ -276,7 +257,7 @@ describe('the merge round, for real', () => {
   });
 
   /**
-   * The 2026-08-31 ruling, against real git and a real suite: a test that has
+   * The 2026-08-31 ruling, against modelled git and a real suite: a test that has
    * always been red on main is red here, and the change cannot land until it
    * is green. The differential round merged this happily, and paid a second
    * worktree and a second suite run every time to be able to.

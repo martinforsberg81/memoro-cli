@@ -3,10 +3,9 @@
  * call against the snapshot in MC_FAKE_GIT_STATE. It costs a node start, and
  * starts no git.
  */
-import { FakeGit } from './mc/_helpers/fake-git.js';
+import { model } from './mc/_helpers/fake-git-preload.mjs';
 
 const file = process.env.MC_FAKE_GIT_STATE;
-const model = FakeGit.load(file);
 let input;
 if (!process.stdin.isTTY) { try { input = (await import('node:fs')).readFileSync(0, 'utf8'); } catch { input = undefined; } }
 const result = model.runner(process.cwd(), process.argv.slice(2), { env: process.env, input: input || undefined });

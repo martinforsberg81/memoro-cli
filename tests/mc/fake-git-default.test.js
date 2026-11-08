@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, execSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { gitLine } from '../_fake-git-default.mjs';
-import { REAL_GIT_FILES } from '../_real-git-files.mjs';
 
 const isolate = fileURLToPath(new URL('../_isolate-home.mjs', import.meta.url));
 
@@ -36,23 +35,23 @@ describe('a test file\'s git is the model', () => {
     assert.equal(execSync('git rev-parse --abbrev-ref HEAD | cat', { cwd, encoding: 'utf8' }).trim(), 'main');
   });
 
-  it('a file off the list that reaches real git ends red, whatever its tests said', () => {
+  it('a formerly exempt file that reaches real git ends red, whatever its tests said', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-stop-'));
-    writeFileSync(join(dir, 'reaches.test.js'), `
+    mkdirSync(join(dir, 'tests', 'mc'), { recursive: true });
+    writeFileSync(join(dir, 'tests', 'mc', 'git.test.js'), `
       import { execSync } from 'node:child_process';
       import { it } from 'node:test';
       it('passes', () => { execSync('unset MC_FAKE_GIT_STATE; git --version'); });
     `);
-    const env = { ...process.env };
+    // This deliberately failing guard fixture owns its counter and evidence,
+    // not the enclosing suite's kept log. Its real call must still be logged.
+    const env = { ...process.env, MC_GIT_CALLS_KEEP: join(dir, 'probe-git-calls.tsv') };
     for (const name of ['MC_GIT_CALLS', 'MC_FAKE_GIT_STATE', 'NODE_OPTIONS', 'NODE_TEST_CONTEXT']) delete env[name];
     // The file run as its own entry, as the runner's child runs it: one node
     // process, where `--test` would start a runner and then this child.
-    const result = spawnSync(process.execPath, ['--import', isolate, 'reaches.test.js'], { cwd: dir, env, encoding: 'utf8' });
+    const result = spawnSync(process.execPath, ['--import', isolate, 'tests/mc/git.test.js'], { cwd: dir, env, encoding: 'utf8' });
     assert.equal(result.status, 1, result.stdout + result.stderr);
     assert.match(result.stdout + result.stderr, /started git \d+ time/u);
-  });
-
-  it('names files that exist', () => {
-    for (const file of REAL_GIT_FILES) assert.equal(existsSync(fileURLToPath(new URL(`../../${file}`, import.meta.url))), true, file);
+    assert.match(readFileSync(env.MC_GIT_CALLS_KEEP, 'utf8'), /^tests\/mc\/git\.test\.js\t--version\n/u);
   });
 });

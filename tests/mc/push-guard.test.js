@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  cpSync, existsSync, linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync,
+  existsSync, linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, mkdirSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,14 +20,13 @@ import {
   MARKER, hookScript, hooksDir, installPushGuard, pushCheckLines, pushGuardState, pushVerdict,
 } from '../../src/mc/push-guard.js';
 
+// Keep the guard ahead of system tools while deliberately hiding mc.
+const noMcPath = `${process.env.PATH.split(':')[0]}:/usr/bin:/bin`;
+
 const NOW = new Date('2026-08-23T14:00:00Z');
 
-/**
- * Each git fixture here is built once per file, when it loads, and every test
- * gets a copy of it on disk: the history is the same for every test, and
- * building it per test was most of each test's time. A copy is a real
- * repository; paths into the template in its config point at the copy.
- */
+/** Each test rebuilds its small model history; only warm executables are shared. */
+const builders = new Map();
 const templates = [];
 after(() => { for (const dir of templates) rmSync(dir, { recursive: true, force: true }); });
 const gitIn = (cwd, args, env = {}) => execFileSync('git', ['-C', cwd, ...args], {
@@ -36,6 +35,7 @@ const gitIn = (cwd, args, env = {}) => execFileSync('git', ['-C', cwd, ...args],
 function template(prefix, build) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   templates.push(root);
+  builders.set(root, build);
   build(root);
   return root;
 }
@@ -52,13 +52,9 @@ const WARM = template('mc-push-guard-warm-', (dir) => {
   try { execFileSync(join(dir, 'exit7')); } catch { /* exit 7, as written */ }
 });
 
-function copyOf(from, prefix, configs = []) {
+function copyOf(from, prefix) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  cpSync(from, root, { recursive: true });
-  for (const config of configs) {
-    const path = join(root, config);
-    writeFileSync(path, readFileSync(path, 'utf8').split(from).join(root));
-  }
+  builders.get(from)(root);
   return root;
 }
 
@@ -193,7 +189,7 @@ describe('the hook, installed', () => {
       assert.match(text, /input=\$\(cat\)/u);
       assert.doesNotMatch(text, /\/Users\/|\/home\//u, 'no absolute path into anybody\'s checkout');
       // No mc on PATH: said, and the push goes (exit 0).
-      const noMc = execFileSync('sh', [first.path, 'origin', 'x'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, input: '', stdio: ['pipe', 'pipe', 'pipe'] });
+      const noMc = execFileSync('sh', [first.path, 'origin', 'x'], { encoding: 'utf8', env: { PATH: noMcPath }, input: '', stdio: ['pipe', 'pipe', 'pipe'] });
       void noMc;
       // Again: nothing to do, and said so.
       const again = installPushGuard(dir);
@@ -349,7 +345,7 @@ describe('the hook, installed', () => {
       // No mc on PATH: the check says so and the chain still runs, fed the
       // refs the hook itself was given.
       execFileSync('sh', [join(dir, '.githooks', 'pre-push'), 'origin', 'url'], {
-        encoding: 'utf8', env: { PATH: '/usr/bin:/bin', MC_TEST_CHAIN_SAW: seen }, input: 'refs/heads/x sha refs/heads/x sha\n', stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf8', env: { PATH: noMcPath, MC_TEST_CHAIN_SAW: seen }, input: 'refs/heads/x sha refs/heads/x sha\n', stdio: ['pipe', 'pipe', 'pipe'],
       });
       assert.equal(readFileSync(seen, 'utf8'), 'refs/heads/x sha refs/heads/x sha\n');
       // A chained hook that refuses refuses the push: its exit code is kept.
@@ -358,7 +354,7 @@ describe('the hook, installed', () => {
       let code = 0;
       try {
         execFileSync('sh', [join(dir, '.githooks', 'pre-push'), 'origin', 'url'], {
-          encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, input: '', stdio: ['pipe', 'pipe', 'pipe'],
+          encoding: 'utf8', env: { PATH: noMcPath }, input: '', stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (error) { code = error.status; }
       assert.equal(code, 7);
@@ -367,7 +363,7 @@ describe('the hook, installed', () => {
 });
 
 /**
- * The live push's world, built once: a bare remote, a clone on `topic` with one
+ * The modelled push's world: a bare remote, a clone on `topic` with one
  * commit main lacks and the guard installed, and on PATH a `gh` that says topic
  * was merged (or, with MC_TEST_GH=down, cannot answer) and an `mc` that is this
  * checkout's. The stubs are run once here, so macOS's check of a fresh
@@ -390,7 +386,7 @@ const LIVE = template('mc-push-guard-live-', (root) => {
   gitIn(work, ['commit', '-q', '-m', 'two']);
   assert.equal(installPushGuard(work).ok, true);
   // Run once, as git will run it: with no mc on PATH it says so and exits 0.
-  execFileSync(join(work, '.git', 'hooks', 'pre-push'), ['origin', 'x'], { env: { PATH: '/usr/bin:/bin' }, input: '', stdio: ['pipe', 'pipe', 'pipe'] });
+  execFileSync(join(work, '.git', 'hooks', 'pre-push'), ['origin', 'x'], { env: { PATH: noMcPath }, input: '', stdio: ['pipe', 'pipe', 'pipe'] });
 });
 const LIVE_BIN = template('mc-push-guard-bin-', (bin) => {
   const merged = '[{"number":42,"title":"t","mergedAt":"2026-08-23T13:00:00Z","mergeCommit":{"oid":"abcdef0123"}}]';
@@ -403,10 +399,10 @@ const LIVE_BIN = template('mc-push-guard-bin-', (bin) => {
   execFileSync(join(bin, 'mc'), ['--version'], { stdio: 'ignore' });
 });
 
-describe('a real git push through the hook', () => {
+describe('a modelled push through the installed hook', () => {
   it('is refused when a stub gh says the branch was merged, goes with MC_PUSH_ANYWAY=1, and goes when gh cannot answer', () => {
     const git = gitIn;
-    const root = copyOf(LIVE, 'mc-push-guard-live-', ['work/.git/config']);
+    const root = copyOf(LIVE, 'mc-push-guard-live-');
     try {
       const work = join(root, 'work');
       // The guard the template installed, as the same file: a copy would be a

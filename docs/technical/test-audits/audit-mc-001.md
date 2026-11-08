@@ -77,8 +77,8 @@ its index, and `cmd_diff` compares model trees. Its three-dot diff is not a proo
 of real Git merge-base semantics. Modeled cleanup can remove real fixture files,
 but does not prove Git's worktree safety checks, merges, conflicts or leases.
 
-Of these twelve, **only asc-build-testflight.test.js is in the current
-[real-Git exception list](../../../tests/_real-git-files.mjs)**. The log reports
+Of these twelve, **only asc-build-testflight.test.js is in the then-current
+audit-time real-Git exception list**. The log reports
 **133 instrumented Git calls in that file**; the preload warm-up is not included
 in that count. Other apparent `git init/commit/clone` fixtures use the model.
 [Fake-default tests](../../../tests/mc/fake-git-default.test.js) inspect the

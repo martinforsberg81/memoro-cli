@@ -5,7 +5,7 @@
  * under test; a fixture spawns git itself, in forty files and four spellings,
  * so the same model stands in at `node:child_process`: a spawn whose program is
  * git (argv, or a shell line that is one git command) is answered by the model
- * and starts nothing. A file named in `REAL_GIT_FILES` keeps real git.
+ * and starts nothing. No test file is exempt.
  */
 import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -46,7 +46,7 @@ function failure(result, args) {
   return error;
 }
 
-/** The model this process answers git from, or null when it keeps real git. */
+/** The model this process answers git from, or null before installation. */
 let installed = null;
 export function fakeGitModel() {
   return installed;
@@ -62,11 +62,13 @@ export function installFakeGitDefault(model = new FakeGit()) {
   let serial = 0;
   const dir = join(process.env.TMPDIR || tmpdir(), 'fake-git-state');
   const shared = (options) => {
+    // An explicit model (FakeGit.inChild) already owns its snapshot and reload.
+    if (options?.env?.MC_FAKE_GIT_STATE) return { file: null, options };
     mkdirSync(dir, { recursive: true });
     const file = model.snapshot(join(dir, `${process.pid}-${serial++}.json`));
     return { file, options: { ...options, env: FakeGit.childEnv(options?.env || process.env, file) } };
   };
-  const back = (file) => { try { model.reload(file); } catch { /* the child never wrote */ } };
+  const back = (file) => { if (!file) return; try { model.reload(file); } catch { /* the child never wrote */ } };
   const isGit = (file) => file === 'git' || /\/git$/u.test(String(file));
   const text = (value, options) => (options?.encoding && options.encoding !== 'buffer' ? value : Buffer.from(value ?? ''));
   childProcess.spawnSync = (file, args, options) => {

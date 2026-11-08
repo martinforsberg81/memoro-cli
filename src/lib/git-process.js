@@ -11,7 +11,17 @@
  * ones that still do). It lives in `lib/` because `lib/` may not import
  * `mc/`; `src/mc/git.js` re-exports it with the readers built on top.
  */
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
+
+let spawn = nodeSpawn;
+let spawnSync = nodeSpawnSync;
+
+/** Inject only the process boundary; arguments, deadlines and result handling stay here. */
+export function useGitProcess(processes) {
+  const previous = { spawn, spawnSync };
+  ({ spawn, spawnSync } = processes);
+  return () => { ({ spawn, spawnSync } = previous); };
+}
 
 export const GIT_TIMEOUT_MS = 300_000;
 

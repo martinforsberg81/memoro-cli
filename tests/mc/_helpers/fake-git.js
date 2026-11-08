@@ -18,11 +18,13 @@
  * blobs are hashed from the bytes on disk, trees from their blobs, so two
  * worktrees with the same files have the same tree, and a commit's tree is
  * the tree the index had — the properties the gate's evidence rests on.
- * Merge, conflict and lease semantics against real git are not modelled; the
- * merge round in operation is where those are measured (decided 2026-11-01).
+ * Merge/conflict, hook and ref-update answers below model fixture scenarios.
+ * They prove our decisions against modelled answers, not git semantics; the
+ * production merge round is where those are measured (decided 2026-11-01).
  */
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { useGitRunner } from '../../../src/mc/git.js';
 
@@ -44,6 +46,7 @@ class Repo {
     this.indexes = new Map();    // isolated index file path → Map(path → blob sha)
     this.remotes = new Map();    // name → url
     this.config = new Map();     // 'user.name' → value
+    this.symbolicRefs = new Map([['HEAD', 'refs/heads/main']]);
     this.fetchHead = null;
     this.serial = 0;
   }
@@ -76,7 +79,7 @@ export class FakeGit {
       gitDir: repo.gitDir, bare: repo.bare, refs: [...repo.refs], commits: [...repo.commits], trees: [...repo.trees].map(([sha, tree]) => [sha, [...tree]]),
       blobs: [...repo.blobs].map(([sha, bytes]) => [sha, bytes.toString('base64')]),
       worktrees: [...repo.worktrees].map(([path, state]) => [path, { head: state.head, index: [...state.index] }]),
-      remotes: [...repo.remotes], config: [...repo.config], fetchHead: repo.fetchHead, serial: repo.serial,
+      symbolicRefs: [...repo.symbolicRefs], remotes: [...repo.remotes], config: [...repo.config], fetchHead: repo.fetchHead, serial: repo.serial,
     }));
     writeFileSync(file, JSON.stringify({ repos, now: this.now }));
     return file;
@@ -93,6 +96,7 @@ export class FakeGit {
       repo.trees = new Map(entry.trees.map(([sha, tree]) => [sha, new Map(tree)]));
       repo.blobs = new Map(entry.blobs.map(([sha, text]) => [sha, Buffer.from(text, 'base64')]));
       repo.worktrees = new Map(entry.worktrees.map(([path, state]) => [path, { head: state.head, index: new Map(state.index) }]));
+      repo.symbolicRefs = new Map(entry.symbolicRefs ?? [['HEAD', 'refs/heads/main']]);
       repo.remotes = new Map(entry.remotes);
       repo.config = new Map(entry.config);
       repo.fetchHead = entry.fetchHead;
@@ -134,7 +138,8 @@ export class FakeGit {
     const argv = [...args];
     let dir = cwd ? resolve(cwd) : process.cwd();
     let gitDir = null;
-    while (argv.length && (argv[0] === '-C' || argv[0] === '--git-dir' || argv[0] === '-c')) {
+    while (argv.length && (argv[0] === '-C' || argv[0] === '--git-dir' || argv[0].startsWith('--git-dir=') || argv[0] === '-c')) {
+      if (argv[0].startsWith('--git-dir=')) { gitDir = resolve(dir, argv.shift().slice('--git-dir='.length)); continue; }
       const flag = argv.shift();
       const value = argv.shift();
       if (flag === '-C') dir = resolve(dir, value);
@@ -290,13 +295,14 @@ export class FakeGit {
     const back = name.match(/^(.*?)((?:~\d*|\^)+)$/u);
     if (back) { name = back[1]; tilde = back[2].split(/(?=[~^])/u).reduce((sum, part) => sum + (part === '^' ? 1 : Number(part.slice(1) || 1)), 0); }
     let sha = null;
-    if (name === 'HEAD') sha = state ? this.headSha(repo, state) : null;
+    if (name === 'HEAD') sha = state ? this.headSha(repo, state) : repo.refs.get(repo.symbolicRefs.get('HEAD')) ?? null;
     else if (name === 'FETCH_HEAD') sha = repo.fetchHead;
     else if (/^[0-9a-f]{40}$/u.test(name)) sha = repo.commits.has(name) || repo.trees.has(name) ? name : null;
     else if (/^[0-9a-f]{4,39}$/u.test(name)) sha = [...repo.commits.keys()].find((key) => key.startsWith(name)) ?? null;
     else {
       for (const candidate of [name, `refs/heads/${name}`, `refs/remotes/${name}`, `refs/tags/${name}`]) {
-        if (repo.refs.has(candidate)) { sha = repo.refs.get(candidate); break; }
+        const target = repo.symbolicRefs.get(candidate) ?? candidate;
+        if (repo.refs.has(target)) { sha = repo.refs.get(target); break; }
       }
     }
     for (let i = 0; sha && i < tilde; i++) sha = repo.commits.get(sha)?.parents[0] ?? null;
@@ -350,7 +356,11 @@ export class FakeGit {
     const tree = repo.trees.get(repo.commits.get(sha).tree);
     const current = this.headTree(repo, state);
     for (const path of current.keys()) {
-      if (!tree.has(path)) rmSync(join(worktree, path), { force: true });
+      if (!tree.has(path)) {
+        rmSync(join(worktree, path), { force: true });
+        // Checkout removes now-empty tracked directories, not untracked files.
+        for (let parent = dirname(join(worktree, path)); parent !== worktree && !readdirSync(parent).length; parent = dirname(parent)) rmSync(parent, { recursive: true });
+      }
     }
     for (const [path, blob] of tree) {
       const full = join(worktree, path);
@@ -372,7 +382,7 @@ export class FakeGit {
     const repo = new Repo(bare ? dir : join(dir, '.git'), { bare });
     this.repos.set(repo.gitDir, repo);
     if (!bare) {
-      mkdirSync(repo.gitDir, { recursive: true });
+      mkdirSync(join(repo.gitDir, 'hooks'), { recursive: true });
       writeFileSync(join(repo.gitDir, 'HEAD'), 'ref: refs/heads/main\n');
       writeFileSync(join(repo.gitDir, 'index'), 'DIRC\n');
       repo.worktrees.set(dir, { head: 'refs/heads/main', index: new Map() });
@@ -412,6 +422,7 @@ export class FakeGit {
     mkdirSync(target, { recursive: true });
     const repo = this.openRepo(target, { bare: Boolean(flags.bare) });
     const branch = flags.b || flags['initial-branch'] || 'main';
+    repo.symbolicRefs.set('HEAD', `refs/heads/${branch}`);
     if (!repo.bare) repo.worktrees.get(real(target)).head = `refs/heads/${branch}`;
     return '';
   }
@@ -495,11 +506,13 @@ export class FakeGit {
   }
 
   cmd_ls_files({ dir, gitDir, argv, env }) {
-    const flags = parse(argv, [], ['cached', 'c', 'others', 'o', 'exclude-standard', 'ignored', 'i', 'z', 'v', 'stage', 's', 'deleted', 'modified']);
+    const flags = parse(argv, [], ['cached', 'c', 'others', 'o', 'exclude-standard', 'ignored', 'i', 'z', 'v', 'stage', 's', 'deleted', 'modified', 'error-unmatch']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
     const index = this.indexFor(repo, state, env);
     const nul = flags.z ? '\0' : '\n';
-    const paths = flags.rest.filter((p) => p !== '--');
+    const prefix = relative(worktree, real(dir));
+    if (prefix === '.git' || prefix.startsWith('.git/')) this.die('fatal: this operation must be run in a work tree');
+    const paths = flags.rest.filter((p) => p !== '--').map((p) => relative(worktree, resolve(real(dir), p)));
     const within = (path) => !paths.length || paths.some((p) => pathspecMatches(p, path));
     if (flags.others || flags.o) {
       const files = this.workingFiles(repo, worktree);
@@ -522,6 +535,7 @@ export class FakeGit {
       return [...files.keys()].filter((p) => !index.has(p) && within(p)).sort().map((p) => `${p}${nul}`).join('');
     }
     const sorted = [...index.entries()].filter(([p]) => within(p)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    if (flags['error-unmatch'] && paths.some((spec) => !sorted.some(([path]) => pathspecMatches(spec, path)))) this.die('error: pathspec did not match any file(s) known to git', 1);
     if (flags.stage || flags.s) return sorted.map(([p, blob]) => `100644 ${blob} 0\t${p}${nul}`).join('');
     if (flags.v) return sorted.map(([p]) => `H ${p}${nul}`).join('');
     return sorted.map(([p]) => `${p}${nul}`).join('');
@@ -589,10 +603,26 @@ export class FakeGit {
     return out.map((line) => `${line}\n`).join('');
   }
 
+  checkRefName(repo, ref, progress = '') {
+    const collision = [...repo.refs.keys()].find((existing) => existing.startsWith(`${ref}/`) || ref.startsWith(`${existing}/`));
+    if (collision) this.die(`${progress}fatal: cannot lock ref '${ref}': '${collision}' exists; cannot create '${ref}'`);
+  }
+
   cmd_branch({ dir, gitDir, argv }) {
-    const flags = parse(argv, { 'set-upstream-to': 1, u: 1 }, ['show-current', 'D', 'd', 'a', 'r', 'f', 'force', 'list']);
+    const flags = parse(argv, { 'set-upstream-to': 1, u: 1 }, ['show-current', 'D', 'd', 'a', 'r', 'f', 'force', 'list', 'q', 'M', 'm']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
+    if (flags.M || flags.m) {
+      const old = flags.rest.length === 2 ? flags.rest[0] : this.branchName(state);
+      const name = flags.rest.at(-1);
+      const ref = `refs/heads/${name}`;
+      const sha = repo.refs.get(`refs/heads/${old}`);
+      if (!sha) this.die(`fatal: No branch named '${old}'`);
+      this.checkRefName(repo, ref);
+      repo.refs.delete(`refs/heads/${old}`); repo.refs.set(ref, sha);
+      if (state?.head === `refs/heads/${old}`) state.head = ref;
+      return '';
+    }
     if (flags['show-current']) return state && this.branchName(state) ? `${this.branchName(state)}\n` : '';
     if (flags['set-upstream-to'] || flags.u) return '';
     if (flags.D || flags.d) { for (const name of flags.rest) repo.refs.delete(`refs/heads/${name}`); return ''; }
@@ -605,6 +635,7 @@ export class FakeGit {
     if (repo.refs.has(`refs/heads/${name}`) && !flags.f && !flags.force) this.die(`fatal: a branch named '${name}' already exists`);
     const sha = this.resolveRev(repo, state, start ?? 'HEAD');
     if (!sha) this.die(`fatal: Not a valid object name: '${start ?? 'HEAD'}'.`);
+    this.checkRefName(repo, `refs/heads/${name}`);
     repo.refs.set(`refs/heads/${name}`, sha);
     return '';
   }
@@ -617,6 +648,7 @@ export class FakeGit {
     if (!target) this.die('fatal: missing branch');
     if (create !== undefined) {
       if (repo.refs.has(`refs/heads/${create}`) && flags.C === undefined) this.die(`fatal: a branch named '${create}' already exists`);
+      this.checkRefName(repo, `refs/heads/${create}`);
       repo.refs.set(`refs/heads/${create}`, this.headSha(repo, state));
       state.head = `refs/heads/${create}`;
       return '';
@@ -640,6 +672,7 @@ export class FakeGit {
       const start = this.resolveRev(repo, state, flags.rest[0] ?? 'HEAD');
       if (!start) this.die(`fatal: invalid reference: ${flags.rest[0]}`);
       if (repo.refs.has(`refs/heads/${name}`) && flags.B === undefined) this.die(`fatal: a branch named '${name}' already exists`);
+      this.checkRefName(repo, `refs/heads/${name}`);
       repo.refs.set(`refs/heads/${name}`, start);
       this.checkout(repo, state, worktree, start);
       state.head = `refs/heads/${name}`;
@@ -660,23 +693,22 @@ export class FakeGit {
   }
 
   cmd_symbolic_ref({ dir, gitDir, argv }) {
-    const flags = parse(argv, [], ['short', 'quiet', 'q']);
+    const flags = parse(argv, [], ['short', 'quiet', 'q', 'delete']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
-    const [name] = flags.rest;
-    if (name === 'HEAD') {
-      const state = worktree ? repo.worktrees.get(worktree) : null;
-      if (!state || !state.head.startsWith('refs/')) this.die(flags.quiet || flags.q ? '' : 'fatal: ref HEAD is not a symbolic ref', 1);
-      return `${flags.short ? this.branchName(state) : state.head}\n`;
+    const [name, target] = flags.rest;
+    const state = worktree ? repo.worktrees.get(worktree) : null;
+    if (flags.delete) {
+      if (!repo.symbolicRefs.delete(name)) this.die(`fatal: ref ${name} is not a symbolic ref`, 1);
+      return '';
     }
-    if (name?.startsWith('refs/remotes/') && name.endsWith('/HEAD')) {
-      const remote = name.split('/')[2];
-      const target = `refs/remotes/${remote}/main`;
-      if (!repo.refs.has(target)) this.die('', 1);
-      return `${flags.short ? `${remote}/main` : target}\n`;
+    if (target) {
+      repo.symbolicRefs.set(name, target);
+      if (name === 'HEAD' && state) state.head = target;
+      return '';
     }
-    // Any other remote-tracking ref is a plain ref, not a symbolic one.
-    this.die(flags.quiet || flags.q ? '' : `fatal: ref ${name} is not a symbolic ref`, 1);
-    return '';
+    const ref = name === 'HEAD' && state ? state.head : repo.symbolicRefs.get(name);
+    if (!ref?.startsWith('refs/')) this.die(flags.quiet || flags.q ? '' : `fatal: ref ${name} is not a symbolic ref`, 1);
+    return `${flags.short ? ref.replace(/^refs\/(heads|remotes)\//u, '') : ref}\n`;
   }
 
   cmd_show_ref({ dir, gitDir, argv }) {
@@ -738,7 +770,7 @@ export class FakeGit {
   }
 
   cmd_rev_list({ dir, gitDir, argv }) {
-    const flags = parse(argv, { 'max-count': 1, n: 1 }, ['count', 'left-right', 'first-parent', 'reverse']);
+    const flags = parse(argv, { 'max-count': 1, n: 1 }, ['count', 'left-right', 'first-parent', 'reverse', 'no-merges', 'cherry-pick', 'right-only']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
     const [range] = flags.rest;
@@ -746,7 +778,13 @@ export class FakeGit {
     if (range?.includes('...')) {
       const [l, r] = range.split('...').map(list);
       const left = [...this.ancestors(repo, l)].filter((sha) => !this.ancestors(repo, r).has(sha));
-      const right = [...this.ancestors(repo, r)].filter((sha) => !this.ancestors(repo, l).has(sha));
+      let right = [...this.ancestors(repo, r)].filter((sha) => !this.ancestors(repo, l).has(sha));
+      if (flags['no-merges']) right = right.filter((sha) => repo.commits.get(sha).parents.length <= 1);
+      if (flags['cherry-pick']) {
+        const patches = new Set(left.map((sha) => this.patchId(repo, sha)));
+        right = right.filter((sha) => !patches.has(this.patchId(repo, sha)));
+      }
+      if (flags['right-only']) return flags.count ? `${right.length}\n` : right.map((sha) => `${sha}\n`).join('');
       if (flags.count) return `${left.length}\t${right.length}\n`;
       return [...left.map((sha) => `<${sha}`), ...right.map((sha) => `>${sha}`)].map((line) => `${line}\n`).join('');
     }
@@ -759,6 +797,16 @@ export class FakeGit {
     if (flags['max-count'] ?? flags.n) shas = shas.slice(0, Number(flags['max-count'] ?? flags.n));
     if (flags.count) return `${shas.length}\n`;
     return shas.map((sha) => `${sha}\n`).join('');
+  }
+
+  /** Patch equivalence for these fixtures: changed paths and before/after blobs. */
+  patchId(repo, sha) {
+    const commit = repo.commits.get(sha);
+    const before = repo.trees.get(repo.commits.get(commit.parents[0])?.tree) ?? new Map();
+    const after = repo.trees.get(commit.tree);
+    return sha1([...new Set([...before.keys(), ...after.keys()])].sort()
+      .filter((path) => before.get(path) !== after.get(path))
+      .map((path) => `${path}\0${before.get(path) ?? ''}\0${after.get(path) ?? ''}`).join('\n'));
   }
 
   /** Commits reachable from `sha`, newest first along first parents, then the rest. */
@@ -777,7 +825,7 @@ export class FakeGit {
   }
 
   cmd_log({ dir, gitDir, argv }) {
-    const flags = parse(argv, { format: 1, pretty: 1, n: 1, 'max-count': 1 }, ['oneline', '1', 'no-decorate', 'reverse', 'first-parent']);
+    const flags = parse(argv.map((arg) => /^-\d+$/u.test(arg) ? `--max-count=${arg.slice(1)}` : arg), { format: 1, pretty: 1, n: 1, 'max-count': 1 }, ['oneline', '1', 'no-decorate', 'reverse', 'first-parent']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
     const range = flags.rest.filter((arg) => arg !== '--')[0] ?? 'HEAD';
@@ -811,16 +859,17 @@ export class FakeGit {
   }
 
   cmd_diff({ dir, gitDir, argv }) {
-    const flags = parse(argv, [], ['name-only', 'no-renames', 'z', 'cached', 'staged', 'quiet', 'exit-code', 'stat']);
+    const flags = parse(argv, { unified: 1, 'diff-filter': 1 }, ['name-only', 'no-renames', 'z', 'cached', 'staged', 'quiet', 'exit-code', 'stat']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
-    const revs = flags.rest.filter((arg) => arg !== '--' && (arg.includes('..') || (!arg.includes('/') && this.resolveRev(repo, state, arg))));
+    const revs = flags.rest.filter((arg) => arg !== '--' && (arg.includes('..') || this.resolveRev(repo, state, arg)));
     const pathspecs = flags.rest.filter((arg) => arg !== '--' && !revs.includes(arg));
     const treeOf = (rev) => { const sha = this.resolveRev(repo, state, rev); return repo.trees.get(repo.commits.get(sha)?.tree ?? sha); };
     let left;
     let right;
     if (revs.length >= 2) { left = treeOf(revs[0]); right = treeOf(revs[1]); } else if (revs[0]?.includes('..')) {
       const [a, b] = revs[0].split(/\.\.\.?/u);
-      left = treeOf(a); right = treeOf(b);
+      const base = revs[0].includes('...') ? this.mergeBase(repo, this.resolveRev(repo, state, a), this.resolveRev(repo, state, b)) : a;
+      left = treeOf(base); right = treeOf(b);
     } else {
       left = revs[0] ? treeOf(revs[0]) : flags.cached || flags.staged ? this.headTree(repo, state) : new Map(state.index);
       right = flags.cached || flags.staged ? new Map(state.index) : this.workingFiles(repo, worktree);
@@ -830,10 +879,21 @@ export class FakeGit {
       }
     }
     const changed = [...new Set([...left.keys(), ...right.keys()])].filter((path) => left.get(path) !== right.get(path))
+      .filter((path) => !flags['diff-filter'] || flags['diff-filter'].includes(!left.has(path) ? 'A' : !right.has(path) ? 'D' : 'M'))
       .filter((path) => !pathspecs.length || pathspecs.some((spec) => path === spec || path.startsWith(`${spec.replace(/\/$/u, '')}/`))).sort();
     if (flags.quiet || flags['exit-code']) { if (changed.length) this.die('', 1); return ''; }
     if (flags['name-only']) return changed.map((path) => `${path}${flags.z ? '\0' : '\n'}`).join('');
-    return changed.map((path) => `diff --git a/${path} b/${path}\n`).join('');
+    if (flags.unified !== undefined && flags.unified !== '0') return this.refuse(['diff', ...argv], 'only --unified=0 hunks are modelled');
+    return changed.map((path) => {
+      const header = `diff --git a/${path} b/${path}\n`;
+      if (flags.unified === undefined) return header;
+      const lines = (blob) => {
+        if (!blob) return [];
+        const text = repo.blobs.get(blob).toString('utf8');
+        return text.endsWith('\n') ? text.slice(0, -1).split('\n') : text ? text.split('\n') : [];
+      };
+      return `${header}--- ${left.has(path) ? `a/${path}` : '/dev/null'}\n+++ ${right.has(path) ? `b/${path}` : '/dev/null'}\n${zeroContextDiff(lines(left.get(path)), lines(right.get(path)))}`;
+    }).join('');
   }
 
   cmd_diff_tree({ dir, gitDir, argv }) {
@@ -878,7 +938,17 @@ export class FakeGit {
     if (!verb) return [...repo.remotes.keys()].sort().map((remote) => `${remote}\n`).join('');
     if (verb === 'add') { if (repo.remotes.has(name)) this.die(`error: remote ${name} already exists.`, 3); repo.remotes.set(name, resolve(dir, url)); return ''; }
     if (verb === 'get-url') { if (!repo.remotes.has(name)) this.die(`error: No such remote '${name}'`, 2); return `${repo.remotes.get(name)}\n`; }
-    if (verb === 'remove' || verb === 'rm') { repo.remotes.delete(name); return ''; }
+    if (verb === 'remove' || verb === 'rm') {
+      repo.remotes.delete(name);
+      for (const refs of [repo.refs, repo.symbolicRefs]) for (const ref of refs.keys()) if (ref.startsWith(`refs/remotes/${name}/`)) refs.delete(ref);
+      return '';
+    }
+    if (verb === 'rename') {
+      for (const [ref, target] of [...repo.symbolicRefs]) if (ref.startsWith(`refs/remotes/${name}/`)) {
+        repo.symbolicRefs.delete(ref);
+        repo.symbolicRefs.set(ref.replace(`refs/remotes/${name}/`, `refs/remotes/${url}/`), target.replace(`refs/remotes/${name}/`, `refs/remotes/${url}/`));
+      }
+    }
     if (verb === 'rename') { const url2 = repo.remotes.get(name); repo.remotes.delete(name); repo.remotes.set(url, url2); for (const [ref, sha] of [...repo.refs]) if (ref.startsWith(`refs/remotes/${name}/`)) { repo.refs.delete(ref); repo.refs.set(ref.replace(`refs/remotes/${name}/`, `refs/remotes/${url}/`), sha); } return ''; }
     if (verb === 'set-url') { repo.remotes.set(name, resolve(dir, url)); return ''; }
     return this.refuse(['remote', ...argv], 'remote verb');
@@ -891,10 +961,10 @@ export class FakeGit {
     if (!from) this.die(`fatal: repository '${source}' does not exist`);
     const target = resolve(dir, destination ?? source.replace(/\/?(\.git)?$/u, '').split('/').pop());
     const repo = this.openRepo(target, { bare: Boolean(flags.bare || flags.mirror) });
-    for (const [key, value] of from.commits) repo.commits.set(key, value);
-    for (const [key, value] of from.trees) repo.trees.set(key, value);
-    for (const [key, value] of from.blobs) repo.blobs.set(key, value);
-    const sourceHead = from.bare ? 'refs/heads/main' : from.worktrees.values().next().value?.head ?? 'refs/heads/main';
+    this.copyObjects(from, repo, [...from.refs].filter(([ref]) => ref.startsWith('refs/heads/')).map(([, sha]) => sha));
+    const sourceHead = from.bare ? from.symbolicRefs.get('HEAD') : from.worktrees.values().next().value?.head;
+    repo.symbolicRefs.set('HEAD', sourceHead ?? 'refs/heads/main');
+    if (!repo.bare && sourceHead) repo.symbolicRefs.set('refs/remotes/origin/HEAD', sourceHead.replace('refs/heads/', 'refs/remotes/origin/'));
     for (const [ref, sha] of from.refs) {
       if (!ref.startsWith('refs/heads/')) continue;
       if (repo.bare) repo.refs.set(ref, sha);
@@ -919,8 +989,10 @@ export class FakeGit {
     if (!refspecs.length) {
       if (flags.prune || flags.p) for (const ref of [...repo.refs.keys()]) if (ref.startsWith(`refs/remotes/${remoteName}/`) && !remote.refs.has(`refs/heads/${ref.slice(`refs/remotes/${remoteName}/`.length)}`)) repo.refs.delete(ref);
       for (const [ref, sha] of remote.refs) if (ref.startsWith('refs/heads/')) repo.refs.set(`refs/remotes/${remoteName}/${ref.slice('refs/heads/'.length)}`, sha);
-      this.copyObjects(remote, repo);
-      repo.fetchHead = remote.refs.get(remote.bare ? 'refs/heads/main' : remote.worktrees.values().next().value?.head ?? 'refs/heads/main') ?? null;
+      this.copyObjects(remote, repo, [...remote.refs].filter(([ref]) => ref.startsWith('refs/heads/')).map(([, sha]) => sha));
+      const head = remote.bare ? remote.symbolicRefs.get('HEAD') : remote.worktrees.values().next().value?.head;
+      if (head) repo.symbolicRefs.set(`refs/remotes/${remoteName}/HEAD`, head.replace('refs/heads/', `refs/remotes/${remoteName}/`));
+      repo.fetchHead = remote.refs.get(head) ?? null;
       return '';
     }
     for (const spec of refspecs) {
@@ -928,7 +1000,7 @@ export class FakeGit {
       const sourceRef = source.startsWith('refs/') ? source : `refs/heads/${source}`;
       const sha = remote.refs.get(sourceRef);
       if (!sha) this.die(`fatal: couldn't find remote ref ${source}`);
-      this.copyObjects(remote, repo);
+      this.copyObjects(remote, repo, [sha]);
       repo.fetchHead = sha;
       if (destination) repo.refs.set(destination.startsWith('refs/') ? destination : `refs/heads/${destination}`, sha);
       if (sourceRef.startsWith('refs/heads/')) repo.refs.set(`refs/remotes/${remoteName}/${sourceRef.slice('refs/heads/'.length)}`, sha);
@@ -936,40 +1008,68 @@ export class FakeGit {
     return '';
   }
 
-  copyObjects(from, to) {
-    for (const [key, value] of from.commits) if (!to.commits.has(key)) to.commits.set(key, value);
-    for (const [key, value] of from.trees) if (!to.trees.has(key)) to.trees.set(key, value);
-    for (const [key, value] of from.blobs) if (!to.blobs.has(key)) to.blobs.set(key, value);
+  copyObjects(from, to, heads = [...from.refs.values()]) {
+    const reachable = new Set(heads.flatMap((sha) => [...this.ancestors(from, sha)]));
+    for (const sha of reachable) {
+      const commit = from.commits.get(sha);
+      if (!commit) continue;
+      to.commits.set(sha, commit);
+      const tree = from.trees.get(commit.tree);
+      to.trees.set(commit.tree, tree);
+      for (const blob of tree.values()) to.blobs.set(blob, from.blobs.get(blob));
+    }
   }
 
-  cmd_push({ dir, gitDir, argv }) {
+  cmd_push({ dir, gitDir, argv, env }) {
     const flags = parse(argv, { 'force-with-lease': 0 }, ['q', 'quiet', 'u', 'set-upstream', 'delete', 'd', 'force', 'f', 'no-thin', 'tags', 'force-with-lease']);
-    const { repo, worktree } = this.repoAt(dir, gitDir);
+    let { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;
     const [remoteName = 'origin', ...specs] = flags.rest;
-    const remote = this.remoteRepo(repo, remoteName);
+    let remote = this.remoteRepo(repo, remoteName);
     if (!specs.length) {
       const branch = state ? this.branchName(state) : null;
       if (!branch) this.die('fatal: You are not currently on a branch.');
       specs.push(branch);
     }
-    for (const spec of specs) {
-      if (flags.delete || flags.d) { remote.refs.delete(`refs/heads/${spec}`); repo.refs.delete(`refs/remotes/${remoteName}/${spec}`); continue; }
-      // `HEAD` alone is the branch checked out, pushed under its own name.
+    const zero = '0'.repeat(40);
+    const updates = specs.map((spec) => {
       const [source, destination = source === 'HEAD' && state && this.branchName(state) ? this.branchName(state) : source] = spec.split(':');
-      const sha = this.resolveRev(repo, state, source);
-      if (!sha) this.die(`error: src refspec ${source} does not match any`);
       const targetRef = destination.startsWith('refs/') ? destination : `refs/heads/${destination}`;
       const current = remote.refs.get(targetRef);
-      if (current && current !== sha && !this.ancestors(repo, sha).has(current) && !(flags.force || flags.f || flags['force-with-lease'] !== undefined)) {
+      const deleting = Boolean(flags.delete || flags.d || !source);
+      const sha = deleting ? zero : this.resolveRev(repo, state, source);
+      if (!sha) this.die(`error: src refspec ${source} does not match any`);
+      if (!deleting && current && current !== sha && !this.ancestors(repo, sha).has(current) && !(flags.force || flags.f || flags['force-with-lease'] !== undefined)) {
         this.die(`error: failed to push some refs to '${repo.remotes.get(remoteName)}'\nhint: Updates were rejected because the remote contains work that you do not have locally.`, 1);
       }
       for (const [path, other] of remote.worktrees) if (other.head === targetRef) this.die(`error: refusing to update checked out branch: ${targetRef} at ${path}`, 1);
-      this.copyObjects(repo, remote);
-      remote.refs.set(targetRef, sha);
-      repo.refs.set(`refs/remotes/${remoteName}/${destination.replace(/^refs\/heads\//u, '')}`, sha);
+      const sourceRef = deleting ? '(delete)' : source === 'HEAD' ? state.head : repo.refs.has(`refs/heads/${source}`) ? `refs/heads/${source}` : source;
+      return { sha, targetRef, current, sourceRef, deleting };
+    });
+    const hooks = repo.config.get('core.hooksPath');
+    const hook = join(hooks ? resolve(worktree ?? dir, hooks) : join(repo.gitDir, 'hooks'), 'pre-push');
+    let stderr = '';
+    let executable = false;
+    try { accessSync(hook, constants.X_OK); executable = true; } catch { /* no executable hook */ }
+    if (executable) {
+      const result = this.inChild(env, (childEnv) => spawnSync('sh', [hook, remoteName, repo.remotes.get(remoteName) ?? remoteName], {
+        cwd: worktree ?? dir, env: childEnv, encoding: 'utf8',
+        input: updates.filter((update) => update.current !== update.sha).map(({ sourceRef, sha, targetRef, current }) => `${sourceRef} ${sha} ${targetRef} ${current ?? zero}\n`).join(''),
+      }));
+      stderr = result.stderr || '';
+      if (result.error || result.status !== 0) return { ...fail(stderr || result.error?.message || 'pre-push refused', result.status || 1), stdout: result.stdout || '' };
+      // The hook's children may have refreshed refs: do not write stale objects.
+      ({ repo } = this.repoAt(dir, gitDir));
+      remote = this.remoteRepo(repo, remoteName);
     }
-    return '';
+    for (const { sha, targetRef, deleting } of updates) {
+      const tracking = `refs/remotes/${remoteName}/${targetRef.replace(/^refs\/heads\//u, '')}`;
+      if (deleting) { remote.refs.delete(targetRef); repo.refs.delete(tracking); continue; }
+      this.copyObjects(repo, remote, [sha]);
+      remote.refs.set(targetRef, sha);
+      repo.refs.set(tracking, sha);
+    }
+    return { ...ok(), stderr };
   }
 
   cmd_ls_remote({ dir, gitDir, argv }) {
@@ -1010,8 +1110,7 @@ export class FakeGit {
       const [pathArg, commitish] = flags.rest;
       const path = resolve(dir, pathArg);
       if (existsSync(path) && readdirSync(path).length && !flags.force && !flags.f) this.die(`fatal: '${path}' already exists`);
-      mkdirSync(path, { recursive: true });
-      const realPath = real(path);
+      let realPath = real(path);
       let head;
       let sha;
       if (flags.b !== undefined || flags.B !== undefined) {
@@ -1019,6 +1118,7 @@ export class FakeGit {
         sha = this.resolveRev(repo, null, commitish ?? 'HEAD') ?? this.resolveRev(repo, repo.worktrees.values().next().value ?? null, commitish ?? 'HEAD');
         if (!sha) this.die(`fatal: invalid reference: ${commitish}`);
         if (repo.refs.has(`refs/heads/${name}`) && flags.B === undefined) this.die(`fatal: a branch named '${name}' already exists`);
+        this.checkRefName(repo, `refs/heads/${name}`, `Preparing worktree (new branch '${name}')\n`);
         repo.refs.set(`refs/heads/${name}`, sha);
         head = `refs/heads/${name}`;
       } else if (flags.detach) {
@@ -1032,6 +1132,8 @@ export class FakeGit {
         else { sha = this.resolveRev(repo, null, name); if (!sha) this.die(`fatal: invalid reference: ${name}`); head = sha; }
         for (const [other, state] of repo.worktrees) if (state.head === head) this.die(`fatal: '${name}' is already checked out at '${other}'`);
       }
+      mkdirSync(path, { recursive: true });
+      realPath = real(path);
       const state = { head, index: new Map() };
       repo.worktrees.set(realPath, state);
       this.worktreeOwner.set(realPath, repo);
@@ -1045,7 +1147,7 @@ export class FakeGit {
     }
     if (verb === 'remove') {
       const flags = parse(rest, [], ['force', 'f']);
-      const path = real(resolve(dir, flags.rest[0]));
+      const path = real(resolve(dir, flags.rest.filter((arg) => arg !== '--')[0]));
       const state = repo.worktrees.get(path);
       if (!state) this.die(`fatal: '${flags.rest[0]}' is not a working tree`);
       if (!flags.force && !flags.f && existsSync(path)) {
@@ -1187,7 +1289,36 @@ export class FakeGit {
     return '';
   }
 
-  cmd_archive() { return this.refuse(['archive'], 'archive is deploy-side'); }
+  /** A regular-file ustar stream, preserving the requested tree paths for tar -x. */
+  cmd_archive({ dir, gitDir, argv }) {
+    const flags = parse(argv, { format: 1 }, []);
+    if (flags.format !== 'tar') return this.refuse(['archive', ...argv], 'only --format=tar is modelled');
+    const { repo, worktree } = this.repoAt(dir, gitDir);
+    const state = worktree ? repo.worktrees.get(worktree) : null;
+    const [rev, ...paths] = flags.rest.filter((arg) => arg !== '--');
+    const sha = this.resolveRev(repo, state, rev);
+    if (!sha) this.die(`fatal: not a valid object name: ${rev}`);
+    const tree = repo.trees.get(repo.commits.get(sha)?.tree ?? sha);
+    const entries = [...tree].filter(([path]) => !paths.length || paths.some((spec) => pathspecMatches(spec, path)));
+    if (paths.some((spec) => !entries.some(([path]) => pathspecMatches(spec, path)))) this.die('fatal: pathspec did not match any files');
+    const blocks = [];
+    for (const [path, blob] of entries) {
+      if (Buffer.byteLength(path) > 100) return this.refuse(['archive', ...argv], 'tar path longer than 100 bytes');
+      const bytes = repo.blobs.get(blob);
+      const header = Buffer.alloc(512);
+      const octal = (offset, width, value) => header.write(`${value.toString(8).padStart(width - 1, '0')}\0`, offset, width, 'ascii');
+      header.write(path, 0, 100);
+      octal(100, 8, 0o644); octal(108, 8, 0); octal(116, 8, 0);
+      octal(124, 12, bytes.length); octal(136, 12, 0);
+      header.fill(32, 148, 156);
+      header.write('0', 156); header.write('ustar\0', 257); header.write('00', 263);
+      const checksum = header.reduce((sum, byte) => sum + byte, 0);
+      header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+      blocks.push(header, bytes, Buffer.alloc((512 - bytes.length % 512) % 512));
+    }
+    blocks.push(Buffer.alloc(1024));
+    return ok(Buffer.concat(blocks));
+  }
   /**
    * `git grep -l -F [--] <text> [-- <pathspec>…]`: the tracked files whose
    * working copy holds the text, exit 1 when none does. Anything else is refused.
@@ -1333,3 +1464,24 @@ function parse(argv, valued = {}, boolean = []) {
 }
 
 export { parse as parseGitArgs };
+
+/** Minimal line edit script via LCS; unchanged lines never become additions. */
+function zeroContextDiff(before, after) {
+  const lengths = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1));
+  for (let i = before.length - 1; i >= 0; i--) for (let j = after.length - 1; j >= 0; j--) {
+    lengths[i][j] = before[i] === after[j] ? lengths[i + 1][j + 1] + 1 : Math.max(lengths[i + 1][j], lengths[i][j + 1]);
+  }
+  let i = 0; let j = 0; let output = '';
+  while (i < before.length || j < after.length) {
+    if (i < before.length && j < after.length && before[i] === after[j]) { i++; j++; continue; }
+    const startI = i; const startJ = j; const edits = [];
+    while ((i < before.length || j < after.length) && !(i < before.length && j < after.length && before[i] === after[j])) {
+      if (j < after.length && (i === before.length || lengths[i][j + 1] > lengths[i + 1][j])) edits.push(`+${after[j++]}\n`);
+      else edits.push(`-${before[i++]}\n`);
+    }
+    const countI = i - startI; const countJ = j - startJ;
+    const range = (start, count) => count === 1 ? `${start + 1}` : `${count ? start + 1 : start},${count}`;
+    output += `@@ -${range(startI, countI)} +${range(startJ, countJ)} @@\n${edits.join('')}`;
+  }
+  return output;
+}
