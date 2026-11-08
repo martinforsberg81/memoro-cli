@@ -213,7 +213,7 @@ export async function run(argv, deps = {}) {
  * the session over the other one's absence helps nobody. Nothing at all is the
  * only failure.
  */
-export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null, attach = attachRepoDeps } = {}) {
+export function ensurePlanArea(programme, { repos, env = process.env, stdout, stderr, git = null, attach = attachRepoDeps, exists = existsSync } = {}) {
   const name = planArea(programme, env);
   const branch = planBranch(programme);
   const runGit = git || ((args) => gitRun(undefined, args, { stdio: 'ignore' }));
@@ -259,7 +259,7 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
   }
   const readmePath = join(area.path, 'README.md');
   let readme = 'kept';
-  if (!existsSync(readmePath)) {
+  if (!exists(readmePath)) {
     const template = programmeReadmeTemplate(programme);
     if (template === null) {
       stderr.write(`mc: could not read the programme template for ${readmePath} — starting without a README\n`);
@@ -421,7 +421,7 @@ export function planLaunch({ programme, repos = [], role, env = process.env, rea
   const layoutTwo = layoutVersion({ root: workRoot(env) }) === 2;
   const lines = [
     `You are the plan session for the \`${programme}\` programme. Its aim is in \`~/mc/${planArea(programme, env)}/README.md\`; read it first.`,
-    ...(readmeWritten ? ['This README is a template to fill in, as `tasks/designing-a-programme.md` says.'] : []),
+    ...(readmeWritten ? ['This README was written just now from the programme template; its sections have placeholder text. Fill it in as `tasks/designing-a-programme.md` says.'] : []),
     'With Martin at the terminal you have full freedom toward that aim: investigate, plan, build and land the work yourself.',
     '',
     `You stand in \`~/mc/${planArea(programme, env)}/\`, with ${beside} beside you — each a`,

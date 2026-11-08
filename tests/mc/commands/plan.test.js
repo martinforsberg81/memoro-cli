@@ -456,6 +456,8 @@ describe('a standing planning checkout', () => {
     const withoutTemplate = planLaunch({ programme, repos: ['memoro'], role, env: { MC_WORK_ROOT: root } }).prompt;
     assert.match(withTemplate, /template/u);
     assert.match(withTemplate, /designing-a-programme/u);
+    assert.match(withTemplate, /written just now/u);
+    assert.match(withTemplate, /placeholder text/u);
     assert.ok(!/template|designing-a-programme/u.test(withoutTemplate), withoutTemplate);
   });
 
@@ -469,14 +471,24 @@ describe('a standing planning checkout', () => {
     spawnSync('git', ['init', '-q', checkout]);
     const readmePath = join(area, 'README.md');
     const original = '# standing\n\nmy own words\n';
-    writeFileSync(readmePath, original);
+    let fileAppearedAfterAbsenceCheck = false;
     const result = ensurePlanArea(programme, {
       repos: [{ name: 'memoro', path: join(root, 'no-such-repo') }],
       env: { MC_WORK_ROOT: root }, stdout: sink(), stderr: sink(), attach: () => ({ ok: true }),
+      // A concurrent planner creates the page after our absence check but
+      // before the exclusive open. The real wx write must leave its bytes alone.
+      exists: (path) => {
+        if (path === readmePath && !fileAppearedAfterAbsenceCheck) {
+          fileAppearedAfterAbsenceCheck = true;
+          writeFileSync(readmePath, original);
+          return false;
+        }
+        return existsSync(path);
+      },
     });
     assert.equal(result.ok, true);
-    assert.equal(result.readme, 'kept');
     assert.equal(readFileSync(readmePath, 'utf8'), original);
+    assert.equal(result.readme, 'kept');
     const prompt = planLaunch({ programme, repos: ['memoro'], role: readCanonRole(PLAN_ROLE), env: { MC_WORK_ROOT: root } }).prompt;
     assert.ok(!/template|designing-a-programme/u.test(prompt), prompt);
   });
