@@ -131,7 +131,8 @@ kill can leave detached HEAD; recovery must inspect that checkout and return
 to the original branch before retrying.
 
 Protection for this change is bounded to the existing gate, docs-measure,
-freshen and preparation-cache fixtures: correct checkout and merged state,
+freshen, merge integration and preparation-cache fixtures (including the
+existing Git model for NUL worktree listings and local-only checkout): correct checkout and merged state,
 no worktree creation/removal, refusal before mutation on unsafe inputs, and
 branch restoration on successful, red and exceptional exits. No new suite,
 scanner or framework is commissioned.

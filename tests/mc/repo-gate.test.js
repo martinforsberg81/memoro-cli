@@ -128,6 +128,7 @@ function fixture({
   const calls = [];
   const candidateDir = join(workRoot, 'existing', 'candidate');
   let detached = false;
+  let merging = false;
   const localSha = pushed || pr.headRefOid;
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
@@ -137,7 +138,7 @@ function fixture({
       return { status: 0, stdout: `worktree ${candidateDir}\0HEAD ${localSha}\0branch refs/heads/${pr.headRefName}\0\0`, stderr: '' };
     }
     if (args[0] === 'checkout') { detached = args.includes('--detach'); return { status: 0, stdout: '', stderr: '' }; }
-    if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: merging && args.at(-1) === 'MERGE_HEAD' ? 0 : 1, stdout: '', stderr: '' };
     if (args[0] === 'rev-parse' && (args[1]?.startsWith('refs/heads/') || (args[1] === 'HEAD' && !detached))) return { status: 0, stdout: localSha, stderr: '' };
     if (args[0] === 'worktree' && args[1] === 'add') {
       const dir = args[args.length - 2];
@@ -151,6 +152,8 @@ function fixture({
       return { status: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'merge') {
+      if (args[1] === '--abort') { merging = false; return { status: 0, stdout: '', stderr: '' }; }
+      merging = conflict;
       return conflict
         ? { status: 1, stdout: 'CONFLICT (content): Merge conflict in src/x.js', stderr: '' }
         : { status: 0, stdout: '', stderr: '' };
@@ -353,6 +356,31 @@ describe('the round measures a state worth measuring', () => {
         else assert.equal((await fx.run()).ok, false);
         assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
         assert.equal(fx.ran('git').some(({ args }) => args[0] === 'reset' || args[0] === 'clean' || (args[0] === 'worktree' && args[1] !== 'list')), false);
+        if (kind === 'conflict') assert.ok(fx.ran('git').some(({ args }) => args[0] === 'merge' && args[1] === '--abort'));
+        assert.equal(fx.lease().held, false);
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('retains unexpected changes and a newly occupied checkout instead of forcing restoration', async () => {
+    for (const kind of ['dirty after suite', 'busy after suite', 'branch moved']) {
+      const fx = fixture();
+      try {
+        const report = await fx.run({
+          candidateCwds: () => kind === 'busy after suite' && fx.ran('suite').length ? [{ pid: 123, cwd: join(fx.workRoot, 'existing', 'candidate') }] : [],
+          git: (args, opts) => {
+            if (fx.ran('suite').length) {
+              if (kind === 'dirty after suite' && args[0] === 'status') return { status: 0, stdout: '?? retained.txt\n', stderr: '' };
+              if (kind === 'branch moved' && args[0] === 'rev-parse' && args[1] === 'refs/heads/feature') return { status: 0, stdout: 'new-head', stderr: '' };
+            }
+            return fx.git(args, opts);
+          },
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'worktree-restore', report.reason);
+        assert.match(report.reason, /retained with detached HEAD/u);
+        assert.equal(fx.ran('git').some(({ args }) => args[0] === 'checkout' && args[1] === '--no-guess'), false);
+        assert.equal(fx.ran('git').some(({ args }) => ['reset', 'clean', 'update-ref'].includes(args[0]) || (args[0] === 'worktree' && args[1] !== 'list')), false);
         assert.equal(fx.lease().held, false);
       } finally { fx.cleanup(); }
     }

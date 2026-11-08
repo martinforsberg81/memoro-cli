@@ -665,7 +665,7 @@ export class FakeGit {
   }
 
   cmd_checkout({ dir, gitDir, argv }) {
-    const flags = parse(argv, { b: 1, B: 1 }, ['q', 'quiet', 'detach', 'force', 'f']);
+    const flags = parse(argv, { b: 1, B: 1 }, ['q', 'quiet', 'detach', 'force', 'f', 'no-guess']);
     const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
     if (flags.b !== undefined || flags.B !== undefined) {
       const name = flags.b ?? flags.B;
@@ -1095,7 +1095,7 @@ export class FakeGit {
     const [verb, ...rest] = argv;
     const { repo } = this.repoAt(dir, gitDir);
     if (verb === 'list') {
-      const flags = parse(rest, [], ['porcelain']);
+      const flags = parse(rest, [], ['porcelain', 'z']);
       const main = repo.bare ? [`worktree ${repo.gitDir}\nbare`] : [];
       const entries = [...repo.worktrees.entries()].map(([path, state]) => {
         const sha = this.headSha(repo, state) ?? '0000000000000000000000000000000000000000';
@@ -1103,7 +1103,8 @@ export class FakeGit {
           ? `worktree ${path}\nHEAD ${sha}\n${state.head.startsWith('refs/') ? `branch ${state.head}` : 'detached'}`
           : `${path}  ${sha.slice(0, 7)} ${state.head.startsWith('refs/') ? `[${this.branchName(state)}]` : '(detached HEAD)'}`;
       });
-      return `${[...main, ...entries].join(flags.porcelain ? '\n\n' : '\n')}\n${flags.porcelain ? '\n' : ''}`;
+      const output = `${[...main, ...entries].join(flags.porcelain ? '\n\n' : '\n')}\n${flags.porcelain ? '\n' : ''}`;
+      return flags.porcelain && flags.z ? output.replaceAll('\n', '\0') : output;
     }
     if (verb === 'add') {
       const flags = parse(rest, { b: 1, B: 1 }, ['q', 'quiet', 'detach', 'force', 'f', 'lock']);

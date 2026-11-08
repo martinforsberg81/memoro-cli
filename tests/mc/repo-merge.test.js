@@ -882,7 +882,7 @@ describe('a batch lands in order, or falls back one by one', () => {
     return {
       ...fx,
       landed,
-      run: (extra = {}) => fx.run({ pr: 401, prs: PRS, git, gh, gate: gateFor ? (args) => gateFor(args, state) : (async () => verdict), ...extra }),
+      run: (extra = {}) => fx.run({ pr: 401, prs: PRS, git, gh, refresh: async () => ({ ok: true }), gate: gateFor ? (args) => gateFor(args, state) : (async () => verdict), ...extra }),
     };
   }
 
