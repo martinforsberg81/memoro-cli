@@ -9,9 +9,21 @@ before, with jev's reading attached. The shared code is `src/mc/jev.js`;
 `mc goal martin` is `askMartin` in `src/mc/commands/goal.js`, and `mc ask` is
 in `src/mc/commands/ask.js`.
 
-Martin's decision, 2026-11-08: jev is asked from any session before a question
-with options reaches Martin. Interactive sessions use `mc ask`; goal questions
-use `mc goal martin` (which asks jev itself, not both verbs).
+## Who asks jev
+
+Martin, 2026-11-08: jev is asked from any session, interactive or headless,
+with or without a goal, as decision support. An interactive session always
+asks jev before it puts a question with options to Martin in chat: when jev
+settles it, the session continues with jev's answer and names it in its
+account; otherwise Martin gets the question with its options, the session's
+recommendation and jev's reading. A goal's question goes through
+`mc goal martin`, which asks jev itself. A build or review session may ask
+jev about a question it believes the goal settles; a non-answer leaves it to
+block as its role says. Reserved acts never go to jev, from any session.
+
+The verb for a question outside `mc goal martin` is `mc ask`, built by goal
+`jev/ask-anywhere`; it is the executable route for this rule. `mc goal martin`
+from a caller with `MC_TOOL` unset still skips jev (*The flow*, step 1).
 
 ## `mc ask`
 

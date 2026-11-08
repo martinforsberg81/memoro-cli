@@ -406,10 +406,10 @@ async function askMartin(args, flags, ctx) {
       asked = { martin: 'jev unavailable: state over budget after trimming' };
     }
     if (built.problems) {
-      sent = { documents: context.documents.map((item) => item.path), trimmed: built.trimmed ?? [], length: null, sha256: null };
+      sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null };
     } else {
-    sent = { documents: context.documents.map((item) => item.path), trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
     const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+    sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
     const answer = values === null ? { unavailable: 'the mc keys source cannot be read' }
       : await askJev({ body: requestBody(built.state, built.state.options), key, ...ctx.jev });
     const parsed = answer.unavailable ? answer : readAnswers(answer.response, options);

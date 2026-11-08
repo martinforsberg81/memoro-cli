@@ -211,7 +211,9 @@ test('documents whose path metadata keeps the state over budget are dropped whol
   const { state } = JSON.parse(f.requests[0].init.body);
   assert.ok(JSON.stringify(state).length <= STATE_BUDGET);
   assert.ok(state.documents.length < documents.length);
-  assert.ok(f.ledger.map((line) => JSON.parse(line))[0].trimmed.some((item) => item.endsWith('dropped')));
+  const ledger = f.ledger.map((line) => JSON.parse(line))[0];
+  assert.ok(ledger.trimmed.some((item) => item.endsWith('dropped')));
+  assert.deepEqual(ledger.documents, state.documents.map((item) => item.path), 'the ledger lists only documents included in the sent state');
 });
 
 test('the thresholds are 0.90, 0.70 and 0.70 and every one is required with agreement', () => {

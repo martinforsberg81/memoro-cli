@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
-import { appendLedgerLine, askJev, buildState, documentPath, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
+import { appendLedgerLine, askJev, buildState, documentPath, INSTRUCTIONS, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -78,12 +78,13 @@ export async function run(argv, deps = {}) {
     if (core) { stderr.write(clean(returnInstruction(built.problems, named, 'mc: mc ask is not called').replaceAll('mc goal martin', 'mc ask'))); return 2; }
   }
   let asked;
-  let sent = { documents: context.documents.map((item) => item.path), trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null };
+  const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+  let sent = { documents: [], trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null };
   if (built.problems) asked = { unavailable: 'state over budget after trimming' };
   else {
-    const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+    if (key) sent.documents = built.state.documents.map((item) => item.path);
     const result = values === null ? { unavailable: 'the mc keys source cannot be read' }
-      : await askJev({ body: requestBody(built.state, built.state.options, WORK_INSTRUCTIONS), key, ...(deps.jev || {}) });
+      : await askJev({ body: requestBody(built.state, built.state.options, target ? INSTRUCTIONS : WORK_INSTRUCTIONS), key, ...(deps.jev || {}) });
     const parsed = result.unavailable ? result : readAnswers(result.response, call.options);
     if (parsed.unavailable) asked = { unavailable: `jev unavailable: ${parsed.unavailable}` };
     else {
@@ -104,7 +105,9 @@ export async function run(argv, deps = {}) {
   if (answered && target) {
     const logPath = join(target.dir, 'LOG.md');
     const old = read(logPath) || '';
-    const entry = { at: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: clean(`jev answered ${asked.reading}`), comment: clean(said), next: clean(`continue with: ${call.options[asked.answers.answer.choice]}`), stage: goal.stage, status: goal.status };
+    const lines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${String(option).replace(/\s*\n\s*/gu, ' ')}`), `Recommended: ${call.recommend}`];
+    const comment = clean([`jev was asked: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}`, ...lines, said].join('\n'));
+    const entry = { at: now.toISOString().replace(/\.\d{3}Z$/u, 'Z'), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: clean(`jev answered ${asked.reading}`), comment, next: clean(`continue with: ${call.options[asked.answers.answer.choice]}`), stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read, write: deps.write || writeFileAtomic });
   }
   stdout.write(`${clean(said)}\n`);

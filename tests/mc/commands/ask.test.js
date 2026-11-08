@@ -117,7 +117,31 @@ test('answering with a named goal appends a goal log entry without changing its 
   const argv = ['jev/plain', '--reason', 'Which?', '--option', 'one: first', '--option', 'two: second', '--recommend', 'one'];
   assert.equal(await run(argv, { ...f.deps, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }, write: writeFileSync,
     home: programmeHome, now: () => new Date('2026-11-08T00:00:00Z') }), 0, f.err());
+  const questions = JSON.parse(f.requests[0].init.body).questions;
+  assert.equal(questions.answer.instructions, 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state');
+  assert.equal(questions.fits.instructions, 'One of the options in `options` is a correct way for this goal to proceed');
+  assert.equal(questions.settled.instructions, "The goal, its contract, the programme's rulings or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed");
   const logged = readFileSync(join(goal, 'LOG.md'), 'utf8');
   assert.match(logged, /jev answered one/u);
+  assert.match(logged, /jev was asked: Which\?/u);
+  assert.match(logged, /Option one: first/u);
+  assert.match(logged, /Option two: second/u);
+  assert.match(logged, /Recommended: one/u);
   assert.equal(JSON.parse(readFileSync(documentPath, 'utf8')).status, 'ready');
+});
+
+test('goal-bound mc ask ledger records only documents retained in the trimmed request', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'many-documents');
+  mkdirSync(goal, { recursive: true });
+  const documents = Array.from({ length: 100 }, (_, n) => ({ label: `doc ${n}`, path: `${String(n).padStart(3, '0')}-${'p'.repeat(3_000)}` }));
+  writeFileSync(join(goal, 'GOAL.json'), goalJson({ stage: 'build', title: 'Many documents', goal: ['Ask about documents.'], repos: ['memoro-cli'], documents }));
+  writeFileSync(join(goal, 'LOG.md'), '');
+  const f = fixture({ response: reply(0.95, 'one') });
+  const read = (path) => path.endsWith('/GOAL.json') ? readFileSync(path, 'utf8') : path.endsWith('/LOG.md') ? '' : 'document text';
+  const argv = ['jev/many-documents', '--reason', 'Which?', '--option', 'one: first', '--option', 'two: second', '--recommend', 'one'];
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync, home: programmeHome }), 0, f.err());
+  const state = JSON.parse(f.requests[0].init.body).state;
+  assert.ok(state.documents.length < documents.length);
+  assert.deepEqual(f.ledger[0].documents, state.documents.map((item) => item.path));
+  assert.ok(f.ledger[0].trimmed.some((item) => item.endsWith('dropped')));
 });
