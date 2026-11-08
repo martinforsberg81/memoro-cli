@@ -152,12 +152,15 @@ Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-**A session decides when a goal merges.** Before a review or finish session
+**A session decides when a goal merges.** Before a review, finish or mend session
 authorizes direct goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
 completed green `mc gate --whole-selection` on the final judged worktree. The
-session records scope, frozen base, judged revision and log. This is a human
-session requirement, not merger enforcement. `mc goal stage merge` records
+session records scope, frozen base, judged revision and log. A content-changing
+mend establishes acceptance for the repaired worktree; an unchanged delivery
+retry may retain still-valid evidence under the existing reuse rules. Explicit
+verification exceptions keep their approved scope. These are session
+requirements, not merger enforcement. `mc goal stage merge` records
 that decision and queues every PR registered on the goal. `landJob` executes
 it with `gh pr merge --squash`, without another gate, criteria check,
 reviewed-head/base validation or automatic conflict resolution. It reads GitHub's merge
