@@ -66,6 +66,9 @@ export function phaseLedger({ execution = null, entries = [] } = {}) {
     total_ms: execution && execution.end_ms !== null ? execution.end_ms - execution.start_ms : null,
     children: entries.map(render),
     overlaps,
+    // Clocks this process never observed, named rather than left out: the caller's own
+    // wait and setup, and the fixture's setup. Per-file wall time is the reporter's, not in here.
+    unobserved: ['caller', 'fixture'],
   };
 }
 

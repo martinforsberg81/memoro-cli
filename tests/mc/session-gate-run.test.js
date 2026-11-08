@@ -1029,6 +1029,7 @@ it('phase intervals overlap honestly: the execution total is the enclosing inter
     assert.deepEqual([byName['command lint'].start_ms, byName['command lint'].end_ms, byName['command lint'].ms], [5, 30, 25]);
     assert.equal(byName.tests.start_wall, new Date(Date.UTC(2026, 10, 8) + 5).toISOString());
     assert.deepEqual(phases.overlaps, [['tests', 'command lint']], 'only the concurrent pair overlaps');
+    assert.deepEqual(phases.unobserved, ['caller', 'fixture'], 'the clocks this process did not observe are named as unknown');
     // The children add to more than the enclosing interval, which is why the total is not their sum.
     const sum = phases.children.reduce((total, one) => total + (one.ms ?? 0), 0);
     assert.ok(sum > phases.total_ms, `children add to ${sum} ms over a ${phases.total_ms} ms interval`);
