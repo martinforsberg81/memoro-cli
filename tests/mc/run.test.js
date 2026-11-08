@@ -3218,7 +3218,7 @@ test('a finish session that moves the goal to merge hands it to the merger: no s
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'in merge the runner starts nothing');
 });
 
-test('a red in merge starts one mend session; queued again it gets the runner\'s entry and waits for the merger, not queued it is merge · blocked', async () => {
+test('a red in merge starts mend; completed ready recovery stays ready even before queue restoration', async () => {
   const f = goalFixture({ red: { stage: 'merge', log: redMerge } });
   f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
   let line = [];
@@ -3234,14 +3234,14 @@ test('a red in merge starts one mend session; queued again it gets the runner\'s
 
   const g = goalFixture({ red: { stage: 'merge', log: redMerge } });
   g.files[`${GOALS}/red/GOAL.json`] = withGoal(g.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
-  g.deps.pendingMerges = () => [];
+  g.deps.pendingMerges = () => [{ repo: 'memoro', pr: 31, state: 'red' }];
+  g.answer = plans(g, 'red', 'merge');
   await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
-  assert.equal(where(g, 'red'), 'merge · blocked', 'a legacy merge · ready red left unqueued blocks the goal for one mend');
-  assert.match(parseLog(g.files[`${GOALS}/red/LOG.md`]).at(-1).comment, /nothing in the merger's line/u);
-  // The mend of the blocked goal that leaves it unqueued waits on Martin: no loop.
-  await createRunner({ deps: g.deps }).pass({ repo: 'memoro' });
-  assert.equal(where(g, 'red'), 'merge · Martin');
-  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(where(g, 'red'), 'merge · ready', 'a completed repair does not become a new failure');
+  assert.equal((await createRunner({ deps: g.deps }).pass({ repo: 'memoro' })).ran, 0,
+    'ready recovery is delivered, not mended again');
+  assert.deepEqual(g.calls.rounds.map(({ repo, pr }) => [repo, pr]), [['memoro', 31]],
+    'the prior red queue entry is replaced by delivery of the repaired goal');
 });
 
 test('a Martin goal, in any stage, and a goal in draft, start nothing', async () => {

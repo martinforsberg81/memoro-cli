@@ -1172,8 +1172,10 @@ threw.
 
 **Where a red goes.** A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
-answered red on #<pr>` entry (`tellGoal`): every failure in `merge` sets
-`merge · blocked` immediately and wakes a mend session ([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
+answered red on #<pr>` entry (`tellGoal`). Failure one or two sets
+`merge · blocked` and wakes mend; its completed repair returns `merge · ready`
+for delivery again. Failure three sets `merge · Martin`
+([`mc-goals.md`](mc-goals.md) § *Finish and mend*).
 A pull request is a goal's when the job carries the goal (its review's `mc goal stage merge`
 queued it) or when the goal's `prs` name it (`goalOfJob`): one a person or
 `mc publish` queued is answered in its goal as well. Landed, it sets the goal

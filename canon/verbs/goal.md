@@ -38,7 +38,7 @@ with ✓/✗ and its check, and each worktree's state.
   session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
-  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and requeues merge. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
+  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
   first: `mc goal martin --reason "<the question>" --option "<key>: <text>"
   --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
   <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys

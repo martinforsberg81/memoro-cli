@@ -1115,7 +1115,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   }
   if (env.MC_ROLE === MEND_ROLE) {
     if (from !== 'merge') return `a mend session is only for merge failures, and this goal is in ${from}`;
-    if (moves) return `a mend session moves no stage (${from} → ${to}): it retries the stage with mc goal ready, or requeues merge with mc goal stage merge; a goal to move is Martin's`;
+    if (moves) return `a mend session moves no stage (${from} → ${to}): it returns merge to ready with mc goal ready, or requeues it with mc goal stage merge; a goal to move is Martin's`;
     return null;
   }
   if (status === 'Martin') {

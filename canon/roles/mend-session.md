@@ -56,7 +56,8 @@ intervening decision by Martin; never clear his hold or reactivate finished
 work. Publish repairs with `mc publish --no-merge`, record the cause, repair,
 acceptance evidence and any residual finding in LOG.md, then requeue every
 registered PR with `mc goal stage merge`. This reauthorizes landing while the
-goal stays in merge. `mc goal ready` alone does not deliver a PR. Once the
+goal stays in merge and becomes ready. If you finish with `mc goal ready`,
+the runner restores delivery; do not leave repaired work blocked. Once the
 handoff succeeds, end the session in that same turn.
 
 **When the failure remains.** Diagnose and repair an in-scope obstacle in this
@@ -64,8 +65,10 @@ session. Do not return it ready merely to make another session repeat the same
 work. If progress requires an unresolved design or policy choice, an exception,
 a reserved act, or a repair outside your authority, use goal-bound `mc ask`
 with the evidence and a concrete recommendation. Continue when jev settles it;
-otherwise leave the goal waiting on Martin. Respect the existing recovery
-bounds. Repeating an unchanged failed attempt is not progress. Keep no
+otherwise leave the goal waiting on Martin. The first two failed merges
+receive mend and another merge attempt; the third failed merge waits on Martin.
+The runner counts merge failures, not your launches or ready handoffs.
+Repeating an unchanged failed attempt is not progress. Keep no
 background work after the session ends.
 
 @verb goal

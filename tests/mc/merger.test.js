@@ -1448,7 +1448,7 @@ describe('a session decision to merge a goal', () => {
     assert.equal(d.calls.some(({ args }) => args.includes('headRefOid')), false);
   });
 
-  it('blocks a content conflict on the first attempt and keeps repeated failures blocked', async () => {
+  it('repeats merge and mend twice, then the third failed merge waits on Martin', async () => {
     const d = decision({ conflict: true });
     await landJob(jobs[0], d.m.deps);
     const [answer] = await landJob(jobs[1], d.m.deps);
@@ -1457,8 +1457,20 @@ describe('a session decision to merge a goal', () => {
     assert.deepEqual(d.pulled, [90], 'a failed merge does not update the installation');
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
     assert.equal(d.goal().log.at(-1).done, 'merger answered red on #14804');
+    const mendReady = () => d.m.deps.setGoal({ stage: 'merge', status: 'ready',
+      entry: { tool: 'codex', role: 'mend', done: 'repair complete' } });
+    mendReady();
     await landJob(jobs[1], d.m.deps);
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    mendReady();
+    // The goal/log are the persisted input; no session counter is kept in memory.
+    await landJob(jobs[1], d.m.deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'Martin']);
+    assert.deepEqual(d.goal().log.filter((entry) => /^merger answered/u.test(entry.done ?? '')).map((entry) => entry.status),
+      ['blocked', 'blocked', 'Martin']);
+    d.m.deps.setGoal({ stage: 'merge', status: 'ready', entry: { tool: 'person', done: 'resume after decision' } });
+    await landJob(jobs[1], d.m.deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked'], 'an interactive resume starts a new failure cycle');
     assert.deepEqual(d.m.rounds, []);
   });
 

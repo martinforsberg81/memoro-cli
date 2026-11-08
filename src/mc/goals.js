@@ -440,6 +440,15 @@ export function mergeAnswered(entry) {
   return entry?.tool === 'runner' && /^merger answered (red|moved) on #\d+/u.test(String(entry.done ?? ''));
 }
 
+/** Failed merge results in this merge stage since an interactive ready entry.
+ * Mend sessions and their ready entries do not reset the result count. */
+export function mergeFailures(log = []) {
+  const entries = inStage(log, 'merge');
+  const resumed = entries.findLastIndex((entry) => entry.status === 'ready'
+    && (entry.tool === 'person' || entry.role === 'plan'));
+  return entries.slice(resumed + 1).filter(mergeAnswered).length;
+}
+
 /** The entries at the end of `log` written in `stage`: since the goal last came to it. */
 export function inStage(log, stage) {
   const out = [];

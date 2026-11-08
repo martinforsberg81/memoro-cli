@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { appendEntry, goalOfPr, logStamp, prRef, redMergeText, setGoalState } from './goals.js';
+import { appendEntry, goalOfPr, logStamp, mergeFailures, prRef, redMergeText, setGoalState } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
@@ -787,8 +787,13 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
       say(`${label}: goal ${name} is ${goal.stage} — not landed, nothing moves`);
       return;
     }
+    const failures = mergeFailures([...(goal.log ?? []), { ...entry(red), stage: 'merge', status: 'blocked' }]);
+    const exhausted = !landed && goal.stage === 'merge' && failures >= 3;
     const change = landed ? { stage: 'done', status: 'ready', entry: entry(`${prRef(job)} ${landedText}`) }
-      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: 'blocked', entry: entry(red, `${why} — a mend session resolves the obstacle`) };
+      : { stage: blocksGoal ? goal.stage || 'merge' : 'merge', status: exhausted ? 'Martin' : 'blocked',
+        entry: entry(red, exhausted
+          ? `${why} — three failed merges; Martin needs to inspect the merge evidence`
+          : `${why} — a mend session resolves the obstacle`) };
     const set = setGoal({ dir: goal.dir, ...change });
     const words = `${change.stage}${change.status ? ` · ${change.status}` : ''}`;
     if (set?.problems) say(`${label}: goal ${name} could not be set ${words} (${set.problems.join('; ')})`);
