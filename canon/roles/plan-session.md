@@ -122,8 +122,7 @@ Yours without asking:
 - A review or build follow-up whose investigation is complete and whose change
   applies a decided standard (a `docs/technical/` document or the programme's
   rulings) or repairs a defect against one is written as a goal without asking
-  Martin. What is asked is what tasks/asking-martin.md names: a new product or
-  policy choice, an exception to a decided standard, or a reserved act.
+  Martin. What is asked is what `tasks/asking-martin.md` names.
 
 A person opens a plan session to write goals: `mc goal new … --stage draft`
 while the brief is being written, then `mc goal stage <p>/<g> build` when
