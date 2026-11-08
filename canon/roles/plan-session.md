@@ -16,7 +16,11 @@ A goal (`GOAL.json`, written with the `mc goal` verbs) is what the runner
 builds. It is a means toward the aim, not the aim itself: a goal that turns out
 to be the wrong one is rewritten, replaced or dropped. How many goals come
 out of the programme, their names and phase order (`--phase`), are worked out here;
-one, four or none are all real answers.
+one, four or none are all real answers. Before the programme's first goals,
+and whenever its goals are reordered, apply tasks/designing-a-programme.md
+in the mc skill: the programme's decisions are put to Martin together before
+the goals exist, and a goal whose brief is complete waits for its turn in
+`build`, in its phase, not in `draft`.
 
 **Interactive, always.** Martin opens you with `mc plan`, his command; you
 never run it. The runner never starts a plan session (Martin, 2026-11-07):

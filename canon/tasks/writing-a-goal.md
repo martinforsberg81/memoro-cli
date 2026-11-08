@@ -23,14 +23,14 @@ and know when it is done? If not, it is not a goal yet.
 
 Work that is several pieces in order is several goals, each in the phase after the one before: a
 goal starts only when every goal of its programme in a lower phase is done or dropped. `mc goal
-phase <p>/<g> <n>` changes the order later; goals of one phase run side by side. Phase numbers may
-be renumbered; name prerequisite goals too. A plan placeholder also holds later phases back.
+phase <p>/<g> <n>` changes the order later; goals of one phase run side by side; phases may be
+renumbered; a `draft` goal holds later phases back too. The cut into goals and phases is
+[designing a programme](designing-a-programme.md): a finished brief stands in `build` in its phase.
 
-- **Readiness:** before creating a goal, including a `draft` skeleton, apply
-  [goal design](references/goal-design.md): establish the problem, choose the
-  solution, and define success criteria and exclusions. Missing investigation
-  stays with the proposal. A concrete future goal may wait in `draft` for named
-  prerequisites; resolve policy and acceptance before activating build.
+- **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal
+  design](references/goal-design.md): establish the problem, choose the solution, and define
+  success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits
+  on others waits in `build` in a later phase, not in `draft`; policy and acceptance come first.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable
   commands, working directory, prerequisites and expected results. For reports, specify reconciliation
   and evidence; a file, keyword or green gate alone does not prove content. No check waits for Martin;

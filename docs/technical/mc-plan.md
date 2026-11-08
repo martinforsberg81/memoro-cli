@@ -123,7 +123,11 @@ the goal, contract, boundaries, documents and criteria with their checks.
 Stages move forward; `ready` or `blocked` is a separate status. Phases order
 work across the programme: all goals of a lower phase finish or are dropped
 before any goal in a higher phase starts. Build sessions neither rewrite the
-brief nor invent another unit inside it.
+brief nor invent another unit inside it. How a programme is designed before
+its goals — its README (`canon/tasks/references/programme-readme.md`), the
+decisions put to Martin in one sitting, the cut into phases, and every
+finished goal set in `build` in its phase rather than parked in `draft` — is
+`canon/tasks/designing-a-programme.md` (Martin, 2026-11-08).
 
 A goal names a work class (`fast` or `large`), not a pinned provider. The
 catalog and observed capacity choose tool, model and effort at launch. Review
