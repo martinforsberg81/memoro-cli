@@ -25,6 +25,11 @@ Existing checkouts are reused and dependencies reattached. Missing repositories
 are said and skipped; no checkout at all is a failure. Layout 1's planning
 root remains supported ([mc-layout.md](mc-layout.md)).
 
+When `mc plan` opens a programme whose planning directory has no `README.md`,
+it writes the fenced page from `canon/tasks/references/programme-readme.md`
+before the session starts, and the opening prompt says it is a template to
+fill in. An existing README is never touched.
+
 With no programme named, `chooseProgramme` offers a numbered list, a new name,
 or an empty answer to leave. A pipe gets usage instead of a question. The
 list combines programmes read from the repositories (`listProgrammes`) and
@@ -160,6 +165,8 @@ No automatic pass can decide that a programme's aim is over.
 `tests/mc/commands/plan.test.js` covers the paths, refusal inside a session,
 programme picker, prompt, role body and the real discovery/launcher composition
 for fresh, compatible resume and `--new`, with provider spawn replaced.
+It also covers `a new programme gets its README from the programme template`
+and `an existing README is left as it is`.
 `tests/mc/work-open.test.js` uses isolated Codex rollouts and Claude stores
 and launch evidence for descendant review, wrong programme, unknown identity,
 explicit refusal, aliases and compatible continuation.
