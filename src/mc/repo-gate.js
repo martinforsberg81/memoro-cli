@@ -44,7 +44,7 @@
  * evidence fails closed; it is not proof that this PR introduced the failure.
  */
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -160,6 +160,9 @@ export async function runGate({
   // Stops the round from outside: step 2 of round-abort, the merger's watch.
   signal = null,
   clock = () => Date.now(),
+  // Monotonic milliseconds for the intervals (`report.intervals`); the wall clock
+  // above stays the round's record. Injected so a test can make both deterministic.
+  monotonic = () => globalThis.performance.now(),
   // How the round's ceiling is armed: `(fire, ms) => cancel`, a timer of `ms`
   // by default. A test hands in one it fires itself, at the moment its stuck
   // child is reached, rather than waiting the ceiling out.
@@ -187,6 +190,7 @@ export async function runGate({
   evidence = null,
 } = {}) {
   const startedAt = clock();
+  const origin = monotonic();
   // Where the repository may keep what it learns about its own tests between
   // rounds (MC_SELECTION_STATE), and whether this round may write there
   // (MC_SELECTION_STATE_WRITE). A directory under mc's home per repository,
@@ -378,6 +382,10 @@ export async function runGate({
     // Wall clock per step (A5). Four decisions about cost were taken one day
     // without a single number from the tool itself; the next one is measured.
     timings: {},
+    // Every step as it ran, wall and monotonic, relative to the round's start for
+    // the monotonic pair. Intervals overlap (the suite and its gates; selection
+    // beside an earlier red), so their `ms` are not a breakdown of `duration_ms`.
+    intervals: [],
     // The lanes the round's tests ran at and the load they were answered at
     // (`testLanes`); the round record names both.
     lanes,
@@ -388,13 +396,20 @@ export async function runGate({
   };
   // Every step of the round is bounded by the ceiling, so a child that ignores
   // its signal cannot hold the lane past it (`untilCeiling`).
+  const interval = (step, wallFrom, wallTo, monoFrom, monoTo) => {
+    report.intervals.push({ step, start_wall: new Date(wallFrom).toISOString(), end_wall: new Date(wallTo).toISOString(),
+      start_ms: monoFrom - origin, end_ms: monoTo - origin, ms: monoTo - monoFrom });
+  };
   const timed = async (step, fn) => {
     if (signal?.aborted) throw new RoundAborted(abortReason(signal));
     const from = clock();
+    const fromMono = monotonic();
     activePhases.add(step);
     try { return await untilCeiling(fn()); } finally {
       activePhases.delete(step);
-      report.timings[step] = (report.timings[step] || 0) + (clock() - from);
+      const to = clock();
+      report.timings[step] = (report.timings[step] || 0) + (to - from);
+      interval(step, from, to, fromMono, monotonic());
       say(`${step} took ${seconds(report.timings[step])}`);
     }
   };
@@ -986,6 +1001,9 @@ export async function runGate({
         // what this round actually ran (`selector-miss.js`). A count cannot
         // answer "was this test selected?".
         selected: selection.files,
+        // The digest of the selector's exact stdout (`selectFiles`'s `raw`): what the
+        // selection was, byte for byte, without retaining the whole reason map here.
+        raw_sha256: selection.raw?.sha256 ?? null,
       };
       say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
       if (selection.files.length === 0) {
@@ -1120,6 +1138,7 @@ export async function runGate({
     // with nothing wrong in the change — the same red memoro's own `ci.mjs`
     // closed on 2026-09-06 by handing its gates the merge base as a commit.
     const besideFrom = clock();
+    const besideMono = monotonic();
     const halves = reused ? [{ status: 'fulfilled', value: reused }, { status: 'fulfilled', value: [] }] : await Promise.allSettled([
       greenFiles ? Promise.resolve(greenFiles)
         : selection
@@ -1136,7 +1155,11 @@ export async function runGate({
         })
         : Promise.resolve([]),
     ]);
-    if (runCommands?.length && !reused) report.timings.gates_beside_suite_ms = clock() - besideFrom;
+    if (runCommands?.length && !reused) {
+      const besideTo = clock();
+      report.timings.gates_beside_suite_ms = besideTo - besideFrom;
+      interval('gates beside suite', besideFrom, besideTo, besideMono, monotonic());
+    }
     // A command gate in flight also receives the abort and is stopped before
     // this round releases its lane.
     if (signal?.aborted) {
@@ -1504,7 +1527,14 @@ export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [
   const classes = plainObject(parsed?.resourceClasses)
     ? Object.fromEntries(Object.entries(parsed.resourceClasses).filter(([, value]) => typeof value === 'string'))
     : {};
-  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed), classes };
+  // The bytes the selector printed and the parsed whole, kept before any of the
+  // normalisation above: `raw.content` is every field the selector said, `files`
+  // and `commands` are only what this gate runs. `mainOnlyExcluded` is what the
+  // pull-request filter took out, so the execution plan can say so.
+  const text = String(run.stdout);
+  const raw = { text, sha256: createHash('sha256').update(text).digest('hex'), content: parsed };
+  const mainOnlyExcluded = pullRequest.length ? named.filter((file) => mainOnly.includes(file)) : [];
+  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null, hash: selectionHash(parsed), classes, raw, mainOnlyExcluded };
 }
 
 /** A caller's binding is not a substitute for the repository Git actually

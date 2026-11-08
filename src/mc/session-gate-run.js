@@ -13,7 +13,7 @@ import { redTests, tapTotals } from './tap-red.js';
 import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
 import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
-import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, recordReceiptGreen, sameContent } from './session-gate-evidence.js';
+import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, recordReceiptGreen, sameContent, selectorSidecar } from './session-gate-evidence.js';
 import { commandIdentity } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
 
@@ -32,20 +32,64 @@ export function selectorCommand(command, { base = 'origin/main', changed = [] } 
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
+// The clock every interval reads: monotonic milliseconds for durations, wall time for
+// the record. A test injects one it controls; nothing else reads the time for these.
+export const systemClock = Object.freeze({ monotonic: () => globalThis.performance.now(), wall: () => new Date().toISOString() });
+const openSpan = (clock, name) => ({ name, start_ms: clock.monotonic(), start_wall: clock.wall(), end_ms: null, end_wall: null });
+const closeSpan = (clock, span) => {
+  if (span && span.end_ms === null) { span.end_ms = clock.monotonic(); span.end_wall = clock.wall(); }
+  return span;
+};
+
+/**
+ * What the phases of one attempt add up to, honestly. The execution interval
+ * encloses selection, the tests and the serial commands, and those overlap one
+ * another, so the total is the enclosing interval and never the sum of the
+ * children. Each child keeps its own span; `overlaps` names the pairs that were
+ * running at once. An interval still open is reported with a null end.
+ */
+export function phaseLedger({ execution = null, entries = [] } = {}) {
+  const origin = execution?.start_ms ?? 0;
+  const render = (one) => ({
+    name: one.name, start_wall: one.start_wall, end_wall: one.end_wall,
+    start_ms: one.start_ms - origin,
+    end_ms: one.end_ms === null ? null : one.end_ms - origin,
+    ms: one.end_ms === null ? null : one.end_ms - one.start_ms,
+  });
+  const overlaps = [];
+  entries.forEach((a, i) => entries.slice(i + 1).forEach((b) => {
+    if (a.end_ms !== null && b.end_ms !== null && a.start_ms < b.end_ms && b.start_ms < a.end_ms) overlaps.push([a.name, b.name]);
+  }));
+  return {
+    basis: 'the execution interval encloses the children, which overlap; the total is that interval, not their sum',
+    execution: execution ? render(execution) : null,
+    total_ms: execution && execution.end_ms !== null ? execution.end_ms - execution.start_ms : null,
+    children: entries.map(render),
+    overlaps,
+  };
+}
+
 export async function runSessionGate(request, {
   snapshot = captureWorktree, persist = persistGateReceipt, record = recordReceiptGreen,
-  now = () => new Date().toISOString(), ...deps
+  now = () => new Date().toISOString(), clock = systemClock, persistSelector = persistSelectorEvidence, ...deps
 } = {}) {
   // What earlier attempts on this content proved passing (`findResumable`):
   // only a measured request, and never with --fresh.
   let prior = { files: new Map(), commands: new Map() };
   // The batches this attempt launched, in order (`executeSessionGate`).
   const launched = [];
+  // The attempt's spans on `clock` (`phaseLedger`), and the selector output it read
+  // (`onSelector`), for the sidecar beside its receipt. `captured` is the spans as
+  // the execution ended, or was cut.
+  const spans = { execution: null, selection: null, tests: null, commands: [] };
+  let captured = null;
+  let selectorRead = null;
   // The tracker, and what it said when a ceiling or an interrupt stopped the
   // run: the run's times files are gone once its process closes.
   let tracker = null;
   let stopped = null;
   const execute = async () => {
+    spans.execution = openSpan(clock, 'execution');
     const controller = new AbortController();
     const external = deps.signal;
     const signal = external ? AbortSignal.any([external, controller.signal]) : controller.signal;
@@ -83,7 +127,7 @@ export async function runSessionGate(request, {
         else signal.addEventListener('abort', stop, { once: true });
       });
       const result = await Promise.race([
-        executeSessionGate(request, { ...deps, prior, launched, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
+        executeSessionGate(request, { ...deps, prior, launched, spans, clock, onSelector: (read) => { selectorRead = read; }, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
@@ -112,7 +156,11 @@ export async function runSessionGate(request, {
       (deps.write || ((text) => process.stdout.write(text)))(`RED — gate round reached its ${Math.ceil(timeoutMs / 1000)} s ceiling; phase: ${phase}${named}${reached}${commandProgress.length ? `; ${commandProgress.join('; ')}` : ''}\n`);
       return stoppedResult({ ...timedOutSnapshot, reason, red_files: unfinished, slowest_files: slowest,
         timeout_phase: phase, pending_commands: pendingCommands, running_commands: runningCommands }, 'timeout');
-    } finally { clearTimeout(timeout); }
+    } finally {
+      clearTimeout(timeout);
+      closeSpan(clock, spans.execution);
+      captured = structuredClone(spans);
+    }
   };
   if (!request.measurement) return execute();
   // Each member as this attempt ran or reused it, for the receipt: what a later
@@ -151,13 +199,18 @@ export async function runSessionGate(request, {
   let before = null;
   let after = null;
   let result = stoppedResult(null, 'content-changed');
+  const fingerprint = { before: null, after: null };
   try {
+    fingerprint.before = openSpan(clock, 'fingerprint before');
     before = snapshot(request.cwd);
+    closeSpan(clock, fingerprint.before);
     // The batches as they launched, whatever the run returned (a cut run returns no record of its own).
     const withLaunched = (value) => (value?.execution?.tests
       ? { ...value, execution: { ...value.execution, tests: { ...value.execution.tests, batches: [...launched] } } } : value);
     if (sameContent(request.measurement.candidate, before)) result = withMembers(withLaunched(await execute()));
+    fingerprint.after = openSpan(clock, 'fingerprint after');
     after = snapshot(request.cwd);
+    closeSpan(clock, fingerprint.after);
   } catch (error) {
     result = stoppedResult({ ...result, error: error.message }, 'evidence');
   }
@@ -166,7 +219,29 @@ export async function runSessionGate(request, {
     result = stoppedResult(result, 'content-changed');
   }
   if (deps.signal?.aborted) result = stoppedResult(result, 'interrupted');
-  const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now() });
+  // The selector's output, beside the receipt. A sidecar that cannot be written is
+  // recorded as unavailable and changes nothing else: the verdict, the members and
+  // the selected work are exactly what they were without it.
+  let selector = null;
+  let sidecar = null;
+  if (selectorRead) {
+    sidecar = openSpan(clock, 'selector sidecar');
+    try {
+      if (!selectorRead.raw) throw new Error(selectorRead.failure || 'the selector output was not retained');
+      const bytes = selectorSidecar({ run: request.measurement.run, repo: request.measurement.repo, configuration: request.measurement.configuration ?? null,
+        sessionRun: request.measurement.session_run ?? null, source: { command: selectorRead.command, base: selectorRead.base, cwd: selectorRead.cwd },
+        content: request.measurement.candidate, raw: selectorRead.raw, plan: selectorRead.plan });
+      const written = persistSelector({ root: request.gate.root, run: request.measurement.run, bytes });
+      selector = { status: 'recorded', file: written.file, sha256: written.sha256, bytes: written.bytes, raw_sha256: selectorRead.raw.sha256 };
+    } catch (error) {
+      selector = { status: 'unavailable', reason: error.message, raw_sha256: selectorRead.raw?.sha256 ?? null };
+      (deps.write || ((text) => process.stdout.write(text)))(`Warning: selector evidence unavailable: ${error.message}\n`);
+    }
+    closeSpan(clock, sidecar);
+  }
+  result = { ...result, phases: phaseLedger({ execution: captured?.execution ?? null,
+    entries: [...(captured ? [captured.selection, captured.tests, ...captured.commands] : []), fingerprint.before, fingerprint.after, sidecar].filter(Boolean) }) };
+  const receipt = gateReceipt({ measurement: request.measurement, before, after, result, started, ended: now(), selector });
   const path = persist({ root: request.gate.root, receipt });
   try { record({ root: request.gate.root, receipt, path }); }
   catch (error) {
@@ -181,6 +256,7 @@ async function executeSessionGate(request, {
   env = process.env, select = selectFiles, tests = realTests, shell = runShell,
   write = (text) => process.stdout.write(text), signal, track = null, complete = null, read = null, outcomes = null, onPhase = () => {}, onProgress = () => {},
   prior = null, settle = settleRed, launched = [],
+  clock = systemClock, spans = { execution: null, selection: null, tests: null, commands: [] }, onSelector = () => {},
 } = {}) {
   const { cwd, flags = [], base = 'origin/main' } = request;
   // The one resolution (`resolveTestPlan`): the declared flags the caller named, and this
@@ -194,8 +270,15 @@ async function executeSessionGate(request, {
     } };
   }
   let selection = { files: request.files || [], commands: [], classes: {} };
+  // What the selector printed, whether or not it was read; `plan` is filled once the run's plan is known.
+  let selectorOut = null;
   if (request.select) {
+    spans.selection = openSpan(clock, 'selection');
     const selected = await select({ command: request.select, cwd, env, signal, say: (line) => write(`${line}\n`), mainOnly: request.mainOnly });
+    closeSpan(clock, spans.selection);
+    selectorOut = { command: request.select, base, cwd, raw: selected.raw ?? null, failure: selected.ok ? null : selected.reason,
+      mainOnlyExcluded: selected.mainOnlyExcluded ?? [], full: selected.full ?? null, plan: null };
+    onSelector(selectorOut);
     if (!selected.ok) {
       write(`Error: selection failed — ${selected.reason}\n`);
       return { ok: false, code: 1, stopped_at: 'selection', deferred: [], coverage: {
@@ -217,6 +300,12 @@ async function executeSessionGate(request, {
     ? sessionFiles(remaining, { times: readTestTimes(request.gate), keep: request.addedTests })
     : { run: remaining, deferred: [] };
   const covered = selected.filter((file) => reusedFiles[file] || files.includes(file));
+  // The normalised execution plan, beside the raw selector output: what this run
+  // selected, added, excluded as main-only, reused, ran and deferred. Not a reason ledger.
+  if (selectorOut) {
+    selectorOut.plan = { selected, added_tests: request.addedTests || [], main_only_excluded: selectorOut.mainOnlyExcluded, full: selectorOut.full,
+      reused_files: Object.keys(reusedFiles), run_files: files, deferred, covered, commands: selection.commands || [], classes: selection.classes || {} };
+  }
   onPhase('selection', false);
   if (deferred.length) write(`deferred, too costly for this partial gate (${deferred.length}; unmeasured): ${deferred.join(' ')}\n`);
   if (!covered.length && !selection.commands?.length) {
@@ -276,6 +365,7 @@ async function executeSessionGate(request, {
 
   const runTests = async () => {
     if (!files.length) return;
+    spans.tests = openSpan(clock, 'tests');
     onPhase('tests', true, files);
     testResult = { exit: null, finished: false, totals: {} };
     progress();
@@ -322,6 +412,7 @@ async function executeSessionGate(request, {
       testResult = { exit: null, finished: false, totals: {}, error: error.message };
       write(`Error: tests threw: ${error.message}\n`);
     } finally {
+      closeSpan(clock, spans.tests);
       onPhase('tests', false, files);
       progress();
     }
@@ -334,6 +425,7 @@ async function executeSessionGate(request, {
       if (signal?.aborted) { code = 1; break; }
       evidence.state = 'running';
       const phase = `command ${command.packageScript}`;
+      spans.commands[index] = openSpan(clock, phase);
       onPhase(phase, true);
       progress();
       try {
@@ -350,6 +442,7 @@ async function executeSessionGate(request, {
         code = 1;
         write(`command ${command.id || command.packageScript}: fail (${error.message})\n`);
       } finally {
+        closeSpan(clock, spans.commands[index]);
         onPhase(phase, false);
         progress();
       }

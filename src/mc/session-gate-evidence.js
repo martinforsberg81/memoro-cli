@@ -1,9 +1,9 @@
 /** Immutable local measurements. A receipt describes checks, not permission to
  * publish or merge. Limited runs never enter the merger's full-selection cache. */
-import { createHash } from 'node:crypto';
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, executionComplete, filesComplete, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
@@ -79,8 +79,49 @@ export function sameContent(a, b) {
     && a.repository === b?.repository && a.tree === b?.tree && a.fingerprint === b?.fingerprint);
 }
 
+/**
+ * The selector's own output for one run, as a versioned sidecar: the exact stdout
+ * bytes (`raw.text`, with their digest), the parsed whole (`parsed`), the source
+ * command, base and cwd, the content it was read on, and the normalised plan the
+ * run executed. Attribution only: nothing here is executed protection, and no
+ * receipt verdict reads it. Refuses to write output that does not parse to its
+ * own parsed content.
+ */
+export function selectorSidecar({ run, repo, configuration = null, sessionRun = null, source, content, raw, plan = null }) {
+  if (typeof raw?.text !== 'string' || JSON.stringify(JSON.parse(raw.text)) !== JSON.stringify(raw.content)) {
+    throw new Error('selector output and its parsed content disagree');
+  }
+  return `${JSON.stringify({
+    schema: 'mc-selector-evidence', version: 1, gate_version: GATE_MEASUREMENT_VERSION, repo, run, session_run: sessionRun, configuration,
+    source: { command: source.command, base: source.base, cwd: source.cwd },
+    content: { repository: content.repository, tree: content.tree, fingerprint: content.fingerprint },
+    raw: { text: raw.text, sha256: hash(raw.text), bytes: Buffer.byteLength(raw.text) },
+    parsed: raw.content, plan,
+  }, null, 2)}\n`;
+}
+
+/**
+ * One run's sidecar, created whole or not at all: written to a temporary file, then
+ * linked under its final name, which fails if anything already holds that name.
+ * Only byte-identical content may be retried; a different one is refused, never
+ * overwritten.
+ */
+export function persistSelectorEvidence({ root, run, bytes }) {
+  if (!/^[a-zA-Z0-9-]+$/u.test(run)) throw new Error('invalid gate run id');
+  const dir = join(root, 'gate-evidence');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${run}.selector.json`);
+  const temp = join(dir, `.${run}.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    writeFileSync(temp, bytes, { flag: 'wx', mode: 0o600 });
+    try { linkSync(temp, path); }
+    catch (error) { if (error.code !== 'EEXIST' || readFileSync(path, 'utf8') !== bytes) throw error; }
+  } finally { rmSync(temp, { force: true }); }
+  return { path, file: basename(path), sha256: hash(bytes), bytes: Buffer.byteLength(bytes) };
+}
+
 /** No running/unknown/empty/partially executed attempt can become green. */
-export function gateReceipt({ measurement, before, after, result, started, ended }) {
+export function gateReceipt({ measurement, before, after, result, started, ended, selector = null }) {
   const coverage = result.coverage || null;
   const execution = result.execution || null;
   const commands = execution?.commands || [];
@@ -105,6 +146,10 @@ export function gateReceipt({ measurement, before, after, result, started, ended
     base: measurement.base, tree: measurement.candidate.tree, fingerprint: measurement.candidate.fingerprint,
     started, ended, outcome, coverage, execution, exit: result.code ?? null,
     stopped_at: result.stopped_at ?? null, members, resumed: result.resumed ?? null,
+    // Optional references, not verdict inputs: the selector sidecar this run wrote
+    // (or why it could not), and the phase intervals (`phaseLedger`). A receipt
+    // without them is as complete as one with them.
+    selector: selector ?? null, phases: result.phases ?? null,
   })));
 }
 
