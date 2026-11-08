@@ -1000,10 +1000,18 @@ describe('MERGES', () => {
       const expanded = drawing(merges, columns, false, true);
       assert.ok(expanded.every((line) => width(line) <= columns));
       assert.match(expanded.join('\n'), /Retry now: mc merge memoro-cli 72/u);
+      assert.doesNotMatch(expanded.join('\n'), /#(?:71|72) +stopped/u,
+        'deferred PRs must not inherit another PR\'s stopped state');
+      assert.match(expanded.join('\n'), /#73 +stopped/u, 'only due unowned work is stopped');
     }
     assert.equal(merges.repos[0].waiting[0].retry.remaining_seconds, 900);
     assert.equal(merges.repos[0].merger_stopped, false, 'deferred-only repo is not reported stopped');
     assert.equal(merges.repos[1].merger_stopped, true, 'mixed repo remains stopped for its due PR');
+    assert.deepEqual(merges.repos[1].waiting.map((item) => ({ pr: item.pr, state: item.state, prs: item.prs })), [
+      { pr: 72, state: 'queued', prs: [{ number: 72, repo: 'memoro-cli', merging: 'queued' }] },
+      { pr: 73, state: 'stopped', prs: [{ number: 73, repo: 'memoro-cli' }] },
+    ], 'JSON state and PR flags follow each item\'s eligibility, not the repository warning');
+    assert.deepEqual(merges.repos[1].prs, merges.repos[1].waiting.flatMap((item) => item.prs));
 
     for (const now of [new Date(deadline), new Date(Date.parse(deadline) + 1)]) {
       const expired = mergesSection({ now, merger: null, queued: [queued[0]] });

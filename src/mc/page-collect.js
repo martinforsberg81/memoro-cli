@@ -647,12 +647,15 @@ export function mergesSection({
       return gridded({ ...item, queue_age_seconds: ageOf(item.queue_since), phase_words: phase },
         'gate', phase === 'landing' ? 'landing' : phase, item.age_seconds ?? null, { merging: 'landing' });
     });
-    // The merger has it — unless there is no merger to have it, and then the
-    // queue is `stopped`.
+    // Due work without a merger is stopped; a future retry keeps its queued
+    // state even when another job makes the repository's warning visible.
     const queuedOwn = own(queuedItems);
     const stopped = !mergerAlive && !active.length && queuedOwn.some((item) => !item.retry);
-    const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : 'queued',
-      item.wait_seconds, stopped ? {} : { merging: 'queued' }));
+    const waiting = queuedOwn.map((item) => {
+      const itemStopped = stopped && !item.retry;
+      return gridded(item, 'wait', itemStopped ? 'stopped' : 'queued',
+        item.wait_seconds, itemStopped ? {} : { merging: 'queued' });
+    });
     const red = own(reds).map((item) => gridded(item, 'red', 'red', item.age_seconds, { merge_red: item.reason || 'red' }));
     const landed = history.filter((round) => String(round.repo || '').replace(/\.git$/u, '') === repo
       && round.phase !== 'start' && round.merged?.length)
