@@ -110,7 +110,7 @@ function build({ branchBreaksSuite = false, standingRed = false, hangingBranch =
     "import { test } from 'node:test';",
     "import assert from 'node:assert/strict';",
     ...(hangingBranch ? ["import { writeFileSync } from 'node:fs';"] : []),
-    `test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`,
+    ...(!hangingBranch ? [`test('the change', () => { assert.equal(1, ${branchBreaksSuite ? 2 : 1}); });`] : []),
     ...(hangingBranch ? ["test('never settles', async () => { writeFileSync(process.env.MC_TEST_HANG_FLAG, ''); await new Promise(() => { setInterval(() => {}, 1000); }); });"] : []),
     '',
   ].join('\n'));
