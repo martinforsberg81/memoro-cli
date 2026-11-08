@@ -9,7 +9,7 @@
  *           [--fill <css>=<text>]… [--eval <js> | --eval-file <path>]…
  *           [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
  *           [--account <name>] [--onboarding] [--me] [--here] [--main]
- *           [--compare <ref>] [--out <file.png>] [--open] [--json]
+ *           [--compare [main|<worktree>]] [--out <file.png>] [--open] [--json]
  *   mc shot <dev|prod> --list
  *   mc shot <dev|prod> <target> --keep [shot flags]
  *   mc shot next [<id>] [step flags] · mc shot close [<id>|--all] · mc shot sessions
@@ -38,7 +38,7 @@ import { deleteSecret, getSecret, setSecret } from '../../lib/keychain.js';
 import { openCommandFor } from '../../lib/device-flow.js';
 import { run as runGit } from '../git.js';
 import { mcHome } from '../paths.js';
-import { runCompare } from '../shot-compare.js';
+import { compareSide, runCompare } from '../shot-compare.js';
 import {
   SESSION_SECRET, SHELLS, THEMES, accessLine, accountTable, actionGap, buildLoginRequest, buildRequest, outPath,
   errorLines, parseActions, parseSafeArea, parseScroll, parseTimeout, parseViewport, predatesWaitFor, readShotDeclaration, reportLines,
@@ -65,10 +65,10 @@ const PLACES = ['dev', 'prod'];
 export const ROUTES = {
   '*': {
     check: (scanned) => refuseShot(scanned)?.error ?? null,
-    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep'],
+    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep', '--compare'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout',
     ],
     repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   },
@@ -112,7 +112,17 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'close') return close(argv.slice(1), io);
   if (argv[0] === 'sessions') return sessions(argv.slice(1), io);
 
-  const scanned = scanArgs(argv, ROUTES['*']);
+  let compareRef = null;
+  const compareArgv = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg !== '--compare') { compareArgv.push(arg); continue; }
+    const value = argv[index + 1];
+    compareRef = !value || value.startsWith('--') ? 'main' : value;
+    if (value && !value.startsWith('--')) index += 1;
+    compareArgv.push(arg);
+  }
+  const scanned = scanArgs(compareArgv, ROUTES['*']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
   const [where, word] = positional;
@@ -183,11 +193,16 @@ export async function run(argv, deps = {}) {
   let serverTiming = null;
   const clock = deps.clock || (() => performance.now());
   let resolved = null;
+  let compareSelection = null;
   const secrets = [];
   if (where === 'dev') {
     // Refused before a server is started, so a wrong name costs no server.
     resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
     if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
+    if (flags.compare) {
+      compareSelection = (deps.compareSide || compareSide)(compareRef || 'main', { env, cwd, hereWorktree: worktree, git: deps.git });
+      if (!compareSelection.ok) { stderr.write(`${compareSelection.error.startsWith('mc:') ? '' : 'mc: '}${compareSelection.error}\n`); return compareSelection.code; }
+    }
     const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
     if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
     baseUrl = app.baseUrl;
@@ -270,7 +285,8 @@ export async function run(argv, deps = {}) {
   if (flags.compare) {
     return runCompare({
       worktree,
-      ref: flags.compare,
+      ref: compareRef || 'main',
+      side: compareSelection,
       declared,
       request,
       signInPath: resolved.path,
@@ -283,7 +299,7 @@ export async function run(argv, deps = {}) {
       stdout,
       stderr,
       openFile: (file) => openFile(file, deps),
-      deps,
+      deps: { ...deps, env, cwd },
     });
   }
   const shotStart = clock();

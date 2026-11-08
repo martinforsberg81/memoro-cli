@@ -28,11 +28,6 @@
  *     holds nothing else, and no process stands in it — and only when a
  *     person runs `mc tidy --apply` (`person`): the runner's daily apply
  *     lists them and removes none.
- *   - (C) `mc shot --compare`'s trees under `~/.memoro/mc/compare/`
- *     (`shot-compare.js`) go when unused for a day — by the directory's
- *     mtime, which `compareTree` touches on every reuse — and no dev server
- *     runs in them, through `git worktree remove` in the repository that
- *     owns each one.
  *   - (I) A planning area's own checkouts (`memoro/`, `memoro-cli/`) go when no
  *     planning session of their programme is running (a foreground `mc plan`, or
  *     a process standing in the programme's directory) and they have been
@@ -114,8 +109,6 @@ export const LIST_KEEP = 30;
  * 72 hours.
  */
 export const PROGRAMME_TRANSCRIPT_KEEP_MS = 72 * 60 * 60 * 1000;
-/** How long a `mc shot --compare` tree is kept after its last use — the day `shot-compare.js` prunes by. */
-export const COMPARE_KEEP_MS = 24 * 60 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -146,7 +139,6 @@ export function tidyRoots(env = process.env) {
     work: join(root, WORK_HOME),
     tidy: join(runner, 'tidy'),
     claude: join(claudeHome(env), 'projects'),
-    compare: join(mcHome(env), 'compare'),
     // The gate's dependency cache, the gate's own directory and the selection state: each holds a directory per repository slug (K).
     gate_cache: workGateCachePath(env),
     gate: workGatePath(env),
@@ -169,7 +161,6 @@ const KIND_ROOT = {
   'plan-goal-worktree': 'plan',
   'work-area': 'work',
   'orphan-step-area': 'step',
-  'compare-worktree': 'compare',
   'gate-cache-slug': 'gate_cache',
   'gate-slug': 'gate',
   'selection-slug': 'selection',
@@ -253,7 +244,7 @@ export function gatherTidyFacts({
   const facts = {
     now, work_root: root, projects_root: roots.claude, roots,
     plan_checkouts: [], plan_worktrees: [], goal_worktrees: [],
-    work_areas: [], step_areas: [], foreign: [], compare_worktrees: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
+    work_areas: [], step_areas: [], foreign: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
     scratch_items: [], generated_files: [], cache_items: [],
   };
 
@@ -333,24 +324,6 @@ export function gatherTidyFacts({
   for (const area of listStepAreas({ root })) {
     if (dirname(area.path) !== roots.step) { facts.step_areas.push({ path: area.path, name: area.name, legacy: true }); continue; }
     facts.step_areas.push(readArea({ path: area.path, name: area.name, legacy: false, worktrees: [], others: [], live: null, bytes: 0 }));
-  }
-
-  // (C) `mc shot --compare`'s trees: last used by the directory's mtime,
-  // which shot-compare touches on reuse; owned by the repository git names.
-  for (const name of listNames(roots.compare)) {
-    const path = join(roots.compare, name);
-    if (!present(join(path, '.git'))) continue;
-    const item = { path, owner: null, last_used_ms: null, live: null, bytes: 0 };
-    facts.compare_worktrees.push(item);
-    try {
-      item.last_used_ms = statSync(path).mtimeMs;
-      const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-      if (!common?.trim()) throw new Error('git could not name the repository that owns it');
-      item.owner = repositoryDir(common.trim());
-      item.live = servers(path).length;
-      if (!compareWorktree(item, now).target) continue;
-      item.bytes = treeBytes(path);
-    } catch (error) { item.error = message(error); }
   }
 
   // (K) The slug directories of the gate, its dependency cache and the selection state. A slug is the hash of a repository's path
@@ -470,7 +443,7 @@ export function gatherTidyFacts({
       const path = line.slice('worktree '.length).trim();
       let real = path;
       try { real = realpathSync(path); } catch { /* retain the listed path when it is gone */ }
-      if (path === repo.path || path.startsWith(`${root}/`) || real.startsWith(`${realRoot}/`) || path.startsWith(`${roots.compare}/`)) continue;
+      if (path === repo.path || path.startsWith(`${root}/`) || real.startsWith(`${realRoot}/`)) continue;
       facts.foreign.push({ path, repo: repo.name });
     }
   }
@@ -990,16 +963,6 @@ export function workArea(item, { person = false, label = 'a retired workarea' } 
   return { target: true, why: `${label}: ${what}` };
 }
 
-/** (C) A compare tree: unused for a day and no dev server in it. */
-export function compareWorktree(item, now) {
-  if (item.error) throw new Error(item.error);
-  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a dev server runs in it');
-  if (item.live) return { target: false, why: `a dev server runs in it (${item.live})` };
-  if (!(item.last_used_ms <= now - COMPARE_KEEP_MS)) return { target: false, why: 'used in the last day' };
-  if (!item.owner) throw new Error('no repository owns it');
-  return { target: true, why: 'a mc shot --compare tree unused for a day, with no dev server' };
-}
-
 /**
  * (K) A slug directory no repository mc knows hashes to: untouched for a day,
  * with no process standing in it. A known slug is never a target.
@@ -1181,12 +1144,6 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
   }
   // (R)
   for (const item of facts.foreign || []) keep(item.path, 'foreign-worktree', `a worktree of ${item.repo} outside ${root}`);
-  // (C)
-  for (const item of facts.compare_worktrees || []) {
-    const verdict = judge(compareWorktree, item, facts.now);
-    if (verdict.target) targets.push({ path: item.path, kind: 'compare-worktree', rule: 'C', why: verdict.why, bytes: item.bytes || 0, owner: item.owner });
-    else keep(item.path, 'C', verdict.why);
-  }
 
   // (K) the slug directories no repository mc knows has, judged as orphanSlug judges them.
   for (const item of facts.cache_slugs || []) {
@@ -1359,7 +1316,6 @@ export function outsideRoots(target, roots) {
     })(),
     'work-area': parent === base,
     'orphan-step-area': parent === base,
-    'compare-worktree': parent === base,
     'gate-cache-slug': parent === base,
     'gate-slug': parent === base,
     'selection-slug': parent === base,
@@ -1414,7 +1370,6 @@ export function applyTidy({
   const keptNow = new Map(fresh.kept.map((item) => [item.path, item]));
   const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
   const workAreas = new Map([...(facts.work_areas || []), ...(facts.step_areas || []).filter((item) => item.worktrees)].map((item) => [item.path, item]));
-  const compares = new Map((facts.compare_worktrees || []).map((item) => [item.path, item]));
   const scratch = new Map((facts.scratch_items || []).map((item) => [item.path, item]));
   const caches = new Map((facts.cache_items || []).map((item) => [item.path, item]));
 
@@ -1502,10 +1457,6 @@ export function applyTidy({
         const refused = (item?.worktrees || []).find((worktree) => !release(worktree.wt));
         if (!item || refused) { applied.push({ path, ok: false, why: `git worktree remove refused${refused ? ` for ${refused.repo}` : ''}` }); continue; }
         remove(path);
-      } else if (target.kind === 'compare-worktree') {
-        // The owner read now, never the one the list file names.
-        const owner = compares.get(path)?.owner;
-        if (!owner || !removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
       } else if (target.kind === 'scratch-worktree') {
         // Retain even an unreferenced replay tip before handing the clean registered tree to git, without --force.
         const item = scratch.get(path);
