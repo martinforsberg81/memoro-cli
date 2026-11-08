@@ -4,14 +4,14 @@
  * Every merge here is a squash: the branch's commits never appear on main,
  * so the SHA count called every landed branch unmerged forever — twelve of
  * fourteen MSR areas read as disorder, and release refused to clean them.
- * Real git throughout: the squash artefact is the subject, not a stub.
+ * Modelled histories protect our content decisions, not git's merge semantics.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 
 import { branchLanded, landedThroughRemote, mergedPullAtTip } from '../../src/mc/branch-landed.js';
 import { directoryInUse, inspectWorkArea, releaseWorkArea, removeWorktree } from '../../src/mc/work-area.js';
@@ -21,28 +21,11 @@ const git = (cwd, args) => execFileSync('git', ['-C', cwd, ...args], {
   env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
 }).trim();
 
-/**
- * Each fixture's git history is built once per file, at load, and every test
- * gets a copy of it on disk: the history is the same for every test, and
- * building it per test cost two seconds of git processes each. The copy is a
- * real repository; the origin URL in its config is pointed at its own copy of
- * the bare origin, so a test's fetch or push never reaches another test's.
- */
-const templates = [];
-after(() => { for (const root of templates) rmSync(root, { recursive: true, force: true }); });
-
-function template(prefix, build) {
+/** Rebuild each small model history: no copied .git directory can share refs. */
+const template = (_prefix, build) => build;
+function copyOf(build, prefix) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  templates.push(root);
   const extra = build(root);
-  return { root, extra };
-}
-
-function copyOf({ root: from, extra }, prefix) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  cpSync(from, root, { recursive: true });
-  const config = join(root, 'repo', '.git', 'config');
-  writeFileSync(config, readFileSync(config, 'utf8').split(from).join(root));
   return { root, repo: join(root, 'repo'), ...extra, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -320,7 +303,7 @@ const buildMended = ({ fetched = false, pullRef = true }) => template('mc-mended
   git(repo, ['fetch', '-q', '--prune', 'origin']);
   return { head };
 });
-// The three variants the tests below use, built at load.
+// The three model-history constructors the tests below use.
 const MENDED = new Map([[true, true], [false, true], [false, false]].map(([fetched, pullRef]) => (
   [`${fetched}/${pullRef}`, buildMended({ fetched, pullRef })])));
 const mended = ({ fetched = false, pullRef = true } = {}) => copyOf(MENDED.get(`${fetched}/${pullRef}`), 'mc-mended-');

@@ -5,7 +5,7 @@
  * under test; a fixture spawns git itself, in forty files and four spellings,
  * so the same model stands in at `node:child_process`: a spawn whose program is
  * git (argv, or a shell line that is one git command) is answered by the model
- * and starts nothing. A file named in `REAL_GIT_FILES` keeps real git.
+ * and starts nothing. No test file is exempt.
  */
 import childProcess from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -46,7 +46,7 @@ function failure(result, args) {
   return error;
 }
 
-/** The model this process answers git from, or null when it keeps real git. */
+/** The model this process answers git from, or null before installation. */
 let installed = null;
 export function fakeGitModel() {
   return installed;

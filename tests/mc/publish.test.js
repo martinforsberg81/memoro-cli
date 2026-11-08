@@ -302,8 +302,8 @@ describe('mc publish', () => {
     assert.deepEqual([out.pushed, out.gh], [[], []]);
   });
 
-  describe('against a real origin/main', () => {
-    // One origin and one clone, real git, built once: `step-x` edits shared.md, which main edits
+  describe('against a modelled origin/main', () => {
+    // One modelled origin and one clone, built once: `step-x` edits shared.md, which main edits
     // later (a conflict once the clone fetches); `step-y` is behind main and edits only other.md.
     let root;
     let workX;

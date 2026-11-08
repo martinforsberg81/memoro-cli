@@ -149,9 +149,14 @@ except its explicit OS check. `directoryInUse` calls
 it cannot replace merge-tree, conflict, patch equivalence, fetch or physical
 worktree/branch removal, nor does `nobody` replace OS process discovery.
 
-**Policy decision remains outside implementation acceptance.**
+**Historical policy finding (superseded 2026-11-08).**
+Martin’s 2026-11-01 no-git/no-exceptions ruling, confirmed by jev on
+2026-11-08, answers this finding: migrate every case with assertions intact.
+The model is not proof of git semantics; the production merge round is.
+The following describes the audit-time policy, not a current exception.
+
 `tests/_isolate-home.mjs` counts real Git calls (including children), installs
-the default model for files outside `tests/_real-git-files.mjs`, and makes an
+the default model for files outside the then-current exception list, and makes an
 off-list real call red on exit. `branch-landed.test.js` is already an exception.
 The list also names git, merger, repo-merge-live, push-guard, asc-build-testflight,
 work-layout, work-area-add, commands/deploy and fake-git tests. Preserve the exact

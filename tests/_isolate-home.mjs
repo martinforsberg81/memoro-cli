@@ -12,13 +12,10 @@
  *
  * Loaded via --import before any test module (see the npm test script).
  */
-import { spawnSync } from 'node:child_process';
 import { accessSync, appendFileSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-import { REAL_GIT_FILES } from './_real-git-files.mjs';
 
 // Four variables a suite inherits isolated: HOME, TMPDIR, MC_HOME and
 // MC_WORK_ROOT. A git identity comes with the home (below), so every commit a
@@ -64,15 +61,11 @@ if (!process.env.MC_HOME) {
 // on origin/main: 64 of 248 test files reach git, 99 % of the suite's measured
 // time, and one autonomy test makes ~380 git processes at ≥47 ms each.
 //
-// So a test file answers git from a repository model (`_fake-git-default.mjs`)
-// and starts none; the files that keep real git are named one by one in
-// `_real-git-files.mjs`, a list that only shrinks. The runner puts a `git`
-// first on PATH that appends `<test file>\t<args>` to its log and runs the real
-// git, or answers from the model where a child has one. What a process spawns
-// inherits PATH, the log and MC_GIT_TEST, so an `mc` or a script a test starts
-// counts against that test's file, and a file off the list that reached git
-// ends red. The runner prints the count to stderr on exit; MC_GIT_CALLS_KEEP
-// names a file to keep the log in.
+// Every test file answers git from the repository model. The runner puts a
+// shim first on PATH so shell children answer from the model too. If a child
+// escapes the model, the shim logs `<test file>\t<args>` before running git,
+// and that file fails by exit code whatever its assertions said. There are
+// no exemptions. MC_GIT_CALLS_KEEP retains the counter log for evidence.
 const testFile = /\.test\.[cm]?js$/u.test(process.argv[1] || '') ? relative(process.cwd(), process.argv[1]) : null;
 if (testFile) process.env.MC_GIT_TEST = testFile;
 if (!process.env.MC_GIT_CALLS) {
@@ -102,10 +95,6 @@ if (!process.env.MC_GIT_CALLS) {
       `exec '${realGit.replace(/'/gu, "'\\''")}' "$@"`,
       '',
     ].join('\n'), { mode: 0o755 });
-    // Run once now, before any test, and before the log is named: on macOS a
-    // freshly written script pays 0.3-0.9 s at its first exec (2026-11-03),
-    // and the first real-git test of a run paid it inside its own time.
-    spawnSync(join(bin, 'git'), ['--version'], { env: { PATH: process.env.PATH || '' }, stdio: 'ignore' });
     writeFileSync(log, '');
     process.env.MC_GIT_CALLS = log;
     process.env.PATH = `${bin}${delimiter}${process.env.PATH || ''}`;
@@ -126,10 +115,10 @@ if (!process.env.MC_GIT_CALLS) {
   }
 }
 
-if (testFile && !REAL_GIT_FILES.has(testFile)) {
+if (testFile) {
   const { installFakeGitDefault } = await import('./_fake-git-default.mjs');
   installFakeGitDefault();
-  // The stop. A file off the list that reached git anyway fails by its own exit
+  // The stop. Any file that reached git anyway fails by its own exit
   // code, whatever its tests said: a new git call is a red, not a slower suite.
   process.prependOnceListener('exit', () => {
     let lines = [];
