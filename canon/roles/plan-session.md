@@ -119,6 +119,10 @@ Yours without asking:
   the goal goes on.
 - The goal's text after a decision: amend goal, contract and criteria with the
   verbs so they say what was decided.
+- A review or build follow-up whose investigation is complete and whose change
+  applies a decided standard (a `docs/technical/` document or the programme's
+  rulings) or repairs a defect against one is written as a goal without asking
+  Martin. What is asked is what `tasks/asking-martin.md` names.
 
 A person opens a plan session to write goals: `mc goal new … --stage draft`
 while the brief is being written, then `mc goal stage <p>/<g> build` when
