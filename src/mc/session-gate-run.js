@@ -194,7 +194,8 @@ export async function runSessionGate(request, {
     }));
     return { ...result, members: { files, commands } };
   };
-  if (!request.fresh) {
+  // A `--command` request reuses nothing, as `--fresh` does: it is a reviewer's own measurement.
+  if (!request.fresh && !request.commands) {
     try { prior = findResumable({ root: request.gate?.root, measurement: request.measurement, flags: request.flags || [], pattern: request.pattern ?? null }); }
     catch { /* nothing to resume from: the whole selection runs */ }
   }
@@ -290,7 +291,21 @@ async function executeSessionGate(request, {
     }
     selection = request.files ? { ...selection, classes: selected.classes || {} } : selected;
   }
-  const selected = [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
+  const requestedCommand = request.commands?.[0];
+  const knownCommands = selection.commands || [];
+  const selectedCommandsForRequest = request.commands
+    ? knownCommands.filter((command) => (command.id ?? command.packageScript) === requestedCommand)
+    : knownCommands;
+  if (request.commands && !selectedCommandsForRequest.length) {
+    const named = knownCommands.map((command) => command.id ?? command.packageScript);
+    const message = `Error: no command gate ${requestedCommand} in this change's selection — the selector named: ${named.length ? named.join(', ') : 'none'}`;
+    write(`${message}\n`);
+    return { ok: false, code: 2, stopped_at: 'no-command', deferred: [], coverage: {
+      kind: 'named', files: [], commands: [], flags: [...plan.flags], execution: identity,
+      pattern: request.pattern ?? null, selector: request.select ?? null,
+    } };
+  }
+  const selected = request.commands ? [] : [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
   if (selected.some((file) => !/\.test\.[cm]?[jt]s$/u.test(file) || resolve(cwd, file) === resolve(cwd) || !resolve(cwd, file).startsWith(`${resolve(cwd)}/`))) {
     write('Error: selector named a test outside the worktree or a non-test file\n');
     return { ok: false, code: 1, stopped_at: 'selection' };
@@ -318,7 +333,7 @@ async function executeSessionGate(request, {
       flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
     } };
   }
-  const selectedCommands = selection.commands || [];
+  const selectedCommands = selectedCommandsForRequest;
   let code = 0;
   let details = [];
   let testResult = null;
@@ -351,7 +366,7 @@ async function executeSessionGate(request, {
   // Every passed test over the slow-test indicator (`slowTests`): named in the verdict, never its red.
   const reusedSlow = Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || []).map((test) => ({ ...test, file })));
   let slow = slowTests(reusedSlow);
-  const coverage = { kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
+  const coverage = { kind: request.files || request.commands ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
     flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null };
   const snapshot = () => {
     const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
@@ -361,7 +376,7 @@ async function executeSessionGate(request, {
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
       ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed, slow_tests: slow,
       coverage, execution: { tests: testResult && { ...testResult, batches: [...launched] }, commands }, resumed,
-      ...(settled && (settled.alone.length || settled.main.length) ? { settled: { alone: settled.alone, main: settled.main, base: settled.base, red: settled.red } } : {}) };
+      ...(settled && (settled.alone.length || settled.main.length || settled.commands_alone?.length) ? { settled: { alone: settled.alone, main: settled.main, ...(settled.commands_alone?.length ? { commands_alone: settled.commands_alone } : {}), base: settled.base, red: settled.red } } : {}) };
   };
   const progress = () => onProgress(snapshot());
   progress();
@@ -420,10 +435,13 @@ async function executeSessionGate(request, {
       progress();
     }
   };
+  // The commands cut by their timeout, killed by a signal, or whose shell threw: red, and not run again.
+  const cut = new Set();
   const runCommands = async () => {
     for (let index = 0; index < selectedCommands.length; index++) {
       const command = selectedCommands[index];
       const evidence = commands[index];
+      const id = command.id || command.packageScript;
       if (evidence.state === 'reused') continue;
       if (signal?.aborted) { code = 1; break; }
       evidence.state = 'running';
@@ -436,14 +454,20 @@ async function executeSessionGate(request, {
         write(`${result.stdout || ''}${result.stderr || ''}`);
         const unavailable = !result.error && !result.signal && command.unavailableExitCode != null && result.status === command.unavailableExitCode;
         const ok = !result.error && !result.signal && result.status === 0;
+        // Cut by its timeout, killed or unable to start: it stays red and is never run again (`commandsAlone`).
+        if (result.error || result.signal) cut.add(index);
         Object.assign(evidence, { exit: result.status ?? null, ok, state: unavailable ? 'unavailable' : 'completed',
           ...(unavailable ? { unavailable: true } : {}), ...(result.error ? { error: result.error.code || result.error.message } : {}) });
-        write(`command ${command.id || command.packageScript}: ${unavailable ? `unavailable (exit ${result.status})` : ok ? 'pass' : 'fail'}\n`);
-        if (!ok && !unavailable) code = 1;
+        if (unavailable) write(`command ${id}: unavailable (exit ${result.status})\n`);
+        else if (ok) write(`command ${id}: pass\n`);
+        // A red in the round is no failure line yet: `summarizeGate` reads `command <id>: fail` as one.
+        else if (request.commands || result.error || result.signal) { code = 1; write(`command ${id}: fail\n`); }
+        else write(`command ${id}: red in the round (exit ${result.status}) — runs alone once when the round is over\n`);
       } catch (error) {
         Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
+        cut.add(index);
         code = 1;
-        write(`command ${command.id || command.packageScript}: fail (${error.message})\n`);
+        write(`command ${id}: fail (${error.message})\n`);
       } finally {
         closeSpan(clock, spans.commands[index]);
         onPhase(phase, false);
@@ -452,6 +476,34 @@ async function executeSessionGate(request, {
     }
   };
   await Promise.all([runTests(), runCommands()]);
+  // Each ordinary red command runs once more alone, one at a time, with nothing else of this gate
+  // beside it. `--command` has no round beside it, so its red is red at once.
+  const commandsAlone = [];
+  if (!request.commands && !signal?.aborted) {
+    for (let index = 0; index < selectedCommands.length; index++) {
+      const command = selectedCommands[index];
+      const evidence = commands[index];
+      const id = command.id || command.packageScript;
+      if (evidence.state !== 'completed' || evidence.ok || evidence.unavailable || evidence.error || cut.has(index)) continue;
+      if (signal?.aborted) { code = 1; break; }
+      evidence.state = 'running';
+      progress();
+      try {
+        const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
+        write(`${result.stdout || ''}${result.stderr || ''}`);
+        const ok = !result.error && !result.signal && result.status === 0;
+        Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(ok ? { settled: 'alone' } : {}) });
+        if (ok) { commandsAlone.push(id); write(`command ${id}: pass (green alone — red in the round under load)\n`); }
+        else { code = 1; write(`command ${id}: fail (red alone too, exit ${result.status})\n`); }
+      } catch (error) {
+        Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
+        code = 1;
+        write(`command ${id}: fail (${error.message})\n`);
+      }
+      progress();
+    }
+  }
+  if (commandsAlone.length) settled = { ...(settled || { alone: [], main: [], base: null, red: [] }), commands_alone: commandsAlone };
   if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
   return snapshot();
 }

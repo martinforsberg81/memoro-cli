@@ -8,6 +8,7 @@
  *   mc gate --base <ref>      … against another base
  *   mc gate --whole-selection run the complete affected selection without cost deferral
  *   mc gate --fresh           run the whole request again, reusing nothing from earlier attempts
+ *   mc gate --command <id>    one command gate of this change's selection, alone, reusing nothing
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
  *   mc gate --wait            wait for the gate running here and print its verdict
@@ -111,7 +112,7 @@ export function gateOwner(cwd, env = process.env, io = SYSTEM) {
 }
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--json', '--wait', '--full', '--whole-selection', '--fresh'], strictValues: ['--base', '--budget', '--test-name-pattern'] } };
+export const ROUTES = { '': { booleans: ['--json', '--wait', '--full', '--whole-selection', '--fresh'], strictValues: ['--base', '--budget', '--test-name-pattern', '--command'] } };
 ROUTES['*'] = ROUTES[''];
 
 export async function run(argv, deps = {}) {
@@ -128,6 +129,11 @@ export async function run(argv, deps = {}) {
   }
   const named = scanned.positional;
   const pattern = scanned.flags['test-name-pattern'];
+  const commandId = scanned.flags.command;
+  if (commandId != null && named.length) { stderr.write(`mc: --command runs one command gate of the selection and takes no test files\n${usage()}`); return 2; }
+  if (commandId != null && scanned.flags.wait) { stderr.write(`mc: --command cannot be combined with --wait\n${usage()}`); return 2; }
+  if (commandId != null && scanned.flags['whole-selection']) { stderr.write(`mc: --command cannot be combined with --whole-selection\n${usage()}`); return 2; }
+  if (commandId != null && pattern != null) { stderr.write(`mc: --command cannot be combined with --test-name-pattern\n${usage()}`); return 2; }
   if (scanned.flags['whole-selection'] && named.length) {
     stderr.write(`mc: --whole-selection runs the affected selector and takes no named files\n${usage()}`); return 2;
   }
@@ -211,7 +217,7 @@ export async function run(argv, deps = {}) {
     if (declaration?.select) select = selectorCommand(declaration.select, { base, changed: files });
   }
   const configuration = gateConfiguration(declaration, effectiveFlags, executionIdentity(plan));
-  const command = files.length ? namedCommand(manifest, files, { pattern, flags })
+  const command = commandId != null ? { run: `command gate ${commandId} against ${baseRef}`, source: 'selection' } : files.length ? namedCommand(manifest, files, { pattern, flags })
     : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
   // The test files this change adds or changes, with the changed lines of each: the tests
   // among them are timed in the verdict (`touchedTests`). Nothing here decides the verdict.
@@ -249,9 +255,9 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: files.length ? files : null, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: declaration?.main_only ?? [],
+      io.write(requestPath, JSON.stringify({ cwd: root, files: commandId != null ? null : files.length ? files : null, commands: commandId != null ? [commandId] : undefined, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: declaration?.main_only ?? [],
         round_timeout_ms: declaration?.round_timeout_ms ?? null,
-        log: logPath, fresh: Boolean(scanned.flags.fresh), defer: !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
+        log: logPath, fresh: commandId != null || Boolean(scanned.flags.fresh), defer: commandId == null && !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
           session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));
       const fd = io.open(logPath);
@@ -329,14 +335,15 @@ export function stallGuardOf(test) {
 
 /**
  * What the gate settled before calling a red the change's (`gate-settle.js`):
- * `SETTLED — green alone: …; red on main <sha> too, untouched: …`; null when nothing was.
+ * `SETTLED — green alone: …; command gates green alone: …`; null when nothing was.
  * The counts above it are the round's own, failures included: this line is why it is green.
  */
 export function settledLine(result) {
   const settled = result?.settled;
-  if (!settled || (!settled.alone?.length && !settled.main?.length)) return null;
+  if (!settled || (!settled.alone?.length && !settled.main?.length && !settled.commands_alone?.length)) return null;
   const parts = [];
   if (settled.alone?.length) parts.push(`green alone (red in the round under load): ${settled.alone.join(' ')}`);
+  if (settled.commands_alone?.length) parts.push(`command gates green alone (red in the round under load): ${settled.commands_alone.join(' ')}`);
   if (settled.main?.length) parts.push(`red on main ${String(settled.base || '').slice(0, 7)} too, untouched by this change: ${settled.main.join(' ')}`);
   if (settled.red?.length) parts.push(`still red: ${settled.red.join(' ')}`);
   return `SETTLED — ${parts.join('; ')}`;

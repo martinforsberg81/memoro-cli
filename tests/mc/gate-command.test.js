@@ -143,6 +143,30 @@ describe('mc gate <test files…>', () => {
     }
   });
 
+  it('--command refuses named files, --wait, --whole-selection and a name pattern before starting, with the usage', async () => {
+    for (const [args, explanation] of [
+      [['--command', 'lint', 'a.test.js'], /takes no test files/u],
+      [['--command', 'lint', '--wait'], /cannot be combined with --wait/u],
+      [['--command', 'lint', '--whole-selection'], /cannot be combined with --whole-selection/u],
+      [['--command', 'lint', '--test-name-pattern', 'one'], /cannot be combined with --test-name-pattern/u],
+    ]) {
+      const h = harness({ tests: ['a.test.js'], changed: ['implementation.js'] });
+      assert.equal(await run(args, h.deps), 2);
+      assert.match(h.out.stderr, explanation);
+      assert.match(h.out.stderr, /mc gate --command <id>/u);
+      assert.deepEqual(h.out.spawned, []);
+    }
+  });
+
+  it('--command <id> asks the worker for that one command gate: no files, fresh, undeferred', async () => {
+    const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+    assert.equal(await run(['--command', 'lint'], h.deps), 0);
+    const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+    assert.deepEqual({ files: request.files, commands: request.commands, fresh: request.fresh, defer: request.defer },
+      { files: null, commands: ['lint'], fresh: true, defer: false });
+    assert.match(h.out.stdout, /command gate lint against origin\/main/u);
+  });
+
   it('a repository that declares session_whole leaves nothing to the merge round', async () => {
     const out = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     const declaration = out.deps.declaration;
