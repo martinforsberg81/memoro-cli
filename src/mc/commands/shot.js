@@ -65,10 +65,10 @@ const PLACES = ['dev', 'prod'];
 export const ROUTES = {
   '*': {
     check: (scanned) => refuseShot(scanned)?.error ?? null,
-    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep'],
+    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep', '--compare'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--compare', '--timeout',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout',
     ],
     repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   },
@@ -83,7 +83,7 @@ export const ROUTES = {
 function refuseShot({ flags, positional }) {
   const [where, , ...extra] = positional;
   if (!PLACES.includes(where)) return { error: `mc shot takes dev or prod first${where ? `, not ${where}` : ''}`, usage: true };
-  if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
+  if (extra.length && !(flags.compare && extra.length === 1)) return { error: `one target at a time (${extra.join(' ')} is extra)` };
   if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
   if (flags.here && where === 'prod') return { error: '--here is for dev — production has one app, not one per worktree' };
   if (flags.main && flags.here) return { error: '--main and --here name two trees — give one' };
@@ -112,7 +112,16 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'close') return close(argv.slice(1), io);
   if (argv[0] === 'sessions') return sessions(argv.slice(1), io);
 
-  const compareArgv = argv.flatMap((arg, index) => arg === '--compare' && (!argv[index + 1] || argv[index + 1].startsWith('--')) ? [arg, 'main'] : [arg]);
+  let compareRef = null;
+  const compareArgv = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg !== '--compare') { compareArgv.push(arg); continue; }
+    const value = argv[index + 1];
+    compareRef = !value || value.startsWith('--') ? 'main' : value;
+    if (value && !value.startsWith('--')) index += 1;
+    compareArgv.push(arg);
+  }
   const scanned = scanArgs(compareArgv, ROUTES['*']);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   const { flags, positional } = scanned;
@@ -191,7 +200,7 @@ export async function run(argv, deps = {}) {
     resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
     if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
     if (flags.compare) {
-      compareSelection = (deps.compareSide || compareSide)(flags.compare, { env, cwd, git: deps.git });
+      compareSelection = (deps.compareSide || compareSide)(compareRef || 'main', { env, cwd, git: deps.git });
       if (!compareSelection.ok) { stderr.write(`mc: ${compareSelection.error}\n`); return compareSelection.code; }
     }
     const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
@@ -276,7 +285,7 @@ export async function run(argv, deps = {}) {
   if (flags.compare) {
     return runCompare({
       worktree,
-      ref: flags.compare,
+      ref: compareRef || 'main',
       side: compareSelection,
       declared,
       request,

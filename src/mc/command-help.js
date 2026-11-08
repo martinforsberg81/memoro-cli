@@ -276,7 +276,7 @@ export const COMMAND_USAGE = Object.freeze({
     "          [--me]                      prod only: signed in as you, from mc shot login prod\n",
     "          [--here]                    dev only: the worktree you stand in (default in a memoro worktree)\n",
     "          [--main]                    dev only: the shared checkout's main server, from any worktree — how it is now\n",
-    "          [--compare [main|<worktree>]] dev only: compare with MAIN or an existing worktree\n",
+    "          [--compare [main|<worktree>]]  dev only: compare with MAIN or an existing worktree\n",
     "",
     "          [--keep]                    keep the browser open for mc shot next\n",
     "          [--out <file.png>] [--open] [--json]\n",
