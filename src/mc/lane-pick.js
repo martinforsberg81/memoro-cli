@@ -3,7 +3,7 @@
  *
  * `run.js`'s `nextWork` supplies only startable goal sessions today:
  *
- * - `mend` for a blocked goal in any stage, and for a goal in merge after a red;
+ * - `mend` only for an unqueued merge failure;
  * - `finish` for a goal in finish;
  * - `review` for a goal in review;
  * - `build` for a goal in build.
@@ -16,8 +16,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * A mend of a blocked goal goes first, then finish and the mend of a red
- * merge, then review, then build. Within the earliest runnable rank, repository fairness reserves a
+ * A merge-failure mend goes first, then finish, review, then build. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -26,9 +25,8 @@
  */
 
 /**
- * Finish work already started before commissioning more: a mend of a blocked
- * goal first, then a finish or a mend of a red merge, then reviews, then
- * builds. Eligibility is the caller's.
+ * Finish work already started before commissioning more: merge-failure mend,
+ * then finish, reviews, then builds. Eligibility is the caller's.
  */
 function rankOf(item) {
   if (item.goal?.status === 'blocked') return 0;

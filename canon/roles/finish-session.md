@@ -38,28 +38,21 @@ the goal anywhere but `merge`, and never back.
 
 **Exits, exactly one:**
 
-- `mc goal stage merge` — finished, published, every criterion met, gate
+- `mc goal stage merge` — finished, published, every criterion met and gate
   green. The normal end.
-- `mc goal blocked --reason "…"` — an obstacle you cannot resolve within the
-  goal as written (a tool or fixture that fails, a dependency not landed, an
-  environment you cannot reach): the precise obstacle, what you tried, and
-  what would clear it. A mend session takes it.
-- `mc goal martin` — finishing needs a change to the goal, its contract or
-  the product scope, or an act reserved for Martin (`mc deploy`, production
-  data, credentials, `--admin`): the question, the options, what you tried as
-  evidence, and your recommendation.
-  Call `mc goal martin --reason "<the question>" --option "<key>: <text>"
-  --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
-  <repo>/<path>]` (2 to 4 options; `--reserved <act>` for a reserved act, which
-  goes straight to Martin). jev reads the question first: when it prints `mc:
-  jev answered <key> … — continue with: <text>`, the goal stays yours —
-  continue with that answer and end in one of the other exits. Otherwise the
-  goal is `Martin` and nothing starts until he answers. A call mc refuses says
-  what is wrong and how to call again.
+- For an in-scope acceptance obstacle, repair it yourself. If recovery cannot
+  continue in this role, set Martin with the obstacle and evidence; never route
+  pre-merge work through mend.
+- `mc ask` — for a genuine unresolved design choice or reserved act. Read
+  standards and programme design first; submit evidence, alternatives/tradeoffs,
+  recommendation and proposed normative wording/destination. An accepted jev
+  answer continues in this session; otherwise the goal waits directly on
+  Martin. Compatible `mc goal martin` also works. Call with 2–4 options and
+  `--reserved <act>` when needed; invalid calls say what to correct.
 
-Then end the session, in that same turn. A finish session that ends with the
-goal still `finish · ready` is set `finish · blocked` by the runner, and a
-mend session reads why.
+
+
+Then end the session, in that same turn. A finish session that ends with the goal still `finish · ready` is set directly to `finish · Martin` by the runner; no mend session is launched.
 
 **Every finish.** Work in the goal's worktree on its branch as it is: never
 `git fetch` and merge `origin/main` to keep up; the merger brings the

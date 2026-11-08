@@ -30,14 +30,9 @@ with or without a goal, as decision support. An interactive session always
 asks jev before it puts a question with options to Martin in chat: when jev
 settles it, the session continues with jev's answer and names it in its
 account; otherwise Martin gets the question with its options, the session's
-recommendation and jev's reading. A goal's question goes through
-`mc goal martin`, which asks jev itself. A build or review session may ask
-jev about a question it believes the goal settles; a non-answer leaves it to
-block as its role says. Reserved acts never go to jev, from any session.
+recommendation and jev's reading. A goal-bound `mc ask` or compatible `mc goal martin` call makes one jev consultation. An answer leaves stage/status unchanged, appends the trace and continues. A valid unanswered, reserved or unavailable result stores the sanitized question/options/recommendation/evidence/reading and sets that goal directly to Martin; it must not trigger another jev request or mend hop. Build, review and finish use this path for a remaining design choice or reserved act; acceptance obstacles are repaired in-role. Reserved acts never go to jev, from any session.
 
-The verb for a question outside `mc goal martin` is `mc ask`, built by goal
-`jev/ask-anywhere`; it is the executable route for this rule. `mc goal martin`
-from a caller with `MC_TOOL` unset still skips jev (*The flow*, step 1).
+`mc ask` is the general route and the single-pass goal-bound escalation path (landed, `jev/ask-anywhere`); `mc goal martin` remains compatible with it and needs no mend caller. A person caller of `mc goal martin` (`MC_TOOL` unset) still skips jev (*The flow*, step 1).
 
 ## `mc ask`
 
@@ -49,8 +44,7 @@ mc ask [<programme>/<goal>] --reason "<the question>" \
 ```
 
 It uses the same validation, request, thresholds and ledger as `mc goal martin`,
-but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. It
-never changes goal state. A named goal (or `MC_GOAL`) supplies exactly the
+but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. For a goal-bound valid unresolved question it sets that goal Martin after logging evidence; answered calls leave stage/status unchanged. A no-goal call changes no goal. A named goal (or `MC_GOAL`) supplies exactly the
 `jevContext` state of `mc goal martin`. Without a goal, programme context is
 `MC_PROGRAMME`, otherwise the programme containing the working directory under
 `~/mc/programs/`; its README and repository planning-worktree rulings are sent,
@@ -61,25 +55,7 @@ the goal-bound instruction texts remain unchanged.
 Answered calls exit 0 and say `mc: jev answered … — continue with: …`. A miss,
 unavailable request or residual over-budget state exits 1; reserved acts exit 1
 with Martin's decision message. A malformed call exits 2. An answered call with
-a named goal appends the same kind of LOG.md entry as `mc goal martin`; other
-calls do not change a goal.
-
-## Who asks jev
-
-Martin, 2026-11-08: jev is asked from any session, interactive or headless,
-with or without a goal, as decision support. An interactive session always
-asks jev before it puts a question with options to Martin in chat: when jev
-settles it, the session continues with jev's answer and names it in its
-account; otherwise Martin gets the question with its options, the session's
-recommendation and jev's reading. A goal's question goes through
-`mc goal martin`, which asks jev itself. A build or review session may ask
-jev about a question it believes the goal settles; a non-answer leaves it to
-block as its role says. Reserved acts never go to jev, from any session.
-
-The verb for a question outside `mc goal martin` is `mc ask`, built by goal
-`jev/ask-anywhere`; until it lands, this rule is not yet executable and
-`mc goal martin` from a caller with `MC_TOOL` unset still skips jev (*The
-flow*, step 1).
+a named goal appends the same kind of LOG.md entry as `mc goal martin`; a valid unresolved goal-bound call changes only that goal status to Martin and appends the escalation trace; invalid calls change neither goal nor ledger. No-goal calls do not change a goal.
 
 ## The call
 
@@ -109,8 +85,7 @@ to call again (Martin's decision: options are required, and a call without
 them is answered with how to call it correctly). `mc goal log --status Martin`
 is refused the same way, pointing at `mc goal martin`.
 
-Who may set `Martin` is unchanged (`refusedMove`): plan, finish, mend and a
-person; a build or review session is refused before jev is asked. The
+Build, review, finish, mend and plan may set Martin within their role bounds; build/review retain stage and brief mutation restrictions. Goal-bound mc ask is a single consultation and direct escalation path. The
 runner's own recovery settings of `Martin` (`src/mc/run.js`) do not go
 through the verb and never ask jev.
 

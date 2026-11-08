@@ -292,6 +292,7 @@ function logEntry(args, fields, ctx) {
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot change ${target.name}\n`); return 2; }
   if (fields.stage !== null && !STAGES.includes(fields.stage)) { stderr.write(`mc: stage is ${STAGES.join(', ')}, not ${fields.stage}\n`); return 2; }
   if (fields.status !== null && !STATUSES.includes(fields.status)) { stderr.write(`mc: status is ${STATUSES.join(', ')}, not ${fields.status}\n`); return 2; }
   if ([fields.done, fields.comment, fields.next, fields.stage, fields.status].every((value) => value === null || value === undefined)) {
@@ -389,6 +390,8 @@ async function askMartin(args, flags, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
+  if (FINISHED.includes(goal.stage)) { stderr.write(`mc: ${target.name} is ${goal.stage} — a finished goal cannot be asked or changed\n`); return 1; }
+  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot ask for ${target.name}\n`); return 2; }
   const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env, dir: target.dir });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
 
@@ -1053,12 +1056,13 @@ function goalNamed(arg, { env, home }) {
  * forward move: it writes goals, finishes them and drops them
  * (`canon/roles/plan-session.md`). A finish session moves a goal in `finish`
  * to `merge`, and sets `blocked` or `Martin` (`canon/roles/finish-session.md`).
- * A mend session sets `ready`, `blocked` or `Martin` and requeues a goal in
- * `merge` with `mc goal stage merge`; it moves no stage
+ * A merge-only mend session sets a status and requeues a goal in `merge` with
+ * `mc goal stage merge`; it moves no stage
  * (`canon/roles/mend-session.md`). A review session moves a goal in `review`
  * to `merge` (OK) or `finish` (not OK, REVIEW.md written first), and sets no
  * status. A build session moves `build` to `review` or sets `blocked`,
- * nothing else.
+ * nothing else; build and review may also set Martin for an actual unresolved
+ * decision or reserved act.
  */
 export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
   if (!isSession(env)) return null;
@@ -1066,19 +1070,24 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
   if ([PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return null;
   if (env.MC_ROLE === FINISH_ROLE) {
-    if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked (a mend session takes it) or Martin, not ${status}`;
+    if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked or Martin, not ${status}`;
     if (!moves) return null;
     if (from !== 'finish') return `a finish session moves only a goal in finish, and this one is ${from}`;
     if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is Martin's (mc goal martin --reason "…" --option "<key>: <text>"… --recommend <key>)`;
     return null;
   }
   if (env.MC_ROLE === MEND_ROLE) {
+    if (from !== 'merge') return `a mend session is only for merge failures, and this goal is in ${from}`;
     if (moves) return `a mend session moves no stage (${from} → ${to}): it retries the stage with mc goal ready, or requeues merge with mc goal stage merge; a goal to move is Martin's`;
     return null;
   }
-  if (status === 'Martin') return 'only plan, finish, mend or a person sets Martin — set blocked for a mend session';
+  if (status === 'Martin') {
+    const expected = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'merge' }[env.MC_ROLE];
+    if (expected && from !== expected) return `${env.MC_ROLE} cannot set Martin for a goal in ${from}`;
+    if (!expected && ![PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return 'only build, review, finish, mend, plan or a person sets Martin';
+  }
   if (env.MC_ROLE === REVIEW_ROLE) {
-    if (status !== null && status !== 'blocked') return 'a review sets no status — it ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
+    if (status !== null && status !== 'blocked' && status !== 'Martin') return 'a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
     if (!moves) return null;
     if (from !== 'review') return `a review moves only a goal in review, and this one is ${from}`;
     if (to !== 'merge' && to !== 'finish') return `a review ends in merge or finish, not ${to}`;
@@ -1088,7 +1097,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   if (to === 'done') return 'a session does not set done — move it to review; the merger sets done when the pull request lands';
   if (to === 'dropped') return 'only plan or a person drops a goal — set it blocked with the question';
   if (moves && !(from === 'build' && to === 'review')) return `a build session moves a goal only from build to review, not ${from} → ${to}`;
-  if (status === 'ready') return 'a build session does not set a goal ready — a mend session or a person does';
+  if (status === 'ready') return 'a build session does not set a goal ready — a person does';
   return null;
 }
 

@@ -4,8 +4,7 @@
  * The runner starts goal sessions: a free lane takes the next goal that could
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
  * session on an open goal, a review session on a goal in review, a finish
- * session on a goal in finish, or the mend session a blocked goal or a red
- * merge wakes — runs it, and picks again. One session is one fresh headless
+ * session on a goal in finish, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
  * process in the goal's worktree. The runner never starts a plan session:
  * plan is interactive, `mc plan` (Martin, 2026-11-07). The runner decides
  * nothing with a model: it reads files, runs git and gh, starts the session
@@ -1312,9 +1311,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The goals a lane could start now, as `pickWork` candidates: those the
-   * runner starts a session on (`goalSession`: `build · ready`, `review ·
-   * ready`, `finish · ready`, every `blocked` goal, and `merge · ready` after a red while its pull
-   * request is out of the merger's line), on one of `repos` (its first repository),
+    * runner starts a session on (`goalSession`: `build · ready`, `review ·
+    * ready`, `finish · ready`, `merge · blocked` when unqueued, and `merge ·
+    * ready` after a red while its pull request is out of the merger's line), on
+    * one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
    * is on the way to writing one — and, for a review, with a model it may run
    * on (`reviewRoute`). A review that cannot run now is left out, so it does
@@ -1338,7 +1338,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return !why;
     };
     const merge = inLine(deps.pendingMerges ? deps.pendingMerges(root) : []);
-    const all = goals();
+    let all = goals();
+    // Reconcile legacy pre-merge blocks without a diagnostic session. Their
+    // existing obstacle and evidence remain in prior entries.
+    for (const goal of all) {
+      if (!goal.problems.length && goal.status === 'blocked' && goal.stage !== 'merge') {
+        goalState(goal, goalName(goal), { status: 'Martin' }, {
+          comment: `legacy ${goal.stage} · blocked reconciled to Martin; existing obstacle and evidence are retained above — no pre-merge mend is started`,
+        });
+      }
+    }
+    all = goals();
     return all
       .filter((goal) => goalSession(goal, merge) !== null
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
@@ -1354,12 +1364,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The session a goal gets (`goalSession`): `mend` when blocked or in merge,
+   * The session a goal gets (`goalSession`): `mend` only for unqueued merge failures,
    * `review` in review, `finish` in finish, else `build`. Only a candidate of
    * `goalWork` comes here, so the merger's line is not asked again.
    */
   function goalKind(goal) {
-    if (goal.status === 'blocked' || goal.stage === 'merge') return 'mend';
+    if (goal.stage === 'merge') return 'mend';
     if (goal.stage === 'review') return 'review';
     return goal.stage === 'finish' ? 'finish' : 'build';
   }
@@ -1513,7 +1523,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `finish`; the runner reads neither its words nor any file. A review that
    * ended with the goal still in `review` died (a crash, a limit): the goal
    * stays `review · ready` with the runner's entry, and the next review runs;
-   * a second that dies in the same `review` sets `review · blocked`.
+   * a second that dies in the same `review` waits directly on Martin.
    */
   function afterReview(goal, name) {
     const now = stateNow(goal);
@@ -1524,7 +1534,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const dirty = dirtyWorktrees(goal);
     const left = dirty.length ? `; worktree not clean — ${dirtySentence(dirty)}` : '';
     if (reviewDiedBefore(log)) {
-      goalState(goal, name, { status: 'blocked' }, { comment: `${REVIEW_DIED_TEXT}, a second time — a mend session takes it${left}` });
+      goalState(goal, name, { status: 'Martin' }, { comment: `${REVIEW_DIED_TEXT}, a second time — review recovery cannot continue${left}` });
       return;
     }
     goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again${left}` });
@@ -1532,33 +1542,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * After a finish session (`canon/roles/finish-session.md`). It publishes
-   * and moves the goal to `merge`, or sets it `blocked` (a mend session takes
-   * it) or `Martin`; the runner adds nothing then. One that ends with the goal
-   * still `finish · ready` sets it `finish · blocked`, so no second finish
-   * starts on the same evidence: a mend session reads why it ended.
+   * and moves the goal to `merge`, or sets it `Martin`; the runner adds nothing
+   * then. One that ends with the goal still `finish · ready` waits directly on
+   * Martin because recovery cannot continue in the finish role.
    */
   function afterFinish(goal, name) {
     const now = stateNow(goal);
     if (now.stage !== 'finish' || now.status !== 'ready') { say(`${name}: finish left it ${now.stage} · ${now.status}`); return; }
-    goalState(goal, name, { status: 'blocked' }, { comment: 'the finish session ended with the goal still in finish — a mend session takes it' });
+    goalState(goal, name, { status: 'Martin' }, { comment: 'the finish session ended with the goal still in finish — finish recovery cannot continue' });
   }
 
   /**
-   * After a mend session (`canon/roles/mend-session.md`) on a goal blocked in
-   * `stage`, or in `merge` after a red. Outside merge it resolves the obstacle
-   * and sets the goal ready, so the stage runs again; one that leaves it
-   * blocked sets `Martin` (the recovery guard: no retry loop). In `merge` it
-   * queues the pull request again: one in the merger's line gets the runner's
+    * After a mend session (`canon/roles/mend-session.md`) on a merge failure.
+    * It queues the pull request again: one in the merger's line gets the runner's
    * entry (the red is taken, so it wakes no session again); one not in line
    * sets `Martin` when the goal was blocked, else `merge · blocked` for one
    * mend session (a legacy `merge · ready` red, `mergeRetryDue`).
    */
   function afterMend(goal, name, { stage, status }) {
     const now = stateNow(goal);
-    if (now.stage === stage && stage !== 'merge' && now.status === 'ready') {
-      say(`${name}: mend resolved the obstacle; retry ${stage}`);
-      return;
-    }
     if (now.stage === stage && now.status === 'blocked') {
       goalState(goal, name, { status: 'Martin' }, { comment: 'mend left the obstacle unresolved; Martin needs to inspect LOG.md and the session log' });
       return;
@@ -1707,7 +1709,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A review starts on a clean tree only: a dirty one holds a fault or work nobody has judged (a dead review's fault replay was left there, 2026-11-06).
       const dirty = review ? dirtyWorktrees(goal) : [];
       if (dirty.length) {
-        goalState(goal, name, { status: 'blocked' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; a mend session inspects it` });
+        goalState(goal, name, { status: 'Martin' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; review recovery cannot safely continue` });
         return 'skipped:dirty';
       }
       // A goal's branch is made when it can start: one made at `mc goal new` in a
@@ -2048,7 +2050,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (offlineHeld()) return { ran: 0 };
       const pick = nextWork({ repo, passed, carry: last?.name });
       if (!pick) return { ran: 0 };
-      // A goal's build, review or finish, or the mend session a blocked goal or a red merge wakes: the only work a lane takes.
+      // A goal's build, review or finish, or merge-failure mend: the only work a lane takes.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = await goalPass(pick.goal, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;

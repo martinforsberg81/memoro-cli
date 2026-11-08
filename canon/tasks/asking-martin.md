@@ -4,15 +4,13 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 ---
 # Asking Martin, and telling him
 
-Never a question without its options. When unclear or settled, read first.
-Read technical standards and programme design; apply answers without asking.
-Investigate details as general rules. Bring one proposal, not a menu: a design
-decision with evidence, costs/tradeoffs, alternatives, recommendation and proposed
-rule text/file/section in docs/technical/; see docs/technical/mc-jev.md.
+Never a question without its options. When unclear or settled, read first; apply technical standards and programme design.
+Investigate details as general rules. Bring one proposal, not a menu: a design decision with evidence, costs/tradeoffs, alternatives, recommendation
+and proposed rule text/file/section in docs/technical/; see mc-jev.md.
 
 Every question with options goes to jev first (docs/technical/mc-jev.md).
-For goal questions, use `mc goal martin` (it asks jev itself). Otherwise call
-`mc ask` before asking Martin in chat:
+For goal questions, use `mc ask <programme>/<goal>` as the single goal-bound path;
+`mc goal martin` remains compatible. Without a goal, call `mc ask` before asking Martin in chat:
 
 ```
 mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<key>: <text>" \
@@ -21,12 +19,12 @@ mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<k
 
 - 2–4 whole-way options, unique keys `^[a-z][a-z0-9_]{0,31}$`; recommend your
   proposal and include evidence. A malformed call gives an example to fix.
-- On a `mc goal martin` answer, continue as if Martin gave it; otherwise the goal
-  is `Martin`. In chat, `mc ask` answers continue and go in your end account;
-  otherwise ask Martin with options, recommendation and jev's reading. Build or
-  review may use `mc ask`; continue on an answer, else block as the role says.
-- A reserved act goes with `--reserved <act>`, never to jev. No user data or
-  passwords in a question: key redaction is only the guard.
+- Goal-bound `mc ask` is one complete escalation: one jev consultation; an
+  answer leaves stage/status unchanged, appends its trace and continues. A valid
+  unresolved, unavailable or reserved result logs safe question/options/recommendation/
+  evidence/reading and sets that goal directly to Martin. Do not call `mc goal martin`
+  again or route through mend. Invalid calls exit 2 with no mutation; a no-goal ask changes no goal.
+- Reserved acts use `--reserved <act>`, never jev. Never send user data or passwords: key redaction is only the guard.
 
 ## What reaches Martin
 
@@ -41,14 +39,16 @@ Three things, and nothing else:
 Never permission to run or rerun a check, a run or time budget, a quiet machine
 or a lane count. Never a red that is `SETTLED` (red alike at the base): it is
 not the goal's, and goes as a proposal to the programme that owns the failing
-file. Never a repair the goal's own acceptance needs: plan commissions it. Never
-which session owns a goal: the one whose LOG.md entry took it, until it hands
+file. The owning build, review or finish role resolves in-scope acceptance repairs;
+plan commissions broader protection scope. Never which session owns a goal: the one whose LOG.md entry took it, until it hands
 over.
 
 ## How to ask and tell
 
 - Headless, there is nobody to ask: your role says where the question goes.
-  Build and review report an obstacle as `blocked`, which a mend session takes.
+  Build, review and finish repair their own in-scope acceptance obstacles. An
+  actual design choice or reserved act goes directly to Martin; continue on a jev
+  answer. Only merge failures wake mend.
 - Tell Martin the outcome, not the bookkeeping. His, in one line with your
   recommendation: a merge that needed your judgement to go green, anything the
   gate refused, anything that changes what is deployed.

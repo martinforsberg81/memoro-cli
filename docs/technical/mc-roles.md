@@ -71,7 +71,7 @@ only, and finish and mend took its headless goal work (Martin, 2026-11-07).
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
-| `mend-session` | opus | `mend-session` | `mc run`, one headless session on a blocked goal in any stage, or on a red merge ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
+| `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
 | `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
@@ -195,8 +195,14 @@ fresh session. A review judges the goal's criteria and PR head; it never
 builds. `roles.test.js` holds the selected parts and their shared instructions.
 
 **The plan session** (`plan-session.md`) is written around the programme's
-aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). It has, in
-principle, full freedom to move the programme toward it, a goal's branch
+aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
+deliverable is the programme's planning: the README and design, the resolved
+prerequisite and policy decisions, the goal decomposition and phases, and
+complete goal briefs with contracts, exclusions, documents, success criteria and
+executable checks. Every complete brief moves from draft to build at once in its
+phase, including one waiting on an earlier phase; a brief with unresolved
+planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
+principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. It is interactive only (Martin, 2026-11-07): Martin is at the
 terminal and it has no restrictions; the runner never starts one. It names
@@ -212,10 +218,8 @@ programme planning, `MC_PLAN_REASON`); those are gone too. What it writes unaske
 **The finish session** (`finish-session.md`) and **the mend session**
 (`mend-session.md`) each state one job, their inputs, what they may change,
 their exits and what they hand to whom. Finish takes `finish · ready` to
-`merge`, or sets `blocked` (an obstacle: mend's) or `Martin` (a change to
-the goal, contract or scope). Mend takes every blocked goal and every red
-merge, resolves the obstacle and retries the stage, and sets `Martin` for
-what only a person decides. Neither changes the goal's text: `refusedMove`
+`merge`, or resolves its own acceptance obstacle or sets `Martin` directly (a change to
+the goal, contract or scope). Mend exists only after a merge failure, repairs it and requeues; bounded failure waits on Martin. Neither changes the goal's text: `refusedMove`
 and the criterion verbs refuse them, as they refuse build and review.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
 frontmatter — and `tests/mc/roles.test.js` § *every canon role has a body* is

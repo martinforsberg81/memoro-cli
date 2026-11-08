@@ -795,7 +795,7 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
       assert.equal(list.targets.find((item) => item.path === martin.path).why, 'clean inactive goal checkout, status Martin, which waits on a person, untouched for 72 hours');
       assert.equal(list.targets.find((item) => item.path === later.path).why, 'clean inactive goal checkout, phase 2 is above the programme\'s lowest unfinished phase 1, untouched for 72 hours');
       assert.equal(keptOf(list, current.path).why, 'goal stage is build, not draft, and a session can start it');
-      assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays for the mend session that resolves it');
+      assert.equal(keptOf(list, blocked.path).why, 'goal is blocked: its checkout stays while its obstacle awaits an owner');
       assert.equal(keptOf(list, review.path).why, 'goal stage is review, not draft, and a session can start it');
     } finally { m.cleanup(); }
   });
