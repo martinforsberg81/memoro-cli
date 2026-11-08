@@ -290,7 +290,21 @@ async function executeSessionGate(request, {
     }
     selection = request.files ? { ...selection, classes: selected.classes || {} } : selected;
   }
-  const selected = [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
+  const requestedCommand = request.commands?.[0];
+  const knownCommands = selection.commands || [];
+  const selectedCommandsForRequest = request.commands
+    ? knownCommands.filter((command) => (command.id ?? command.packageScript) === requestedCommand)
+    : knownCommands;
+  if (request.commands && !selectedCommandsForRequest.length) {
+    const named = knownCommands.map((command) => command.id ?? command.packageScript);
+    const message = `Error: no command gate ${requestedCommand} in this change's selection — the selector named: ${named.length ? named.join(', ') : 'none'}`;
+    write(`${message}\n`);
+    return { ok: false, code: 2, stopped_at: 'no-command', deferred: [], coverage: {
+      kind: 'named', files: [], commands: [], flags: [...plan.flags], execution: identity,
+      pattern: request.pattern ?? null, selector: request.select ?? null,
+    } };
+  }
+  const selected = request.commands ? [] : [...new Set([...(selection.files || []), ...(request.addedTests || [])])];
   if (selected.some((file) => !/\.test\.[cm]?[jt]s$/u.test(file) || resolve(cwd, file) === resolve(cwd) || !resolve(cwd, file).startsWith(`${resolve(cwd)}/`))) {
     write('Error: selector named a test outside the worktree or a non-test file\n');
     return { ok: false, code: 1, stopped_at: 'selection' };
@@ -318,7 +332,7 @@ async function executeSessionGate(request, {
       flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
     } };
   }
-  const selectedCommands = selection.commands || [];
+  const selectedCommands = selectedCommandsForRequest;
   let code = 0;
   let details = [];
   let testResult = null;
@@ -361,7 +375,7 @@ async function executeSessionGate(request, {
       verdict: code !== 0 ? 'red' : unavailable.length ? 'incomplete' : 'green', code, files, deferred, commands,
       ...(unavailable.length ? { unavailable_commands: unavailable } : {}), red_tests: details, timed_tests: timed, slow_tests: slow,
       coverage, execution: { tests: testResult && { ...testResult, batches: [...launched] }, commands }, resumed,
-      ...(settled && (settled.alone.length || settled.main.length) ? { settled: { alone: settled.alone, main: settled.main, base: settled.base, red: settled.red } } : {}) };
+      ...(settled && (settled.alone.length || settled.main.length || settled.commands_alone?.length) ? { settled: { alone: settled.alone, main: settled.main, ...(settled.commands_alone?.length ? { commands_alone: settled.commands_alone } : {}), base: settled.base, red: settled.red } } : {}) };
   };
   const progress = () => onProgress(snapshot());
   progress();
@@ -439,7 +453,10 @@ async function executeSessionGate(request, {
         Object.assign(evidence, { exit: result.status ?? null, ok, state: unavailable ? 'unavailable' : 'completed',
           ...(unavailable ? { unavailable: true } : {}), ...(result.error ? { error: result.error.code || result.error.message } : {}) });
         write(`command ${command.id || command.packageScript}: ${unavailable ? `unavailable (exit ${result.status})` : ok ? 'pass' : 'fail'}\n`);
-        if (!ok && !unavailable) code = 1;
+        if (!ok && !unavailable) {
+          if (request.commands || result.error || result.signal) { code = 1; write(`command ${command.id || command.packageScript}: fail\n`); }
+          else write(`command ${command.id || command.packageScript}: red in the round (exit ${result.status}) — runs alone once when the round is over\n`);
+        }
       } catch (error) {
         Object.assign(evidence, { exit: null, ok: false, state: 'completed', error: error.message });
         code = 1;
@@ -452,6 +469,26 @@ async function executeSessionGate(request, {
     }
   };
   await Promise.all([runTests(), runCommands()]);
+  const commandsAlone = [];
+  if (!request.commands && !signal?.aborted) {
+    for (let index = 0; index < selectedCommands.length; index++) {
+      const command = selectedCommands[index];
+      const evidence = commands[index];
+      if (evidence.state !== 'completed' || evidence.ok || evidence.unavailable || evidence.error) continue;
+      if (signal?.aborted) { code = 1; break; }
+      try {
+        const result = await shell(evidence.command, { cwd, env: suiteEnv(env), timeoutMs: suiteTimeoutMs(env), signal });
+        write(`${result.stdout || ''}${result.stderr || ''}`);
+        const ok = !result.error && !result.signal && result.status === 0;
+        Object.assign(evidence, { exit: result.status ?? null, ok, state: 'completed', ...(ok ? { settled: 'alone' } : {}) });
+        const id = command.id || command.packageScript;
+        if (ok) { commandsAlone.push(id); write(`command ${id}: pass (green alone — red in the round under load)\n`); }
+        else { code = 1; write(`command ${id}: fail (red alone too, exit ${result.status})\n`); }
+      } catch (error) { evidence.error = error.message; code = 1; write(`command ${command.id || command.packageScript}: fail (${error.message})\n`); }
+      progress();
+    }
+  }
+  if (commandsAlone.length) settled = { ...(settled || { alone: [], main: [], base: null, red: [] }), commands_alone: commandsAlone };
   if (signal?.aborted) { code = 1; write('Error: gate interrupted\n'); }
   return snapshot();
 }
