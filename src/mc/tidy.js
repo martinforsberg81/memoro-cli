@@ -592,9 +592,15 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           if (ahead > 0) {
             if (!fetched.has(repo.path)) fetched.set(repo.path, git(repo.path, ['fetch', '-q', 'origin']));
             if (fetched.get(repo.path) === null) throw new Error(`checkout has commits beyond origin/main (${ahead}) and the fetch of origin failed, so whether they are pushed is unknown`);
-            const unpushed = git(path, ['rev-list', '--count', `origin/goal/${goal}..HEAD`]);
+            const remote = `origin/goal/${goal}`;
+            const remoteRef = `refs/heads/goal/${goal}`;
+            const advertised = git(repo.path, ['ls-remote', '--exit-code', '--heads', 'origin', remoteRef]);
+            if (advertised === null || !advertised.split(/\r?\n/u).some((line) => line.endsWith(`\t${remoteRef}`))) {
+              throw new Error(`checkout has commits beyond origin/main (${ahead}) that are not on ${remote}`);
+            }
+            const unpushed = git(path, ['rev-list', '--count', `${remote}..HEAD`]);
             if (unpushed === null || !/^0\s*$/u.test(unpushed)) throw new Error(`checkout has commits beyond origin/main (${ahead}) that are not on origin/goal/${goal}`);
-            pushed = { commits: ahead, remote: `origin/goal/${goal}` };
+            pushed = { commits: ahead, remote };
           }
           const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
           if (!common) throw new Error('owning Git directory could not be verified');

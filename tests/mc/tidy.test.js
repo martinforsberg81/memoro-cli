@@ -533,7 +533,7 @@ function layout2(m) {
 }
 
 /** A registered, synthetic goal worktree and the Git/process answers it needs. */
-function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', pushed = null, cwd = '/', open = [], registration = true, metadata = null } = {}) {
+function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', pushed = null, advertised = pushed !== null, cwd = '/', open = [], registration = true, metadata = null } = {}) {
   layout2(m);
   const dir = join(m.work, 'programs', 'mc', 'goals', name);
   const path = join(dir, 'memoro');
@@ -545,12 +545,16 @@ function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', re
   m.write(join(path, '.git'), 'gitdir: /fake/admin/worktrees/draft\n', recent ? NOW : OLD);
   ageTree(dir, recent ? NOW : OLD);
   m.planGoalStates ||= new Map();
-  m.planGoalStates.set(path, { name, owner, ignored, dirty, own, pushed, cwd, open, registration, branch: `goal/${name}`, head: 'a'.repeat(40) });
+  m.planGoalStates.set(path, { name, owner, ignored, dirty, own, pushed, advertised, cwd, open, registration, branch: `goal/${name}`, head: 'a'.repeat(40) });
   m.cwds = [{ pid: 1, cwd: '/' }, ...[...m.planGoalStates.values()].filter((state) => state.cwd !== '/').map((state, index) => ({ pid: 9001 + index, cwd: state.cwd }))];
   const prior = m.git;
   const git = (at, args) => {
     if (args[0] === 'fetch') { m.fetches.push([at, ...args]); return m.fetchFails ? null : ''; }
     if (at === owner && args[0] === 'worktree' && args[1] === 'list') return `${owner}\n` + [...m.planGoalStates.values()].filter((state) => state.registration).map((state) => `worktree ${join(m.work, 'programs', 'mc', 'goals', state.name, 'memoro')}\nHEAD ${'a'.repeat(40)}\n`).join('\n');
+    if (at === owner && args[0] === 'ls-remote') {
+      const state = [...m.planGoalStates.values()].find((candidate) => args.at(-1) === `refs/heads/goal/${candidate.name}`);
+      return state?.advertised ? `${'a'.repeat(40)}\trefs/heads/goal/${state.name}\n` : null;
+    }
     const state = m.planGoalStates.get(at);
     if (state && args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return state.branch;
     if (state && args[0] === 'rev-parse' && args.includes('HEAD')) return state.head;
@@ -779,6 +783,17 @@ describe('(P) automatic plan goal worktree release', () => {
     } finally { quiet.cleanup(); }
   });
 
+  it('a stale tracking ref does not prove that the pushed branch still exists on origin', () => {
+    const m = machine();
+    try {
+      const stale = planGoalTree(m, { name: 'stale', own: '1', pushed: '0', advertised: false });
+      const facts = runTidy(stale.doors()).list;
+      assert.deepEqual(ruled(facts, 'P'), []);
+      assert.match(keptOf(facts, stale.path).why, /commits beyond origin\/main \(1\) that are not on origin\/goal\/stale/u);
+      assert.deepEqual(m.fetches, [[stale.owner, 'fetch', '-q', 'origin']]);
+    } finally { m.cleanup(); }
+  });
+
   it('rebuildable ignored residue does not keep a checkout, and any other ignored entry still does', () => {
     const m = machine();
     try {
@@ -916,7 +931,7 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
     } finally { m.cleanup(); }
   });
 
-  it('a real checkout with a commit pushed to origin/goal/<goal> is released, and its branch with the commit stays', () => {
+  it('a modeled checkout with a commit pushed to origin/goal/<goal> is released, and its branch with the commit stays', () => {
     const m = machine();
     try {
       layout2(m);
