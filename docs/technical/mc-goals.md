@@ -54,6 +54,16 @@ any      ── person or interactive Martin may move backward ───▶ an e
 
 ## Layout
 
+### Publication conflicts
+
+Martin, 2026-11-09: a concrete conflict reported by `mc publish`, as well as
+a merger-reported conflict, permits the owning interactive session to merge
+`origin/main` into the goal's existing worktree. Preserve both changes'
+intents, retain history without rebase or force-push, and rerun affected
+acceptance before publishing. This is not permission for routine main
+catch-up, another checkout, an admin merge or deployment. A publication
+conflict is ordinary delivery repair, not a reserved admin act.
+
 ```
 ~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria, its stage and status
 ~/mc/programs/<programme>/goals/<goal>/REVIEW.md  what a review that sent it to finish found, for the finish session
