@@ -792,6 +792,25 @@ is not the change's red. Its failures are kept under
 landing does not remove, and the round's line in `gate-rounds.jsonl` carries
 `under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
 
+The queued retry record retains `not_before`, retry counts and a bounded
+`retry_diagnostic` (`category` from the actual report's `stopped_at`, and
+`explanation` from its actual `reason`). The diagnostic is not an inference
+that a check proved machine overload. Offline backoff uses the same durable
+shape, with the offline report as evidence. Queue parsing preserves these
+additive fields; older entries remain compatible. A legacy queued entry with a
+valid future `not_before` is still deferred, but its cause is displayed as
+unknown when no diagnostic exists. A deadline is an eligibility time, not a
+guaranteed start time. Only a valid future deadline is an active timed pause;
+expired, malformed and absent deadlines are due and must not be presented as
+delayed. Explicit requeue/new queueing and landing clear obsolete delay
+diagnostics for current display. The normal MERGE & DEPLOY panel shows the
+cause, local eligibility time with timezone, remaining delay, automatic retry
+step and `mc merge <repo> <pr>` retry-now command. An all-deferred queue is
+intentional even without a live merger process; a due job without an owner is
+still stopped. Mixed queues keep each job's delay attached to its own PR and
+repository. Current deploy/gate/lease observations remain separate, and a
+completed failed deploy is historical rather than an active merge blocker.
+
 **A test that never ends is a red by name.** Every selected, previous-red and
 own test file runs with `--test-force-exit` and one `--test-timeout`, resolved
 from the tree actually measured — the session's worktree, or the round's final

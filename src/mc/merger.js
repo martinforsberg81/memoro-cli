@@ -919,6 +919,10 @@ export async function serve({
   const writeAnswer = async ({ job, landed: isLanded, report, requeued, back, moved, offline }) => {
     const at = now().toISOString();
     const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+    const retryDiagnostic = {
+      category: String(report?.stopped_at || (offline ? 'offline' : 'unknown')).slice(0, 80),
+      explanation: String(report?.reason || 'The round provided no explanation').slice(0, 1000),
+    };
     lock(root, () => {
       let entries = parseQueue(read(mergesPath(root)));
       entries = (isLanded && report?.ok && report.merged) || moved
@@ -926,9 +930,9 @@ export async function serve({
         : back
         ? markQueued(entries, job)
         : requeued
-        ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+        ? markRequeued(entries, job, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString(), retryDiagnostic })
         : offline
-        ? markOffline(entries, job, { notBefore: offlineNotBefore(job, now) })
+        ? markOffline(entries, job, { notBefore: offlineNotBefore(job, now), retryDiagnostic })
         : markRed(entries, job, { reason, answered: at });
       write(mergesPath(root), entries);
     }, { name: 'merges' });
@@ -1021,14 +1025,18 @@ export async function serve({
           let entries = parseQueue(read(mergesPath(root)));
           for (const { job: one, report, requeued, back, moved, offline } of left) {
             const reason = `${report?.stopped_at || 'unknown'}: ${report?.reason || 'the round said nothing'}`;
+            const retryDiagnostic = {
+              category: String(report?.stopped_at || (offline ? 'offline' : 'unknown')).slice(0, 80),
+              explanation: String(report?.reason || 'The round provided no explanation').slice(0, 1000),
+            };
             entries = (report?.ok && report.merged) || moved
               ? dequeue(entries, one)
               : back
               ? markQueued(entries, one)
               : requeued
-              ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString() })
+              ? markRequeued(entries, one, { notBefore: new Date(now().getTime() + REQUEUE_DELAY_MS).toISOString(), retryDiagnostic })
               : offline
-              ? markOffline(entries, one, { notBefore: offlineNotBefore(one, now) })
+              ? markOffline(entries, one, { notBefore: offlineNotBefore(one, now), retryDiagnostic })
               : markRed(entries, one, { reason, answered });
           }
           write(mergesPath(root), entries);

@@ -122,7 +122,22 @@ export function mergesLines(lines, c, wide, merges, expand) {
     if (repo.pause) operation(lines, c, wide, 'paused', repo.pause.reason || repo.pause.kind, ['red']);
     if (repo.merger_stopped) operation(lines, c, wide, 'merger stopped', 'queue waiting', ['red']);
     if (!active.length && !repo.pause && !repo.merger_stopped) {
-      operation(lines, c, wide, waiting.length ? 'waiting' : 'idle', waiting.length ? 'ready for merger' : 'no merge running');
+      const due = waiting.some((item) => !item.retry);
+      operation(lines, c, wide, due ? 'waiting' : waiting.length ? 'scheduled retry' : 'idle',
+        due ? 'ready for merger' : waiting.length ? 'deferred until retry eligibility' : 'no merge running');
+    }
+    for (const item of waiting.filter((entry) => entry.retry)) {
+      const retry = item.retry;
+      const eligible = new Date(retry.eligible_at).toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+      });
+      const secs = retry.remaining_seconds;
+      const remaining = secs >= 3600 ? `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
+        : secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+      detail(lines, c, wide, 6, `#${item.pr} retry delayed · ${retry.category}: ${retry.explanation}`, ['yellow']);
+      detail(lines, c, wide, 8, `Eligible ${eligible} (in ${remaining}) · requeue ${retry.requeues}, offline ${retry.offline}`, ['yellow']);
+      detail(lines, c, wide, 8, retry.next, ['yellow']);
+      detail(lines, c, wide, 8, `Retry now: ${retry.retry_now}`, ['yellow']);
     }
     for (const item of active) {
       const refs = (item.prs || []).map((pr) => `#${pr.number}`).join(', ') || 'PR unknown';

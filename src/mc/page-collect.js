@@ -585,10 +585,22 @@ export function mergesSection({
   };
   const queuedItems = entries.filter((item) => !isLanding(item)).map((item) => {
     const since = Date.parse(item.since || '');
+    const deadline = item.state === 'queued' ? Date.parse(item.not_before || '') : NaN;
+    const delayed = Number.isFinite(deadline) && deadline > at;
     return {
       ...item,
       title: titled(item.repo, item.pr)?.title || null,
       wait_seconds: Number.isFinite(since) ? Math.max(0, Math.round((at - since) / 1000)) : null,
+      retry: delayed ? {
+        eligible_at: new Date(deadline).toISOString(),
+        remaining_seconds: Math.ceil((deadline - at) / 1000),
+        category: item.retry_diagnostic?.category || 'unknown',
+        explanation: item.retry_diagnostic?.explanation || 'Reason not recorded (legacy queue entry)',
+        requeues: item.requeues || 0,
+        offline: item.offline || 0,
+        next: 'The merger will retry automatically when eligible; start time is not guaranteed.',
+        retry_now: `mc merge ${item.repo} ${item.pr}`,
+      } : null,
     };
   });
   const open = (item) => !prs.length || Boolean(titled(item.repo, item.pr));
@@ -638,7 +650,7 @@ export function mergesSection({
     // The merger has it — unless there is no merger to have it, and then the
     // queue is `stopped`.
     const queuedOwn = own(queuedItems);
-    const stopped = !mergerAlive && !active.length && Boolean(queuedOwn.length);
+    const stopped = !mergerAlive && !active.length && queuedOwn.some((item) => !item.retry);
     const waiting = queuedOwn.map((item) => gridded(item, 'wait', stopped ? 'stopped' : 'queued',
       item.wait_seconds, stopped ? {} : { merging: 'queued' }));
     const red = own(reds).map((item) => gridded(item, 'red', 'red', item.age_seconds, { merge_red: item.reason || 'red' }));

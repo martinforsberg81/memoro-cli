@@ -153,6 +153,17 @@ test('an offline entry keeps its place, counts an offline and no requeue, and is
   assert.equal(queueEntries(markRequeued(back, { repo: 'memoro-cli', pr: 1 }))[0].offline, 0, 'a requeue is a new answer, so the count starts again');
 });
 
+test('retry diagnostics survive parsing and are cleared when the job is newly queued or lands', () => {
+  const diagnostic = { category: 'red-under-load', explanation: 'passed alone; red in round' };
+  const entries = queueEntries([job({ state: 'landing' })]);
+  const delayed = parseQueue(JSON.stringify(markRequeued(entries, job(), {
+    notBefore: '2026-11-08T12:15:00.000Z', retryDiagnostic: diagnostic,
+  })));
+  assert.deepEqual(delayed[0].retry_diagnostic, diagnostic);
+  assert.deepEqual(queueEntries(markQueued(delayed, job()))[0].retry_diagnostic, null);
+  assert.deepEqual(queueEntries(markLanding(delayed, job(), 'now', 42))[0].retry_diagnostic, null);
+});
+
 test('markLanding names its merger; queueEntries keeps it on landing, and drops it on queued and red', () => {
   const landing = markLanding(enqueue([], job()), job(), 'T', 4242);
   assert.equal(landing[0].state, 'landing');
