@@ -219,8 +219,12 @@ programme planning, `MC_PLAN_REASON`); those are gone too. What it writes unaske
 (`mend-session.md`) each state one job, their inputs, what they may change,
 their exits and what they hand to whom. Finish takes `finish · ready` to
 `merge`, or resolves its own acceptance obstacle or sets `Martin` directly (a change to
-the goal, contract or scope). Mend exists only after a merge failure, repairs it and requeues; bounded failure waits on Martin. Neither changes the goal's text: `refusedMove`
-and the criterion verbs refuse them, as they refuse build and review.
+the goal, contract or scope). Mend owns a reported merge failure through repair,
+final acceptance and requeue, preserving intervening person decisions. An unchanged delivery retry can retain
+valid evidence; a content-changing repair requires acceptance of the repaired
+worktree. Bounded failure outside its authority waits on Martin. Neither changes
+the goal's text: `refusedMove` and the criterion verbs refuse them, as they
+refuse build and review.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
 frontmatter — and `tests/mc/roles.test.js` § *every canon role has a body* is
 the guard that keeps that from coming back, for every part of every role.

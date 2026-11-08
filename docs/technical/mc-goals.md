@@ -522,14 +522,29 @@ overarching role the runner woke at different moments). Plan is interactive,
   obstacles; an unresolved design choice/reserved act goes directly to Martin.
   If it ends with `finish · ready`, the runner changes it to `finish · Martin`.
 - **A mend session** (`MC_ROLE=mend-session`, `canon/roles/mend-session.md`)
-  exists only after a merge failure: conflict, failed candidate check or moved
-  judged head. It repairs within contract, gates, publishes and requeues every
-  registered PR with `mc goal stage merge`; it does not move stages or write
-  product/policy/goal text. Recovery is bounded and unresolved merge repair
-  waits on Martin. A PR already queued is not relaunched. Pre-merge blocked
-  goals never start mend: legacy records are reconciled to Martin while their
-  prior obstacle and evidence remain in LOG.md. Build/review/finish own their
-  acceptance repairs and may ask Martin directly for a remaining real choice.
+  owns the reported merge failure through its repair and final handoff. It
+  diagnoses from the current goal, merger evidence and judged revision, and
+  may change code, commissioned tests, fixtures and documentation within the
+  contract. A merger-reported conflict permits the existing conflict procedure;
+  a delivery retry may require no source change or commit. It does not change
+  goal text, acceptance, product/privacy policy or test protection scope.
+  After a content-changing repair it establishes affected criterion evidence
+  and completed whole-selection GREEN on the final judged worktree before
+  authorizing direct landing. An unchanged retry may retain still-valid evidence
+  under the existing reuse rules. Explicitly approved verification exceptions
+  keep their exact scope; no later merger gate is assumed. It publishes repairs
+  with `mc publish --no-merge`, records cause, repair and evidence, then requeues
+  every registered PR with `mc goal stage merge` and ends in the same turn.
+  Plain `ready` is not a merge handoff. Before publishing or requeueing, it
+  rereads the goal and preserves any intervening person decision: it cannot
+  clear Martin's hold or reactivate a completed/dropped goal. These are session
+  obligations, not a claim that the requeue command enforces every boundary.
+  A queued PR remains the merger's. Repeated unchanged failures are not progress;
+  existing recovery bounds remain. An obstacle outside its authority is
+  escalated with evidence through goal-bound `mc ask`; a settled jev answer
+  continues work, otherwise the goal waits on Martin. Pre-merge blocked goals
+  never start mend: legacy records are reconciled to Martin without a diagnostic
+  launch. Build/review/finish own their acceptance repairs.
 
 Both run in the goal's first repository's worktree, on the goal's class
 routing and billing like a build, with `MC_GOAL`, `MC_REPO` and
