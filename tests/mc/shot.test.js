@@ -366,6 +366,46 @@ describe('mc shot — the run', () => {
     assert.match(result.stderr, /was already serving it/u, 'progress goes to stderr');
   });
 
+  it('the timing line tells the slot wait and server start from the shot\'s own time, and --json carries it', async () => {
+    // The clock moves only where a stub moves it: the start takes 419 s, 405 s of it a slot wait, and the capture 14 s.
+    // Only differences of the clock are read, so no other read of it changes the numbers.
+    const fx = fixture();
+    let t = 0;
+    let out = null;
+    const capturing = (ms) => ({ request }) => {
+      out = request.out;
+      t += ms;
+      return { ok: true, result: { ok: true, file: request.out, url: `${request.base_url}/app/` }, status: 0 };
+    };
+    const dev = {
+      clock: () => t,
+      ensureDevServer: async () => {
+        t += 419_000;
+        return { ok: true, server: { url: 'http://127.0.0.1:8787/', instance_id: 'srv-1' }, started: true, waited_ms: 405_000 };
+      },
+      runCapture: capturing(14_000),
+    };
+
+    const plain = await shot(['dev', 'home'], fx, dev);
+    assert.equal(plain.code, 0, plain.stderr);
+    assert.equal(plain.stdout.split('\n')[0], out, 'the path is still the first stdout line');
+    assert.equal(plain.stdout.split('\n')[1], 'http://127.0.0.1:8787/app/');
+    assert.deepEqual(
+      plain.stderr.split('\n').filter((line) => line.startsWith('mc: timing')),
+      ['mc: timing — slot wait 405 s, server start 14 s, shot 14 s'],
+    );
+
+    const json = await shot(['dev', 'home', '--json'], fx, dev);
+    assert.equal(json.code, 0, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout).timing, { slot_wait_s: 405, server_start_s: 14, shot_s: 14 });
+    assert.ok(!json.stderr.includes('mc: timing'), json.stderr);
+
+    const prod = await shot(['prod', 'home'], fx, { clock: () => t, runCapture: capturing(9_000) });
+    assert.equal(prod.code, 0, prod.stderr);
+    assert.deepEqual(prod.stderr.split('\n').filter((line) => line.startsWith('mc: timing')), ['mc: timing — shot 9 s']);
+    assert.ok(!prod.stderr.includes('slot wait'), prod.stderr);
+  });
+
   it('the four first-criterion forms each build their request', async () => {
     const fx = fixture();
     const forms = [
@@ -441,7 +481,7 @@ describe('mc shot — the run', () => {
     const fx = fixture();
     const result = await shot(['prod', 'home', '--me'], fx, { behaviour: 'not-signed-in' });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /^mc: the session is not signed in at https:\/\/meetmemoro\.app\nmc shot login prod\n$/u);
+    assert.match(result.stderr, /^mc: the session is not signed in at https:\/\/meetmemoro\.app\nmc shot login prod\nmc: timing — shot \d+ s\n$/u);
     assert.equal(result.stdout, '');
   });
 
@@ -683,7 +723,7 @@ describe('mc shot — eval, upload, press, timeout, and what comes back', () => 
     });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, '');
-    assert.equal(result.stderr.split('\n').slice(-3).join('\n'), 'mc: the page crashed\nerror  page  Out of memory ×2\n');
+    assert.match(result.stderr, /mc: the page crashed\nerror  page  Out of memory ×2\nmc: timing — slot wait \d+ s, server start \d+ s, shot \d+ s\n$/u);
   });
 
   it('usage lists the new flags and the error paragraph', () => {
@@ -987,7 +1027,7 @@ describe('mc shot — wait-for in order, the login timeout, and an app that is n
     const result = await shot(['dev', 'home', '--wait-for', '.panel'], fx, { behaviour: 'old-script' });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, '');
-    assert.match(result.stderr, /mc: the capture script .*fake-shot\.mjs in .* predates wait-for; rebase onto main and try again\n$/u);
+    assert.match(result.stderr, /mc: the capture script .*fake-shot\.mjs in .* predates wait-for; rebase onto main and try again\nmc: timing — slot wait \d+ s, server start \d+ s, shot \d+ s\n$/u);
   });
 
   it('a login gets LOGIN_TIMEOUT_MS above the script\'s five-minute window; an ordinary shot keeps 180 s', async () => {
@@ -1015,7 +1055,8 @@ describe('mc shot — wait-for in order, the login timeout, and an app that is n
     const lines = result.stderr.trimEnd().split('\n');
     assert.equal(lines[0], 'mc: the app at https://meetmemoro.app did not show itself after 20.0 s; /api/boot answered 200');
     assert.equal(lines[1], 'error  boot  the session was not refused, so sign-in is not the problem; the app did not show — try again');
-    assert.equal(lines.length, 2);
+    assert.match(lines[2], /^mc: timing — shot \d+ s$/u, 'the timing line follows the answer, and a prod shot has no server part');
+    assert.equal(lines.length, 3);
     assert.ok(!result.stderr.includes('mc shot login prod'));
   });
 

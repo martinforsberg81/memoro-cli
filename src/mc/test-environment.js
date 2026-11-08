@@ -428,6 +428,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       (deps.touchServer || touchServer)(running.instance_id, { ...(root ? { root } : {}), holder });
       return {
         ok: true, server: running, started: false, held: { reason: hold, stale: builtFromMoved(running, worktree, deps), idle_seconds: idleMs / 1000 },
+        waited_ms: 0,
       };
     }
   }
@@ -454,7 +455,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const stale = builtFromMoved(running, worktree, deps) || editedSince(running, worktree, deps);
     if (!stale) {
       (deps.touchServer || touchServer)(running.instance_id, { ...(root ? { root } : {}), holder });
-      return { ok: true, server: running, started: false, followed, unfollowed };
+      return { ok: true, server: running, started: false, followed, unfollowed, waited_ms: 0 };
     }
     // The server is alive and it is this worktree's, and it is serving a tree
     // that is no longer here. Stopped through its own stop command, like
@@ -649,6 +650,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       (deps.touchServer || touchServer)(server.instance_id, { ...(root ? { root } : {}), holder });
       return {
         ok: true, server, started, service: start.service, profile: start.profile, restartedFrom, replacedHung, followed, unfollowed,
+        waited_ms: admitted.waited_ms ?? 0,
       };
     }
     // A wrapper that has died is not going to answer, and waiting ten minutes
@@ -684,6 +686,9 @@ export async function ensureAppServer(worktree, declaration, {
   // dropped only when `stdout` is that answer stream: a caller that sends progress to stderr
   // (`mc shot next`) gets the lines it waits through, as it does without `json`.
   const quiet = json && stdout === answer;
+  // Its whole run on the injected clock: the slot wait from admission, the rest is the server's start (or finding it up).
+  const clock = deps.clock || (() => performance.now());
+  const started = clock();
   if (!quiet) stdout.write(`mc: a dev server for ${worktree}…\n`);
   const ensured = await (deps.ensureDevServer || ensureDevServer)(worktree, declaration, {
     ...deps,
@@ -719,7 +724,9 @@ export async function ensureAppServer(worktree, declaration, {
         : `mc: ${baseUrl} was already serving it (${server.instance_id})\n`);
     }
   }
-  return { ok: true, server, baseUrl };
+  const slotWaitMs = ensured.waited_ms ?? 0;
+  const serverMs = Math.max(0, clock() - started - slotWaitMs);
+  return { ok: true, server, baseUrl, timing: { slot_wait_ms: slotWaitMs, server_ms: serverMs } };
 }
 
 /** The line a held main server says: why it was not restarted, and what it serves against the checkout. */
