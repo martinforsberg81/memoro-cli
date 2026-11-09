@@ -54,7 +54,7 @@ stays.
 | `~/Library/Preferences/.wrangler/logs/` | Wrangler logs | regular `.log` files directly in the root, older than 72 hours (F) |
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
-| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record (S); never logs, patches or the directory |
+| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData, registered source exports | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record; a verified registered export of an ended session (S, [Registered source exports](#registered-source-exports)); never logs, patches, receipts or the directory |
 | Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
@@ -62,9 +62,10 @@ In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy r
 
 The old project rule P was removed with projects. Rules version 11 reuses P
 for plan goal checkouts; it reads no execution register and retains S, F and
-the rebuildable-cache rule B approved by Martin on 2026-11-06.
-Scratch cleanup follows S below; transcripts and logs outside F's exact
-root and shape remain governed by their existing rules.
+the rebuildable-cache rule B approved by Martin on 2026-11-06. Rules version 12
+adds the `scratch-export` kind to S, the registered source exports below.
+Scratch cleanup follows S below and [Registered source exports](#registered-source-exports);
+transcripts and logs outside F's exact root and shape remain governed by their existing rules.
 
 **F — generated files (72 hours, independent of `--days`).** The approved
 Wrangler root is `~/Library/Preferences/.wrangler/logs/`; only direct regular
@@ -297,6 +298,118 @@ rule runs in routine unattended tidy, including disk-pressure passes;
 marker-less `DerivedData` is never adopted. Before 2026-11-05 the chore pass
 removed every scratch directory not touched for two days, including evidence;
 that sweep is gone.
+
+### Registered source exports
+
+The approved shared standard (Martin, 2026-11-09). It applies to every programme:
+
+> A disposable source export is created by mc from a retained commit in a
+> configured repository, for explicit repository-relative paths and one
+> positively identified runner session. Its reconstruction receipt remains
+> outside the removable tree. Reuse requires the same source, selected paths
+> and unchanged export contents. The owning session may explicitly release
+> the export; otherwise it becomes eligible after that session has ended.
+> Removal writes a target list first and immediately rechecks ownership,
+> source availability, contents, filesystem identity and process/open-file
+> evidence. Failure or uncertainty retains the export with its reason.
+> Unregistered contents, changed or additional files, legacy directories,
+> evidence, patches and session records are not eligible under this rule.
+> Pressure recovery relaxes none of these conditions. A configured dependency
+> link may be unlinked only as an explicitly recorded attachment; its target
+> is never traversed or removed.
+
+What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc scratch --help`):
+
+- **Layout.** `<scratch>/<stem>/exports/<id>/` is the removable tree and nothing
+  else; `<scratch>/<stem>/.mc-exports/<id>.json` is the receipt, outside it. The
+  source is kept as `refs/mc/retained-export/<commit>`. `<id>` is the first 12
+  hex digits of the commit and the first 16 of a key: sha256 over the repository
+  name, the full commit and the canonical path set. No other directory under
+  `exports/` is a target.
+- **Creation.** `mc scratch export --repo <repo> --ref <ref> --path <path>…`
+  needs `MC_SCRATCH` to name the runner-owned scratch directory exactly (its
+  record names the runner, the session and a start, and no end). The ref is
+  resolved once to a full commit. Paths are literal relative names, normalized,
+  deduplicated and sorted. Absolute, traversing, wildcard, empty and `.git`
+  selections are refused; `.` is the whole repository. The inventory is one
+  `git ls-tree -r -l -z`. Contents stream from `git cat-file --batch` in whatever
+  pieces the pipe delivers, never buffered whole; each object's id and size are
+  checked before its file is written with `wx`. Regular and executable files (modes 100644, 100755) are written as
+  committed. A selected symbolic link, submodule or other entry is refused, not
+  omitted. No checkout and no `.git` is made. A failed creation removes its own
+  partial tree; an interrupted one leaves a directory that no receipt names, and
+  that is kept.
+- **Retention.** The source ref is created with a zero old value, so an existing
+  different commit fails creation. Retention is complete before the ready
+  receipt is written, and it is never replaced or pruned by mc.
+- **Receipt.** Written atomically, only after the tree verifies: schema, version,
+  id, generation, state, key, owner (session, start, stem and the scratch
+  directory's device, inode and birth time), repository (name and real path),
+  commit, paths, retained ref, export directory identity (device, inode),
+  inventory (path, mode, blob id, size) with its digest, bytes and the attachment
+  if any. A receipt's own digest is never proof of its tree. The requested/listed
+  id, receipt filename and payload id, export path and removal receipt path must
+  agree; a mismatch is retained, never redirected.
+- **Verification.** Every reuse, release and tidy removal runs the same check:
+  the receipt's shape and key; the owner record names the same session and
+  start, and the same directory; the configured repository and its real path; the
+  retained ref names the commit; `ls-tree` at the commit for the literal paths
+  equals the inventory exactly; the tree holds no entry that is not in the
+  inventory, no directory outside it, and no link except a recorded `node_modules`;
+  each file has the recorded size, mode and blob id (read in 1 MiB pieces, so
+  memory is bounded).
+  A `removing` receipt (a removal that stopped part way) may lack files, never
+  add or change any. A receipt that does not verify is kept with its reason.
+- **Reuse.** A repeated request in the same session, with the same key, returns
+  the existing path only after verification. A changed tree is reported and kept;
+  it is not overwritten. Create, reuse and release for one session are serialized
+  in process and by a lock file in `.mc-exports/`. No scan of all scratch takes
+  a lock.
+- **Dependency link.** `--attach-deps <dir>` records one `node_modules` symlink to
+  a prepared tree that holds `.memoro-deps.json`: the target's real path, device,
+  inode and the marker's digest. Removal unlinks the link (`lstat`, never followed)
+  and leaves the target and its contents as they were. A real `node_modules`
+  directory, a different link, a changed target or any other extra entry keeps
+  the export. The command installs nothing and runs no install script.
+- **Release.** `mc scratch release <id>` previews by writing
+  `.mc-exports/<id>.plan.json` (the receipt's digest and the export's identity) and
+  removes nothing. `--apply` needs that plan and recomputes the decision; if the
+  receipt, the tree, the link or the owner changed since the preview, it removes
+  nothing and says so. The owning session may release while it still runs; no
+  other process may stand in or hold a file open in the tree, and unknown process
+  or open-file evidence keeps it. Explicit release reads only the selected
+  receipt/tree. Immediately before each deletion, under that session's lock,
+  re-read this candidate's receipt, owner, source, tree and attachment, compare
+  with the saved plan, and refresh wall time, cwd and open-file evidence. Earlier
+  inventory or another candidate's inspection is not deletion-time proof.
+  Reject symlinked ancestors. Removal order: the receipt becomes `removing`,
+  the recorded link is unlinked, the tree is removed through `rmTree` (which never
+  follows a link), and the receipt becomes `released` with its time and bytes. The
+  receipt, the plan's absence and every log, patch and record beside it remain.
+  A permission error or partial removal is kept visible and retried safely.
+- **Tidy (rule S).** A ready or `removing` export is a target only when its
+  session has a recorded end, or its runner is positively gone (the rule for
+  records without an end above), the tree passes verification, no process stands
+  in it, and no file in it is open. It is listed as kind `scratch-export` with its
+  identity; apply reads the fresh facts and removes only what the list still
+  describes. Routine and pressure passes apply the same rule; pressure relaxes
+  none of it. Only `<scratch>/<stem>/exports/<id>` with a receipt is ever a target.
+- **Session end.** After the end marker and the finalized session logs are
+  written, the runner awaits `mc scratch sweep` for its own scratch directory, in
+  a bounded child process (no synchronous tree read or child wait on the runner's
+  event loop). The sweep requires the recorded end, and touches nothing else. A
+  refused or failed sweep is recorded as cleanup and changes no session exit, goal
+  verdict or provider classification.
+- **Not eligible, under this rule.** Unregistered and legacy directories,
+  receipts that do not verify (malformed, forged, or whose inventory does not
+  reconcile with the retained commit), dirty or registered worktrees of any other
+  kind, native-phone, host and public source, logs, patches, results, session
+  records, receipts and goal documents. Their existing rules still apply.
+- **Costs.** Git is reached for a fixed handful of commands per export (resolve,
+  retain, list, and one list per verification), never once per file; the object
+  reads are one streamed `cat-file --batch` per creation. No age threshold is added
+  and no retention rule changes. Existing thresholds, lanes and the admission
+  policy are unchanged.
 
 ## Disk pressure
 

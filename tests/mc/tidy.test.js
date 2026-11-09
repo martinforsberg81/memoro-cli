@@ -22,6 +22,9 @@ import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { addGoalWorktree } from '../../src/mc/goals.js';
 import { repoFileSlug } from '../../src/mc/repo-snapshot.js';
+import { defaultRepos } from '../../src/mc/repos.js';
+import { createExport } from '../../src/mc/scratch.js';
+import { blobId as gitBlobId, gitModel } from './_helpers/git-model.js';
 import {
   LIST_KEEP, PROGRAMME_TRANSCRIPT_KEEP_MS, applyTidy, areaOf, gatherTidyFacts, openFilesAmong, orphanSlug, outsideRoots, runTidy,
   staleGateCacheEntry, tidyPlan, tidyRoots,
@@ -125,7 +128,7 @@ describe('--days', () => {
  * the repository that owns a compare tree.
  */
 function machine() {
-  const home = mkdtempSync(join(tmpdir(), 'mc-tidy-'));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'mc-tidy-')));
   const work = join(home, 'mc');
   const claude = join(home, 'claude');
   const projects = join(claude, 'projects');
@@ -1259,7 +1262,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 11);
+      assert.equal(written.rules_version, 12, 'rules version 12: the scratch-export kind under rule S');
       assert.equal(written.person, false, 'the list says whose run it was');
       assert.equal(written.pressure, false);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
@@ -2149,4 +2152,178 @@ describe('file-scoped screenshot open-file evidence', () => {
       assert.deepEqual(openFilesAmong([], { run: () => assert.fail('empty inventory spawns nothing') }), new Map());
     } finally { m.cleanup(); }
   });
+});
+
+describe('(S) registered source exports (scratch.js) in the routine and pressure passes', () => {
+  /**
+   * A tidy machine with the memoro-cli repository the model Git answers for. Each
+   * session is a runner scratch directory; `exportIn` makes a real export in it,
+   * `end` records the session's end. Runner pid 4242 is alive and runs `mc run`.
+   */
+  function exportMachine() {
+    const m = machine();
+    const git = gitModel();
+    git.commit('one', { 'src/a.js': 'committed a\n', 'src/b.js': 'committed b\n' });
+    const scratch = tidyRoots(m.env).scratch;
+    const session = (stem, over = {}) => {
+      const dir = join(scratch, stem);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '.mc-scratch.json'), JSON.stringify({
+        schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: `goal:mc/${stem}`, kind: 'build', stem, started: '2026-10-12T08:00:00Z', ...over,
+      }));
+      writeFileSync(join(dir, 'gate.log'), 'red');
+      return dir;
+    };
+    const end = (dir) => {
+      const marker = JSON.parse(readFileSync(join(dir, '.mc-scratch.json'), 'utf8'));
+      writeFileSync(join(dir, '.mc-scratch.json'), JSON.stringify({ ...marker, ended: '2026-10-12T09:00:00Z', exit: 0 }));
+    };
+    const exportIn = (dir, paths = ['src']) => createExport({
+      scratch: dir, env: m.env, repos: defaultRepos(m.env), repoName: 'memoro-cli', ref: 'HEAD', paths,
+      git: { text: (cwd, args) => git.text(cwd, args), blobs: (cwd, shas) => git.blobs(cwd, shas) }, now: NOW,
+    });
+    const exportDoors = (over = {}) => m.doors({
+      git: (cwd, args) => git.text(cwd, args),
+      openIn: (path) => (m.openHeld?.[path] ?? []),
+      alive: (pid) => pid === 4242,
+      commandLine: () => 'node /opt/homebrew/bin/mc run',
+      ...over,
+    });
+    return { m, git, scratch, session, end, exportIn, exportDoors, blobId: gitBlobId };
+  }
+  const present = (path) => existsSync(path);
+  const targetsOf = (list, kind) => list.targets.filter((item) => item.kind === kind).map((item) => item.path).sort();
+
+  it('a ready export of an ended session is the one export target: its tree goes, and its receipt, the session\'s evidence and a running session\'s export stay', async () => {
+    const x = exportMachine();
+    try {
+      const ended = x.session('ended');
+      const endedMade = await x.exportIn(ended);
+      x.end(ended);
+      const running = x.session('running');
+      const runningMade = await x.exportIn(running);
+      const { list, outcome } = runTidy({ apply: true, ...x.exportDoors() });
+      assert.deepEqual(targetsOf(list, 'scratch-export'), [endedMade.path]);
+      assert.equal(ruled(list, 'S').find((item) => item.kind === 'scratch-export').rule, 'S');
+      assert.deepEqual(outcome.applied.filter((item) => item.path === endedMade.path).map((item) => item.ok), [true]);
+      assert.equal(present(endedMade.path), false, 'the ended session\'s tree is gone');
+      assert.equal(readFileSync(join(ended, 'gate.log'), 'utf8'), 'red', 'its evidence stays');
+      assert.match(readFileSync(join(ended, '.mc-exports', `${endedMade.id}.json`), 'utf8'), /"state": "released"/u, 'its receipt stays');
+      assert.equal(readFileSync(join(runningMade.path, 'src', 'a.js'), 'utf8'), 'committed a\n', 'the running session\'s tree is intact');
+      assert.equal(keptOf(list, runningMade.path).why, 'goal:mc/running has not recorded an end');
+    } finally { x.m.cleanup(); }
+  });
+
+  it('active, open, incomplete, unregistered, malformed and runner-crash exports: the exact targets, and every other byte survives', async () => {
+    const x = exportMachine();
+    try {
+      const ok = x.session('ok'); const okMade = await x.exportIn(ok); x.end(ok);
+      const live = x.session('live'); const liveMade = await x.exportIn(live); x.end(live);
+      x.m.cwds.push({ pid: 50, cwd: join(liveMade.path, 'src') });
+      const open = x.session('open'); const openMade = await x.exportIn(open); x.end(open);
+      x.m.openHeld = { [openMade.path]: [77] };
+      const incomplete = x.session('incomplete'); x.end(incomplete);
+      const half = join(incomplete, 'exports', 'abcdef012345-0123456789abcdef');
+      mkdirSync(half, { recursive: true }); writeFileSync(join(half, 'partial.js'), 'half');
+      const unregistered = x.session('unregistered'); x.end(unregistered);
+      mkdirSync(join(unregistered, 'exports', 'whatever'), { recursive: true }); writeFileSync(join(unregistered, 'exports', 'whatever', 'keep.txt'), 'mine');
+      const malformed = x.session('malformed'); const malformedMade = await x.exportIn(malformed); x.end(malformed);
+      writeFileSync(join(malformed, '.mc-exports', `${malformedMade.id}.json`), '{broken');
+      const crashed = x.session('crashed', { runner_pid: 9999 }); const crashedMade = await x.exportIn(crashed);
+      const running = x.session('running'); const runningMade = await x.exportIn(running);
+
+      const { list, outcome } = runTidy({ apply: true, ...x.exportDoors() });
+      assert.deepEqual(targetsOf(list, 'scratch-export'), [okMade.path, crashedMade.path].sort(), 'exactly the ready ended export and the crashed runner\'s export');
+      assert.deepEqual(outcome.applied.filter((item) => [okMade.path, crashedMade.path].includes(item.path)).map((item) => [item.path, item.ok]).sort(), [[okMade.path, true], [crashedMade.path, true]].sort());
+      assert.equal(keptOf(list, liveMade.path).why, 'process 50 stands in it');
+      assert.equal(keptOf(list, openMade.path).why, 'process 77 holds a file open in it');
+      assert.match(keptOf(list, malformedMade.path).why, /broken|JSON|Unexpected|receipt/u);
+      assert.equal(keptOf(list, runningMade.path).why, 'goal:mc/running has not recorded an end');
+      assert.equal(present(okMade.path), false);
+      assert.equal(present(crashedMade.path), false, 'the runner that owned it is gone: its export goes');
+      assert.equal(readFileSync(join(liveMade.path, 'src', 'a.js'), 'utf8'), 'committed a\n', 'the standing process\'s export keeps its bytes');
+      assert.equal(readFileSync(join(openMade.path, 'src', 'a.js'), 'utf8'), 'committed a\n', 'the open file\'s export keeps its bytes');
+      assert.equal(readFileSync(join(runningMade.path, 'src', 'a.js'), 'utf8'), 'committed a\n', 'the running session\'s export keeps its bytes');
+      assert.equal(readFileSync(join(malformedMade.path, 'src', 'a.js'), 'utf8'), 'committed a\n', 'the malformed receipt\'s export keeps its bytes');
+      assert.equal(readFileSync(join(half, 'partial.js'), 'utf8'), 'half', 'an incomplete directory is not a target');
+      assert.equal(readFileSync(join(unregistered, 'exports', 'whatever', 'keep.txt'), 'utf8'), 'mine', 'an arbitrary exports directory is not a target');
+      assert.equal(readFileSync(join(malformed, 'gate.log'), 'utf8'), 'red');
+    } finally { x.m.cleanup(); }
+  });
+
+  it('the pressure pass selects exactly the routine pass\'s exports and weakens none of their safeguards', async () => {
+    const x = exportMachine();
+    try {
+      const ok = x.session('ok'); const okMade = await x.exportIn(ok); x.end(ok);
+      const live = x.session('live'); const liveMade = await x.exportIn(live);
+      const half = join(x.session('incomplete'), 'exports', 'abcdef012345-0123456789abcdef');
+      mkdirSync(half, { recursive: true });
+      x.m.cwds.push({ pid: 50, cwd: join(liveMade.path, 'src') });
+      const routine = runTidy({ apply: false, ...x.exportDoors() }).list;
+      const pressure = runTidy({ apply: true, pressure: true, ...x.exportDoors() }).list;
+      assert.deepEqual(targetsOf(pressure, 'scratch-export'), targetsOf(routine, 'scratch-export'));
+      assert.deepEqual(targetsOf(pressure, 'scratch-export'), [okMade.path]);
+      assert.equal(present(liveMade.path), true, 'a standing process keeps its export under pressure');
+      assert.equal(present(half), true, 'an incomplete directory stays under pressure');
+    } finally { x.m.cleanup(); }
+  });
+
+  it('an export changed between the list and the apply is retained with its reason: changed content, replaced receipt, or another owner', async () => {
+    const x = exportMachine();
+    try {
+      const contentDir = x.session('content'); const contentMade = await x.exportIn(contentDir); x.end(contentDir);
+      const receiptDir = x.session('receipt'); const receiptMade = await x.exportIn(receiptDir); x.end(receiptDir);
+      const ownerDir = x.session('owner'); const ownerMade = await x.exportIn(ownerDir); x.end(ownerDir);
+      const { listPath } = runTidy({ apply: false, ...x.exportDoors() });
+      writeFileSync(join(contentMade.path, 'src', 'a.js'), 'Xommitted a\n');
+      const receiptFile = join(receiptDir, '.mc-exports', `${receiptMade.id}.json`);
+      writeFileSync(receiptFile, readFileSync(receiptFile, 'utf8').replace('"state": "ready"', '"state": "ready", "note": "edited"'));
+      const ownerFile = join(ownerDir, '.mc-scratch.json');
+      writeFileSync(ownerFile, JSON.stringify({ ...JSON.parse(readFileSync(ownerFile, 'utf8')), session: 'goal:mc/someone-else' }));
+      const { applied } = applyTidy({ listPath, ...x.exportDoors() });
+      const outcome = (path) => applied.find((item) => item.path === path);
+      assert.equal(outcome(contentMade.path).ok, false);
+      assert.match(outcome(contentMade.path).why, /changed content: src\/a\.js/u);
+      assert.equal(outcome(receiptMade.path).ok, false);
+      assert.match(outcome(receiptMade.path).why, /receipt, tree or dependency link changed/u);
+      assert.equal(outcome(ownerMade.path).ok, false);
+      assert.match(outcome(ownerMade.path).why, /owning session of this export changed/u);
+      for (const kept of [contentMade.path, receiptMade.path, ownerMade.path]) assert.equal(present(kept), true, `${kept} survives`);
+      assert.equal(readFileSync(join(contentMade.path, 'src', 'a.js'), 'utf8'), 'Xommitted a\n', 'the changed bytes are not overwritten');
+    } finally { x.m.cleanup(); }
+  });
+  it('ordinary and pressure apply recheck content, ownership and cwd after another candidate was inspected', async () => {
+    for (const pressure of [false, true]) {
+      for (const change of ['content', 'owner', 'cwd', 'unknown-open']) {
+        const x = exportMachine();
+        try {
+          const firstDir = x.session('a-first'); const first = await x.exportIn(firstDir); x.end(firstDir);
+          const secondDir = x.session('z-second'); const second = await x.exportIn(secondDir); x.end(secondDir);
+          const preview = runTidy({ pressure, ...x.exportDoors() });
+          assert.deepEqual(targetsOf(preview.list, 'scratch-export'), [first.path, second.path].sort());
+          let changed = false;
+          const outcome = applyTidy({ listPath: preview.listPath, pressure, ...x.exportDoors({
+            openIn: (path) => {
+              if (path === second.path && !changed) {
+                changed = true;
+                if (change === 'content') writeFileSync(join(first.path, 'src/a.js'), 'NEW USER EVIDENCE');
+                if (change === 'owner') {
+                  const p = join(firstDir, '.mc-scratch.json');
+                  writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p)), session: 'goal:mc/replacement' }));
+                }
+                if (change === 'cwd') x.m.cwds.push({ pid: 81, cwd: join(first.path, 'src') });
+              }
+              return change === 'unknown-open' && changed && path === first.path ? null : [];
+            },
+          }) });
+          assert.equal(present(join(first.path, 'src/a.js')), true, `${pressure}/${change}: changed or occupied candidate survives`);
+          assert.equal(readFileSync(join(first.path, 'src/a.js'), 'utf8'), change === 'content' ? 'NEW USER EVIDENCE' : 'committed a\n');
+          assert.deepEqual(outcome.applied.filter((item) => item.kind === 'scratch-export' || [first.path, second.path].includes(item.path)).map((item) => [item.path, item.ok]).sort(), [[first.path, false], [second.path, true]].sort());
+          assert.equal(readFileSync(join(firstDir, 'gate.log'), 'utf8'), 'red');
+          assert.equal(present(second.path), false);
+        } finally { x.m.cleanup(); }
+      }
+    }
+  });
+
 });

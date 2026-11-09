@@ -53,6 +53,9 @@
  *   - (A) A `~/mc/gate-cache/<slug>/<key>/` entry under a slug a repository mc knows has goes when no round has used it for fourteen days
  *     (`meta.at`), and a `<key>.tmp-<pid>` staging directory once it is a day old, through `rmTree`. The dependency cache is bounded by
  *     count (`prepare-cache.js`); this bounds it by age too.
+ *   - (S) Also: a registered source export of a session, `<scratch>/<stem>/exports/<id>`, verified
+ *     against its receipt and retained commit, once its session has ended and no process stands in it
+ *     (`scratch.js`, docs/technical/mc-tidy.md "Registered source exports").
  *   - (S) Inside a runner session's scratch directory
  *     (`~/mc/runner/scratch/<stem>/`), a git worktree and a `DerivedData`
  *     directory are the two things that may go, and only when the directory's
@@ -91,6 +94,9 @@ import {
 import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
 import { ATTACHED_MARK } from './shared-deps.js';
+import {
+  SCRATCH_MARKER, SCRATCH_SCHEMA, exportDecision, exportShapeOk, gatherExports, removeExport, withSessionLockSync,
+} from './scratch.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
@@ -101,7 +107,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 11;
+export const RULES_VERSION = 12;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
@@ -123,9 +129,8 @@ const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
 export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S', 'B']);
-/** The ownership record the runner writes into each session's scratch directory (`run.js`). */
-export const SCRATCH_MARKER = '.mc-scratch.json';
-export const SCRATCH_SCHEMA = 'mc-scratch';
+/** The ownership record the runner writes into each session's scratch directory (`run.js`), defined in scratch.js. */
+export { SCRATCH_MARKER, SCRATCH_SCHEMA } from './scratch.js';
 /** The one name under a scratch directory that is rebuildable whole. */
 const DERIVED_DATA = 'DerivedData';
 
@@ -170,6 +175,7 @@ const KIND_ROOT = {
   'gate-cache-entry': 'gate_cache',
   'scratch-worktree': 'scratch',
   'scratch-derived': 'scratch',
+  'scratch-export': 'scratch',
   'wrangler-log': 'wrangler_logs',
   'mc-shot': 'shots',
   'codex-image': 'codex_images',
@@ -248,7 +254,7 @@ export function gatherTidyFacts({
     now, work_root: root, projects_root: roots.claude, roots,
     plan_checkouts: [], plan_worktrees: [], goal_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
-    scratch_items: [], generated_files: [], cache_items: [],
+    scratch_items: [], scratch_exports: [], generated_files: [], cache_items: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
@@ -434,6 +440,26 @@ export function gatherTidyFacts({
         if (marker) item.open = openIn(path);
         if (scratchItem(item).target) item.bytes = treeBytes(path);
       } catch (error) { item.error = message(error); }
+    }
+  }
+
+  // (S) registered source exports (scratch.js): each session's receipts read and its trees verified here; tidyPlan decides.
+  // Only `<scratch>/<stem>/exports/<id>` with its receipt in `.mc-exports/` is a candidate, never an arbitrary exports directory.
+  const exportGit = { text: (cwd, args) => git(cwd, args), blobs: null };
+  const standingOf = (path, { excludePid = null } = {}) => {
+    if (!running) return null;
+    try { return processesStandingIn([path], { cwds: running }).map((p) => p.pid).filter((pid) => pid !== excludePid); } catch { return null; }
+  };
+  const runnerEnded = (marker) => {
+    if (marker.ended) return null;
+    try { return runnerGone(marker, { alive, commandLine }); } catch { return null; }
+  };
+  for (const stem of listNames(roots.scratch)) {
+    const dir = join(roots.scratch, stem);
+    try {
+      facts.scratch_exports.push(...gatherExports({ stemDir: dir, env, git: exportGit, repos, standing: standingOf, openIn, runnerGone: runnerEnded }));
+    } catch (error) {
+      facts.scratch_exports.push({ path: dir, stem, error: message(error), receipt: null, marker: null, live: null, open: null, verify: null, bytes: 0 });
     }
   }
 
@@ -1200,6 +1226,16 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
       });
     } else keep(item.path, 'S', verdict.why);
   }
+  // (S) registered source exports: the same decision as a session's own release makes, on the facts read now.
+  for (const item of facts.scratch_exports || []) {
+    const verdict = judge(exportDecision, item);
+    if (verdict.target) {
+      targets.push({
+        path: item.path, kind: 'scratch-export', rule: 'S', why: verdict.why, bytes: verdict.bytes || 0,
+        owner_id: scratchOwner(item.marker), identity: verdict.identity,
+      });
+    } else keep(item.path, 'S', verdict.why);
+  }
 
   // (L) T1–T5 and leftovers, unchanged, over what G left.
   const cutoff = facts.now - days * DAY_MS;
@@ -1356,6 +1392,8 @@ export function outsideRoots(target, roots) {
     // `<scratch>/<stem>/<worktree>` and `<scratch>/<stem>/DerivedData`.
     'scratch-worktree': dirname(parent) === base,
     'scratch-derived': dirname(parent) === base && name === DERIVED_DATA,
+    // `<scratch>/<stem>/exports/<id>`: exactly three levels, no link on the way, and a receipt-shaped id.
+    'scratch-export': exportShapeOk(target.path, roots.scratch) && real.startsWith(`${base}/`),
     'wrangler-log': parent === base && name.endsWith('.log') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
     'mc-shot': (parent === base || parent.startsWith(`${base}/`)) && name.endsWith('.png') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink()
       && real.slice(base.length + 1).split('/').every((part) => !part.startsWith('.') && part !== 'sessions'),
@@ -1403,6 +1441,7 @@ export function applyTidy({
   const worktrees = new Map([...(facts.plan_worktrees || []), ...(facts.plan_checkouts || [])].map((item) => [item.path, item]));
   const workAreas = new Map([...(facts.work_areas || []), ...(facts.step_areas || []).filter((item) => item.worktrees)].map((item) => [item.path, item]));
   const scratch = new Map((facts.scratch_items || []).map((item) => [item.path, item]));
+  const exportsByPath = new Map((facts.scratch_exports || []).map((item) => [item.path, item]));
   const caches = new Map((facts.cache_items || []).map((item) => [item.path, item]));
 
   const applied = [];
@@ -1496,6 +1535,25 @@ export function applyTidy({
         const git = doors.git || realGit;
         if (!owner || !retainReplayHead(owner, item.head, item.refs, git)) { applied.push({ path, ok: false, why: 'replay HEAD could not be retained in its owning repository' }); continue; }
         if (!removeWorktree(owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); continue; }
+      } else if (target.kind === 'scratch-export') {
+        // Its receipt, tree and dependency link are read again inside the removal; a changed identity keeps it.
+        const item = exportsByPath.get(path);
+        if (!item || !sameEvidence(again.identity, target.identity)) {
+          applied.push({ path, ok: false, why: 're-check: its receipt, tree or dependency link changed since the list' });
+          continue;
+        }
+        const outcome = withSessionLockSync(item.stem_dir, () => removeExport({
+          stemDir: item.stem_dir, id: item.id, identity: target.identity,
+          git: { text: doors.git || realGit }, repos: doors.repos || defaultRepos(env),
+          standing: (candidate) => {
+            const running = (doors.cwds || cwdsOfUser)();
+            if (!running?.length || running.complete === false) return null;
+            return processesStandingIn([candidate], { cwds: running }).map((p) => p.pid);
+          },
+          openIn: doors.openIn || openFilesIn,
+          runnerGone: (marker) => runnerGone(marker, { alive: doors.alive || pidAlive, commandLine: doors.commandLine || commandLineOf }),
+        }));
+        if (!outcome.ok) { applied.push({ path, ok: false, why: outcome.why }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);
         remove(path);
