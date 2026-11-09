@@ -638,8 +638,14 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     return { ...dash, ...events, cost, note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
   const json = sessionResult(stdout);
-  // Every claude session's cost is priced per request from its stream, with or without a result line.
-  const cost = streamSummary(stdout)?.total_cost_usd ?? null;
+  // A session that answered carries claude's own list-price cost (`total_cost_usd`,
+  // `costBasis: 'list'`), priced per request with every tier — checked by hand
+  // 2026-11-09 against a Haiku 5.5 session: $3.04 against claude's $3.02. Only a
+  // session ended before its result line is priced from its stream, where each
+  // message's `output_tokens` is the count when it started, not when it ended:
+  // that cost leaves out most of the output.
+  const answered = Number(json?.total_cost_usd);
+  const cost = json?.total_cost_usd != null && Number.isFinite(answered) ? answered : (streamSummary(stdout)?.total_cost_usd ?? null);
   if (!json) {
     // No answer: the runner killed the session (a landing through `mc merge`,
     // rc=143), or the API ended it without a result line. Whether the quota

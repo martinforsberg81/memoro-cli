@@ -51,8 +51,14 @@ each:
   session is a lower bound.
 
 A runner session's cost is recorded when it ends, in runs.tsv's `cost`
-column (dollars, four decimals): claude's priced per request from its stream,
-codex's on its totals. `rowCost` takes that recorded cost; a row without one
+column (dollars, four decimals). A claude session that answered records
+claude's own `total_cost_usd` (`costBasis: 'list'`), which prices every
+request at its tier; checked by hand on 2026-11-09 against a Haiku 5.5
+session ($3.04 computed, $3.02 reported). A claude session ended before its
+result line (a landing through `mc merge`) is priced from its stream message
+by message; the stream's `output_tokens` are each message's count when it
+started, so that cost leaves out most of the output. Codex is priced on its
+totals. `rowCost` takes that recorded cost; a row without one
 (before 2026-11-09) is priced on its totals by its own `model`, at the base
 tier — an underestimate for long Haiku prompts — and a row from before the
 `model` column at the runner's model, `opus` (`RUNNER_MODEL`).

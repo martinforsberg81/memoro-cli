@@ -245,7 +245,8 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(summed.subtype, 'error_during_execution');
     assert.equal(summed.result, 'blocked');
     const r = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 0 });
-    assert.deepEqual(r, { turns: '32', session: 'sid', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', cost: null, note: 'failed', quota: false, quotaReset: null });
+    // The cost is claude's own running total, the last result line's.
+    assert.deepEqual(r, { turns: '32', session: 'sid', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', cost: 1.75, note: 'failed', quota: false, quotaReset: null });
   });
 
   it('keeps the quota rule: a short limit answer is quota', () => {
