@@ -106,7 +106,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   };
   const log = [];
   const aborted = new Set();
-  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [], shelved: [], attached: [] };
+  const calls = { stopped: [], git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], rmScratch: [], checkouts: [], rounds: [], docsRounds: [], ticks: [], shelved: [], attached: [], sweeps: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   /** `/w/runner/block/<repo>` — and the one it writes a blocked step in. */
@@ -116,6 +116,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   const duringSession = [];
   // A scratch directory's mtime, by path; one not named here is as old as `now`.
   const scratchAges = {};
+  const sweepAnswer = () => ({ removed: [], kept: [] });
+  const sweepHook = { answer: null };
   const deps = {
     env,
     // The runner and tidy share this short owner/allocation lock. Fixture
@@ -188,6 +190,14 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
     // The scratch directories of `/w/runner/scratch/`, with an age each.
     mkdir: (p) => { dirs.add(p); },
+    // The end-of-session sweep of this session's exports (scratch.js). What it saw is recorded at the call: the end marker and the
+    // finalized log of this session, so a test can say the cleaner ran after both. Answered empty unless a test says otherwise.
+    sweepExports: async (scratch) => {
+      const marker = JSON.parse(files[`${scratch}/.mc-scratch.json`] || 'null');
+      const stem = scratch.split('/').at(-1);
+      calls.sweeps.push({ scratch, ended: Boolean(marker?.ended), logged: `/w/runner/log/${stem}.jsonl` in files });
+      return sweepHook.answer ? sweepHook.answer(scratch) : sweepAnswer(scratch);
+    },
     scratchDirs: (p) => [...dirs].filter((d) => d.startsWith(`${p}/`) && !d.slice(p.length + 1).includes('/'))
       .map((d) => ({ name: d.slice(p.length + 1), mtimeMs: scratchAges[d] ?? Date.parse(now) })),
     rmTree: (p) => { dirs.delete(p); calls.rmScratch.push(p); return true; },
@@ -453,7 +463,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
       return { ok: true, stdout: '' };
     },
   };
-  return { deps, files, dirs, scratchAges, log, calls, root, duringSession };
+  return { deps, files, dirs, scratchAges, log, calls, root, duringSession, sweepHook };
 }
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */
@@ -643,6 +653,46 @@ test('a scratch directory that cannot be made is said, and the session starts wi
   assert.equal('MC_SCRATCH' in f.calls.sessions[0].env, false);
   assert.equal(f.calls.sessions[0].env.MC_GOAL, 'prog/alpha');
   assert.match(f.files['/w/runner/log/runner.log'], /goal:prog\/alpha: no scratch directory .*EACCES/u);
+});
+
+test('the session end: the end marker and finalized logs are written first, then this session\'s own scratch is swept, once', async () => {
+  const f = goalFixture({ alpha: {} });
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 1);
+  const scratch = f.calls.sessions[0].env.MC_SCRATCH;
+  assert.deepEqual(f.calls.sweeps, [{ scratch, ended: true, logged: true }], 'only this session, after its end marker and its finalized log');
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /scratch/u, 'an empty sweep reports nothing');
+});
+
+test('a failed session and an interrupted-but-resolved one are swept by the same rule, after their logs', async () => {
+  for (const answer of [
+    () => ({ status: 1, stdout: '', stderr: 'boom', timedOut: false }),
+    () => ({ status: null, stdout: '', stderr: '', timedOut: true }),
+  ]) {
+    const f = goalFixture({ alpha: {} });
+    f.answer = answer;
+    await createRunner({ deps: f.deps }).pass();
+    const scratch = f.calls.sessions[0].env.MC_SCRATCH;
+    assert.deepEqual(f.calls.sweeps, [{ scratch, ended: true, logged: true }]);
+  }
+});
+
+test('a cleanup that is refused or fails is recorded as cleanup: the session, the goal and the log entries are those of a clean run', async () => {
+  const clean = goalFixture({ alpha: {} });
+  await createRunner({ deps: clean.deps }).pass();
+  for (const failure of [
+    { answer: { error: 'sweep exited 1: scratch is busy' } },
+    { throws: new Error('spawn E2BIG') },
+  ]) {
+    const f = goalFixture({ alpha: {} });
+    f.sweepHook.answer = failure.throws ? () => { throw failure.throws; } : () => failure.answer;
+    await createRunner({ deps: f.deps }).pass();
+    assert.deepEqual(goalEntries(f), goalEntries(clean), 'the goal log is the same');
+    assert.equal(f.calls.sessions.length, clean.calls.sessions.length, 'the same sessions ran');
+    const lines = (fx) => fx.files['/w/runner/log/runner.log'].split('\n').filter((line) => !/scratch/u.test(line));
+    assert.deepEqual(lines(f), lines(clean), 'the runner log says the same about the session as a clean run');
+    assert.match(f.files['/w/runner/log/runner.log'], /scratch cleanup not completed — .*; its exports stay for the next tidy/u);
+  }
 });
 
 test('the chore pass removes no scratch directory by age: what goes from scratch is tidy rule S\'s, on proof', async () => {

@@ -59,6 +59,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
@@ -105,6 +106,7 @@ import { billingRoute, gatewayLaunch } from './billing-route.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
+import { runTool } from './child-async.js';
 import { rmTree } from './rm-tree.js';
 import { POLL_MS as DISK_POLL_MS, createDiskPressure, gb, statfsAvailable } from './disk-pressure.js';
 import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
@@ -165,6 +167,23 @@ export const SLEEP_GAP_MS = 3 * 60 * 1000;
  * The lane total as `lanes.json` says it now (`mc run lanes`). `deps.laneCount`
  * answers `{ lanes }`, or the number itself.
  */
+/** The runner's own entry point, which the end-of-session sweep runs as a child process. */
+const MC_CLI = fileURLToPath(new URL('../mc-cli.js', import.meta.url));
+
+/**
+ * `mc scratch sweep` for one session's scratch directory, awaited in a bounded
+ * child process: no synchronous tree read or child wait on the runner's event
+ * loop. Resolves to `{ removed, kept }`, or `{ error }` when it did not run or
+ * did not answer; never rejects.
+ */
+export async function sweepSessionExports(scratch, { run = runTool, timeoutMs = 120_000 } = {}) {
+  const ran = await run(process.execPath, [MC_CLI, 'scratch', 'sweep', '--json'], {
+    env: { ...process.env, MC_SCRATCH: scratch }, timeoutMs,
+  });
+  if (ran.status !== 0) return { error: `sweep exited ${ran.status ?? ran.signal ?? 'without a status'}: ${String(ran.stderr || ran.error?.message || '').trim().split('\n')[0] || 'no detail'}` };
+  try { return JSON.parse(ran.stdout); } catch { return { error: 'sweep printed no answer' }; }
+}
+
 export function laneTotal(deps = {}) {
   const read = deps.laneCount || (() => readLaneCount({ repos: REPO_NAMES.length }));
   const value = read();
@@ -488,6 +507,7 @@ export function realDeps(env = process.env) {
     // session, with its ownership record (`.mc-scratch.json`) that tidy's rule
     // S reads. Nothing here removes one by age.
     mkdir: (path) => { mkdirSync(path, { recursive: true }); },
+    sweepExports: (scratch) => sweepSessionExports(scratch),
     // The bytes an unprivileged writer can still use on the volume holding
     // `path` — or its nearest existing parent, since scratch may not exist
     // yet. Null when nothing can be read. A deps object without it has no disk
@@ -895,6 +915,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `scripts/measure-steps.py` reads — absent when there was none), and
    * stderr (`.json.err`, where it always was).
    */
+  /**
+   * The end-of-session step (scratch.js): this session's own ready exports, and
+   * nothing else, once its end marker and finalized logs are written. A failure
+   * is recorded here as cleanup; it does not change the session's exit, its goal
+   * verdict or its provider classification, and its exports stay for tidy.
+   */
+  async function reclaimSessionExports(scratch, name) {
+    if (!scratch) return;
+    let answer;
+    try { answer = await deps.sweepExports(scratch); } catch (error) { answer = { error: String(error?.message || error) }; }
+    if (answer?.error) { say(`${name}: scratch cleanup not completed — ${answer.error}; its exports stay for the next tidy`); return; }
+    for (const item of answer?.removed || []) say(`${name}: scratch export ${item.id} released — ${item.why}`);
+    for (const item of answer?.kept || []) say(`${name}: scratch export ${item.id} kept — ${item.why}`);
+  }
+
   function writeSessionLogs(stem, result) {
     if (!deps.exists(`${stem}.jsonl`)) deps.write(`${stem}.jsonl`, result.stdout);
     // A session `mc merge` ended has no result line; its turns and usage are
@@ -1847,6 +1882,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       writeSessionLogs(out, result);
+      // After the end marker and the finalized logs: this session's own ready exports only (scratch.js). A failure is
+      // recorded as cleanup and changes nothing about the session, the goal or the provider.
+      await reclaimSessionExports(scratchEnv.MC_SCRATCH, name);
       noteWindows({ name, launch }, result.stdout);
       const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
       if (result.handedOff) read.note = 'success,queued';
