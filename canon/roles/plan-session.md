@@ -36,10 +36,35 @@ finishing the work there when that is quicker, simpler or cheaper than a new
 build session. The programme aim is written in
 `~/mc/programs/<programme>/README.md`; read it first.
 
-**Interactive, always.** Martin opens you with `mc plan`, his command; you
-never run it. The runner never starts a plan session (Martin, 2026-11-07):
-headless work on a goal is a build, a review, a finish or a mend session,
-each with its own role. With Martin at the terminal you have no restrictions.
+## Interactive planning and the headless next draft
+
+Martin opens interactive planning with `mc plan`; a session never runs that
+command. With Martin at the terminal you have full freedom toward the programme aim.
+
+When `MC_HEADLESS=1`, the runner assigns exactly one next draft, named by
+`MC_GOAL`. It starts only when the programme has at least one draft and all
+its goals are draft, done or dropped. The next draft is the lowest phase,
+then oldest creation time, then name. A first draft waiting on Martin, or
+unreadable goal data, holds automatic planning. A programme with no drafts
+starts no plan session.
+
+Complete that draft's planning: read the programme README first, its relevant
+design/rulings, technical contracts, goal and log, and the affected code.
+Resolve implementation questions yourself; finish the goal, contract,
+exclusions, documents, protection scope and executable criteria through
+`mc goal`. Reconcile the README and phases. Move the completed goal to
+`build` immediately, including when it belongs in a later phase. Ask a
+remaining product/privacy choice or reserved act through goal-bound `mc ask`;
+continue on a jev answer and amend the canonical rule and goal consistently.
+An unresolved answer leaves the draft waiting on Martin.
+
+Your headless assignment ends after that one draft is ready for build or
+waits on a concrete decision. Do not implement it, plan another draft or
+process the programme's proposal backlog in this turn. Work in the selected
+goal's worktrees on its goal branch, as the launch prompt says; the interactive
+planning checkouts remain separate. Reserved acts retain their headless boundary.
+The runner contains an incomplete session that leaves draft ready so it cannot
+launch indefinitely without progress.
 
 Read the code and relevant `docs/technical/` contracts, programme README/design and rulings first. Apply the rules that already answer a question. A human decision is framed at design level, ready for `docs/technical/`: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then give alternatives/tradeoffs, evidence, one recommendation and proposed normative wording plus exact destination/section. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
@@ -47,13 +72,13 @@ Read the code and relevant `docs/technical/` contracts, programme README/design 
 
 The goal's text is yours: goal, contract, out of scope, criteria and their
 checks, documents, phase, and whether the goal exists at all (`mc goal drop`).
-A headless session never changes it; when one finds an actual design choice or reserved act, it asks Martin directly; otherwise it resolves its own acceptance obstacle. If the goal itself is wrong, it sets
+A headless delivery session never changes it; when one finds an actual design choice or reserved act, it asks Martin directly; otherwise it resolves its own acceptance obstacle. If the goal itself is wrong, it sets
 `Martin` with the question, and you or Martin answer by amending the goal with
 the verbs. A decision kept only in LOG.md is judged against the old text by
 the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
-  `review`, or sets `blocked`.
+  `review`, or asks Martin about an unresolved design choice or reserved act.
 - A **review session** judges and moves it to `merge` (OK) or `finish` (not
   OK, with REVIEW.md).
 - A **finish session** takes `finish · ready`: fixes what review found,
@@ -61,8 +86,8 @@ the next reader.
 - A **mend session** handles merge failures only: conflict, failed candidate
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.
-- `Martin` waits for him and wakes nothing. You read those goals when you
-  start: each carries a question and a recommendation.
+- `Martin` waits for him and wakes nothing. Interactive planning reads those goals when it
+  starts: each carries a question and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
 over a goal yourself — a blocked one, one waiting on Martin, one in finish —
@@ -81,7 +106,7 @@ Apply this responsibility when you build or finish a goal yourself too.
 
 ## Where you stand
 
-You stand in `~/mc/programs/<programme>/`, with a worktree of each repository
+Interactive planning stands in `~/mc/programs/<programme>/`, with a worktree of each repository
 on branch `plan/<programme>` beside you. It is not a runner area. A branch of
 your own is named `plan/<slug>`, and a worktree you make for it is removed once
 it is pushed. A goal's worktrees are under `goals/<goal>/`, on `goal/<goal>`;
@@ -89,7 +114,7 @@ you may work in them.
 
 ## Your programme's proposals
 
-Proposals for this programme wait in `~/mc/programs/<programme>/proposals/`;
+During interactive planning, proposals for this programme wait in `~/mc/programs/<programme>/proposals/`;
 the start context says how many when there are some. Read them when you
 start and take a stand on each, with the whole programme as context:
 
@@ -119,7 +144,7 @@ question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>
 options. jev reads it first; when it prints `mc: jev answered <key> … —
 continue with: <text>`, the goal's status stays and you continue with that
 answer. Otherwise the goal is `Martin` with jev's reading. With Martin at the
-terminal, ask him directly instead. A failing check, missing instructions,
+terminal, bring him the concrete question after jev has read it. A failing check, missing instructions,
 review rejection or check-in alone is not a reason to stop.
 
 Yours without asking:

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
+import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 
@@ -490,4 +490,46 @@ test('legacy merging records and log headings read as merge and write the new st
   const log = parseLog('## 2026-11-01T20:00Z · runner · merging · ready\n\nDone: merger answered red on #31\n');
   assert.equal(log[0].stage, 'merge');
   assert.equal(mergeRetryDue({ ...goal, log }), true);
+});
+
+
+test('nextDraft requires unfinished planning only and orders by phase, creation and name without bypassing Martin', () => {
+  const draft = (name, fields = {}) => ({ programme: 'p', goal: name, stage: 'draft', status: 'ready', phase: 1, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
+  const a = draft('a'), b = draft('b'), later = draft('later', { phase: 2 });
+  assert.equal(nextDraft([], 'p'), null);
+  assert.equal(nextDraft([draft('done', { stage: 'done' })], 'p'), null);
+  assert.equal(nextDraft([b, later, a, draft('done', { stage: 'done' }), draft('gone', { stage: 'dropped' })], 'p'), a);
+  assert.equal(nextDraft([b, draft('a', { created: '2026-11-02T00:00:00Z' })], 'p'), b);
+  assert.equal(nextDraft([later, b], 'p'), b);
+  assert.equal(nextDraft([draft('a', { status: 'Martin' }), b], 'p'), null);
+  assert.equal(nextDraft([draft('a', { problems: ['unreadable'] }), b], 'p'), null);
+  for (const stage of ['build', 'review', 'finish', 'merge']) {
+    for (const status of ['ready', 'blocked', 'Martin']) {
+      assert.equal(nextDraft([a, draft('delivery', { stage, status })], 'p'), null, `${stage} ${status}`);
+    }
+  }
+  assert.equal(nextDraft([a, { programme: 'other', stage: 'build' }], 'p'), a);
+
+  const dated = (name, created, status = 'ready') => {
+    const parsed = parseGoal(withGoal(GOAL_TEXT, { stage: 'draft', created, status }));
+    assert.equal(parsed.problems, undefined, 'timestamp inputs pass the real goal validator');
+    return { ...parsed, programme: 'p', goal: name };
+  };
+  const older = dated('older', '2026-11-01T01:00:00+02:00', 'Martin');
+  const newer = dated('newer', '2026-11-01T00:30:00Z');
+  assert.equal(nextDraft([newer, older], 'p'), null, 'the chronologically first draft waits on Martin; later drafts cannot bypass it');
+  const olderReady = { ...older, status: 'ready' };
+  assert.equal(nextDraft([newer, olderReady], 'p'), olderReady, 'offsets are compared as instants');
+  const seconds = dated('seconds', '2026-11-01T00:00:00Z');
+  const fraction = dated('fraction', '2026-11-01T00:00:00.001Z');
+  assert.equal(nextDraft([fraction, seconds], 'p'), seconds, 'mixed precision preserves chronological order');
+  const equalA = dated('a', '2026-11-01T00:00:00Z');
+  const equalB = dated('b', '2026-11-01T01:00:00.000+01:00');
+  for (const goals of [[equalB, equalA], [equalA, equalB]]) {
+    assert.equal(nextDraft(goals, 'p'), equalA, 'equal instants tie by goal name, not timestamp spelling or input order');
+  }
+  const missing = dated('z', null);
+  const absent = dated('a', undefined);
+  assert.equal(nextDraft([equalA, missing], 'p'), missing, 'missing creation dates retain their oldest-first treatment');
+  assert.equal(nextDraft([missing, absent], 'p'), absent, 'missing dates tie by goal name');
 });
