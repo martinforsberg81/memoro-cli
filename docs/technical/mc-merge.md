@@ -84,6 +84,35 @@ were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
 seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
+Martin, 2026-11-09 (manager session, evening): regardless of load, a merge
+round runs to completion robustly, and it never takes all cores. A round ends
+with a verdict about the change — green, or red on a failed assertion, a thrown
+error or a test that never ends — never with a verdict about the machine. A
+time cut under load (a test cut at the stall guard, a `before` hook node cut at
+its timeout, a file killed from outside the round, a command gate that exited at
+its wall) is unmeasured, not red: once its suite and gates are done the round
+runs each such file or gate again by itself, alone and one at a time at one
+lane with the never-ends limit (`TEST_TIMEOUT_MS`) as its only per-test bound,
+until it has passed on its own (green; a test over its declared limit still goes
+to the too-slow file, so sessions still learn what to rebuild) or failed on its
+own (red). The repository ceiling becomes a report line, not a red; the round
+ends early only when nothing has progressed — no file finished, no gate ended —
+for fifteen minutes, and then it is `stalled` and goes back in line, never to a
+session. The round's test processes never exceed cores − 1 at any moment: its
+command gates run after the suite, not beside it, and the alone phase runs one
+member at a time. The rule of 2026-11-04 stands: an assertion that fails in the
+round and passes alone is still red; only an interrupted test is run again.
+Measured: 38 of 128 non-green memoro rounds since 2026-11-05 ended on a time cut
+at a median load of 25 on 8 cores (32 of 38 at load 15 or more); suite seconds
+per selected file double above load 15; the 180→300 s raise of memoro's
+contract-gate wall (memoro#15161) did not hold at load 40 (memoro#15171,
+19:20Z); 8 of 15 red-under-load rounds met the same cut when measured again.
+The goal `mc/merge-round-runs-to-completion` carries it into the code, memoro's
+`scripts/testing/contract-gate.mjs` (no wall when `MC_GATE_ROUND` is set) and
+these sections; until it lands the paragraphs below — the ceiling as a red, the
+stall guard as a red, `red-under-load` and `file-killed` as requeued stops, and
+the gates beside the suite — describe what runs.
+
 **Every gate round has a repository ceiling.** `round_timeout_ms` and its
 `round_timeout_why` live in `repo-gate-table.js`: 20 minutes for memoro and 15
 minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
