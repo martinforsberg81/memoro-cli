@@ -6,7 +6,7 @@ the user's Coding Profile, which once came first, was removed by ruling 24, and
 the one rule in it nothing else said (what is written in English) is a sentence
 in `all-sessions.md`. This document is the one account of how those two are found
 and joined. `mc run`, `mc plan`, `mc helper` and `mc manager` each described a corner
-of it from their own angle; they now point here, because four parallel accounts
+of it from their own angle; they now point here, because parallel accounts
 of one mechanism is four things to keep true.
 
 What a session is told is never written into a worktree. It rides on the launch
@@ -60,7 +60,7 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: five goal roles, each one file, and the three that
+What canon holds today: five stage/goal roles, each one file, plus the Martin desk role and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
 the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Finish
 and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09).
@@ -73,10 +73,37 @@ and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-1
 | `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
 | `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
 | `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
+| `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 
 ## Parts: one role, started more than one way
+
+### Martin's decision desk
+
+`mc martin` is a foreground-only desk in `~/mc/martin/`, distinct from
+manager, plan and helper. It cannot be launched by the runner or an unattended
+session. Its `get` subcommand is a model-free, read-only view over live
+goal records, not a cache or a second queue store; see [mc-martin.md](mc-martin.md).
+A resumed conversation receives a fresh queue snapshot so remembered goals are
+not treated as current.
+
+Martin explicitly granted this interactive role full authority over waiting
+goals: take over and finish, fix only the obstacle and return to the same
+stage, hand off to an appropriate stage, rewrite goal/criteria/programme plan,
+move stages backward or forward, or drop. The goal verbs enforce it and log
+`by martin`; the role text alone is not authorization. It preserves JSON
+validation and acceptance, review, gate, publish and merge evidence. It cannot
+mark criteria met administratively. Other session roles retain their bounds.
+
+Martin investigates source questions against shared technical standards and
+programme design before raising a choice. Resolved details are not escalated.
+Any remaining choice is synthesized at design level with evidence,
+uncertainty, alternatives/tradeoffs, recommendation and proposed normative
+wording for an exact `docs/technical/` section. Original queue evidence remains
+unchanged. After a decision, the canonical standard and affected programme and
+goal contracts are reconciled before handoff. Get remains model-free and does
+not reinterpret historical questions.
 
 The parser can select parts of a role. The build role currently has one:
 
@@ -166,7 +193,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc martin`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runGoal`) | a selected-draft plan, build, review, finish or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |

@@ -18,10 +18,10 @@ with ✓/✗ and its check, and each worktree's state.
   it back. Every write is validated; an invalid one is refused and not written.
   `mc goal criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`
   rewrites a criterion's text or check and leaves it unmet, logged with the old
-  and new text; a goal session (build, review, finish, mend) cannot.
+  and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin may.
   `mc goal criterion remove [<p>/<g>] <n> --reason "…"` takes criterion `n`
   out, the later ones move up one number, and the removed text, check, met state
-  and reason are logged; a goal session cannot.
+  and reason are logged; a goal session cannot, but interactive Martin may.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
@@ -52,7 +52,9 @@ with ✓/✗ and its check, and each worktree's state.
   <option text>`, the status stays, and the session continues with that answer;
   otherwise the goal is `Martin` with jev's reading in the entry. A reserved
   act (`--reserved deploy|production-data|credentials|admin`) and a person's
-  call never go to jev. `mc goal log --status Martin` is refused: use
+  call never go to jev. Interactive Martin may use `mc ask` for a newly
+  synthesized question after investigating the standards; do not repeat jev for
+  the same recorded live question. `mc goal log --status Martin` is refused: use
   `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
@@ -67,14 +69,15 @@ with ✓/✗ and its check, and each worktree's state.
   within the current stage, including implementation, checks and publication
   when needed; then follow that stage's normal transition. Merely clearing
   `blocked` or moving the goal back to hand the work to the runner does not
-  resolve it. A goal in `Martin` carries a question only a person answers:
-  answer it by amending the goal with the verbs, then set it ready.
+  resolve it. A goal in `Martin` carries the source question for Martin's
+  interactive decision desk. That role investigates it against technical and
+  programme design, resolves settled details, records actual decisions
+  canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
   In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
-- **Refused.** mc refuses every session a backward move, naming both stages
-  — only a person (`MC_TOOL=person`, or none) moves a stage back, and that is
-  logged. It refuses `done` and `dropped` from every session but plan, any
+- **Refused.** mc refuses every session except the interactive Martin role a backward move, naming both stages
+  — a person (`MC_TOOL=person`, or none) and interactive Martin may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin, any
   move but `build → review` from a build session, any but `review →
   merge|finish` from a review, `finish` without REVIEW.md, any but `finish →
   merge` from a finish session, every stage move from a mend session, and
@@ -85,7 +88,7 @@ with ✓/✗ and its check, and each worktree's state.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
-  --reason "…"` abandons delivery; only plan or a person may drop. The stage is
+  --reason "…"` abandons delivery; only plan, interactive Martin or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
   cancelled, and the goal is archived immediately when safe. Shared PRs stay
   open and queued. Failed or unsafe cleanup stays visible and retries through

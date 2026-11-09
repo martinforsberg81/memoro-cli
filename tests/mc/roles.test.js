@@ -324,13 +324,14 @@ describe('reserved names', () => {
   // reserved beside it for a pair of roles that no longer exist; they are
   // ordinary names again, and `mc work pm` makes an ordinary workarea.
   it('is the fixed set, each pointing at its own door', () => {
-    assert.deepEqual([...RESERVED_ROLE_NAMES], ['helper']);
+    assert.deepEqual([...RESERVED_ROLE_NAMES], ['helper', 'martin']);
     for (const name of RESERVED_ROLE_NAMES) assert.equal(reservedRoleName(name), true);
     assert.equal(reservedRoleName('worker-1'), false);
     assert.equal(reservedRoleName('pm'), false);
     assert.equal(reservedRoleName('pm-helper'), false);
     // The bare verb owns `~/mc/helper/`, so that is the command to name.
     assert.match(reservedRoleHint('helper'), /mc helper\)/u);
+    assert.match(reservedRoleHint('martin'), /mc martin\)/u);
   });
 
   it('guards case-insensitively — the filesystems mostly are', () => {
@@ -350,7 +351,7 @@ describe('the role catalogue', () => {
   // when plan became interactive only (Martin, 2026-11-07).
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'build-session.md', 'finish-session.md', 'helper.md', 'intake.md', 'manager.md', 'mend-session.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'build-session.md', 'finish-session.md', 'helper.md', 'intake.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });

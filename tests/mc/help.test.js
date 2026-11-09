@@ -157,7 +157,7 @@ describe('help names the caller, not only the operation', () => {
     // Binary routing is covered above; inspect the shared help and actual
     // command-help path here without starting two more Node processes.
     assert.equal(HELP_TEXT.split('WHO USES THE VERBS\n').length - 1, 1, 'role guidance must not be duplicated during a merge');
-    assert.match(HELP_TEXT, /Person: mc plan, mc manager, mc helper open interactive sessions/u);
+    assert.match(HELP_TEXT, /Person: mc plan, mc manager, mc helper, mc martin open interactive sessions/u);
     assert.match(HELP_TEXT, /mc run start\|stop controls the headless runner/u);
     assert.match(HELP_TEXT, /Session: mc goal new \/ set \/ criterion add writes goals/u);
     let plan = '';

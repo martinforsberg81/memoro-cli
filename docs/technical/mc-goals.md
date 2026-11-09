@@ -48,10 +48,20 @@ merge    ── mend repairs, gates and returns ready ────────�
 merge    ── third failed merge ──────────────────────────────▶ merge · Martin
 any pre-merge blocked ── legacy migration, no session ─────────▶ the same stage · Martin
 any      ── Martin waits and wakes nothing; ready keeps the stage
-any      ── only a person moves a stage backward, logged ─────▶ an earlier stage
+any      ── person or interactive Martin may move backward ───▶ an earlier stage
 ```
 
 ## Layout
+
+### Publication conflicts
+
+Martin, 2026-11-09: a concrete conflict reported by `mc publish`, as well as
+a merger-reported conflict, permits the owning interactive session to merge
+`origin/main` into the goal's existing worktree. Preserve both changes'
+intents, retain history without rebase or force-push, and rerun affected
+acceptance before publishing. This is not permission for routine main
+catch-up, another checkout, an admin merge or deployment. A publication
+conflict is ordinary delivery repair, not a reserved admin act.
 
 ```
 ~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria, its stage and status
@@ -197,10 +207,15 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   brings the candidate up to date when it lands it.
 - **`set <p>/<g> title|goal|contract|out-of-scope --text "…"`** — replaces that
   field. A prose field takes a paragraph per block between blank lines, and an
-  empty text clears it; an empty title is refused.
-- **`document add <p>/<g> --label "…" --path "…"`** — appends a document.
+  empty text clears it; an empty title is refused. Build, review, finish and
+  mend sessions cannot rewrite the brief; plan, interactive Martin and a person
+  may.
+- **`document add <p>/<g> --label "…" --path "…"`** — appends a document;
+  build, review, finish and mend sessions cannot change the brief.
 - **`criterion add <p>/<g> --criterion "…" --check "…"`** — appends a criterion,
   not met. Both flags are required: a criterion without a check is refused.
+  Build, review, finish and mend sessions cannot add acceptance criteria;
+  plan, interactive Martin and a person may.
 - **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
   as holding, after its check was run, or takes it back. A number the goal
   has no criterion for is refused.
@@ -253,7 +268,7 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
-  `done`; it holds no later phase back. The reason is required. Only a person
+  `done`; it holds no later phase back. The reason is required. Only a person, interactive Martin
   or a plan session drops a goal. After persisting the stage, the command closes
   open PRs owned only by this goal, removes their queued/red merge work, and
   archives immediately when the shared archive safety checks pass. PRs carried
@@ -296,16 +311,18 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   here fails the move (`remakeUnbuiltBranches`, `goals.js`). A repository
   without a worktree says `no worktree yet — the runner remakes the branch
   from origin/main at the first session`; it makes no git call.
-- **Forward only, each stage its owner** (`refusedMove`). A session is a
-  caller with `MC_GOAL` set and `MC_TOOL` not `person`. No session moves a
-  stage backward: `mc: a session does not move a goal back — merge → review;
-  only a person does (mc goal stage <programme>/<goal> review, MC_TOOL=person)`,
-  with nothing written. A person may, and the entry says `moved back from
-  merge to review by a person`. The interactive plan session (`MC_ROLE=plan`)
+- **Forward only, each stage its owner, except interactive Martin** (`refusedMove`). A session is a
+  caller with `MC_GOAL` set and `MC_TOOL` not `person`. Ordinary sessions cannot move a
+  stage backward. A person or interactive `MC_ROLE=martin` may; the entry names
+  the actor (`moved back from merge to review by martin`). The interactive plan session (`MC_ROLE=plan`)
   makes any forward move and sets any status. A finish session (`finish-session`) moves `finish` to `merge` and may set `Martin` for an unresolved obstacle. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for an unresolved design choice/reserved act. Review moves `review` to `merge` or `finish`, may set `Martin` directly, and requires REVIEW.md before `finish`. A session other than plan is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
   criterion met mc/g 2` (`unmetGoalWords`). The session decides when to merge.
+  Interactive Martin also has validated goal-field and criterion set/remove,
+  drop and any-stage authority. It cannot make a criterion met administratively
+  or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
+  Martin authority is refused. Build, review and mend retain their ordinary limits.
 - **`show <p>/<g>`** — a status line (`<p>/<g> · stage · status · phase <n> · repos · class ·
   criteria <met>/<all> · created …`, with `· prs …` when set), the goal as text (*Seen, not only stored*), the last three entries, and
   each worktree's changed files, commits past `origin/main` and last commit date.
@@ -704,7 +721,7 @@ Each stage has one owner, and a goal passes each once:
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
-- `dropped` — delivery abandoned (`mc goal drop`), by a person or plan, from any
+- `dropped` — delivery abandoned (`mc goal drop`), by a person, plan or interactive Martin, from any
   stage. Final; it holds no later phase back, and is immediately finalized and
   archived when cleanup is safe. A dropped goal never wakes a mend session or
   accepts an old merger answer.
@@ -712,7 +729,7 @@ Each stage has one owner, and a goal passes each once:
 `Martin`, in any stage, waits on Martin and wakes nothing: `mc goal list` says `<stage> · Martin, waits on
 a person`, and the page leads the row's tail with `waits on a person` and the
 last entry's comment, in the colour of what waits on a person. `mc goal ready`
-sets it ready in the same stage. Only a person moves a stage backward. The
+sets it ready in the same stage. A person or interactive Martin may move a stage backward. The
 page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
 (`programmes[].goals[]`, with `stage` and `status`) all say `stage · status`.
 

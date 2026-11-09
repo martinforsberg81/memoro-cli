@@ -168,6 +168,21 @@ test('an unresolved goal-bound ask records safe evidence and sets Martin directl
   assert.equal(f.ledger[0].goal, 'jev/unsettled');
 });
 
+test('interactive Martin may consult jev on a newly synthesized question and keeps truthful role evidence', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'martin-choice');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
+  writeFileSync(file, goalJson({ status: 'Martin', stage: 'build', title: 'Martin choice', repos: ['memoro-cli'] }));
+  writeFileSync(log, '## 2026-11-07T00:00Z · runner · build · Martin\n\nComment: runner failure: no structured design question\n');
+  const f = fixture({ response: reply(0.95, 'shared'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/martin-choice', MC_TOOL: 'claude', MC_ROLE: 'martin', cwd: repoDir } });
+  f.deps.readKeys = () => ({ TYPESAFE_API_KEY: 'fixture-secret-value' });
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  assert.equal(await run(['--reason', 'Which general rule?', '--option', 'specific: keep local behavior', '--option', 'shared: define a shared rule', '--recommend', 'shared'], { ...f.deps, read, write: writeFileSync }), 0, `${f.err()}${f.out()}`);
+  assert.equal(f.requests.length, 1);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
+  assert.equal(parseLog(readFileSync(log, 'utf8')).at(-1).role, 'martin');
+});
+
 test('a reserved goal-bound ask sets Martin without a jev request', async () => {
   const goal = join(programmeHome, 'jev', 'goals', 'reserved');
   mkdirSync(goal, { recursive: true });

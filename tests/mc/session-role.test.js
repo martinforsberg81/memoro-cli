@@ -22,6 +22,8 @@ describe('session identity', () => {
       ['/mc/runner/step/p/memoro', null], ['/mc/step/p', null],
       ['/mc/runner/mend/memoro-1', null], ['/mc/brief', 'manager'], ['/mc/manager', 'manager'],
       ['/mc/helper', 'helper'], ['/mc/intake', 'intake'],
+      ['/mc/martin', 'martin'],
+      ['/mc/martin', 'martin'],
       ['/elsewhere', null], ['/mc-other/programs/mc', null], ['/mc/programs/mc/goals', null],
     ]) {
       assert.deepEqual(identity(cwd), { role, programme, source: 'cwd' }, cwd);

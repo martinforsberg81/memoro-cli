@@ -47,9 +47,9 @@ import { mcSkillPath } from './skills.js';
  * `pm` and `pm-helper` were reserved beside it, for the same reason and for a
  * pair of roles that no longer exist. They are ordinary names again.
  */
-export const RESERVED_ROLE_NAMES = Object.freeze(['helper']);
+export const RESERVED_ROLE_NAMES = Object.freeze(['helper', 'martin']);
 
-const ROLE_COMMANDS = { helper: 'mc helper' };
+const ROLE_COMMANDS = { helper: 'mc helper', martin: 'mc martin' };
 
 export function reservedRoleName(name) {
   // Case-insensitively: the filesystems this runs on mostly are, and `PM`

@@ -85,9 +85,14 @@ to call again (Martin's decision: options are required, and a call without
 them is answered with how to call it correctly). `mc goal log --status Martin`
 is refused the same way, pointing at `mc goal martin`.
 
-Build, review, finish, mend and plan may set Martin within their role bounds; build/review retain stage and brief mutation restrictions. Goal-bound mc ask is a single consultation and direct escalation path. The
+Build, review, finish, mend, plan and interactive Martin may set Martin within their role bounds; build/review retain stage and brief mutation restrictions. Martin may use `mc ask` to consult jev once for a newly synthesized design-level question. Goal-bound mc ask is a single consultation and direct escalation path. The
 runner's own recovery settings of `Martin` (`src/mc/run.js`) do not go
 through the verb and never ask jev.
+
+The Martin role's interactive-only restriction also applies to `mc ask`,
+with or without a goal. An unattended Martin call is refused before any
+goal/log/ledger mutation, key read or provider request; ordinary headless
+stage roles retain their existing bounded ask permissions.
 
 ## The flow
 
