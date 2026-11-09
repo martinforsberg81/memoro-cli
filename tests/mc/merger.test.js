@@ -1397,11 +1397,11 @@ describe('no round holds the other lane, and a SIGTERM finishes what is in fligh
 describe('a session decision to merge a goal', () => {
   const GOAL = { programme: 'mc', goal: 'g', dir: '/programs/mc/goals/g' };
   const jobs = [
-    { ...JOB, repo: 'memoro-cli', pr: 90, goal: GOAL, sha: 'old-reviewed-head' },
+    { ...JOB, repo: 'memoro-cli', pr: 90, goal: GOAL },
     { ...JOB, repo: 'memoro', repo_path: '/repos/memoro', pr: 14804, goal: GOAL },
   ];
 
-  function decision({ conflict = false } = {}) {
+  function decision({ reports = [] } = {}) {
     let goal = { ...GOAL, stage: 'merge', status: 'ready', prs: jobs.map(({ repo, pr }) => ({ repo, pr })),
       success_criteria: [{ criterion: 'not checked again', check: 'none', met: false }], log: [], problems: [] };
     const calls = [];
@@ -1413,15 +1413,28 @@ describe('a session decision to merge a goal', () => {
       const pr = Number(args[2]);
       if (args[1] === 'merge') {
         if (landed.has(pr)) return { status: 1, stderr: 'already merged' };
-        if (conflict && pr === 14804) return { status: 1, stderr: 'CONFLICT (content): a.js' };
         landed.add(pr);
         return { status: 0, stdout: '' };
       }
       return { status: 0, stdout: JSON.stringify(landed.has(pr)
         ? { state: 'MERGED', mergeCommit: { oid: `commit-${pr}` }, baseRefName: 'main' }
-        : { state: 'OPEN' }) };
+        : { state: 'OPEN', headRefOid: `head-${pr}` }) };
     };
+    const recorded = [];
+    const started = [];
+    const pending = [...reports];
     const m = machine([], {
+      mergeRound: async (options) => {
+        m.rounds.push(options);
+        assert.equal(await options.beforeMerge(), true);
+        const report = { ...(pending.shift() ?? green) };
+        if (report.merged) {
+          report.merge_commit = `commit-${options.pr}`;
+          landed.add(options.pr);
+        }
+        return report;
+      },
+      recordStart: (options) => started.push(options), record: (report) => recorded.push(report),
       gh, goalsOf: () => [goal], afterLanding: (job) => { pulled.push(job.pr); },
       noteGoal: ({ entry }) => { goal.log.push(entry); },
       setGoal: (change) => {
@@ -1430,26 +1443,68 @@ describe('a session decision to merge a goal', () => {
         return { goal };
       },
     });
-    return { m, calls, writes, landed, pulled, goal: () => goal };
+    return { m, calls, writes, landed, pulled, recorded, started, goal: () => goal };
   }
 
-  it('merges both repositories directly and sets done only after the last landing', async () => {
+  it('lands both repositories through the round and sets done only after the last landing', async () => {
     const d = decision();
-    assert.equal((await landJob(jobs[0], d.m.deps))[0].landed, true);
+    const [first] = await landJob(jobs[0], d.m.deps);
+    assert.deepEqual(d.m.rounds.map(({ repoPath, pr }) => [repoPath, pr]), [['/repos/memoro-cli', 90]], 'goal landing must run a merge round');
+    assert.equal(first.landed, true);
     assert.equal(d.goal().stage, 'merge');
     assert.equal((await landJob(jobs[1], d.m.deps))[0].landed, true);
+    assert.deepEqual(d.m.rounds.map(({ repoPath, pr }) => [repoPath, pr]), [['/repos/memoro-cli', 90], ['/repos/memoro', 14804]]);
     assert.deepEqual([d.goal().stage, d.goal().status], ['done', 'ready']);
-    assert.deepEqual(d.m.rounds, [], 'no gate round');
+    assert.deepEqual(d.recorded.map(({ merge_commit }) => merge_commit), ['commit-90', 'commit-14804']);
+    assert.deepEqual(d.started.map(({ prs }) => prs), [[90], [14804]]);
     assert.deepEqual(d.pulled, [90, 14804], 'successful landings still update installations');
-    assert.deepEqual(d.calls.filter(({ args }) => args[1] === 'merge'), [
-      { args: ['pr', 'merge', '90', '--squash'], cwd: '/repos/memoro-cli' },
-      { args: ['pr', 'merge', '14804', '--squash'], cwd: '/repos/memoro' },
-    ]);
-    assert.equal(d.calls.some(({ args }) => args.includes('headRefOid')), false);
+    assert.deepEqual(d.calls.filter(({ args }) => args[1] === 'merge'), [], 'only the round may squash');
+    assert.deepEqual(d.calls.filter(({ args }) => args[4] === 'headRefOid').map(({ args }) => args[2]), ['90', '14804']);
+  });
+
+  it('an exact reused round lands without a suite', async () => {
+    const reused = { ...green, reused: { mode: 'exact' }, suite: null };
+    const d = decision({ reports: [reused] });
+    const [answer] = await landJob(jobs[0], d.m.deps);
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90]);
+    assert.equal(answer.landed, true);
+    assert.deepEqual(answer.report.reused, { mode: 'exact' });
+    assert.equal(answer.report.suite, null);
+    assert.deepEqual(d.recorded, [answer.report]);
+    assert.deepEqual(d.pulled, [90]);
+  });
+
+  it('a red round sets merge · blocked for mend without landing', async () => {
+    const d = decision({ reports: [red] });
+    const [answer] = await landJob(jobs[0], d.m.deps);
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90]);
+    assert.equal(answer.landed, false);
+    assert.equal(answer.report.stopped_at, 'red');
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    assert.match(d.goal().log.at(-1).comment, /a mend session resolves the obstacle/u);
+    assert.deepEqual(d.pulled, []);
+  });
+
+  it('a pushed head leaves the queue with the goal still in merge for mend', async () => {
+    const d = decision({ reports: [{ ok: false, merged: false, stopped_at: 'pushed', reason: '#90 got a new push' }] });
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ ...jobs[0], since: '2026-10-09T11:00:00Z' }]));
+    const code = await serve({
+      root, lock, take: () => true, release: () => {}, ...ONE_LANE,
+      now: d.m.deps.now, say: d.m.deps.say, sleep: d.m.deps.sleep,
+      land: landerFor(d.m.deps),
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90]);
+    assert.deepEqual(queue(), [], 'a pushed goal is not automatically requeued');
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked']);
+    assert.equal(d.goal().log.at(-1).done, 'merger answered moved on #90');
+    assert.deepEqual(d.pulled, []);
   });
 
   it('repeats merge and mend twice, then the third failed merge waits on Martin', async () => {
-    const d = decision({ conflict: true });
+    const conflict = { ok: false, merged: false, stopped_at: 'merge', reason: 'CONFLICT (content): a.js' };
+    const d = decision({ reports: [green, conflict, conflict, conflict, conflict] });
     await landJob(jobs[0], d.m.deps);
     const [answer] = await landJob(jobs[1], d.m.deps);
     assert.equal(answer.landed, false);
@@ -1471,7 +1526,7 @@ describe('a session decision to merge a goal', () => {
     d.m.deps.setGoal({ stage: 'merge', status: 'ready', entry: { tool: 'person', done: 'resume after decision' } });
     await landJob(jobs[1], d.m.deps);
     assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'blocked'], 'an interactive resume starts a new failure cycle');
-    assert.deepEqual(d.m.rounds, []);
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90, 14804, 14804, 14804, 14804]);
   });
 
   it('recovers a landing made before the previous process recorded its answer', async () => {
@@ -1482,31 +1537,23 @@ describe('a session decision to merge a goal', () => {
     assert.equal(d.goal().stage, 'done');
   });
 
-  // GitHub unreachable for the direct merge: the call failed, or it ran and the confirmation could not be read.
-  function unreachable({ mergeRuns = false } = {}) {
-    const d = decision();
-    const gh = (args) => {
-      d.calls.push({ args });
-      if (args[1] === 'merge' && !mergeRuns) return { status: 1, stderr: 'error connecting to api.github.com' };
-      if (args[1] === 'merge') return { status: 0, stdout: '' };
-      return { status: 1, stderr: 'dial tcp: lookup api.github.com: no such host — Could not resolve host: api.github.com' };
-    };
-    return { d, deps: { ...d.m.deps, gh } };
+  // Offline round results use the ordinary retry/backoff path for goal jobs too.
+  function unreachable() {
+    const d = decision({ reports: [{ ok: false, merged: false, stopped_at: 'offline', reason: 'GitHub could not be reached' }] });
+    return { d, deps: d.m.deps };
   }
 
   it('a merge decision GitHub cannot be reached for is put back in line, and the goal stays merge · ready', async () => {
-    for (const mergeRuns of [false, true]) {
-      const { d, deps } = unreachable({ mergeRuns });
-      const [answer] = await landJob(jobs[0], deps);
-      assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready'], 'no recovery session for the network');
-      assert.equal(answer.landed, false);
-      assert.equal(answer.offline, true, answer.report.reason);
-      assert.equal(answer.report.stopped_at, 'offline');
-      assert.match(answer.report.reason, mergeRuns ? /^gh pr view 90 could not reach GitHub/u : /^gh pr merge 90 --squash could not reach GitHub \(error connecting to api\.github\.com\)/u);
-      assert.deepEqual(d.writes, []);
-      assert.deepEqual(d.goal().log, []);
-      assert.ok(d.m.said.some((line) => /: offline: .* — back in line in 1 min \(offline 1 of 6\), no session started$/u.test(line)), d.m.said.join('\n'));
-    }
+    const { d, deps } = unreachable();
+    const [answer] = await landJob(jobs[0], deps);
+    assert.deepEqual([d.goal().stage, d.goal().status], ['merge', 'ready'], 'no recovery session for the network');
+    assert.equal(answer.landed, false);
+    assert.equal(answer.offline, true, answer.report.reason);
+    assert.equal(answer.report.stopped_at, 'offline');
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90]);
+    assert.deepEqual(d.writes, []);
+    assert.deepEqual(d.goal().log, []);
+    assert.ok(d.m.said.some((line) => /: offline: .* — back in line in 1 min \(offline 1 of 6\), no session started$/u.test(line)), d.m.said.join('\n'));
   });
 
   it('a merge decision still unreachable on the sixth answer blocks the goal in merge, saying the network was down', async () => {
@@ -1518,16 +1565,16 @@ describe('a session decision to merge a goal', () => {
   });
 
   it('a merge decision GitHub refuses is still red at once, not offline', async () => {
-    const d = decision({ conflict: true });
+    const d = decision({ reports: [{ ok: false, merged: false, stopped_at: 'merge', reason: 'GitHub refused the squash' }] });
     const [answer] = await landJob(jobs[1], d.m.deps);
     assert.equal(answer.offline, undefined);
     assert.equal(answer.report.stopped_at, 'merge');
   });
 
-  it('a PR linked to a goal uses its merge decision even without job.goal', async () => {
+  it('a PR linked to a goal lands through the round even without job.goal', async () => {
     const d = decision();
     await landJob({ ...jobs[0], goal: null }, d.m.deps);
-    assert.deepEqual(d.m.rounds, []);
+    assert.deepEqual(d.m.rounds.map(({ pr }) => pr), [90]);
     assert.match(d.goal().log.at(-1).done, /^memoro-cli#90 landed/u);
   });
 });

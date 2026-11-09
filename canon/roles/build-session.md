@@ -86,8 +86,8 @@ You build, headless, with nobody watching.
 **One branch, built to the end.** Keep this goal's branch, worktree and pull
 request through build. Necessary main integration follows `tasks/git.md` and
 `docs/technical/mc-goals.md`, *Integrating main into a goal*. Your final
-acceptance precedes review; do not assume the merger will provide a later
-candidate check.
+acceptance precedes review; the merger’s combined-candidate round reuses the
+session’s evidence and does not replace final-tree acceptance.
 
 **Commits.** Commit as you go, in commits that stand on their own; never leave
 work only in the tree. One branch, one pull request, and `mc publish` is the

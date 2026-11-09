@@ -70,8 +70,10 @@ lane as soon as every registered PR is queued; nothing follows that command.
 
 1. **The stage, always one of two.**
    - OK: `mc goal stage merge`. It sends every registered pull request
-     to the merger. Your decision is final: mc merges them without another
-     gate, criteria check or reviewed-head check, then sets `done`.
+     to the merger. Your decision is final: mc lands them through the ordinary
+     measured round, reusing your whole-selection receipt (exact or delta) and
+     measuring the rest, then sets `done`. It does not re-check criteria or the
+     reviewed head.
    - Not OK: write `REVIEW.md` in the goal's directory first — the head sha
      you judged, then what is wrong and where (file and line, the check that
      failed and its output) — then `mc goal stage finish`. mc refuses
