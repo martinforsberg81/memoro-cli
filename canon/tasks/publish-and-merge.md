@@ -46,13 +46,13 @@ No criteria or reviewed-head re-check; done after all land. Conflicts go to a se
   current base and squashes only on green. No flag lands a red.
 - A pull request whose every file is a document under `docs/` (no script) runs
   the tests that read documents and lands in the call when they are green.
-- `mc merge <repo> <a> <b>` takes only pull requests aimed at one base, and is
-  not atomic: a red lands a prefix and stops.
+- `mc merge <repo> <a> <b>` takes one base; not atomic: a red lands a prefix and stops.
 - Do not poll: no loop, no `sleep`, no `mc merge watch` unless asked. One
   `gh pr view --json …` snapshot is the state; an empty check list is normal.
 - A red's files are in `~/mc/runner/merge-red/<repo>-<pr>.txt`; rerun with
-  `mc gate` before fixing. A ceiling leaves unfinished files unmeasured. For a
-  non-PR stop (main moved, a lease), run `mc repo who <repo>` and requeue.
+  `mc gate` before fixing. A round reports its ceiling and continues; interrupted
+  members run alone; a stall goes back in line. For other non-PR stops,
+  run `mc repo who <repo>` and requeue.
 - `--admin` squashes with GitHub's admin override and no gate round: for a
   change the round cannot measure, after you measured what it reaches; the
   PR says what ran. The hook refuses it headless. `gh pr merge` skips mc's

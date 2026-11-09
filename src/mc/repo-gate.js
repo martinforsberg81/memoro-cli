@@ -149,7 +149,7 @@ export async function runGate({
   gh = null,
   suite = null,
   // How the command gates the selection named are run (`commandShell` when
-  // null): asynchronous, because they run beside the suite.
+  // null): asynchronous, after the suite has finished.
   shell: gateShell = null,
   // The `{ ensure, release }` a command gate that `needs: ['docker']` is given;
   // null means src/mc/docker.js's own, and a test hands in a fake.
@@ -171,6 +171,12 @@ export async function runGate({
     const timer = setTimeout(fire, ms);
     timer.unref?.();
     return () => clearTimeout(timer);
+  },
+  // Poll progress independently of the ceiling; injectable for the fixture clock.
+  armStall = (fire, ms) => {
+    const timer = setInterval(fire, Math.min(1000, ms));
+    timer.unref?.();
+    return () => clearInterval(timer);
   },
   // Whether the round owns the lease or is running inside somebody else's.
   //
@@ -226,45 +232,45 @@ export async function runGate({
   // A round that took an environment and then resolved its binaries against a
   // different one is answering a question nobody asked, and it is why a test
   // that put a stub `gh` on the PATH still reached the real one.
-  // The round's ceiling (`ceiling`, armed once the lane is held below). It is
-  // made here, before any child is asked for anything, so that every await the
-  // round makes can be bounded by it: `untilCeiling`, and `timed` for each step.
+  // The round-wide stall signal exists before any child starts, and bounds
+  // every await even when an injected child ignores its signal.
   const deadlineController = new AbortController();
-  const ceiling = deadlineController.signal;
-  // What the round's runs have written, so the ceiling can name what did not
-  // finish (`runProgress`): the times files they track, read when it comes.
+  const stopSignal = deadlineController.signal;
+  // Reporter progress names unfinished work and detects forward motion.
   const progress = progressTracker();
   const pendingTestRuns = new Set();
-  let ceilingPending = [];
+  let lastProgress = clock();
+  let progressSeen = JSON.stringify([]);
+  const progressed = () => { lastProgress = clock(); };
+  const activeCommands = new Set();
   const activePhases = new Set();
-  let ceilingPhases = [];
-  let ceilingRuns = null;
-  // The signal a child is started with: the caller's and the ceiling's, read
+
+  // The signal a child is started with: the caller's and the stall detector's, read
   // when the child starts, which is after `signal` is combined below.
   const childSignal = () => signal;
   // A child may ignore its signal (a stub, a process that never reads it). The
-  // round must not wait for it past the ceiling, so the wait is cut there and
+  // round must not wait for it past a stall, so the wait is cut there and
   // the round unwinds through `RoundAborted`; the child is still signalled.
-  const untilCeiling = (value) => new Promise((resolve, reject) => {
-    const stop = () => reject(new RoundAborted(abortReason(ceiling)));
-    if (ceiling.aborted) {
+  const untilStopped = (value) => new Promise((resolve, reject) => {
+    const stop = () => reject(new RoundAborted(abortReason(stopSignal)));
+    if (stopSignal.aborted) {
       Promise.resolve(value).catch(() => {});
       return stop();
     }
-    ceiling.addEventListener('abort', stop, { once: true });
+    stopSignal.addEventListener('abort', stop, { once: true });
     Promise.resolve(value).then((done) => {
-      ceiling.removeEventListener('abort', stop);
+      stopSignal.removeEventListener('abort', stop);
       resolve(done);
     }, (thrown) => {
-      ceiling.removeEventListener('abort', stop);
+      stopSignal.removeEventListener('abort', stop);
       reject(thrown);
     });
   });
-  const bounded = (call) => (...args) => ceiling.aborted
-    ? Promise.reject(new RoundAborted(abortReason(ceiling))) : untilCeiling(call(...args));
+  const bounded = (call) => (...args) => stopSignal.aborted
+    ? Promise.reject(new RoundAborted(abortReason(stopSignal))) : untilStopped(call(...args));
   const run = (tool) => (args, options = {}) => runTool(tool, args, { cwd: options.cwd, env, signal: childSignal() });
   // The raw git is kept for the workspace's own clean-up, which runs after the
-  // ceiling has come and must not be cut short by it.
+  // stall signal has fired and must not be cut short by it.
   const askGitRaw = git || ((args, options = {}) => runGitAsync(options.cwd, args, { env }));
   const askGit = bounded(askGitRaw);
   const askGh = bounded(gh || run('gh'));
@@ -293,6 +299,7 @@ export async function runGate({
   const runSuite = async (options) => {
     const result = await (suite || ((one) => realSuite({ ...one, env, lanes, signal, times: timesOf })))(options);
     measuredTests.push(...(result?.tests || []));
+    progressed();
     return result;
   };
   const runTests = async (options) => {
@@ -303,7 +310,8 @@ export async function runGate({
       track: (file) => { progress.track(file); ownProgress.track(file); },
       complete: (file) => { progress.complete(file); ownProgress.complete(file); },
     };
-    const result = await (tests || realTests)({ ...options, env, lanes, classes: fileClasses, signal, times });
+    const result = await (tests || realTests)({ env, lanes, classes: fileClasses, signal, ...options, times });
+    progressed();
     measuredTests.push(...(result?.tests || []));
     if (tapTotals(result.tap).finished && !result.aborted && !result.timedOut && !result.error) pendingTestRuns.delete(request);
     return result;
@@ -346,6 +354,8 @@ export async function runGate({
     // a selection ran instead.
     full_suite: null,
     extra_gates: [],
+    unmeasured: { files: [], gates: [] },
+    alone: { files: [], gates: [] },
     // Previously measured exact-base health, read only after a candidate red.
     // Missing or stale evidence never triggers a main run or attribution walk.
     main_red: null,
@@ -386,8 +396,7 @@ export async function runGate({
     // without a single number from the tool itself; the next one is measured.
     timings: {},
     // Every step as it ran, wall and monotonic, relative to the round's start for
-    // the monotonic pair. Intervals overlap (the suite and its gates; selection
-    // beside an earlier red), so their `ms` are not a breakdown of `duration_ms`.
+    // the monotonic pair. Intervals can overlap (selection beside an earlier red), so their `ms` are not a breakdown of `duration_ms`.
     intervals: [],
     // The lanes the round's tests ran at and the load they were answered at
     // (`testLanes`); the round record names both.
@@ -397,8 +406,7 @@ export async function runGate({
     finished_at: null,
     duration_ms: null,
   };
-  // Every step of the round is bounded by the ceiling, so a child that ignores
-  // its signal cannot hold the lane past it (`untilCeiling`).
+  // Every await is bounded by the stall signal, including a child that ignores it.
   const interval = (step, wallFrom, wallTo, monoFrom, monoTo) => {
     report.intervals.push({ step, start_wall: new Date(wallFrom).toISOString(), end_wall: new Date(wallTo).toISOString(),
       start_ms: monoFrom - origin, end_ms: monoTo - origin, ms: monoTo - monoFrom });
@@ -408,7 +416,7 @@ export async function runGate({
     const from = clock();
     const fromMono = monotonic();
     activePhases.add(step);
-    try { return await untilCeiling(fn()); } finally {
+    try { return await untilStopped(fn()); } finally {
       activePhases.delete(step);
       const to = clock();
       report.timings[step] = (report.timings[step] || 0) + (to - from);
@@ -419,7 +427,9 @@ export async function runGate({
 
   const finish = (stoppedAt, reason) => {
     report.stopped_at = stoppedAt;
-    report.reason = reason;
+    const unmeasured = [...report.unmeasured.files, ...report.unmeasured.gates];
+    report.reason = reason && ['red', 'pr-tests', 'selected-gate', 'extra-gate'].includes(stoppedAt) && unmeasured.length
+      ? `${reason}; not measured in the initial run: ${unmeasured.join(', ')}` : reason;
     report.slow_tests = slowTests(measuredTests);
     report.ok = stoppedAt === null;
     report.verdict = verdictFor(report);
@@ -469,52 +479,49 @@ export async function runGate({
   if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane`);
   else say('the round lock could not be written — running anyway; another round could overlap this one');
 
-  // One ceiling for the entire round, shared by merger, mc gate's caller and
-  // mc test: the repository's `round_timeout_ms`, from the lane's reservation
-  // on. The session wait budget is only how long its caller waits; it must
-  // never extend the repository's lane reservation. Every child is stopped by
-  // it (`childSignal`), and every await is cut by it (`untilCeiling`).
+  // The repository ceiling is information, not a verdict. Only no progress
+  // for the stall window stops the group and releases its lane.
   const externalSignal = signal;
-  signal = externalSignal ? AbortSignal.any([externalSignal, ceiling]) : ceiling;
+  signal = externalSignal ? AbortSignal.any([externalSignal, stopSignal]) : stopSignal;
   const roundTimeoutMs = declared.declaration.round_timeout_ms || suiteTimeoutMs(env);
-  let timedOut = false;
+  const stallMinutes = Number(env.MC_ROUND_STALL_MINUTES);
+  const stallMs = Number.isFinite(stallMinutes) && stallMinutes > 0 ? stallMinutes * 60_000 : ROUND_STALL_MS;
+  let stalled = false;
+  let stallReason = null;
+  const relativeFile = (file) => {
+    const prefixes = [headDir, ...(existsSync(headDir) ? [realpathSync(headDir)] : [])];
+    const prefix = prefixes.find(dir => file.startsWith(`${dir}/`));
+    return prefix ? file.slice(prefix.length + 1) : file;
+  };
+  const pendingFiles = () => {
+    const runs = progress.read();
+    return [...new Set([...runs.unfinished.map(relativeFile), ...[...pendingTestRuns].flatMap(request => {
+      const done = new Set(request.progress.read().finished.map(one => relativeFile(one.file)));
+      return request.files.map(relativeFile).filter(file => !done.has(file));
+    })])];
+  };
+  const stopStalled = (why) => {
+    stalled = true;
+    report.stalled_files = pendingFiles();
+    report.stalled_gates = [...activeCommands];
+    stallReason = `${why} — files in flight: ${nameSome(report.stalled_files) || 'none named'}; gates in flight: ${nameSome(report.stalled_gates) || 'none'}; phase: ${[...activePhases].join(', ') || 'final checks'}; load ${Math.round(loadavg()[0] * 10) / 10}`;
+    deadlineController.abort(new Error(stallReason));
+  };
   const cancelCeiling = armCeiling(() => {
-    timedOut = true;
-    // Read before the abort: the runs' files are gone once their processes close.
-    ceilingRuns = progress.read();
-    ceilingPending = [...pendingTestRuns].flatMap((request) => {
-      const done = new Set(request.progress.read().finished.map(one => one.file));
-      return request.files.filter(file => !done.has(join(headDir, file)));
-    });
-    ceilingPhases = [...activePhases];
-    deadlineController.abort(new Error(`gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`));
+    const runs = progress.read();
+    const finished = runs.finished.length;
+    say(`past its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling at load ${Math.round(loadavg()[0] * 10) / 10} — ${finished} of ${finished + pendingFiles().length} files finished, going on`);
   }, roundTimeoutMs);
-
-  // The round's verdict once its ceiling has come: red, and named. The files
-  // that did not finish are the red — the ones to rebuild. The slowest files
-  // that did finish are for the reader only, and are kept apart from them.
-  const atCeiling = () => {
-    // Fetch/PR timeouts happen before the candidate exists. There are no
-    // candidate paths to canonicalise then, but the verdict must still return.
-    const headPrefixes = [...new Set([headDir, ...(existsSync(headDir) ? [realpathSync(headDir)] : [])])].map(dir => `${dir}/`);
-    const rel = (file) => {
-      const prefix = headPrefixes.find(prefix => file.startsWith(prefix));
-      return prefix ? file.slice(prefix.length) : file;
-    };
-    const runs = ceilingRuns || { unfinished: [], finished: [] };
-    const unfinished = [...new Set([...runs.unfinished.map(rel), ...ceilingPending])];
-    const slowest = runs.finished.filter(one => !unfinished.includes(rel(one.file))).slice(0, 5).map((one) => ({ file: rel(one.file), seconds: one.seconds }));
-    report.red_files = unfinished;
-    report.slowest_files = slowest;
-    report.candidate = { red_files: unfinished, red_tests: [] };
-    const ceilingText = `gate round reached its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling`;
-    const named = unfinished.length ? `unfinished: ${nameSome(unfinished)}`
-      : ceilingPhases.includes('suite') ? 'no test file was named as unfinished — the run did not say which one' : 'no unfinished test files';
-    const reached = slowest.length ? `; slowest finished: ${slowest.map((one) => `${one.file} (${one.seconds} s)`).join(', ')}` : '';
-    report.timeout_phase = ceilingPhases.join(', ') || 'final checks';
-    const reason = `${ceilingText} — phase: ${report.timeout_phase}; ${named}${reached}`;
-    say(reason);
-    return finish('red', reason);
+  const cancelStall = armStall(() => {
+    const signature = JSON.stringify(progress.read().finished);
+    if (signature !== progressSeen) { progressSeen = signature; progressed(); }
+    if (clock() - lastProgress >= stallMs) stopStalled(`no progress for ${stallMs / 60_000} min`);
+  }, stallMs);
+  // A completed command is progress; its invocation names a stalled child.
+  const trackedCommand = async (command, options) => {
+    activeCommands.add(command);
+    try { return await runShell(command, options); }
+    finally { activeCommands.delete(command); progressed(); }
   };
 
   // Abort through the ordinary finally path so children stop before the
@@ -685,7 +692,7 @@ export async function runGate({
     // It never stops the round. Whether the suite can resolve its
     // dependencies is measured below, from the candidate, and a measurement
     // beats a report of what an install thought it did.
-    const deps = await untilCeiling(ensureSharedDeps({
+    const deps = await untilStopped(ensureSharedDeps({
       repo: headDir, repoName: repoNameOf(repoPath), env, install: (cwd) => npmCiAsync(cwd, childSignal()), ownTree: headDir,
     }));
     if (deps.state === 'installed-own') say(`the candidate's own dependency tree was installed — ${deps.why}`);
@@ -813,65 +820,36 @@ export async function runGate({
     // Returns the finished report, or null when every red file is main's and
     // the change touches none of them: the round goes on.
     const retry = declared.declaration.retry_once || { files: [], gates: [] };
-    const stopRed = async (result, { alone = false } = {}) => {
-      // A file something outside the round killed is not a verdict on this
-      // change, and the base would pass it — the main-red probe would then
-      // call it "this change broke them" (#13337, 2026-10-10 12:19:56). Every
-      // red killed: a stop the merger measures again. Some: the rest is the
-      // red, and the killed ones are listed beside it, never counted green.
+    // Shared by suite, previous-red and own-test phases, without granting an
+    // own-test assertion any new exemption or retry policy.
+    const classifyUnmeasured = (result) => {
       const killed = result.killed_files || [];
-      if (killed.length) {
-        report.killed_files = killed;
-        const theirs = new Set(result.killed_red || []);
-        const rest = result.red.filter((name) => !theirs.has(name));
-        if (!rest.length) {
-          const signals = [...new Set(killed.map((one) => one.signal))].join('/');
-          return finish('file-killed', `${killed.map((one) => one.file).join(', ')} ended by ${signals} from outside the round — not a verdict on this change`);
-        }
-        result.red = rest;
-        if (result.red_files) result.red_files = result.red_files.filter((file) => !killed.some((one) => one.file === file));
-      }
-      // A file whose tests were cancelled and none failed — a `before` hook
-      // that ran out of time, as memoro's build-bundle.test.js on #13470 at
-      // load ~38 — is under load, not the change's: taken out of the red as a
-      // file that passed alone would be, without running it again, and never
-      // counted green. Every red cancelled: the merger measures again.
       const cancelled = result.cancelled_files || [];
-      if (cancelled.length) {
-        report.cancelled_files = cancelled;
-        const theirs = new Set(result.cancelled_red || []);
-        const rest = result.red.filter((name) => !theirs.has(name));
-        if (!rest.length) {
-          report.under_load_files = cancelled;
-          return finish('red-under-load', underLoadReason({ cancelled }));
-        }
-        result.red = rest;
-        if (result.red_files) result.red_files = result.red_files.filter((file) => !cancelled.includes(file));
-      }
-      const red = result.red;
-      // What a killed or cancelled file failed is not the red either, and is
-      // not handed to whoever fixes it (ruling 44).
-      if (result.red_tests) result.red_tests = result.red_tests.filter((test) => red.includes(test.name));
-      // A test cut at the stall guard (the run's `--test-timeout`) is already an
-      // actionable failure, and the only time that is red: a test over the 1 s
-      // slow-test indicator is named in `slow_tests`, never here. Re-running the
-      // file cannot make the test pass reliably and can spend another full
-      // timeout holding the lane; leave it red for a rebuild instead.
-      const tooSlow = (result.red_tests || []).flatMap((test) => {
-        const error = (test.error || []).join(' ');
-        const timeout = /(?:test )?timed out after\s+(\d+)\s*ms/iu.exec(error);
-        if (!timeout) return [];
-        return [{ file: test.file, name: test.name, duration_ms: Number(timeout[1]) }];
+      if (killed.length) report.killed_files = [...new Map([...(report.killed_files || []), ...killed].map(one => [one.file, one])).values()];
+      if (cancelled.length) report.cancelled_files = [...new Set([...(report.cancelled_files || []), ...cancelled])];
+      const cut = (result.red_tests || []).filter(test => {
+        const match = /(?:test )?timed out after\s+(\d+)\s*ms/iu.exec((test.error || []).join(' '));
+        return match && Number(match[1]) !== TEST_TIMEOUT_MS;
       });
-      if (tooSlow.length) {
-        report.too_slow = tooSlow;
-        const details = tooSlow.map((test) => `${test.name} (cut at ${Math.ceil(test.duration_ms / 1000)} s)`).join(', ');
-        const otherRed = (result.red_tests || []).filter((test) => !tooSlow.some((slow) => slow.name === test.name)).map((test) => test.name);
-        const rest = otherRed.length ? `; other tests red: ${nameSome(otherRed)}` : '';
-        const reason = `reached the stall guard — rebuild: ${details}${rest}`;
-        say(reason);
-        return finish('red', reason);
+      const files = [...new Set([...killed.map(one => one.file), ...cancelled, ...cut.map(test => test.file).filter(Boolean)])];
+      const ignored = new Set([...(result.killed_red || []), ...(result.cancelled_red || []), ...cut.map(test => test.name)]);
+      // Drop parent names only when every failing leaf under them was cut.
+      for (const name of result.red) {
+        const leaves = (result.red_tests || []).filter(test => test.name.startsWith(`${name} › `));
+        if (leaves.length && leaves.every(test => ignored.has(test.name))) ignored.add(name);
       }
+      for (const file of files) if (!report.unmeasured.files.includes(file)) report.unmeasured.files.push(file);
+      result.red = result.red.filter(name => !ignored.has(name));
+      result.red_tests = (result.red_tests || []).filter(test => !ignored.has(test.name));
+      result.red_files = (result.red_files || []).filter(file => !files.includes(file) || result.red_tests.some(test => test.file === file));
+      result.unmeasured = files;
+      if (files.length) say(`not measured: ${files.join(', ')} — will run alone after the suite and gates`);
+    };
+    const stopRed = async (result, { alone = false, measuringAlone = false } = {}) => {
+      if (!measuringAlone) classifyUnmeasured(result);
+      if (!result.red.length) return null;
+      const never = (result.red_tests || []).filter(test => /timed out after\s+600000\s*ms/iu.test((test.error || []).join(' ')));
+      if (never.length) return finish('red', `never ends: ${never.map(test => test.name).join(', ')}`);
       // Every red file in it, and every red test located in one: a red name
       // no file accounts for is nobody's to excuse.
       const within = (files) => Boolean(result.red_files?.length)
@@ -936,7 +914,8 @@ export async function runGate({
             : 'could not read what this change touches — red as before');
         }
       }
-      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${mainRedClause(report.main_red)}`);
+      const errors = (result.red_tests || []).flatMap(test => test.error || []);
+      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
     };
 
     // The files this pull request's last round found red, alone on the
@@ -1097,79 +1076,29 @@ export async function runGate({
       },
     } : null;
 
-    // The one run. What it finds red is the verdict: there is no second tree
-    // to subtract, so a test the change reaches is either green or the round
-    // is red — unless the probe after it finds that red main's and the change
-    // leaves the file alone (`stopRed`).
-    //
-    // The gates the selection named, on the candidate, started when the suite
-    // starts and awaited with it — before any verdict is reached, because a
-    // round that stopped at a red test and skipped them would report a
-    // contract as unchecked exactly when it is least safe to assume it holds.
-    // Every gate still runs and is judged; beside the suite they stop adding
-    // their whole time to the round (`sql:pr-ci` alone was 36 s at the median
-    // on 2026-10-09/10).
-    //
-    // Beside the suite, and still one after another in the order the selector
-    // gave, not all at once: this is an 8 GB machine already running the
-    // suite's lanes, and memory pressure was measured stretching rounds on
-    // 2026-10-10 (`kern.memorystatus_level` 30, swap 2.4 of 3 GB). One gate
-    // beside the suite is one process more; six would be six.
-    //
-    // A spawn error is a result in both halves, not a throw (`realTests`,
-    // `realSuite` and `commandShell` resolve it), so a round where neither
-    // could start reports both reasons. Anything that does throw is waited out
-    // and then thrown, as it was sequentially: the other half finishes first,
-    // and nothing turns green because one half threw.
-    //
-    // The base a command gate is handed is the commit the round measured
-    // against, not the ref. Every worktree shares one git directory, so
-    // another session's `git fetch` moves `origin/main` under a round that is
-    // minutes into its suite; a differential gate that resolved the ref at
-    // its own moment then measured a main the candidate never merged.
-    // Measured 2026-10-08: memoro #13032 went red three rounds running on
-    // `sql:pr-ci`'s "head does not include moving base … merge current main"
-    // with nothing wrong in the change — the same red memoro's own `ci.mjs`
-    // closed on 2026-09-06 by handing its gates the merge base as a commit.
-    const besideFrom = clock();
-    const besideMono = monotonic();
-    const halves = reused ? [{ status: 'fulfilled', value: reused }, { status: 'fulfilled', value: [] }] : await Promise.allSettled([
-      greenFiles ? Promise.resolve(greenFiles)
-        : selection
-          ? (say(`running the ${runFiles.length} file${runFiles.length === 1 ? '' : 's'} this change reaches${rerun ? ' that main\'s movement can have changed' : ''}`), timed('suite', () => measureSelected({
-            tests: runTests, git: askGit, cwd: headDir, files: runFiles, flags, say, is, signal,
-          })))
-          : (say(`running the whole suite — ${commandLine.run} — this takes a while`), timed('suite', () => measure({
-            suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is,
-          }))),
-      runCommands?.length
-        ? runSelectedCommands({
-          commands: runCommands, cwd: headDir, env, baseRef: report.base.commit || baseRef, say, timed, clock, shell: runShell,
-          docker: dockerIo, holderPid, dockerLabel, root, signal,
-        })
-        : Promise.resolve([]),
-    ]);
-    if (runCommands?.length && !reused) {
-      const besideTo = clock();
-      report.timings.gates_beside_suite_ms = besideTo - besideFrom;
-      interval('gates beside suite', besideFrom, besideTo, besideMono, monotonic());
-    }
-    // A command gate in flight also receives the abort and is stopped before
-    // this round releases its lane.
+    // Gates follow the suite, never overlap its lanes (Martin, 2026-11-09).
+    // The immutable base commit still reaches every command.
+    const after = reused || greenFiles || (selection
+      ? await timed('suite', () => measureSelected({ tests: runTests, git: askGit, cwd: headDir, files: runFiles, flags, say, is, signal }))
+      : await timed('suite', () => measure({ suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is })));
+    const selectedGates = !reused && runCommands?.length ? await runSelectedCommands({
+      commands: runCommands, cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, timed, clock, shell: trackedCommand,
+      docker: dockerIo, holderPid, dockerLabel, root, signal,
+    }) : [];
     if (signal?.aborted) {
-      if (timedOut) return atCeiling();
+      if (stalled) return finish('stalled', stallReason);
       return finish('gone', abortReason(signal));
     }
-    const thrown = halves.find((half) => half.status === 'rejected');
-    if (thrown) throw thrown.reason;
-    const [after, selectedGates] = halves.map((half) => half.value);
     report.extra_gates.push(...selectedGates);
-    let failedGates = selectedGates.filter((gate) => !gate.ok);
+    const gateInterrupted = gate => gate.exit_code === 124 || Boolean(gate.signal);
+    const queueGate = gate => {
+      if (!report.unmeasured.gates.includes(gate.name)) report.unmeasured.gates.push(gate.name);
+    };
+    selectedGates.filter(gateInterrupted).forEach(queueGate);
+    let failedGates = selectedGates.filter(gate => !gate.ok && !gateInterrupted(gate));
 
-    // Sequentially, a suite that could not be measured stopped the round
-    // before any gate ran. Beside it the gates did run, and are listed; the
-    // stop is the suite's, as it was.
-    if (!after.ok) return finish('suite', `the run ${after.reason}`);
+    // The suite and every selected gate have now finished; a process bound is stalled.
+    if (!after.ok) return finish(after.stalled ? 'stalled' : 'suite', `the run ${after.reason}${after.stalled ? `; files in flight: ${nameSome(pendingFiles()) || 'none named'}; load ${loadavg()[0]}` : ''}`);
     report.candidate = after.result;
     if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result });
     // The measured tree's own hash, so a landing can later prove — not
@@ -1178,12 +1107,12 @@ export async function runGate({
     // time" are two different claims, and only the first was measured).
     report.candidate.tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
 
-    // Both halves have finished, so the probe for main red never runs beside
+    // The suite and gates have finished, so the probe for main red never runs beside
     // a gate.
     if (!reused) say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
-      // The red names every gate that failed beside the tests, so the session it goes to fixes them in one go (memoro #14169, 2026-10-24).
+      // The red names every gate that failed after the tests, so the session it goes to fixes them in one go (memoro #14169, 2026-10-24).
       if (stop?.stopped_at === 'red' && failedGates.length) stop.reason = `${stop.reason} — and ${failedGatesText(failedGates)}`;
       if (stop) return stop;
     }
@@ -1197,7 +1126,7 @@ export async function runGate({
       say(`only ${names.join(', ')} failed, declared retry_once — running ${names.length === 1 ? 'it' : 'them'} once more alone`);
       const again = await runSelectedCommands({
         commands: selection.commands.filter((entry) => names.includes(entry.packageScript)),
-        cwd: headDir, env, baseRef: report.base.commit || baseRef, say, clock, shell: runShell,
+        cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, clock, shell: trackedCommand,
         docker: dockerIo, holderPid, dockerLabel, root, signal,
         timed: (step, fn) => timed('retry once', fn),
       });
@@ -1228,10 +1157,10 @@ export async function runGate({
     // A list of directories would fix yesterday's hole and make tomorrow's.
     if (facts.pr && !batch) {
       const own = await timed('pr tests', async () => ownTests({
-        tests: runTests, cwd: headDir, changed: await changedBy('HEAD'), say, flags,
+        tests: runTests, cwd: headDir, changed: await changedBy('HEAD'), say, flags, classify: classifyUnmeasured,
       }));
       report.pr_tests = own.result;
-      if (!own.ok) return finish('pr-tests', own.reason);
+      if (!own.ok) return finish(own.stalled ? 'stalled' : 'pr-tests', own.reason);
     } else if (batch) {
       // Each pull request's own tests, by itself: the files *it* adds or
       // changes against the base, run on the batch candidate. The suite ran
@@ -1240,14 +1169,14 @@ export async function runGate({
       for (const [index, item] of all.entries()) {
         say(`#${item.number}'s own tests`);
         const own = await timed('pr tests', async () => ownTests({
-          tests: runTests, cwd: headDir, changed: await changedBy(item.head_sha), say, flags,
+          tests: runTests, cwd: headDir, changed: await changedBy(item.head_sha), say, flags, classify: classifyUnmeasured,
         }));
         report.prs[index].pr_tests = own.result;
-        if (!own.ok) return finish('pr-tests', `#${item.number}: ${own.reason}`);
+        if (!own.ok) return finish(own.stalled ? 'stalled' : 'pr-tests', `#${item.number}: ${own.reason}`);
       }
     }
 
-    // Gates an operator declared beside the suite, run on the candidate.
+    // Additional gates an operator declared, run on the candidate.
     //
     // They ran on both sides until 2026-08-31 and were judged by the delta,
     // for the reason the suite was: an extra gate run only on the candidate
@@ -1262,27 +1191,29 @@ export async function runGate({
     // the red names silently degrade to exit codes on every gate that is a
     // node test. A command that is not node ignores the variable.
     const gates = declared.declaration.extra_gates || [];
-    const gateEnv = { ...env };
+    const gateEnv = { ...env, MC_GATE_ROUND: gateMode };
     delete gateEnv.NODE_TEST_CONTEXT;
     gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
     for (const gate of gates) {
       say(`extra gate ${gate.name}`);
-      const outcome = await timed('extra gates', async () => await shell(gate.command, { cwd: headDir, env: gateEnv, signal }));
+      const outcome = await timed('extra gates', () => trackedCommand(gate.command, { cwd: headDir, env: gateEnv, signal }));
       const head = gateSide(outcome);
       report.extra_gates.push({
-        // What an operator declared beside the suite, as opposed to what the
+        // What an operator declared, as opposed to what the
         // repository's selector chose for this diff.
         source: 'declaration',
         name: gate.name,
         command: gate.command,
         ok: head.ok,
         exit_code: head.exit_code,
+        ...(outcome.signal ? { signal: outcome.signal } : {}),
         ran: head.ran,
         // The red names when the gate printed TAP that finished, null when it
         // did not — the difference between "these failed" and "it failed".
         red: head.red,
         output: trim(outcome.stderr) || trim(outcome.stdout) || null,
       });
+      if (gateInterrupted(report.extra_gates.at(-1))) { queueGate(report.extra_gates.at(-1)); continue; }
       if (!head.ran) return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
       if (!head.ok) {
         return finish('extra-gate', `${gate.name} failed (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
@@ -1290,18 +1221,67 @@ export async function runGate({
       }
     }
 
-    // A ceiling that came in the last stretch, with nothing left to await, is
-    // still the ceiling: no verdict is green past it.
-    if (timedOut) throw new RoundAborted(abortReason(ceiling));
+    // The alone phase: every interruption is resolved here, serially. This
+    // override is execution policy, not a loosening of the declaration floor.
+    const aloneFlags = [...withoutConcurrency(withoutTimeouts(plan.flags)), `--test-timeout=${TEST_TIMEOUT_MS}`];
+    const alonePlan = { ...resolveTestPlan({ flags: aloneFlags }), concurrencyDeclared: false };
+    for (const file of report.unmeasured.files) {
+      let kills = report.killed_files?.some(one => one.file === file) ? 1 : 0;
+      for (;;) {
+        const from = clock();
+        const argv = nodeTestArgv({ plan: alonePlan, files: [file], lanes: 1, stdioBlocking: STDIO_BLOCKING });
+        const ran = await timed('alone', () => measureSelected({
+          tests: options => runTests({ ...options, flags: alonePlan.flags, plan: alonePlan, lanes: 1, env: { ...env, MC_TEST_LANES: '1' } }),
+          git: askGit, cwd: headDir, files: [file], flags: alonePlan.flags, say, is, signal,
+        }));
+        const killed = Boolean(ran.result?.killed_files?.length);
+        const row = { file, outcome: killed ? 'killed' : !ran.ok || ran.result.red.length ? 'failed' : 'passed', seconds: (clock() - from) / 1000, argv: ran.result?.batches?.[0]?.argv || argv };
+        report.alone.files.push(row);
+        progressed();
+        if (killed) {
+          if (++kills >= 3) return finish('stalled', `${file} killed from outside three times; load ${loadavg()[0]}`);
+          continue;
+        }
+        if (!ran.ok) return finish(ran.stalled ? 'stalled' : 'red', `${file}: ${ran.reason}`);
+        recordTooSlow({ root: workRoot(env), repo: lane, where: timesOf.where, tests: measuredTests });
+        if (ran.result.red.length) {
+          const stop = await stopRed(ran.result, { alone: true, measuringAlone: true });
+          if (stop) { report.candidate = { ...ran.result, tree: report.candidate.tree }; return stop; }
+        }
+        break;
+      }
+    }
+    for (const name of report.unmeasured.gates) {
+      const original = report.extra_gates.find(gate => gate.name === name);
+      let kills = 0;
+      for (;;) {
+        const from = clock();
+        const [ran] = await runSelectedCommands({
+          commands: [{ packageScript: name, ...selection?.commands?.find(entry => entry.packageScript === name),
+            ...(original.source === 'declaration' ? { command: original.command } : {}) }],
+          cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, timed, clock, shell: trackedCommand,
+          docker: dockerIo, holderPid, dockerLabel, root, signal,
+        });
+        report.alone.gates.push({ name, outcome: gateInterrupted(ran) ? 'unmeasured' : ran.ok ? 'passed' : 'failed', seconds: (clock() - from) / 1000 });
+        progressed();
+        if (gateInterrupted(ran)) {
+          if (++kills >= 2) return finish('stalled', `${name} interrupted three times; load ${loadavg()[0]}`);
+          continue;
+        }
+        if (!ran.ok) return finish('selected-gate', failedGatesText([ran]));
+        break;
+      }
+    }
     return finish(null, null);
   } catch (error) {
-    if (error instanceof RoundAborted && timedOut) return atCeiling();
+    if (error instanceof RoundAborted && stalled) return finish('stalled', stallReason);
     if (error instanceof RoundAborted) return finish('gone', error.message);
     throw error;
   } finally {
     cancelCeiling();
+    cancelStall();
     for (const signal of caught) process.off(signal, onSignal);
-    // The raw git: the ceiling may have come, and the clean-up must still run.
+    // The raw git: the round may have stalled, and the clean-up must still run.
     if (borrowed?.ok) {
       const restored = await borrowed.restore();
       if (!restored.ok) finish(report.stopped_at || 'worktree-restore', `${report.reason ? `${report.reason}; ` : ''}${restored.reason}`);
@@ -1341,10 +1321,6 @@ export function verdictFor(report) {
   if (report.stopped_at === 'derived-outside') return 'red';
   // So is a project log row its tree carries twice.
   if (report.stopped_at === 'project-log') return 'red';
-  // A file killed from outside the round is measured again, not judged.
-  if (report.stopped_at === 'file-killed') return 'stopped';
-  // Nor is a red that passes alone on the base and on the candidate.
-  if (report.stopped_at === 'red-under-load') return 'stopped';
   if (report.stopped_at !== null) return 'stopped';
   return 'green';
 }
@@ -1417,7 +1393,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
   const run = await suite({ cwd, command, onLine: (line) => say(line) });
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
-  if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
+  if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
@@ -1656,7 +1632,7 @@ function shellQuote(value) {
  */
 async function runSelectedCommands({
   commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell,
-  docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root, signal = null,
+  docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root, signal = null, mode = 'merge',
 }) {
   const results = [];
   // The one thing the round's environment must not carry in: node sets
@@ -1665,10 +1641,10 @@ async function runSelectedCommands({
   // with no results and exit 0, which is the false green the whole module is
   // built to refuse. Everything else is the environment the round was given,
   // because that is what `runPackageCommand` passes.
-  const commandEnv = { ...env };
+  const commandEnv = { ...env, MC_GATE_ROUND: mode };
   delete commandEnv.NODE_TEST_CONTEXT;
   for (const entry of commands) {
-    const invocation = `npm run ${entry.packageScript}${entry.passBaseRef ? ` -- --base-ref ${baseRef}` : ''}`;
+    const invocation = entry.command || `npm run ${entry.packageScript}${entry.passBaseRef ? ` -- --base-ref ${baseRef}` : ''}`;
     // A gate that needs the container runtime is leased to this round before it
     // runs, and the lease goes back when it ends. A runtime that will not start
     // means the gate does not run: unavailable where the selector said it may
@@ -1725,6 +1701,7 @@ async function runSelectedCommands({
       command: invocation,
       ok: ran && (outcome.status === 0 || unavailable),
       exit_code: outcome.status ?? null,
+      signal: outcome.signal || null,
       ran,
       ...(unavailable ? { unavailable: true } : {}),
       ...(up ? { docker: up.started ? 'started' : 'up' } : {}),
@@ -1755,7 +1732,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
   const run = await tests({ cwd, files, flags, signal, onLine: (line) => say(line) });
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
-  if (run.timedOut) return { ok: false, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
+  if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
   if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
@@ -1765,7 +1742,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
     ok: true,
     result: {
       commit, is, exit_code: run.code, totals, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
-      red_tests: redTests(run.tap, files),
+      red_tests: redTests(run.tap, files), batches: run.batches || [],
       ...killedOf(run.tap, files),
     },
   };
@@ -2140,7 +2117,7 @@ export function noteRedOnMain({ env = process.env, now = Date.now(), repo, file,
  * A PR that touches no test file is recorded as exactly that, `files: []`,
  * and the round goes on: that fact belongs to the reviewer, not to the gate.
  */
-async function ownTests({ tests, cwd, changed, say, flags = [] }) {
+async function ownTests({ tests, cwd, changed, say, flags = [], classify = null }) {
   if (!changed.ok) {
     return { ok: false, reason: 'could not list the files the pull request changes', result: null };
   }
@@ -2169,19 +2146,26 @@ async function ownTests({ tests, cwd, changed, say, flags = [] }) {
   if (flags.length) say(`pr tests run with the declared flags: ${flags.join(' ')}`);
   const run = await tests({ cwd, files, flags, onLine: (line) => say(`pr tests: ${line}`) });
   const totals = tapTotals(run.tap);
-  const red = redNames(run.tap);
-  const result = { files, totals, red, exit_code: run.code };
+  let red = redNames(run.tap);
+  const result = { files, totals, red, exit_code: run.code, red_files: redFiles(run.tap, files), red_tests: redTests(run.tap, files), ...killedOf(run.tap, files) };
+  if (run.timedOut) return { ok: false, stalled: true, reason: 'own tests reached the process bound', result };
+  if (classify && totals.finished && totals.tests && red.length) {
+    classify(result);
+    red = result.red;
+  }
   if (run.cut?.length) return { ok: false, reason: cutReason(run.cut), result };
   if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
   if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
   if (red.length) {
+    const never = result.red_tests.filter(test => /timed out after\s+600000\s*ms/iu.test((test.error || []).join(' ')));
+    if (never.length) return { ok: false, reason: `never ends: ${never.map(test => test.name).join(', ')}`, result };
     // Counted by the summary's own `# fail`, never by the number of red
     // names: a failing test reddens its parent suites too, so two failures
     // can carry three names — and "3 of the pull request's own tests" was
     // the gate answering with confidence a question it had miscounted
     // (2026-08-24). The names stay, said as names.
     const failed = totals.fail ?? red.length;
-    return { ok: false, reason: `${failed} of the pull request's own tests ${failed === 1 ? 'is' : 'are'} red — the red names, parent suites included: ${red.slice(0, 3).join(', ')}${red.length > 3 ? ', …' : ''}`, result };
+    return { ok: false, reason: `${failed} of the pull request's own tests ${failed === 1 ? 'is' : 'are'} red — the red names, parent suites included: ${red.slice(0, 3).join(', ')}${red.length > 3 ? ', …' : ''}${result.red_tests.length ? ` — ${result.red_tests.flatMap(test => test.error || []).join('; ')}` : ''}`, result };
   }
   return { ok: true, result };
 }
@@ -2319,6 +2303,16 @@ function withoutTimeouts(flags) {
   return kept;
 }
 
+/** The alone phase owns its single lane, even if the declaration names concurrency. */
+function withoutConcurrency(flags) {
+  const kept = [];
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] === '--test-concurrency') { i++; continue; }
+    if (!flags[i].startsWith('--test-concurrency=')) kept.push(flags[i]);
+  }
+  return kept;
+}
+
 /** The one `--test-timeout` an argv actually carries, in ms; null when it has none or more than one. */
 export function executedTimeoutOf(argv) {
   const values = argv.filter((word) => String(word).startsWith('--test-timeout=')).map((word) => Number(String(word).slice('--test-timeout='.length)));
@@ -2335,9 +2329,8 @@ export function executedTimeoutOf(argv) {
  * counting it red (`measure`, `measureSelected`).
  */
 /**
- * The most files a round counts green because they passed alone on the base
- * and on the candidate after being red in it (`green_alone`). More than that,
- * and the round stops `red-under-load` as before.
+ * Historical green-alone limit, retained for readers of old evidence. Current
+ * rounds never excuse assertion red by replaying the base and candidate.
  */
 export const GREEN_ALONE_MAX = 3;
 
@@ -2358,8 +2351,7 @@ export const MERGE_LANES_MIN = 4;
  * runs): the standard batch took 178 s at the median (p90 377 s); the nightly
  * full suite, seven lanes and no sessions, runs five to eight times more tests
  * a second. The round is what every step waits for, so it gets a floor the
- * sessions' load cannot take away. The reds-under-load requeue (`markRequeued`)
- * still answers a red that only load caused.
+ * sessions' load cannot take away. Interrupted members run alone; a stalled round goes back in line.
  *
  * `MC_TEST_LANES` overrides both.
  */
@@ -2383,6 +2375,7 @@ export function suiteTimeoutMs(env = process.env) {
  * whole run's hour stopping it with no name (memoro #14067, 95 minutes, 2026-10-23).
  */
 export const TEST_TIMEOUT_MS = 10 * 60_000;
+export const ROUND_STALL_MS = 15 * 60_000;
 
 /**
  * The environment a suite runs in: the caller's, without what belongs to the
@@ -2640,7 +2633,7 @@ function shell(command, options) {
 }
 
 /**
- * How the command gates the selection named are run, beside the suite. The
+ * How the command gates the selection named are run after the suite. The
  * name stays for its tests; it is `child-async.js`'s `runShell`, which is
  * what every child of the round now is.
  */

@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { killedFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
+import { cancelledFiles, killedFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -271,11 +271,13 @@ describe('a file that failed to load, and a hook that failed — node v24.10.0 T
     assert.equal(hook.name, 'hooked');
     assert.equal(hook.at, 'hook.test.js:3:24');
     assert.deepEqual(hook.error, ['hook of hooked failed:', 'seed failed']);
+    assert.deepEqual(cancelledFiles(hookThrows, ['hook.test.js']), []);
   });
 
   it('a hook that timed out names which hook it was', () => {
     const [hook] = redTests(hookTimesOut, ['hook2.test.js']);
     assert.equal(hook.name, 'hooked');
     assert.deepEqual(hook.error, ['before hook of hooked failed']);
+    assert.deepEqual(cancelledFiles(hookTimesOut, ['hook2.test.js']), ['hook2.test.js']);
   });
 });

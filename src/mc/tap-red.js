@@ -305,14 +305,18 @@ export function killedFiles(tap, files) {
 export function cancelledFiles(tap, files) {
   const owner = ownerIn(files);
   const cancelled = new Set();
+  const timeoutHooks = new Set();
   const failed = new Set();
   for (const block of failingBlocks(tap)) {
     const file = [...block.locations, block.own].map(owner).find(Boolean);
     if (!file) continue;
     if (block.failureType === 'cancelledByParent') cancelled.add(file);
-    else if (!(block.type === 'suite' && ['hookFailed', 'subtestsFailed'].includes(block.failureType))) failed.add(file);
+    else if (block.failureType === 'hookFailed') {
+      if (block.error.some(line => HOOK_TIMEOUT.test(line))) { cancelled.add(file); timeoutHooks.add(file); }
+      else failed.add(file);
+    } else if (!(block.type === 'suite' && block.failureType === 'subtestsFailed')) failed.add(file);
   }
-  return [...cancelled].filter((file) => !failed.has(file));
+  return [...cancelled].filter((file) => timeoutHooks.has(file) && !failed.has(file));
 }
 
 /** How many lines of a test's error are kept: the assertion's first lines, not its whole diff. */

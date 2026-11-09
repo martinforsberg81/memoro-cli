@@ -21,7 +21,7 @@ touches:
 
 - **the gate round** — lease, the pull request's **existing** checkout holding its head
   with main merged into it, the test files the change reaches run there, the
-  command gates the same selection named run beside them, squash. This is what
+  command gates the same selection named run after them, squash. This is what
   `mc repo merge` was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
   after the repository selector's document tests and command gates pass. A script is not a document,
@@ -84,60 +84,58 @@ were a claim about a suite's cost, and memoro-cli's went unmeasured from 60 s to
 seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
-Martin, 2026-11-09 (manager session, evening): regardless of load, a merge
-round runs to completion robustly, and it never takes all cores. A round ends
-with a verdict about the change — green, or red on a failed assertion, a thrown
-error or a test that never ends — never with a verdict about the machine. A
-time cut under load (a test cut at the stall guard, a `before` hook node cut at
-its timeout, a file killed from outside the round, a command gate that exited at
-its wall) is unmeasured, not red: once its suite and gates are done the round
-runs each such file or gate again by itself, alone and one at a time at one
-lane with the never-ends limit (`TEST_TIMEOUT_MS`) as its only per-test bound,
-until it has passed on its own (green; a test over its declared limit still goes
-to the too-slow file, so sessions still learn what to rebuild) or failed on its
-own (red). The repository ceiling becomes a report line, not a red; the round
-ends early only when nothing has progressed — no file finished, no gate ended —
-for fifteen minutes, and then it is `stalled` and goes back in line, never to a
-session. The round's test processes never exceed cores − 1 at any moment: its
-command gates run after the suite, not beside it, and the alone phase runs one
-member at a time. The rule of 2026-11-04 stands: an assertion that fails in the
-round and passes alone is still red; only an interrupted test is run again.
-Measured: 38 of 128 non-green memoro rounds since 2026-11-05 ended on a time cut
-at a median load of 25 on 8 cores (32 of 38 at load 15 or more); suite seconds
-per selected file double above load 15; the 180→300 s raise of memoro's
-contract-gate wall (memoro#15161) did not hold at load 40 (memoro#15171,
-19:20Z); 8 of 15 red-under-load rounds met the same cut when measured again.
-The goal `mc/merge-round-runs-to-completion` carries it into the code, memoro's
-`scripts/testing/contract-gate.mjs` (no wall when `MC_GATE_ROUND` is set) and
-these sections; until it lands the paragraphs below — the ceiling as a red, the
-stall guard as a red, `red-under-load` and `file-killed` as requeued stops, and
-the gates beside the suite — describe what runs.
+## The round runs to its verdict
 
-**Every gate round has a repository ceiling.** `round_timeout_ms` and its
-`round_timeout_why` live in `repo-gate-table.js`: 20 minutes for memoro and 15
-minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
-247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
-ordinary-load rounds red). The deadline bounds the complete round, from the
-moment the lane is held: the preparation, git, selection, the suite, the
-command gates and the retry, and no await in the round waits past it even when
-a child ignores its signal. At the ceiling mc stops the active process group,
-returns a red verdict, and releases the lane so the next queued job can start.
-The verdict and the merge log name two groups of files, kept apart: the
-**unfinished** files (a test file whose top-level test started and did not
-end, or a selected file that never started) are the red, the ones to rebuild;
-the **slowest finished** files are for the reader. A whole-suite round names
-only the files it started, since its selection is not known to mc. A test cut at
-the stall guard (its run's `--test-timeout`) is red, `reached the stall guard —
-rebuild`, and is not run again; a test that passes over the 1 s slow-test
-indicator is named as slow and is not red. `mc
-gate` and the gate a session reaches through `mc publish` use this same
-repository ceiling; a caller's wait budget cannot extend it.
+Martin, 2026-11-09: regardless of load a merge, check or whole-suite round
+runs to completion robustly, and never takes all cores. A round ends green or
+red on the change: a failed assertion, a thrown error or a test that never
+ends. An assertion red in the round that passes alone is still red; the
+2026-11-04 rule, standing main evidence and explicit `retry_once` remain.
 
-Timeout reports name the active phase. Completed reporter snapshots survive
-batch cleanup, so the slowest completed files remain visible. Only the active
-incomplete test requests contribute unfinished files: a command-gate timeout
-cannot relabel the already-completed selection as unfinished. Own-test
-requests are tracked separately and name their own pending files.
+A test cut at its declared stall guard, a file cancelled by a hook node cut
+at its timeout, a file killed from outside, and a command gate exiting 124 or
+by signal are **unmeasured**, not red. `report.unmeasured` names their files
+and gates. Genuine assertion red ends red without retrying these members,
+which remain named as not measured beside the red. A thrown hook is red with
+its own message; cancellation by itself is not evidence of a hook timeout.
+
+After the suite, command gates and PR's own tests, the round measures each
+unmeasured file alone, one at a time with `MC_TEST_LANES=1`. Declared loaders
+and flags remain, but mc replaces `--test-timeout` with `600000`
+(`TEST_TIMEOUT_MS`). The declaration timeout floor governs the suite, not this
+execution override. A passing file is green; passed tests over the declared
+limit are kept under the PR in the too-slow file. An assertion or thrown error
+is red through the ordinary attribution rules. A test cut at 600 s is red,
+"never ends", by name. Another external kill is retried; the third kill
+stalls. Unmeasured command gates follow the files, serially through
+`runSelectedCommands`. Every round command receives `MC_GATE_ROUND=<mode>`;
+memoro's contract gates disable their hand/CI wall under it. `report.alone`
+records `files: [{ file, outcome, seconds, argv }]` and
+`gates: [{ name, outcome, seconds }]`; both alone and unmeasured are retained
+in `gate-rounds.jsonl`.
+
+`round_timeout_ms` and `round_timeout_why` retain their values: 20 minutes for
+memoro and 15 for memoro-cli. The ceiling only reports
+"past its N s ceiling at load L — F of S files finished, going on".
+Only **no progress** — no test file finished, command gate ended or alone
+member ended — for `MC_ROUND_STALL_MINUTES` (default 15, `ROUND_STALL_MS`)
+stops the process group early. The `stalled` report names files and gates in
+flight, phase and load, and releases the lane. The sixty-minute process bound
+(`MC_GATE_SUITE_MINUTES`) remains a last bound and also stops stalled.
+The merger's `REQUEUE_STOPS` is only `['stalled']`: it puts the round back in
+line after fifteen minutes, without a session, with `MAX_REQUEUES` unchanged.
+Exhausted requeues are answered as before. The session's `mc gate` retains its
+own hard ceiling and stall guard; this round policy does not change it.
+
+Measured reason (2026-11-09): of 128 non-green memoro rounds since November 5,
+38 ended on time cuts at median load 25 on eight cores, 32 at load 15 or more;
+green rounds had median load 17.75. Suite seconds per selected file doubled
+above load 15 (0.45 → 0.93). memoro#15171 fell ten times that day, five on
+browser cuts under load. Raising the contract wall from 180 to 300 s
+(memoro#15161, 16:43Z) did not hold: at 19:20Z, load 40, browser-contracts
+exited 124 again. At 22:29 load was 60 with five session gates beside the
+round. Eight of fifteen historical red-under-load rounds met the same cut
+on automatic remeasurement. Machine time cuts must not judge the change.
 
 ## Mend eligibility independent of goals
 
@@ -572,7 +570,9 @@ sessions the load sits at 10–16 on eight cores, and at two lanes the standard
 batch took 178 s at the median (p90 377 s) over 159 suite runs from 2026-10-20 to
 24. The floor is four and not seven because seven lanes beside the sessions are
 what went red under load on 2026-10-19; the sessions' load cannot take the round's
-lanes away, and the reds-under-load requeue (`markRequeued`) stays underneath it.
+lanes away. Martin, 2026-11-09: the round never takes all cores — at any
+moment its test processes are at most cores − 1. Command gates follow the
+suite; an alone member takes one lane, never beside another phase.
 A whole-suite round hands the same count to its own runner as `MC_TEST_LANES`,
 which still overrides all of it. The round record names the `lanes` and the
 `load` it ran at, so a round's speed is read against the lanes it had. And the
@@ -623,7 +623,7 @@ when they are unset, so memoro-cli's runner tests once read the real programmes
 and one of them waited for a STOP it never wrote. A suite, a selected run, or a
 file measured alone that is still running after `MC_GATE_SUITE_MINUTES` (default
 60) is killed with its process group, and the round stops with `ran past N min
-and was stopped — a test that never ends` instead of holding the lane. Before
+and was stopped — a test that never ends` as `stalled` instead of holding the lane. Before
 2026-10-19 nothing bounded it, and memoro-cli #1009 held the light lane for
 hours with no line in the log.
 
@@ -669,11 +669,10 @@ not spend additional time obtaining a baseline. No timeout is raised.
 
 **A declared timing test gets one more run** (ruling 44 § 5). Since 2026-10-07
 memoro's JSC start-up budget, `sql:pr-ci`, dead-CSS and build-bundle went red
-and then green with no change, and neither `file-killed` nor `red-under-load`
-caught them. A declaration's `retry_once` names such test files and selected
+and then green with no change. A declaration's `retry_once` names such test files and selected
 command gates (`{ "files": […], "gates": […] }`, shipped for memoro in
 [`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js), overridable in
-`.mc/test.json` like any field). After the killed and cancelled files are taken
+`.mc/test.json` like any field). After unmeasured interruptions are taken
 out and before reading standing evidence, a red whose every file is in `files` is run once
 more alone on the candidate: green, and the round sets `flipped: { files, names
 }`, says `green alone — … flipped under load`, and goes on as a green suite
@@ -744,31 +743,19 @@ directory; an old cleanup cannot remove a successor's claim. A failed
 reservation stops the operation. During rollout, let already-running old
 workers finish: old code cannot enforce the new reservation protocol.
 
-**The command gates the selection names run beside the suite** (merge-throughput,
-ruling 34). Until then they ran after it: 65 s mean on top of every round that
-had any on 2026-10-09/10, `sql:pr-ci` alone 36 s at the median over 55 rounds.
-Now `runGate` starts them when the suite starts and awaits both halves
-(`Promise.allSettled`); the round's `timings.gates_beside_suite_ms` is the wall
-time of the two together. They still run one at a time and in the selector's
-order, not all at once — this is an 8 GB machine already running the suite's
-lanes, and memory pressure was measured stretching rounds on 2026-10-10
-(`kern.memorystatus_level` 30, swap 2.4 of 3 GB): one gate beside the suite is
-one process more, six would be six. They run through `commandShell`, an
-asynchronous spawn, because a `spawnSync` would stop the round reading the
-suite's pipes and "beside" would become "after" again. The verdict is what it
-was sequentially: every gate runs and is judged and is reported in
-`extra_gates` in the selector's order; a failed gate beside a green suite is
-`selected-gate` with every failure named; a suite that could not be measured
-is the suite's stop, with the gates that ran listed; and a half that throws is
-waited out with the other and then thrown, so nothing turns green because one
-half threw. A round red in its tests names its failed gates in the same reason, so the session it goes to fixes them in one go (memoro #14169, 2026-10-24). Measured at close-out over 60 memoro rounds (2026-10-10 18:01 –
-2026-10-11 07:19 UTC): within a round the two together took 320 s mean where
-suite plus gates add up to 546 s, so the overlap saves 226 s a round — but
-beside the suite the gates are slower, 161 s at the median against 36 s when
-they ran alone on 2026-10-09/10, and the suite itself 179 s against 91 s (it
-also selects more files now, see batches in [`mc-run.md`](mc-run.md)
-§ *The merge*). The wall time of suite and gates was 236 s at the median
-against 155 s for the same pair run one after the other before.
+**The command gates the selection names run after the suite.** They run one
+at a time in selector order, through asynchronous `commandShell`, with the
+frozen base commit rather than a moving ref. Every gate is measured even
+when the suite has red, and every failed gate is named in `extra_gates`.
+`timings['selected gates']` remains; the overlap timing is retired.
+
+The old beside policy was measured on 2026-10-10 with light gates (161 s
+beside against 36 s alone). Since the heavy contract gates of November 4/7,
+a gate beside the four-lane suite was cut at its wall: memoro#15171 on
+November 9 measured gates at 286–477 s beside suites of 238–377 s.
+Martin ruled on 2026-11-09 that the round never takes all cores. Sequential
+phases preserve that bound rather than adding command concurrency to the
+suite's lanes.
 
 **`mc test <repo> --full`** is the other reading, and the only one that is about
 the code rather than about a change: the repository's declared suite command,
@@ -885,52 +872,16 @@ exact-SHA record from a completed main-only run. The historical diagnostic
 helpers and old `selector-misses.jsonl` entries remain available; they are not
 work a PR round performs. See *Main's red is not investigated*, above.
 
-**A file killed from outside the round is no verdict** (ruling 38, since
-deleted). When something outside the round ends a test file's process,
-`node --test` writes one failing entry for that file with `signal: 'SIGTERM'`
-(or another signal) and `exitCode: ~` in its TAP block. `killedFiles(tap,
-files)` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js) names every file
-whose failing block has a non-null `signal:`. Before reading standing evidence,
-`runGate` takes those files' red names out of the red set: when nothing is
-left the round stops `stopped_at: 'file-killed'`, `<files> ended by <signal>
-from outside the round — not a verdict on this change`. A killed process is
-not classified as a test regression. With other reds beside it the round is `red` over those alone,
-and `report.killed_files` lists the killed ones; they are never counted green.
-The merger (`landJob`) runs a round that stopped `file-killed` once more,
-saying `<files> was killed from outside the round — measuring again`. A second
-`file-killed` is answered red with that reason: there is nothing in the change
-to fix.
-
-Martin, 2026-11-09 (manager session): a `before` hook that **throws** is the
-change's red, named with the hook's message; only a hook node cut at its
-timeout is cancelled under load. Twelve of fifteen `red-under-load` rounds
-since 2026-11-05 were one thrown hook ("No dev server database matches this
-tree's 412 migrations"), requeued and met again. The goal `mc/hook-error-is-red`
-carries it into `cancelledFiles` and rewrites this section. The decision of
-2026-11-04 stands: no green-alone exemption, no base replay in a PR round.
-
-**Cancelled tests are not attributed to the PR** (`red-under-load`).
-The former base-then-candidate replay and `green_alone` exemption are retired:
-without existing exact-base evidence a failure remains red, not silently
-subtracted. Explicit `retry_once` on the candidate remains as described above.
-A red file whose own entries are
-cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
-hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
-taken out of the red without any re-run, as if it had passed alone; with
-nothing else red the round is `red-under-load`. A file with a failed test stays
-red whatever else it has. The merger runs a `red-under-load` round once more,
-saying `<files> red only under load — measuring again`. A second one — and a
-second `file-killed` — is put back in line rather than answered
-(`REQUEUE_STOPS`, `mayRequeue` in `merger.js`): the entry is `queued` again with
-its place kept, `requeues` one higher and `not_before` fifteen minutes on
-(`markRequeued`, `merge-queue.js`), the goal keeps its stage, no retry session is
-started — the merger says `back in line in 15 min
-(requeue n of 2), no session started`. After two requeues it is answered red
-with its reason and `red under load in two rounds running`, as before. It is never counted green, and it
-is not the change's red. Its failures are kept under
-`runner/merge-red/<repo>-<pr>-<stop>-<time>.txt` (`loadRedPath`), which a
-landing does not remove, and the round's line in `gate-rounds.jsonl` carries
-`under_load_files`, `head_alone`, `killed_files` and `cancelled_files`.
+**Interrupted files are unmeasured, never excused green.** `killedFiles` in
+[`src/mc/tap-red.js`](../../src/mc/tap-red.js) reads a non-null TAP signal;
+`cancelledFiles` accepts cancellation only when no test failed and no hook
+threw a non-timeout error. These files join the alone phase described above.
+The hook-timeout marker is `failed running <kind> hook`; a different thrown
+message stays the change's red. A failed test beside cancelled tests stays red.
+With genuine red elsewhere the round stops red immediately, naming the
+interrupted members separately. There is no base replay or green-alone
+exemption (Martin, 2026-11-04). Only a stalled round is requeued; interrupted
+members are resolved within the same round, not by a session.
 
 The queued retry record retains `not_before`, retry counts and a bounded
 `retry_diagnostic` (`category` from the actual report's `stopped_at`, and
@@ -1005,7 +956,7 @@ configuration and of its check identity. Each batch is recorded **when it is
 launched**, from the argv the spawn boundary was given: its resource class, its
 files, the lanes it ran at (the `--test-concurrency` it carried), the Node
 executable and version, the timeout Node was handed, and the argv with reporter
-destinations masked (they are ephemeral). A run the ceiling or an interrupt cuts
+destinations masked (they are ephemeral). A run a stall or an interrupt cuts
 before it returns still says what it launched.
 
 A green receipt needs `executionComplete` (`src/mc/gate-greens.js`): the
@@ -1037,16 +988,17 @@ is not an exception the round grants or detects.
 **What the timeout means in time.** `--test-timeout` bounds each test callback
 and each hook from when it starts. It does not bound a file's startup (module
 loading, top-level `await`), which is outside every callback clock, nor the
-whole file, batch or round: those are the round's ceiling (`round_timeout_ms`,
-20 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
+whole file, batch or round: the session has its hard ceiling; a merge round
+has the no-progress stall detector and the last process bound. Synchronous JavaScript
 that does not yield cannot be interrupted by any timer, so a blocked callback is
 measured as long as it ran, not cut at its limit. None of these is an absolute
 synchronous CPU cap, and no repository scanner enforces that every explicit
 per-test timeout is at most the default.
-A test cut at the stall guard is not run again by `retry_once`: the verdict
-says `reached the stall guard — rebuild` with the test name and the limit it was
-cut at (`cut at 30 s`), so a timed-out test is rebuilt by a session rather than
-consuming another round. Only the stall guard is red.
+A session's test cut at the stall guard remains red, with its name and cut
+limit for rebuilding. A merge round instead treats that cut as unmeasured and
+runs the file in its alone phase with the 600 s never-ends bound; `retry_once`
+is the separate policy for declared assertion failures. The declaration floor
+above governs declarations and the suite, not the alone override.
 
 **The slow-test indicator is 1 s per test** (`SLOW_TEST_MS` in
 `src/mc/test-times.js`, not configurable per repository). Every passed test a
