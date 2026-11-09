@@ -383,7 +383,7 @@ test('dropping refuses to archive while a live current-*.json owns the goal', as
  * A goal's branch is made when the goal can start: one written in plan got its
  * branch at `mc goal new`, before the phases ahead of it landed.
  */
-test('mc goal stage build remakes a branch with no commits of its own from origin/main, and leaves one with commits alone', async () => {
+test('mc goal stage build remakes a branch with no commits of its own from origin/main, leaves one with commits alone, and says no worktree yet for a repository without one', async () => {
   const planned = seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'draft' }) });
   const counts = ({ own, behind }) => (cwd, args) => {
     if (args[0] === 'rev-list') return ok(`${args[2] === 'origin/main..HEAD' ? own : behind}\n`);
@@ -396,6 +396,16 @@ test('mc goal stage build remakes a branch with no commits of its own from origi
   assert.deepEqual(reset, { cwd: `${DIR}/memoro-cli`, args: ['reset', '-q', '--keep', 'origin/main'] });
   assert.ok(fresh.calls.findIndex((call) => call.args[0] === 'fetch') < fresh.calls.indexOf(reset), 'fetched first');
   assert.match(fresh.out(), /memoro-cli {2}goal\/plain remade from origin\/main — it had no commits of its own, and main has 7 more/u);
+
+  const absent = fixture({
+    files: planned,
+    absent: [`${DIR}/memoro-cli`],
+    git: (cwd) => ({ ok: false, stderr: `fatal: cannot change to '${cwd}': No such file or directory` }),
+  });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], absent.deps), 0, absent.err());
+  assert.equal(absent.calls.some((call) => call.cwd === `${DIR}/memoro-cli`), false, 'no git call for a missing worktree');
+  assert.match(absent.out(), /memoro-cli {2}goal\/plain no worktree yet — the runner remakes the branch from origin\/main at the first session/u);
+  assert.doesNotMatch(absent.out(), /could not fetch/u, 'a missing worktree is not reported as a fetch failure');
 
   const built = fixture({ files: planned, git: counts({ own: 3, behind: 7 }) });
   assert.equal(await run(['stage', 'mc/plain', 'build'], built.deps), 0, built.err());
@@ -467,7 +477,7 @@ test('mc goal log and new name the session that wrote the entry by its role in t
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: BUILD_ROLES.goal }, ['--stage', 'review', '--done', 'x'], '· claude · review · ready · by build', 'review', 'build'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: REVIEW_ROLE }, ['--done', 'x'], '· claude · build · ready · by review', 'build', 'review'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE }, ['--done', 'x'], '· claude · build · ready · by plan', 'build', 'plan'],
-    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person', MC_ROLE: BUILD_ROLES.goal }, ['--done', 'x'], '· person · build · ready', 'build', null],
+    [{ MC_GOAL: 'mc/plain', MC_TOOL: 'person', MC_ROLE: BUILD_ROLES.goal }, ['--done', 'x'], '· person · build · ready · by build', 'build', 'build'],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'odd role:x' }, ['--done', 'x'], '· claude · build · ready', 'build', null],
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'constructor' }, ['--done', 'x'], '· claude · build · ready · by constructor', 'build', 'constructor'],
@@ -726,7 +736,7 @@ test('the goal verbs refuse what would not validate, and write nothing', async (
   const before = f.store[`${DIR}/GOAL.json`];
   assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'no check'], f.deps), 2);
   assert.match(f.err(), /criterion add needs --check/u);
-  assert.equal(await run(['criterion', 'met', 'mc/plain', '3'], f.deps), 1);
+  assert.equal(await run(['criterion', 'met', 'mc/plain', '3'], f.deps), 2);
   assert.match(f.err(), /it has 1 criteria, no criterion 3/u);
   assert.equal(await run(['criterion', 'met', 'mc/plain', 'x'], f.deps), 2);
   assert.equal(await run(['set', 'mc/plain', 'title', '--text', '  '], f.deps), 1);
@@ -760,14 +770,14 @@ test('mc goal criterion set refuses no flag, a blank text, a criterion that is n
   assert.match(f.err(), /criterion set needs --criterion "…" or --check "…"/u);
   assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--check', '  '], f.deps), 2);
   assert.match(f.err(), /criterion set needs --check with text in it/u);
-  assert.equal(await run(['criterion', 'set', 'mc/plain', '9', '--check', 'x'], f.deps), 1);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '9', '--check', 'x'], f.deps), 2);
   assert.match(f.err(), /it has 2 criteria, no criterion 9/u);
   assert.equal(await run(['criterion', 'set', 'mc/plain', 'x', '--check', 'x'], f.deps), 2);
   assert.equal(f.store[`${DIR}/GOAL.json`], before, 'GOAL.json byte-identical');
   assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'no entry either');
 });
 
-test('mc goal criterion set is refused for a build session and a review session, and a plan session may rewrite', async () => {
+test('mc goal criterion set is refused for a build session and a review session, with or without MC_TOOL, and a plan session may rewrite', async () => {
   for (const [env, word] of [[BUILD, 'build'], [REVIEW, 'review']]) {
     const f = fixture({ files: twoCriteria(), env });
     const before = f.store[`${DIR}/GOAL.json`];
@@ -776,8 +786,18 @@ test('mc goal criterion set is refused for a build session and a review session,
     assert.equal(f.store[`${DIR}/GOAL.json`], before, `${word}: file unchanged`);
     assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, `${word}: no entry`);
   }
+  const halfSet = fixture({ files: twoCriteria(), env: { MC_GOAL: 'mc/plain', MC_ROLE: BUILD_ROLES.goal } });
+  const before = halfSet.store[`${DIR}/GOAL.json`];
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], halfSet.deps), 2);
+  assert.match(halfSet.err(), /a build session does not rewrite a criterion/u);
+  assert.equal(halfSet.store[`${DIR}/GOAL.json`], before, 'without MC_TOOL: GOAL.json byte-identical');
+  assert.equal(halfSet.store[`${DIR}/LOG.md`], LOG_TEXT, 'without MC_TOOL: no entry');
   const plan = fixture({ files: twoCriteria(), env: PLAN });
   assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--check', 'x'], plan.deps), 0, plan.err());
+  assert.equal(await run(['criterion', 'remove', 'mc/plain', '1', '--reason', 'obsolete'], halfSet.deps), 2);
+  assert.match(halfSet.err(), /a build session does not remove a criterion/u);
+  assert.equal(halfSet.store[`${DIR}/GOAL.json`], before, 'without MC_TOOL: GOAL.json byte-identical');
+  assert.equal(halfSet.store[`${DIR}/LOG.md`], LOG_TEXT, 'without MC_TOOL: no entry');
 });
 
 const THREE = [{ criterion: 'first', check: 'a test', met: true }, { criterion: 'second', check: 'another test', met: false }, { criterion: 'third', check: 'a third test', met: true }];
