@@ -207,6 +207,8 @@ hand, and `~/.memoro/mc/selection/` held `memoro-1ee6756a`, `memoro-76f950b8`,
 `memoro-ffede537` and `memoro-cli-1d5e7a04` beside the live `memoro.git-17111bc1`
 and `memoro-cli.git-365b96c6`.
 
+The known slug's `candidate/` is the standing measurement checkout, kept while the repository is known and never removed by tidy or pressure cleanup (its `node_modules` is a prepare-cache clone sharing blocks).
+
 **A — gate-cache entries.** `~/mc/gate-cache/<slug>/<key>/` is the gate's dependency cache (`prepare-cache.js`): a `node_modules` a green `npm ci` left, with a `meta.json` whose `at` a store sets and every hit renews. Under a slug a repository mc knows has, an entry no round has used for fourteen days (`PREPARE_CACHE_MAX_AGE_MS`) goes, judged by `meta.at` or, without a meta, by the directory's own mtime; a `<key>.tmp-<pid>` staging directory goes once it is a day old, since a store that is running renews its mtime. Removal is through `rmTree`. A round that is cloning an entry as it goes falls back to `npm ci`, which is why no lock is taken. An entry under a slug no repository knows is K's, and goes whole with its slug.
 
 **B — rebuildable caches.** `src/mc/tidy-caches.js` enumerates only the following

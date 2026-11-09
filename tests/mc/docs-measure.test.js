@@ -3,7 +3,7 @@
  *
  * Every step is a fake here: no git, no test run, no npm. What is asserted is
  * the order the steps run in, which step stops the measure and how it is named,
- * and that the candidate is taken away whatever happened to it. The selector
+ * and that the standing candidate is kept whatever happened to it. The selector
  * and the TAP reading have their own tests; this one only needs their answers.
  */
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ const GATE = mkdtempSync(join(tmpdir(), 'docs-measure-'));
 const REPO = '/repos/memoro';
 const PR = 14188;
 const LANE = 'memoro';
-const DIR = join(GATE, repoFileSlug(REPO), `docs-${PR}`);
+const DIR = join(GATE, 'gate', repoFileSlug(REPO), 'candidate');
 const FILES = ['tests/docs/doc-links.test.js', 'tests/docs/msr.test.js'];
 
 const GREEN = 'TAP version 13\n# Subtest: a\nok 1 - a\n1..1\n# tests 1\n# pass 1\n# fail 0';
@@ -41,9 +41,9 @@ function gitWith(log, answer = () => null) {
     log.git.push({ args, cwd });
     const explicit = answer(args);
     if (explicit) return explicit;
-    if (args[0] === 'worktree' && args[1] === 'list') {
+    if (args[0] === 'worktree' && args[1] === 'add') {
       mkdirSync(DIR, { recursive: true });
-      return { ...OK, stdout: `worktree ${DIR}\0HEAD f00ba4\0branch refs/heads/docs/msr\0\0` };
+      return OK;
     }
     if (args[0] === 'rev-parse' && args.includes('--verify')) return { ...OK, status: 1 };
     if (args[0] === 'rev-parse') return { ...OK, stdout: 'f00ba4' };
@@ -76,13 +76,14 @@ function measure(log, overrides = {}) {
     headSha: 'f00ba4',
     headRef: 'docs/msr',
     base: 'main',
+    env: { MC_WORK_ROOT: GATE, MC_HOME: join(GATE, 'home') },
     say: (line) => log.say.push(line),
     deps: { ...fakes(log), ...overrides },
   });
 }
 
 describe('measureDocs — the tests the selector draws for a documents-only pull request', () => {
-  it('reserves the lane of its repository before preparation and releases it after cleanup, even on failure', async () => {
+  it('reserves the lane of its repository before preparation and releases it after measurement, even on failure', async () => {
     const log = recorder();
     const events = [];
     const result = await measure(log, {
@@ -95,7 +96,7 @@ describe('measureDocs — the tests the selector draws for a documents-only pull
     assert.deepEqual(events, ['reserved', 'released']);
   });
 
-  it('keeps assertion diagnostics and the raw output after removing the candidate', async () => {
+  it('keeps assertion diagnostics and the raw output beside the kept candidate', async () => {
     const log = recorder();
     const tap = `TAP version 13
 not ok 1 - a link resolves
@@ -136,7 +137,7 @@ not ok 1 - a link resolves
     assert.deepEqual(log.git, []);
   });
 
-  it('a red test stops the merge, names it, and takes the candidate away', async () => {
+  it('a red test stops the merge, names it, and keeps the candidate detached', async () => {
     const log = recorder();
     const result = await measure(log, { tests: async (args) => { log.tests.push(args); return { tap: RED, timedOut: false }; } });
     assert.equal(result.ok, false);
@@ -148,12 +149,13 @@ not ok 1 - a link resolves
     assert.equal(log.tests[0].cwd, DIR);
     assert.deepEqual(log.tests[0].files, FILES);
     assert.deepEqual(log.tests[0].flags, ['--import', './tests/_isolate-home.mjs']);
-    assert.deepEqual(log.git.at(-1), { args: ['checkout', '--no-guess', 'docs/msr'], cwd: DIR });
-    assert.equal(log.git.some(({ args }) => args[0] === 'worktree' && ['add', 'remove'].includes(args[1])), false);
+    assert.deepEqual(log.git.filter(({ args }) => args[0] === 'checkout'), [{ args: ['checkout', '--detach', 'f00ba4'], cwd: DIR }]);
+    assert.deepEqual(log.git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
     assert.equal(existsSync(DIR), true);
   });
 
-  it('all green is ok, with the files it ran', async () => {
+  it('all green reuses the standing checkout on later documents measurements', async () => {
+    rmSync(DIR, { recursive: true, force: true });
     const log = recorder();
     const result = await measure(log);
     assert.equal(result.ok, true);
@@ -163,6 +165,13 @@ not ok 1 - a link resolves
     assert.deepEqual(result.red, []);
     assert.deepEqual(result.commands, []);
     assert.equal(log.tests.length, 1);
+    assert.equal((await measure(log)).ok, true);
+    assert.deepEqual(log.git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add'), [
+      { args: ['worktree', 'add', '--detach', DIR, 'f00ba4'], cwd: REPO },
+    ]);
+    assert.deepEqual(log.git.filter(({ args }) => args[0] === 'checkout').map(({ args }) => args),
+      [['checkout', '--detach', 'f00ba4'], ['checkout', '--detach', 'f00ba4']]);
+    assert.deepEqual(log.git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
     assert.equal(existsSync(DIR), true);
   });
 

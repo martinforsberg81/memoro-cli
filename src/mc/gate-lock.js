@@ -20,7 +20,7 @@
  * refuse the run. There is no expiry that could mistake a slow run for a
  * dead one.
  *
- * Code merges, documents' tests, the nightly run, a deploy and an iOS build
+ * Code merges, documents' tests, branch freshening, the nightly run, a deploy and an iOS build
  * reserve a lane. A deploy and an iOS build reserve memoro's (`BUILD_LANE`).
  */
 import { readdirSync, readFileSync, rmSync } from 'node:fs';

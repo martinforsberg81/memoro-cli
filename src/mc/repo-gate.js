@@ -14,7 +14,7 @@
  *  1. take the repository's lease, so two rounds cannot measure against each
  *     other's moving main;
  *  2. read what the pull request actually is, from `gh`;
- *  3. borrow the PR's clean, idle checkout — its head with the current base
+ *  3. heal mc's standing measurement checkout — its head with the current base
  *     merged into it, so what is measured is the state after merging rather
  *     than the state the author last saw;
  *  4. run what the repository's selection reached — or, with `full`, the
@@ -57,7 +57,7 @@ import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { runShell as runShellAsync, runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { existingCandidate } from './existing-candidate.js';
+import { measurementCheckout, measurementCheckoutPath } from './measurement-checkout.js';
 import { log } from './logger.js';
 import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -196,7 +196,7 @@ export async function runGate({
   // Where the repository may keep what it learns about its own tests between
   // rounds (MC_SELECTION_STATE), and whether this round may write there
   // (MC_SELECTION_STATE_WRITE). A directory under mc's home per repository,
-  // never inside it: the candidate is thrown away after every round, so a
+  // never inside it: the candidate is healed before every round, so a
   // selector that learns from its runs has nowhere else to keep it. Written
   // only by a whole-suite run of the default branch as fetched — the nightly,
   // or a person's `--full` — because that is the one tree that is main and not
@@ -518,7 +518,7 @@ export async function runGate({
   };
 
   // Abort through the ordinary finally path so children stop before the
-  // borrowed checkout is restored. Exiting inside the handler skips that path.
+  // lane is released. Exiting inside the handler skips that path.
   const onSignal = (received) => {
     log('gate.killed', { repo: repoFileSlug(repoPath), signal: received, pr: label, holder: holder?.name || null });
     try {
@@ -536,12 +536,7 @@ export async function runGate({
 
   report.declaration = { source: declared.source, ...declared.declaration };
 
-  const workspace = join(gateRoot(env), repoFileSlug(repoPath));
-  // PR measurements borrow their branch checkout. Only a standalone main
-  // measurement owns the temporary candidate below.
-  let headDir = join(workspace, 'candidate');
-  let borrowed = null;
-  let ownsWorkspace = false;
+  const headDir = measurementCheckoutPath(repoPath, workRoot(env));
 
   try {
     // What the pull request actually is, rather than what the caller believes.
@@ -570,12 +565,6 @@ export async function runGate({
     const fetched = await timed('fetch', async () => askGit(['fetch', 'origin', '--prune'], { cwd: repoPath }));
     if (fetched.status !== 0) return finish('fetch', trim(fetched.stderr) || 'git fetch failed');
 
-    if (!facts.pr) {
-      ownsWorkspace = true;
-      await clearWorkspace({ git: askGit, repoPath, workspace });
-      mkdirSync(workspace, { recursive: true, mode: 0o700 });
-    }
-
     // The branch the change is aimed at — or, with no pull request to ask it
     // of, the default branch as the remote itself names it. Assuming `main`
     // here would measure a tree nobody asked about on a repository that calls
@@ -603,22 +592,14 @@ export async function runGate({
     // this one exists only when no selection ran.
     if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
 
-    if (facts.pr) {
-      borrowed = await existingCandidate({ repoPath, branch: facts.pr.head, sha: facts.pr.head_sha, git: askGit, restoreGit: askGitRaw, cwds: candidateCwds, root: workRoot(env) });
-      if (!borrowed.ok) return finish('worktree', borrowed.reason);
-      headDir = borrowed.dir;
-      if (signal?.aborted) throw new RoundAborted(abortReason(signal));
-      const ready = await borrowed.start(batch ? baseRef : facts.pr.head_sha);
-      if (!ready.ok) return finish('worktree', ready.reason);
-      say(`using existing checkout ${headDir} — no worktree created`);
-    }
+    const candidate = await measurementCheckout({
+      repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : baseRef,
+      git: askGit, cwds: candidateCwds, root: workRoot(env),
+    });
+    if (!candidate.ok) return finish('worktree', candidate.reason);
+    say(`using the merger's measurement checkout ${headDir}`);
 
-    // Detached on purpose. The round must be able to merge the base into the
-    // candidate without that ever becoming a commit on somebody's branch:
-    // what is measured is a state, not a change to the repository.
     if (!facts.pr) {
-      const only = await askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
-      if (only.status !== 0) return finish('worktree', trim(only.stderr) || `could not check out ${baseRef}`);
       say(`measuring ${baseRef} as fetched — the whole suite, one tree`);
     } else if (!batch) {
       // The candidate is measured *after* merging the current base into it. A PR
@@ -1302,12 +1283,6 @@ export async function runGate({
   } finally {
     cancelCeiling();
     for (const signal of caught) process.off(signal, onSignal);
-    // The raw git: the ceiling may have come, and the clean-up must still run.
-    if (borrowed?.ok) {
-      const restored = await borrowed.restore();
-      if (!restored.ok) finish(report.stopped_at || 'worktree-restore', `${report.reason ? `${report.reason}; ` : ''}${restored.reason}`);
-    }
-    if (ownsWorkspace) await clearWorkspace({ git: askGitRaw, repoPath, workspace });
     // Always, and last. A round that died half way through must not leave the
     // repository held by a session that is no longer running — but a round
     // running inside somebody else's lease gives back nothing, because the
@@ -1959,27 +1934,6 @@ async function defaultBaseRef({ git, repoPath }) {
   const asked = await git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
   const ref = asked?.status === 0 ? trim(asked.stdout) : '';
   return ref || null;
-}
-
-/**
- * Worktrees the round made, taken back — and the directory with them.
- *
- * `git worktree remove --force` first so the repository's own administrative
- * record goes away with the directory; `prune` afterwards for the case where
- * the directory is already gone and only the record is left, which is what an
- * interrupted round leaves behind.
- */
-async function clearWorkspace({ git, repoPath, workspace }) {
-  // `candidate` is the only one the round makes now; `baseline` is swept for
-  // the rounds that ran before 2026-08-31 and may have left one behind.
-  for (const name of ['baseline', 'candidate']) {
-    const dir = join(workspace, name);
-    if (existsSync(dir)) {
-      try { await git(['worktree', 'remove', '--force', dir], { cwd: repoPath }); } catch { /* pruned below */ }
-    }
-  }
-  try { await git(['worktree', 'prune'], { cwd: repoPath }); } catch { /* nothing to prune */ }
-  try { rmSync(workspace, { recursive: true, force: true }); } catch { /* gone */ }
 }
 
 /**

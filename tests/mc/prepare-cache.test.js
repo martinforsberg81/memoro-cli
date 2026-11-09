@@ -94,7 +94,7 @@ describe('the prepare cache', () => {
     assert.ok(fx.said.includes(`prepare: cloned node_modules from the cache (${result.key})`));
   });
 
-  it('a cache hit replaces an existing checkout tree instead of nesting inside it', async () => {
+  it('a cache hit replaces the standing checkout dependency tree instead of nesting inside it', async () => {
     const fx = fixture();
     try {
       await fx.go();
