@@ -52,7 +52,6 @@ import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
 import { gateLaneOf, gateLanes } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
-import { isNetworkFailure } from './network-failure.js';
 import { deployPull, runMergeRound } from './repo-merge.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
@@ -461,7 +460,7 @@ export async function landJob(batch, {
     return !dropped || matching.some((goal) => !['done', 'dropped'].includes(goal.stage));
   };
   const answer = async (job, landed, report) => {
-    // A goal's head moved past the one its review judged: not OK any more.
+    // A goal's head moved past the one the round started on: not OK any more.
     // It leaves the queue, and the goal stays in merge for one mend session (`tellGoal`).
     const moved = !landed && Boolean(job.goal) && (report?.stopped_at === 'pushed' || report?.stopped_at === 'moved');
     // A round the watch stopped for a new push: back in line at its place.
@@ -473,6 +472,9 @@ export async function landJob(batch, {
     const given = !landed && !offline && report?.stopped_at === OFFLINE_STOP ? offlineGivenUp(report) : report;
     const flags = { ...(requeued ? { requeued: true } : {}), ...(back ? { back: true } : {}), ...(moved ? { moved: true } : {}), ...(offline ? { offline: true } : {}) };
     answers.push({ job, landed, report: given, ...flags });
+    if (landed && afterLanding) {
+      try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
+    }
     await tell(job, landed, given, {
       root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal,
     });
@@ -486,44 +488,7 @@ export async function landJob(batch, {
     }
   };
   const jobs = [].concat(batch);
-  // A session already decided that a goal should merge. Execute that decision
-  // directly: no criteria, reviewed-head check, gate or automatic conflict fix.
   const ask = gh || realGh;
-  for (const one of [...jobs]) {
-    if (!await allowedToMerge(one)) {
-      await answer(one, false, { ok: false, merged: false, stopped_at: 'dropped', reason: 'its goal was dropped; delivery is abandoned' });
-      jobs.splice(jobs.indexOf(one), 1);
-      continue;
-    }
-    const goal = goalOfJob(one, goalsOf);
-    if (!one.goal && goal?.stage !== 'merge') continue;
-    let merged;
-    try {
-      merged = await ask(['pr', 'merge', String(one.pr), '--squash'], { cwd: one.repo_path });
-    } catch (error) { merged = { status: 1, stderr: error.message }; }
-    // Read the result, also covering a retry after the previous process landed
-    // the PR but died before recording its answer.
-    const unread = {};
-    const facts = await prStateOf(one, ask, unread);
-    const error = String(merged?.stderr || '').trim();
-    // GitHub could not be reached, and nothing says the PR merged: the network's
-    // answer (`offline`), not the decision's. Back in line; the goal is left as it is.
-    const unreachable = facts?.state !== 'MERGED' && facts?.state !== 'CLOSED'
-      && (merged?.status !== 0 ? isNetworkFailure(error) : !facts && isNetworkFailure(unread.error));
-    const report = facts?.state === 'MERGED' ? { ...alreadyMerged(facts), already_merged: merged?.status !== 0 }
-      : unreachable ? {
-        ok: false, merged: false, stopped_at: OFFLINE_STOP,
-        reason: merged?.status !== 0
-          ? `gh pr merge ${one.pr} --squash could not reach GitHub (${error}) — ${facts?.state === 'OPEN' ? 'GitHub still has it open' : 'its state could not be read'}, so nothing is known to have merged`
-          : `gh pr view ${one.pr} could not reach GitHub to confirm the merge (${unread.error})`,
-      }
-      : { ok: false, merged: false, stopped_at: 'merge', reason: error || 'GitHub did not confirm the merge' };
-    if (report.ok && afterLanding) {
-      try { await afterLanding(one); } catch (error) { say(`${one.repo}: could not pull the installation (${error.message})`); }
-    }
-    await answer(one, report.ok, report);
-    jobs.splice(jobs.indexOf(one), 1);
-  }
   // Asked first: a pull request somebody merged or closed on GitHub is
   // answered by itself and leaves the batch, rather than stopping the round
   // for everyone in it (2026-10-10 17:52, #13372 turned #13373 and #13374 red).
@@ -545,8 +510,8 @@ export async function landJob(batch, {
   if (!jobs.length) return answers;
   // The head the round starts on, read once for a single job: a push to it
   // while the round runs stops the round (`watchSubject`). Unreadable: only
-  // merged and closed are watched. A goal's is the head its review judged.
-  const startHead = jobs.length === 1 ? (jobs[0].goal && jobs[0].sha) || await headOf(jobs[0], ask) : null;
+  // merged and closed are watched. Goal jobs carry no reviewed-head pin.
+  const startHead = jobs.length === 1 ? await headOf(jobs[0], ask) : null;
 
   const [job] = jobs;
   const numbers = jobs.map((item) => item.pr);

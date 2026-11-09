@@ -148,8 +148,8 @@ this section; until it lands the paragraphs below describe what runs.
 
 Martin, 2026-11-08: a merge must reuse the checkout the work already has;
 creating and deleting another worktree wastes time and disk. This applies to
-ordinary and documents-only PR measurements, batch candidates and branch
-freshening before landing. Direct goal landing keeps its existing procedure.
+ordinary, goal and documents-only PR measurements, batch candidates and branch
+freshening before landing.
 
 `existingCandidate` locates the registered checkout of the exact PR branch.
 It requires the pushed head, a clean index and working tree (including
@@ -208,38 +208,44 @@ Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
 
-Martin, 2026-11-09 (manager session): a goal's pull requests land through the
-same measured round as every other. `mc goal stage merge` still records the
-session's decision and queues every registered pull request; the merger lands
-them through `runMergeRound` — a candidate with the current base, reuse of the
-session's whole-selection receipt when the tree and selection match or main's
-movement is selected, measurement of the rest, the squash pinned to the head
-measured. The direct `gh pr merge --squash` in `landJob` goes. A session's
-completed GREEN `mc gate --whole-selection` on the final judged worktree remains
-required: it is the receipt the round reuses. The goal
-`mc/goal-landing-through-the-round` carries it into the code and rewrites this
-section; until it lands the paragraph below describes what runs.
-
 **A session decides when a goal merges.** Before a review, finish or mend session
-authorizes direct goal landing with `mc goal stage merge`, the canonical
+authorizes goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
 completed green `mc gate --whole-selection` on the final judged worktree. The
 session records scope, frozen base, judged revision and log. A content-changing
 mend establishes acceptance for the repaired worktree; an unchanged delivery
 retry may retain still-valid evidence under the existing reuse rules. Explicit
 verification exceptions keep their approved scope. These are session
-requirements, not merger enforcement. `mc goal stage merge` records
-that decision and queues every PR registered on the goal. `landJob` executes
-it with `gh pr merge --squash`, without another gate, criteria check,
-reviewed-head/base validation or automatic conflict resolution. It reads GitHub's merge
-result for bookkeeping; each landed PR is recorded under the shared lock, and
-the final landing sets `done`. A failed merge goes to a session. The runner
-recovers missing queue entries for goals already in `merge`; it does not make
-the merge decision. Existing `merging` records are read as `merge`.
+requirements, not merger enforcement.
 
-Goal sessions therefore cannot assume that landing will integrate a missing
-prerequisite or measure the combined candidate. Necessary main integration
-belongs before their final acceptance and authorization, under
+`mc goal stage merge` records that decision and queues every PR registered on
+the goal. `landJob` sends goal jobs through the ordinary `runMergeRound`: a
+candidate with the current base, exact reuse of the session's whole-selection
+receipt when tree and selection match, delta reuse when the selector can measure
+main's movement, and measurement of the rest. The squash is pinned with
+`--match-head-commit` to the head the round measured. Every round is recorded.
+The merger does not re-check criteria or the reviewed head and does not resolve
+content conflicts. Each landing is recorded under the shared lock; the final
+landing sets `done`. A failed round goes to mend under the ordinary retry and
+offline rules. A new push during a goal's round leaves the queue and keeps the
+goal in merge for mend to re-judge the head. Dropped-goal ownership is checked at
+admission and again before the squash. The runner recovers missing queue entries
+for goals already in `merge`; it does not make the merge decision. Existing
+`merging` records are read as `merge`.
+
+This closes the direct-landing gap (Martin, 2026-11-09): a goal's final gate was
+measured at a frozen base, while main moved every few minutes — 86 goals landed
+in 24 hours. A clean textual merge does not establish that the combined tree is
+green. Main's red was the third cause of pull-request rounds failing for reasons
+not theirs: 10 of 128 non-green rounds in the last five days, after load/time
+sensitivity and infrastructure. Evidence and method are in the programme's
+`~/mc/programs/mc/evidence/2026-11-09-merge-rounds/measurement.md` (986 rounds,
+2026-10-26 through 11-09).
+
+The merger measures the combined candidate and reuses the session's evidence;
+the session's acceptance remains required because it is what the merger reuses.
+Necessary integration of a named prerequisite still belongs before final
+acceptance and authorization, under
 [mc-goals.md](mc-goals.md#integrating-main-into-a-goal). A clean textual merge
 does not establish that the judged tree contains its required dependencies.
 
@@ -561,7 +567,7 @@ records each test file's measured seconds in `~/mc/test-times/<repo>.json`
 the old). An unnamed ordinary `mc gate` runs the test files the change touches,
 then others cheapest first while the estimate fits 180 s, and exposes the
 exact files it deferred as unmeasured. Its coverage is `partial`, never
-reusable evidence; direct goal landing does not run deferred files. The public
+reusable evidence; it cannot replace the session’s required acceptance. The public
 `mc gate --whole-selection` uses the same affected selector, tests and command
 gates, but runs every selected check without cost deferral. Named files and a
 bound gate (`measurementBinding`, `wholeSelection`) also defer nothing, as does

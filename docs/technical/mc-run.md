@@ -178,7 +178,10 @@ role tells the session to read LOG.md first.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment
-without waiting for the merge. `mc goal stage merge` writes a receipt in the
+without waiting for the merge. The merger lands goal PRs through the ordinary
+round on the current base, reusing the session’s whole-selection receipt (exact
+or delta) and measuring the rest; it does not re-check criteria or the reviewed
+head. `mc goal stage merge` writes a handoff receipt in the
 session's scratch directory after queueing every PR. The runner checks it
 every 250 ms, ends its own launched child, and releases the current file,
 slot and goal/programme claims after the child closes. Partial queue failures

@@ -14,7 +14,7 @@ in it and say why in the reply.
 - Before review, finish or mend authorizes `mc goal stage merge`, require
   completed GREEN `mc gate --whole-selection` on the final judged worktree.
   Record scope, frozen base, revision and log; finish RUNNING with `mc gate --wait`.
-  Partial, deferred or failed runs are not acceptance; direct landing adds no check.
+  Partial, deferred or failed runs are not acceptance; the round reuses this evidence.
   Repairs need final-tree acceptance; unchanged retries may retain valid evidence
   under the reuse rules below. Preserve approved verification exceptions.
 - A rerun on identical content reuses each file and command gate that passed there and runs
@@ -38,8 +38,10 @@ in it and say why in the reply.
   known gaps and each changed test's `mc gate` timing (`test <file> › <name> —
   0.xyz s`). Never claim a run you did not make; "suite not run" is acceptable.
 ## `mc merge <repo> <pr>` — the one door to main
-`mc goal stage merge` directly merges every registered PR, without gate,
-criteria or head checks; the goal is done after all land.
+`mc goal stage merge` records the session’s decision and queues every registered
+PR for the ordinary measured round, reusing the session’s whole-selection receipt
+(exact or delta) and measuring the rest on the current base. The merger does not
+re-check criteria or the reviewed head; the goal is done after all land.
 Conflicts go to a session.
 - Queues the pull request and returns. The merger takes the queue one at a
   time per repository lane, runs the gate round on a candidate with the
