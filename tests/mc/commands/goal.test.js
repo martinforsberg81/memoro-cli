@@ -471,9 +471,13 @@ test('interactive Martin can return, move backward/forward and drop with attribu
     assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
     if (from === 'merge') assert.match(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, /moved back from merge to build by martin/u);
   }
-  const drop = fixture({ files: inStage('build'), env: MARTIN });
+  const drop = dropFixture(fixture({ files: inStage('build'), env: MARTIN }));
   assert.equal(await run(['drop', '--reason', 'superseded'], drop.deps), 0, drop.err());
-  assert.equal(stateOf(drop), 'dropped · ready'); assert.equal(parseLog(drop.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
+  const archived = `${HOME}/mc/goals/.archive/plain`;
+  assert.equal(drop.store[`${DIR}/GOAL.json`], undefined, 'the active goal is archived');
+  assert.equal(goalField(drop.store[`${archived}/GOAL.json`], 'stage'), 'dropped');
+  assert.equal(goalField(drop.store[`${archived}/GOAL.json`], 'status'), 'ready');
+  assert.equal(parseLog(drop.store[`${archived}/LOG.md`]).at(-1).role, 'martin');
   const returned = fixture({ files: inStage('review', 'Martin'), env: MARTIN });
   assert.equal(await run(['ready'], returned.deps), 0, returned.err());
   assert.equal(stateOf(returned), 'review · ready'); assert.equal(parseLog(returned.store[`${DIR}/LOG.md`]).at(-1).role, 'martin');
