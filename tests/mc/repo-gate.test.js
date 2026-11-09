@@ -1983,31 +1983,34 @@ describe('a repository that selects by diff', () => {
     const onCandidate = [...prefix, "+   z: 'new regression',", "-   z: 'expected',", '  }'];
     const onBase = [...prefix, "    z: 'expected',", '  }'];
 
-    /** Main's evidence as a completed main-only run writes it: the parsed red tests of its TAP. */
-    function cached(fx, { commit = 'base1111full', files = [scanner], name = null, error = onCandidate, legacy = false } = {}) {
+    /** Main evidence from a measured landing, using the real parsed diagnostic. */
+    function cached(fx, { commit = 'base1111full', files = [scanner], name = null, error = onCandidate, legacy = false, covered = files, green = false } = {}) {
       const parsed = redTests(located(files, error), files)
         .map((test) => ({ ...test, name: name || test.name }))
         .map(({ diagnostic, ...test }) => (legacy ? test : { ...test, diagnostic }));
-      recordMainRed({ root: fx.mcHome, repo: 'repo', commit, result: {
-        totals: { finished: true }, red_files: files, red_tests: parsed,
+      recordMainRed({ root: fx.mcHome, repo: 'repo', commit, covered, from: 'landing', result: {
+        totals: { finished: true }, red_files: green ? [] : files, red_tests: green ? [] : parsed,
       } });
     }
 
     it('a completed main-only round records evidence without running another tree', async () => {
       const fx = selecting({ files: [scanner], full: true });
       try {
-        const report = await fx.report({ suite: async ({ cwd }) => ({ code: 1, tap: located([scanner]).replaceAll('/somewhere/candidate', cwd) }) });
+        const report = await fx.report({ suite: async ({ cwd }) => ({ code: 1, tap: located([scanner]).replaceAll('/somewhere/candidate', cwd), tests: [{ file: scanner }, { file: 'tests/green.test.js' }] }) });
         assert.equal(report.ok, false);
         const proof = readMainRed({ root: fx.mcHome, repo: 'repo', baseCommit: report.base.commit, files: [scanner] });
         assert.equal(proof.cached, true);
         assert.deepEqual(proof.red_on_main, [scanner]);
+        assert.equal(proof.from, 'full');
+        assert.equal(proof.inherited_from, null);
+        assert.equal(readMainRed({ root: fx.mcHome, repo: 'repo', baseCommit: report.base.commit, files: ['tests/green.test.js'] }).states['tests/green.test.js'].state, 'covered_green');
       } finally { fx.cleanup(); }
     });
 
-    for (const kind of ['missing', 'stale', 'new failure', 'new diagnostic', 'legacy evidence', 'changed test', 'exact']) {
+    for (const kind of ['not_covered', 'covered_green', 'stale', 'new failure', 'new diagnostic', 'legacy evidence', 'touched covered_red', 'matching covered_red']) {
       it(`standing main evidence is ${kind}: no base replay or history walk`, async () => {
         const { gitAlso, tests } = onMain({
-          redAt: { candidate: [scanner] }, touched: kind === 'changed test' ? [scanner] : [], error: onCandidate,
+          redAt: { candidate: [scanner] }, touched: kind === 'touched covered_red' ? [scanner] : [], error: onCandidate,
         });
         const calls = [];
         const fx = selecting({ files: [scanner], gitAlso: (args, options) => {
@@ -2015,13 +2018,14 @@ describe('a repository that selects by diff', () => {
         } });
         let runs = 0;
         try {
-          if (kind !== 'missing') cached(fx, {
+          if (kind !== 'not_covered') cached(fx, {
             commit: kind === 'stale' ? 'old-main' : 'base1111full',
             name: kind === 'new failure' ? 'another failure' : null,
             // Differs only after the sixth nonblank line: same display lines.
             error: kind === 'new diagnostic' ? onBase : onCandidate,
             // Written before the whole diagnostic was kept: never an exemption.
             legacy: kind === 'legacy evidence',
+            green: kind === 'covered_green',
           });
           if (kind === 'new diagnostic') {
             const [base] = redTests(located([scanner], onBase), [scanner]);
@@ -2029,13 +2033,15 @@ describe('a repository that selects by diff', () => {
             assert.deepEqual(base.error, candidate.error, 'the display lines alone cannot tell them apart');
           }
           const report = await fx.report({ tests: (args) => { runs++; return tests(args); } });
-          assert.equal(report.ok, kind === 'exact', report.reason);
+          assert.equal(report.ok, kind === 'matching covered_red', report.reason);
           assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
           assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), [
             ['checkout', '--detach', 'abc1234'],
           ]);
           assert.equal(report.timings['main red'], undefined);
-          if (kind === 'exact') assert.deepEqual(report.main_red_files, [scanner]);
+          if (kind === 'covered_green') assert.ok(report.reason.includes(`green on main at base1111full`), report.reason);
+          if (kind === 'not_covered') assert.match(report.reason, /not_covered: .*unknown on main/u);
+          if (kind === 'matching covered_red') assert.deepEqual(report.main_red_files, [scanner]);
           else assert.equal(report.main_red_files, null);
         } finally { fx.cleanup(); }
       });
@@ -2128,7 +2134,7 @@ describe('a repository that selects by diff', () => {
           assert.equal(report.stopped_at, 'red');
           assert.equal(report.verdict, 'red');
           assert.equal(report.flipped, null);
-          assert.equal(report.reason, `1 test red: a test in ${scanner}`);
+          assert.equal(report.reason, `1 test red: a test in ${scanner} — not_covered: ${scanner} — unknown on main at base1111full`);
           assert.deepEqual(report.head_alone, { red: [scanner] });
           assert.ok(said.includes(`red again alone: ${scanner}`));
         } finally { fx.cleanup(); }
@@ -2649,7 +2655,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({ onProgress: (line) => said.push(line) });
         assert.equal(report.verdict, 'green', report.reason);
-        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory' });
+        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory', covered: [] });
         assert.ok(said.includes(`the candidate's tree tree333 was measured green by mc gate at ${AT} with the same selection — not measured again`));
         assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']], 'only the pull request\'s own tests ran');
         assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
@@ -2708,7 +2714,7 @@ describe('a repository that selects by diff', () => {
         });
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'pr-tests');
-        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory' });
+        assert.deepEqual(report.reused, { mode: 'exact', at: AT, session: 'gate-memory', covered: [] });
       } finally { fx.cleanup(); }
     });
   });
@@ -2759,6 +2765,7 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report({ evidence: fx.evidence });
         assert.equal(report.verdict, 'green', report.reason);
         assert.equal(report.reused.mode, 'exact');
+        assert.deepEqual(report.reused.covered, files, 'the validated receipt coverage reaches the landing');
         assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']]);
         assert.equal(fx.mark('lint'), null);
         assert.equal(fx.mark('required'), '', 'required merge gate still ran');
@@ -2867,7 +2874,7 @@ describe('a repository that selects by diff', () => {
         });
         const report = await fx.report();
         assert.equal(report.verdict, 'green', report.reason);
-        assert.deepEqual(report.reused, { mode: 'exact', at: 'x', session: 's' });
+        assert.deepEqual(report.reused, { mode: 'exact', at: 'x', session: 's', covered: [] });
         assert.deepEqual(fx.runs.map((run) => run.files), [[own]]);
         assert.equal(fx.mark('selector-delta'), null, 'the delta was never asked');
       } finally { fx.cleanup(); }
@@ -2879,7 +2886,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({ onProgress: (line) => said.push(line) });
         assert.equal(report.verdict, 'green', report.reason);
-        assert.deepEqual(report.reused, { mode: 'delta', at: AT, session: 'delta-session', delta_paths: 0, rerun_files: 0, rerun_commands: [] });
+        assert.deepEqual(report.reused, { mode: 'delta', at: AT, session: 'delta-session', covered: files, delta_paths: 0, rerun_files: 0, rerun_commands: [] });
         assert.deepEqual(fx.runs.map((run) => run.files), [[own]], 'only the pull request\'s own tests');
         assert.equal(fx.mark('lint'), null);
         assert.equal(fx.mark('selector-delta'), null, 'no paths, no selector');
@@ -2914,7 +2921,7 @@ describe('a repository that selects by diff', () => {
         assert.equal(fx.mark('types'), '', 'the reached command gate ran');
         assert.equal(fx.mark('lint'), null, 'the unreached one did not');
         assert.deepEqual(report.reused, {
-          mode: 'delta', at: AT, session: 'delta-session', delta_paths: 2, rerun_files: 1, rerun_commands: ['types'],
+          mode: 'delta', at: AT, session: 'delta-session', covered: files, delta_paths: 2, rerun_files: 1, rerun_commands: ['types'],
         });
         assert.equal(fx.mark('selector-delta'), "--list --json --base-ref origin/main --changed-path src/it's.js --changed-path src/moved.js");
         assert.ok(said.some((line) => /running 1 of the 3 selected files and 1 of 2 command gates again/u.test(line)), said.join('\n'));

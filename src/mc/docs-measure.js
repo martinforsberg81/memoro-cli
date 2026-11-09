@@ -110,6 +110,8 @@ export async function measureDocs({
     dir = candidate.dir;
     note(`using the merger's measurement checkout ${dir}`);
 
+    const baseRead = await io.git(['rev-parse', `origin/${base}`], { cwd: dir });
+    const baseCommit = baseRead.status === 0 ? String(baseRead.stdout || '').trim() : null;
     const merged = await io.git(['merge', '--no-edit', `origin/${base}`], { cwd: dir });
     if (merged.status !== 0) {
       return { ok: false, stopped_at: 'merge', reason: `#${pr} does not merge cleanly with ${base} — merge ${base} in and push` };
@@ -160,7 +162,10 @@ export async function measureDocs({
       if (failed.length) parts.push(`command gate(s) failed: ${failed.join(', ')}`);
       return { ok: false, stopped_at: 'red', reason: parts.join('; '), files: sel.files.length, red, commands: failed, red_tests: details, red_files: failingFiles, command_results: commandResults };
     }
-    return { ok: true, stopped_at: null, reason: null, files: sel.files.length, red: [], commands: [] };
+    const treeRead = await io.git(['rev-parse', 'HEAD^{tree}'], { cwd: dir });
+    return { ok: true, stopped_at: null, reason: null, files: sel.files.length, red: [], commands: [],
+      base_commit: baseCommit, tree: treeRead.status === 0 ? String(treeRead.stdout || '').trim() : null,
+      selected: sel.files, red_tests: [], red_files: [] };
   }
 
   /** The result with its `seconds`, read after the lane is released. */
