@@ -213,6 +213,24 @@ export function archivedProgramsHome(env = process.env) {
   return join(workRoot(env), ARCHIVE_HOME, PROGRAMS_HOME);
 }
 
+/**
+ * `~/mc/restricted/<programme>/<date>-<topic>/` — development data that must
+ * stay out of every repository and out of `programs/` (account-bearing
+ * manifests, owner originals, production-derived bytes). Each entry carries a
+ * README.md saying what it is, who made it and when it goes; checksums and
+ * conclusions live in the programme's `evidence/`. Programme archive removes
+ * the programme's entries and keeps only their READMEs (mc-layout.md).
+ */
+export const RESTRICTED_HOME = 'restricted';
+
+export function restrictedHome(env = process.env) {
+  return join(workRoot(env), RESTRICTED_HOME);
+}
+
+export function restrictedProgrammeDir(programme, env = process.env) {
+  return join(restrictedHome(env), programme);
+}
+
 export const ARCHIVED_PROJECTS = 'projects';
 
 /**
@@ -385,7 +403,7 @@ export function sessionName(areaName) {
  * work-area.js). Dot-directories are left out by the caller.
  */
 export const STATE_HOMES = new Set([
-  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
+  'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, RESTRICTED_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
   'node_modules', 'bin', 'npm', 'status', 'helper', 'martin', 'pm',
 ]);
 

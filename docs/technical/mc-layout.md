@@ -15,6 +15,10 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
     memoro/  memoro-cli/             goal/<goal> worktrees, as repos declares
   goals/.archive/                   finished goals moved aside
   goals/goal_log.md                 archive rows
+  evidence/<date>-<topic>/          the programme's evidence, with README.md
+~/mc/restricted/
+  README.md                         the rules below
+  <programme>/<date>-<topic>/       restricted evidence, with README.md
 ~/mc/runner/
   deps/<name>/<repo>/               dependency-update worktrees
   log/  merges.json  register.lock  runner and merger records
@@ -25,6 +29,45 @@ The goal directory and branch are made by `mc goal new`; phases and stages
 are described in [mc-goals.md](mc-goals.md). Projects went on 2026-11-03;
 that document's § From a project describes migration of the old records.
 No new execution area is made under `runner/step/`.
+
+## Data outside the repositories
+
+Development data that is worth keeping but does not belong in a repository
+has two places, by sensitivity. Temporary run output (`runner/scratch/`, gate
+receipts) is neither; it has its own retention.
+
+**Programme evidence** — `programs/<programme>/evidence/<date>-<topic>/`.
+Screenshots, measurements, logs, checksums and conclusions a goal or decision
+cites. Nothing account-bearing, no owner originals, no production-derived
+bytes. Each directory has a README.md naming the goal or decision it serves,
+what produced it and what it shows. It goes with the programme into
+`archive/programs/`.
+
+**Restricted evidence** — `~/mc/restricted/<programme>/<date>-<topic>/`.
+Data that must stay out of `programs/` and every repository: owner originals,
+account-bearing manifests, production-derived bytes. Rules, also in
+`~/mc/restricted/README.md`:
+
+- `~/mc/restricted/` and every directory under it are mode 0700. The root is
+  excluded from Time Machine once (`tmutil addexclusion ~/mc/restricted`, a
+  per-path attribute). It is never inside a worktree, `programs/` or a synced
+  folder, and nothing there is uploaded.
+- Each entry has a README.md: owning programme and goal or decision, what it
+  holds and its source, who created it and when, and the condition on which it
+  is deleted. The README holds no restricted content itself.
+- Checksums, dimensions and conclusions are written to the programme's
+  `evidence/<date>-<topic>/`, never the bytes, storage keys or account ids.
+- Only an interactive session creates, moves or deletes an entry. Headless
+  sessions only read a copy they are pointed at.
+- The entry is deleted when its README's condition holds, by the plan session
+  that owns it, which records the deletion in the programme. When the
+  programme is archived, `mc plan <programme> --archive` removes
+  `~/mc/restricted/<programme>/` and keeps each README as
+  `evidence/<entry>/RESTRICTED-README.md` in the archived programme; it refuses
+  while an entry has no README.md.
+
+mc enforces only the archive step and counts `restricted` as its own home
+(`STATE_HOMES`); the rest is the creating session's duty. There is no hook.
 
 ## Compatibility and path helpers
 

@@ -117,6 +117,7 @@ describe('listStrays', () => {
       mkdirSync(join(strayRoot, 'step', 'p'), { recursive: true });
       mkdirSync(join(strayRoot, 'work', 'w'), { recursive: true });
       mkdirSync(join(strayRoot, '.cache'), { recursive: true });
+      mkdirSync(join(strayRoot, 'restricted', 'programme', '2026-11-08-topic'), { recursive: true });
       // A role home is mc worker's.
       mkdirSync(join(strayRoot, 'helper2'), { recursive: true });
       writeFileSync(join(strayRoot, 'helper2', '.mc-role'), 'worker\n');
