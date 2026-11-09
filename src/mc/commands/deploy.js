@@ -984,7 +984,7 @@ export async function ship(job, deps = {}) {
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
     if (pin) {
       const out = job.json ? stderr : stdout;
-      if (pin.number) out.write(`mc: ${said.branch} → ${pin.ref}${pin.url ? ` ${pin.url}` : ''}${pin.queued ? ' — queued for the merger' : ''}\n`);
+      if (pin.number) out.write(`mc: ${said.branch} → ${pin.ref}${pin.url ? ` ${pin.url}` : ''}${pin.queued ? ' — queued for the merger' : ' — opened, not queued'}\n`);
       if (pin.error) stderr.write(`mc: the pull request for ${said.branch} — ${pin.error}; the deploy's outcome is unchanged\n`);
     }
     if (job.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said, ...(pin ? { pin_pr: pin.number } : {}) }, null, 2)}\n`);

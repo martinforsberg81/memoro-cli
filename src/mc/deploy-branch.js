@@ -53,7 +53,12 @@ export async function openBranchPr({ worktree, branch, short, repo, git, gh, mer
     if (!number) return { number: null, ref: '', url: '', queued: false, error: `gh pr create failed: ${made.text || 'no pull request number in its answer'}` };
     const url = (/\S*\/pull\/\d+/u.exec(made.stdout || '') || [''])[0];
     const ref = `${repo}#${number}`;
-    const code = await merge([repo, String(number)], { stdout, stderr });
+    let code;
+    try {
+      code = await merge([repo, String(number)], { stdout, stderr });
+    } catch (error) {
+      return { number, ref, url, queued: false, error: `mc merge ${repo} ${number} failed: ${error?.message || String(error)}` };
+    }
     if (code !== 0) return { number, ref, url, queued: false, error: `mc merge ${repo} ${number} exited ${code}` };
     return { number, ref, url, queued: true, error: '' };
   } catch (error) {

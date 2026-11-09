@@ -103,8 +103,11 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
     request is opened whether the deploy went through or failed, because the
     script pushes the branch in both. Opening or queueing can fail (no `gh`, no
     network, a refusal): that is one line on stderr and a phrase in the row's
-    note, and the exit code and the outcome stay the script's. Until that pull
-    request lands, a second deploy of the same sha makes the same change again —
+    note, and the exit code and the outcome stay the script's. Once a pull
+    request has opened, its number and URL remain in the terminal output and
+    its number remains in the row even if queueing throws; the terminal says
+    `— opened, not queued` and the row says `opened as memoro#<n>, not queued`.
+    Until that pull request lands, a second deploy of the same sha makes the same change again —
     it costs time, never a failure — and its branch gets a pull request of its
     own. A line that is not exactly `Deploy branch: <branch>` — the script's
     `Deploy branch not pushed: …` and `Deploy branch not recorded: …` say that

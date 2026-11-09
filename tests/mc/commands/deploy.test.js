@@ -1295,6 +1295,20 @@ describe('mc deploy — the record', () => {
         assert.equal(row.outcome, outcome);
         assert.match(row.note, /opened as memoro#15170, not queued/u);
       });
+
+      it(`a ${name} deploy retains its opened PR when queueing throws, without changing the script outcome`, async () => {
+        const { out, stdout, stderr } = io();
+        const fake = pr({ merge: async () => { throw new Error('queue unavailable'); } });
+        const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...script, last: NAMED }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+        assert.equal(code, expected);
+        assert.deepEqual(fake.calls.merge, [['memoro', '15170']]);
+        assert.match(out.stdout, /memoro#15170 https:\/\/github\.com\/example\/memoro\/pull\/15170 — opened, not queued/u);
+        assert.match(out.stderr, /mc merge memoro 15170 failed: queue unavailable/u);
+        const row = lastAttempt({ MC_WORK_ROOT: work });
+        assert.equal(row.outcome, outcome);
+        assert.match(row.note, /opened as memoro#15170, not queued \(mc merge memoro 15170 failed: queue unavailable\)/u);
+        assert.doesNotMatch(row.note, /has no pull request/u);
+      });
     }
 
     it('a gh that throws is a report, not a crash', async () => {
