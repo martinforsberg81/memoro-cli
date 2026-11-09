@@ -38,6 +38,7 @@ import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
 import { mcHome } from './paths.js';
+import { recordLandingMainRed } from './selector-miss.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
@@ -375,6 +376,7 @@ export async function runMergeRound({
       const at = trim((await askGit(['rev-parse', base], { cwd: repoPath })).stdout) || null;
       const made = await mergeCommitOf({ gh: askGh, repoPath, pr: number });
       const landed = made || at;
+      const evidenceBase = expected;
       expected = landed;
       if (batch) {
         report.batch.merges.push({ number, merged: true, merge_commit: landed, error: null });
@@ -396,6 +398,8 @@ export async function runMergeRound({
         const landedTree = trim((await askGit(['rev-parse', `${base}^{tree}`], { cwd: repoPath })).stdout) || null;
         if (landedTree === expectTree) {
           if (report.tree_identical !== false) report.tree_identical = true;
+          if (!recordLandingMainRed({ root, repo: repoPath, commit: landed, baseCommit: evidenceBase,
+            verdict, at: new Date(clock()).toISOString() })) say(`WARNING: could not write main evidence for ${short(landed)}`);
           say(batch
             ? `#${number} landed byte-identical to the measured build (tree ${short(landedTree)})`
             : `${verdict.pr.base} is byte-identical to the measured candidate (tree ${short(landedTree)}) — the green transfers by identity`);

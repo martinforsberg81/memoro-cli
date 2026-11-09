@@ -14,6 +14,9 @@
  */
 import { spawnSync } from 'node:child_process';
 
+import { runAsync as runGitAsync } from './git.js';
+import { mcHome } from './paths.js';
+import { recordLandingMainRed } from './selector-miss.js';
 import { measureDocs } from './docs-measure.js';
 
 export const DOCS_PREFIX = 'docs/';
@@ -71,7 +74,7 @@ export function prFiles(pr, { repoPath, gh = ghRunner(repoPath) } = {}) {
 }
 
 export async function runDocsMerge({
-  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs,
+  repoPath, pr, gh = ghRunner(repoPath), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), onProgress = () => {}, now = () => new Date(), measure = measureDocs, root = mcHome(), git = runGitAsync,
 } = {}) {
   const started = now();
   const report = { repo: repoPath, pr: { number: pr }, mode: 'docs', ok: false, merged: false, stopped_at: null, reason: null, files: [], merge_commit: null, started_at: started.toISOString() };
@@ -136,6 +139,16 @@ export async function runDocsMerge({
   report.ok = true;
   report.merge_commit = after.mergeCommit?.oid || null;
   report.merged_into = report.pr.base;
+  if (measured.tree && report.merge_commit) {
+    const fetched = await git(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    const landed = fetched.status === 0
+      ? await git(['rev-parse', `${report.merge_commit}^{tree}`], { cwd: repoPath }) : null;
+    report.tree_identical = landed?.status === 0 && String(landed.stdout || '').trim() === measured.tree;
+    if (report.tree_identical && !recordLandingMainRed({ root, repo: repoPath, commit: report.merge_commit,
+      baseCommit: measured.base_commit, at: now().toISOString(),
+      verdict: { selection: { selected: measured.selected }, candidate: measured },
+    })) onProgress(`WARNING: could not write main evidence for ${report.merge_commit}`);
+  }
   return { ...report, duration_ms: now() - started };
 }
 

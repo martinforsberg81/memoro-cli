@@ -1,11 +1,11 @@
 /**
  * Existing exact-base main-health evidence, plus historical attribution helpers.
- * PR rounds use readMainRed only: no reproduction or history walk. Completed
- * main-only runs write standing failures through recordMainRed. The older
+ * PR rounds use readMainRed only: no reproduction or history walk. Identical
+ * landings and completed full runs write coverage through recordMainRed. The older
  * probeMainRed algorithm remains an explicit diagnostic helper and its prior
  * selector-misses.jsonl records remain readable; runGate never calls it.
  */
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
@@ -252,33 +252,78 @@ export function selectorMissReading(repoPath, { root = mcHome(), now = Date.now(
   return { days, misses: recent.length, recent: recent.slice(0, 5) };
 }
 
-// Standing-red evidence is written only by a completed run of main itself.
-// PR rounds read an exact base SHA; they never reproduce or bisect main.
-const mainRedPath = (root, repo) => join(root, 'main-red', `${basename(repo).replace(/\.git$/u, '')}.json`);
+// The landing chain and completed full runs write exact-commit coverage.
+// PR rounds only read it; they never reproduce or bisect main.
+const mainRedDir = (root, repo) => join(root, 'main-red', basename(repo).replace(/\.git$/u, ''));
+const mainRedPath = (root, repo, commit) => join(mainRedDir(root, repo), `${commit}.json`);
 
-export function recordMainRed({ root = mcHome(), repo, commit, result }) {
-  if (!commit || !result?.totals?.finished) return false;
+function mainRecord(root, repo, commit) {
+  if (!commit || basename(commit) !== commit) return null;
   try {
-    const path = mainRedPath(root, repo);
-    mkdirSync(join(root, 'main-red'), { recursive: true });
-    const tests = result.red_tests || [];
-    const files = result.red_files || [...new Set(tests.map(test => test.file).filter(Boolean))];
-    writeJsonAtomic(path, { commit, files, tests }, { mode: 0o600 });
+    const path = mainRedPath(root, repo, commit);
+    const modern = existsSync(path);
+    const record = JSON.parse(readFileSync(modern ? path : `${mainRedDir(root, repo)}.json`, 'utf8'));
+    const strings = value => Array.isArray(value) && value.every(file => typeof file === 'string');
+    if (record.commit !== commit || !strings(record.files) || !Array.isArray(record.tests)
+      || !record.tests.every(test => test && typeof test.file === 'string' && typeof test.name === 'string'
+        && (test.error === undefined || strings(test.error))
+        && (test.diagnostic === undefined || typeof test.diagnostic === 'string'))) return null;
+    // Legacy evidence knows its red only, never which other files ran green.
+    if (!modern) return { ...record, covered: record.files, from: 'full', inherited_from: null, at: null, legacy: true };
+    if (!strings(record.covered) || !['landing', 'full'].includes(record.from)
+      || !Number.isFinite(Date.parse(record.at))
+      || !(record.inherited_from === null || typeof record.inherited_from === 'string')
+      || !record.files.every(file => record.covered.includes(file))
+      || !record.tests.every(test => record.files.includes(test.file))) return null;
+    return record;
+  } catch { return null; }
+}
+
+export function recordMainRed({ root = mcHome(), repo, commit, result, covered = result?.covered || [],
+  from = 'full', baseCommit = null, at = new Date().toISOString() }) {
+  if (!commit || basename(commit) !== commit || (from !== 'landing' && !result?.totals?.finished)) return false;
+  try {
+    const measured = new Set(covered);
+    const base = from === 'landing' ? mainRecord(root, repo, baseCommit) : null;
+    const tests = [...(base?.tests || []).filter(test => !measured.has(test.file)), ...(result?.red_tests || [])];
+    const files = [...new Set([...(base?.files || []).filter(file => !measured.has(file)),
+      ...(result?.red_files || []), ...tests.map(test => test.file).filter(Boolean)])];
+    const record = { commit, covered: [...new Set([...(base?.covered || []), ...covered, ...files])], files, tests,
+      from, inherited_from: base ? baseCommit : null, at };
+    const dir = mainRedDir(root, repo);
+    mkdirSync(dir, { recursive: true });
+    writeJsonAtomic(mainRedPath(root, repo, commit), record, { mode: 0o600 });
+    const records = readdirSync(dir).filter(file => file.endsWith('.json')).map(file => {
+      try { return { file, at: Date.parse(JSON.parse(readFileSync(join(dir, file), 'utf8')).at) || 0 }; }
+      catch { return { file, at: 0 }; }
+    }).sort((a, b) => b.at - a.at || b.file.localeCompare(a.file));
+    for (const old of records.slice(200)) unlinkSync(join(dir, old.file));
     return true;
   } catch { return false; }
 }
 
+/** Called only after the landed tree has been proved identical. */
+export function recordLandingMainRed({ root = mcHome(), repo, commit, baseCommit, verdict, at }) {
+  const tests = [...(verdict.candidate?.red_tests || []), ...(verdict.main_red?.tests || [])];
+  return recordMainRed({ root, repo, commit, baseCommit, from: 'landing', at,
+    covered: [...new Set([...(verdict.selection?.selected || []), ...(verdict.candidate?.covered || []),
+      ...(verdict.reused?.covered || [])])],
+    result: { red_tests: tests, red_files: [...new Set([...(verdict.candidate?.red_files || []), ...tests.map(test => test.file)])] },
+  });
+}
+
 export function readMainRed({ root = mcHome(), repo, baseCommit, files }) {
-  const unknown = { base: baseCommit, red_on_main: [], breaks: [], stopped: 'no exact main evidence; no main replay in PR rounds' };
-  try {
-    const evidence = JSON.parse(readFileSync(mainRedPath(root, repo), 'utf8'));
-    if (evidence.commit !== baseCommit || !Array.isArray(evidence.files) || !Array.isArray(evidence.tests)
-      || !evidence.files.every(file => typeof file === 'string')
-      || !evidence.tests.every(test => test && typeof test.file === 'string' && typeof test.name === 'string'
-        && (test.error === undefined || (Array.isArray(test.error) && test.error.every(line => typeof line === 'string')))
-        && (test.diagnostic === undefined || typeof test.diagnostic === 'string'))) return unknown;
-    const red = evidence.files.filter((file) => files.includes(file));
-    if (!red.length) return unknown; // No base/candidate-alone fallback either.
-    return { base: baseCommit, red_on_main: red, tests: evidence.tests, breaks: [], cached: true };
-  } catch { return unknown; }
+  const evidence = mainRecord(root, repo, baseCommit);
+  const states = Object.fromEntries(files.map(file => [file, !evidence?.covered.includes(file)
+    ? { state: 'not_covered' } : evidence.files.includes(file)
+      ? { state: 'covered_red', tests: evidence.tests.filter(test => test.file === file) }
+      : { state: 'covered_green' }]));
+  const red = files.filter(file => states[file].state === 'covered_red');
+  const green = files.filter(file => states[file].state === 'covered_green');
+  const unknown = files.filter(file => states[file].state === 'not_covered');
+  return { base: baseCommit, states, red_on_main: red, green_on_main: green, not_covered: unknown,
+    tests: (evidence?.tests || []).filter(test => red.includes(test.file)), breaks: [], cached: Boolean(evidence),
+    from: evidence?.from ?? null, inherited_from: evidence?.inherited_from ?? null, at: evidence?.at ?? null,
+    ...(unknown.length ? { stopped: 'no exact main evidence for not_covered files; no main replay in PR rounds' } : {}),
+  };
 }
