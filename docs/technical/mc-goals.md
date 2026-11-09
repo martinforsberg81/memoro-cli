@@ -45,6 +45,7 @@ finish   ── finish session ended still in finish (runner) ────▶ fi
 merge    ── merger landed ────────────────────────────────────▶ done
 merge    ── first/second failed merge ────────────────────────▶ merge · blocked
 merge    ── mend repairs, gates and returns ready ────────────▶ merge · ready
+merge    ── every pull request closed, ready (runner) ────────▶ merge · Martin
 merge    ── third failed merge ──────────────────────────────▶ merge · Martin
 any pre-merge blocked ── legacy migration, no session ─────────▶ the same stage · Martin
 any      ── Martin waits and wakes nothing; ready keeps the stage
@@ -646,7 +647,8 @@ from other branches — `ios-release/mc-asc` landed in six pull requests across
 memoro and memoro-cli — left the goal for a person to close by hand.
 
 - **A pull request carries its goal.** `mc publish` writes the pull request
-  into the goal's `prs`, with an entry `Done: published <repo>#<n>`, when it
+  into the goal's `prs`, with an entry `Done: published <repo>#<n>` carrying
+  `· by <role>` like every session entry, when it
   knows the goal: `--goal <p>/<g>`, else `MC_GOAL`, else the goal whose
   worktree it stands in (`goalOfPath`), else the one goal named as a
   `goal/<g>` branch is. A `--goal` that is no goal is refused before the push;
@@ -668,7 +670,12 @@ memoro and memoro-cli — left the goal for a person to close by hand.
   closed without merging is settled, not waited for: its entry's comment
   names it (`closed without landing: …`), and the runner and `mc goal stage
   merge` never queue it (`… closed without merging — not queued`). A goal
-  whose every pull request is closed is not done.
+  whose every pull request is closed is not done. In `merge · ready`, the runner
+  sets it `merge · Martin` once, with a comment naming the closed pull requests,
+  and says nothing further for it. A goal with any open or unknown pull request,
+  in another stage, or already blocked is unchanged. A pull request already
+  merged is not queued either (`… already merged — not queued`); it counts as
+  landed through `prsLanded`.
 - **Review stays on the first repository.** A goal's review session is told
   the open pull request on `goal/<g>` in its first repository, as before; a
   second repository's pull request carries the goal and lands it, but is not

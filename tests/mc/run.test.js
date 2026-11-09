@@ -3391,6 +3391,83 @@ test('a closed pull request is never queued: the goal is done once the others ha
   assert.deepEqual([entry.tool, entry.stage, entry.done, entry.comment], ['runner', 'done', 'landed memoro#1', 'closed without landing: memoro#2']);
 });
 
+test('a merged pull request with no landed entry is not queued again, and the goal is done', async () => {
+  const f = goalFixture({ outside: { stage: 'merge', prs: ['memoro#1', 'memoro#2'] } });
+  const states = { 1: 'MERGED', 2: 'OPEN' };
+  const asked = [];
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => {
+    if (args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'state') {
+      asked.push(Number(args[2]));
+      return { ok: true, stdout: JSON.stringify({ state: states[args[2]] }) };
+    }
+    return gh(cwd, args);
+  };
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.calls.rounds.map(({ repo, pr }) => [repo, pr]), [['memoro', 2]]);
+  assert.deepEqual(asked, [1, 2], 'one state call per pull request per pass');
+  assert.equal(where(f, 'outside'), 'merge · ready', 'the other pull request is open');
+  assert.ok(f.log.some((line) => line.includes('prog/outside: memoro#1 already merged — not queued')));
+
+  states[2] = 'MERGED';
+  f.deps.now = () => new Date('2026-08-29T10:06:00Z');
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.calls.rounds.map(({ repo, pr }) => [repo, pr]), [['memoro', 2]], 'no additional round');
+  assert.deepEqual(asked, [1, 2, 1, 2]);
+  assert.equal(where(f, 'outside'), 'done · ready');
+  assert.equal(parseLog(f.files[`${GOALS}/outside/LOG.md`]).at(-1).done, 'landed memoro#1, memoro#2');
+});
+
+test('a goal whose every pull request is closed without merging is set merge · Martin once, with the closed ones named, and nothing further is written', async () => {
+  const f = goalFixture({ shut: { stage: 'merge', prs: ['memoro#1', 'memoro#2'] } });
+  const gh = f.deps.gh;
+  f.deps.gh = (cwd, args) => (args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'state'
+    ? { ok: true, stdout: '{"state":"CLOSED"}' } : gh(cwd, args));
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  const firstState = where(f, 'shut');
+  const entries = parseLog(f.files[`${GOALS}/shut/LOG.md`]);
+  const said = f.log.filter((line) => line.includes('prog/shut:'));
+  const before = [f.files[`${GOALS}/shut/GOAL.json`], f.files[`${GOALS}/shut/LOG.md`]];
+
+  f.deps.now = () => new Date('2026-08-29T10:06:00Z');
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(firstState, 'merge · Martin', `first-pass state; runner said across both passes: ${f.log.filter((line) => line.includes('prog/shut:')).join('\n')}`);
+  assert.deepEqual(entries.map(({ tool, stage, status }) => [tool, stage, status]), [['runner', 'merge', 'Martin']]);
+  assert.equal(entries.at(-1).comment, 'every pull request closed without merging: memoro#1, memoro#2 — nothing to land; a person opens a new one (mc goal pr) and sets it ready, or drops the goal');
+  assert.deepEqual(f.calls.rounds, []);
+  assert.equal(said.length, 1, 'the state entry says it, not the recovery loop');
+  assert.deepEqual([f.files[`${GOALS}/shut/GOAL.json`], f.files[`${GOALS}/shut/LOG.md`]], before, 'both files byte-identical');
+  assert.deepEqual(f.log.filter((line) => line.includes('prog/shut:')), said, 'nothing further said');
+
+  // One additional settle pass checks the boundary; the other repository's
+  // lane leaves these goals' session-owned stages/statuses alone.
+  const boundaries = [
+    ['open', 'merge', 'ready', ['CLOSED', 'OPEN']],
+    ['unknown', 'merge', 'ready', ['CLOSED', null]],
+    ['building', 'build', 'ready', ['CLOSED', 'CLOSED']],
+    ['blocked', 'merge', 'blocked', ['CLOSED', 'CLOSED']],
+    ['already', 'merge', 'Martin', ['CLOSED', 'CLOSED']],
+    ['empty', 'merge', 'ready', []],
+  ];
+  const states = {};
+  const other = goalFixture(Object.fromEntries(boundaries.map(([name, stage, status, answers], index) => {
+    const prs = answers.map((state, i) => {
+      const pr = 10 + index * 2 + i;
+      states[pr] = state;
+      return `memoro#${pr}`;
+    });
+    return [name, { stage, status, prs }];
+  })));
+  const otherGh = other.deps.gh;
+  other.deps.gh = (cwd, args) => (args[0] === 'pr' && args[1] === 'view' && args.at(-1) === 'state'
+    ? { ok: true, stdout: JSON.stringify({ state: states[args[2]] }) } : otherGh(cwd, args));
+  const unchanged = boundaries.map(([name]) => [other.files[`${GOALS}/${name}/GOAL.json`], other.files[`${GOALS}/${name}/LOG.md`]]);
+  await createRunner({ deps: other.deps }).pass({ repo: 'memoro-cli' });
+  assert.deepEqual(boundaries.map(([name]) => [other.files[`${GOALS}/${name}/GOAL.json`], other.files[`${GOALS}/${name}/LOG.md`]]), unchanged);
+});
+
 test('a Martin or done goal is never started', async () => {
   const f = goalFixture({ stuck: { status: 'Martin' }, finished: { stage: 'done' } });
   f.files[`${GOALS}/broken/GOAL.json`] = 'no front matter\n';

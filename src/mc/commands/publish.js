@@ -43,6 +43,7 @@ import { programsHome } from '../paths.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
+import { writerRole } from './goal.js';
 import { commandUsage } from '../command-help.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 
@@ -194,7 +195,7 @@ function carryGoal({ goal, repo, number, env, now, read, write, stdout, stderr, 
   const out = json ? stderr : stdout;
   try {
     const parsed = parseGoal(read(join(goal.dir, GOAL_FILE)) ?? '');
-    const entry = { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, stage: parsed.stage ?? null, status: parsed.status ?? 'ready', done: `published ${ref}`, comment: null, next: null };
+    const entry = { at: logStamp(now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), stage: parsed.stage ?? null, status: parsed.status ?? 'ready', done: `published ${ref}`, comment: null, next: null };
     const added = addPr({ dir: goal.dir, repo, pr: number, entry, read, write });
     if (added.problems) { stderr.write(`mc: ${ref} is not written into ${goal.name} — ${added.problems.join('; ')}\n`); return; }
     out.write(`goal ${goal.name} carries ${ref}${added.added ? '' : ' already'} — done when every pull request it carries has landed\n`);

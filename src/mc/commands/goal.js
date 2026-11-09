@@ -64,7 +64,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
@@ -282,7 +282,7 @@ function newGoal(args, flags, ctx) {
  * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. With no role, none is written.
  */
 const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'mend', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
-function writerRole(env) {
+export function writerRole(env) {
   const role = env.MC_ROLE || '';
   if (!role) return null;
   const word = Object.hasOwn(WRITER_WORDS, role) ? WRITER_WORDS[role] : role.split(':')[0];
@@ -597,15 +597,18 @@ function mainConflictRefusal(goal, target, ctx) {
 
 /**
  * Execute the session's merge decision for every PR it registered on the goal.
- * A PR GitHub says is closed without merging is not queued, and is named.
+ * A PR GitHub says is closed or already merged is not queued, and is named.
  */
 function queueGoal(target, goal, ctx) {
   const queued = [];
   const closed = [];
+  const merged = [];
   for (const item of goal.prs) {
     const repoPath = ctx.known().find((path) => repoNameOf(path) === item.repo);
     if (!repoPath) return { error: `${item.repo} is not a repository mc knows` };
-    if (prStateOf(ctx, repoPath, item.pr) === 'CLOSED') { closed.push(prRef(item)); continue; }
+    const state = prState(ctx.gh, repoPath, item.pr);
+    if (state === 'CLOSED') { closed.push(prRef(item)); continue; }
+    if (state === 'MERGED') { merged.push(prRef(item)); continue; }
     try {
       ctx.queue({ repo: item.repo, repoPath, pr: item.pr, holder: { name: `goal:${target.name}` }, goal: { programme: target.programme, goal: target.goal, dir: target.dir }, now: ctx.now });
       queued.push(prRef(item));
@@ -615,14 +618,8 @@ function queueGoal(target, goal, ctx) {
   }
   const said = queued.length ? [`queued ${queued.join(', ')} for the merger`] : [];
   for (const ref of closed) said.push(`${ref} closed without merging — not queued`);
+  for (const ref of merged) said.push(`${ref} already merged — not queued`);
   return { text: said.length ? said.join('; ') : 'no pull requests registered on the goal' };
-}
-
-/** GitHub's `state` of pull request `pr` in the repository at `repoPath`, or null when it cannot say. */
-function prStateOf(ctx, repoPath, pr) {
-  const asked = ctx.gh(repoPath, ['pr', 'view', String(pr), '--json', 'state']);
-  if (!asked.ok) return null;
-  try { return JSON.parse(asked.stdout || 'null')?.state ?? null; } catch { return null; }
 }
 
 /** `remakeUnbuiltBranches` for a goal going open by a verb, each repository's answer on stdout. */

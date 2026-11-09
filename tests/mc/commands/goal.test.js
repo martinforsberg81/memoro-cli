@@ -569,14 +569,14 @@ test('a queue failure preserves the merge decision so it can be retried', async 
   assert.deepEqual(f.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
 });
 
-test('mc goal stage merge queues the pull request GitHub says is open, and names the one it says is closed without queueing it', async () => {
+test('mc goal stage merge queues the pull request GitHub says is open, and names the one it says is closed without queueing it, and the one already merged', async () => {
   const files = inStage('review');
-  files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32'] });
+  files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32', 'memoro-cli#33'] });
   const f = reviewed({ files });
-  f.deps.gh = (cwd, args) => { f.gh.push({ cwd, args }); return ok(JSON.stringify({ state: args[2] === '32' ? 'CLOSED' : 'OPEN' })); };
+  f.deps.gh = (cwd, args) => { f.gh.push({ cwd, args }); return ok(JSON.stringify({ state: { 31: 'OPEN', 32: 'CLOSED', 33: 'MERGED' }[args[2]] })); };
   assert.equal(await run(['stage', 'merge'], f.deps), 0, f.err());
   assert.deepEqual(f.queued.map(({ repo, pr }) => [repo, pr]), [['memoro-cli', 31]]);
-  assert.equal(f.out(), 'mc: mc/plain · merge · ready\nmc: queued memoro-cli#31 for the merger; memoro#32 closed without merging — not queued\n');
+  assert.equal(f.out(), 'mc: mc/plain · merge · ready\nmc: queued memoro-cli#31 for the merger; memoro#32 closed without merging — not queued; memoro-cli#33 already merged — not queued\n');
   assert.equal(stateOf(f), 'merge · ready');
 });
 

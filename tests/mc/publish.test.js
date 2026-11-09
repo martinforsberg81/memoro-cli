@@ -187,6 +187,12 @@ describe('mc publish', () => {
       assert.deepEqual(f.out.merged, [['memoro', '9']]);
     });
 
+    it('--goal with a build session\'s environment writes the entry with · by build', async () => {
+      const f = withGoal({ deps: { env: { MC_TOOL: 'claude', MC_ROLE: 'build-session:goal' } } });
+      assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
+      assert.match(f.files[`${GDIR}/LOG.md`], /· claude · review · ready · by build\n\nDone: published memoro#9\n/u);
+    });
+
     it('MC_GOAL, the goal worktree it stands in, or a goal/<g> branch name the goal too', async () => {
       const byEnv = withGoal({ deps: { env: { MC_GOAL: 'ios/asc' } } });
       assert.equal(await run([], byEnv.deps), 0, byEnv.out.stderr);
