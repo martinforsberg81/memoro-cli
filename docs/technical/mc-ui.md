@@ -632,16 +632,18 @@ by ` ▶ `; otherwise three and three on two rows, each keeping its arrows with
 The count is the waiting proposals (programmes and the root) for proposals, and
 the goals in the stage otherwise, followed by `⚑n` for goals waiting on Martin
 and `⊘n` for blocked goals there. The marks are one per session working in the
-stage, drawn green: build, review and finish sessions on their stage; on draft,
+stage, in the stage's colour: build, review and finish sessions on their stage; on draft,
 every plan session, interactive (`data.sessions.planning_sessions`) and headless
 (runner `plan` sessions); proposals carries none; on merge `◎` per gate round in
 flight and `↺` per mend session, in mend's yellow. A box shows at most eight
-marks of one kind; more are drawn `●×n`. The border carries the stage's state:
-red when a goal there is blocked, else green when a session works there, else
-yellow when it holds work, else grey — the terminal's real grey (`ESC[90m`), which
-the grey-to-white mapping above does not touch, so the boxes recede. The name is
-bold in the terminal's own foreground; a count is bold above zero and grey at
-zero; the arrows are grey; `⚑` and `⊘` keep their yellow and red. `done` and
+marks of one kind; more are drawn `●×n`. A box's border is its stage's colour,
+from `STAGE_TONE` (`page-grid.js`): proposals yellow, draft blue, build green,
+review magenta, finish blue, merge orange. A box with no count and no session
+has a grey border, the terminal's real grey (`ESC[90m`), which the grey-to-white
+mapping above does not touch, so empty boxes recede. A mend (`↺`) is yellow.
+The name is bold in the terminal's own foreground; a count is bold above zero
+and grey at zero; the arrows are grey; `⚑` keeps its yellow and `⊘` its red, and
+a blocked goal changes nothing else. `done` and
 `dropped` have no box; what landed is in the hero frame. Complete header fields
 wrap within the hero frame on narrow terminals. `mc manager` (or `m` at the page
 prompt) opens the session for priorities, blockers and proposals across all

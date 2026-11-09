@@ -50,7 +50,7 @@ import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
-  KIND_TONE, PR_QUIET_S, PR_TONE, STATE_TONE, clipCell, duration, kindTone,
+  KIND_TONE, PR_QUIET_S, PR_TONE, STAGE_TONE, STATE_TONE, clipCell, duration, kindTone,
 } from './page-grid.js';
 import { clip, pad, painter, width } from './status-render.js';
 
@@ -792,10 +792,12 @@ export function pipelineStages(data) {
   return PIPELINE.map((stage) => {
     const here = goals.filter(goal => (goal.stage || 'unknown') === stage);
     // Every plan session, interactive or headless, is a mark on draft; proposals has none.
+    // A session's mark takes its stage's colour; a mend, which has no box, is yellow.
+    const tone = STAGE_TONE[stage];
     const marks = stage === 'proposals' ? []
-      : stage === 'draft' ? [{ mark: '●', count: interactive + ofKind('plan'), styles: ['green'] }]
-        : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: ['green'] }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
-          : [{ mark: '●', count: ofKind(stage), styles: ['green'] }];
+      : stage === 'draft' ? [{ mark: '●', count: interactive + ofKind('plan'), styles: tone }]
+        : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: tone }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
+          : [{ mark: '●', count: ofKind(stage), styles: tone }];
     return {
       stage,
       count: stage === 'proposals' ? proposals : here.length,
@@ -819,9 +821,10 @@ const textWidth = (parts) => parts.reduce((n, part) => n + width(part.text), 0);
  * border (`┌─ build ──┐`), the count with its flags, the marks, and the bottom
  * border. The box is as wide as its widest content — the name with its `─ `
  * and ` ─`, the count, the marks — plus one space each side, and never wider.
- * Its border takes the stage's state (red blocked, green worked, yellow
- * waiting, grey empty) in the real grey, which the page's text mapping does not
- * touch; the name is bold in the terminal's own foreground.
+ * Its border is the stage's colour (`STAGE_TONE`), or the real grey when the
+ * stage is empty: no count and no session. The grey is drawn raw, which the
+ * page's text mapping does not touch. The name is bold in the terminal's own
+ * foreground.
  */
 function stageBox(c, raw, item) {
   const count = [
@@ -832,11 +835,12 @@ function stageBox(c, raw, item) {
   const marks = [];
   for (const { mark, count: n, styles } of item.marks) {
     if (!n) continue;
-    const text = n <= MARK_CAP ? mark.repeat(n) : `${mark}×${n}`;
-    marks.push({ text: marks.length ? ` ${text}` : text, styles });
+    // The space between two kinds is plain, not painted with either.
+    if (marks.length) marks.push({ text: ' ' });
+    marks.push({ text: n <= MARK_CAP ? mark.repeat(n) : `${mark}×${n}`, styles });
   }
   const inner = Math.max(item.stage.length + 4, textWidth(count) + 2, textWidth(marks) + 2);
-  const tone = item.blocked ? ['red'] : marks.length ? ['green'] : item.count ? ['yellow'] : ['grey'];
+  const tone = marks.length || item.count ? STAGE_TONE[item.stage] : ['grey'];
   const edge = (text) => raw(text, ...tone);
   // Centred: the spare column, if any, goes on the right.
   const row = (parts) => {

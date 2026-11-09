@@ -158,32 +158,37 @@ describe('the pipeline drawn', () => {
     assert.equal(marks, '  │             │     │         │     │         │     │          │     │          │     │         │');
   });
 
-  it('paints the border by the stage state, the name bold, the count bold or grey, the arrows grey', () => {
-    // proposals: waiting, yellow; draft: a session works there, green; build:
-    // a blocked goal, red; review, finish and merge are empty, the real grey.
+  it('paints each border and its marks in the stage colour, an empty stage grey, the name bold, the count bold or grey', () => {
+    // One stage of each colour: proposals yellow (waiting), draft blue (a plan
+    // session), build green (a blocked goal does not change its border), review
+    // magenta (a session), finish grey (empty), merge orange (a gate round, and
+    // a mend in yellow).
     const data = {
       intake: { proposals: 2 },
       programmes: { programmes: [{ goals: [
         { stage: 'draft', status: 'ready' }, { stage: 'build', status: 'blocked' }, { stage: 'build', status: 'ready' },
       ] }] },
       sessions: { planning_sessions: { mc: [{}] } },
-      runner: { sessions: [] },
-      merges: { repos: [] },
+      runner: { sessions: [{ kind: 'review' }, { kind: 'mend' }] },
+      merges: { repos: [{ landings: [{}] }] },
     };
     const painted = renderPageLines(data, { columns: 160, now: NOW, colour: true });
     const [top, counts, marks, bottom] = pipelineOf(painted, 4);
-    assert.match(top, /\x1b\[33m┌─ \x1b\[0m\x1b\[1mproposals\x1b\[0m\x1b\[33m ─┐\x1b\[0m/u, 'waiting is yellow');
-    assert.match(top, /\x1b\[32m┌─ \x1b\[0m\x1b\[1mdraft\x1b\[0m/u, 'a session working is green');
-    assert.match(top, /\x1b\[90m┌─ \x1b\[0m\x1b\[1mfinish\x1b\[0m/u, 'empty is the real grey, not the mapped white');
-    assert.match(top, /\x1b\[31m┌─ \x1b\[0m\x1b\[1mbuild\x1b\[0m/u, 'a blocked goal is red, and beats a session');
+    for (const [stage, code] of [['proposals', '33'], ['draft', '34'], ['build', '32'], ['review', '35'], ['finish', '90'], ['merge', '38;5;208']]) {
+      assert.ok(top.includes(`\x1b[${code}m┌─ \x1b[0m\x1b[1m${stage}\x1b[0m`), `${stage}: its border and its name`);
+    }
+    assert.ok(top.includes('\x1b[90m┌─ \x1b[0m\x1b[1mfinish\x1b[0m'), 'empty is the real grey, not the mapped white');
+    assert.ok(!top.includes('\x1b[37m┌'), 'no border is the mapped white');
+    assert.ok(marks.includes('\x1b[34m●\x1b[0m'), 'a plan session on draft is blue');
+    assert.ok(marks.includes('\x1b[35m●\x1b[0m'), 'a review session is magenta');
+    assert.ok(marks.includes('\x1b[38;5;208m◎\x1b[0m'), 'a gate round is merge\'s orange');
+    assert.ok(marks.includes('\x1b[33m↺\x1b[0m'), 'a mend is yellow');
     assert.match(counts, /\x1b\[1m2\x1b\[0m/u, 'a count above zero is bold');
     assert.match(counts, /\x1b\[37m0\x1b\[0m/u, 'a zero count is grey text (the page maps it)');
     assert.match(counts, /\x1b\[31m ⊘1\x1b\[0m/u, 'the blocked flag keeps its red');
-    assert.match(counts, /\x1b\[90m ▶ \x1b\[0m|\x1b\[90m ──▶ \x1b\[0m/u, 'arrows are grey');
-    assert.match(marks, /\x1b\[32m●\x1b\[0m/u, 'a mark is green');
-    assert.equal(painted.includes('\x1b[37m┌'), false, 'no border is the mapped white');
+    assert.match(counts, /\x1b\[90m ─*▶ \x1b\[0m/u, 'arrows are grey');
     assert.deepEqual(pipelineOf(painted, 4).map((line) => line.replace(/\x1b\[[0-9;]*m/gu, '')),
-      pipelineOf(renderPageLines(data, { columns: 160, now: NOW }), 4), 'painted and plain rows are the same width and text');
-    assert.ok(bottom.includes('\x1b[31m└'), 'the bottom border carries the same tone');
+      pipelineOf(renderPageLines(data, { columns: 160, now: NOW }), 4), 'painted and plain rows are the same text');
+    assert.ok(bottom.includes('\x1b[38;5;208m└'), 'the bottom border carries the stage colour');
   });
 });
