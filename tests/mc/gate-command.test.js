@@ -206,6 +206,29 @@ describe('mc gate <test files…>', () => {
     assert.deepEqual(JSON.parse(json.out.stdout).slow_tests, slow_tests.slice(0, 1));
   });
 
+  it('a settled green names its receipt as not reusable on the line after SETTLED; a green receipt, an unsettled green and --json print no such line', async () => {
+    const settled = { alone: ['tests/a.test.js'], main: [], red: [] };
+    const receiptOf = (evidence, extra = {}) => harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN, code: 0, result: { ok: true, code: 0, evidence, ...extra } });
+    const RECEIPT = /^RECEIPT — not a reusable complete green \(evidence incomplete\)/mu;
+    const incomplete = receiptOf({ path: '/state/gate-evidence/x.json', outcome: 'incomplete' }, { settled });
+    assert.equal(await run(['tests/a.test.js'], incomplete.deps), 0);
+    const lines = incomplete.out.stdout.split('\n');
+    assert.match(lines[0], /^GREEN — /u);
+    const settledAt = lines.findIndex((line) => line.startsWith('SETTLED — green alone'));
+    assert.notEqual(settledAt, -1, incomplete.out.stdout);
+    assert.match(lines[settledAt + 1], RECEIPT);
+    const green = receiptOf({ path: '/state/gate-evidence/x.json', outcome: 'green' }, { settled });
+    assert.equal(await run(['tests/a.test.js'], green.deps), 0);
+    assert.doesNotMatch(green.out.stdout, /RECEIPT —/u);
+    const unsettled = receiptOf({ path: '/state/gate-evidence/x.json', outcome: 'incomplete' });
+    assert.equal(await run(['tests/a.test.js'], unsettled.deps), 0);
+    assert.doesNotMatch(unsettled.out.stdout, /RECEIPT —/u);
+    const json = receiptOf({ path: '/state/gate-evidence/x.json', outcome: 'incomplete' }, { settled });
+    assert.equal(await run(['tests/a.test.js', '--json'], json.deps), 0);
+    assert.deepEqual(JSON.parse(json.out.stdout).evidence, { path: '/state/gate-evidence/x.json', outcome: 'incomplete' });
+    assert.doesNotMatch(json.out.stdout, /RECEIPT —/u);
+  });
+
   it('a green gate with no test over 1 s prints no slow line', async () => {
     const h = harness({ tests: ['tests/a.test.js'], finishAfter: 1, output: GREEN, code: 0, result: { ok: true, code: 0, slow_tests: [] } });
     assert.equal(await run(['tests/a.test.js'], h.deps), 0);

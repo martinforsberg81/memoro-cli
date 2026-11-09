@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { changedAgainst, declaredTestFlags, docsOnly, measuredDeclaration } from '../../src/mc/gate-fast.js';
+import { changedAgainst, docsOnly, flagsOf, measuredDeclaration } from '../../src/mc/gate-fast.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { tryGit } from '../../src/mc/git.js';
 import { main as selector } from '../../scripts/affected-tests.js';
@@ -78,16 +78,23 @@ describe('the selector answers --changed-path (scripts/affected-tests.js)', () =
   });
 });
 
-describe('declaredTestFlags', () => {
-  it('declaredTestFlags reads the primary checkout\'s declaration', () => {
-    const io = (answer) => ({ git: (cwd, args) => (args.includes('--git-common-dir') ? '/repo/x/.git' : null), declaration: answer });
-    assert.deepEqual(declaredTestFlags(io(() => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } })), { root: '/w/x', env: {} }), ['--import', './a.mjs']);
-    assert.equal(declaredTestFlags(io(() => ({ ok: true, declaration: {} })), { root: '/w/x', env: {} }), null);
-    assert.equal(declaredTestFlags(io(() => ({ ok: true, declaration: { pr_tests_flags: [] } })), { root: '/w/x', env: {} }), null);
-    assert.equal(declaredTestFlags(io(() => ({ ok: false, reason: 'x' })), { root: '/w/x', env: {} }), null);
-    assert.equal(declaredTestFlags(io(() => { throw new Error('bad file'); }), { root: '/w/x', env: {} }), null);
-    const noCommon = { git: () => null, declaration: () => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } }) };
-    assert.equal(declaredTestFlags(noCommon, { root: '/w/x', env: {} }), null);
+describe('measuredDeclaration and the flags it declares', () => {
+  const io = (answer, common = '/repo/x/.git') => ({ git: (cwd, args) => (args.includes('--git-common-dir') ? common : null), declaration: answer });
+  const measure = (answer, common) => measuredDeclaration(io(answer, common), { root: '/w/x', env: {} });
+
+  it('flagsOf is the nonempty pr_tests_flags of the measured declaration, and null when it declares none', () => {
+    const flags = (answer, common) => flagsOf(measure(answer, common)?.declaration);
+    assert.deepEqual(flags(() => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } })), ['--import', './a.mjs']);
+    assert.equal(flags(() => ({ ok: true, declaration: {} })), null);
+    assert.equal(flags(() => ({ ok: true, declaration: { pr_tests_flags: [] } })), null);
+    assert.equal(flags(() => { throw new Error('bad file'); }), null);
+    assert.equal(flags(() => ({ ok: true, declaration: { pr_tests_flags: ['--import', './a.mjs'] } }), null), null);
+  });
+
+  it('an ok:false declaration with a reason is a stop, whatever its kind; the no-entry fallback is null', () => {
+    assert.deepEqual(measure(() => ({ ok: false, reason: 'x' })), { stop: 'x' });
+    assert.deepEqual(measure(() => ({ ok: false, kind: 'invalid', reason: 'y' })), { stop: 'y' });
+    assert.equal(measure(() => ({ ok: false, kind: 'undeclared', reason: 'no entry' })), null);
   });
 
   it('timeout policy: the session names the repository by its common directory and reads the declaration of the worktree it measures', () => {
@@ -119,7 +126,7 @@ describe('declaredTestFlags', () => {
       const stopped = measuredDeclaration(io(join(root, 'repos', 'memoro.git')), { root: worktree, env: {} });
       assert.deepEqual(Object.keys(stopped), ['stop']);
       assert.match(stopped.stop, /^memoro declares itself in .*\/wt\/\.mc\/test\.json, but it could not be read as JSON/u);
-      assert.equal(declaredTestFlags(io(join(root, 'repos', 'memoro.git')), { root: worktree, env: {} }), null);
+      assert.equal(flagsOf(measuredDeclaration(io(join(root, 'repos', 'memoro.git')), { root: worktree, env: {} })?.declaration), null);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

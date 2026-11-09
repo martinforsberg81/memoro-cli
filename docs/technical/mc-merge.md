@@ -894,8 +894,13 @@ the `.mc/test.json` read is the measured tree's, never the common directory's.
    (memoro #14067, 95 minutes, 2026-10-23). Node itself gives no per-test limit
    when none is stated; the round's default is what makes a hang red.
 
-A malformed `.mc/test.json` in the measured tree is a stop too; it never falls
-through to the shipped table or the test script.
+An invalid declaration in the measured tree is a stop too, for the session gate
+and the candidate round alike: a malformed `.mc/test.json`, or any other
+`declarationFor` refusal that carries a reason (a missing `prepare`, an
+unreadable `retry_once`, an invalid `round_timeout_ms` or `select_changed_path`).
+It never falls through to the shipped table or the test script. The one
+fall-through is a repository with no declaration at all, where the test
+script's flags stand — the session gate's documented default.
 
 **One resolution, and what the receipt binds.** `resolveTestPlan`
 (`src/mc/repo-gate.js`) resolves the test arguments once, for the session's

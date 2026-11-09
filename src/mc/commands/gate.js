@@ -316,7 +316,8 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
   const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: ${deferredFiles.join(' ')}` : '';
   const resumed = resumedLine(result);
   const settled = settledLine(result);
-  const resumedText = `${resumed ? `\n${resumed}` : ''}${settled ? `\n${settled}` : ''}`;
+  const receipt = summary.ok && !summary.incomplete ? settledReceiptLine(result) : null;
+  const resumedText = `${resumed ? `\n${resumed}` : ''}${settled ? `\n${settled}` : ''}${receipt ? `\n${receipt}` : ''}`;
   if (json) {
     const verdict = ceiling ? { stopped_at: 'timeout', reason: result.reason, red_files: result.red_files || [], slowest_files: result.slowest_files || [] } : {};
     stdout.write(`${JSON.stringify({ ...summary, ...verdict, command: lock.command.run, script: lock.command.script, files: lock.command.files, deferred: deferredFiles,
@@ -347,6 +348,17 @@ export function settledLine(result) {
   if (settled.main?.length) parts.push(`red on main ${String(settled.base || '').slice(0, 7)} too, untouched by this change: ${settled.main.join(' ')}`);
   if (settled.red?.length) parts.push(`still red: ${settled.red.join(' ')}`);
   return `SETTLED — ${parts.join('; ')}`;
+}
+
+/**
+ * What a settled green does not grant (`mc-gate-evidence.md`, Settling a red):
+ * its receipt is not a reusable complete green, so the text verdict says so
+ * under the SETTLED line. Null unless something was settled and the receipt is
+ * not green. The caller shows it only for a green verdict.
+ */
+export function settledReceiptLine(result) {
+  if (!settledLine(result) || result?.evidence?.outcome === 'green') return null;
+  return `RECEIPT — not a reusable complete green (evidence ${result?.evidence?.outcome ?? 'absent'}): its round had a failure, so it grants reuse only to its members; a rerun on the same content resumes its passed members and measures the rest`;
 }
 
 /**
