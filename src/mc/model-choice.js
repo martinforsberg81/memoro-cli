@@ -1,5 +1,6 @@
 /**
- * The candidate a fast, large or review step runs on (ruling 59), decided from
+ * The candidate a list's session runs on (ruling 59) — a work class (fast,
+ * large) for build, or a role list (review, finish, mend, plan, manager) — decided from
  * the catalog and the local capacity snapshot alone.
  *
  * Pure: it reads no file, spends no model turn and writes nothing, and the one
@@ -33,7 +34,7 @@
  *     the ChatGPT entitlement and a failed one as its absence. That is an
  *     inference; an `account/read` would make it a fact.
  */
-import { candidateSpec, CLASSES } from './model-config.js';
+import { candidateSpec, LISTS } from './model-config.js';
 import { codexCandidateAt, providerAt, STALE_MS } from './model-capacity.js';
 import { REVIEW_CLASS } from './plan-schema.js';
 
@@ -112,7 +113,8 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
 }
 
 /**
- * The candidate a class runs on.
+ * The candidate a list runs on. Every list but review is judged the same way,
+ * over its own candidates only: a role list never borrows a class's.
  *
  * `{ ok: true, class, candidate, spec, basis, headroom, why }`, where `basis` is
  * `preferred` (the review candidate with most headroom), `known` (the candidate with the most headroom; the
@@ -130,7 +132,7 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
  */
 export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto' }) {
   if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority);
-  if (!CLASSES.includes(cls)) throw new Error(`"${cls}" is not a class — fast, large or review`);
+  if (!LISTS.includes(cls)) throw new Error(`"${cls}" is not a list — ${LISTS.join(', ')}`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   if (priority !== 'auto') {
     const known = judged.filter((entry) => entry.state === 'known');

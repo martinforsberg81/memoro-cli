@@ -25,6 +25,8 @@ const claude = (state, five, seven = five, at = NOW) => applyObservation(state, 
 /** Codex's primary and secondary windows and its model list, read at `at`. */
 const codex = (state, primary, secondary = null, { models = LISTED, at = NOW } = {}) => applyObservation(state, 'codex', { windows: { primary, secondary }, models }, at);
 const choose = (capacity, cls = 'fast', catalog = DEFAULT_CATALOG) => chooseCandidate({ cls, catalog, capacity, now: NOW });
+/** A catalog whose review list is the one claude:opus:high, as the single-candidate review cases need. */
+const ONE_REVIEW = { ...DEFAULT_CATALOG, review: [{ tool: 'claude', model: 'opus', effort: 'high' }] };
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
 
 test('the automatic plan limit is the full window', () => {
@@ -98,31 +100,31 @@ test('a retired manual credits flag cannot override plan-first routing', () => {
 });
 
 test('review takes its first candidate whatever the usage says', () => {
-  const unread = choose(empty(), 'review');
+  const unread = choose(empty(), 'review', ONE_REVIEW);
   assert.equal(unread.ok, true);
   assert.equal(unread.spec, 'claude:opus:high');
   assert.equal(unread.basis, 'preferred');
-  const nearLimit = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review');
+  const nearLimit = choose(codex(claude(empty(), win(0.9), win(0.9)), win(0.1)), 'review', ONE_REVIEW);
   assert.equal(nearLimit.spec, 'claude:opus:high', 'not outscored by the codex headroom');
-  assert.equal(choose(applyRefusal(empty(), 'codex', AHEAD), 'review').spec, 'claude:opus:high', 'the other provider\'s refusal is not review\'s');
+  assert.equal(choose(applyRefusal(empty(), 'codex', AHEAD), 'review', ONE_REVIEW).spec, 'claude:opus:high', 'the other provider\'s refusal is not review\'s');
 });
 
 test('review uses its one candidate\'s plan through 99 % and API reserve at 100 %', () => {
-  const nearLimit = choose(claude(empty(), win(0.99)), 'review');
+  const nearLimit = choose(claude(empty(), win(0.99)), 'review', ONE_REVIEW);
   assert.equal(nearLimit.spec, 'claude:opus:high');
-  const full = choose(claude(empty(), win(1)), 'review');
+  const full = choose(claude(empty(), win(1)), 'review', ONE_REVIEW);
   assert.equal(full.ok, true);
   assert.equal(full.spec, 'claude:opus:high');
   assert.equal(full.billing, 'credits');
 });
 
 test('review uses its own provider API reserve on a plan refusal', () => {
-  const held = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(0.1)), 'review');
+  const held = choose(codex(applyRefusal(empty(), 'claude', AHEAD), win(0.1)), 'review', ONE_REVIEW);
   assert.equal(held.ok, true);
-  assert.equal(held.class, 'review');
+  assert.equal(held.class, 'review', ONE_REVIEW);
   assert.equal(held.spec, 'claude:opus:high');
   assert.equal(held.billing, 'credits');
-  assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review').spec, 'claude:opus:high', 'a passed refusal holds nothing');
+  assert.equal(choose(applyRefusal(empty(), 'claude', PAST), 'review', ONE_REVIEW).spec, 'claude:opus:high', 'a passed refusal holds nothing');
 });
 
 const SOL = Object.freeze({ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' });
@@ -288,8 +290,25 @@ test('an unavailable plan may still use the provider API reserve', () => {
   assert.equal(none.billing, 'credits');
 });
 
-test('a class is fast, large or review', () => {
-  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a class — fast, large or review/u);
+test('a list is a work class or a role list', () => {
+  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a list — fast, large, review, finish, mend, plan, manager/u);
+});
+
+test('a role list chooses within itself and never borrows a class', () => {
+  const catalog = { ...DEFAULT_CATALOG, fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
+  for (const [list, claudeSpec, codexSpec] of [
+    ['finish', 'claude:opus:high', 'codex:gpt-6.1-sol:high'],
+    ['mend', 'claude:sonnet:medium', 'codex:gpt-6.1-sol:medium'],
+    ['plan', 'claude:opus:high', 'codex:gpt-6.1-sol:high'],
+    ['manager', 'claude:opus:medium', 'codex:gpt-6.1-sol:medium'],
+  ]) {
+    assert.equal(chooseCandidate({ cls: list, catalog, capacity: empty(), now: NOW, priority: 'claude' }).spec, claudeSpec, `${list} bootstraps on its own claude candidate`);
+    const roomierCodex = codex(claude(empty(), win(0.9)), win(0.1), null, { models: [{ id: 'gpt-6.1-sol', efforts: ['high', 'medium'] }] });
+    assert.equal(chooseCandidate({ cls: list, catalog, capacity: roomierCodex, now: NOW, priority: 'codex' }).spec, codexSpec, `${list} follows provider priority within itself`);
+    const full = claude(empty(), win(1));
+    const reserve = chooseCandidate({ cls: list, catalog, capacity: full, now: NOW, priority: 'claude' });
+    assert.notEqual(reserve.candidate.model, 'haiku');
+  }
 });
 
 test('provider preference outranks headroom, is symmetric, and auto keeps capacity ranking', () => {

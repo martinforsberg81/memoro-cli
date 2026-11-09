@@ -3197,14 +3197,18 @@ const plans = (f, name, stage, status = 'ready', inner = okSession()) => (call) 
 const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one mend session takes it and queues it again\n`;
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
-test('a finish and a mend session route on the goal\'s class like a build, by capacity, and run in the goal\'s worktree', async () => {
-  for (const [stage, role] of [['finish', 'finish-session'], ['merge', 'mend-session']]) {
+test('only a build routes on the goal\'s class: finish, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
+  const HAIKU_ONLY = { ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
+  // finish: opus high / sol high; mend: sonnet medium / sol medium (DEFAULT_CATALOG), whichever has room.
+  for (const [stage, role, claudeModel] of [['finish', 'finish-session', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
     for (const tool of ['claude', 'codex']) {
       const f = goalFixture({ stuck: { stage, ...(stage === 'merge' ? { log: redMerge } : {}) } });
+      f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
+      f.deps.catalog = () => structuredClone(HAIKU_ONLY);
       let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
       capacity = applyObservation(capacity, 'codex', {
         windows: { primary: windowAt(tool === 'codex' ? 0.1 : 0.9) },
-        models: [{ id: 'gpt-6.1-sol', efforts: ['high'] }],
+        models: [{ id: 'gpt-6.1-sol', efforts: ['high', 'medium'] }],
       }, ROUTING_NOW);
       f.deps.capacity.write(capacity);
       const launch = f.deps.launch;
@@ -3218,14 +3222,42 @@ test('a finish and a mend session route on the goal\'s class like a build, by ca
       assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
       assert.equal(call.env.MC_ROLE, role);
-      // The goal's class is `large`: claude opus medium, or codex gpt-6.1-sol high (DEFAULT_CATALOG), whichever has room.
-      assert.equal(call.env.MC_MODEL, tool === 'claude' ? 'opus' : 'gpt-6.1-sol');
+      assert.equal(call.env.MC_MODEL, tool === 'claude' ? claudeModel : 'gpt-6.1-sol', `${stage} on a fast goal is not haiku`);
       assert.equal(call.env.MC_TOOL, tool);
       assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree, not the programme directory');
       assert.deepEqual([call.env.MC_REPO, call.env.MC_WORKAREA], ['memoro', `${GOALS}/stuck/memoro`]);
       assert.equal('MC_PLAN_REASON' in call.env, false, 'no headless plan reason any more');
     }
   }
+  const planned = goalFixture({ a: { stage: 'draft' } });
+  planned.files[`${GOALS}/a/GOAL.json`] = withGoal(planned.files[`${GOALS}/a/GOAL.json`], { class: 'fast' });
+  planned.deps.catalog = () => structuredClone(HAIKU_ONLY);
+  planned.deps.capacity.write(capacityWith({ claude: 0.1 }));
+  await createRunner({ deps: planned.deps }).pass();
+  assert.deepEqual([planned.calls.sessions[0].env.MC_ROLE, planned.calls.sessions[0].env.MC_MODEL], ['plan', 'opus'], 'next-draft planning runs on the plan list');
+  const built = goalFixture({ b: { stage: 'build' } });
+  built.files[`${GOALS}/b/GOAL.json`] = withGoal(built.files[`${GOALS}/b/GOAL.json`], { class: 'fast' });
+  built.deps.catalog = () => structuredClone(HAIKU_ONLY);
+  built.deps.capacity.write(capacityWith({ claude: 0.1 }));
+  await createRunner({ deps: built.deps }).pass({ repo: 'memoro' });
+  assert.equal(built.calls.sessions[0].env.MC_MODEL, 'haiku', 'a build still follows its class');
+});
+
+test('a finish whose list has no usable subscription never borrows a class: its own API reserve, or it waits', async () => {
+  const f = goalFixture({ stuck: { stage: 'finish' } });
+  f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] });
+  f.deps.capacity.write(capacityWith({ claude: 0.1 }));
+  f.answer = plans(f, 'stuck', 'finish', 'Martin');
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.1-sol'], 'the finish list\'s own reserve, though haiku has room');
+  const off = goalFixture({ stuck: { stage: 'finish' } });
+  off.files[`${GOALS}/stuck/GOAL.json`] = withGoal(off.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
+  off.deps.catalog = f.deps.catalog;
+  off.deps.capacity.write(capacityWith({ claude: 0.1 }));
+  off.deps.billing = { ...off.deps.billing, readApi: () => ({ claude: true, codex: false }) };
+  assert.equal((await createRunner({ deps: off.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(off.calls.sessions.length, 0, 'with its API off it waits; no session on haiku');
 });
 
 test('a goal in finish starts one finish session: the finish role, in the goal\'s worktree, told to finish it', async () => {
@@ -3729,6 +3761,7 @@ test('a goal whose every review candidate is its build model is reviewed on that
   // The review catalog's model and the build session's are the same: claude opus.
   const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [DEFAULT_CATALOG.review[0]] });
   f.answer = judges(f, 'merge');
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
@@ -3788,7 +3821,7 @@ test('a goal built on the first review candidate is reviewed by the next one whe
   f.answer = judges(f, 'merge');
   await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['claude', 'opus']);
-  assert.ok(f.log.some((line) => /review starting .* class large: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
+  assert.ok(f.log.some((line) => /review starting .* review list: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
 });
 
 test('goal review rereads changed provider priority over headroom and build-model avoidance', async () => {

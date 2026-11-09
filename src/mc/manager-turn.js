@@ -13,7 +13,7 @@ import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './role
 import { headlessArgs, readSessionOutput, sessionResult, TIMEOUT_EXIT } from './run-plan.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
-import { readModels } from './model-config.js';
+import { DEFAULT_CATALOG, readModels } from './model-config.js';
 import { readCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 
@@ -30,19 +30,18 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   if (!prompt?.trim() || !Number.isFinite(minutes) || minutes <= 0 || minutes > 1440) return { ok: false, reason: 'invalid manager task or time limit' };
   const role = (deps.role || readCanonRole)('manager');
   if (!role?.overlay) return { ok: false, reason: 'manager role missing' };
-  const catalog = !model && (!tool || tool === 'codex') ? (deps.catalog || (() => readModels(env)))() : { providerPriority: 'auto', large: [] };
+  // The unattended manager runs on the catalog's manager list (`mc model`); an explicit model wins, and an explicit tool takes that tool's first manager candidate.
+  const catalog = !model ? (deps.catalog || (() => readModels(env)))() : { providerPriority: 'auto' };
   const priority = catalog.providerPriority ?? 'auto';
   let routeCandidate = null;
   let routeWhy = null;
   let routeBilling = null;
-  if (!model && (tool === 'codex' || (!tool && priority !== 'auto'))) {
-    const roleCandidates = [
-      { tool: 'claude', model: role.model || 'opus', effort: 'medium' },
-      ...(catalog.large || []).filter((candidate) => candidate.tool === 'codex'),
-    ];
-    if (tool === 'codex') routeCandidate = roleCandidates.find((candidate) => candidate.tool === 'codex') || null;
+  if (!model) {
+    const managerList = catalog.manager || DEFAULT_CATALOG.manager;
+    if (tool) routeCandidate = managerList.find((candidate) => candidate.tool === tool) || null;
     else {
-      const chosen = chooseCandidate({ cls: 'large', catalog: { large: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority });
+      const chosen = chooseCandidate({ cls: 'manager', catalog: { manager: managerList }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority });
+      if (!chosen.ok) return { ok: false, reason: chosen.reason, providerPriority: priority };
       routeCandidate = chosen.candidate;
       routeWhy = chosen.why;
       routeBilling = chosen.billing;
@@ -51,7 +50,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   const selectedTool = tool || routeCandidate?.tool || role.tools?.[0] || 'claude';
   const launch = (deps.launch || resolveLaunch)(selectedTool);
   if (!launch?.ok) return { ok: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
-  if (launch.id === 'codex' && !model && !routeCandidate) return { ok: false, reason: 'no Codex Manager candidate is listed in mc model' };
+  if (!model && !routeCandidate) return { ok: false, reason: `no ${selectedTool} candidate is on the manager list in mc model` };
   const selectedModel = model || routeCandidate?.model || (launch.shortName === role.tools?.[0] ? role.model : null) || 'opus';
   const instructions = instructionsFor(launch.id, role.overlay);
   const task = `You are running headless with nobody at the terminal. Carry out only the task below, then report what changed, what was checked and what remains. When a decision needs Martin, record the question with the affected goal or proposal and report it; do not guess his answer. Do not start another Manager session.\n\n${prompt}`;

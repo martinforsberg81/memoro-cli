@@ -1,11 +1,18 @@
 /**
- * The model catalog (ruling 59): the candidates a fast or a large step may run
- * on, in the order they are preferred, and the ordered candidates a review
- * runs on (ruling 59 § 2: the first is the preferred one).
+ * The model catalog (ruling 59): the ordered candidates each list may run on,
+ * the first preferred.
+ *
+ * `fast` and `large` are the work classes: a goal's class routes its build
+ * sessions and nothing else. The role lists — `review`, `finish`, `mend`, `plan`
+ * and `manager` — each route their own unattended role, whatever the goal's
+ * class (ruling 59 § 2 for review; the 2026-11-09 ruling for the others). None
+ * of them falls back to a class.
  *
  * A file whose `review` is one candidate object, as every catalog was before
  * review became a list, reads as a list of that one candidate; it is written
- * back as a list the first time `mc model` changes the file.
+ * back as a list the first time `mc model` changes the file. A file that lacks
+ * `finish`, `mend`, `plan` or `manager` reads that list from the defaults, and
+ * is written back with every list the first time `mc model` changes it.
  *
  * It is a file the person owns — `~/mc/runner/models.json` — and mc writes it
  * only through `mc model`. An absent file reads as the defaults below. A file
@@ -35,11 +42,16 @@ import { pidAlive } from './status-collect.js';
 export const MODELS_SCHEMA = 'mc-models';
 export const MODELS_VERSION = 1;
 export const MODELS_FILE = 'models.json';
+/** The work classes: a goal's class routes its build sessions, and nothing else. */
 export const CLASSES = Object.freeze(['fast', 'large']);
-/** The lists `mc model add` and `remove` change: the two work classes and review. */
-export const LISTS = Object.freeze([...CLASSES, 'review']);
+/** The role lists, each routing its own unattended role. `set` replaces one whole. */
+export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager']);
+/** Every list the catalog holds. `mc model add` and `remove` take any of them. */
+export const LISTS = Object.freeze([...CLASSES, ...ROLE_LISTS]);
+/** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
+const DEFAULTED_LISTS = Object.freeze(['finish', 'mend', 'plan', 'manager']);
 export const TOOLS = Object.freeze(['claude', 'codex']);
-const DOCUMENT_KEYS = Object.freeze(['schema', 'version', 'fast', 'large', 'review', 'provider_priority']);
+const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, 'provider_priority']);
 export const PROVIDER_PRIORITIES = Object.freeze(['auto', 'codex', 'claude']);
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
 const LOCK_POLL_MS = 50;
@@ -54,11 +66,15 @@ export class ModelConfigError extends Error {
 
 const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort });
 
-/** What an absent catalog reads as. Review is an ordered list, as fast and large are. */
+/** What an absent catalog reads as, and what a file lacking one of the defaulted lists reads for it. */
 export const DEFAULT_CATALOG = Object.freeze({
   fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
   large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  review: Object.freeze([candidate('claude', 'opus', 'high')]),
+  review: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
+  finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
+  mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
+  plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
+  manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
 });
 
 export function modelsPath(env = process.env) {
@@ -130,6 +146,7 @@ function documentProblems(value) {
   if (value.version !== MODELS_VERSION) problems.push(`version: ${MODELS_VERSION} is the only version this mc reads`);
   if (value.provider_priority !== undefined && !PROVIDER_PRIORITIES.includes(value.provider_priority)) problems.push(`provider_priority: one of ${PROVIDER_PRIORITIES.join(', ')}`);
   for (const cls of LISTS) {
+    if (DEFAULTED_LISTS.includes(cls) && value[cls] === undefined) continue;
     const list = cls === 'review' ? reviewList(value.review) : value[cls];
     if (!Array.isArray(list) || list.length === 0) {
       problems.push(`${cls}: a list of at least one candidate`);
@@ -151,8 +168,13 @@ function reviewList(value) {
 }
 
 /** The catalog as an object of its own: a copy whose candidates a change may edit. */
-function cloneCatalog({ fast, large, review }) {
-  return { fast: fast.map((value) => ({ ...value })), large: large.map((value) => ({ ...value })), review: review.map((value) => ({ ...value })) };
+function cloneCatalog(catalog) {
+  return Object.fromEntries(LISTS.map((cls) => [cls, catalog[cls].map((value) => ({ ...value }))]));
+}
+
+/** Every list of a catalog, in LISTS order, as the file is written. */
+function listsOf(catalog) {
+  return Object.fromEntries(LISTS.map((cls) => [cls, catalog[cls]]));
 }
 
 /**
@@ -182,14 +204,15 @@ export function readModels(env = process.env) {
     path,
     providerPriority: value.provider_priority ?? 'auto',
     providerPriorityPersisted: Object.hasOwn(value, 'provider_priority'),
-    fast: value.fast.map((item) => candidate(item.tool, item.model, item.effort)),
-    large: value.large.map((item) => candidate(item.tool, item.model, item.effort)),
-    review: reviewList(value.review).map((item) => candidate(item.tool, item.model, item.effort)),
+    ...Object.fromEntries(LISTS.map((cls) => {
+      const list = cls === 'review' ? reviewList(value.review) : value[cls] ?? DEFAULT_CATALOG[cls];
+      return [cls, list.map((item) => candidate(item.tool, item.model, item.effort))];
+    })),
   };
 }
 
 function classList(catalog, cls) {
-  if (!LISTS.includes(cls)) throw new ModelConfigError(`"${cls}" is not a list: add and remove take fast, large or review`);
+  if (!LISTS.includes(cls)) throw new ModelConfigError(`"${cls}" is not a list: add and remove take ${LISTS.join(', ')}`);
   return catalog[cls];
 }
 
@@ -216,10 +239,16 @@ export function removeCandidate(catalog, cls, { tool, model }) {
   return catalog;
 }
 
+/** A role list replaced whole by the one candidate. A work class is changed by add and remove only. */
+export function setRoleList(catalog, list, value) {
+  if (!ROLE_LISTS.includes(list)) throw new ModelConfigError(`"${list}" is not a role list: set takes ${ROLE_LISTS.join(', ')}`);
+  catalog[list] = [candidate(value.tool, value.model, value.effort)];
+  return catalog;
+}
+
 /** The review list replaced whole by the one candidate. */
 export function setReview(catalog, value) {
-  catalog.review = [candidate(value.tool, value.model, value.effort)];
-  return catalog;
+  return setRoleList(catalog, 'review', value);
 }
 
 /** Sleeps on the calling thread, as plan-write's lock does: a verb this short waits in place. */
@@ -286,9 +315,7 @@ export function changeModels(env = process.env, change) {
     const document = {
       schema: MODELS_SCHEMA,
       version: MODELS_VERSION,
-      fast: catalog.fast,
-      large: catalog.large,
-      review: catalog.review,
+      ...listsOf(catalog),
       ...(current.providerPriorityPersisted ? { provider_priority: current.providerPriority } : {}),
     };
     writeJsonAtomic(current.path, document);
@@ -303,7 +330,7 @@ export function changeProviderPriority(env = process.env, priority) {
     const current = readModels(env);
     const document = {
       schema: MODELS_SCHEMA, version: MODELS_VERSION,
-      fast: current.fast, large: current.large, review: current.review,
+      ...listsOf(current),
       provider_priority: priority,
     };
     writeJsonAtomic(current.path, document);

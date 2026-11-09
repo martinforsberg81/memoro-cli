@@ -76,7 +76,7 @@ it('unattended Manager honors saved Codex priority with a valid catalog model an
   }, now);
   const result = await runManagerTurn({
     ...f.options, now, tool: null, model: null,
-    deps: { ...f.options.deps, catalog: () => ({ providerPriority: priority, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+    deps: { ...f.options.deps, catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
       launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
       session: async (call) => { seen = call; return { status: 0, stdout: '{"type":"thread.started","thread_id":"fresh"}\n{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}\n{"type":"turn.completed","usage":{}}\n', stderr: '' }; } },
   });
@@ -86,10 +86,31 @@ it('unattended Manager honors saved Codex priority with a valid catalog model an
   assert.equal(result.providerPriority, 'codex');
   priority = 'claude';
   const fallback = await runManagerTurn({ ...f.options, now, tool: null, model: null, deps: { ...f.options.deps,
-    catalog: () => ({ providerPriority: priority, large: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
+    catalog: () => ({ providerPriority: priority, manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] }), capacity: () => capacity,
     launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
   } });
   assert.deepEqual([fallback.tool, fallback.model, fallback.providerPriority], ['claude', 'opus', 'claude']);
+});
+
+it('unattended Manager runs on the catalog manager list, never on large; an explicit model still wins', async t => {
+  const f = fixture(t);
+  const now = new Date('2026-11-05T18:00:00Z');
+  const capacity = applyObservation(normaliseCapacity(null), 'claude', {
+    windows: { five_hour: { fraction_used: 0.2, resets_at: '2026-11-05T22:00:00Z' } },
+  }, now);
+  const seen = [];
+  const deps = { ...f.options.deps, capacity: () => capacity,
+    catalog: () => ({ providerPriority: 'claude', large: [{ tool: 'claude', model: 'haiku', effort: 'high' }], manager: [{ tool: 'claude', model: 'sonnet', effort: 'low' }] }),
+    launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: getAdapter(tool === 'codex' ? 'codex' : 'claude-code'), spec: { bin: '/fake/model' } }),
+    session: async (call) => { seen.push(call); return { status: 0, stdout: '{"type":"result","subtype":"success","result":"Done","session_id":"fresh"}', stderr: '' }; } };
+  const routed = await runManagerTurn({ ...f.options, now, tool: null, model: null, deps });
+  assert.deepEqual([routed.tool, routed.model], ['claude', 'sonnet']);
+  assert.ok(seen[0].args.includes('low'), 'the manager candidate\'s effort is passed');
+  const explicit = await runManagerTurn({ ...f.options, now, tool: 'claude', model: 'opus', deps });
+  assert.equal(explicit.model, 'opus');
+  const noCodex = await runManagerTurn({ ...f.options, now, tool: 'codex', model: null, deps });
+  assert.equal(noCodex.ok, false);
+  assert.match(noCodex.reason, /manager list/u);
 });
 
 it('records failures and timeouts and releases the running-session record', async t => {

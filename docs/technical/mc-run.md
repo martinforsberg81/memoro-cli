@@ -173,8 +173,7 @@ role tells the session to read LOG.md first.
 - A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
   review found, gates, publishes and `mc goal stage merge`. One that ends
   with the goal still `finish · ready` is set `finish · Martin`.
-- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree on the goal's class, like a
-  build, and write the merge handoff when they queue. See
+- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, finish on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
   [finish and mend](mc-goals.md#finish-and-mend). Planning is a separate next-draft assignment under the rule below.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
@@ -302,8 +301,8 @@ plan request, the next launch uses its API key through the local billing gateway
 This applies to every current MC session path: build, review, finish, mend,
 helper, and interactive sessions. An ordinary interactive `mc plan` still lets
 Martin choose the tool and model; billing follows that choice. A finish or
-mend session runs on the goal's class routing and is billed as any other
-session. `mc run --billing` shows both providers' next routes. The MC page shows
+mend session runs on its own catalog list (finish, mend), never the goal's
+class, and is billed as any other session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 
 The API reserve is switched per provider:
@@ -371,14 +370,22 @@ billing boundaries starts a cold cache context.
 
 ## Work classes and capacity (ruling 59)
 
-A goal names a work class, `fast` or `large`, not a model. The route
+A goal names a work class, `fast` or `large`, not a model, and the class
+routes the goal's build sessions only. Every other unattended role runs on its
+own catalog list, whatever the goal's class: `review`, `finish`, `mend`, `plan`
+(the runner's next-draft planning) and `manager` (an unattended manager turn
+without an explicit tool or model). A role list never borrows a class's
+candidates: with none of its own usable and its API off, the session waits
+(Martin, 2026-11-09). Interactive `mc plan` and `mc manager` keep their own
+selection. The route
 is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
 (`~/mc/runner/model-capacity.json`). Choosing spends no model turn and reads no
 account. The snapshot is refreshed by sessions that run anyway, and by
 independent read-only collectors due at startup and every 15 minutes for both
-providers. `review` is a class too, but only a goal's review
-takes it. Review ranks usable subscriptions by provider priority, then
+providers. Every list is judged by the same capacity, provider-priority,
+bootstrap and API-reserve rules over its own candidates; review adds one.
+Review ranks usable subscriptions by provider priority, then
 headroom; ties avoid the build model, then follow catalog order. Codex needs a
 fresh successful capacity observation listing the model and effort. Auto mode
 retains unknown-Claude bootstrap only when no candidate has measured usable
@@ -390,20 +397,30 @@ candidates. The review waits when the selected API is off.
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
-- `mc model [list] [--json]` — the candidates of fast, large and review, each
-  a numbered list in preference order, and whether they come from the file or
-  the defaults.
+- `mc model [list] [--json]` — the candidates of fast, large, review, finish,
+  mend, plan and manager, each a numbered list in catalog order, and whether
+  they come from the file or the defaults.
 - `mc model priority [auto|codex|claude]` — show or change the provider
   preference for unattended launches; an absent setting means `auto`.
-- `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate.
+- `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate;
+  `add` takes finish, mend, plan and manager as well.
 - `mc model remove fast|large|review <tool>:<model>` — removes the candidate
-  with exactly that tool and model; a list keeps at least one.
+  with exactly that tool and model; a list keeps at least one. `remove` takes
+  every list as `add` does.
 - `mc model set review <tool>:<model>:<effort>` — replaces the whole review
-  list with that one candidate.
+  list with that one candidate; `set` takes finish, mend, plan and manager as
+  well, never a work class.
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.1-sol:high`; review, `claude:opus:high` alone. A file whose
+`codex:gpt-6.1-sol:high`; review, `claude:opus:medium` then
+`codex:gpt-6.1-sol:medium`; finish, `claude:opus:high` then
+`codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
+`codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
+`codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
+`codex:gpt-6.1-sol:medium`. A file without finish, mend, plan or manager reads
+that list from the defaults and is written back with every list the first time
+`mc model` changes it. A file whose
 `review` is one candidate object, as files were before review was a list, reads
 as a list of that candidate and is written back as a list the first time `mc
 model` changes it. A file that is there and cannot be read is refused, never quietly replaced by the defaults. A catalog

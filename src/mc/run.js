@@ -1697,8 +1697,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * merge` executes its decision, with `afterReview` after it. A goal in `finish`
    * gets a finish session (`finish-session`) and `afterFinish`; an unqueued
    * merge failure gets a mend session
-   * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree
-   * on the goal's class.
+   * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree.
+   * Only a build routes on the goal's class (fast, large); review, finish, mend
+   * and plan each route on their own catalog list, whatever the class, and wait
+   * when it has no candidate rather than borrow a class's.
    *
    * A session cut off by the API is not resumed: it ends, its goal is picked
    * again, and the next session reads `LOG.md` and the branch. The worktree
@@ -1724,7 +1726,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES[kind];
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routed = review ? reviewRoute(goal) : { route: routeClass(goal.class) };
+    const routeList = kind === 'build' ? goal.class : kind;
+    const routed = review ? reviewRoute(goal) : { route: routeClass(routeList) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
@@ -1799,7 +1802,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // Before anything a launch leaves behind (the in-flight file, the scratch directory, a log entry).
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
-      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · class ${goal.class}: ${route.basis} (${route.why})`);
+      say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${kind === 'build' ? `class ${goal.class}` : `${routeList} list`}: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       // There exactly as long as the session is, so in flight and slot are one
       // fact, and the eligibility of this goal is that same fact.
