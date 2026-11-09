@@ -41,7 +41,7 @@ test('a catalog whose review is one object reads as a list of it, and is written
     assert.deepEqual(readModels(c.env).review, [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
     const listed = await c.verb('list');
     assert.equal(listed.code, 0);
-    assert.match(listed.out, /\nreview\n {2}1 {2}codex:gpt-6\.1-sol:high\n$/u);
+    assert.match(listed.out, /\nreview\n {2}1 {2}codex:gpt-6\.1-sol:high\nfinish\n/u);
     assert.deepEqual(c.file().review, OLD.review, 'reading leaves the file as it was');
 
     assert.equal((await c.verb('add', 'review', 'claude:opus:high')).code, 0);
@@ -54,10 +54,11 @@ test('a catalog whose review is one object reads as a list of it, and is written
 test('mc model add and remove review change the list as they do fast and large; set review replaces it whole', async () => {
   const c = catalogAt(null);
   try {
+    assert.equal((await c.verb('remove', 'review', 'codex:gpt-6.1-sol')).code, 0);
     const added = await c.verb('add', 'review', 'codex:gpt-6.1-sol:high');
     assert.equal(added.code, 0, added.err);
-    assert.equal(added.out, 'mc: added codex:gpt-6.1-sol:high to review — review is now claude:opus:high, codex:gpt-6.1-sol:high\n');
-    assert.match((await c.verb('list')).out, /\nreview\n {2}1 {2}claude:opus:high\n {2}2 {2}codex:gpt-6\.1-sol:high\n$/u);
+    assert.equal(added.out, 'mc: added codex:gpt-6.1-sol:high to review — review is now claude:opus:medium, codex:gpt-6.1-sol:high\n');
+    assert.match((await c.verb('list')).out, /\nreview\n {2}1 {2}claude:opus:medium\n {2}2 {2}codex:gpt-6\.1-sol:high\nfinish\n/u);
 
     const twice = await c.verb('add', 'review', 'codex:gpt-6.1-sol:low');
     assert.equal(twice.code, 1);
@@ -79,9 +80,43 @@ test('mc model add and remove review change the list as they do fast and large; 
 
     const unknown = await c.verb('add', 'slow', 'claude:opus:high');
     assert.equal(unknown.code, 2);
-    assert.match(unknown.err, /"slow" is not a list: add takes fast, large or review/u);
+    assert.match(unknown.err, /"slow" is not a list: add takes fast, large, review, finish, mend, plan, manager/u);
   } finally {
     c.done();
+  }
+});
+
+test('a file without the role lists reads them as the defaults; mc model lists all seven and writes them back on a change', async () => {
+  const c = catalogAt({ ...OLD, review: [OLD.review] });
+  try {
+    const models = readModels(c.env);
+    assert.deepEqual(models.finish, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
+    assert.deepEqual(models.mend, [{ tool: 'claude', model: 'sonnet', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]);
+    assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
+    assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]);
+    const listed = (await c.verb('list')).out;
+    for (const list of ['fast', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
+    assert.equal(c.file().finish, undefined, 'reading writes nothing');
+
+    const set = await c.verb('set', 'finish', 'codex:gpt-6.1-sol:high');
+    assert.equal(set.code, 0, set.err);
+    assert.equal(set.out, 'mc: finish is now codex:gpt-6.1-sol:high alone\n');
+    assert.deepEqual(c.file().finish, [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
+    assert.deepEqual(c.file().mend, models.mend, 'a change writes every list');
+    assert.equal((await c.verb('add', 'manager', 'claude:sonnet:high')).code, 0);
+    assert.equal((await c.verb('remove', 'manager', 'claude:opus')).code, 0);
+    assert.deepEqual(c.file().manager.map((item) => item.model), ['gpt-6.1-sol', 'sonnet']);
+    const classSet = await c.verb('set', 'fast', 'claude:opus:high');
+    assert.equal(classSet.code, 2);
+    assert.match(classSet.err, /mc model set review\|finish\|mend\|plan\|manager/u);
+  } finally {
+    c.done();
+  }
+  const bad = catalogAt({ ...OLD, finish: [] });
+  try {
+    assert.throws(() => readModels(bad.env), /finish: a list of at least one candidate/u);
+  } finally {
+    bad.done();
   }
 });
 

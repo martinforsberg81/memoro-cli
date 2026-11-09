@@ -149,7 +149,7 @@ written, and a write that would make one is refused with the field named.
   phase 1; `renderGoal` always writes it.
 - `repos` — repository names in order. The first is where a session starts,
   and the lane that serves it takes the goal.
-- `class` — `fast` or `large`, routed through the model catalog (ruling 59).
+- `class` — `fast` or `large`, routed through the model catalog (ruling 59) for the goal's build sessions only; review, finish, mend and next-draft plan run on their own catalog lists, whatever the class (`docs/technical/mc-run.md`, *Work classes and capacity*).
 - `created` — an ISO instant written by `mc goal new`, or null.
 - `prs` — the pull requests that carry the goal's work, as `<repo>#<n>`.
   `mc publish` writes the one it opens or updates (*Done when its work has
@@ -533,7 +533,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    before the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
    `MC_SESSION_STARTED` are set for it. With none, the goal goes to
    `finish · ready` with a runner entry. A goal in `finish` gets a finish
-   session (`finish-session`); merge failures alone get a mend session (`mend-session`). Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
+   session (`finish-session`) on the finish list; merge failures alone get a mend session (`mend-session`) on the mend list; next-draft planning runs on the plan list. None of them uses the goal's class, and none borrows a class's candidates when its own list has none usable. Legacy blocked goals outside merge are reconciled to Martin, retaining prior evidence without a diagnostic launch. `MC_ROLE`,
    `MC_GOAL`, `MC_REPO`, `MC_WORKAREA` and `MC_TOOL` are set for every kind.
    If the role's file is missing on the machine, the goal is skipped.
 4. **Silent build.** A build session that leaves no entry gets one from the
@@ -606,8 +606,8 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   never start mend: legacy records are reconciled to Martin without a diagnostic
   launch. Build/review/finish own their acceptance repairs.
 
-Both run in the goal's first repository's worktree, on the goal's class
-routing and billing like a build, with `MC_GOAL`, `MC_REPO` and
+Both run in the goal's first repository's worktree, finish on the finish list
+and mend on the mend list (never the goal's class), with billing like a build, with `MC_GOAL`, `MC_REPO` and
 `MC_WORKAREA` set; their `mc goal stage merge` writes the merge handoff file
 that ends the session and releases its lane. Neither performs Martin's acts:
 deploy, production data, credentials or admin override. The programme turns

@@ -143,10 +143,12 @@ reason: plan sessions put "write this goal now" questions to jev, which could
 not settle them (on 2026-11-08, 67 jev calls showed `settled` below 0.70 on 20
 such questions).
 
-A goal names a work class (`fast` or `large`), not a pinned provider. The
-catalog and observed capacity choose tool, model and effort at launch. Review
-has its own catalog list, changed with `mc model add|remove review` or
-`mc model set review`.
+A goal names a work class (`fast` or `large`), not a pinned provider; the
+class routes its build sessions only. The catalog and observed capacity choose
+tool, model and effort at launch. Review, finish, mend, the runner's plan and
+the unattended manager each have their own catalog list, whatever the class,
+changed with `mc model add|remove <list>` or `mc model set <list>`; this is
+`mc model add|remove review` and `mc model set review` for review.
 
 Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order.
 
