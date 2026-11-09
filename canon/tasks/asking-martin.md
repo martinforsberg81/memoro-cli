@@ -31,8 +31,8 @@ mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<k
 Three things, and nothing else:
 
 - A reserved act: `mc deploy`, production data, credentials, `--admin`.
-- A product or policy choice that no decided standard answers (all-sessions,
-  Decided standards). His answer is written where the standard belongs, so the
+- A product or policy choice that neither a decided standard nor established
+  practice answers (all-sessions, Decided standards). His answer is written where the standard belongs, so the
   same question is never asked twice.
 - An exception to a decided standard, named and bounded.
 
