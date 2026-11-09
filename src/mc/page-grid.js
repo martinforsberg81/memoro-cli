@@ -58,6 +58,21 @@ export const KIND_TONE = Object.freeze({
   idle: ['grey'],
 });
 
+/**
+ * One colour per pipeline stage: its box's border and its session marks in the
+ * manager pipeline (page-render.js `pipelineLines`). The same colours as the
+ * kinds of session that work there, so a stage and its sessions read alike;
+ * merge is orange, which no kind has. An empty stage is drawn grey instead.
+ */
+export const STAGE_TONE = Object.freeze({
+  proposals: ['yellow'],
+  draft: ['blue'],
+  build: ['green'],
+  review: ['magenta'],
+  finish: ['blue'],
+  merge: ['orange'],
+});
+
 /** An open pull request's number with nothing else to say about it. */
 export const PR_TONE = Object.freeze(['cyan', 'bold']);
 

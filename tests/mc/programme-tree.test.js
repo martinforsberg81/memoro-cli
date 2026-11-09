@@ -169,7 +169,9 @@ describe('PROGRAMMES phase tree', () => {
       assert.ok(plainLines.some((line) => /^  ┌─ inbox /u.test(line)), 'programme has a boundary');
       assert.ok(plainLines.some((line) => /^  └─/u.test(line)), 'programme closes before the next unit');
       assert.ok(plainLines.some((line) => /stage build · status ready · criteria 0\/1/u.test(line)));
-      assert.ok(!colourLines.some((line) => /\u001b\[(?:90|2)m/u.test(line)), 'secondary text is not dark grey or dim');
+      // The pipeline's box borders and arrows are the real grey by contract (mc-ui.md, Pipeline); nothing else is.
+      const text = (line) => line.replace(/\u001b\[90m[┌┐└┘│─▶ ]+\u001b\[0m/gu, '');
+      assert.ok(!colourLines.some((line) => /\u001b\[(?:90|2)m/u.test(text(line))), 'secondary text is not dark grey or dim');
       assert.ok(colourLines.every((line) => width(line) <= columns), `${columns}: ${colourLines.filter((line) => width(line) > columns)}`);
       assert.ok(plainLines.some((line) => line.includes('invalid')));
       assert.ok(plainLines.some((line) => line.includes('repos names no repository')));

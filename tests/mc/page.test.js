@@ -1237,7 +1237,8 @@ describe('INTAKE', () => {
       const header = lines.slice(0, lines.findIndex((line) => line.includes('PROGRAMMES'))).join('\n');
       assert.match(header, /mc manager/u);
       assert.match(header, /● · MANAGER · 60 min/u);
-      assert.match(header, /3 proposals/u);
+      assert.match(header, /┌─ proposals ─+┐/u);
+      assert.match(header, /│ +3 +│/u);
       assert.ok(lines.some(line => /Last collection failed · 26 h ago/u.test(line)));
       assert.ok(!lines.some(line => /HELPER/u.test(line)));
       assert.ok(lines.every((line) => width(line) <= columns), `${columns} columns`);
@@ -1525,10 +1526,11 @@ describe('the page', () => {
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
-    // Where work stands is the pipeline under the hero frame: a frame per
-    // stage, its count and flags, and a mark per session working in it.
-    assert.match(text, /│ 3 build ⚑1 +│▶│/u);
-    assert.match(text, /│ 1 proposals +│▶│ 0 draft +│/u);
+    // Where work stands is the pipeline under the hero frame: a box per
+    // stage, its name in the border, its count and flags, and a mark per session.
+    assert.match(text, /┌─ build ─+┐/u);
+    assert.match(text, /│ +3 ⚑1 +│ ─*▶ │/u);
+    assert.match(text, /│ +1 +│ ─*▶ │ +0 +│/u);
     assert.doesNotMatch(text, /in flight ·|Goals: \d+ total/u, 'the old count lines are gone');
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     assert.match(text, /runner pid 4242/u);

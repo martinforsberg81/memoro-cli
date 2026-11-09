@@ -50,7 +50,7 @@ import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
-  KIND_TONE, PR_QUIET_S, PR_TONE, STATE_TONE, clipCell, duration, kindTone, stateTone,
+  KIND_TONE, PR_QUIET_S, PR_TONE, STAGE_TONE, STATE_TONE, clipCell, duration, kindTone,
 } from './page-grid.js';
 import { clip, pad, painter, width } from './status-render.js';
 
@@ -72,9 +72,6 @@ export function colourFor(stream = process.stdout, env = process.env) {
 export function columnsFor(stream = process.stdout) {
   return Math.max(60, Math.min(Number(stream?.columns) || 100, 160));
 }
-
-/** A state's colour, by its one palette (page-grid.js `STATE_TONE`). */
-const statusTone = stateTone;
 
 /** `08-29 12:39Z` — an ISO instant with the year and the seconds taken off. */
 export function when(ts) {
@@ -709,7 +706,7 @@ export function sparkline(counts = []) {
  * Hero frame: what mc is, and what came out of it in the last 24 hours
  * (`data.landed`, landed.js). Where work stands now is the pipeline below it.
  */
-function headerLines(lines, c, wide, data, version) {
+function headerLines(lines, c, raw, wide, data, version) {
   const room = wide - 6;
   const frame = (text) => lines.push(`  ${c('│', 'grey')} ${text}${' '.repeat(Math.max(0, room - width(text)))} ${c('│', 'grey')}`);
   const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
@@ -774,14 +771,15 @@ function headerLines(lines, c, wide, data, version) {
     { text: landedPlan.plan_sessions ? `headless plan ${money(landedPlan.plan_cost) || '$0'} (${landedPlan.plan_sessions})` : '', styles: ['grey'] },
   ]);
   rule('└', '┘');
-  pipelineLines(lines, c, wide, data);
+  pipelineLines(lines, c, raw, wide, data);
   lines.push('');
 }
 
 /**
- * Where work stands now: one frame per stage, its count on the first line and
- * one mark per session working in it on the second. Martin (⚑) and blocked (⊘)
- * goals are flagged on the count line of the stage they stand in.
+ * Where work stands now, one entry per stage: its count, the goals waiting on
+ * Martin (`martin`) and blocked (`blocked`) in it, and its marks — one per
+ * session working there. Every plan session, interactive or headless, is a mark
+ * on draft; proposals carries none.
  */
 export function pipelineStages(data) {
   const groups = data.programmes?.programmes || [];
@@ -793,10 +791,13 @@ export function pipelineStages(data) {
   const rounds = (data.merges?.repos || []).reduce((n, repo) => n + (repo.landings?.length || 0), 0);
   return PIPELINE.map((stage) => {
     const here = goals.filter(goal => (goal.stage || 'unknown') === stage);
-    const marks = stage === 'proposals' ? [{ mark: '●', count: interactive, styles: kindTone('plan') }]
-      : stage === 'draft' ? [{ mark: '●', count: ofKind('plan'), styles: kindTone('plan') }]
-        : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: kindTone('gate') }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
-          : [{ mark: '●', count: ofKind(stage), styles: kindTone(stage) }];
+    // Every plan session, interactive or headless, is a mark on draft; proposals has none.
+    // A session's mark takes its stage's colour; a mend, which has no box, is yellow.
+    const tone = STAGE_TONE[stage];
+    const marks = stage === 'proposals' ? []
+      : stage === 'draft' ? [{ mark: '●', count: interactive + ofKind('plan'), styles: tone }]
+        : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: tone }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
+          : [{ mark: '●', count: ofKind(stage), styles: tone }];
     return {
       stage,
       count: stage === 'proposals' ? proposals : here.length,
@@ -807,53 +808,84 @@ export function pipelineStages(data) {
   });
 }
 
-/** Narrowest frame: `149 proposals` between its borders, no padding. */
-const FRAME_MIN = 15;
+/** At most this many marks of one kind in a box; more are drawn `●×n`. */
+const MARK_CAP = 8;
 
-function pipelineLines(lines, c, wide, data) {
-  const stages = pipelineStages(data);
+/** The arrows between boxes: ` ──▶ ` where the row has the room, else ` ▶ `. */
+const ARROW = Object.freeze({ wide: ' ──▶ ', narrow: ' ▶ ' });
+
+const textWidth = (parts) => parts.reduce((n, part) => n + width(part.text), 0);
+
+/**
+ * One stage as a box of four rows, all of one width: the name set into the top
+ * border (`┌─ build ──┐`), the count with its flags, the marks, and the bottom
+ * border. The box is as wide as its widest content — the name with its `─ `
+ * and ` ─`, the count, the marks — plus one space each side, and never wider.
+ * Its border is the stage's colour (`STAGE_TONE`), or the real grey when the
+ * stage is empty: no count and no session. The grey is drawn raw, which the
+ * page's text mapping does not touch. The name is bold in the terminal's own
+ * foreground.
+ */
+function stageBox(c, raw, item) {
+  const count = [
+    { text: String(item.count), styles: item.count ? ['bold'] : ['grey'] },
+    item.martin ? { text: ` ⚑${item.martin}`, styles: ['yellow'] } : null,
+    item.blocked ? { text: ` ⊘${item.blocked}`, styles: ['red'] } : null,
+  ].filter(Boolean);
+  const marks = [];
+  for (const { mark, count: n, styles } of item.marks) {
+    if (!n) continue;
+    // The space between two kinds is plain, not painted with either.
+    if (marks.length) marks.push({ text: ' ' });
+    marks.push({ text: n <= MARK_CAP ? mark.repeat(n) : `${mark}×${n}`, styles });
+  }
+  const inner = Math.max(item.stage.length + 4, textWidth(count) + 2, textWidth(marks) + 2);
+  const tone = marks.length || item.count ? STAGE_TONE[item.stage] : ['grey'];
+  const edge = (text) => raw(text, ...tone);
+  // Centred: the spare column, if any, goes on the right.
+  const row = (parts) => {
+    const free = inner - textWidth(parts);
+    const left = Math.floor(free / 2);
+    return `${edge('│')}${' '.repeat(left)}${paint(c, parts)}${' '.repeat(free - left)}${edge('│')}`;
+  };
+  return {
+    width: inner + 2,
+    top: `${edge('┌─ ')}${c(item.stage, 'bold')}${edge(` ${'─'.repeat(inner - item.stage.length - 3)}┐`)}`,
+    counts: row(count),
+    marks: row(marks),
+    bottom: edge(`└${'─'.repeat(inner)}┘`),
+  };
+}
+
+/**
+ * Where work stands now: a small box per stage, joined by arrows under the
+ * hero frame at its indent. All six on one row when they fit the page (`wide`
+ * less the indent), else with the narrower arrow, else three and three on two
+ * rows, each keeping its arrows. A row is never clipped mid-box.
+ */
+function pipelineLines(lines, c, raw, wide, data) {
+  const boxes = pipelineStages(data).map((item) => stageBox(c, raw, item));
   const room = wide - 2;
-  // One row of frames joined by arrows when they fit, else three to a row.
-  const perRow = room >= stages.length * FRAME_MIN + stages.length - 1 ? stages.length : 3;
-  // The frames fill the hero frame's width; the first ones take the remainder.
-  const base = Math.floor((room - (perRow - 1)) / perRow);
-  const spare = room - (perRow - 1) - base * perRow;
-  // A space inside each border while the frame has room for it.
-  const gap = base >= FRAME_MIN + 2 ? ' ' : '';
-  const tone = (stage) => (stage === 'proposals' ? ['yellow'] : stage === 'draft' ? kindTone('plan') : statusTone(stage));
-  for (let at = 0; at < stages.length; at += perRow) {
-    const row = stages.slice(at, at + perRow);
-    const top = []; const counts = []; const marks = []; const bottom = [];
-    row.forEach((item, index) => {
-      const outer = base + (index < spare ? 1 : 0);
-      const inner = outer - 2 - 2 * gap.length;
-      const cell = (parts) => {
-        const text = paint(c, parts, inner);
-        return `${c('│', 'grey')}${gap}${text}${' '.repeat(Math.max(0, inner - width(text)))}${gap}${c('│', 'grey')}`;
-      };
-      const arrow = index === row.length - 1 ? '' : ' ';
-      top.push(c(`┌${'─'.repeat(outer - 2)}┐`, 'grey') + arrow);
-      bottom.push(c(`└${'─'.repeat(outer - 2)}┘`, 'grey') + arrow);
-      const flags = [
-        item.martin ? { text: ` ⚑${item.martin}`, styles: ['yellow'] } : null,
-        item.blocked ? { text: ` ⊘${item.blocked}`, styles: ['red'] } : null,
-      ].filter(Boolean);
-      counts.push(cell([{ text: `${item.count} ${item.stage}`, styles: item.count ? tone(item.stage) : ['grey'] }, ...flags])
-        + (index === row.length - 1 ? '' : c('▶', 'grey')));
-      const shown = [];
-      let used = 0;
-      for (const { mark, count, styles } of item.marks) {
-        if (!count) continue;
-        const sep = used ? 1 : 0;
-        // Marks up to the room; past it, the marks that fit and the count.
-        const fits = used + sep + count <= inner;
-        const text = fits ? mark.repeat(count) : `${mark}×${count}`;
-        shown.push({ text: `${sep ? ' ' : ''}${text}`, styles });
-        used += sep + text.length;
-      }
-      marks.push(cell(shown) + arrow);
-    });
-    for (const line of [top, counts, marks, bottom]) lines.push(`  ${line.join('')}`);
+  const fits = (rows, arrow) => rows.every((group) => group.reduce((n, box) => n + box.width, 0)
+    + arrow.length * (group.length - 1) <= room);
+  let rows = [boxes];
+  let arrow = ARROW.wide;
+  if (!fits(rows, arrow)) {
+    arrow = ARROW.narrow;
+    if (!fits(rows, arrow)) {
+      const half = Math.ceil(boxes.length / 2);
+      rows = [boxes.slice(0, half), boxes.slice(half)];
+      arrow = fits(rows, ARROW.wide) ? ARROW.wide : ARROW.narrow;
+    }
+  }
+  const blank = ' '.repeat(arrow.length);
+  const along = (group, pick, sep) => group.map((box, index) => (index ? sep : '') + pick(box)).join('');
+  for (const group of rows) {
+    // Only the count row carries the arrows; the other rows keep their place.
+    lines.push(`  ${along(group, (box) => box.top, blank)}`);
+    lines.push(`  ${along(group, (box) => box.counts, raw(arrow, 'grey'))}`);
+    lines.push(`  ${along(group, (box) => box.marks, blank)}`);
+    lines.push(`  ${along(group, (box) => box.bottom, blank)}`);
   }
 }
 
@@ -873,7 +905,7 @@ export function renderPageLines(data, {
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
 
-  headerLines(lines, c, wide, data, version);
+  headerLines(lines, c, paintText, wide, data, version);
   const managers = data.sessions?.desk_sessions?.manager
     || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
   for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
