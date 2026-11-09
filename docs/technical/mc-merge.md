@@ -85,7 +85,7 @@ seventeen minutes. A deploy and an iOS build hold memoro's lane. A refusal and
 the page name the lane they wait on.
 
 **Every gate round has a repository ceiling.** `round_timeout_ms` and its
-`round_timeout_why` live in `repo-gate-table.js`: 15 minutes for memoro and 15
+`round_timeout_why` live in `repo-gate-table.js`: 20 minutes for memoro and 15
 minutes for memoro-cli (whose whole suite measured 128 s on 2026-11-01, and
 247 s, 273 s quiet and 568 s under load on 2026-11-03; a 5 minute ceiling made
 ordinary-load rounds red). The deadline bounds the complete round, from the
@@ -110,6 +110,26 @@ incomplete test requests contribute unfinished files: a command-gate timeout
 cannot relabel the already-completed selection as unfinished. Own-test
 requests are tracked separately and name their own pending files.
 
+## Mend eligibility independent of goals
+
+Martin, 2026-11-09: merge recovery is attached to the failed PR and repository,
+not restricted to a goal. A failed eligible merge must be recoverable by mend
+whether it came from a goal, interactive planning, Manager or a direct merge
+request. Goal metadata supplies additional contract and lifecycle context;
+its absence must not suppress recovery or require inventing a goal.
+
+Use the PR's one existing checkout and exact failed revision, preserve its
+author's intent, establish acceptance for the repaired final tree and requeue
+through the ordinary merger. Preserve existing capacity/provider routing,
+retry limits, reserved-act restrictions and stopped/closed PR safety. A goal
+and a PR recovery must never acquire concurrent ownership of the same branch.
+For a PR without a goal, retain recovery attempts, logs and outcome against
+the repository/PR identity. Failed command gates need their command identity
+and diagnostic evidence even when no Node red file was reported.
+
+This decision supersedes goal-only eligibility below. It specifies required
+behaviour; the existing goal-only runner is not evidence of implementation.
+
 ## Reuse the existing checkout
 
 Martin, 2026-11-08: a merge must reuse the checkout the work already has;
@@ -123,6 +143,16 @@ untracked files), no unfinished Git operation, and complete process cwd
 evidence that nobody else is working there. A synchronous requesting process
 and its waiting ancestors may hand over their own checkout. A missing, dirty, busy or mismatched
 checkout stops with its reason; it never triggers another checkout.
+
+Keep the existing branch checkout while its PR remains open, including after
+publication without queue admission and after failed acceptance. A pushed branch
+is recoverable source, but it is not a checkout the merger can borrow. Manual
+cleanup must use the same open-PR retention boundary as tidy; disk pressure does
+not authorize deleting an open PR's only checkout. After landing or closing,
+normal safe cleanup applies. If an earlier cleanup already removed it, delivery
+repair may restore that same branch at its original path after checking the
+pushed head and that no other checkout holds it. This restores the original
+working area; the merger still never creates another measurement checkout.
 
 The measurement temporarily detaches HEAD in that directory, merges the
 current fetched base, prepares and tests that combined tree, then returns to
@@ -905,7 +935,7 @@ is not an exception the round grants or detects.
 and each hook from when it starts. It does not bound a file's startup (module
 loading, top-level `await`), which is outside every callback clock, nor the
 whole file, batch or round: those are the round's ceiling (`round_timeout_ms`,
-15 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
+20 minutes for memoro) and the stall guard for the run. Synchronous JavaScript
 that does not yield cannot be interrupted by any timer, so a blocked callback is
 measured as long as it ran, not cut at its limit. None of these is an absolute
 synchronous CPU cap, and no repository scanner enforces that every explicit

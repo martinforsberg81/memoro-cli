@@ -16,8 +16,12 @@ with ✓/✗ and its check, and each worktree's state.
   <p>/<g> --criterion "…" --check "…"`. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
   it back. Every write is validated; an invalid one is refused and not written.
-  `mc goal criterion set <p>/<g> <n> [--criterion "…"] [--check "…"]` rewrites a criterion's text or check and leaves it unmet, logged with the old and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin may.
-  `mc goal criterion remove <p>/<g> <n> --reason "…"` takes criterion `n` out, the later ones move up one number, and the removed text, check, met state and reason are logged; a goal session cannot, but interactive Martin may.
+  `mc goal criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`
+  rewrites a criterion's text or check and leaves it unmet, logged with the old
+  and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin may.
+  `mc goal criterion remove [<p>/<g>] <n> --reason "…"` takes criterion `n`
+  out, the later ones move up one number, and the removed text, check, met state
+  and reason are logged; a goal session cannot, but interactive Martin may.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the

@@ -33,6 +33,11 @@ and its `index.lock` are every session's at once.
   A force-push rewrites what another session or the merger may already hold;
   when one is meant (a rebased stack), `--force-with-lease` with
   `MC_HOOK_ALLOW=1`. `main` changes only through a merge.
+- **Keep an open PR's checkout.** Publication, a pushed head and failed gates
+  are not completion. Retain its existing branch checkout until the PR lands
+  or closes, including manual disk cleanup: the merger must borrow that tree.
+  If it was already removed, inspect the branch/head and restore its original
+  path once; never create a second checkout for a merge measurement.
 - **Removing a branch or a worktree.** Check first, then do it:
   `git worktree list` shows no worktree holding the branch (git refuses
   otherwise), and `git cherry origin/main <branch>` lists nothing, or each `+`

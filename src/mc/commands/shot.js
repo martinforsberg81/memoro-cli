@@ -97,6 +97,25 @@ function refuseShot({ flags, positional }) {
   return null;
 }
 
+/**
+ * The flag a public target does not take, said in one line, or null. A public
+ * page is pictured signed out, in the locale its URL carries, and not kept.
+ */
+function refusePublic(flags, entry) {
+  const signedOut = 'a public page is pictured signed out';
+  const refusals = [
+    ['account', signedOut],
+    ['onboarding', signedOut],
+    ['locale', `the URL carries the locale (${entry.path})`],
+    ['shell', 'a public page has no app shell'],
+    ['me', signedOut],
+    ['keep', 'a public target is pictured, not kept'],
+    ['compare', 'a public page is not compared across trees'],
+  ];
+  const hit = refusals.find(([name]) => flags[name]);
+  return hit ? `--${hit[0]} is not for a public target — ${hit[1]}` : null;
+}
+
 function refuseAccount(verb, { positional }) {
   const [where, ...extra] = positional;
   return where !== 'prod' || extra.length ? `mc shot ${verb} is for prod only — a dev server signs in through /dev/login` : null;
@@ -176,7 +195,13 @@ export async function run(argv, deps = {}) {
   const target = resolveTarget(word, declared);
   if (!target.ok) { stderr.write(`mc: ${target.error}\n`); return 2; }
   const entry = target.target.name ? (declared.targets.find((item) => item.name === target.target.name) ?? null) : null;
-  const viewport = parseViewport(flags.viewport, declared);
+  const isPublic = target.public === true;
+  if (isPublic) {
+    // Refused before a server or a token: a public page is pictured signed out, in its URL's locale.
+    const flag = refusePublic(flags, entry);
+    if (flag) { stderr.write(`mc: ${flag}\n`); return 2; }
+  }
+  const viewport = parseViewport(flags.viewport ?? (isPublic ? entry.viewport : undefined), declared);
   if (!viewport.ok) { stderr.write(`mc: ${viewport.error}\n`); return 2; }
 
   const read = readDeclaration(worktree);
@@ -195,7 +220,23 @@ export async function run(argv, deps = {}) {
   let resolved = null;
   let compareSelection = null;
   const secrets = [];
-  if (where === 'dev') {
+  if (isPublic) {
+    // A public page signs nobody in: no /dev/login, no token, no session.
+    who = null;
+    signIn = { kind: 'none' };
+    if (where === 'dev') {
+      const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
+      if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
+      baseUrl = app.baseUrl;
+      serverTiming = app.timing ?? { slot_wait_ms: 0, server_ms: 0 };
+      served = (deps.servedTree || servedTree)(worktree, app.server);
+      serverId = app.server?.instance_id ?? null;
+      if (!flags.json) stderr.write(`mc: serving ${served.line}\n`);
+    } else {
+      baseUrl = prodBase(declaration);
+      if (!baseUrl) { stderr.write(`mc: ${worktree} declares no production base_url\n`); return 1; }
+    }
+  } else if (where === 'dev') {
     // Refused before a server is started, so a wrong name costs no server.
     resolved = resolveAccount(declared, { account: flags.account, onboarding: flags.onboarding, entry });
     if (!resolved.ok) { stderr.write(`mc: ${resolved.error}\n`); return 2; }
@@ -262,6 +303,7 @@ export async function run(argv, deps = {}) {
     onboarding: resolved?.state === 'fresh',
     actions: acting.actions,
     timeoutMs: timeout.timeoutMs,
+    public: isPublic,
   });
   const scrub = scrubber(secrets);
   if (flags.keep) {

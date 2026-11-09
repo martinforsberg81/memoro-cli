@@ -167,9 +167,11 @@ Next: what the next session should do
   minute; `<tool>` is `MC_TOOL`, `person` or `runner`; `<model>` is `MC_MODEL`
   when set; `<stage> · <status>` is where the goal is after the entry. An entry
   written before stages has `· <status>` alone, and is read with no stage.
-  `· by <role>` names the session that wrote it, from `MC_ROLE`: `build`, `review`,
-  `plan`, `manager`, else the role's name before its `:`. A person's entry, or one
-  with no `MC_ROLE`, has none; so does a runner's. It is not the stage: a build
+  `· by <role>` names the writer from `MC_ROLE` alone: `build`, `review`,
+  `plan`, `manager`, else the role's name before its `:`. `MC_TOOL=person` or an
+  unset `MC_TOOL` does not suppress it; no role, or a word containing whitespace,
+  writes none. This attribution does not change stage/person authorization.
+  It is not the stage: a build
   session that moves a goal to `review` writes `· review · ready · by build`.
 - The labels are `Done:`, `Comment:` and `Next:`, in English like the rest of
   the goal. A log written before 2026-11-03 has `Gjort:`, `Kommentar:` and
@@ -218,6 +220,14 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
   as holding, after its check was run, or takes it back. A number the goal
   has no criterion for is refused.
+- **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`** — rewrites
+  the criterion's text or check and leaves it unmet, logging the old and new
+  text. A build, review, finish or mend role is refused, from `MC_ROLE` alone.
+- **`criterion remove [<p>/<g>] <n> --reason "…"`** — removes the criterion and
+  renumbers those after it, logging its text, check, met state and reason.
+  The same goal-session roles are refused; the only criterion cannot be removed.
+  A criterion verb's refusal of its arguments exits 2 and writes nothing;
+  a missing or unparsable GOAL.json remains exit 1.
 - **`convert [<p>]`** — turns every goal of the programme (of every programme
   when none is named) still written as GOAL.md into GOAL.json (*Converting a
   GOAL.md*), then gives every goal still written with `after` its phase
@@ -299,7 +309,9 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   nor one with uncommitted changes `--keep` will not carry; each repository
   says which (`remade from origin/main — it had no commits of its own, and
   main has 12 more`, `left as it is — 3 commits of its own`), and nothing
-  here fails the move (`remakeUnbuiltBranches`, `goals.js`).
+  here fails the move (`remakeUnbuiltBranches`, `goals.js`). A repository
+  without a worktree says `no worktree yet — the runner remakes the branch
+  from origin/main at the first session`; it makes no git call.
 - **Forward only, each stage its owner, except interactive Martin** (`refusedMove`). A session is a
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. Ordinary sessions cannot move a
   stage backward. A person or interactive `MC_ROLE=martin` may; the entry names

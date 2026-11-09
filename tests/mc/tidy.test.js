@@ -140,6 +140,8 @@ function machine() {
     cwds: [{ pid: 1, cwd: '/' }],
     released: [],
     pruned: [],
+    fetches: [],
+    fetchFails: false,
   };
   m.write = (path, text = 'x', at = OLD) => {
     mkdirSync(join(path, '..'), { recursive: true });
@@ -533,7 +535,7 @@ function layout2(m) {
 }
 
 /** A registered, synthetic goal worktree and the Git/process answers it needs. */
-function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', cwd = '/', open = [], registration = true, metadata = null } = {}) {
+function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', recent = false, ignored = '', dirty = '', own = '0', pushed = null, advertised = pushed !== null, cwd = '/', open = [], registration = true, metadata = null } = {}) {
   layout2(m);
   const dir = join(m.work, 'programs', 'mc', 'goals', name);
   const path = join(dir, 'memoro');
@@ -545,17 +547,27 @@ function planGoalTree(m, { name = 'draft', stage = 'draft', status = 'ready', re
   m.write(join(path, '.git'), 'gitdir: /fake/admin/worktrees/draft\n', recent ? NOW : OLD);
   ageTree(dir, recent ? NOW : OLD);
   m.planGoalStates ||= new Map();
-  m.planGoalStates.set(path, { name, owner, ignored, dirty, own, cwd, open, registration, branch: `goal/${name}`, head: 'a'.repeat(40) });
+  m.planGoalStates.set(path, { name, owner, ignored, dirty, own, pushed, advertised, cwd, open, registration, branch: `goal/${name}`, head: 'a'.repeat(40) });
   m.cwds = [{ pid: 1, cwd: '/' }, ...[...m.planGoalStates.values()].filter((state) => state.cwd !== '/').map((state, index) => ({ pid: 9001 + index, cwd: state.cwd }))];
   const prior = m.git;
   const git = (at, args) => {
+    if (args[0] === 'fetch') { m.fetches.push([at, ...args]); return m.fetchFails ? null : ''; }
     if (at === owner && args[0] === 'worktree' && args[1] === 'list') return `${owner}\n` + [...m.planGoalStates.values()].filter((state) => state.registration).map((state) => `worktree ${join(m.work, 'programs', 'mc', 'goals', state.name, 'memoro')}\nHEAD ${'a'.repeat(40)}\n`).join('\n');
+    if (at === owner && args[0] === 'ls-remote') {
+      const state = [...m.planGoalStates.values()].find((candidate) => args.at(-1) === `refs/heads/goal/${candidate.name}`);
+      return state?.advertised ? `${'a'.repeat(40)}\trefs/heads/goal/${state.name}\n` : null;
+    }
     const state = m.planGoalStates.get(at);
     if (state && args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return state.branch;
     if (state && args[0] === 'rev-parse' && args.includes('HEAD')) return state.head;
     if (state && args[0] === 'rev-parse' && args.includes('--git-common-dir')) return owner;
     if (state && args[0] === 'status') return args.includes('--ignored=matching') ? state.ignored : state.dirty;
-    if (state && args[0] === 'rev-list') return state.own;
+    if (state && args[0] === 'rev-list') {
+      // Ahead of origin/main by `own`; on origin/goal/<name> by `pushed` (null: no such remote branch).
+      if (args.includes('origin/main..HEAD')) return state.own;
+      if (args.includes(`origin/goal/${state.name}..HEAD`)) return state.pushed;
+      return null;
+    }
     return prior(at, args);
   };
   return {
@@ -728,13 +740,75 @@ describe('(P) automatic plan goal worktree release', () => {
       m.write(join(attached.path, 'node_modules', '.memoro-deps.json'), '{}\n', OLD);
       ageTree(attached.dir, OLD);
       const unmarked = planGoalTree(m, { name: 'unmarked', ignored: '!! node_modules/\n' });
-      const mixed = planGoalTree(m, { name: 'mixed', ignored: '!! node_modules/\n!! .wrangler/\n' });
+      const mixed = planGoalTree(m, { name: 'mixed', ignored: '!! node_modules/\n!! .mc/local.json\n' });
       m.write(join(mixed.path, 'node_modules', '.memoro-deps.json'), '{}\n', OLD);
       ageTree(mixed.dir, OLD);
       const facts = runTidy(attached.doors()).list;
       assert.deepEqual(facts.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), [attached.path]);
       assert.match(keptOf(facts, unmarked.path).why, /ignored files \(node_modules\/\)/u);
-      assert.match(keptOf(facts, mixed.path).why, /ignored files \(\.wrangler\/\)/u);
+      assert.match(keptOf(facts, mixed.path).why, /ignored files \(\.mc\/local\.json\)/u);
+    } finally { m.cleanup(); }
+  });
+
+  it('a checkout whose commits beyond origin/main are all on its pushed branch is released after one fetch of its owning repository; unpushed commits keep it', () => {
+    const m = machine();
+    try {
+      const pushed = planGoalTree(m, { name: 'pushed', own: '2', pushed: '0' });
+      const unpushed = planGoalTree(m, { name: 'unpushed', own: '2', pushed: '1' });
+      const preview = runTidy(pushed.doors());
+      assert.deepEqual(paths(ruled(preview.list, 'P')), [pushed.path], JSON.stringify(preview.list.kept.filter((item) => item.path.includes('/goals/'))));
+      assert.match(preview.list.targets.find((item) => item.path === pushed.path).why, /2 commits, all on origin\/goal\//u);
+      assert.match(keptOf(preview.list, unpushed.path).why, /commits beyond origin\/main \(2\) that are not on origin\/goal\//u);
+      assert.deepEqual(m.fetches, [[pushed.owner, 'fetch', '-q', 'origin']], 'one fetch, at the owning repository and in no checkout');
+      const applied = applyTidy({ listPath: preview.listPath, ...pushed.doors() });
+      assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[pushed.path, true]], JSON.stringify(applied.applied));
+      assert.deepEqual(m.released, [pushed.path], 'the pushed checkout leaves through the worktree door');
+      assert.equal(existsSync(unpushed.path), true);
+    } finally { m.cleanup(); }
+  });
+
+  it('a fetch that fails keeps an ahead checkout and says so, and a checkout with nothing beyond origin/main needs no fetch', () => {
+    const m = machine();
+    try {
+      const ahead = planGoalTree(m, { name: 'ahead', own: '1', pushed: '0' });
+      m.fetchFails = true;
+      const failed = runTidy(ahead.doors()).list;
+      assert.deepEqual(ruled(failed, 'P'), []);
+      assert.match(keptOf(failed, ahead.path).why, /commits beyond origin\/main \(1\) and the fetch of origin failed/u, 'a remote branch that says 0 is no evidence once the fetch failed');
+      assert.equal(m.fetches.length, 1);
+    } finally { m.cleanup(); }
+    const quiet = machine();
+    try {
+      const level = planGoalTree(quiet, { name: 'level', own: '0' });
+      assert.deepEqual(paths(ruled(runTidy(level.doors()).list, 'P')), [level.path]);
+      assert.deepEqual(quiet.fetches, [], 'nothing beyond origin/main, so no fetch');
+    } finally { quiet.cleanup(); }
+  });
+
+  it('a stale tracking ref does not prove that the pushed branch still exists on origin', () => {
+    const m = machine();
+    try {
+      const stale = planGoalTree(m, { name: 'stale', own: '1', pushed: '0', advertised: false });
+      const facts = runTidy(stale.doors()).list;
+      assert.deepEqual(ruled(facts, 'P'), []);
+      assert.match(keptOf(facts, stale.path).why, /commits beyond origin\/main \(1\) that are not on origin\/goal\/stale/u);
+      assert.deepEqual(m.fetches, [[stale.owner, 'fetch', '-q', 'origin']]);
+    } finally { m.cleanup(); }
+  });
+
+  it('rebuildable ignored residue does not keep a checkout, and any other ignored entry still does', () => {
+    const m = machine();
+    try {
+      const residue = planGoalTree(m, { name: 'residue', ignored: ['!! .venv-fonts/', '!! .wrangler/', '!! node_modules/', '!! public/dist/', '!! scripts/dev/local-schema.sql', '!! scripts/x/__pycache__/', '!! __pycache__/'].join('\n') + '\n' });
+      m.write(join(residue.path, 'node_modules', '.memoro-deps.json'), '{}\n', OLD);
+      ageTree(residue.dir, OLD);
+      const local = planGoalTree(m, { name: 'local', ignored: '!! .wrangler/\n!! .mc/local.json\n' });
+      const venv = planGoalTree(m, { name: 'venv', ignored: '!! scripts/admin/_venv/\n' });
+      const facts = runTidy(residue.doors()).list;
+      assert.deepEqual(paths(ruled(facts, 'P')), [residue.path], JSON.stringify(facts.kept.filter((item) => item.path.includes('/goals/'))));
+      assert.match(keptOf(facts, local.path).why, /ignored files \(\.mc\/local\.json\)$/u);
+      assert.doesNotMatch(keptOf(facts, local.path).why, /wrangler/u, 'the residue entry is not named');
+      assert.match(keptOf(facts, venv.path).why, /ignored files \(scripts\/admin\/_venv\/\)$/u);
     } finally { m.cleanup(); }
   });
 
@@ -856,6 +930,73 @@ describe('(P) goal checkouts that cannot start a session now: Martin, a later ph
       assert.deepEqual([again.ok, again.existed, again.branch], [true, true, 'goal/real']);
       assert.equal(run(path, ['rev-parse', 'HEAD']).stdout.trim(), head, 'the same HEAD');
       assert.equal(run(path, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim(), 'goal/real');
+    } finally { m.cleanup(); }
+  });
+
+  it('a modeled checkout with a commit pushed to origin/goal/<goal> is released, and its branch with the commit stays', () => {
+    const m = machine();
+    try {
+      layout2(m);
+      const run = (cwd, args) => spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } });
+      const origin = join(m.home, 'origin.git');
+      const seed = join(m.home, 'seed');
+      const owner = join(m.home, 'repos', 'memoro');
+      const goals = join(m.work, 'programs', 'mc', 'goals');
+      mkdirSync(seed, { recursive: true });
+      run(seed, ['init', '-q', '-b', 'main']);
+      writeFileSync(join(seed, 'README.md'), 'a repository\n');
+      run(seed, ['add', 'README.md']);
+      run(seed, ['commit', '-q', '-m', 'first']);
+      run(m.home, ['clone', '-q', '--bare', seed, origin]);
+      run(m.home, ['clone', '-q', origin, owner]);
+      goal(m, 'lowest', 'build');
+      // A goal checkout from origin/main on goal/<name>, as addGoalWorktree makes it.
+      const checkout = (name) => {
+        m.write(join(goals, name, 'GOAL.json'), goalJson({ stage: 'build', status: 'ready', phase: 2, repos: ['memoro'] }), OLD);
+        m.write(join(goals, name, 'LOG.md'), '# Goal\n', OLD);
+        const path = join(goals, name, 'memoro');
+        assert.equal(run(owner, ['worktree', 'add', '-q', '-b', `goal/${name}`, path, 'origin/main']).status, 0);
+        return path;
+      };
+      const commit = (path, file) => {
+        writeFileSync(join(path, file), `${file}\n`);
+        assert.equal(run(path, ['add', file]).status, 0);
+        assert.equal(run(path, ['commit', '-q', '-m', file]).status, 0);
+        return run(path, ['rev-parse', 'HEAD']).stdout.trim();
+      };
+      // `real` has its one commit pushed; `unpushed` has one pushed and one that is not.
+      const real = checkout('real');
+      const pushedHead = commit(real, 'pushed.txt');
+      assert.equal(run(real, ['push', '-q', 'origin', 'goal/real']).status, 0);
+      const unpushed = checkout('unpushed');
+      commit(unpushed, 'first.txt');
+      assert.equal(run(unpushed, ['push', '-q', 'origin', 'goal/unpushed']).status, 0);
+      commit(unpushed, 'second.txt');
+      ageEverything(join(goals, 'real'), OLD);
+      ageEverything(join(goals, 'unpushed'), OLD);
+      const doors = m.doors({
+        repos: [{ name: 'memoro', path: owner }],
+        git: (cwd, args) => { const r = run(cwd, args); return r.status === 0 ? r.stdout : null; },
+        openIn: () => [],
+        goalWorktreeLock: (fn) => fn(),
+        removeWorktree: (repo, target) => run(repo, ['worktree', 'remove', target]).status === 0,
+      });
+      const preview = runTidy(doors);
+      assert.deepEqual(paths(ruled(preview.list, 'P')), [real], JSON.stringify(preview.list.kept.filter((item) => item.path.includes('/goals/'))));
+      assert.match(preview.list.targets.find((item) => item.path === real).why, /1 commit, all on origin\/goal\/real/u);
+      assert.match(keptOf(preview.list, unpushed).why, /commits beyond origin\/main \(2\) that are not on origin\/goal\/unpushed/u);
+      const applied = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.deepEqual(applied.applied.map((item) => [item.path, item.ok]), [[real, true]], JSON.stringify(applied.applied));
+      assert.equal(existsSync(real), false, 'the checkout is gone');
+      const ref = run(owner, ['show-ref', '--verify', 'refs/heads/goal/real']);
+      assert.equal(ref.status, 0, 'the branch stays');
+      assert.ok(ref.stdout.startsWith(pushedHead), 'and still names the pushed commit');
+      const again = addGoalWorktree({
+        git: (cwd, args) => { const r = run(cwd, args); return { ok: r.status === 0, stdout: r.stdout, stderr: r.stderr }; },
+        bare: owner, path: real, goal: 'real',
+      });
+      assert.deepEqual([again.ok, again.existed, again.branch], [true, true, 'goal/real']);
+      assert.equal(run(real, ['rev-parse', 'HEAD']).stdout.trim(), pushedHead, 'the same HEAD');
     } finally { m.cleanup(); }
   });
 });

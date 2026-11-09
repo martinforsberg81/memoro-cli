@@ -651,12 +651,14 @@ export function goalBranch({ git, dir, goal, repo }) {
  * `origin/main` — is moved to `origin/main` as it is now, which is that branch
  * made again. A branch with commits is never moved, nor one under uncommitted
  * changes `git reset --keep` will not carry. `say(repo, text)` is told what
- * happened per repository; nothing here fails.
+ * happened per repository; nothing here fails. The verb supplies `exists` for
+ * a goal without a checkout; the runner has already placed its worktrees.
  */
-export function remakeUnbuiltBranches({ git, dir, goal, repos, say }) {
+export function remakeUnbuiltBranches({ git, dir, goal, repos, say, exists }) {
   for (const repo of repos) {
     const path = join(dir, repo);
     const tell = (text) => say(repo, `goal/${goal} ${text}`);
+    if (exists && !exists(path)) { tell('no worktree yet — the runner remakes the branch from origin/main at the first session'); continue; }
     const fetched = git(path, ['fetch', '-q', 'origin']);
     if (!fetched.ok) { tell(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
     const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
@@ -787,7 +789,7 @@ export function setGoalState({ dir, stage, status, entry, read = readTextOrNull,
 
 /**
  * Changes a goal's GOAL.json by `change(goal)`, which returns the goal as it
- * is to be, or `{ problems }` to refuse. The result is validated before it is
+ * is to be, or `{ problems, code, prefix }` to refuse. The result is validated before it is
  * written, so an invalid GOAL.json is never written. Returns `{ goal }` or
  * `{ problems }`.
  */
@@ -798,7 +800,7 @@ export function updateGoal({ dir, change, read = readTextOrNull, write = writeFi
   const parsed = parseGoal(text);
   if (parsed.problems) return { problems: parsed.problems };
   const next = change(parsed);
-  if (next?.problems) return { problems: next.problems };
+  if (next?.problems) return { problems: next.problems, code: next.code, prefix: next.prefix };
   let rendered;
   try { rendered = renderGoal(next); } catch (error) { return { problems: [error.message] }; }
   write(path, rendered);

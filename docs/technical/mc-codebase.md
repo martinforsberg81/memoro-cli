@@ -44,11 +44,19 @@ its last row should read `0%`.
 - Test strategy and construction: read the mc task reference (source:
   [`canon/tasks/writing-tests.md`](../../canon/tasks/writing-tests.md)).
   Test authority is assigned by the canonical session roles.
-- Tests mirror `src/` under `tests/`. `tests/_isolate-home.mjs` answers every
-  git a test spawns from the model in `tests/mc/_helpers/fake-git.js`; a file
-  that reaches real git ends red, with no exemptions. The model proves mc's
-  decisions against modelled answers, not git's merge/conflict/hook semantics.
-  The production merge round remains the check of git semantics.
+- Tests mirror `src/` under `tests/`. Routine suites model Git through
+  `tests/_isolate-home.mjs` and `tests/mc/_helpers/fake-git.js` instead of
+  making repeated real Git calls. Martin clarified on 2026-11-09 that this
+  policy removes unnecessary process cost, not meaningful proof of Git's own
+  behaviour. A model proves mc's decisions against modeled answers; it
+  cannot prove Git's merge, conflict, hook or worktree semantics.
+  When a goal explicitly commissions such proof, use a bounded isolated
+  local-Git fixture and record its calls, wall time and results separately.
+  The current gate harness still models Git and refuses real Git; run the
+  commissioned independent probe outside that harness, with scratch-only
+  repositories, `MC_HOME` and `MC_WORK_ROOT`, and no network or live state.
+  This does not authorize repeated real-Git fixtures across routine suites,
+  a new integration lane or an incidental change to the shared harness.
 - `src/adapters/index.js` is the launch adapter every verb that starts a tool
   goes through (`resolveLaunch`), so no verb spells out `claude` or `codex`.
 - Don't add a verb nothing reaches, or leave a module nothing reaches. Don't

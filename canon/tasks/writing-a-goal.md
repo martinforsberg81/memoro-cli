@@ -4,8 +4,7 @@ description: Writing or changing a goal's GOAL.json with the mc goal verbs — n
 ---
 # Writing a goal with `mc goal`
 
-A goal is written through the verbs; the files are mc's. It is instructions for a headless build
-session that has read nothing else, with nobody watching: can that session build it start to finish,
+A goal is written through the verbs; the files are mc's. It is instructions for a headless build session that has read nothing else, with nobody watching: can that session build it start to finish,
 and know when it is done? If not, it is not a goal yet.
 
 1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class
@@ -32,16 +31,17 @@ renumbered; a `draft` goal holds later phases back too. The cut into goals and p
   success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits
   on others waits in `build` in a later phase, not in `draft`; policy and acceptance come first.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable
-  commands, working directory, prerequisites and expected results. For reports, specify reconciliation
-  and evidence; a file, keyword or green gate alone does not prove content. No check waits for Martin;
-  put policy choices in planning, not acceptance.
+  commands, working directory, prerequisites and expected results. For branch comparisons, use
+  `git diff origin/main...HEAD`; for reports, specify reconciliation and evidence. A file, keyword
+  or green gate alone does not prove content. No check waits for Martin; put policy choices in
+  planning, not acceptance.
 - **Evidence:** distinguish measured, historical and missing proof. Record revision, scope and logs;
   partial, skipped or unavailable evidence is not green. Mark criteria met only after the whole check
   holds. Follow writing-tests.md for costs; moving work between clocks is not a saving.
-- **Live evidence:** a live check (app, browser) gives its command, prerequisites and a wall-time
-  ceiling per run; never a run count, stage allocation, reserved run or a condition on the
-  machine's load: a check that holds only on a quiet machine is a defect to repair. Any session
-  reruns a check after a change or a diagnosis; a failed run is evidence, not budget spent.
+- **Live evidence:** a live check (app, browser) gives its command and prerequisites; read the
+  ceiling from evidence: the verdict's wall time is under N s, not enforced by a wrapper. Do not
+  set a run count, stage allocation, reserved run or load condition: a check that holds only on a quiet
+  machine is a defect to repair. Rerun after a change or diagnosis; failure is evidence, not budget.
 - **Standards:** list the `docs/technical/` documents it holds to; criteria apply them, never set new.
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build.
 - **Test protection:** name protected behaviours, failure consequences, the

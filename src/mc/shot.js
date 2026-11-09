@@ -53,7 +53,34 @@ export function readShotDeclaration(worktree) {
   if (declaration.targets !== undefined && !Array.isArray(declaration.targets)) {
     return { ok: false, error: `${path}: targets is a list of { name, path }` };
   }
+  const publicError = (declaration.targets || [])
+    .map((target, index) => publicTargetError(target, index, declaration.viewports || {}))
+    .find(Boolean);
+  if (publicError) return { ok: false, error: `${path}: ${publicError}` };
   return { ok: true, declaration: { targets: [], viewports: {}, ...declaration } };
+}
+
+const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+/**
+ * What is wrong with a target declared `"public": true`, or null: a public
+ * page is loaded by its own URL, signed out, so its `path` is outside /app and
+ * /admin; `locale`, `viewport` and `settled` are optional.
+ */
+function publicTargetError(target, index, viewports) {
+  if (target?.public !== true) return null;
+  const at = `targets[${index}] public target`;
+  const { path } = target;
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('/app') || isAdminPath(path)) {
+    return `${at} needs a path outside /app and /admin`;
+  }
+  if (!nonEmptyString(target.name)) return `${at} needs a name`;
+  if (target.locale !== undefined && !nonEmptyString(target.locale)) return `${at} locale is a non-empty string`;
+  if (target.viewport !== undefined && !Object.hasOwn(viewports, target.viewport)) {
+    return `${at} viewport is one of the declared viewports: ${Object.keys(viewports).join(', ') || '(none declared)'}`;
+  }
+  if (target.settled !== undefined && !nonEmptyString(target.settled)) return `${at} settled is a non-empty CSS selector`;
+  return null;
 }
 
 /**
@@ -83,12 +110,31 @@ export function isAdminPath(value) {
   return value === '/admin' || String(value).startsWith('/admin/');
 }
 
-/** A path under /app or /admin as given, or a declared target name; an unknown name lists the known ones. */
+/**
+ * A path under /app or /admin as given, or a declared target name; an unknown
+ * name lists the known ones. Any other path is a public page, and only one
+ * `.mc/shot.json` declares with `"public": true` and exactly that path is
+ * pictured — by its name, and with `public: true` said, as a public target's
+ * name is.
+ */
 export function resolveTarget(word, declaration) {
   const value = String(word || '');
   if (value.startsWith('/app') || isAdminPath(value)) return { ok: true, target: { path: value }, label: slug(value) };
-  const names = (declaration.targets || []).map((target) => target.name);
-  if (names.includes(value)) return { ok: true, target: { name: value }, label: slug(value) };
+  const targets = declaration.targets || [];
+  const names = targets.map((target) => target.name);
+  if (value.startsWith('/')) {
+    const declared = targets.find((target) => target?.public === true && target.path === value);
+    if (declared) return { ok: true, target: { name: declared.name }, label: slug(value), public: true };
+    return {
+      ok: false,
+      error: `no public target at ${value} — a public page is pictured only when .mc/shot.json declares it `
+        + `(targets[] with "public": true); a path under /app or /admin, or one of: ${names.join(', ') || '(none declared)'}`,
+    };
+  }
+  if (names.includes(value)) {
+    const isPublic = targets.find((target) => target.name === value)?.public === true;
+    return { ok: true, target: { name: value }, label: slug(value), ...(isPublic ? { public: true } : {}) };
+  }
   return {
     ok: false,
     error: `no target called ${value} — a path under /app or /admin, or one of: ${names.join(', ') || '(none declared)'}`,
@@ -380,16 +426,26 @@ export function outPath({
  * The capture request, in the shape the contract fixes. `actions` is every
  * acting flag in order, or null. `click` is the plain presses for a script that
  * knows only those: the same selectors when every action is a click, else null.
+ * A public target is pictured signed out and in its URL's own locale:
+ * `sign_in: { kind: "none" }`, no `account` at all, and `locale: null`.
  */
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
   theme = null, locale = null, out, safeArea = null, scroll = null, measure = null,
-  onboarding = false, click = null, actions = null, timeoutMs = null,
+  onboarding = false, click = null, actions = null, timeoutMs = null, public: isPublic = false,
 }) {
   const acts = Array.isArray(actions) && actions.length ? actions.map((a) => ({ ...a })) : null;
   const plain = acts
     ? (acts.every((a) => a.kind === 'click') ? acts.map((a) => a.selector) : null)
     : (Array.isArray(click) && click.length ? [...click] : null);
+  if (isPublic) {
+    const signedOut = buildRequest({
+      baseUrl, account: null, signIn: { kind: 'none' }, target, element, shell: null, full, viewport, theme,
+      locale: null, out, safeArea, scroll, measure, onboarding: false, click, actions, timeoutMs,
+    });
+    delete signedOut.account;
+    return signedOut;
+  }
   return {
     mode: 'capture',
     base_url: baseUrl,

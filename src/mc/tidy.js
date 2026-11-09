@@ -38,11 +38,14 @@
  *     (younger only in pressure) when its goal cannot start a build or review
  *     session now: in `stage: draft`, or with `status: Martin`, or in a phase
  *     above its programme's lowest unfinished phase (`phaseOpen`). A goal with
- *     `status: blocked` keeps its checkout. Clean means no tracked, untracked
- *     or ignored entry, except the `node_modules/` dependency link the runner
- *     attaches (it carries `.memoro-deps.json` and is re-attached at the next
- *     session); any other ignored entry keeps the checkout. Its branch and goal directory stay,
- *     and the runner re-adds the checkout on that branch when it next needs it.
+ *     `status: blocked` keeps its checkout. Clean means no tracked or untracked
+ *     entry, and its ignored entries are only the `node_modules/` dependency
+ *     link the runner attaches (it carries `.memoro-deps.json`) and the
+ *     rebuildable residue of a memoro dev server; any other ignored entry keeps
+ *     the checkout. Commits beyond `origin/main` are released only when every
+ *     one is on `origin/goal/<goal>` after a fetch of origin in the owning
+ *     repository; a failed fetch keeps. Its branch and goal directory stay, and
+ *     the runner re-adds the checkout on that branch when it next needs it.
  *   - (K) A slug directory under `~/mc/gate-cache/`, `~/mc/gate/` or
  *     `~/.memoro/mc/selection/` that no repository mc knows hashes to — a
  *     repository's path moved and left it — goes when untouched for a day and no
@@ -511,6 +514,7 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
   const addError = (path, why) => facts.goal_worktrees.push({ path, error: why, bytes: 0 });
   const programs = roots.plan;
   const phases = new Map();
+  const fetched = new Map(); // owning repository → its `git fetch -q origin` answer, at most once per call
   if (basename(programs) !== 'programs') return; // goal worktrees exist only in layout 2.
   let programmes;
   try { programmes = only ? [only.programme] : readdirSync(programs, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name).sort(); }
@@ -552,10 +556,25 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           if (status.trim()) throw new Error('checkout has tracked or untracked changes');
           const ignored = git(path, ['status', '--porcelain', '--ignored=matching', '--untracked-files=all']);
           if (ignored === null) throw new Error('Git could not establish ignored-file state');
-          const kept = ignoredBeyondAttachedDeps(path, ignored);
+          const kept = ignoredBeyondRebuildable(path, ignored);
           if (kept.length) throw new Error(`checkout contains ignored files (${kept.slice(0, 3).map((line) => line.slice(3)).join(', ')}${kept.length > 3 ? ', …' : ''})`);
           const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
-          if (own === null || !/^0\s*$/u.test(own)) throw new Error('checkout has commits beyond origin/main or Git could not verify them');
+          if (own === null || !/^\d+\s*$/u.test(own)) throw new Error('checkout has commits beyond origin/main or Git could not verify them');
+          const ahead = Number(own);
+          let pushed = null;
+          if (ahead > 0) {
+            if (!fetched.has(repo.path)) fetched.set(repo.path, git(repo.path, ['fetch', '-q', 'origin']));
+            if (fetched.get(repo.path) === null) throw new Error(`checkout has commits beyond origin/main (${ahead}) and the fetch of origin failed, so whether they are pushed is unknown`);
+            const remote = `origin/goal/${goal}`;
+            const remoteRef = `refs/heads/goal/${goal}`;
+            const advertised = git(repo.path, ['ls-remote', '--exit-code', '--heads', 'origin', remoteRef]);
+            if (advertised === null || !advertised.split(/\r?\n/u).some((line) => line.endsWith(`\t${remoteRef}`))) {
+              throw new Error(`checkout has commits beyond origin/main (${ahead}) that are not on ${remote}`);
+            }
+            const unpushed = git(path, ['rev-list', '--count', `${remote}..HEAD`]);
+            if (unpushed === null || !/^0\s*$/u.test(unpushed)) throw new Error(`checkout has commits beyond origin/main (${ahead}) that are not on origin/goal/${goal}`);
+            pushed = { commits: ahead, remote };
+          }
           const common = git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
           if (!common) throw new Error('owning Git directory could not be verified');
           const identity = goalWorktreeIdentity(path, common);
@@ -567,7 +586,7 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
           if (openedGoal.length || openedTree.length) throw new Error(`a process holds a goal/worktree file open (${[...new Set([...openedGoal, ...openedTree])].join(', ')})`);
           const activity = newestMtime(dir);
           if (!Number.isFinite(activity)) throw new Error('could not establish goal/worktree activity');
-          item.wt = { path, repo: repoName, branch, head, owner: repo.path, common, identity, activity, metadata_identity: raw };
+          item.wt = { path, repo: repoName, branch, head, owner: repo.path, common, identity, activity, metadata_identity: raw, pushed };
           if (!only) item.bytes = treeBytes(path);
           item.verdict = { target: true, why: 'eligible plan goal checkout' };
           item.error = null;
@@ -578,15 +597,25 @@ function gatherPlanGoalWorktrees(facts, { roots, running, now, git, repos, openI
 }
 
 /**
- * Ignored entries that keep a goal checkout. The one exception is the
- * dependency link the runner attaches at every session (`node_modules/`
- * holding shared-deps.js's ATTACHED_MARK): it is rebuilt from the lockfile
- * at the next session, so it holds nothing a person made. Anything else
- * ignored (local databases, build output, .wrangler state) still keeps it.
+ * The rebuildable residue of a memoro dev server, as memoro's `.gitignore`
+ * names it: a rebuild recreates every one of these, and none holds a person's
+ * state. `.venv-<name>/` and `__pycache__/` at any depth are matched by rule.
  */
-function ignoredBeyondAttachedDeps(path, porcelain) {
+const REBUILDABLE_RESIDUE = new Set(['.wrangler/', 'public/dist/', 'scripts/dev/local-schema.sql']);
+const isRebuildableResidue = (entry) => REBUILDABLE_RESIDUE.has(entry) || /^\.venv-[^/]+\/$/u.test(entry)
+  || entry === '__pycache__/' || entry.endsWith('/__pycache__/');
+
+/**
+ * Ignored entries that keep a goal checkout. Two kinds do not: the dependency
+ * link the runner attaches at every session (`node_modules/` holding
+ * shared-deps.js's ATTACHED_MARK, rebuilt from the lockfile at the next
+ * session) and the rebuildable residue above. Anything else ignored (local
+ * databases, `.mc/local.json`, `scripts/admin/_venv/`) still keeps it.
+ */
+function ignoredBeyondRebuildable(path, porcelain) {
   return porcelain.split('\n').filter((line) => line.trim())
-    .filter((line) => !(line === '!! node_modules/' && existsSync(join(path, 'node_modules', ATTACHED_MARK))));
+    .filter((line) => !(line === '!! node_modules/' && existsSync(join(path, 'node_modules', ATTACHED_MARK))))
+    .filter((line) => !(line.startsWith('!! ') && isRebuildableResidue(line.slice(3))));
 }
 
 function goalWorktreeIdentity(path, common) {
@@ -1123,7 +1152,7 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
       path: item.path, kind: 'plan-goal-worktree', rule: 'P', why: verdict.why, bytes: item.bytes || 0,
       programme: item.programme, goal: item.goal, repo: item.repo, stage: item.stage, status: item.status,
       metadata: item.metadata, branch: item.wt.branch, head: item.wt.head, owner: item.wt.owner,
-      common: item.wt.common, identity: item.wt.identity, activity: item.wt.activity,
+      common: item.wt.common, identity: item.wt.identity, activity: item.wt.activity, pushed: item.wt.pushed,
     });
     else keep(item.path, 'P', verdict.why);
   }
@@ -1236,14 +1265,17 @@ export function planGoalWorktree(item, { now, pressure = false } = {}) {
     return { target: false, why: `goal stage is ${item.stage || 'unknown'}, not draft, and a session can start it` };
   }
   if (item.wt.activity >= now - GENERATED_KEEP_MS && !pressure) return { target: false, why: 'goal/worktree touched within the last 72 hours' };
+  const pushed = item.wt.pushed
+    ? ` (${item.wt.pushed.commits} ${item.wt.pushed.commits === 1 ? 'commit' : 'commits'}, all on ${item.wt.pushed.remote})`
+    : '';
   if (cannot === 'draft') {
     return { target: true, why: pressure
-      ? 'clean inactive draft goal checkout (pressure pass; age exception)'
-      : 'clean inactive draft goal checkout, untouched for 72 hours' };
+      ? `clean inactive draft goal checkout${pushed} (pressure pass; age exception)`
+      : `clean inactive draft goal checkout${pushed}, untouched for 72 hours` };
   }
   return { target: true, why: pressure
-    ? `clean inactive goal checkout, ${cannot} (pressure pass; age exception)`
-    : `clean inactive goal checkout, ${cannot}, untouched for 72 hours` };
+    ? `clean inactive goal checkout${pushed}, ${cannot} (pressure pass; age exception)`
+    : `clean inactive goal checkout${pushed}, ${cannot}, untouched for 72 hours` };
 }
 
 /**
@@ -1438,8 +1470,8 @@ export function applyTidy({
           const wt = item?.wt;
           if (!verdict?.target || !wt || item.metadata !== target.metadata || item.stage !== target.stage || item.status !== target.status
             || wt.branch !== target.branch || wt.head !== target.head || wt.owner !== target.owner || wt.common !== target.common
-            || wt.activity !== target.activity || !sameEvidence(wt.identity, target.identity)) {
-            applied.push({ path, ok: false, why: `re-check: ${!verdict?.target ? verdict?.why || 'goal checkout disappeared or is no longer declared' : 'goal metadata, stage, worktree identity, HEAD or activity changed since the list'}` });
+            || wt.activity !== target.activity || !sameEvidence(wt.identity, target.identity) || !sameEvidence(wt.pushed ?? null, target.pushed ?? null)) {
+            applied.push({ path, ok: false, why: `re-check: ${!verdict?.target ? verdict?.why || 'goal checkout disappeared or is no longer declared' : 'goal metadata, stage, worktree identity, HEAD, activity or pushed-branch evidence changed since the list'}` });
             return;
           }
           if (!removeWorktree(wt.owner, path)) { applied.push({ path, ok: false, why: 'git worktree remove refused' }); return; }

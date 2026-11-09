@@ -41,8 +41,8 @@ Apply only the commissioned deliberate delta to `$source`, then save and inspect
 git -C "$reviewed" diff -- "$source" > "$MC_SCRATCH/fault.patch"
 git -C "$reviewed" status --short
 ```
-`status --short` must list only `$source`. Record the changed path and the before/after source. Run only the
-commissioned check from the worktree: `mc gate <test-files…>`. Record its printed full log path and the observed
+`status --short` must list only `$source`. Record the changed path and the before/after source. For a criterion covering every route or caller, replay one deletion per call site, not one shared-function change: a shared-function fault proves nothing about routes not tested. Run only the commissioned check from the worktree:
+`mc gate <test-files…>`. Record its printed full log path and the observed
 assertion failure. Import/setup failures are insufficient: the relevant assertion must fail. An invocation-local
 loader is an alternative only with guards for its target URL and exact source match. Record both guards, source
 identity and activation. If the source guard fails, stop; never fall back silently. Keep loader and output in

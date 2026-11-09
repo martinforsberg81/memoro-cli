@@ -121,9 +121,25 @@ keeps every one, with its error.
 while its valid `GOAL.json` says `stage: draft` (`plan` before 2026-11-07), or `status: Martin`, or its phase
 is above its programme's lowest unfinished phase (the runner's own `phaseOpen`
 rule), once its goal and checkout have been untouched for 72 hours. A goal with
-`status: blocked` keeps its checkout; a goal in a finished stage is not reached. It must be on `goal/<goal>`, have no commits
-beyond `origin/main`, no tracked/untracked/ignored files, and no live cwd, open
-file, or uncertain process evidence in the goal or checkout. Goal metadata,
+`status: blocked` keeps its checkout; a goal in a finished stage is not reached. It must be on `goal/<goal>`, have no tracked or untracked
+entry, and no live cwd, open file, or uncertain process evidence in the goal or
+checkout. Its ignored entries may be only the `node_modules/` link the runner
+attaches (when `node_modules/.memoro-deps.json` exists) and the rebuildable
+residue of a memoro dev server, exactly `.wrangler/`, `public/dist/`,
+`scripts/dev/local-schema.sql`, `.venv-<name>/`, and `__pycache__/` at any depth.
+Any other ignored entry (`.mc/local.json`, a local database,
+`scripts/admin/_venv/`, `.env*`, `*.log`, `tmp/`, `coverage/`, `.pr-review/`,
+`public/modules/`) keeps the checkout, and its why names it. Commits beyond
+`origin/main` keep the checkout unless every one is already on
+`origin/goal/<goal>`: when a checkout is ahead, P runs one `git fetch -q origin`
+per owning repository per pass (in `repo.path`, never in the checkout, never
+with `--prune`, a refspec or `--force`), asks the same repository with
+`git ls-remote --exit-code --heads origin refs/heads/goal/<goal>` whether origin
+still has the branch, and then counts the commits on `origin/goal/<goal>`. A
+fetch that fails, or a branch origin does not have, keeps the checkout; a stale
+local tracking ref alone does not prove remote existence. A pass with nothing
+ahead of `origin/main` fetches nothing. The preview records the count and the remote branch, and the apply
+recheck compares them. Goal metadata,
 checkout ownership, HEAD, and activity are recorded in the preview and fully
 rechecked under the shared runner lock before each removal. The lock-held
 recheck reads only that goal and checkout, without repeating the full tidy
@@ -135,7 +151,10 @@ existing `placeGoalWorktrees` recovery calls `addGoalWorktree` on that branch.
 During a disk-pressure pass only the 72-hour age condition is relaxed; all
 other checks remain identical. Invalid or unreadable metadata, ignored local
 state, active work, unknown ownership, or changed preview evidence means keep.
-Nested cache targets are omitted when the checkout itself is selected.
+Nested cache targets are omitted when the checkout itself is selected. The
+`node_modules/` narrowing of the ignored-files guard was made by a plan session
+on 2026-11-07 and stands; a plan session may narrow a tidy guard when the rule's
+never-removed boundary is kept (Martin, 2026-11-08).
 
 **W — what is left under `~/mc/work/`.** The workareas were retired on
 2026-11-03 (goal `mc/no-work`, [`mc-work.md`](mc-work.md)), and nothing makes
@@ -444,7 +463,7 @@ the runtime was down.
 
 A retired workarea outside a person's `--apply`, and one with anything in it
 but landed checkouts; a worktree with
-uncommitted changes or commits main lacks; any `memory/` under
+uncommitted changes or commits main lacks that are not on its pushed branch; any `memory/` under
 `~/.claude/projects`; `runs.tsv`; `~/.memoro/mc/gate-rounds.jsonl`;
 `project_log.md`; anything outside the roots above. No `git worktree move`
 and no `--force`. Deletion goes through node `fs`, with no shell, no `find`
