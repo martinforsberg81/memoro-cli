@@ -9,6 +9,7 @@
 /** Every verb the dispatcher routes, and the module that answers it. */
 export const VERB_MODULES = {
   tidy: './mc/commands/tidy.js',
+  scratch: './mc/commands/scratch.js',
   layout: './mc/commands/layout.js',
   repos: './mc/commands/repos.js',
   repo: './mc/commands/repo.js',

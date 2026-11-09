@@ -95,6 +95,8 @@ ${commandReference('asc')}
 
 ${commandReference('tidy')}
 
+${commandReference('scratch')}
+
 ${commandReference('layout')}
 
 ${commandReference('repos')}
