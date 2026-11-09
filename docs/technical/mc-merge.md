@@ -199,6 +199,12 @@ the final landing sets `done`. A failed merge goes to a session. The runner
 recovers missing queue entries for goals already in `merge`; it does not make
 the merge decision. Existing `merging` records are read as `merge`.
 
+Goal sessions therefore cannot assume that landing will integrate a missing
+prerequisite or measure the combined candidate. Necessary main integration
+belongs before their final acceptance and authorization, under
+[mc-goals.md](mc-goals.md#integrating-main-into-a-goal). A clean textual merge
+does not establish that the judged tree contains its required dependencies.
+
 
 ### Watching a merge
 
