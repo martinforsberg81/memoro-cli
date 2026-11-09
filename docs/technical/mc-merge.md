@@ -68,7 +68,7 @@ before `gh` is asked anything
 ## The gate form
 
 Unchanged, deliberately: `mc merge` calls the same `gate()` in `repo.js`, which
-calls the same `runGate` and `runMergeRound`. The round, its lease, its borrowed
+calls the same `runGate` and `runMergeRound`. The round, its lease, its measurement
 checkout, the red names read out of it by name, the deploy pull and
 the merge-log line are all described where they live —
 [`src/mc/repo-merge.js`](../../src/mc/repo-merge.js),
@@ -130,77 +130,61 @@ and diagnostic evidence even when no Node red file was reported.
 This decision supersedes goal-only eligibility below. It specifies required
 behaviour; the existing goal-only runner is not evidence of implementation.
 
-## Reuse the existing checkout
+## The measurement checkout
 
-Martin, 2026-11-09 (manager session): superseded. The merger measures every
-candidate — a pull request's round, a batch, the documents-only measurement,
-branch freshening and the whole-suite round — in one standing measurement
-checkout per repository, `<work root>/gate/<slug>/candidate`, which mc owns,
-heals at every use and never creates or removes per round; it is used only
-while the repository's merge lane is held. No round borrows a session's or a
-planning checkout, and the restore rule below goes with the borrowing. The
-reason the 2026-11-08 rule gave — no worktree created and deleted per round —
-holds for the standing checkout too; what it cost was 32 stopped rounds in four
-days (`measure-candidate` "is in use", `worktree`, `worktree-restore`,
-`dependencies` outside the work root; `~/mc/programs/mc/evidence/2026-11-09-merge-rounds/measurement.md`).
-The goal `mc/merger-standing-checkout` carries it into the code and rewrites
-this section; until it lands the paragraphs below describe what runs.
+Every repository round — a PR, batch, documents-only measurement, branch
+freshening and whole-suite run (`--full` or nightly) — uses mc's standing
+checkout at `<work root>/gate/<slug>/candidate` (`~/mc/gate/…`), implemented by
+[`measurement-checkout.js`](../../src/mc/measurement-checkout.js). First use
+creates it from the repository with `git worktree add --detach <dir> <sha>`;
+subsequent rounds keep it. No round borrows a session or planning checkout or
+creates a per-round worktree. No branch needs to be held by another checkout.
 
-Martin, 2026-11-08: a merge must reuse the checkout the work already has;
-creating and deleting another worktree wastes time and disk. This applies to
-ordinary and documents-only PR measurements, batch candidates and branch
-freshening before landing. Direct goal landing keeps its existing procedure.
+The repository's merge lane is the exclusion: every user holds its atomic
+claim for the whole use of this checkout. Gate rounds and documents
+measurements already hold it; freshening takes the lane with `takeLane` and
+releases it only after its push (or failure). Two users cannot own it at once.
+A foreign process standing in the directory is refused as `worktree`, naming
+its pids; the round's own ancestry is excluded. Incomplete process evidence
+also refuses mutation. Nobody is directed to work in this directory.
 
-`existingCandidate` locates the registered checkout of the exact PR branch.
-It requires the pushed head, a clean index and working tree (including
-untracked files), no unfinished Git operation, and complete process cwd
-evidence that nobody else is working there. A synchronous requesting process
-and its waiting ancestors may hand over their own checkout. A dirty, busy or mismatched
-checkout stops with its reason; it never triggers another checkout.
+Before use mc heals its own workspace: `git worktree prune`, re-add a missing
+directory, abort any unfinished merge, cherry-pick or revert, then
+`git reset --hard` and `git clean -fd`. Ignored files, including dependencies,
+stay; preparation replaces a cached `node_modules` clone rather than nesting
+inside it. Finally `git checkout --detach <sha>` selects the candidate.
+Discarding this tree never discards a session's work.
 
-Martin, 2026-11-09: a branch no checkout holds is not a reason to stop. The
-merge restores one: the local branch is created at the pushed head (or moved
-forward to it when it is behind, never otherwise) and checked out with
-`git worktree add` at `<work root>/checkouts/<repository>/<branch>`
-(`~/mc/checkouts/…`). That is the branch's one checkout from then on: it is
-kept like any other, measured in by the same rules, and never a detached
-throwaway. It is under the work root because the shared dependency tree,
-`~/mc/node_modules`, is found by walking up from the worktree. A checkout
-anywhere else resolves none of it, and the round stops at `dependencies`
-(memoro-cli#1441, restored under mc home).
+A PR starts at its pushed head and merges the fetched `origin/<base>`; a batch
+starts at the fetched base and merges its heads in order. Documents start at
+the branch head and merge the base. Freshening starts at the pushed head,
+merges the base, regenerates declared derived paths and pushes
+`HEAD:refs/heads/<branch>`. It never advances the session's local branch: that
+checkout may now be behind origin, which `mc publish` explains. A whole-suite
+run starts detached at the fetched default base in this same directory.
 
-Keep the existing branch checkout while its PR remains open, including after
-publication without queue admission and after failed acceptance. A pushed branch
-is recoverable source, but it is not a checkout the merger can borrow. Manual
-cleanup must use the same open-PR retention boundary as tidy; disk pressure does
-not authorize deleting an open PR's only checkout. After landing or closing,
-normal safe cleanup applies. If an earlier cleanup already removed it, delivery
-repair may restore that same branch at its original path after checking the
-pushed head and that no other checkout holds it. This restores the original
-working area; the merger restores a checkout only for a branch none holds and
-never creates a second measurement checkout beside an existing one.
+After measurement the checkout stays detached at the measured commit with
+its merged tree, for `git diff` and `git log` inspection. Nothing is restored;
+`worktree-restore` is no longer a stop. A failed or killed round's unfinished
+operation or dirt is healed at next use. Round cleanup never removes the
+checkout or its workspace; only round-owned temporary files are removed.
 
-The measurement temporarily detaches HEAD in that directory, merges the
-current fetched base, prepares and tests that combined tree, then returns to
-the original branch without moving it. A batch starts from its fetched base
-in the first PR's existing checkout. Branch freshening uses the same mechanism
-and pushes only the named branch, then advances its local branch to that pushed
-head with an expected-old-head check. The installation's main checkout is never
-used as a PR candidate. Standalone measurements of main without a PR retain
-their separate candidate; they are not merge attempts.
+This replaces the borrowed-checkout rule of 2026-11-08 and its restore rule
+of 2026-11-09 (Martin, manager session, 2026-11-09). The evidence at
+`~/mc/programs/mc/evidence/2026-11-09-merge-rounds/measurement.md` records 32
+stops in four days: `measure-candidate` 16 (checkout in use), `worktree` 13
+(in use, worktree preparation, no checkout), `worktree-restore` 1 and
+`dependencies` 3 (restored outside the work root). Those bucket counts total
+33 in the five-day table; the evidence's four-day borrowed-checkout reading
+is 32. They were infrastructure failures, not the change's red. Keeping a
+standing checkout preserves the original aim of avoiding per-round creation
+and deletion without borrowing working areas.
 
-A conflict is aborted during restoration. Restoration never resets or cleans
-files: unexpected changes are retained and reported, and the round cannot
-return green. It never removes the borrowed checkout. An uncatchable process
-kill can leave detached HEAD; recovery must inspect that checkout and return
-to the original branch before retrying.
-
-Protection for this change is bounded to the existing gate, docs-measure,
-freshen, merge integration and preparation-cache fixtures (including the
-existing Git model for NUL worktree listings and local-only checkout): correct checkout and merged state,
-no worktree creation/removal, refusal before mutation on unsafe inputs, and
-branch restoration on successful, red and exceptional exits. No new suite,
-scanner or framework is commissioned.
+Protection stays in the existing gate, docs-measure, freshen, merge
+integration and preparation-cache fixtures: first creation and later reuse,
+healing dirt, missing directories and unfinished operations, foreign-process
+refusal, the lane across freshening and its push, and session branch/HEAD
+preservation. No new test file, scanner, framework or lane is commissioned.
 
 ## The door
 
@@ -314,13 +298,13 @@ whole of it. It takes a repository path and a number and:
    no real reason; `CONFLICTING` is a refusal that says which base to merge in;
    then it reads the head again, and a head that moved since step 1 is `drift`:
    not merged, because the files checked are not the files that would land;
-4. measures the documents before anything is squashed. It borrows the branch's
-   existing clean, idle checkout and merges `origin/<base>` into a detached head there,
+4. measures the documents before anything is squashed. It heals the standing
+   measurement checkout, detaches at the branch head and merges `origin/<base>` there,
    prepares it as a round does, asks the repository's selector (`selectFiles`,
    the gate round's own) which tests read the files, runs those files and the
    command gates it names, and refuses on any red: `red`, with the names. A
    measurement that could not run is `measure-<stage>` — `measure-candidate`,
-   `measure-merge`, `measure-prepare`, `measure-selection` or `measure-suite` —
+   `measure-worktree`, `measure-merge`, `measure-prepare`, `measure-selection` or `measure-suite` —
    and is not merged either. The head is read again after the tests, and a head
    that moved is `drift`, as above. The code is
    [`src/mc/docs-measure.js`](../../src/mc/docs-measure.js);
@@ -440,14 +424,15 @@ longer mentions it. The gate form's argument errors live with the gate, in
 
 ## Where the candidate's dependencies come from
 
-The candidate reuses the branch's checkout and its existing dependency location. A suite run
+The standing candidate lives under the work root, so Node's parent walk can
+resolve the shared `~/mc/node_modules`. A suite run
 where the declared packages cannot be resolved does not fail — it runs the
 tests that happen to need nothing and prints a number with the right shape
 (D-0152: 2162 tests and 30 failures, where 206 tests never ran and were not
 counted as skipped; 2368 of 2368 once the tree was linked). A number from such
 a run is not low, it is invalid, and nothing about the number says so.
 
-The round calls `ensureSharedDeps` on the borrowed checkout, then runs the
+The round calls `ensureSharedDeps` on the standing measurement checkout, then runs the
 repository's declared preparation. A cached dependency clone replaces any
 existing checkout-local `node_modules`; it must never nest inside it or write
 through a link into the shared tree.

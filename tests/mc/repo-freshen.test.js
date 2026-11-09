@@ -25,6 +25,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
+import { runningRound } from '../../src/mc/gate-lock.js';
 import { freshenBranchForLanding } from '../../src/mc/repo-freshen.js';
 
 function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
@@ -36,7 +38,7 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
   const calls = [];
   const git = (args, opts = {}) => {
     calls.push({ args, cwd: opts.cwd });
-    if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: `worktree ${repoPath}\0HEAD abc1234def\0branch refs/heads/track-two\0\0`, stderr: '' };
+    if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args.at(-2), { recursive: true });
     if (args[0] === 'checkout' && args.includes('--detach') && addFails) return { status: 1, stdout: '', stderr: 'invalid reference' };
     if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
     if (args[0] === 'merge' && args[1] !== '--abort') {
@@ -54,28 +56,39 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
     calls,
     git,
     workRoot: join(root, 'work'),
-    // The scratch worktree goes where the gate's does, under the work root.
+    mcHome: join(root, 'home'),
+    candidateDir: measurementCheckoutPath(repoPath, join(root, 'work')),
+    // The standing checkout goes where the gate's does, under the work root.
     run: (over = {}) => freshenBranchForLanding({
-      repoPath, branch: 'track-two', base: 'main', env: { MC_WORK_ROOT: join(root, 'work') }, git, candidateCwds: () => [], ...over,
+      repoPath, branch: 'track-two', base: 'main', env: { MC_WORK_ROOT: join(root, 'work'), MC_HOME: join(root, 'home') }, git, candidateCwds: () => [], ...over,
     }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
 
 describe('freshening the branch that is landing next in a batch', () => {
-  it('merges the base in and pushes it plainly', async () => {
+  it('holds the repository lane across detached freshening and push, then releases it', async () => {
     const fx = fixture();
     try {
-      const out = await fx.run();
+      const out = await fx.run({ git: (args, opts) => {
+        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' })?.pid, process.pid, `lane held during git ${args.join(' ')}`);
+        return fx.git(args, opts);
+      } });
       assert.equal(out.ok, true, out.reason || '');
       assert.equal(out.at, 'abc1234');
       const merged = fx.calls.find((c) => c.args[0] === 'merge');
       assert.deepEqual(merged.args, ['merge', '--no-edit', 'origin/main']);
       const pushed = fx.calls.find((c) => c.args[0] === 'push');
       assert.deepEqual(pushed.args, ['push', 'origin', 'HEAD:refs/heads/track-two']);
-      assert.deepEqual(fx.calls.find((c) => c.args[0] === 'update-ref').args, ['update-ref', 'refs/heads/track-two', 'abc1234def', 'abc1234def']);
-      assert.ok(fx.calls.indexOf(pushed) < fx.calls.findIndex((c) => c.args[0] === 'update-ref'));
-      assert.deepEqual(fx.calls.at(-1).args, ['checkout', '--no-guess', 'track-two']);
+      assert.equal(merged.cwd, fx.candidateDir);
+      assert.equal(pushed.cwd, fx.candidateDir);
+      assert.deepEqual(fx.calls.filter(({ args }) => args[0] === 'checkout').map(({ args }) => args), [['checkout', '--detach', 'abc1234def']]);
+      assert.deepEqual(fx.calls.filter(({ args }) => args[0] === 'update-ref'), [], 'the session branch never moves');
+      assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'released after the push');
+      assert.equal((await fx.run()).ok, true);
+      assert.deepEqual(fx.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').map(({ args }) => args),
+        [['worktree', 'add', '--detach', fx.candidateDir, 'abc1234def']]);
+      assert.deepEqual(fx.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
     } finally { fx.cleanup(); }
   });
 
@@ -140,15 +153,16 @@ describe('freshening the branch that is landing next in a batch', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('restores its existing checkout whatever happened', async () => {
+  it('keeps the standing checkout detached and releases the lane whatever happened', async () => {
     for (const conflicts of [[], ['src/x.js']]) {
       const fx = fixture({ conflicts });
       try {
         await fx.run();
         assert.ok(
-          fx.calls.some((c) => c.args[0] === 'checkout' && c.args[1] === '--no-guess'),
-          'the original branch is restored on both paths',
+          fx.calls.every((c) => c.args[0] !== 'checkout' || c.args[1] === '--detach'),
+          'no branch is checked out on either path',
         );
+        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null);
       } finally { fx.cleanup(); }
     }
   });
@@ -172,13 +186,12 @@ describe('freshening the branch that is landing next in a batch', () => {
 describe('the branch carries the regeneration the gate made', () => {
   const declaration = { prepare: 'npm ci', derived: [{ command: 'npm run sql:inventory -- --write', paths: ['docs/sql/'] }] };
   const withStatus = (fx, porcelain) => {
-    let statuses = 0;
     let committed = false;
     return (args, opts = {}) => {
       if (args[0] === 'commit') committed = true;
       if (args[0] === 'status') {
         fx.calls.push({ args, cwd: opts.cwd });
-        return { status: 0, stdout: statuses++ === 0 || committed ? '' : porcelain, stderr: '' };
+        return { status: 0, stdout: committed ? '' : porcelain, stderr: '' };
       }
       return fx.git(args, opts);
     };

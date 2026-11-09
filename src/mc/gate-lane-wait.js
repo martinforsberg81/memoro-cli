@@ -1,6 +1,6 @@
 /**
- * Waiting for a repository's lane (gate-lock.js), for a docs gate, which runs
- * its tests beside the merger's rounds and in the same line. Nothing a session
+ * Waiting for a repository's lane (gate-lock.js), for documents measurement
+ * and branch freshening between merger rounds. Nothing a session
  * runs waits here: its gate takes no lane.
  */
 import { describeRunning, takeGateLock } from './gate-lock.js';
