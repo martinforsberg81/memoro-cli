@@ -121,11 +121,12 @@ Any other ignored entry (`.mc/local.json`, a local database,
 `origin/main` keep the checkout unless every one is already on
 `origin/goal/<goal>`: when a checkout is ahead, P runs one `git fetch -q origin`
 per owning repository per pass (in `repo.path`, never in the checkout, never
-with `--prune`, a refspec or `--force`), verifies the branch is advertised by
-origin, and then counts the commits on `origin/goal/<goal>`. A fetch that fails,
-or a remote branch that does not exist, keeps the checkout; a stale local
-tracking ref alone does not prove remote existence. A pass with nothing ahead of `origin/main` fetches
-nothing. The preview records the count and the remote branch, and the apply
+with `--prune`, a refspec or `--force`), asks the same repository with
+`git ls-remote --exit-code --heads origin refs/heads/goal/<goal>` whether origin
+still has the branch, and then counts the commits on `origin/goal/<goal>`. A
+fetch that fails, or a branch origin does not have, keeps the checkout; a stale
+local tracking ref alone does not prove remote existence. A pass with nothing
+ahead of `origin/main` fetches nothing. The preview records the count and the remote branch, and the apply
 recheck compares them. Goal metadata,
 checkout ownership, HEAD, and activity are recorded in the preview and fully
 rechecked under the shared runner lock before each removal. The lock-held
