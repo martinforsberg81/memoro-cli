@@ -1357,7 +1357,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     all = goals();
     const drafts = [...new Set(all.map(goal => goal.programme))]
       .map(programme => nextDraft(all, programme)).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && ![...held].some(name => name.startsWith(`goal:${goal.programme}/`)))
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null

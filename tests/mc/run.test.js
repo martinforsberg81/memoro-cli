@@ -3913,10 +3913,10 @@ test('an incomplete ordinary plan waits on Martin and holds later drafts without
 test('planning rechecks programme eligibility after allocation before launching', async () => {
   const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
   f.deps.attachDeps = async () => {
-    f.files[`${GOALS}/b/GOAL.json`] = withGoal(f.files[`${GOALS}/b/GOAL.json`], { stage: 'build' });
+    f.files[`${GOALS}/b/GOAL.json`] = withGoal(f.files[`${GOALS}/b/GOAL.json`], { stage: 'build', status: 'Martin' });
     return { ok: true };
   };
-  await createRunner({ deps: f.deps }).pass({ passed: ['goal:prog/b'] });
+  await createRunner({ deps: f.deps }).pass();
   assert.equal(f.calls.sessions.length, 0);
   assert.equal(where(f, 'a'), 'draft · ready');
   assert.match(f.log.join('\n'), /programme changed during admission/u);
@@ -3926,6 +3926,8 @@ test('a live predecessor session holds programme planning even when its goal has
   const f = goalFixture({ a: { stage: 'draft' }, old: { stage: 'done' } }, { livePids: [777] });
   f.files['/w/runner/current-memoro.json'] = JSON.stringify({ pid: 777, lane: 0, name: 'goal:prog/old', repo: 'memoro' });
   assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ pid: 777, lane: 0, repo: 'memoro' });
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null, 'unknown current ownership holds planning');
 });
 
 test('another lane cannot plan a second draft while the selected draft is held', async t => {

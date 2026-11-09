@@ -14,7 +14,7 @@ export const COMMAND_USAGE = Object.freeze({
     "                                    next safe point, each starting a successor on the new code\n",
     "                                    already on origin/main: nothing written (--force writes anyway)\n",
     "                                    already draining: the drain, and the sessions it waits on\n",
-    "        mc run lanes [<n>]          headless sessions at once (build, review, finish, mend), in total\n",
+    "        mc run lanes [<n>]          headless sessions at once (build, review, finish, mend, plan), in total\n",
     "                                    across every repository; no argument prints it\n",
     "        mc run --billing             plan usage and next billing for Claude and Codex\n",
     "        mc run --billing <claude|codex> <on|off>\n",

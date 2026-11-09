@@ -168,7 +168,7 @@ Four paths launch a session with instructions, and all four call it:
 |---|---|
 | `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
-| `run.js` (`runGoal`) | a goal build, review, finish or mend session |
+| `run.js` (`runGoal`) | a selected-draft plan, build, review, finish or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
 
 Each of them used to write the join out by hand.
