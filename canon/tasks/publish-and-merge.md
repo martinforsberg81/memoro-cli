@@ -38,11 +38,9 @@ in it and say why in the reply.
   known gaps and each changed test's `mc gate` timing (`test <file> › <name> —
   0.xyz s`). Never claim a run you did not make; "suite not run" is acceptable.
 ## `mc merge <repo> <pr>` — the one door to main
-`mc goal stage merge` records the session’s decision and queues every registered
-PR for the ordinary measured round, reusing the session’s whole-selection receipt
-(exact or delta) and measuring the rest on the current base. The merger does not
-re-check criteria or the reviewed head; the goal is done after all land.
-Conflicts go to a session.
+`mc goal stage merge` queues every registered PR for the ordinary measured round,
+reusing the session’s whole-selection receipt (exact or delta), measuring the rest on the current base.
+No criteria or reviewed-head re-check; done after all land. Conflicts go to a session.
 - Queues the pull request and returns. The merger takes the queue one at a
   time per repository lane, runs the gate round on a candidate with the
   current base and squashes only on green. No flag lands a red.
