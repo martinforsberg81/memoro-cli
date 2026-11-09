@@ -818,6 +818,9 @@ it('prune removes exactly the expired evidence and keeps what a retained green n
     '.fresh.abcdef012345.tmp', '.pruned', 'content/', `content/${key}/`, `content/${key}/fresh`, `content/${key}/gate-one`,
     `content/${key}/notes.v1`, 'content/notes/', 'content/notes/gone', 'fresh.json', 'fresh.selector.json', 'gate-one.json', 'notes.txt', 'young.json',
   ].sort();
+  // The receipt a retained green names, and its content marker, survive whatever else goes.
+  assert.deepEqual(listTree(dir).filter((name) => name === 'gate-one.json' || name === `content/${key}/gate-one`),
+    ['content/' + key + '/gate-one', 'gate-one.json'], 'the receipt a retained green names survives the prune');
   assert.deepEqual([...removed].sort(), expectedRemoved);
   assert.deepEqual(listTree(dir), expectedSurvivors);
   assert.deepEqual([...expectedSurvivors, ...expectedRemoved].sort(), before, 'nothing outside the two lists changed');
