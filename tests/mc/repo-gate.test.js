@@ -34,6 +34,8 @@ import { runSessionGate } from '../../src/mc/session-gate-run.js';
 import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
 import { measureDocs } from '../../src/mc/docs-measure.js';
 import { freshenBranchForLanding } from '../../src/mc/repo-freshen.js';
+import { settleRed } from '../../src/mc/gate-settle.js';
+import { gateLines as sessionGateLines, summarizeGate } from '../../src/mc/gate-local.js';
 import { spawnedBatch } from './_helpers/spawned-batch.js';
 
 /**
@@ -2222,20 +2224,20 @@ describe('a repository that selects by diff', () => {
       });
     });
 
-    /** TAP for a file whose `before` hook timed out, the way node 24.10 writes it: the suite hookFailed, its tests cancelled. */
-    function hookTimedOut(file, { failing = false } = {}) {
+    /** Node 24.10 hookFailed suite: a timeout or a thrown error cancels its children. */
+    function hookTimedOut(file, { failing = false, message = 'failed running before hook' } = {}) {
       const at = (line) => `      location: '/somewhere/candidate/${file}:${line}:3'`;
       const lines = ['TAP version 13', '# Subtest: bundle',
         '    # Subtest: one', '    not ok 1 - one', '      ---', "      type: 'test'", at(4), "      failureType: 'cancelledByParent'", '      ...',
         '    # Subtest: two', '    not ok 2 - two', '      ---', "      type: 'test'", at(5), "      failureType: 'cancelledByParent'", '      ...'];
       if (failing) lines.push('    # Subtest: three', '    not ok 3 - three', '      ---', "      type: 'test'", at(6), "      failureType: 'testCodeFailure'", '      ...');
       lines.push('    1..2', 'not ok 1 - bundle', '  ---', "  type: 'suite'", `  location: '/somewhere/candidate/${file}:2:1'`,
-        "  failureType: 'hookFailed'", "  error: 'failed running before hook'", '  ...', '1..1',
+        "  failureType: 'hookFailed'", `  error: '${message}'`, '  ...', '1..1',
         `# tests ${failing ? 3 : 2}`, '# pass 0', `# fail ${failing ? 1 : 0}`, '# cancelled 2');
       return lines.join('\n');
     }
 
-    it('a file with tests cancelled and none failed is red-under-load, without running anything again', async () => {
+    it('a timed-out before hook is red-under-load, without running anything again', async () => {
       const fx = selecting({ files: [scanner, own] });
       const probed = [];
       try {
@@ -2246,9 +2248,76 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.stopped_at, 'red-under-load');
         assert.equal(report.verdict, 'stopped');
         assert.deepEqual(report.under_load_files, [scanner]);
+        assert.deepEqual(report.cancelled_files, [scanner]);
         assert.equal(report.reason, `${scanner} had tests cancelled and none failed — measured again`);
         assert.deepEqual(probed, [], 'a cancelled file is not asked of the base');
       } finally { fx.cleanup(); }
+    });
+
+    it('a thrown before hook is red with its message and diagnostic, not red-under-load', async () => {
+      const fx = selecting({ files: [scanner, own] });
+      const message = "No dev server database matches this tree’s 412 migrations";
+      const tap = hookTimedOut(scanner, { message });
+      const probed = [];
+      try {
+        const report = await fx.report({ tests: async () => ({ code: 1, tap }),
+          readMainEvidence: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; } });
+        assert.equal(report.stopped_at, 'red');
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.cancelled_files, undefined);
+        assert.equal(report.under_load_files, undefined);
+        assert.deepEqual(report.candidate.red_files, [scanner]);
+        assert.deepEqual(report.candidate.red_tests, redTests(tap, [scanner]));
+        assert.deepEqual(report.candidate.red_tests.map((test) => test.error), [['hook of bundle failed:', message]]);
+        assert.equal(report.candidate.red_tests[0].diagnostic, createHash('sha256').update(JSON.stringify([message])).digest('hex'));
+        assert.deepEqual(probed, [[scanner]], 'ordinary main-red evidence matching receives the hook failure');
+        assert.ok(report.reason.includes(`${scanner}: before hook failed — ${message}`), report.reason);
+      } finally { fx.cleanup(); }
+    });
+
+    for (const [label, message, passesAlone] of [
+      ['thrown before hook', 'seed failed', false],
+      ['timed-out before hook', 'failed running before hook', false],
+      ['cancelled hook even after passing alone', 'failed running before hook', true],
+    ]) it(`session gate: ${label} is RED and its receipt is not green`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'mc-hook-session-'));
+      const candidate = { repository: '/repo/.git', tree: 'c'.repeat(40), fingerprint: 'bytes' };
+      let output = '';
+      let receipt;
+      let calls = 0;
+      try {
+        const result = await runSessionGate({ cwd: root, files: [scanner], gate: { root, repo: 'repo' },
+          measurement: { repo: 'repo', run: 'hook', base: 'b'.repeat(40), candidate } }, {
+          snapshot: () => candidate, record: () => {}, env: { PATH: process.env.PATH, MC_HOME: root, MC_WORK_ROOT: root },
+          persist: (value) => { receipt = value.receipt; return join(root, 'receipt.json'); },
+          write: (text) => { output += text; },
+          settle: (args) => settleRed({ ...args, git: async (_cwd, argv) => ({ status: 0, stdout: argv[0] === 'diff' ? scanner : '' }) }),
+          tests: async ({ times, onBatch, plan, files }) => {
+            const green = ++calls > 1 && passesAlone;
+            onBatch?.(spawnedBatch({ plan, files }));
+            const path = join(root, `times-${calls}.jsonl`);
+            // Completed reporter summary at the external test-process boundary.
+            writeFileSync(path, `${JSON.stringify({ file: join(root, scanner), ended: true, ok: green })}\n`);
+            times.track(path); times.complete(path);
+            // Also cover a successful child exit whose summary still cancels tests.
+            return { code: green || message === 'failed running before hook' ? 0 : 1, tap: green ? '# tests 3\n# pass 3\n# fail 0\n# cancelled 0\n'
+              : hookTimedOut(scanner, { message }).replace('# tests 2', '# tests 3').replace('# pass 0', '# pass 1') };
+          },
+        });
+        assert.equal(calls, 2, 'the real settlement ran the file alone');
+        assert.equal(result.code, 1);
+        assert.equal(result.ok, false);
+        assert.equal(receipt.outcome, 'red');
+        if (!passesAlone) {
+          assert.ok(output.includes(message), output);
+          assert.deepEqual(result.red_tests.map((test) => test.error), [message === 'seed failed'
+            ? ['hook of bundle failed:', message] : ['before hook of bundle failed']]);
+        }
+        const summary = summarizeGate(output, { exitCode: result.code });
+        assert.match(sessionGateLines(summary, { command: 'tests', seconds: 0, logPath: 'log' }), /^RED /u);
+        // The display must also refuse a stale/settled worker's successful exit.
+        assert.equal(summarizeGate(output, { exitCode: 0 }).ok, false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
     });
 
     it('a file with a failed test beside its cancelled ones stays red', async () => {
