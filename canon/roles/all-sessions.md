@@ -23,20 +23,24 @@ search them when the work touches what they cover; never read one whole.
 
 When a question has options, ask jev first as [asking-martin](../tasks/asking-martin.md) says.
 
-What the app does across programmes is decided once, in memoro's
-`docs/technical/`. Its contracts, rules and budgets hold for every programme.
-A programme's `docs/project/<programme>/rulings.md` decides only that
-programme's own work; a ruling that reaches beyond it belongs in
-`docs/technical/`. A goal's contract narrows these for its own work and never
-contradicts them. Where one of them answers a question, apply it without
-asking.
+Design has two places, and no third. What runs — landed functionality — is
+described once, in memoro's (or memoro-cli's) `docs/technical/`: the only
+description of what the app does, with contracts, rules and budgets that hold
+for every programme. What is being built — decisions, findings and design while
+the work is under way — is in `~/mc/programs/<programme>/`: its README and
+goals. When a goal lands, its work writes the functionality into
+`docs/technical/`, and the programme README drops what `docs/technical/` now
+describes. No session writes `docs/project/`; it is history. A goal's contract
+narrows these for its own work and never contradicts them. Where one of them
+answers a question, apply it without asking.
 
-Before asking, read the relevant technical contracts and programme README/design/rulings. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. Every decision for Martin is a design-level amendment ready for `docs/technical/`: evidence, remaining uncertainty, alternatives/tradeoffs, recommendation, proposed normative wording and exact destination/section. A technical gap within existing direction is resolved in planning and recorded; only an unapproved product/privacy choice or reserved act is Martin's. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md.
+Before asking, read the relevant technical contracts and the programme README and design. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. Every decision for Martin is a design-level amendment ready for `docs/technical/`: evidence, remaining uncertainty, alternatives/tradeoffs, recommendation, proposed normative wording and exact destination/section. A technical gap within existing direction is resolved in planning and recorded; only an unapproved product/privacy choice or reserved act is Martin's. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md. A decision that reaches beyond the programme goes in `docs/technical/`; one that is the programme's alone goes in its README or the goal it governs.
 Plan writes a technical standard into `docs/technical/` within the app's
 existing direction. A product or policy choice — what users see or are
 promised, a cost or privacy line, the test strategy — is Martin's, and his
-answer is written into `docs/technical/` (or the programme's rulings, when it
-is that programme's alone), not only into a goal's log. A shared component
+answer is written into `docs/technical/` when it reaches beyond the programme,
+or into the programme README and the goal it governs when it is that programme's
+alone, not only into a goal's log. A shared component
 that falls short of a standard is changed by the work that owns it, not in
 passing: a goal that finds it writes a proposal to that programme.
 

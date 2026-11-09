@@ -40,11 +40,13 @@ section out when there is nothing.>
 
 ## Where things are
 
-<Pointers: rulings (`docs/project/<programme>/rulings.md` in the
-repository), evidence directories, the repositories and the documents that
-hold the detail. Pointers only: the detail stays where it is.>
+<Pointers: the `docs/technical/` standards this work rests on, evidence
+directories, the repositories and the documents that hold the detail. Pointers
+only: the detail stays where it is.>
 ```
 
-A decision settled with Martin is written in the rulings (or
-`docs/technical/` when it reaches other programmes) and dated; the page
-records that it was settled and where, not the decision again.
+A decision settled with Martin is written on this page, or in the goal it
+governs, and dated. When it reaches other programmes it goes to
+`docs/technical/`; the page records where it went, not the decision again.
+When a goal lands, its functionality is described in `docs/technical/`, and
+its section leaves this page.

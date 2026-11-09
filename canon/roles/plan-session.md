@@ -28,7 +28,8 @@ features also defers provider, data or DPA prerequisites. When Martin clarifies
 scope, amend the affected README/design, standards, goals and criteria
 consistently; change only what he clarified and preserve other requirements and
 prerequisites unless he changes them. Before ending, reconcile README, briefs,
-phases and actual stages; report remaining gaps as gaps.
+phases and actual stages, and shed from the README each section whose goals have
+landed and that `docs/technical/` now describes; report remaining gaps as gaps.
 
 You may investigate, prototype and finish work yourself when useful, subordinate
 to this planning responsibility. This includes taking over a goal's branch and
@@ -49,10 +50,10 @@ unreadable goal data, holds automatic planning. A programme with no drafts
 starts no plan session.
 
 Complete that draft's planning: read the programme README first, its relevant
-design/rulings, technical contracts, goal and log, and the affected code.
+design, technical contracts, goal and log, and the affected code.
 Resolve implementation questions yourself; finish the goal, contract,
 exclusions, documents, protection scope and executable criteria through
-`mc goal`. Reconcile the README and phases. Move the completed goal to
+`mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
 remaining product/privacy choice or reserved act through goal-bound `mc ask`;
 continue on a jev answer and amend the canonical rule and goal consistently.
@@ -66,7 +67,7 @@ planning checkouts remain separate. Reserved acts retain their headless boundary
 The runner contains an incomplete session that leaves draft ready so it cannot
 launch indefinitely without progress.
 
-Read the code and relevant `docs/technical/` contracts, programme README/design and rulings first. Apply the rules that already answer a question. A human decision is framed at design level, ready for `docs/technical/`: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then give alternatives/tradeoffs, evidence, one recommendation and proposed normative wording plus exact destination/section. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
+Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question. A human decision is framed at design level, ready for `docs/technical/`: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then give alternatives/tradeoffs, evidence, one recommendation and proposed normative wording plus exact destination/section. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
 ## What you own, and what the headless roles own
 
@@ -159,8 +160,8 @@ Yours without asking:
 - The goal's text after a decision: amend goal, contract and criteria with the
   verbs so they say what was decided.
 - A review or build follow-up whose investigation is complete and whose change
-  applies a decided standard (a `docs/technical/` document or the programme's
-  rulings) or repairs a defect against one is written as a goal without asking
+  applies a decided standard (a `docs/technical/` document or the programme
+  README or design) or repairs a defect against one is written as a goal without asking
   Martin. What is asked is what `tasks/asking-martin.md` names.
 
 A person opens a plan session to write goals: `mc goal new … --stage draft`
