@@ -147,9 +147,13 @@ checkout stops with its reason; it never triggers another checkout.
 Martin, 2026-11-09: a branch no checkout holds is not a reason to stop. The
 merge restores one: the local branch is created at the pushed head (or moved
 forward to it when it is behind, never otherwise) and checked out with
-`git worktree add` at `<mc home>/checkouts/<repository>/<branch>`. That is the
-branch's one checkout from then on: it is kept like any other, measured in by
-the same rules, and never a detached throwaway.
+`git worktree add` at `<work root>/checkouts/<repository>/<branch>`
+(`~/mc/checkouts/…`). That is the branch's one checkout from then on: it is
+kept like any other, measured in by the same rules, and never a detached
+throwaway. It is under the work root because the shared dependency tree,
+`~/mc/node_modules`, is found by walking up from the worktree. A checkout
+anywhere else resolves none of it, and the round stops at `dependencies`
+(memoro-cli#1441, restored under mc home).
 
 Keep the existing branch checkout while its PR remains open, including after
 publication without queue admission and after failed acceptance. A pushed branch

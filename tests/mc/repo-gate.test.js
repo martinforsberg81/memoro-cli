@@ -339,7 +339,9 @@ describe('the round measures a state worth measuring', () => {
       const added = git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add');
       assert.equal(added.length, 1, 'exactly one checkout is made');
       assert.equal(added[0].args.at(-1), 'feature', 'it is the PR branch, not a detached throwaway');
-      assert.match(added[0].args.at(-2), /checkouts[\\/]repo[\\/]feature$/u);
+      // Under the work root, where the shared `node_modules` is found by
+      // walking up; under mc home it resolved nothing (memoro-cli#1441).
+      assert.equal(added[0].args.at(-2), join(fx.workRoot, 'checkouts', 'repo', 'feature'));
       assert.equal(git.some(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), false, 'and it stays');
       assert.deepEqual(git.filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
     } finally { fx.cleanup(); }
