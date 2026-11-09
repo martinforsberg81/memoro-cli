@@ -66,15 +66,27 @@
  *     file open in the candidate, and — for a worktree — nothing is uncommitted
  *     and its HEAD is on a branch or tag, or retained first. Logs, patches and
  *     everything else in the directory stay. A directory with no record is
- *     legacy and is kept: its age says nothing about whether it is idle. A
- *     session whose runner is alive and has recorded no end is kept.
+ *     legacy: rule S keeps its items unless the proof above holds, and
+ *     (S-whole) below may take it whole. A session whose runner is alive and
+ *     has recorded no end is kept.
+ *   - (S-whole) An ended session's scratch directory goes whole once untouched for 7 days (72 hours under pressure), unless its stem or path is named in an unfinished goal's GOAL.json or LOG.md or in a waiting proposal; then it stays until that goal is finished. (C) A Codex session transcript under `~/.codex/sessions/` goes once older than 7 days and not held open; Codex's databases are never touched.
+ *     Untouched means the newest mtime of the directory and its direct entries.
+ *     A directory is kept, with its reason, when a process stands in it or
+ *     holds a file open, when it still holds a git worktree (a `.git` at depth
+ *     0 to 2) after S's worktree step, when S or B keeps something in it for
+ *     its own reason, or when any fact cannot be read. A legacy directory (no
+ *     record) is judged by the same age and the same process and open-file
+ *     evidence. Removal is `rmTree`, after the list and a recheck at apply.
+ *   - (C) Codex transcripts: see (S-whole) above; a date directory that its
+ *     transcripts leave empty goes with them, and an empty one untouched for 7
+ *     days goes too. Nothing else under the Codex home is read.
  *   - (B) Exact rebuildable caches (tidy-caches.js): five native-phone output
  *     paths in ended runner scratch whose owning goal has finished, idle worker bundles, and four
  *     named per-user caches. Shared caches/bundles retain 72 hours. Every
  *     removal rechecks ownership, process/open-file evidence and tree identity.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -95,7 +107,7 @@ import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
 import { ATTACHED_MARK } from './shared-deps.js';
 import {
-  SCRATCH_MARKER, SCRATCH_SCHEMA, exportDecision, exportShapeOk, gatherExports, removeExport, withSessionLockSync,
+  EXPORTS_DIR, SCRATCH_MARKER, SCRATCH_SCHEMA, exportDecision, exportShapeOk, gatherExports, listReceipts, removeExport, withSessionLockSync,
 } from './scratch.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
@@ -107,7 +119,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 12;
+export const RULES_VERSION = 13;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
@@ -118,6 +130,10 @@ export const LIST_KEEP = 30;
  * 72 hours.
  */
 export const PROGRAMME_TRANSCRIPT_KEEP_MS = 72 * 60 * 60 * 1000;
+/** (S-whole) An ended session's scratch directory, untouched this long, goes whole; 72 hours under pressure (GENERATED_KEEP_MS). */
+export const SCRATCH_WHOLE_MS = 7 * 24 * 60 * 60 * 1000;
+/** (C) A Codex session transcript older than this, and not held open, goes. */
+export const CODEX_TRANSCRIPT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -128,7 +144,7 @@ const PLAN_CHECKOUTS = new Set(['memoro', 'memoro-cli']);
 /** mc's own files in a workarea: never what keeps one, and gone with it. */
 const WORK_AREA_OWN = new Set(['.mc.json', '.mc-role', '.mc-stopped', '.DS_Store']);
 /** Keeps that are the ordinary case, left out of the printout. */
-export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S', 'B']);
+export const ROUTINE = new Set(['T1', 'T2', 'T5', 'recent', 'plan-checkout', 'G', 'K', 'A', 'S', 'B', 'C-other', 'S-named']);
 /** The ownership record the runner writes into each session's scratch directory (`run.js`), defined in scratch.js. */
 export { SCRATCH_MARKER, SCRATCH_SCHEMA } from './scratch.js';
 /** The one name under a scratch directory that is rebuildable whole. */
@@ -156,6 +172,8 @@ export function tidyRoots(env = process.env) {
     wrangler_logs: join(env.HOME || homedir(), 'Library', 'Preferences', '.wrangler', 'logs'),
     shots: join(mcHome(env), 'shots'),
     codex_images: join(env.CODEX_HOME || join(homedir(), '.codex'), 'generated_images'),
+    // Codex session transcripts (C): `sessions/YYYY/MM/DD/*.jsonl`, and nothing else under the Codex home.
+    codex_sessions: join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions'),
   };
 }
 
@@ -179,10 +197,16 @@ const KIND_ROOT = {
   'wrangler-log': 'wrangler_logs',
   'mc-shot': 'shots',
   'codex-image': 'codex_images',
+  'scratch-session': 'scratch',
+  'codex-transcript': 'codex_sessions',
+  'codex-session-day': 'codex_sessions',
 };
 
 /** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
 const SLUG_ROOTS = [['gate_cache', 'gate-cache-slug'], ['gate', 'gate-slug'], ['selection', 'selection-slug']];
+
+/** The kinds that are one approved regular file each (F, and C's transcripts): unlinked, identity-checked, shape-checked. */
+const APPROVED_FILE_KINDS = ['wrangler-log', 'mc-shot', 'codex-image', 'codex-transcript', 'codex-session-day'];
 
 /** The directories directly under `dir`: none when it cannot be read. */
 function listDirs(dir) {
@@ -255,6 +279,7 @@ export function gatherTidyFacts({
     plan_checkouts: [], plan_worktrees: [], goal_worktrees: [],
     work_areas: [], step_areas: [], foreign: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
     scratch_items: [], scratch_exports: [], generated_files: [], cache_items: [],
+    scratch_sessions: [], scratch_refs: null, codex_transcripts: [], codex_days: [], codex_other: [], codex_errors: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
@@ -377,18 +402,7 @@ export function gatherTidyFacts({
   // (S) A runner session's scratch directory: its record read once, its worktrees and DerivedData judged.
   for (const stem of listNames(roots.scratch)) {
     const dir = join(roots.scratch, stem);
-    let marker = null;
-    let markerError = null;
-    let markerAbsent = false;
-    try {
-      if (!lstatSync(join(dir, SCRATCH_MARKER)).isFile()) throw new Error('not a regular file');
-      const value = JSON.parse(readFileSync(join(dir, SCRATCH_MARKER), 'utf8'));
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
-      marker = value;
-    } catch (error) {
-      if (error?.code === 'ENOENT') markerAbsent = true;
-      else markerError = message(error);
-    }
+    const { marker, error: markerError, absent: markerAbsent } = scratchRecord(dir);
     let entries = [];
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { entries = []; }
     for (const entry of entries) {
@@ -442,6 +456,10 @@ export function gatherTidyFacts({
       } catch (error) { item.error = message(error); }
     }
   }
+
+  // (S-whole) every runner session's scratch directory, read whole, and the references that name it (read once here).
+  facts.scratch_refs = gatherScratchReferences(roots);
+  gatherScratchSessions(facts, { roots, running, now, alive, commandLine, openIn });
 
   // (S) registered source exports (scratch.js): each session's receipts read and its trees verified here; tidyPlan decides.
   // Only `<scratch>/<stem>/exports/<id>` with its receipt in `.mc-exports/` is a candidate, never an arbitrary exports directory.
@@ -512,6 +530,7 @@ export function gatherTidyFacts({
   }
   facts.cache_items = gatherCacheFacts({ roots, now, repos, git, running, openIn, servers: (wt) => servers(wt, { root: mcHome(env) }) });
   gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, readDir });
+  gatherCodexSessions(facts, { roots, now, filesOpen });
   return facts;
 }
 
@@ -749,6 +768,237 @@ function gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, r
       if (open === null || active === null) addError(dir, 'codex-image', new Error('could not establish process/open-file evidence'));
     }
   }
+}
+
+/** The entries of a directory: none when it does not exist; any other failure throws. */
+function entriesOf(dir) {
+  try { return readdirSync(dir, { withFileTypes: true }); } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return [];
+    throw error;
+  }
+}
+
+/** A scratch directory's ownership record: its value, or why it cannot be read, or `absent` when there is none. */
+function scratchRecord(dir) {
+  const path = join(dir, SCRATCH_MARKER);
+  try {
+    if (!lstatSync(path).isFile()) throw new Error('not a regular file');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object');
+    return { marker: value, error: null, absent: false };
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { marker: null, error: null, absent: true };
+    return { marker: null, error: message(error), absent: false };
+  }
+}
+
+/** A file's text, or '' when there is no such file. Any other failure throws. */
+function textOrEmpty(path) {
+  try { return readFileSync(path, 'utf8'); } catch (error) { if (error?.code === 'ENOENT') return ''; throw error; }
+}
+
+/** Whether a GOAL.json says, validly, that its goal is done or dropped. Anything else — missing, invalid, unfinished — is not finished. */
+function positivelyFinished(text) {
+  try {
+    const parsed = parseGoal(text);
+    return !parsed.problems && FINISHED.includes(parsed.stage);
+  } catch { return false; }
+}
+
+/**
+ * What names a scratch session (S-whole): the text of every goal's GOAL.json and LOG.md under
+ * `programs/<programme>/goals/<goal>/`, unless the goal's GOAL.json positively says it is done or dropped,
+ * and of every waiting proposal (`proposals/*.md` under the work root and under each programme; `archive/`
+ * is not read). A goal whose GOAL.json is missing or does not parse is read as unfinished: what it names is
+ * kept, and nothing else is held. A file that exists but cannot be read is recorded as `unreadable`, and then
+ * nothing is judged unreferenced.
+ */
+export function gatherScratchReferences(roots) {
+  const refs = { texts: [], unreadable: null };
+  const unreadable = (why) => { refs.unreadable = refs.unreadable || why; };
+  const programs = join(roots.root, PROGRAMS_HOME);
+  let programmes = [];
+  try {
+    programmes = entriesOf(programs).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name);
+  } catch (error) { unreadable(`programmes: ${message(error)}`); }
+  for (const programme of programmes) {
+    const goalsDir = join(programs, programme, GOALS_DIR);
+    let goals = [];
+    try { goals = entriesOf(goalsDir).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name); } catch (error) {
+      unreadable(`goals of ${programme}: ${message(error)}`);
+      continue;
+    }
+    for (const goal of goals) {
+      const label = `${programme}/${goal}`;
+      const dir = join(goalsDir, goal);
+      try {
+        const goalText = textOrEmpty(join(dir, GOAL_FILE));
+        const logText = textOrEmpty(join(dir, 'LOG.md'));
+        if (positivelyFinished(goalText)) continue;
+        if (goalText) refs.texts.push({ source: `goal ${label} GOAL.json`, text: goalText });
+        if (logText) refs.texts.push({ source: `goal ${label} LOG.md`, text: logText });
+      } catch (error) { unreadable(`goal ${label}: ${message(error)}`); }
+    }
+  }
+  for (const dir of [join(roots.root, 'proposals'), ...programmes.map((programme) => join(programs, programme, 'proposals'))]) {
+    let entries = [];
+    try { entries = entriesOf(dir); } catch (error) { unreadable(`proposals in ${shortPath(dir)}: ${message(error)}`); continue; }
+    for (const entry of entries) {
+      if (!entry.name.endsWith('.md') || entry.isDirectory()) continue;
+      const path = join(dir, entry.name);
+      try { refs.texts.push({ source: `waiting proposal ${shortPath(path)}`, text: readFileSync(path, 'utf8') }); } catch (error) {
+        unreadable(`proposal ${shortPath(path)}: ${message(error)}`);
+      }
+    }
+  }
+  return refs;
+}
+
+/** The sources whose text names a stem: its directory name is its name, and its absolute path contains it. */
+function namedBy(refs, stem) {
+  if (!refs || refs.unreadable) return [];
+  return refs.texts.filter((item) => item.text.includes(stem)).map((item) => item.source);
+}
+
+/** The newest mtime of a directory and its direct entries (not walked further). */
+function untouchedMs(dir) {
+  let newest = lstatSync(dir).mtimeMs;
+  for (const name of readdirSync(dir)) newest = Math.max(newest, lstatSync(join(dir, name)).mtimeMs);
+  return newest;
+}
+
+/** The directories a `.git` entry sits in at depth 0 to 2 under a scratch session: the git worktrees it still holds. */
+function worktreesWithin(dir) {
+  const held = [];
+  if (present(join(dir, '.git'))) held.push(dir);
+  for (const child of readdirSync(dir, { withFileTypes: true })) {
+    if (!child.isDirectory()) continue;
+    const path = join(dir, child.name);
+    if (present(join(path, '.git'))) held.push(path);
+    for (const grand of readdirSync(path, { withFileTypes: true })) {
+      if (grand.isDirectory() && present(join(path, grand.name, '.git'))) held.push(join(path, grand.name));
+    }
+  }
+  return held;
+}
+
+/** The entries of `exports/` that no receipt in `.mc-exports/` names: an interrupted creation, kept. */
+function unregisteredExports(dir) {
+  const exportsDir = join(dir, EXPORTS_DIR);
+  if (!present(exportsDir)) return [];
+  const registered = new Set(listReceipts(dir).map((entry) => entry.id));
+  return readdirSync(exportsDir).filter((name) => !registered.has(name));
+}
+
+/**
+ * (S-whole) Every runner session's scratch directory, read whole: its record, the newest mtime of it and
+ * its direct entries, the git worktrees it holds, the exports no receipt names, and the references that
+ * name it. Only when those leave it a candidate are the processes standing in it and the files open in it
+ * read (one lsof each, and never for a directory a reference, a recent write or a live runner keeps).
+ */
+function gatherScratchSessions(facts, { roots, running, now, alive, commandLine, openIn }) {
+  const refs = facts.scratch_refs;
+  for (const stem of listNames(roots.scratch)) {
+    const dir = join(roots.scratch, stem);
+    const item = {
+      path: dir, stem, marker: null, marker_error: null, marker_absent: false, runner_gone: null, newest_ms: null,
+      worktrees: [], unregistered: [], named: [], identity: null, live: null, open: null, bytes: 0, error: null,
+    };
+    facts.scratch_sessions.push(item);
+    try {
+      const record = scratchRecord(dir);
+      item.marker = record.marker;
+      item.marker_error = record.error;
+      item.marker_absent = record.absent;
+      const stat = lstatSync(dir);
+      item.identity = { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+      item.newest_ms = untouchedMs(dir);
+      item.worktrees = worktreesWithin(dir);
+      item.unregistered = unregisteredExports(dir);
+      item.named = namedBy(refs, stem);
+      if (item.marker_error) continue;
+      if (item.marker && !item.marker.ended) item.runner_gone = runnerGone(item.marker, { alive, commandLine });
+      // The lsof answers are read only for a directory the planner could still take: the shortest window is 72 hours.
+      const candidate = !refs.unreadable && item.named.length === 0 && item.unregistered.length === 0
+        && (!item.marker || item.marker.ended || item.runner_gone) && item.newest_ms <= now - GENERATED_KEEP_MS;
+      if (!candidate) continue;
+      if (!running) throw new Error('lsof could not say who stands in it');
+      item.live = [...new Set(processesStandingIn([dir], { cwds: running }).map((p) => p.pid))];
+      if (item.live.length) continue;
+      item.open = openIn(dir);
+      if (Array.isArray(item.open) && item.open.length === 0) item.bytes = treeBytes(dir);
+    } catch (error) { item.error = message(error); }
+  }
+}
+
+/** The sessions root's `YYYY/MM/DD` path segments of a real path under it, or null when it is not under it. */
+function codexRelative(real, base) {
+  return real.startsWith(`${base}/`) ? real.slice(base.length + 1).split('/') : null;
+}
+const isCodexDay = (rel) => rel.length >= 3 && /^\d{4}$/u.test(rel[0]) && /^\d{2}$/u.test(rel[1]) && /^\d{2}$/u.test(rel[2]);
+
+/**
+ * (C) The Codex session transcripts under `<codex>/sessions/YYYY/MM/DD/`: each `*.jsonl` directly in a date
+ * directory, judged by its mtime and by whether a process holds it open (`filesOpen`, one batch, and only
+ * for those old enough to go). A symbolic link or a non-file is refused by name; every other entry is kept.
+ * Nothing else under the Codex home is read.
+ */
+function gatherCodexSessions(facts, { roots, now, filesOpen }) {
+  const base = roots.codex_sessions;
+  const fail = (path, error) => facts.codex_errors.push({ path, error: message(error) });
+  let top;
+  try { top = lstatSync(base); } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return;
+    fail(base, error);
+    return;
+  }
+  if (!top.isDirectory() || top.isSymbolicLink()) { fail(base, new Error('sessions root is not a regular directory')); return; }
+  const transcripts = [];
+  const listing = (dir) => { try { return readdirSync(dir, { withFileTypes: true }); } catch (error) { fail(dir, error); return []; } };
+  for (const year of listing(base)) {
+    const yearPath = join(base, year.name);
+    if (!year.isDirectory() || !/^\d{4}$/u.test(year.name)) { facts.codex_other.push(yearPath); continue; }
+    for (const month of listing(yearPath)) {
+      const monthPath = join(yearPath, month.name);
+      if (!month.isDirectory() || !/^\d{2}$/u.test(month.name)) { facts.codex_other.push(monthPath); continue; }
+      for (const day of listing(monthPath)) {
+        const dayPath = join(monthPath, day.name);
+        if (!day.isDirectory() || !/^\d{2}$/u.test(day.name)) { facts.codex_other.push(dayPath); continue; }
+        const entries = [];
+        for (const entry of listing(dayPath)) {
+          const path = join(dayPath, entry.name);
+          entries.push(path);
+          if (!entry.name.endsWith('.jsonl')) { facts.codex_other.push(path); continue; }
+          const item = { path, mtime_ms: null, bytes: 0, identity: null, open: null, refused: null, error: null };
+          transcripts.push(item);
+          try {
+            const stat = lstatSync(path);
+            if (stat.isSymbolicLink()) item.refused = 'a symbolic link is not a target';
+            else if (!stat.isFile()) item.refused = 'not a regular file';
+            else {
+              item.mtime_ms = stat.mtimeMs;
+              item.bytes = stat.size;
+              item.identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs };
+            }
+          } catch (error) { item.error = message(error); }
+        }
+        let mtime = null;
+        let error = null;
+        try { mtime = lstatSync(dayPath).mtimeMs; } catch (caught) { error = message(caught); }
+        facts.codex_days.push({ path: dayPath, entries, mtime_ms: mtime, error });
+      }
+    }
+  }
+  const old = new Set(transcripts.filter((item) => !item.refused && !item.error && typeof item.mtime_ms === 'number'
+    && item.mtime_ms <= now - CODEX_TRANSCRIPT_KEEP_MS).map((item) => item.path));
+  if (old.size) {
+    let opened = null;
+    try { opened = filesOpen([...old]); } catch { /* uncertainty keeps every candidate */ }
+    for (const item of transcripts) {
+      if (old.has(item.path)) item.open = opened instanceof Map && Array.isArray(opened.get(item.path)) ? opened.get(item.path) : null;
+    }
+  }
+  facts.codex_transcripts.push(...transcripts);
 }
 
 /**
@@ -1121,6 +1371,72 @@ export function scratchItem(item) {
     : { target: true, why: `rebuildable DerivedData of ${session}` };
 }
 
+/**
+ * (S-whole) A runner session's whole scratch directory. It goes only when it has ended (or its runner is
+ * positively gone), has been untouched for seven days (72 hours in a pressure pass), and nothing keeps any
+ * part of it: no reference, no process, no open file, no git worktree that is not going, and no S or B item
+ * kept for its own reason (`own`). A reference always wins over age. Anything unknown keeps it.
+ */
+export function scratchWhole(item, { now, pressure = false, own = null, worktreesGoing = new Set(), refsUnreadable = null } = {}) {
+  if (item.error) throw new Error(item.error);
+  if (item.marker_error) return { target: false, why: `its scratch directory's ownership record cannot be read (${item.marker_error})`, rule: 'S' };
+  const marker = item.marker;
+  if (marker && (marker.schema !== SCRATCH_SCHEMA || marker.owner !== 'runner' || !marker.session || !marker.started)) {
+    return { target: false, why: 'its scratch directory\'s owner is not clear', rule: 'S' };
+  }
+  if (marker && !marker.ended && !item.runner_gone) return { target: false, why: `${marker.session} has not recorded an end`, rule: 'S' };
+  // A reference keeps the directory whatever its age, and its why is the reference (routine: most scratch is named by an unfinished goal).
+  if (item.named?.length) {
+    const more = item.named.length > 1 ? ` and ${item.named.length - 1} more` : '';
+    return { target: false, why: `named by ${item.named[0]}${more}: kept until that goal is finished or the proposal leaves`, rule: 'S-named' };
+  }
+  const label = pressure ? '72 hours' : '7 days';
+  if (typeof item.newest_ms !== 'number') throw new Error('could not tell when it was last touched');
+  if (item.newest_ms > now - (pressure ? GENERATED_KEEP_MS : SCRATCH_WHOLE_MS)) return { target: false, why: `touched in the last ${label}`, rule: 'recent' };
+  if (refsUnreadable) return { target: false, why: `error: a goal or proposal that may name it cannot be read (${refsUnreadable})`, rule: 'S-whole' };
+  if (item.unregistered?.length) return { target: false, why: `an export no receipt names is kept (${item.unregistered[0]})`, rule: 'S' };
+  if (own) return { target: false, why: `kept for its own reason by rule ${own.rule}: ${own.why}`, rule: own.rule };
+  const held = (item.worktrees || []).filter((path) => !worktreesGoing.has(path));
+  if (held.length) return { target: false, why: `still holds a git worktree (${held[0].slice(item.path.length + 1) || '.'})`, rule: 'S-whole' };
+  if (item.live === null || item.live === undefined) throw new Error('could not tell whether a process stands in it');
+  if (item.live.length) return { target: false, why: `process ${item.live.join(', ')} stands in it`, rule: 'S-whole' };
+  if (!Array.isArray(item.open)) throw new Error('could not tell whether a file in it is open');
+  if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds a file open in it`, rule: 'S-whole' };
+  const what = !marker ? 'a legacy scratch directory with no ownership record'
+    : marker.ended ? `ended session ${marker.session}`
+      : `session ${marker.session}, whose owning runner is gone (${item.runner_gone})`;
+  return { target: true, why: `${what}, untouched for ${label}` };
+}
+
+/**
+ * (C) A Codex session transcript: a regular `*.jsonl` older than seven days (its mtime) and not held open.
+ * A recent one is kept as `recent`; a symbolic link or a non-file is kept by name.
+ */
+export function codexTranscript(item, { now }) {
+  if (item.error) throw new Error(item.error);
+  if (item.refused) return { target: false, why: item.refused, rule: 'C' };
+  if (!(item.mtime_ms <= now - CODEX_TRANSCRIPT_KEEP_MS)) return { target: false, why: 'touched in the last 7 days', rule: 'recent' };
+  if (item.open === null || item.open === undefined) throw new Error('could not tell whether a process holds it open');
+  if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds it open`, rule: 'C' };
+  return { target: true, why: 'older than 7 days and not held open' };
+}
+
+/**
+ * (C) A date directory, when every entry in it is a transcript this pass takes (`emptied`): it goes with them.
+ * A date directory with no entry is removed only when it is itself untouched for seven days.
+ */
+export function codexDay(item, { now, emptied }) {
+  if (item.error) throw new Error(item.error);
+  if (item.entries.length === 0) {
+    if (typeof item.mtime_ms !== 'number') throw new Error('could not tell when it was last touched');
+    if (item.mtime_ms > now - CODEX_TRANSCRIPT_KEEP_MS) return { target: false, why: 'empty, touched in the last 7 days', rule: 'recent' };
+    return { target: true, why: 'empty and untouched for 7 days' };
+  }
+  const stays = item.entries.filter((path) => !emptied.has(path));
+  if (stays.length) return { target: false, why: `holds ${stays.length} kept ${stays.length === 1 ? 'entry' : 'entries'}, such as ${basename(stays[0])}`, rule: 'C' };
+  return { target: true, why: 'emptied by its transcripts' };
+}
+
 /* ------------------------------------------------------------- deciding */
 
 /**
@@ -1135,6 +1451,14 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
 
   const claimed = new Set();
   const transcripts = facts.transcripts || [];
+  // What an S or B item keeps for its own reason, by the scratch session directory it lies in: S-whole then keeps that directory too.
+  const ownKeeps = new Map();
+  const holdOwn = (dir, rule, why) => { if (dir && !ownKeeps.has(dir)) ownKeeps.set(dir, { rule, why }); };
+  const scratchDirOf = (path) => {
+    const scratch = facts.roots?.scratch;
+    if (!scratch || !path.startsWith(`${scratch}/`)) return null;
+    return join(scratch, path.slice(scratch.length + 1).split('/')[0]);
+  };
 
   // (G) per `~/.claude/projects/<dir>`, its planning transcripts.
   const groups = new Map();
@@ -1224,7 +1548,10 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
         owner_id: scratchOwner(item.marker), head: item.head, identity: item.identity, evidence: item.evidence,
         ...(item.owner ? { owner: item.owner } : {}),
       });
-    } else keep(item.path, 'S', verdict.why);
+    } else {
+      keep(item.path, 'S', verdict.why);
+      holdOwn(item.session_dir, 'S', verdict.why);
+    }
   }
   // (S) registered source exports: the same decision as a session's own release makes, on the facts read now.
   for (const item of facts.scratch_exports || []) {
@@ -1234,7 +1561,10 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
         path: item.path, kind: 'scratch-export', rule: 'S', why: verdict.why, bytes: verdict.bytes || 0,
         owner_id: scratchOwner(item.marker), identity: verdict.identity,
       });
-    } else keep(item.path, 'S', verdict.why);
+    } else {
+      keep(item.path, 'S', verdict.why);
+      if (item.receipt?.state !== 'released') holdOwn(item.stem_dir ?? item.path, 'S', verdict.why);
+    }
   }
 
   // (L) T1–T5 and leftovers, unchanged, over what G left.
@@ -1259,10 +1589,29 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
     else keep(item.path, verdict.rule || 'error', verdict.why);
   }
 
-  // (B) Exact rebuildable caches, with ownership/age and inactivity evidence.
-  for (const item of facts.cache_items || []) {
-    const verdict = rebuildableCache(item, facts.now);
-    // A containing worktree/area already includes this cache in its removal and byte estimate.
+  // (B) Exact rebuildable caches, with ownership/age and inactivity evidence. Read first: a cache B keeps keeps its scratch session whole.
+  const cacheVerdicts = (facts.cache_items || []).map((item) => [item, rebuildableCache(item, facts.now)]);
+  for (const [item, verdict] of cacheVerdicts) if (!verdict.target) holdOwn(scratchDirOf(item.path), 'B', verdict.why);
+
+  // (S-whole) a runner session's whole scratch directory, decided after the S, export and B items it holds, so their own reasons keep it.
+  const worktreesGoing = new Set(targets.filter((item) => item.kind === 'scratch-worktree').map((item) => item.path));
+  for (const item of facts.scratch_sessions || []) {
+    const inside = targets.filter((target) => target.path.startsWith(`${item.path}/`));
+    const verdict = judge(scratchWhole, item, {
+      now: facts.now, pressure, own: ownKeeps.get(item.path) ?? null, worktreesGoing,
+      refsUnreadable: facts.scratch_refs?.unreadable ?? null,
+    });
+    if (verdict.target) {
+      // Its worktrees and exports go first, through git and their own receipts; the bytes they hold are not counted twice.
+      targets.push({
+        path: item.path, kind: 'scratch-session', rule: 'S-whole', why: verdict.why,
+        bytes: Math.max(0, (item.bytes || 0) - inside.reduce((sum, target) => sum + (target.bytes || 0), 0)), identity: item.identity,
+      });
+    } else keep(item.path, verdict.rule ?? 'S-whole', verdict.why);
+  }
+
+  for (const [item, verdict] of cacheVerdicts) {
+    // A containing worktree/area, or a scratch session taken whole, already includes this cache in its removal and byte estimate.
     if (verdict.target && targets.some((parent) => item.path.startsWith(parent.path + '/'))) continue;
     if (verdict.target) targets.push({ path: item.path, kind: item.kind, rule: 'B', why: verdict.why,
       bytes: item.bytes || 0, identity: item.identity, owner_id: item.owner_id ?? null });
@@ -1282,6 +1631,21 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
     if (item.mtime_ms >= facts.now - GENERATED_KEEP_MS) { keepFor('touched in the last 72 hours'); continue; }
     targets.push({ path: item.path, kind: item.kind, rule: 'F', why: `older than 72 hours (${Math.floor((facts.now - item.mtime_ms) / HOUR_MS)} hours)`, bytes: item.bytes || 0, identity: item.identity });
   }
+
+  // (C) Codex session transcripts older than seven days and not held open, then the date directories they leave empty. A transcript comes first.
+  for (const item of facts.codex_transcripts || []) {
+    const verdict = judge(codexTranscript, item, { now: facts.now });
+    if (verdict.target) targets.push({ path: item.path, kind: 'codex-transcript', rule: 'C', why: verdict.why, bytes: item.bytes || 0, identity: item.identity });
+    else keep(item.path, verdict.rule ?? 'C', verdict.why);
+  }
+  const emptied = new Set(targets.filter((item) => item.kind === 'codex-transcript').map((item) => item.path));
+  for (const item of facts.codex_days || []) {
+    const verdict = judge(codexDay, item, { now: facts.now, emptied });
+    if (verdict.target) targets.push({ path: item.path, kind: 'codex-session-day', rule: 'C', why: verdict.why, bytes: 0 });
+    else keep(item.path, verdict.rule ?? 'C', verdict.why);
+  }
+  for (const item of facts.codex_errors || []) keep(item.path, 'C', `error: ${item.error}`);
+  for (const path of facts.codex_other || []) keep(path, 'C-other', 'not a session transcript: rule C touches only sessions/YYYY/MM/DD/*.jsonl');
 
   return { days, person, targets, kept };
 }
@@ -1352,12 +1716,12 @@ export function outsideRoots(target, roots) {
   const key = KIND_ROOT[target?.kind];
   if (!key || typeof target.path !== 'string') return `not a kind tidy removes: ${target?.kind}`;
   if (!roots[key]) return `no ${key} root in this layout`;
-  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
+  if (APPROVED_FILE_KINDS.includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
     const rootStat = lstatSync(roots[key]);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return 'approved root is not a regular directory';
   }
   const base = realpathSync(roots[key]);
-  if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
+  if (APPROVED_FILE_KINDS.includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
     const relative = target.path.startsWith(`${roots[key]}/`) ? target.path.slice(roots[key].length + 1) : null;
     if (relative === null) return `not under ${roots[key]}`;
     let cursor = roots[key];
@@ -1398,6 +1762,11 @@ export function outsideRoots(target, roots) {
     'mc-shot': (parent === base || parent.startsWith(`${base}/`)) && name.endsWith('.png') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink()
       && real.slice(base.length + 1).split('/').every((part) => !part.startsWith('.') && part !== 'sessions'),
     'codex-image': dirname(parent) === base && UUID_DIRECTORY.test(basename(parent)) && GENERATED_IMAGE.test(name) && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(),
+    // `<scratch>/<stem>`: the whole session directory, a real directory directly under the scratch root.
+    'scratch-session': parent === base && lstatSync(real).isDirectory() && !lstatSync(real).isSymbolicLink(),
+    // `<codex>/sessions/YYYY/MM/DD/<name>.jsonl`, and `<codex>/sessions/YYYY/MM/DD` (C).
+    'codex-transcript': (() => { const rel = codexRelative(real, base); return rel?.length === 4 && isCodexDay(rel) && name.endsWith('.jsonl') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(); })(),
+    'codex-session-day': (() => { const rel = codexRelative(real, base); return rel?.length === 3 && isCodexDay(rel) && lstatSync(real).isDirectory() && !lstatSync(real).isSymbolicLink(); })(),
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
 }
@@ -1484,7 +1853,16 @@ export function applyTidy({
           continue;
         }
         remove(path);
-      } else if (['wrangler-log', 'mc-shot', 'codex-image'].includes(target.kind)) {
+      } else if (target.kind === 'scratch-session') {
+        // Its worktrees went first, through git (the S items above); one still held keeps the whole directory.
+        if (!again.identity || !sameEvidence(again.identity, target.identity)) { applied.push({ path, ok: false, why: 're-check: its directory was replaced or changed since the list' }); continue; }
+        if (worktreesWithin(path).length) { applied.push({ path, ok: false, why: 're-check: it still holds a git worktree' }); continue; }
+        remove(path);
+      } else if (target.kind === 'codex-session-day') {
+        // Only when empty now: the transcripts it held were removed first in this apply.
+        if (readdirSync(path).length) { applied.push({ path, ok: false, why: 're-check: it is not empty' }); continue; }
+        rmdirSync(path);
+      } else if (APPROVED_FILE_KINDS.includes(target.kind)) {
         const stat = lstatSync(path);
         const identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs };
         if (!stat.isFile() || stat.isSymbolicLink() || JSON.stringify(identity) !== JSON.stringify(target.identity)
