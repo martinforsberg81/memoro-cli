@@ -13,7 +13,7 @@
  * The readers take `list` and `read` as arguments, so the tests use a file
  * model.
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
@@ -651,13 +651,14 @@ export function goalBranch({ git, dir, goal, repo }) {
  * `origin/main` — is moved to `origin/main` as it is now, which is that branch
  * made again. A branch with commits is never moved, nor one under uncommitted
  * changes `git reset --keep` will not carry. `say(repo, text)` is told what
- * happened per repository; nothing here fails.
+ * happened per repository; nothing here fails. The verb supplies `exists` for
+ * a goal without a checkout; the runner has already placed its worktrees.
  */
-export function remakeUnbuiltBranches({ git, dir, goal, repos, say, exists = existsSync }) {
+export function remakeUnbuiltBranches({ git, dir, goal, repos, say, exists }) {
   for (const repo of repos) {
     const path = join(dir, repo);
     const tell = (text) => say(repo, `goal/${goal} ${text}`);
-    if (!exists(path)) { tell('no worktree yet — the runner remakes the branch from origin/main at the first session'); continue; }
+    if (exists && !exists(path)) { tell('no worktree yet — the runner remakes the branch from origin/main at the first session'); continue; }
     const fetched = git(path, ['fetch', '-q', 'origin']);
     if (!fetched.ok) { tell(`left as it is — could not fetch (${fetched.stderr.trim() || 'git failed'})`); continue; }
     const own = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
