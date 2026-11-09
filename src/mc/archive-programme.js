@@ -23,7 +23,9 @@
  *    branch deleted, the conversations and the directory gone with them. In
  *    layout 2 the directory is the programme's own — its projects and
  *    documents — so it is moved whole to `~/mc/archive/programs/` instead
- *    (ruling 57).
+ *    (ruling 57). Before it moves, `~/mc/restricted/<programme>/` is removed,
+ *    each entry's README.md kept in the programme's `evidence/` (Martin,
+ *    2026-11-09).
  *
  * Refused, with nothing touched, while any plan under the programme is still
  * on main in either repository (a done one is the runner's to archive first),
@@ -34,14 +36,16 @@
  * and running it again carries on: an archive PR still open from an earlier
  * attempt is landed rather than opened twice.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendRow, keptFiles, keptParagraph, relinkRemoved, remoteSlug } from './archive-plan.js';
 import { listProgrammes } from './brief-collect.js';
 import { FINISHED, programsGoals } from './goals.js';
-import { archivedProgramsHome, programsHome } from './paths.js';
+import { archivedProgramsHome, programsHome, restrictedProgrammeDir } from './paths.js';
 import { landingNote } from './run-plan.js';
 import { isProgrammeArea } from './work-area.js';
 
@@ -102,11 +106,16 @@ export function removedKind(dir, before, after) {
  */
 export function archiveVerdict({
   programme, goals = [], homes = [], areaExists = false, forecast = null, area,
+  restricted = [], restrictedDir = null, beside = true,
 }) {
   const lines = [];
   for (const goal of goals) lines.push(`goal ${programme}/${goal.goal} is ${goal.stage || 'unreadable'} — it is finished or dropped first`);
   for (const item of forecast?.kept || []) lines.push(`${item.path} would be kept: ${item.why}`);
   for (const entry of forecast?.held_by || []) lines.push(`${area}/${entry} is not mc's to remove`);
+  for (const entry of restricted) {
+    if (!entry.readme) lines.push(`${restrictedDir}/${entry.name} has no README.md — say what it is and when it goes, then archive`);
+  }
+  if (restricted.length && !beside) lines.push(`${restrictedDir}/ holds restricted evidence and a layout 1 archive has no programme directory to keep its READMEs`);
   if (!lines.length && !homes.length && !areaExists) lines.push(`no programme named ${programme} — not on main, not being planned`);
   return lines.length ? { ok: false, lines } : { ok: true };
 }
@@ -136,8 +145,13 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
   const homes = present.filter((repo) => listProgrammes(repo, { git: gitOut }).includes(programme));
   const areaExists = existsSync(areaPath);
   const forecast = areaExists ? deps.release(areaName, { env, dryRun: true }) : null;
+  const restrictedDir = restrictedProgrammeDir(programme, env);
+  const restricted = restrictedEntries(restrictedDir);
 
-  const verdict = archiveVerdict({ programme, goals, homes, areaExists, forecast, area: tilde(areaPath) });
+  const verdict = archiveVerdict({
+    programme, goals, homes, areaExists, forecast, area: tilde(areaPath),
+    restricted, restrictedDir: tilde(restrictedDir), beside: isProgrammeArea(areaName, env),
+  });
   if (!verdict.ok) {
     stderr.write(`mc: ${programme} is not archived — nothing was touched:\n`);
     for (const line of verdict.lines) stderr.write(`  ${line}\n`);
@@ -174,6 +188,14 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       return 1;
     }
     if (beside) {
+      // Its restricted evidence goes before the directory moves, so a failed
+      // move is run again from programs/ with nothing restricted left.
+      try {
+        for (const line of clearRestricted(restricted, restrictedDir, areaPath)) say(line);
+      } catch (error) {
+        stderr.write(`mc: ${tilde(restrictedDir)}/ could not be cleared — ${error.message}. Run it again to carry on.\n`);
+        return 1;
+      }
       // The programme is over, so its directory leaves programs/ whole — its
       // projects and documents with it — for archive/programs/ (ruling 57).
       let moved;
@@ -199,6 +221,39 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     if (pr) say(`${repo.name}: #${pr} is still open from an earlier attempt — landing that one`);
     return pr || null;
   }
+}
+
+/**
+ * The entries under `~/mc/restricted/<programme>/`: `{ name, readme }` for
+ * each, `readme` whether it holds a README.md. A file directly there is an
+ * entry with none. Empty when the directory is absent.
+ */
+export function restrictedEntries(dir) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  return entries
+    .filter((entry) => !entry.name.startsWith('.'))
+    .map((entry) => ({ name: entry.name, readme: entry.isDirectory() && existsSync(join(dir, entry.name, 'README.md')) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Removes a programme's restricted evidence: each entry's README.md is copied
+ * to `<area>/evidence/<entry>/RESTRICTED-README.md` first — the record of what
+ * was there and why it went — then `dir` goes whole. Returns the lines to say.
+ */
+export function clearRestricted(entries, dir, areaPath) {
+  if (!existsSync(dir)) return [];
+  const lines = [];
+  for (const entry of entries) {
+    const to = join(areaPath, 'evidence', entry.name);
+    mkdirSync(to, { recursive: true });
+    copyFileSync(join(dir, entry.name, 'README.md'), join(to, 'RESTRICTED-README.md'));
+    lines.push(`${tilde(join(dir, entry.name))} removed — its README kept as ${tilde(join(to, 'RESTRICTED-README.md'))}`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  if (!entries.length) lines.push(`${tilde(dir)}/ removed — it was empty`);
+  return lines;
 }
 
 /**

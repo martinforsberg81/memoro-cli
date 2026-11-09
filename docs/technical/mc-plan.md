@@ -157,14 +157,18 @@ Review ranks usable subscriptions by provider priority, then headroom; ties avoi
 `mc plan <programme> --archive` is a person's act. The runner archives
 finished goals, not the programme above them. `archiveProgramme`
 (`src/mc/archive-programme.js`) refuses any goal not done or dropped and
-anything the planning area's release forecast would keep. It checks before
-changing anything.
+anything the planning area's release forecast would keep, and any entry under
+`~/mc/restricted/<programme>/` without a README.md. It checks before changing
+anything.
 
 In each repository that holds `docs/project/<programme>/`, it removes that
 directory and adds a `closed` row for the programme in `project_log.md`, in a
 docs-only pull request. An existing archive PR is reused. Only after those
-PRs land are the planning worktrees released. In layout 2 the programme's
-directory is moved whole to `~/mc/archive/programs/<programme>/` (a dated
+PRs land are the planning worktrees released. In layout 2
+`~/mc/restricted/<programme>/` is then removed, each entry's README.md first
+copied to the programme's `evidence/<entry>/RESTRICTED-README.md`
+([mc-layout.md § Data outside the repositories](mc-layout.md#data-outside-the-repositories)),
+and the programme's directory is moved whole to `~/mc/archive/programs/<programme>/` (a dated
 name if needed); its remaining documents are not deleted. A network failure
 leaves the planning area intact so a later attempt can continue.
 

@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -204,6 +204,41 @@ describe('archiveProgramme', () => {
     assert.equal(existsSync(area), false);
     assert.ok(existsSync(join(moved, 'rulings.md')));
     assert.ok(existsSync(join(moved, 'proj', 'CLOSEOUT.json')));
+  });
+
+  it('removes the programme\'s restricted evidence and keeps each entry\'s README in the archived programme', async () => {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    const entry = join(fx.root, 'work', 'restricted', 'gone', '2026-11-08-capture');
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'README.md'), '# capture\nDelete when: the programme closes.\n');
+    writeFileSync(join(entry, 'original.png'), 'bytes');
+    mkdirSync(join(fx.root, 'work', 'restricted', 'other', 'keep'), { recursive: true });
+    const { deps } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    assert.equal(existsSync(join(fx.root, 'work', 'restricted', 'gone')), false);
+    assert.ok(existsSync(join(fx.root, 'work', 'restricted', 'other', 'keep')), 'another programme\'s entry was removed');
+    const kept = join(fx.root, 'work', 'archive', 'programs', 'gone', 'evidence', '2026-11-08-capture');
+    assert.equal(readFileSync(join(kept, 'RESTRICTED-README.md'), 'utf8'), '# capture\nDelete when: the programme closes.\n');
+    assert.equal(existsSync(join(kept, 'original.png')), false, 'restricted bytes were carried into the archive');
+  });
+
+  it('touches nothing while a restricted entry has no README', async () => {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    const entry = join(fx.root, 'work', 'restricted', 'gone', 'unlabelled');
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'original.png'), 'bytes');
+    const { deps, calls } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    assert.equal(await archiveProgramme('gone', a), 1);
+    assert.match(a.stderr.out.text, /restricted\/gone\/unlabelled has no README\.md/u);
+    assert.deepEqual(calls.prs, []);
+    assert.ok(existsSync(join(entry, 'original.png')));
+    assert.ok(existsSync(area));
   });
 
   it('a programme archived under a name archived before goes beside it, never over it', () => {
