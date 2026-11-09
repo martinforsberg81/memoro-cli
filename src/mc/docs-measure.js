@@ -22,11 +22,11 @@ import { join } from 'node:path';
 
 import { runShell } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
-import { existingCandidate } from './existing-candidate.js';
+import { measurementCheckout } from './measurement-checkout.js';
 import { declarationFor } from './repo-gate-table.js';
 import { realTests, selectFiles } from './repo-gate.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
-import { mcHome } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
 import { takeLane } from './gate-lane-wait.js';
 import { releaseGateLock } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
@@ -77,7 +77,6 @@ export async function measureDocs({
   }
 
   let dir;
-  let borrowed;
   const lane = gateLaneOf(repoPath);
   const reservation = { root: mcHome(env), lane, repo: repoFileSlug(repoPath), mode: 'docs-gate' };
   const logPath = join(io.outputDir, `docs-${repoFileSlug(repoPath)}-${pr}-${randomUUID()}.log`);
@@ -93,34 +92,23 @@ export async function measureDocs({
   } catch (error) {
     result = { ok: false, stopped_at: holding ? 'measurement' : 'reservation', reason: error.message };
   } finally {
-    try {
-      if (holding) {
-        try {
-          if (borrowed?.ok) {
-            const restored = await borrowed.restore();
-            if (!restored.ok) result = { ...result, ok: false, stopped_at: 'worktree-restore', reason: restored.reason };
-          }
-        }
-        finally { io.releaseLane(reservation); }
-      }
-    } finally { for (const signal of ['SIGTERM', 'SIGINT']) process.removeListener(signal, interrupted); }
+    try { if (holding) io.releaseLane(reservation); }
+    finally { for (const signal of ['SIGTERM', 'SIGINT']) process.removeListener(signal, interrupted); }
   }
   if (controller.signal.aborted) result = { ...result, ok: false, stopped_at: 'interrupted', reason: 'documents test measurement interrupted' };
   return finish({ ...result, log: logPath });
 
-  /** The candidate's life: made, prepared, selected, run. Cleaned up by the caller. */
+  /** The standing candidate: healed, prepared, selected, run, then kept. */
   async function measure() {
     for (const args of [['fetch', 'origin', '--prune'], ['fetch', 'origin', headRef]]) {
       const run = await io.git(args, { cwd: repoPath });
       if (run.status !== 0) return { ok: false, stopped_at: 'candidate', reason: trim(run.stderr) || `git ${args[0]} exited ${run.status}` };
     }
 
-    borrowed = await existingCandidate({ repoPath, branch: headRef, sha: headSha, git: io.git, cwds: deps.candidateCwds });
-    if (!borrowed.ok) return { ok: false, stopped_at: 'candidate', reason: borrowed.reason };
-    dir = borrowed.dir;
-    const ready = await borrowed.start();
-    if (!ready.ok) return { ok: false, stopped_at: 'candidate', reason: ready.reason };
-    note(`using existing checkout ${dir} — no worktree created`);
+    const candidate = await measurementCheckout({ repoPath, sha: headSha, git: io.git, cwds: deps.candidateCwds, root: workRoot(env) });
+    if (!candidate.ok) return { ok: false, stopped_at: 'worktree', reason: candidate.reason };
+    dir = candidate.dir;
+    note(`using the merger's measurement checkout ${dir}`);
 
     const merged = await io.git(['merge', '--no-edit', `origin/${base}`], { cwd: dir });
     if (merged.status !== 0) {
@@ -175,7 +163,7 @@ export async function measureDocs({
     return { ok: true, stopped_at: null, reason: null, files: sel.files.length, red: [], commands: [] };
   }
 
-  /** The result with its `seconds`, read after the candidate is gone. */
+  /** The result with its `seconds`, read after the lane is released. */
   function finish(result) {
     const seconds = Math.round((io.clock() - started) / 1000);
     return { ok: false, stopped_at: null, reason: null, files: 0, red: [], commands: [], ...result, seconds };

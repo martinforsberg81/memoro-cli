@@ -4,7 +4,10 @@
  * The forge is a shell script: its git commands also reach the model. Refs,
  * content and lease decisions are asserted against modelled answers, never
  * presented as proof of git's squash, conflict or lease semantics. The
- * production merge round is the check of those (decided 2026-11-01).
+ * ordinary gate remains modelled (decided 2026-11-01). The commissioned
+ * standing-checkout proof also runs the bounded green/prepare cases from this
+ * same file without the harness, with isolated HOME, MC_HOME and MC_WORK_ROOT,
+ * against local real Git; that independent evidence belongs in the goal log.
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -15,10 +18,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
+import { fakeGitModel } from '../_fake-git-default.mjs';
+import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
 import { runGate } from '../../src/mc/repo-gate.js';
 import { readLease } from '../../src/mc/repo-lease.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { runningRound } from '../../src/mc/gate-lock.js';
+
+// This fixture now issues reset --hard during checkout healing. The shared
+// model has no reset verb yet: extend only this fixture's installed instance,
+// using its existing tracked-tree checkout mechanism, without changing the
+// shared harness. Without the harness (the independent real-Git run) no model
+// is installed and every reset reaches Git itself.
+const model = fakeGitModel();
+if (model) {
+  model.cmd_reset = function ({ dir, gitDir, argv }) {
+    assert.deepEqual(argv, ['--hard'], 'only the commissioned reset is modelled here');
+    const { repo, worktree, state } = this.worktreeOf(dir, gitDir);
+    this.checkout(repo, state, worktree, this.headSha(repo, state));
+    return '';
+  };
+}
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
@@ -145,7 +165,7 @@ function repository(options = {}) {
     hangFlag: join(root, 'hang-flag'),
     mainAt: () => git(root, ['--git-dir', bare, 'rev-parse', 'refs/heads/main']).trim(),
     subjectsOnMain: () => git(root, ['--git-dir', bare, 'log', '--oneline', '-5', 'refs/heads/main']).trim().split('\n'),
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MC_TEST_HANG_FLAG: join(root, 'hang-flag', 'started') },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, MC_WORK_ROOT: join(root, 'work'), MC_TEST_HANG_FLAG: join(root, 'hang-flag', 'started') },
     lease: () => readLease(repo, { root: mcHome }),
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
   };
@@ -201,12 +221,18 @@ describe('the merge round, with modelled git', () => {
     } finally { watcher.close(); fx.cleanup(); }
   });
 
-  it('gates a green branch and squash-merges it onto main', async () => {
+  it('measures in the standing checkout without moving the session branch and squash-merges onto main', async (t) => {
     const fx = repository();
     writeFileSync(fx.logPath, '| Datum | PR | Kontroller | Klass | Beslut | Anteckning |\n|---|---|---|---|---|---|\n');
     try {
       const before = fx.mainAt();
+      const branchBefore = git(fx.repo, ['branch', '--show-current']).trim();
+      const headBefore = git(fx.repo, ['rev-parse', 'HEAD']).trim();
+      assert.equal(branchBefore, 'feature');
+      assert.equal(headBefore, fx.head);
+      const measuredIn = [];
       const report = await runMergeRound({
+        onProgress: (line) => measuredIn.push(line),
         repoPath: fx.repo,
         pr: 400,
         holder: AREA,
@@ -222,6 +248,14 @@ describe('the merge round, with modelled git', () => {
       assert.equal(report.gate.candidate.totals.finished, true);
       assert.deepEqual(report.gate.candidate.red, [], 'nothing this change reaches is red');
       assert.equal(report.gate.candidate.totals.tests, 2, 'both test files ran');
+
+      const candidate = measurementCheckoutPath(fx.repo, fx.env.MC_WORK_ROOT);
+      assert.ok(measuredIn.some(line => line.includes(`measurement checkout ${candidate}`)), measuredIn.join('\n'));
+      assert.equal(git(candidate, ['branch', '--show-current']).trim(), '', 'measurement stays detached');
+      assert.equal(git(candidate, ['rev-parse', 'HEAD^{tree}']).trim(), report.gate.candidate.tree);
+      assert.equal(git(fx.repo, ['rev-parse', 'HEAD']).trim(), headBefore, 'session HEAD unchanged');
+      assert.equal(git(fx.repo, ['branch', '--show-current']).trim(), branchBefore, 'session branch unchanged');
+      t.diagnostic(`measurement checkout ${candidate}; session ${branchBefore} at ${headBefore} unchanged; measured tree ${report.gate.candidate.tree}`);
 
       // And main really moved, by exactly one squashed commit.
       const after = fx.mainAt();
@@ -388,7 +422,7 @@ describe('what a repository declares, the round does', () => {
       });
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.gate.declaration.prepare, prepare);
-      assert.equal(readFileSync(fx.env.MC_TEST_PREPARED, 'utf8').trim(), realpathSync(fx.repo));
+      assert.equal(readFileSync(fx.env.MC_TEST_PREPARED, 'utf8').trim(), realpathSync(measurementCheckoutPath(fx.repo, fx.env.MC_WORK_ROOT)));
       assert.equal(report.gate.declaration.source, 'declared');
     } finally { fx.cleanup(); }
   });

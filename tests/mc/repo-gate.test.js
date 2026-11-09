@@ -31,6 +31,9 @@ import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
 import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, ROUND_STALL_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { runSessionGate } from '../../src/mc/session-gate-run.js';
+import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
+import { measureDocs } from '../../src/mc/docs-measure.js';
+import { freshenBranchForLanding } from '../../src/mc/repo-freshen.js';
 import { settleRed } from '../../src/mc/gate-settle.js';
 import { gateLines as sessionGateLines, summarizeGate } from '../../src/mc/gate-local.js';
 import { spawnedBatch } from './_helpers/spawned-batch.js';
@@ -128,17 +131,12 @@ function fixture({
   writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
 
   const calls = [];
-  const candidateDir = join(workRoot, 'existing', 'candidate');
+  const candidateDir = measurementCheckoutPath(repoPath, workRoot);
   let detached = false;
   let merging = false;
   const localSha = pushed || pr.headRefOid;
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
-    if (args[0] === 'worktree' && args[1] === 'list') {
-      mkdirSync(candidateDir, { recursive: true });
-      writeFileSync(join(candidateDir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
-      return { status: 0, stdout: `worktree ${candidateDir}\0HEAD ${localSha}\0branch refs/heads/${pr.headRefName}\0\0`, stderr: '' };
-    }
     if (args[0] === 'checkout') { detached = args.includes('--detach'); return { status: 0, stdout: '', stderr: '' }; }
     if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: merging && args.at(-1) === 'MERGE_HEAD' ? 0 : 1, stdout: '', stderr: '' };
     if (args[0] === 'rev-parse' && (args[1]?.startsWith('refs/heads/') || (args[1] === 'HEAD' && !detached))) return { status: 0, stdout: localSha, stderr: '' };
@@ -194,6 +192,7 @@ function fixture({
     repoPath,
     mcHome,
     workRoot,
+    candidateDir,
     calls,
     git,
     gh,
@@ -312,99 +311,101 @@ describe('the round measures a state worth measuring', () => {
    * memoro the second side was a second `npm ci` for a 492 MB tree and a
    * second 233.6 s of tests for every pull request.
    */
-  it('reuses the existing checkout, restores its branch, and runs the suite once', async () => {
+  it('all round kinds keep one standing checkout, detach per use and never move a session branch', async () => {
     const fx = fixture();
     try {
-      await fx.run();
-      const added = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
-      assert.deepEqual(added, [], 'no worktree is created');
-      assert.deepEqual(fx.ran('git').filter((call) => call.args[0] === 'checkout').map((call) => call.args), [
-        ['checkout', '--detach', 'abc1234'], ['checkout', '--no-guess', 'feature'],
-      ]);
-      assert.equal(fx.ran('git').some((call) => call.args[0] === 'worktree' && call.args[1] === 'remove'), false);
-      const sides = fx.ran('suite').map((call) => call.cwd.split('/').pop());
-      assert.deepEqual(sides, ['candidate']);
-    } finally { fx.cleanup(); }
-  });
-
-  it('restores one checkout for a branch nothing holds, measures in it and keeps it', async () => {
-    const fx = fixture();
-    try {
-      const report = await fx.run({
-        git: (args, opts) => {
-          if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '', stderr: '' };
-          return fx.git(args, opts);
-        },
-      });
-      assert.notEqual(report.stopped_at, 'worktree');
+      const env = { ...process.env, MC_WORK_ROOT: fx.workRoot, MC_HOME: fx.mcHome };
+      assert.equal((await fx.run()).ok, true);
+      assert.equal((await fx.run({ pr: null, full: true })).ok, true);
+      assert.equal((await fx.run({ prs: [400, 401] })).ok, true);
+      const docs = await measureDocs({ repoPath: fx.repoPath, pr: 400, headRef: 'feature', headSha: 'abc1234', base: 'main', env,
+        deps: { git: fx.git, candidateCwds: () => [], declaration: () => ({ ok: true, declaration: { select: 'select' } }),
+          select: async ({ cwd }) => { fx.calls.push({ tool: 'docs', cwd }); return { ok: true, files: [] }; } } });
+      assert.equal(docs.ok, true, docs.reason);
+      const freshen = await freshenBranchForLanding({ repoPath: fx.repoPath, branch: 'feature', base: 'main', env, git: fx.git, candidateCwds: () => [] });
+      assert.equal(freshen.ok, true, freshen.reason);
       const git = fx.ran('git');
-      const added = git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add');
-      assert.equal(added.length, 1, 'exactly one checkout is made');
-      assert.equal(added[0].args.at(-1), 'feature', 'it is the PR branch, not a detached throwaway');
-      // Under the work root, where the shared `node_modules` is found by
-      // walking up; under mc home it resolved nothing (memoro-cli#1441).
-      assert.equal(added[0].args.at(-2), join(fx.workRoot, 'checkouts', 'repo', 'feature'));
-      assert.equal(git.some(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), false, 'and it stays');
-      assert.deepEqual(git.filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
+      assert.deepEqual(git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add'), [
+        { tool: 'git', args: ['worktree', 'add', '--detach', fx.candidateDir, 'abc1234'], cwd: fx.repoPath },
+      ], 'first use only');
+      assert.deepEqual(git.filter(({ args }) => args[0] === 'checkout').map(({ args, cwd }) => [args, cwd]),
+        ['abc1234', 'origin/main', 'origin/main', 'abc1234', 'base1111'].map(sha => [['checkout', '--detach', sha], fx.candidateDir]));
+      assert.deepEqual(fx.ran('suite').map(({ cwd }) => cwd), [fx.candidateDir, fx.candidateDir, fx.candidateDir]);
+      assert.deepEqual(fx.ran('docs').map(({ cwd }) => cwd), [fx.candidateDir]);
+      assert.deepEqual(git.filter(({ args }) => args[0] === 'push').map(({ cwd }) => cwd), [fx.candidateDir]);
+      assert.deepEqual(git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
+      assert.deepEqual(git.filter(({ args }) => ['update-ref', 'branch'].includes(args[0])), []);
+      assert.equal(existsSync(fx.candidateDir), true);
     } finally { fx.cleanup(); }
   });
 
-  it('refuses a busy, dirty or mismatched checkout before changing it', async () => {
-    for (const kind of ['busy', 'unknown activity', 'dirty', 'wrong head']) {
+  it('heals a dirty or unfinished checkout and recreates a missing checkout before measuring', async () => {
+    for (const kind of ['dirty', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'missing']) {
       const fx = fixture();
       try {
+        assert.equal((await fx.run()).ok, true);
+        if (kind === 'missing') rmSync(fx.candidateDir, { recursive: true });
+        let tracked = kind === 'dirty';
+        let untracked = kind === 'dirty';
+        let operation = kind.endsWith('_HEAD') ? kind : null;
+        const ignored = join(fx.candidateDir, 'node_modules');
+        if (kind !== 'missing') mkdirSync(ignored);
         const report = await fx.run({
-          candidateCwds: () => {
-            if (kind === 'unknown activity') throw new Error('lsof failed');
-            return kind === 'busy' ? [{ pid: 123, cwd: join(fx.workRoot, 'existing', 'candidate', 'src') }] : [];
-          },
           git: (args, opts) => {
-            if (kind === 'dirty' && args[0] === 'status') return { status: 0, stdout: ' M src/work.js\n', stderr: '' };
-            if (kind === 'wrong head' && args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: 'unpublished', stderr: '' };
-            return fx.git(args, opts);
+            const run = fx.git(args, opts);
+            if (args[0] === 'rev-parse' && args.includes('--verify')) return { ...run, status: args.at(-1) === operation ? 0 : 1 };
+            if (['merge', 'cherry-pick', 'revert'].includes(args[0]) && args[1] === '--abort') operation = null;
+            if (args[0] === 'reset' && args[1] === '--hard') tracked = false;
+            if (args[0] === 'clean' && args[1] === '-fd') untracked = false;
+            return run;
+          },
+          suite: ({ cwd }) => {
+            assert.equal(cwd, fx.candidateDir);
+            assert.equal(tracked, false, 'tracked dirt must be healed before the suite');
+            assert.equal(untracked, false, 'untracked dirt must be healed before the suite');
+            assert.equal(operation, null, 'unfinished operation must be aborted before the suite');
+            return fx.suite({ cwd });
           },
         });
-        assert.equal(report.stopped_at, 'worktree', kind);
-        assert.deepEqual(fx.ran('suite'), []);
-        assert.equal(fx.ran('git').some(({ args }) => ['checkout', 'merge', 'reset', 'clean'].includes(args[0]) || (args[0] === 'worktree' && args[1] !== 'list')), false, kind);
+        assert.equal(report.ok, true, `${kind}: ${report.reason}`);
+        const git = fx.ran('git');
+        assert.deepEqual(git.filter(({ args }) => args[0] === 'reset').map(({ args }) => args), [['reset', '--hard'], ['reset', '--hard']]);
+        assert.deepEqual(git.filter(({ args }) => args[0] === 'clean').map(({ args }) => args), [['clean', '-fd'], ['clean', '-fd']]);
+        assert.deepEqual(git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').map(({ args }) => args),
+          Array.from({ length: kind === 'missing' ? 2 : 1 }, () => ['worktree', 'add', '--detach', fx.candidateDir, 'abc1234']));
+        if (kind !== 'missing') assert.equal(existsSync(ignored), true, 'ignored dependencies stay');
       } finally { fx.cleanup(); }
     }
   });
 
-  it('restores the original branch after a red verdict, a conflict and an exception', async () => {
+  it('refuses a foreign process by pid or unknown activity before changing the standing checkout', async () => {
+    for (const kind of ['busy', 'unknown activity']) {
+      const fx = fixture();
+      try {
+        const report = await fx.run({ candidateCwds: () => {
+          if (kind === 'unknown activity') throw new Error('lsof failed');
+          return [{ pid: 123, cwd: join(fx.candidateDir, 'src') }];
+        } });
+        assert.equal(report.stopped_at, 'worktree', kind);
+        if (kind === 'busy') assert.match(report.reason, /is in use by pid 123/u);
+        assert.deepEqual(fx.ran('suite'), []);
+        assert.deepEqual(fx.ran('git').filter(({ args }) => ['checkout', 'merge', 'reset', 'clean', 'worktree'].includes(args[0])), []);
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('leaves the measured checkout detached after a red verdict, conflict or exception and heals next use', async () => {
     for (const kind of ['red', 'conflict', 'exception']) {
       const fx = fixture({ candidateRed: kind === 'red' ? ['broken'] : [], conflict: kind === 'conflict' });
       try {
         if (kind === 'exception') await assert.rejects(fx.run({ suite: () => { throw new Error('suite crashed'); } }), /suite crashed/u);
         else assert.equal((await fx.run()).ok, false);
-        assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
-        assert.equal(fx.ran('git').some(({ args }) => args[0] === 'reset' || args[0] === 'clean' || (args[0] === 'worktree' && args[1] !== 'list')), false);
+        assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'checkout').map(({ args }) => args), [['checkout', '--detach', 'abc1234']]);
+        assert.equal(existsSync(fx.candidateDir), true);
+        assert.equal(fx.lease().held, false);
+        await fx.run();
         if (kind === 'conflict') assert.ok(fx.ran('git').some(({ args }) => args[0] === 'merge' && args[1] === '--abort'));
-        assert.equal(fx.lease().held, false);
-      } finally { fx.cleanup(); }
-    }
-  });
-
-  it('retains unexpected changes and a newly occupied checkout instead of forcing restoration', async () => {
-    for (const kind of ['dirty after suite', 'busy after suite', 'branch moved']) {
-      const fx = fixture();
-      try {
-        const report = await fx.run({
-          candidateCwds: () => kind === 'busy after suite' && fx.ran('suite').length ? [{ pid: 123, cwd: join(fx.workRoot, 'existing', 'candidate') }] : [],
-          git: (args, opts) => {
-            if (fx.ran('suite').length) {
-              if (kind === 'dirty after suite' && args[0] === 'status') return { status: 0, stdout: '?? retained.txt\n', stderr: '' };
-              if (kind === 'branch moved' && args[0] === 'rev-parse' && args[1] === 'refs/heads/feature') return { status: 0, stdout: 'new-head', stderr: '' };
-            }
-            return fx.git(args, opts);
-          },
-        });
-        assert.equal(report.ok, false);
-        assert.equal(report.stopped_at, 'worktree-restore', report.reason);
-        assert.match(report.reason, /retained with detached HEAD/u);
-        assert.equal(fx.ran('git').some(({ args }) => args[0] === 'checkout' && args[1] === '--no-guess'), false);
-        assert.equal(fx.ran('git').some(({ args }) => ['reset', 'clean', 'update-ref'].includes(args[0]) || (args[0] === 'worktree' && args[1] !== 'list')), false);
-        assert.equal(fx.lease().held, false);
+        assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
       } finally { fx.cleanup(); }
     }
   });
@@ -800,11 +801,11 @@ describe('the dependency tree is checked before a suite is believed', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('runs in the registered checkout under the shared dependency tree', async () => {
+  it('runs in the measurement checkout under the shared dependency tree', async () => {
     const fx = fixture();
     try {
       await fx.run();
-      assert.equal(fx.ran('suite')[0].cwd, join(fx.workRoot, 'existing', 'candidate'));
+      assert.equal(fx.ran('suite')[0].cwd, fx.candidateDir);
     } finally { fx.cleanup(); }
   });
 });
@@ -1036,7 +1037,9 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
       const report = await fx.run();
       assert.equal(report.ok, true, report.reason);
       const adds = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add').map((call) => call.args[call.args.length - 1]);
-      assert.deepEqual(adds, [], 'no new worktree');
+      assert.deepEqual(adds, ['origin/main'], 'one standing worktree on first use');
+      assert.equal(fx.ran('suite')[0].cwd, fx.candidateDir);
+      assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
       assert.deepEqual(fx.ran('git').find((call) => call.args[0] === 'checkout').args, ['checkout', '--detach', 'origin/main']);
       const merges = fx.ran('git').filter((call) => call.args[0] === 'merge').map((call) => call.args[2]);
       assert.deepEqual(merges, ['sha401', 'sha402', 'sha403'], 'heads merged in the order given');
@@ -1197,7 +1200,7 @@ describe('a repository that selects by diff', () => {
     // the stub; this tests the invocation the repository will actually get.
     writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/', ...scripts } });
     // Where a script records that it ran, and with which arguments. Outside the
-    // worktrees, which the round removes on its way out.
+    // worktrees, so they do not affect the measured tree.
     const marks = join(root, 'marks');
     mkdirSync(marks, { recursive: true });
     // The operator table is where a repository says how it selects. `echo` is a
@@ -1219,22 +1222,21 @@ describe('a repository that selects by diff', () => {
 
     const runs = [];
     let detached = false;
-    const candidateDir = join(root, 'existing', 'candidate');
     const git = (args, opts = {}) => {
       const also = gitAlso(args, opts);
       if (also !== undefined) return also;
       if (args[0] === 'checkout') { detached = args.includes('--detach'); return { status: 0, stdout: '', stderr: '' }; }
       if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse' && (args[1]?.startsWith('refs/heads/') || (args[1] === 'HEAD' && !detached))) return { status: 0, stdout: 'abc1234', stderr: '' };
-      if (args[0] === 'worktree' && args[1] === 'list') {
-        const dir = candidateDir;
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const dir = args.at(-2);
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
         for (const file of files) {
           mkdirSync(join(dir, dirname(file)), { recursive: true });
           writeFileSync(join(dir, file), '');
         }
-        return { status: 0, stdout: `worktree ${dir}\0HEAD abc1234\0branch refs/heads/feature\0\0`, stderr: '' };
+        return { status: 0, stdout: '', stderr: '' };
       }
       if (args[0] === 'worktree' && args[1] === 'remove') {
         rmSync(args[args.length - 1], { recursive: true, force: true });
@@ -1269,7 +1271,7 @@ describe('a repository that selects by diff', () => {
       report: (extra = {}) => runGate({
         candidateCwds: () => [],
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
-        env: { ...process.env, GATE_MARKS: marks },
+        env: { ...process.env, MC_WORK_ROOT: root, GATE_MARKS: marks },
         suite: ({ cwd, command }) => {
           if (!full) throw new Error('a selecting round must not run the whole suite');
           suites.push(cwd);
@@ -2030,7 +2032,7 @@ describe('a repository that selects by diff', () => {
           assert.equal(report.ok, kind === 'exact', report.reason);
           assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
           assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), [
-            ['checkout', '--detach', 'abc1234'], ['checkout', '--no-guess', 'feature'],
+            ['checkout', '--detach', 'abc1234'],
           ]);
           assert.equal(report.timings['main red'], undefined);
           if (kind === 'exact') assert.deepEqual(report.main_red_files, [scanner]);
@@ -3125,13 +3127,12 @@ describe('derived artifacts are regenerated after the base is merged in', () => 
   });
   /** The fixture's git, with `status` answering what the commands left. */
   const withStatus = (fx, porcelain) => {
-    let statuses = 0;
     let committed = false;
     return (args, opts = {}) => {
       if (args[0] === 'commit') committed = true;
       if (args[0] === 'status') {
         fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
-        return { status: 0, stdout: statuses++ === 0 || committed ? '' : porcelain, stderr: '' };
+        return { status: 0, stdout: committed ? '' : porcelain, stderr: '' };
       }
       return fx.git(args, opts);
     };
@@ -3199,7 +3200,7 @@ describe('the round awaits its children (merger-hardening step 4)', () => {
       assert.equal(report.base.commit, 'base1111');
       assert.equal(report.candidate.commit, 'cand2222');
       assert.deepEqual(report.pr_tests.files, ['tests/a.test.js']);
-      assert.ok(fx.ran('git').some((call) => call.args[0] === 'checkout' && call.args[1] === '--no-guess'), 'the original branch was restored');
+      assert.deepEqual(fx.ran('git').filter(({ args }) => args[0] === 'checkout').map(({ args }) => args), [['checkout', '--detach', 'abc1234']], 'the candidate stays detached');
     } finally { fx.cleanup(); }
   });
 
