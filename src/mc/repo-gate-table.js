@@ -253,6 +253,11 @@ export const SHIPPED = Object.freeze({
         paths: Object.freeze(['public/css/tokens/', 'public/css/theme/theme-memoro-light.css', 'public/css/theme/theme-memoro-dark.css']),
       }),
       Object.freeze({ command: 'npm run tokens:docs', paths: Object.freeze(['docs/technical/design-tokens.md']) }),
+      // The scan card's mirror of src/i18n/locales.js (a test compares them).
+      Object.freeze({
+        command: 'node scripts/scan-ocr-languages-mirror.mjs',
+        paths: Object.freeze(['public/js/msr/cards/document-scan/generated/locales.js']),
+      }),
     ]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs

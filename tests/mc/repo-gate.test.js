@@ -325,8 +325,28 @@ describe('the round measures a state worth measuring', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('refuses an absent, busy, dirty or mismatched checkout before changing it', async () => {
-    for (const kind of ['absent', 'busy', 'unknown activity', 'dirty', 'wrong head']) {
+  it('restores one checkout for a branch nothing holds, measures in it and keeps it', async () => {
+    const fx = fixture();
+    try {
+      const report = await fx.run({
+        git: (args, opts) => {
+          if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '', stderr: '' };
+          return fx.git(args, opts);
+        },
+      });
+      assert.notEqual(report.stopped_at, 'worktree');
+      const git = fx.ran('git');
+      const added = git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add');
+      assert.equal(added.length, 1, 'exactly one checkout is made');
+      assert.equal(added[0].args.at(-1), 'feature', 'it is the PR branch, not a detached throwaway');
+      assert.match(added[0].args.at(-2), /checkouts[\\/]repo[\\/]feature$/u);
+      assert.equal(git.some(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), false, 'and it stays');
+      assert.deepEqual(git.filter(({ args }) => args[0] === 'checkout').at(-1).args, ['checkout', '--no-guess', 'feature']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('refuses a busy, dirty or mismatched checkout before changing it', async () => {
+    for (const kind of ['busy', 'unknown activity', 'dirty', 'wrong head']) {
       const fx = fixture();
       try {
         const report = await fx.run({
@@ -335,7 +355,6 @@ describe('the round measures a state worth measuring', () => {
             return kind === 'busy' ? [{ pid: 123, cwd: join(fx.workRoot, 'existing', 'candidate', 'src') }] : [];
           },
           git: (args, opts) => {
-            if (kind === 'absent' && args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '', stderr: '' };
             if (kind === 'dirty' && args[0] === 'status') return { status: 0, stdout: ' M src/work.js\n', stderr: '' };
             if (kind === 'wrong head' && args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: 'unpublished', stderr: '' };
             return fx.git(args, opts);
