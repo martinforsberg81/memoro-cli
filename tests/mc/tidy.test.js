@@ -1262,7 +1262,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 11);
+      assert.equal(written.rules_version, 12, 'rules version 12: the scratch-export kind under rule S');
       assert.equal(written.person, false, 'the list says whose run it was');
       assert.equal(written.pressure, false);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
