@@ -54,7 +54,8 @@ stays.
 | `~/Library/Preferences/.wrangler/logs/` | Wrangler logs | regular `.log` files directly in the root, older than 72 hours (F) |
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
-| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData, registered source exports | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record; a verified registered export of an ended session (S, [Registered source exports](#registered-source-exports)); never logs, patches, receipts or the directory |
+| `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData, registered source exports | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record; a verified registered export of an ended session (S, [Registered source exports](#registered-source-exports)); under S alone never logs, patches, receipts or the directory; the whole directory goes only as S-whole below |
+| `${CODEX_HOME:-~/.codex}/sessions/YYYY/MM/DD/` | Codex session transcripts | a regular `*.jsonl` file older than seven days and not held open, and the date directory its transcripts leave empty (C); nothing else under the Codex home |
 | Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
 
@@ -63,9 +64,13 @@ In layout 2 the planning areas are `~/mc/programs/<programme>/`, of which tidy r
 The old project rule P was removed with projects. Rules version 11 reuses P
 for plan goal checkouts; it reads no execution register and retains S, F and
 the rebuildable-cache rule B approved by Martin on 2026-11-06. Rules version 12
-adds the `scratch-export` kind to S, the registered source exports below.
-Scratch cleanup follows S below and [Registered source exports](#registered-source-exports);
-transcripts and logs outside F's exact root and shape remain governed by their existing rules.
+adds the `scratch-export` kind to S, the registered source exports below. Rules
+version 13 adds S-whole, the whole-directory rule for an ended session's scratch,
+and C, the Codex session transcripts, both below (Martin, 2026-11-09). Scratch
+cleanup follows S and S-whole below and
+[Registered source exports](#registered-source-exports); transcripts and logs
+outside F's exact root and shape, and outside C's `sessions/` shape, remain
+governed by their existing rules.
 
 **F — generated files (72 hours, independent of `--days`).** The approved
 Wrangler root is `~/Library/Preferences/.wrangler/logs/`; only direct regular
@@ -299,6 +304,17 @@ marker-less `DerivedData` is never adopted. Before 2026-11-05 the chore pass
 removed every scratch directory not touched for two days, including evidence;
 that sweep is gone.
 
+**S-whole — an ended session's whole scratch directory.** An ended session's scratch directory goes whole once untouched for 7 days (72 hours under pressure), unless its stem or path is named in an unfinished goal's GOAL.json or LOG.md or in a waiting proposal; then it stays until that goal is finished. Each step of the decision is in the list with its reason:
+
+- *Ended* is S's own test on `.mc-scratch.json`: the record names the runner and the session, and either has `ended`, or has no `ended` while its `runner_pid` is positively gone. A directory with no record is legacy and qualifies under the same age only when no process stands in it and no file in it is open.
+- *Untouched* is the newest mtime of the directory itself and of its direct entries.
+- *Unfinished* is any goal whose GOAL.json does not validly say `done` or `dropped`. A goal whose GOAL.json is missing or does not parse is read as unfinished: what it names is kept, and nothing else is held. *Waiting proposal* is a file `proposals/*.md` under the work root or under a programme (`programs/<programme>/proposals/`); `archive/` names nothing. A goal or proposal file that exists but cannot be read keeps every directory, with its why.
+- A directory named by an unfinished goal or a waiting proposal is kept whatever its age, and its why names the reference (`S-named`).
+- A directory is kept when a process stands in it or holds a file open in it; when it still holds a git worktree (a `.git` at depth 0 to 2) after S's worktree step, so a clean worktree S removes first goes through git and retains a detached HEAD as S always does; when S or B keeps something in it for its own reason (a dirty worktree, a registered export that does not verify, a marker-less `DerivedData`, a B cache whose goal is unfinished); when `exports/` holds an entry no receipt names; or when any fact cannot be read.
+- Removal is `rmTree`, after the list. At apply the directory is judged again on fresh facts, and it is kept when its identity changed, when it became named or touched since the list was written, or when a worktree is still in it.
+
+**C — Codex session transcripts.** A Codex session transcript under `~/.codex/sessions/` goes once older than 7 days and not held open; Codex's databases are never touched. The rule takes a regular `sessions/YYYY/MM/DD/*.jsonl` file (never a symbolic link), judged by its mtime and by one `lsof` batch over the candidates old enough to go, and a date directory whose entries are all such transcripts goes with them, through `rmdir` only when it is empty. An empty date directory untouched for 7 days goes too. `CODEX_HOME` is honoured. Nothing else under the Codex home is read or removed: the `thread_history_*.sqlite` and `logs_*.sqlite` databases, `generated_images/` (F), and every entry outside `sessions/`. A compressed `sessions/*.jsonl.gz` is not a `*.jsonl` file, so C keeps it, as "not a session transcript"; whether C should cover it is a question for planning.
+
 ### Registered source exports
 
 The approved shared standard (Martin, 2026-11-09). It applies to every programme:
@@ -400,11 +416,14 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   event loop). The sweep requires the recorded end, and touches nothing else. A
   refused or failed sweep is recorded as cleanup and changes no session exit, goal
   verdict or provider classification.
-- **Not eligible, under this rule.** Unregistered and legacy directories,
-  receipts that do not verify (malformed, forged, or whose inventory does not
-  reconcile with the retained commit), dirty or registered worktrees of any other
-  kind, native-phone, host and public source, logs, patches, results, session
-  records, receipts and goal documents. Their existing rules still apply.
+- **Not eligible, under this rule.** Unregistered exports, receipts that do not
+  verify (malformed, forged, or whose inventory does not reconcile with the
+  retained commit), dirty or registered worktrees of any other kind, and
+  native-phone, host and public source stay under this rule. Logs, patches,
+  results, session records and receipts in an ended, unreferenced directory now
+  go whole under S-whole, after 7 days (72 hours under pressure); a directory
+  that S-whole keeps keeps them too. Goal documents are not in a scratch
+  directory, and their existing rules still apply.
 - **Costs.** Git is reached for a fixed handful of commands per export (resolve,
   retain, list, and one list per verification), never once per file; the object
   reads are one streamed `cat-file --batch` per creation. No age threshold is added
@@ -533,7 +552,9 @@ rule, the first ten targets, every keep worth reading, and the list file;
 `--json` prints the list with `disk`. The bytes are the list's estimate. The
 runner runs `mc tidy --apply` once a day by its own `runs.tsv` row (kind
 `tidy`, note `freed=<bytes>,items=<n>,kept=<k>`), and its file rules in every
-pressure pass. In the chore pass
+pressure pass. S-whole and C run in both: a pressure pass takes an ended scratch
+directory after 72 hours instead of 7 days, and C's seven days hold in both. In
+the chore pass
 `runner.log` moves to `runner.log.1` once it passes 32 MiB
 (`RUNNER_LOG_MAX_BYTES`).
 
@@ -578,7 +599,9 @@ A retired workarea outside a person's `--apply`, and one with anything in it
 but landed checkouts; a worktree with
 uncommitted changes or commits main lacks that are not on its pushed branch; any `memory/` under
 `~/.claude/projects`; `runs.tsv`; `~/.memoro/mc/gate-rounds.jsonl`;
-`project_log.md`; anything outside the roots above. No `git worktree move`
+`project_log.md`; Codex's databases (`thread_history_*.sqlite`, `logs_*.sqlite`)
+and everything under the Codex home that is not a `sessions/` transcript (C);
+anything outside the roots above. No `git worktree move`
 and no `--force`. Deletion goes through node `fs`, with no shell, no `find`
 and no globbing.
 
@@ -587,7 +610,17 @@ and no globbing.
 `tests/mc/goal-archive.test.js` covers archive checks, worktree removal,
 archive rows and phase renumbering. `tests/mc/tidy.test.js` covers the
 per-root rules and rechecks on fixture facts, rule S on a temporary scratch
-root with fake git and lsof, and the disk lines of the printout.
+root with fake git and lsof, and the disk lines of the printout. S-whole is
+tested on the same kind of temporary scratch root: the seven-day and 72-hour
+windows, an ended, unnamed session taken whole, each keep with its own reason
+(six days, a live or unreadable record, a worktree still held, a process,
+an open or unknown file, a legacy directory's marker-less DerivedData), the
+references of unfinished goals and waiting proposals against done, dropped and
+archived ones, a goal file that cannot be read, the git order of a clean
+worktree before its directory, and the apply's recheck. C is tested on a
+temporary `CODEX_HOME`, with the open-file fake, a symbolic link, the date
+directory it empties, a young transcript, and the databases beside it left
+alone.
 `tests/mc/run.test.js` drives the policy through the runner's fixture: the
 exact line and one byte under it, recovery to 40 GB, exhausted candidates and
 the persisted cooldown across a restart, an unreadable disk, two lanes at

@@ -1262,7 +1262,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 12, 'rules version 12: the scratch-export kind under rule S');
+      assert.equal(written.rules_version, 13, 'rules version 13: S-whole and C, on top of the scratch-export kind under rule S');
       assert.equal(written.person, false, 'the list says whose run it was');
       assert.equal(written.pressure, false);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
@@ -1781,6 +1781,269 @@ describe('(S) worktrees and DerivedData in ended runner sessions\' scratch direc
       assert.match(outsideRoots({ kind: 'scratch-derived', path: join(dir, 'replay') }, roots), /^not the shape a scratch-derived has/u);
       assert.match(outsideRoots({ kind: 'scratch-worktree', path: dir }, roots), /^not the shape a scratch-worktree has/u);
     } finally { s.m.cleanup(); }
+  });
+});
+
+describe('(S-whole) an ended runner session\'s scratch directory, taken whole once it is idle and unnamed', () => {
+  /**
+   * `~/mc/runner/scratch/` with session directories. A session's age is set last, on the directory and its
+   * direct entries, since that is what S-whole reads. Git is faked per worktree path; lsof is a map of
+   * `openIn` answers; a runner pid is alive only when it is in `processes`.
+   */
+  function wholeMachine() {
+    const m = machine();
+    const scratch = tidyRoots(m.env).scratch;
+    const processes = { 4242: 'node /opt/homebrew/bin/mc run', 5151: 'zsh -l' };
+    const opens = {};
+    const answers = {};
+    const marker = (over = {}) => JSON.stringify({ schema: 'mc-scratch', version: 1, owner: 'runner', runner_pid: 4242, session: 'goal:mc/x', kind: 'build', stem: 's', started: '2026-10-01T08:00:00Z', ended: '2026-10-01T09:00:00Z', exit: 0, ...over });
+    const session = (stem, { record = marker(), at = OLD, files = { 'gate.log': 'red' }, extra = null } = {}) => {
+      const dir = join(scratch, stem);
+      mkdirSync(dir, { recursive: true });
+      if (record !== null) writeFileSync(join(dir, '.mc-scratch.json'), record);
+      for (const [name, text] of Object.entries(files)) m.write(join(dir, name), text, at);
+      if (extra) extra(dir);
+      for (const name of readdirSync(dir)) utimesSync(join(dir, name), new Date(at), new Date(at));
+      utimesSync(dir, new Date(at), new Date(at));
+      return dir;
+    };
+    const git = (cwd, args) => {
+      const answer = answers[cwd];
+      if (!answer) {
+        if (args[0] === 'worktree' && args[1] === 'list') return Object.keys(answers).map((path) => `worktree ${path}\nHEAD ${'a'.repeat(40)}\n`).join('\n');
+        return m.git(cwd, args);
+      }
+      if (args[0] === 'status') return answer.status;
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return `${'a'.repeat(40)}\n`;
+      if (args[0] === 'for-each-ref') return answer.refs;
+      if (args[0] === 'rev-parse' && args.includes('--git-common-dir')) return `${join(m.home, 'repos', 'memoro')}/.git\n`;
+      return null;
+    };
+    const doors = (over = {}) => m.doors({
+      git, openIn: (path) => (path in opens ? opens[path] : []),
+      alive: (pid) => pid in processes,
+      commandLine: (pid) => { if (!(pid in processes)) throw new Error(`no process ${pid}`); return processes[pid]; },
+      ...over,
+    });
+    return { m, scratch, session, marker, answers, opens, processes, doors };
+  }
+
+  it('an ended, unnamed session untouched for seven days goes whole; the others are listed with their own reasons', () => {
+    const w = wholeMachine();
+    try {
+      const aged = w.session('aged', { at: OLD });
+      const sixDays = w.session('six-days', { at: NOW - 6 * DAY });
+      const gone = w.session('gone-runner', { record: w.marker({ ended: undefined, runner_pid: 9999 }), at: OLD });
+      const legacy = w.session('legacy', { record: null, at: OLD });
+      const running = w.session('running', { record: w.marker({ ended: undefined }), at: OLD });
+      const unreadable = w.session('unreadable', { record: '{', at: OLD });
+      const foreign = w.session('foreign', { record: w.marker({ owner: 'person' }), at: OLD });
+      const { list } = runTidy(w.doors());
+      assert.deepEqual(list.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path).sort(), [aged, gone, legacy].sort());
+      assert.equal(list.targets.find((item) => item.path === gone).rule, 'S-whole');
+      assert.match(list.targets.find((item) => item.path === gone).why, /^session goal:mc\/x, whose owning runner is gone \(runner pid 9999 is not alive\), untouched for 7 days$/u);
+      assert.equal(keptOf(list, sixDays).why, 'touched in the last 7 days');
+      assert.equal(keptOf(list, sixDays).rule, 'recent');
+      assert.equal(keptOf(list, running).why, 'goal:mc/x has not recorded an end');
+      assert.equal(keptOf(list, running).rule, 'S');
+      assert.match(keptOf(list, unreadable).why, /^its scratch directory's ownership record cannot be read/u);
+      assert.equal(keptOf(list, foreign).why, 'its scratch directory\'s owner is not clear');
+      assert.ok(existsSync(aged) && existsSync(legacy), 'a plan removes nothing');
+    } finally { w.m.cleanup(); }
+  });
+
+  it('a goal or waiting proposal that names a session keeps it; a done or dropped goal and an archived proposal do not', () => {
+    const w = wholeMachine();
+    try {
+      const inLog = w.session('in-log', { at: OLD });
+      const inJson = w.session('in-goal-json', { at: OLD });
+      const inProposal = w.session('in-proposal', { at: OLD });
+      const inDone = w.session('in-done', { at: OLD });
+      const inDropped = w.session('in-dropped', { at: OLD });
+      const inArchive = w.session('in-archive', { at: OLD });
+      const recentNamed = w.session('recent-named', { at: NOW - DAY });
+      goal(w.m, 'live', 'build');
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'live', 'LOG.md'), `Scratch: ${inLog}\nAlso ${recentNamed}\n`, NOW);
+      goal(w.m, 'json-names', 'build', { text: JSON.stringify({ ...JSON.parse(goalJson({ stage: 'build', status: 'ready' })), title: 'Names in-goal-json' }) });
+      goal(w.m, 'finished', 'done');
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'finished', 'LOG.md'), `Scratch: ${inDone}\n`, NOW);
+      goal(w.m, 'dropped-goal', 'dropped');
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'dropped-goal', 'LOG.md'), `Scratch: ${inDropped}\n`, NOW);
+      w.m.write(join(w.m.work, 'proposals', 'waiting.md'), `Names ${inProposal}\n`, NOW);
+      w.m.write(join(w.m.work, 'proposals', 'archive', 'old.md'), `Names ${inArchive}\n`, NOW);
+      const { list } = runTidy(w.doors());
+      assert.deepEqual(list.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path).sort(), [inDone, inDropped, inArchive].sort());
+      assert.equal(keptOf(list, inLog).why, 'named by goal mc/live LOG.md: kept until that goal is finished or the proposal leaves');
+      assert.equal(keptOf(list, inLog).rule, 'S-named');
+      assert.equal(keptOf(list, recentNamed).rule, 'S-named', 'a reference wins over age: a recent named session says so');
+      assert.match(keptOf(list, recentNamed).why, /^named by goal mc\/live LOG\.md/u);
+      assert.match(keptOf(list, inJson).why, /^named by goal mc\/json-names GOAL\.json/u);
+      assert.match(keptOf(list, inProposal).why, /^named by waiting proposal /u);
+    } finally { w.m.cleanup(); }
+  });
+
+  it('a session still holding a worktree, a live process, an open file or an unknown open file is kept with that reason', () => {
+    const w = wholeMachine();
+    try {
+      const deep = w.session('deep', { at: OLD, extra: (dir) => { mkdirSync(join(dir, 'a', 'b'), { recursive: true }); writeFileSync(join(dir, 'a', 'b', '.git'), 'gitdir: x'); } });
+      const dirty = w.session('dirty-replay', { at: OLD, extra: (dir) => {
+        mkdirSync(join(dir, 'replay'));
+        writeFileSync(join(dir, 'replay', '.git'), 'gitdir: x');
+        w.answers[join(dir, 'replay')] = { status: ' M src.js\n', refs: 'refs/heads/x\n' };
+      } });
+      const live = w.session('live', { at: OLD });
+      w.m.cwds = [{ pid: 1, cwd: '/' }, { pid: 50, cwd: join(live, 'sub') }];
+      const open = w.session('open', { at: OLD });
+      w.opens[open] = [77];
+      const unknown = w.session('unknown-open', { at: OLD });
+      w.opens[unknown] = null;
+      const legacyDerived = w.session('legacy-derived', { record: null, at: OLD, files: { 'DerivedData/Build/app.o': 'o' } });
+      const control = w.session('control', { at: OLD });
+      const { list } = runTidy(w.doors());
+      assert.deepEqual(list.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path), [control]);
+      assert.match(keptOf(list, deep).why, /^still holds a git worktree \(a\/b\)$/u);
+      assert.equal(keptOf(list, dirty).why, 'kept for its own reason by rule S: 1 uncommitted change(s)');
+      assert.equal(keptOf(list, dirty).rule, 'S');
+      assert.equal(keptOf(list, live).why, 'process 50 stands in it');
+      assert.equal(keptOf(list, open).why, 'process 77 holds a file open in it');
+      assert.match(keptOf(list, unknown).why, /^error: could not tell whether a file in it is open|^could not tell whether a file in it is open/u);
+      assert.equal(keptOf(list, legacyDerived).why, 'kept for its own reason by rule S: marker-less scratch data is not adopted');
+    } finally { w.m.cleanup(); }
+  });
+
+  it('under pressure 72 hours is enough; the routine pass still waits seven days', () => {
+    const w = wholeMachine();
+    try {
+      const threeDays = w.session('three-days', { at: NOW - 3 * DAY });
+      const routine = runTidy(w.doors()).list;
+      assert.equal(routine.targets.some((item) => item.path === threeDays), false);
+      assert.equal(keptOf(routine, threeDays).why, 'touched in the last 7 days');
+      const pressure = runTidy({ ...w.doors(), pressure: true }).list;
+      assert.equal(pressure.pressure, true);
+      assert.deepEqual(pressure.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path), [threeDays]);
+      assert.match(pressure.targets[0].why, /untouched for 72 hours/u);
+    } finally { w.m.cleanup(); }
+  });
+
+  it('the apply keeps a session that was touched or named after the list was written', () => {
+    const w = wholeMachine();
+    try {
+      const touched = w.session('touched', { at: OLD });
+      const named = w.session('named', { at: OLD });
+      const idle = w.session('idle', { at: OLD });
+      const { listPath } = runTidy(w.doors());
+      writeFileSync(join(touched, 'later.txt'), 'written after the list');
+      w.m.write(join(w.m.work, 'proposals', 'waiting.md'), `Names ${named}\n`, NOW);
+      const { applied } = applyTidy({ listPath, ...w.doors() });
+      const result = new Map(applied.map((item) => [item.path, item]));
+      assert.equal(result.get(touched).ok, false);
+      assert.match(result.get(touched).why, /^re-check: touched in the last 7 days/u);
+      assert.equal(result.get(named).ok, false);
+      assert.match(result.get(named).why, /^re-check: named by waiting proposal/u);
+      assert.equal(result.get(idle).ok, true);
+      assert.ok(existsSync(touched) && existsSync(named), 'kept sessions stay');
+      assert.equal(existsSync(idle), false, 'the idle one goes whole');
+    } finally { w.m.cleanup(); }
+  });
+
+  it('a goal file that exists but cannot be read keeps every session, not only the ones it might name', () => {
+    const w = wholeMachine();
+    try {
+      const aged = w.session('aged', { at: OLD });
+      mkdirSync(join(w.m.work, 'programs', 'mc', 'goals', 'broken', 'GOAL.json'), { recursive: true });
+      const { list } = runTidy(w.doors());
+      assert.equal(list.targets.some((item) => item.kind === 'scratch-session'), false);
+      assert.equal(keptOf(list, aged).rule, 'error');
+      assert.match(keptOf(list, aged).why, /^error: a goal or proposal that may name it cannot be read/u);
+    } finally { w.m.cleanup(); }
+  });
+
+  it('a goal whose GOAL.json is missing or does not parse is read as unfinished: what it names is kept, nothing else is held', () => {
+    const w = wholeMachine();
+    try {
+      const aged = w.session('aged', { at: OLD });
+      const named = w.session('named', { at: OLD });
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'broken', 'GOAL.json'), '{', NOW);
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'broken', 'LOG.md'), `Scratch ${named}\n`, NOW);
+      w.m.write(join(w.m.work, 'programs', 'mc', 'goals', 'no-goal-json', 'LOG.md'), 'a log with no goal file\n', NOW);
+      const { list } = runTidy(w.doors());
+      assert.deepEqual(list.targets.filter((item) => item.kind === 'scratch-session').map((item) => item.path), [aged]);
+      assert.match(keptOf(list, named).why, /^named by goal mc\/broken LOG\.md/u);
+      assert.equal(list.kept.some((item) => item.rule === 'error'), false, 'no error: the goal is read, not refused');
+    } finally { w.m.cleanup(); }
+  });
+
+  it('a clean ended worktree goes through git first, and then the directory it stood in goes whole', () => {
+    const w = wholeMachine();
+    try {
+      const dir = w.session('clean', { at: OLD, extra: (d) => {
+        mkdirSync(join(d, 'replay'));
+        writeFileSync(join(d, 'replay', '.git'), 'gitdir: x');
+        w.answers[join(d, 'replay')] = { status: '', refs: 'refs/heads/goal/x\n' };
+      } });
+      const { outcome } = runTidy({ apply: true, ...w.doors() });
+      assert.deepEqual(outcome.applied.map((item) => [item.path, item.ok]), [[join(dir, 'replay'), true], [dir, true]]);
+      assert.equal(existsSync(dir), false);
+    } finally { w.m.cleanup(); }
+  });
+});
+
+/**
+ * (C) Codex session transcripts: `$CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`, on a temporary Codex home. The
+ * sqlite databases beside it are never touched.
+ */
+describe('(C) Codex session transcripts older than seven days, not held open', () => {
+  it('an old transcript goes, and the date directory it empties with it; every other entry stays', () => {
+    const m = machine();
+    try {
+      const sessions = join(m.env.CODEX_HOME, 'sessions');
+      const file = (rel, at, text = 'transcript') => { m.write(join(sessions, rel), text, at); return join(sessions, rel); };
+      const oldEmptied = file('2026/09/01/old.jsonl', OLD);
+      const oldBeside = file('2026/09/20/old.jsonl', OLD);
+      const youngBeside = file('2026/09/20/young.jsonl', NOW - 6 * DAY);
+      const open = file('2026/09/10/open.jsonl', OLD);
+      const linked = join(sessions, '2026/09/10/link.jsonl');
+      const outside = join(m.home, 'outside.jsonl');
+      m.write(outside, 'outside', OLD);
+      symlinkSync(outside, linked);
+      const notes = file('2026/09/10/notes.txt', OLD);
+      const sqlite = join(m.env.CODEX_HOME, 'thread_history_1.sqlite');
+      const logs = join(m.env.CODEX_HOME, 'logs_1.sqlite');
+      m.write(sqlite, 'db', OLD);
+      m.write(logs, 'db', OLD);
+      const emptyOld = join(sessions, '2026/08/15');
+      mkdirSync(emptyOld, { recursive: true });
+      utimesSync(emptyOld, new Date(OLD), new Date(OLD));
+      const emptyRecent = join(sessions, '2026/09/25');
+      mkdirSync(emptyRecent, { recursive: true });
+      utimesSync(emptyRecent, new Date(RECENT), new Date(RECENT));
+      const doors = m.doors({ filesOpen: (paths) => new Map(paths.map((path) => [path, path === open ? [77] : []])) });
+
+      const dry = runTidy(doors);
+      const codex = dry.list.targets.filter((item) => item.rule === 'C').map((item) => [item.kind, item.path]).sort();
+      assert.deepEqual(codex, [
+        ['codex-session-day', emptyOld], ['codex-session-day', join(sessions, '2026/09/01')],
+        ['codex-transcript', oldBeside], ['codex-transcript', oldEmptied],
+      ].sort());
+      assert.equal(keptOf(dry.list, youngBeside).why, 'touched in the last 7 days');
+      assert.equal(keptOf(dry.list, open).why, 'process 77 holds it open');
+      assert.equal(keptOf(dry.list, linked).why, 'a symbolic link is not a target');
+      assert.match(keptOf(dry.list, notes).why, /^not a session transcript/u);
+      assert.equal(keptOf(dry.list, join(sessions, '2026/09/20')).why, 'holds 1 kept entry, such as young.jsonl');
+      assert.equal(keptOf(dry.list, join(sessions, '2026/09/10')).rule, 'C');
+      assert.equal(keptOf(dry.list, emptyRecent).why, 'empty, touched in the last 7 days');
+      assert.equal(dry.list.targets.some((item) => item.path === sqlite || item.path === logs), false);
+
+      const { applied } = applyTidy({ listPath: dry.listPath, ...doors });
+      assert.ok(applied.every((item) => item.ok), JSON.stringify(applied.filter((item) => !item.ok)));
+      assert.equal(existsSync(oldEmptied), false);
+      assert.equal(existsSync(join(sessions, '2026/09/01')), false, 'the date directory it emptied goes');
+      assert.equal(existsSync(oldBeside), false);
+      assert.equal(existsSync(emptyOld), false, 'an empty date directory untouched for seven days goes');
+      for (const kept of [youngBeside, open, linked, notes, sqlite, logs, emptyRecent, join(sessions, '2026/09/10'), join(sessions, '2026/09/20')]) {
+        assert.ok(existsSync(kept), `${kept} stays`);
+      }
+    } finally { m.cleanup(); }
   });
 });
 
