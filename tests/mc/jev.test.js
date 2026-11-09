@@ -110,11 +110,11 @@ test('the request: POST to the endpoint, model jev-1.14.0, Bearer key, and the t
     criteria: { fake_timer: 'inject a timer that fires at once', real_wait: 'wait the full 15 seconds, [redacted]' },
   });
   assert.deepEqual(body.questions.fits, { type: 'noul', instructions: 'One of the options in `options` is a correct way for this goal to proceed' });
-  assert.deepEqual(body.questions.settled, { type: 'noul', instructions: 'The goal, its contract, the programme\'s rulings or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed' });
+  assert.deepEqual(body.questions.settled, { type: 'noul', instructions: 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed' });
   assert.equal(INSTRUCTIONS.fits, body.questions.fits.instructions);
 });
 
-test('the state holds question, options, evidence, the goal with contract and criteria, README, rulings, documents and the last five entries — and not the recommendation', async () => {
+test('the state holds question, options, evidence, the goal with contract and criteria, README, documents and the last five entries — and not the recommendation, nor any docs/project rulings', async () => {
   const f = fixture();
   assert.equal(await run(CALL, f.deps), 0, f.err());
   const { state } = JSON.parse(f.requests[0].init.body);
@@ -128,7 +128,8 @@ test('the state holds question, options, evidence, the goal with contract and cr
     stage: 'finish', status: 'ready',
   });
   assert.equal(state.programme.readme, '# mc\n\nThe programme README.');
-  assert.deepEqual(state.programme.rulings, [{ path: 'memoro-cli/docs/project/mc/rulings.md', text: '# rulings\n\n1. Timers are injected.' }]);
+  assert.deepEqual(Object.keys(state.programme), ['readme'], 'the programme carries its README and no rulings');
+  assert.doesNotMatch(JSON.stringify(state), /Timers are injected/u, 'a docs/project/<programme>/rulings.md in the repository is not sent');
   assert.deepEqual(state.documents, [
     { path: '/docs/standard.md', label: 'the standard', text: 'The standard text.' },
     { path: 'memoro-cli/docs/extra.md', text: 'Extra document; the key [redacted] and [redacted] must not leave.' },
@@ -181,18 +182,18 @@ test('a budget-busting state stays within 240,000 characters, trimmed oldest log
 
 test('buildState trims in order: the log alone when that is enough; then documents largest first; then the programme README', () => {
   const core = { question: 'q', options: { a: 'x', b: 'y' }, evidence: 'e', goal: { title: 't' } };
-  const logOnly = buildState({ ...core, programme: { readme: 'r', rulings: [] }, documents: [{ path: 'd', text: 'd'.repeat(500) }], log: ['l'.repeat(400), 'm'.repeat(400), 'n'.repeat(10)] }, { budget: 1000 });
+  const logOnly = buildState({ ...core, programme: { readme: 'r' }, documents: [{ path: 'd', text: 'd'.repeat(500) }], log: ['l'.repeat(400), 'm'.repeat(400), 'n'.repeat(10)] }, { budget: 1000 });
   assert.deepEqual(logOnly.trimmed, ['log: 2 oldest entries left out']);
   assert.deepEqual(logOnly.state.log, ['n'.repeat(10)]);
   assert.equal(logOnly.state.documents[0].text, 'd'.repeat(500));
 
-  const docs = buildState({ ...core, programme: { readme: 'r'.repeat(300), rulings: [] }, documents: [{ path: 'small', text: 's'.repeat(300) }, { path: 'large', text: 'L'.repeat(600) }], log: ['l'.repeat(100)] }, { budget: 900 });
+  const docs = buildState({ ...core, programme: { readme: 'r'.repeat(300) }, documents: [{ path: 'small', text: 's'.repeat(300) }, { path: 'large', text: 'L'.repeat(600) }], log: ['l'.repeat(100)] }, { budget: 900 });
   assert.deepEqual(docs.trimmed, ['log: 1 oldest entry left out', 'document large truncated']);
   assert.equal(docs.state.documents[0].text, 's'.repeat(300));
   assert.ok(docs.state.documents[1].text.endsWith(TRUNCATED));
   assert.ok(docs.text.length <= 900);
 
-  const readme = buildState({ ...core, programme: { readme: 'r'.repeat(800), rulings: [] }, documents: [{ path: 'a', text: 'a'.repeat(300) }, { path: 'b', text: 'b'.repeat(200) }], log: [] }, { budget: 600 });
+  const readme = buildState({ ...core, programme: { readme: 'r'.repeat(800) }, documents: [{ path: 'a', text: 'a'.repeat(300) }, { path: 'b', text: 'b'.repeat(200) }], log: [] }, { budget: 600 });
   assert.deepEqual(readme.trimmed, ['document a truncated', 'document b truncated', 'programme README truncated']);
   assert.ok(readme.state.programme.readme.endsWith(TRUNCATED));
   assert.ok(readme.text.length <= 600);

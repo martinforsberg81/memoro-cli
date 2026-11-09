@@ -73,6 +73,21 @@ describe('mc martin get', () => {
     assert.deepEqual(snapshot(f.home), before);
   });
 
+  it('sends no rulings: a docs/project rulings file in a goal repository reaches neither the queue, its context nor its text', async () => {
+    const f = fixture(); f.make('alpha', 'waiting', {}, [log('2026-01-01T12:00Z', 'Martin', 'runner failure: missing evidence')]);
+    const rulings = join(f.home, 'alpha', 'memoro-cli', 'docs', 'project', 'alpha');
+    mkdirSync(rulings, { recursive: true });
+    writeFileSync(join(rulings, 'rulings.md'), '# rulings\n\n1. Old decision text.');
+    const result = collectMartinQueue({ home: f.home });
+    assert.equal(result.items.length, 1);
+    assert.equal(Object.hasOwn(result.items[0], 'rulings'), false);
+    assert.equal(Object.hasOwn(result.programme_context[0], 'rulings'), false);
+    assert.doesNotMatch(JSON.stringify(result), /Old decision text/u);
+    const text = io();
+    assert.equal(get([], { home: f.home, ...text }), 0);
+    assert.doesNotMatch(text.out.stdout, /Old decision text|Rulings/u);
+  });
+
   it('preserves real ask readings and every populated tail field in text and JSON outside the question tail', async () => {
     const f = fixture(); const dir = f.make('alpha', 'waiting', { status: 'ready' });
     const writer = askFixture(f.home, 'alpha/waiting');
@@ -192,7 +207,7 @@ describe('mc martin launch', () => {
     const { out, stdout, stderr } = io(); let opened;
     const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.1-sol'], {
       stdout, stderr, env: { MC_WORK_ROOT: '/work', MC_HOME: '/home' }, interactive: () => true,
-      collect: () => ({ items: [{ reference: 'alpha/g', title: 'Current', log: [], goal_markdown: '# Current', worktrees: [], rulings: [], evidence_paths: [] }], programme_context: [], issues: [] }),
+      collect: () => ({ items: [{ reference: 'alpha/g', title: 'Current', log: [], goal_markdown: '# Current', worktrees: [], evidence_paths: [] }], programme_context: [], issues: [] }),
       open: async (options) => { opened = options; return { ok: true, code: 0 }; }, mkdir: () => {},
       role: () => ({ name: 'martin', model: 'opus', tools: ['claude','codex'], cache: '5m', overlay: 'Martin role instructions' }),
     });

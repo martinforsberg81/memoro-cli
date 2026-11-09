@@ -56,7 +56,8 @@ test('mc ask without a goal asks jev, sends programme context and a confined doc
   assert.match(JSON.stringify(JSON.parse(f.requests[0].init.body).questions), /this work/u);
   assert.doesNotMatch(JSON.stringify(JSON.parse(f.requests[0].init.body).questions), /this goal/u);
   assert.equal(state.programme.readme, 'Programme aim.');
-  assert.deepEqual(state.programme.rulings, [{ path: 'memoro-cli/docs/project/jev/rulings.md', text: 'Programme ruling.' }]);
+  assert.deepEqual(Object.keys(state.programme), ['readme'], 'the programme carries its README and no rulings');
+  assert.doesNotMatch(JSON.stringify(state), /Programme ruling/u, 'a docs/project/<programme>/rulings.md is not sent');
   assert.deepEqual(state.documents, [{ path: 'memoro-cli/docs/technical/standard.md', text: 'The standard.' }]);
   assert.match(f.out(), /^mc: jev answered fake_timer /u);
   assert.deepEqual([f.ledger.length, f.ledger[0].verb, f.ledger[0].programme, f.ledger[0].goal, f.ledger[0].model], [1, 'ask', 'jev', null, 'jev-1.14.0']);
@@ -121,7 +122,7 @@ test('answering with a named goal appends a goal log entry without changing its 
   const questions = JSON.parse(f.requests[0].init.body).questions;
   assert.equal(questions.answer.instructions, 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state');
   assert.equal(questions.fits.instructions, 'One of the options in `options` is a correct way for this goal to proceed');
-  assert.equal(questions.settled.instructions, "The goal, its contract, the programme's rulings or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed");
+  assert.equal(questions.settled.instructions, 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed');
   const logged = readFileSync(join(goal, 'LOG.md'), 'utf8');
   assert.match(logged, /jev answered one/u);
   assert.match(logged, /jev was asked: Which\?/u);

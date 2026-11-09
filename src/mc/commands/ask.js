@@ -166,14 +166,9 @@ function noGoalContext(programme, extra, ctx) {
       const repoRoot = join(base, repo);
       if (!['docs', 'goals', 'proposals'].includes(repo) && (known.has(repo) || existsSync(join(repoRoot, '.git')))) roots.push(repoRoot);
     }
-    const rulings = roots.map((root) => {
-      const path = `${root.slice(base.length + 1)}/docs/project/${programme}/rulings.md`;
-      const text = ctx.read(join(base, path));
-      return text === null ? null : { path, text };
-    }).filter(Boolean);
     const readme = ctx.read(join(base, 'README.md'));
     for (const path of extra) addExtra(path);
-    return { goal: null, programme: { readme, rulings }, documents, log: [] };
+    return { goal: null, programme: { readme }, documents, log: [] };
   }
   for (const path of extra) addExtra(path);
   return { goal: null, programme: null, documents, log: [] };

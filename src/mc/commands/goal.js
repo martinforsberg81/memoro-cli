@@ -485,18 +485,12 @@ async function askMartin(args, flags, ctx) {
 
 /**
  * What jev reads beside the question: the goal (its text, criteria with met,
- * stage and status), the programme's README and each repository's
- * `docs/project/<programme>/rulings.md` when present, the goal's documents and
- * each `--document` (path and text; one that cannot be read is said and not
- * sent), and the last LOG.md entries.
+ * stage and status), the programme's README, the goal's documents and each
+ * `--document` (path and text; one that cannot be read is said and not sent),
+ * and the last LOG.md entries.
  */
 export function jevContext(target, goal, extra, ctx) {
   const { read, env } = ctx;
-  const rulings = goal.repos.map((repo) => {
-    const path = `${repo}/docs/project/${target.programme}/rulings.md`;
-    const text = read(join(target.dir, path));
-    return text === null ? null : { path, text };
-  }).filter(Boolean);
   const documents = [];
   const seen = new Set();
   for (const { label, path, explicit } of [...goal.documents.map((item) => ({ ...item, explicit: false })), ...extra.map((path) => ({ label: null, path, explicit: true }))]) {
@@ -520,7 +514,7 @@ export function jevContext(target, goal, extra, ctx) {
       criteria: goal.success_criteria.map((item) => ({ criterion: item.criterion, check: item.check, met: item.met })),
       stage: goal.stage, status: goal.status,
     },
-    programme: { readme: read(join(ctx.home, target.programme, 'README.md')), rulings },
+    programme: { readme: read(join(ctx.home, target.programme, 'README.md')) },
     documents,
     log,
   };
