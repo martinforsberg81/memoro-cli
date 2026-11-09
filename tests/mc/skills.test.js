@@ -1,6 +1,6 @@
 /** Observable discovery, migration and lazy resource loading in isolated homes. */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -91,6 +91,23 @@ describe('the mc bundle', () => {
     symlinkSync(join(env.HOME, 'missing-target'), join(targets[0], 'mc'));
     assert.throws(() => syncSkills(env), /unowned mc skill/u);
     assert.equal(read(old), before);
+
+    // The second home is refused before the first is written, so no legacy guidance moves.
+    unlinkSync(join(targets[0], 'mc')); // rmSync leaves a dangling symlink in place
+    const second = legacy(targets[1], 'mc-old2');
+    const secondBefore = read(second);
+    write(join(targets[1], 'mc/SKILL.md'), 'their own mc skill');
+    assert.throws(() => syncSkills(env), (error) => error.message === `refusing to replace an unowned mc skill: ${join(targets[1], 'mc')}`);
+    assert.equal(read(old), before);
+    assert.equal(read(second), secondBefore);
+    assert.equal(existsSync(join(targets[0], 'mc')), false);
+    assert.equal(read(join(targets[1], 'mc/SKILL.md')), 'their own mc skill');
+    rmSync(join(targets[1], 'mc'), { recursive: true });
+    assert.deepEqual(syncSkills(env).map(({ tool, name, did }) => [tool, name, did]), [
+      ['claude', 'mc', 'installed'], ['claude', 'mc-old', 'removed'],
+      ['codex', 'mc', 'installed'], ['codex', 'mc-old2', 'removed'],
+    ]);
+    assert.deepEqual(syncSkills(env), []);
   });
 
   it('refuses nested entrypoints before they can advertise more skills', () => {

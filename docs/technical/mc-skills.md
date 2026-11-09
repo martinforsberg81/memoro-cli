@@ -44,7 +44,7 @@ changes need no skill regeneration.
 all files outside the discovery directory, swaps in the completed bundle, and
 then removes old `mc-*` directories bearing mc's installed-source marker.
 Unmarked skills and symlinks are left alone. An existing unowned `mc/` is
-refused. An invalid source or failed replacement leaves legacy guidance intact.
+refused. Every target is checked for an unowned mc/ before any target is written: a refusal in either tool home leaves both homes exactly as they were. An invalid source or failed replacement leaves legacy guidance intact.
 A second sync without source changes writes nothing. Obsolete resources
 disappear with the next bundle replacement.
 
