@@ -1,18 +1,55 @@
-/** Borrow a branch's clean, idle checkout for a merge measurement. Never add a worktree. */
+/**
+ * Borrow a branch's clean, idle checkout for a merge measurement. A branch no
+ * checkout holds gets one restored (once, kept), never a throwaway worktree.
+ */
+import { basename, join } from 'node:path';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
+import { mcHome } from './paths.js';
 import { ownAncestry } from './work-stop.js';
 
 const text = (run) => String(run?.stdout || '').trim();
 const failure = (run) => run?.error?.message || String(run?.stderr || '').trim() || `git exited ${run?.status}`;
 
-export async function existingCandidate({ repoPath, branch, sha, git, restoreGit = git, cwds = cwdsOfUser }) {
+/** Where a branch's restored checkout lives: stable per repository and branch. */
+export function restoredCheckoutPath(repoPath, branch, home = mcHome()) {
+  return join(home, 'checkouts', basename(repoPath).replace(/\.git$/u, ''), branch.replace(/[^A-Za-z0-9._-]+/gu, '-'));
+}
+
+async function restoreCheckout({ repoPath, branch, sha, git, home }) {
+  const ref = `refs/heads/${branch}`;
+  const local = await git(['rev-parse', '--verify', '-q', ref], { cwd: repoPath });
+  if (local.status !== 0) {
+    const made = await git(['branch', '--no-track', branch, sha], { cwd: repoPath });
+    if (made.status !== 0) return { ok: false, reason: `no checkout of ${branch} and could not create the branch at ${sha}: ${failure(made)}` };
+  } else if (text(local) !== sha) {
+    // Held by nobody, so it may move forward to the pushed head, never anywhere else.
+    const ahead = await git(['merge-base', '--is-ancestor', text(local), sha], { cwd: repoPath });
+    if (ahead.status !== 0) return { ok: false, reason: `no checkout of ${branch} and the local branch is not behind the pushed head ${sha}` };
+    const moved = await git(['update-ref', ref, sha, text(local)], { cwd: repoPath });
+    if (moved.status !== 0) return { ok: false, reason: `could not advance ${branch} to ${sha}: ${failure(moved)}` };
+  }
+  const dir = restoredCheckoutPath(repoPath, branch, home);
+  await git(['worktree', 'prune'], { cwd: repoPath });
+  const added = await git(['worktree', 'add', dir, branch], { cwd: repoPath });
+  if (added.status !== 0) return { ok: false, reason: `could not restore a checkout of ${branch} at ${dir}: ${failure(added)}` };
+  return { ok: true, dir };
+}
+
+export async function existingCandidate({ repoPath, branch, sha, git, restoreGit = git, cwds = cwdsOfUser, home = mcHome() }) {
   const listed = await git(['worktree', 'list', '--porcelain', '-z'], { cwd: repoPath });
   if (listed.status !== 0) return { ok: false, reason: failure(listed) };
   const ref = `refs/heads/${branch}`;
   const records = String(listed.stdout || '').split('\0\0').map((record) => record.split('\0'));
-  const record = records.find((fields) => fields.includes(`branch ${ref}`));
-  const dir = record?.find((field) => field.startsWith('worktree '))?.slice(9);
-  if (!dir) return { ok: false, reason: `no existing checkout of ${branch} — no worktree was created` };
+  let record = records.find((fields) => fields.includes(`branch ${ref}`));
+  let dir = record?.find((field) => field.startsWith('worktree '))?.slice(9);
+  if (!dir) {
+    // Nothing holds the branch (cleanup removed its checkout, or it never had
+    // one): give it one checkout, kept from now on like any other.
+    const made = await restoreCheckout({ repoPath, branch, sha, git, home });
+    if (!made.ok) return made;
+    dir = made.dir;
+    record = [];
+  }
   if (record.some((field) => /^(locked|prunable)( |$)/u.test(field))) {
     return { ok: false, reason: `${dir} is locked or prunable` };
   }

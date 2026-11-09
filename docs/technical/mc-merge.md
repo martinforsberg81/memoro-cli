@@ -141,8 +141,15 @@ freshening before landing. Direct goal landing keeps its existing procedure.
 It requires the pushed head, a clean index and working tree (including
 untracked files), no unfinished Git operation, and complete process cwd
 evidence that nobody else is working there. A synchronous requesting process
-and its waiting ancestors may hand over their own checkout. A missing, dirty, busy or mismatched
+and its waiting ancestors may hand over their own checkout. A dirty, busy or mismatched
 checkout stops with its reason; it never triggers another checkout.
+
+Martin, 2026-11-09: a branch no checkout holds is not a reason to stop. The
+merge restores one: the local branch is created at the pushed head (or moved
+forward to it when it is behind, never otherwise) and checked out with
+`git worktree add` at `<mc home>/checkouts/<repository>/<branch>`. That is the
+branch's one checkout from then on: it is kept like any other, measured in by
+the same rules, and never a detached throwaway.
 
 Keep the existing branch checkout while its PR remains open, including after
 publication without queue admission and after failed acceptance. A pushed branch
@@ -152,7 +159,8 @@ not authorize deleting an open PR's only checkout. After landing or closing,
 normal safe cleanup applies. If an earlier cleanup already removed it, delivery
 repair may restore that same branch at its original path after checking the
 pushed head and that no other checkout holds it. This restores the original
-working area; the merger still never creates another measurement checkout.
+working area; the merger restores a checkout only for a branch none holds and
+never creates a second measurement checkout beside an existing one.
 
 The measurement temporarily detaches HEAD in that directory, merges the
 current fetched base, prepares and tests that combined tree, then returns to
