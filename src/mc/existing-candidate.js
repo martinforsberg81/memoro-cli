@@ -4,18 +4,24 @@
  */
 import { basename, join } from 'node:path';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
-import { mcHome } from './paths.js';
+import { workRoot } from './paths.js';
 import { ownAncestry } from './work-stop.js';
 
 const text = (run) => String(run?.stdout || '').trim();
 const failure = (run) => run?.error?.message || String(run?.stderr || '').trim() || `git exited ${run?.status}`;
 
-/** Where a branch's restored checkout lives: stable per repository and branch. */
-export function restoredCheckoutPath(repoPath, branch, home = mcHome()) {
-  return join(home, 'checkouts', basename(repoPath).replace(/\.git$/u, ''), branch.replace(/[^A-Za-z0-9._-]+/gu, '-'));
+/**
+ * Where a branch's restored checkout lives: stable per repository and branch,
+ * and under the work root. The shared dependency tree is `~/mc/node_modules`,
+ * found by walking up from the worktree; a checkout outside the work root
+ * (it was `~/.memoro/mc/checkouts` until 2026-11-09) resolves none of it and
+ * the round stops at `dependencies`.
+ */
+export function restoredCheckoutPath(repoPath, branch, root = workRoot()) {
+  return join(root, 'checkouts', basename(repoPath).replace(/\.git$/u, ''), branch.replace(/[^A-Za-z0-9._-]+/gu, '-'));
 }
 
-async function restoreCheckout({ repoPath, branch, sha, git, home }) {
+async function restoreCheckout({ repoPath, branch, sha, git, root }) {
   const ref = `refs/heads/${branch}`;
   const local = await git(['rev-parse', '--verify', '-q', ref], { cwd: repoPath });
   if (local.status !== 0) {
@@ -28,14 +34,14 @@ async function restoreCheckout({ repoPath, branch, sha, git, home }) {
     const moved = await git(['update-ref', ref, sha, text(local)], { cwd: repoPath });
     if (moved.status !== 0) return { ok: false, reason: `could not advance ${branch} to ${sha}: ${failure(moved)}` };
   }
-  const dir = restoredCheckoutPath(repoPath, branch, home);
+  const dir = restoredCheckoutPath(repoPath, branch, root);
   await git(['worktree', 'prune'], { cwd: repoPath });
   const added = await git(['worktree', 'add', dir, branch], { cwd: repoPath });
   if (added.status !== 0) return { ok: false, reason: `could not restore a checkout of ${branch} at ${dir}: ${failure(added)}` };
   return { ok: true, dir };
 }
 
-export async function existingCandidate({ repoPath, branch, sha, git, restoreGit = git, cwds = cwdsOfUser, home = mcHome() }) {
+export async function existingCandidate({ repoPath, branch, sha, git, restoreGit = git, cwds = cwdsOfUser, root = workRoot() }) {
   const listed = await git(['worktree', 'list', '--porcelain', '-z'], { cwd: repoPath });
   if (listed.status !== 0) return { ok: false, reason: failure(listed) };
   const ref = `refs/heads/${branch}`;
@@ -45,7 +51,7 @@ export async function existingCandidate({ repoPath, branch, sha, git, restoreGit
   if (!dir) {
     // Nothing holds the branch (cleanup removed its checkout, or it never had
     // one): give it one checkout, kept from now on like any other.
-    const made = await restoreCheckout({ repoPath, branch, sha, git, home });
+    const made = await restoreCheckout({ repoPath, branch, sha, git, root });
     if (!made.ok) return made;
     dir = made.dir;
     record = [];

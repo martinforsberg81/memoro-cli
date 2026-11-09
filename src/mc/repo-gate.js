@@ -604,7 +604,7 @@ export async function runGate({
     if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
 
     if (facts.pr) {
-      borrowed = await existingCandidate({ repoPath, branch: facts.pr.head, sha: facts.pr.head_sha, git: askGit, restoreGit: askGitRaw, cwds: candidateCwds });
+      borrowed = await existingCandidate({ repoPath, branch: facts.pr.head, sha: facts.pr.head_sha, git: askGit, restoreGit: askGitRaw, cwds: candidateCwds, root: workRoot(env) });
       if (!borrowed.ok) return finish('worktree', borrowed.reason);
       headDir = borrowed.dir;
       if (signal?.aborted) throw new RoundAborted(abortReason(signal));
