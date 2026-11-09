@@ -23,6 +23,10 @@ import {
 import { setLogPath } from '../../src/mc/logger.js';
 import { blobId, gitModel, ZERO } from './_helpers/git-model.js';
 
+const SESSION = { session: 'goal:mc/x', started: '2026-11-09T08:00:00Z' };
+const nothingStands = () => [];
+const nothingOpen = () => [];
+
 setLogPath(join(mkdtempSync(join(tmpdir(), 'mc-scratch-log-')), 'mc.log'));
 
 /** A runner's root with one memoro-cli repository, a scratch directory per session, and the model Git. */
