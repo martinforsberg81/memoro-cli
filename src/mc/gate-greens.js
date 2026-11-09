@@ -6,12 +6,12 @@
  * the selection named, minutes later and for nothing. Now a green `mc gate` on
  * an unchanged measured tree is written down here — the tree, the selection
  * it measured as a hash, and the version of what both sides measure — and a merge round whose
- * candidate is that tree, with that selection, under that version, runs only
+ * candidate is that tree, with that selection (or a covered subset), under that version, runs only
  * the pull request's own tests (`runGate`).
  *
  * The record is the claim "this exact tree was measured green with this exact
- * selection". Anything less than all three matching is not that claim, and the
- * round measures as it always did.
+ * selection". A valid full receipt can also cover a smaller selection on the
+ * same tree; everything outside that proof is measured as always.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -68,16 +68,23 @@ export function recordGreen({ root = mcHome(), entry }) {
   renameSync(next, path);
 }
 
-/** The last recorded green matching all four, or null. */
-export function findGreen({ root = mcHome(), repo, tree, selection, version = GATE_MEASUREMENT_VERSION, evidence = null, checks = null }) {
+/** The last valid same-tree green covering the selection, or null. */
+export function findGreen({ root = mcHome(), repo, tree, selection, version = GATE_MEASUREMENT_VERSION, evidence = null, checks = null, onMiss = () => {} }) {
   if (evidence !== null && !checks) return null;
   if (!repo || !tree || !selection) return null;
   let found = null;
   for (const line of readLines(greensPath(root))) {
     let entry = null;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry?.repo === repo && entry.tree === tree && entry.selection === selection && entry.gate_version === version
-      && receiptMatches(entry, { root, evidence, version, checks })) found = entry;
+    if (entry?.repo !== repo || entry.tree !== tree) continue;
+    if (entry.gate_version !== version) { onMiss({ why: 'receipt-invalid', reason: 'version' }); continue; }
+    if (!receiptMatches(entry, { root, evidence, version, onInvalid: onMiss })) continue;
+    if (entry.selection === selection && receiptMatches(entry, { root, evidence, version, checks, onInvalid: onMiss })) found = entry;
+    // Only a durable full receipt can establish a superset; legacy cache claims cannot.
+    else if (entry.receipt && checks && receiptMatches(entry, { root, evidence, version, checks, superset: true })) found = entry;
+    else onMiss({ why: 'selection-differs', receipt_files: entry.files?.length ?? null,
+      selected_files: checks?.files?.length ?? null, receipt_commands: entry.commands?.length ?? null,
+      selected_commands: checks?.commands?.length ?? null });
   }
   return found;
 }
@@ -88,16 +95,19 @@ export function findGreen({ root = mcHome(), repo, tree, selection, version = GA
  * and `files` to compute the delta from. Records written before those fields
  * existed are never returned — they can only be matched exactly.
  */
-export function findGreenForHead({ root = mcHome(), repo, headTree, version = GATE_MEASUREMENT_VERSION, evidence = null }) {
+export function findGreenForHead({ root = mcHome(), repo, headTree, version = GATE_MEASUREMENT_VERSION, evidence = null, onMiss = () => {} }) {
   if (!repo || !headTree) return null;
   let found = null;
   for (const line of readLines(greensPath(root))) {
     let entry = null;
     try { entry = JSON.parse(line); } catch { continue; }
-    if (entry?.repo !== repo || entry.gate_version !== version) continue;
+    if (entry?.repo !== repo) continue;
     if ((entry.head_tree ?? entry.tree) !== headTree) continue;
-    if (typeof entry.base !== 'string' || !entry.base || !Array.isArray(entry.files)) continue;
-    if (!receiptMatches(entry, { root, evidence, version })) continue;
+    if (entry.gate_version !== version) { onMiss({ why: 'receipt-invalid', reason: 'version' }); continue; }
+    if (!receiptMatches(entry, { root, evidence, version, onInvalid: onMiss })) continue;
+    if (typeof entry.base !== 'string' || !entry.base || !Array.isArray(entry.files)) {
+      onMiss({ why: 'delta-fallback', kind: 'missing-base-or-files' }); continue;
+    }
     found = entry;
   }
   return found;
@@ -190,17 +200,19 @@ export function fullCoverage(coverage) {
  * The run is a gate-run ID; optional session/revision bindings must match too.
  * Missing identity/configuration is uncertainty, not permission to reuse. */
 export function readGreenReceipt({ root = mcHome(), repo, repository, run, sessionRun = null,
-  goalRevision = null, configuration, version = GATE_MEASUREMENT_VERSION } = {}) {
-  if (!repo || !repository || !/^[a-zA-Z0-9-]+$/u.test(run || '') || !configuration) return null;
+  goalRevision = null, configuration, version = GATE_MEASUREMENT_VERSION, onInvalid = () => {} } = {}) {
+  const refused = (reason) => { onInvalid({ why: 'receipt-invalid', reason }); return null; };
+  if (!repo || !repository || !/^[a-zA-Z0-9-]+$/u.test(run || '') || !configuration) return refused('configuration');
   let receipt;
-  try { receipt = JSON.parse(readFileSync(join(root, 'gate-evidence', `${run}.json`), 'utf8')); } catch { return null; }
-  if (receipt?.schema !== 'mc-session-gate-evidence' || receipt.version !== 1 || receipt.gate_version !== version
-    || receipt.repo !== repo || receipt.repository !== repository || receipt.run !== run
+  try { receipt = JSON.parse(readFileSync(join(root, 'gate-evidence', `${run}.json`), 'utf8')); } catch { return refused('files'); }
+  if (receipt?.schema !== 'mc-session-gate-evidence' || receipt.version !== 1 || receipt.gate_version !== version) return refused('version');
+  if (receipt.repo !== repo || receipt.repository !== repository || receipt.run !== run
     || receipt.session_run !== sessionRun || receipt.goal_revision !== goalRevision
-    || receipt.configuration !== configuration || receipt.outcome !== 'green' || receipt.exit !== 0
+    || receipt.configuration !== configuration) return refused('configuration');
+  if (receipt.outcome !== 'green' || receipt.exit !== 0
     || receipt.stopped_at != null || !/^[0-9a-f]{40,64}$/u.test(receipt.tree || '')
     || !/^[0-9a-f]{40,64}$/u.test(receipt.base || '') || !receipt.fingerprint
-    || !Number.isFinite(Date.parse(receipt.started)) || !(Date.parse(receipt.ended) >= Date.parse(receipt.started))) return null;
+    || !Number.isFinite(Date.parse(receipt.started)) || !(Date.parse(receipt.ended) >= Date.parse(receipt.started))) return refused('execution');
   const coverage = receipt.coverage;
   const execution = receipt.execution;
   if (!Array.isArray(coverage?.files) || !Array.isArray(coverage.commands) || !Array.isArray(coverage.flags)
@@ -211,9 +223,9 @@ export function readGreenReceipt({ root = mcHome(), repo, repository, run, sessi
     || !(coverage.files.length || coverage.commands.length) || !Array.isArray(execution?.commands)
     || execution.commands.length !== coverage.commands.length
     || execution.commands.some((command) => !command || command.exit !== 0 || command.ok !== true || command.error
-      || (command.state === 'reused' && (typeof command.from !== 'string' || !command.from)))) return null;
-  if (!filesComplete(coverage, execution, receipt.members)) return null;
-  if (!executionComplete(coverage, execution, receipt.members)) return null;
+      || (command.state === 'reused' && (typeof command.from !== 'string' || !command.from)))) return refused('execution');
+  if (!filesComplete(coverage, execution, receipt.members)) return refused('files');
+  if (!executionComplete(coverage, execution, receipt.members)) return refused('execution');
   return receipt;
 }
 
@@ -235,24 +247,34 @@ export function filesComplete(coverage, execution, members = null) {
     && tests.totals?.pass > 0 && tests.totals?.fail === 0 && !tests.totals?.cancelled);
 }
 
-function receiptMatches(entry, { root, evidence, version, checks = null }) {
+function receiptMatches(entry, { root, evidence, version, checks = null, superset = false, onInvalid = () => {} }) {
+  const refused = (reason) => { onInvalid({ why: 'receipt-invalid', reason }); return false; };
   // Legacy v1 cache records remain readable only to legacy consumers.
-  if (!entry.receipt) return evidence === null;
+  if (!entry.receipt) return evidence === null || refused('files');
   let raw;
-  try { raw = JSON.parse(readFileSync(entry.receipt, 'utf8')); } catch { return false; }
-  if (!raw || typeof raw !== 'object') return false;
+  try { raw = JSON.parse(readFileSync(entry.receipt, 'utf8')); } catch { return refused('files'); }
+  if (!raw || typeof raw !== 'object') return refused('files');
   const context = evidence || { repository: raw.repository, run: raw.run, sessionRun: raw.session_run,
     goalRevision: raw.goal_revision, configuration: raw.configuration };
-  const receipt = readGreenReceipt({ ...context, root, repo: entry.repo, version });
-  if (!receipt || entry.receipt !== join(root, 'gate-evidence', `${receipt.run}.json`) || !fullCoverage(receipt.coverage)) return false;
-  if (evidence !== null && checks) {
-    try { if (checksHash(receipt.coverage) !== checksHash(checks)) return false; } catch { return false; }
+  const receipt = readGreenReceipt({ ...context, root, repo: entry.repo, version, onInvalid });
+  if (!receipt) return false;
+  if (entry.receipt !== join(root, 'gate-evidence', `${receipt.run}.json`) || !fullCoverage(receipt.coverage)) return refused('files');
+  if (checks && (evidence !== null || superset)) {
+    try {
+      const coverage = receipt.coverage;
+      if (superset) {
+        const commands = new Set(coverage.commands.map(commandIdentity));
+        if (!checks.files.every((file) => coverage.files.includes(file))
+          || !checks.commands.every((command) => commands.has(commandIdentity(command)))) return false;
+      }
+      if (checksHash(superset ? { ...coverage, files: checks.files, commands: checks.commands } : coverage) !== checksHash(checks)) return false;
+    } catch { return false; }
   }
-  if ((entry.files && !Array.isArray(entry.files)) || (entry.commands && !Array.isArray(entry.commands))) return false;
-  return receipt.tree === entry.tree && (entry.head_tree ?? entry.tree) === receipt.tree
+  if ((entry.files && !Array.isArray(entry.files)) || (entry.commands && !Array.isArray(entry.commands))) return refused('files');
+  return (receipt.tree === entry.tree && (entry.head_tree ?? entry.tree) === receipt.tree
     && entry.base === receipt.base && entry.selection === selectionHash(receipt.coverage)
     && (!entry.files || digest([...entry.files].sort()) === digest([...receipt.coverage.files].sort()))
-    && (!entry.commands || digest([...entry.commands].sort()) === digest(receipt.coverage.commands.map((c) => c.packageScript).sort()));
+    && (!entry.commands || digest([...entry.commands].sort()) === digest(receipt.coverage.commands.map((c) => c.packageScript).sort()))) || refused('files');
 }
 
 function digest(value) {

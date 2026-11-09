@@ -133,6 +133,7 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // (`exact`, or `delta` with what it ran again — ruling 47), so the hit
     // rate is counted from the log rather than guessed. Null when it measured.
     reused: gate?.reused || null,
+    reuse: gate?.reuse || null,
     // What a load stop measured: the files red only under load, how they ran
     // alone on the candidate, and the files killed or wholly cancelled — so a
     // file that is red under load again and again is found from the log.

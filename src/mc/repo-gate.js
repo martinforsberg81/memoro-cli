@@ -383,6 +383,9 @@ export async function runGate({
     // head tree with only what main's movement reaches run again (ruling 47).
     // Null when it measured the whole selection.
     reused: null,
+    // The reuse decision, including why a round measured instead. Kept beside
+    // `reused` so existing readers retain their nullable success-only field.
+    reuse: null,
     // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
     // what main must be, byte for byte, after each landing. Null for a
     // single round; `T_N` equals `candidate.tree`.
@@ -969,19 +972,23 @@ export async function runGate({
       }
     }
 
-    // A green `mc gate` already measured this exact tree with this exact
-    // selection (`gate-greens.js`): the suite and the selected command gates
+    // A green `mc gate` already measured this exact tree with this selection
+    // or a superset (`gate-greens.js`): the suite and the selected command gates
     // are not run again. The pull request's own tests and the declared gates
     // still are, below. Only a single pull request's round: a batch candidate
     // is a tree no session stood in, and `--full` asks for a measurement.
     const receiptContext = await bindReceiptRepository(askGit, repoPath, evidence === null ? null : { ...evidence,
       configuration: gateConfiguration(measured.declaration, plan.flags, executionIdentity(plan)) });
     let reused = null;
+    let candidateTree = null;
+    let reuseMiss = { why: batch ? 'batch' : !selection || !facts.pr ? 'full' : 'no-affected-green-for-head' };
     if (selection && facts.pr && !batch) {
       const tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
+      candidateTree = tree;
       const green = findGreen({
         root, repo: repoNameOf(repoPath), tree, selection: selection.hash, version: GATE_MEASUREMENT_VERSION, evidence: receiptContext,
         checks: { ...selection, flags: plan.flags, execution: executionIdentity(plan) },
+        onMiss: (miss) => { reuseMiss = miss; },
       });
       if (green) {
         const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
@@ -994,7 +1001,8 @@ export async function runGate({
           },
         };
         report.reused = { mode: 'exact', at: green.at ?? null, session: green.session ?? null, covered: coveredByGreen(green) };
-        say(`the candidate's tree ${tree.slice(0, 7)} was measured green by mc gate at ${green.at} with the same selection — not measured again`);
+        report.reuse = { ...report.reused, ...(green.selection !== selection.hash ? { superset: true } : {}) };
+        say(`the candidate's tree ${tree.slice(0, 7)} was measured green by mc gate at ${green.at} with ${report.reuse.superset ? 'a superset of the selection' : 'the same selection'} — not measured again`);
       }
     }
 
@@ -1015,20 +1023,25 @@ export async function runGate({
     // Anything that goes wrong on the way is a fallback to the whole
     // selection, never a green.
     let rerun = null;
-    if (selection && facts.pr && !batch && !reused && declared.declaration.select_changed_path) {
+    if (selection && facts.pr && !batch && !reused) {
       const delta = await timed('delta', () => deltaFromGreen({
         git: askGit, cwd: headDir, root, repo: repoNameOf(repoPath), headSha: facts.pr.head_sha,
         baseCommit: report.base.commit, derived: report.derived?.commit ? report.derived.regenerated : [],
         command: declared.declaration.select, env, selection, evidence: receiptContext,
+        allowDelta: Boolean(declared.declaration.select_changed_path), candidateTree,
       }));
       if (delta.kind === 'fallback') {
+        reuseMiss = { why: 'delta-fallback', kind: delta.fallback, reason: delta.reason };
         say(`delta reuse not taken — ${delta.reason}; measuring the whole selection`);
+      } else if (delta.kind === 'none') {
+        if (reuseMiss.why === 'no-affected-green-for-head' && delta.miss) reuseMiss = delta.miss;
       } else if (delta.kind === 'reuse') {
         const { green } = delta;
         report.reused = {
           mode: 'delta', at: green.at ?? null, session: green.session ?? null, covered: coveredByGreen(green),
           delta_paths: delta.paths.length, rerun_files: delta.files.length, rerun_commands: delta.commands.map((entry) => entry.packageScript),
         };
+        report.reuse = { ...report.reused };
         const head = String(facts.pr.head_sha || '').slice(0, 7);
         if (!delta.files.length && !delta.commands.length) {
           const at = await askGit(['rev-parse', 'HEAD'], { cwd: headDir });
@@ -1046,6 +1059,12 @@ export async function runGate({
           say(`#${facts.pr.number}'s head ${head} was measured green by mc gate at ${green.at}; main moved ${delta.paths.length} path${delta.paths.length === 1 ? '' : 's'} since — running ${delta.files.length} of the ${selection.files.length} selected file${selection.files.length === 1 ? '' : 's'} and ${delta.commands.length} of ${selection.commands.length} command gate${selection.commands.length === 1 ? '' : 's'} again`);
         }
       }
+    }
+    if (!report.reuse) {
+      report.reuse = { mode: 'none', ...reuseMiss };
+      say(`session green not reused — ${reuseMiss.why}${reuseMiss.kind ? ` (${reuseMiss.kind})` : ''}`
+        + `${reuseMiss.reason ? `: ${reuseMiss.reason}` : ''}`
+        + `${reuseMiss.why === 'selection-differs' ? ` (receipt ${reuseMiss.receipt_files ?? 'unknown'} files/${reuseMiss.receipt_commands ?? 'unknown'} commands; round ${reuseMiss.selected_files} files/${reuseMiss.selected_commands} commands)` : ''}`);
     }
     // What the run below measures: the whole selection, or the delta's part.
     const runFiles = rerun ? rerun.files : selection?.files;
@@ -1524,21 +1543,25 @@ export const DELTA_PATHS_MAX = 4000;
  * `select` with ` --changed-path <p>` per path, read like `selectFiles`, and
  * run by `run` as there.
  */
-export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null, run: runCommand = shell }) {
+export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit, derived = [], command, env, selection, evidence = null, run: runCommand = shell, allowDelta = true, candidateTree = null }) {
   if (!headSha || !baseCommit) return { kind: 'none' };
   const tree = await git(['rev-parse', `${headSha}^{tree}`], { cwd });
   const headTree = tree?.status === 0 ? trim(tree.stdout) : null;
-  if (!headTree) return { kind: 'fallback', reason: `could not read the tree of ${String(headSha).slice(0, 7)}` };
+  if (!headTree) return { kind: 'fallback', fallback: 'head-tree', reason: `could not read the tree of ${String(headSha).slice(0, 7)}` };
   evidence = await bindReceiptRepository(git, cwd, evidence);
-  const green = findGreenForHead({ root, repo, headTree, version: GATE_MEASUREMENT_VERSION, evidence });
-  if (!green) return { kind: 'none' };
+  let miss = { why: 'no-affected-green-for-head' };
+  const green = findGreenForHead({ root, repo, headTree, version: GATE_MEASUREMENT_VERSION, evidence,
+    onMiss: (reason) => { miss = reason; } });
+  if (!green) return { kind: 'none', miss };
+  if (!allowDelta) return { kind: 'none', miss: headTree !== candidateTree
+    ? { why: 'head-green-but-no-delta-declaration' } : null };
   const ancestor = await git(['merge-base', '--is-ancestor', green.base, baseCommit], { cwd });
-  if (ancestor?.status === 1) return { kind: 'fallback', reason: `the green's base ${green.base.slice(0, 7)} is not an ancestor of ${baseCommit.slice(0, 7)}` };
-  if (ancestor?.status !== 0) return { kind: 'fallback', reason: `git could not say whether ${green.base.slice(0, 7)} is an ancestor of ${baseCommit.slice(0, 7)}` };
+  if (ancestor?.status === 1) return { kind: 'fallback', fallback: 'not-ancestor', reason: `the green's base ${green.base.slice(0, 7)} is not an ancestor of ${baseCommit.slice(0, 7)}` };
+  if (ancestor?.status !== 0) return { kind: 'fallback', fallback: 'ancestry-unknown', reason: `git could not say whether ${green.base.slice(0, 7)} is an ancestor of ${baseCommit.slice(0, 7)}` };
   const diff = await git(evidence === null
     ? ['diff', '--name-only', green.base, baseCommit]
     : ['diff', '--name-only', '--no-renames', '-z', green.base, baseCommit], { cwd });
-  if (diff?.status !== 0) return { kind: 'fallback', reason: `git could not diff ${green.base.slice(0, 7)}..${baseCommit.slice(0, 7)}` };
+  if (diff?.status !== 0) return { kind: 'fallback', fallback: 'diff', reason: `git could not diff ${green.base.slice(0, 7)}..${baseCommit.slice(0, 7)}` };
   const paths = [...new Set([
     ...(evidence === null ? String(diff.stdout || '').split('\n').map((line) => line.trim())
       : String(diff.stdout || '').split('\0')).filter(Boolean),
@@ -1554,31 +1577,31 @@ export async function deltaFromGreen({ git, cwd, root, repo, headSha, baseCommit
     measuredCommands = evidence === null
       ? new Set((Array.isArray(green.commands) ? green.commands : []).map(String))
       : new Set(JSON.parse(readFileSync(green.receipt, 'utf8')).coverage.commands.map(commandIdentity));
-  } catch { return { kind: 'fallback', reason: 'the measured receipt is no longer readable' }; }
+  } catch { return { kind: 'fallback', fallback: 'receipt-unreadable', reason: 'the measured receipt is no longer readable' }; }
   const fresh = (reached) => ({
     files: selection.files.filter((file) => reached.files.has(file) || !measuredFiles.has(file)),
     commands: selection.commands.filter((entry) => reached.commands.has(entry.packageScript) || !measuredCommands.has(commandKey(entry))),
   });
   if (!paths.length) return { kind: 'reuse', green, paths, ...fresh({ files: new Set(), commands: new Set() }) };
-  if (paths.length > DELTA_PATHS_MAX) return { kind: 'fallback', reason: `main moved ${paths.length} paths since the green, more than ${DELTA_PATHS_MAX} to hand the selector` };
+  if (paths.length > DELTA_PATHS_MAX) return { kind: 'fallback', fallback: 'too-many-paths', reason: `main moved ${paths.length} paths since the green, more than ${DELTA_PATHS_MAX} to hand the selector` };
 
   const asked = `${command}${paths.map((path) => ` --changed-path ${shellQuote(path)}`).join('')}`;
   let run = null;
   try { run = await runCommand(asked, { cwd, env }); } catch (error) {
-    return { kind: 'fallback', reason: `the selector could not be run for the delta (${error.message})` };
+    return { kind: 'fallback', fallback: 'selector-run', reason: `the selector could not be run for the delta (${error.message})` };
   }
   if (run?.status !== 0) {
-    return { kind: 'fallback', reason: `the selector failed for the delta — ${trim(run?.stderr) || run?.error?.code || `exit ${run?.status}`}` };
+    return { kind: 'fallback', fallback: 'selector-exit', reason: `the selector failed for the delta — ${trim(run?.stderr) || run?.error?.code || `exit ${run?.status}`}` };
   }
   let parsed = null;
-  try { parsed = JSON.parse(run.stdout); } catch { return { kind: 'fallback', reason: 'the selector printed no JSON for the delta' }; }
-  if (!Array.isArray(parsed?.files)) return { kind: 'fallback', reason: 'the selector printed no `files` array for the delta' };
+  try { parsed = JSON.parse(run.stdout); } catch { return { kind: 'fallback', fallback: 'selector-json', reason: 'the selector printed no JSON for the delta' }; }
+  if (!Array.isArray(parsed?.files)) return { kind: 'fallback', fallback: 'selector-files', reason: 'the selector printed no `files` array for the delta' };
   if (parsed.commands !== undefined && !Array.isArray(parsed.commands)) {
-    return { kind: 'fallback', reason: 'the selector printed a `commands` field that is not a list for the delta' };
+    return { kind: 'fallback', fallback: 'selector-commands', reason: 'the selector printed a `commands` field that is not a list for the delta' };
   }
   if (evidence !== null && (parsed.full || parsed.files.some((file) => typeof file !== 'string' || !file)
     || (parsed.commands || []).some((entry) => !entry?.packageScript))) {
-    return { kind: 'fallback', reason: 'uncertain delta selection' };
+    return { kind: 'fallback', fallback: 'selector-uncertain', reason: 'uncertain delta selection' };
   }
   const reached = {
     files: new Set(parsed.files.map(String).filter(Boolean)),

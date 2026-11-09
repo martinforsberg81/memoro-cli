@@ -141,6 +141,10 @@ cache, after its receipt is durable. Version 3 of the shared measurement
 contract invalidates older cache entries. Added-test discovery, repository
 imports, resource batching and lane reservations remain the existing gate's.
 
+A valid full receipt may serve a smaller selection of the same tree when its
+files and command invocations cover that selection and the version, configuration,
+flags and execution identity still match.
+
 Receipts alone grant no execution, publication or merge authority.
 `findPublicationReceipt` has no caller in `mc publish` or the merger. The caller supplies the frozen local commit and
 an independently observed remote SHA; both must be the current local HEAD. Its
@@ -155,7 +159,7 @@ Receipts also retain a hash of the effective repository gate declaration and
 test flags, covering operator-table changes outside Git. Bound callers of
 `runGate` explicitly supply an `evidence` binding (`repository`, gate `run`,
 optional `sessionRun` and `goalRevision`). Exact reuse reads the durable receipt
-and checks the current declaration, content tree and complete selection. Delta
+and checks the current declaration, content tree and coverage of the selection. Delta
 reuse reads a compatible full receipt for the PR head, then asks the existing
 dependency-aware selector about main's movement and derived paths. Newly selected
 or newly configured commands/checks are measured; missing receipts, changed

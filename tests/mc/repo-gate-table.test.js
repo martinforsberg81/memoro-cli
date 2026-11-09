@@ -555,8 +555,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         prepare_why: SHIPPED['memoro-cli'].prepare_why,
         select: SHIPPED['memoro-cli'].select,
         select_why: SHIPPED['memoro-cli'].select_why,
-        select_changed_path: false,
-        select_changed_path_why: null,
+        select_changed_path: SHIPPED['memoro-cli'].select_changed_path,
+        select_changed_path_why: SHIPPED['memoro-cli'].select_changed_path_why,
         suite: SHIPPED['memoro-cli'].suite,
         suite_why: SHIPPED['memoro-cli'].suite_why,
         extra_gates: [],
@@ -808,13 +808,14 @@ describe('the fields a declaration can carry', () => {
     } finally { fx.cleanup(); cli.cleanup(); }
   });
 
-  it('select_changed_path ships on for memoro, off elsewhere, and a non-boolean is a declaration error (ruling 47)', () => {
+  it('select_changed_path ships on for memoro and memoro-cli, and a non-boolean is a declaration error (ruling 47)', () => {
     const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
     const cli = repo('memoro-cli', { name: 'memoro-cli', dependencies: { a: '1' } });
     try {
       assert.equal(fx.ask().declaration.select_changed_path, true);
       assert.match(fx.ask().declaration.select_changed_path_why, /--changed-path/u);
-      assert.equal(cli.ask().declaration.select_changed_path, false);
+      assert.equal(cli.ask().declaration.select_changed_path, true, 'memoro-cli head greens survive main moving');
+      assert.match(cli.ask().declaration.select_changed_path_why, /--changed-path.*--base-ref/u);
       fx.declare({ select_changed_path: false });
       assert.equal(fx.ask().declaration.select_changed_path, false);
       fx.declare({ select_changed_path: 'yes' });

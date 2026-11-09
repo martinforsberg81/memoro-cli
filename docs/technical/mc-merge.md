@@ -719,14 +719,26 @@ would be the most confident kind of nothing.
 47). Completed full, unfiltered affected gates now write durable
 [receipts](mc-gate-evidence.md) and populate `gate-greens.jsonl`
 ([`src/mc/gate-greens.js`](../../src/mc/gate-greens.js)). A round can reuse exactly
-by tree, selection hash and measurement version, or use the PR head's receipt
+by tree and measurement version with equal selection, or with a valid full receipt
+whose files and command invocations are supersets of the selected checks on that
+same tree. Flags, execution identity and receipt validity remain required;
+`reuse.superset: true` names the latter case. A round can also use the PR head's receipt
 and ask the repository's dependency-aware selector what main's movement reaches.
 Missing or incompatible evidence means measuring the relevant selection. Named
 or filtered runs never enter this full-selection cache. Receipt-bound
 callers additionally require the matching repository/run/revision and current
 gate configuration; legacy v1 callers retain their existing admission path.
 Required merge gates and the PR's own tests still run. `reused` in the round log
-records the evidence taken, not a new measurement.
+records the evidence taken, not a new measurement. Beside that unchanged field,
+`reuse` records every decision: `mode: exact | delta` carries the existing reused
+fields; `mode: none` carries `why`: `no-affected-green-for-head` (no cache entry
+for head or candidate), `head-green-but-no-delta-declaration` (a head green but
+main moved without `select_changed_path`), `selection-differs` (same tree but
+uncovered selection, with receipt/selected file and command counts),
+`receipt-invalid` (with `reason`: `version`, `execution`, `configuration` or
+`files`), `delta-fallback` (with the fallback `kind` and detail), `batch`, or
+`full`. The merger narrates a non-reuse reason in one line and the round record
+keeps it, including the counts or refusal/fallback detail.
 
 **`mc gate` selects from code changes** ([`src/mc/commands/gate.js`](../../src/mc/commands/gate.js)).
 With no files named, the repository selector receives all paths changed against
