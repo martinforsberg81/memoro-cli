@@ -440,6 +440,22 @@ test('prsLanded: done when one landed and every other is closed or landed; open 
   assert.deepEqual(prsLanded(prs, states({ 'memoro#1': 'MERGED', 'memoro-cli#2': 'OPEN' })).open, ['memoro-cli#2']);
 });
 
+test('prState: OPEN, MERGED or CLOSED from gh pr view --json state; null when gh fails or answers no state', async () => {
+  const { prState } = await import('../../src/mc/goals.js');
+  for (const [answer, expected] of [
+    ...['OPEN', 'MERGED', 'CLOSED'].map((state) => [{ ok: true, stdout: JSON.stringify({ state }) }, state]),
+    [{ ok: false, stdout: '{"state":"OPEN"}' }, null],
+    [{ ok: true, stdout: '{}' }, null],
+    [{ ok: true, stdout: 'not JSON' }, null],
+    [{ ok: true, stdout: '{"state":"unexpected"}' }, null],
+  ]) {
+    const calls = [];
+    const gh = (cwd, args) => { calls.push({ cwd, args }); return answer; };
+    assert.equal(prState(gh, '/repos/memoro', 7), expected);
+    assert.deepEqual(calls, [{ cwd: '/repos/memoro', args: ['pr', 'view', '7', '--json', 'state'] }]);
+  }
+});
+
 test('goalOfPr and goalOfPath find the goal a pull request or a worktree is', async () => {
   const { goalOfPath, goalOfPr } = await import('../../src/mc/goals.js');
   const goals = [{ programme: 'mc', goal: 'a', prs: [] }, { programme: 'ios', goal: 'b', prs: [{ repo: 'memoro', pr: 7 }] }];

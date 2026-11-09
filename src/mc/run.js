@@ -69,7 +69,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1475,9 +1475,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const readState = ({ repo: repoName, pr }) => {
       const repo = repos.find((item) => item.name === repoName);
       if (!repo) return null;
-      const answer = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'state']);
-      if (!answer.ok) return null;
-      try { return JSON.parse(answer.stdout || 'null')?.state ?? null; } catch { return null; }
+      return prState(deps.gh, repo.path, pr);
     };
     for (const goal of goals()) {
       if (goal.problems.length || FINISHED.includes(goal.stage) || !goal.prs?.length) continue;
@@ -1488,6 +1486,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (!asked.has(key)) asked.set(key, readState(item));
         return asked.get(key);
       };
+      const settled = prsLanded(goal.prs, stateOf);
+      if (goal.stage === 'merge' && goal.status === 'ready' && settled.closed.length === goal.prs.length) {
+        goalState(goal, goalName(goal), { status: 'Martin' }, {
+          comment: `every pull request closed without merging: ${settled.closed.join(', ')} — nothing to land; a person opens a new one (mc goal pr) and sets it ready, or drops the goal`,
+        });
+        continue;
+      }
       // Recover the execution of an existing merge decision, including a
       // process that stopped after saving the stage but before queueing all PRs.
       // A red remains with mend until its ready handoff authorizes delivery again.
@@ -1502,6 +1507,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           if (goal.log.some((entry) => String(entry.done ?? '').startsWith(`${item.repo}#${item.pr} landed `))) continue;
           // Closed without merging: the merger has nothing to land, and would answer red.
           if (stateOf(item) === 'CLOSED') { say(`${goalName(goal)}: ${item.repo}#${item.pr} closed without merging — not queued`); continue; }
+          if (stateOf(item) === 'MERGED') { say(`${goalName(goal)}: ${item.repo}#${item.pr} already merged — not queued`); continue; }
           const repo = repos.find((entry) => entry.name === item.repo);
           try {
             deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.pr,
@@ -1510,7 +1516,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           } catch (error) { say(`${goalName(goal)}: ${item.repo}#${item.pr} could not be queued (${error.message})`); }
         }
       }
-      const settled = prsLanded(goal.prs, stateOf);
       if (!settled.done) continue;
       goalState(goal, goalName(goal), { stage: 'done' }, {
         done: `landed ${settled.landed.join(', ')}`,

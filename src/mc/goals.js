@@ -716,6 +716,16 @@ export function prsLanded(prs, stateOf) {
   return { ...out, done: out.landed.length > 0 && out.open.length === 0 && out.unknown.length === 0 };
 }
 
+/** GitHub's pull-request state, or null when it cannot say. */
+export function prState(gh, repoPath, pr) {
+  const answer = gh(repoPath, ['pr', 'view', String(pr), '--json', 'state']);
+  if (!answer.ok) return null;
+  try {
+    const state = JSON.parse(answer.stdout || 'null')?.state;
+    return ['OPEN', 'MERGED', 'CLOSED'].includes(state) ? state : null;
+  } catch { return null; }
+}
+
 /**
  * The goal whose worktree `cwd` stands in, as `{ programme, goal }`: a path
  * `<home>/<programme>/goals/<goal>/<repo>/…`. Null anywhere else. How `mc
