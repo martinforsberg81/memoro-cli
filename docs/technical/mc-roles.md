@@ -62,12 +62,12 @@ There are two catalogues, and they are looked up in that order:
 
 What canon holds today: five goal roles, each one file, and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
-the session is for; a verb file says how a verb is used). Plan is interactive
-only, and finish and mend took its headless goal work (Martin, 2026-11-07).
+the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Finish
+and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
-| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; never the runner |
+| `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
@@ -204,8 +204,9 @@ phase, including one waiting on an earlier phase; a brief with unresolved
 planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
-build session. It is interactive only (Martin, 2026-11-07): Martin is at the
-terminal and it has no restrictions; the runner never starts one. It names
+build session. That freedom is interactive. The runner may instead assign
+one next draft under [the programme trigger](mc-goals.md#next-draft-planning)
+(Martin, 2026-11-09), with the role limited to completing that brief. It names
 the headless roles and what each owns, so it knows the goal's text is its
 own and a headless session's `Martin` is a question for it. A goal
 is what the runner builds, a means toward the aim. `refusedMove`
@@ -383,7 +384,7 @@ accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
 `manager`, `helper` and `intake`. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 Runner roles are `build-session:goal`, `review-session:goal`, `finish-session`
-and `mend-session`; `plan` is the interactive plan session's.
+and `mend-session`; `plan` serves interactive planning and next-draft assignment.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
 MC_GOAL, then cwd. Programme directories identify plan sessions; their

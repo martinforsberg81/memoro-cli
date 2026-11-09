@@ -48,24 +48,17 @@ describe('the plan role', () => {
     assert.ok(role.overlay, 'the plan role has no overlay body');
   });
 
-  /**
-   * What the body is for (Martin, 2026-11-03): the programme's aim in its
-   * README, and full freedom toward it, a goal's branch included. Interactive
-   * only (Martin, 2026-11-07): the runner never starts a plan session, and the
-   * role names the headless roles that took its goal work — finish and mend —
-   * so a plan session knows what it owns. The ban a headless plan session had
-   * — no code, no commit, no publish, no `review` or `done` — and its list of
-   * three allowed ends are gone, and so are the headless sections.
-   */
-  it('says the session drives the programme toward the README aim, interactive only, and names the headless owners', () => {
+  // Interactive programme planning and the runner-assigned draft share one role.
+  it('says the session drives the programme toward the README aim, with interactive freedom and a bounded next-draft assignment', () => {
     const told = instructionsFor('claude-code', readCanonRole(PLAN_ROLE).overlay).replace(/\s+/gu, ' ');
     assert.match(told, /~\/mc\/programs\/<programme>\/README\.md/u);
     assert.match(told, /primary deliverable/u);
     assert.match(told, /subordinate to this planning responsibility/u);
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
-    assert.match(told, /\*\*Interactive, always\.\*\*.*you have no restrictions/u);
-    assert.match(told, /The runner never starts a plan session/u);
+    assert.match(told, /With Martin at the terminal you have full freedom/u);
+    assert.match(told, /runner assigns exactly one next draft/u);
+    assert.match(told, /Do not implement it, plan another draft/u);
     assert.match(told, /A \*\*finish session\*\* takes `finish · ready`/u);
     assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);

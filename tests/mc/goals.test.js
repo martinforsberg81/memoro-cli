@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
+import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 
@@ -490,4 +490,23 @@ test('legacy merging records and log headings read as merge and write the new st
   const log = parseLog('## 2026-11-01T20:00Z · runner · merging · ready\n\nDone: merger answered red on #31\n');
   assert.equal(log[0].stage, 'merge');
   assert.equal(mergeRetryDue({ ...goal, log }), true);
+});
+
+
+test('nextDraft requires unfinished planning only and orders by phase, creation and name without bypassing Martin', () => {
+  const draft = (name, fields = {}) => ({ programme: 'p', goal: name, stage: 'draft', status: 'ready', phase: 1, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
+  const a = draft('a'), b = draft('b'), later = draft('later', { phase: 2 });
+  assert.equal(nextDraft([], 'p'), null);
+  assert.equal(nextDraft([draft('done', { stage: 'done' })], 'p'), null);
+  assert.equal(nextDraft([b, later, a, draft('done', { stage: 'done' }), draft('gone', { stage: 'dropped' })], 'p'), a);
+  assert.equal(nextDraft([b, draft('a', { created: '2026-11-02T00:00:00Z' })], 'p'), b);
+  assert.equal(nextDraft([later, b], 'p'), b);
+  assert.equal(nextDraft([draft('a', { status: 'Martin' }), b], 'p'), null);
+  assert.equal(nextDraft([draft('a', { problems: ['unreadable'] }), b], 'p'), null);
+  for (const stage of ['build', 'review', 'finish', 'merge']) {
+    for (const status of ['ready', 'blocked', 'Martin']) {
+      assert.equal(nextDraft([a, draft('delivery', { stage, status })], 'p'), null, `${stage} ${status}`);
+    }
+  }
+  assert.equal(nextDraft([a, { programme: 'other', stage: 'build' }], 'p'), a);
 });

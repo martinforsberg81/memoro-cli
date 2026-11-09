@@ -16,8 +16,7 @@ does the work, records each criterion it has checked as met, and publishes its
 pull request; a review session on another model runs the checks and decides;
 OK queues it for the merger, not OK sends it to a finish session that fixes
 what review found and sends it on; the goal is `done` when it lands, and it
-lands only with every criterion met. Only a merge failure (conflict, failed candidate check or moved judged head) starts mend. Legacy blocked work outside merge is reconciled to Martin without a diagnostic session (Martin, 2026-11-08). Plan is interactive only:
-the runner never starts a plan session.
+lands only with every criterion met. Only a merge failure (conflict, failed candidate check or moved judged head) starts mend. Legacy blocked work outside merge is reconciled to Martin without a diagnostic session (Martin, 2026-11-08). Interactive plan remains `mc plan`; the runner may also complete one next draft under *Next draft planning*.
 
 A goal has two fields where it had one status (Martin, 2026-11-03: *"Status
 måste innehålla även processen så att den inte går tillbaka."* *"Det kan
@@ -184,7 +183,7 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
-  stage `draft` (nothing happens to it there; the runner never takes it), or
+  stage `draft` (awaiting planning; see *Next draft planning*), or
   `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's
   highest is refused (`phase 4 would leave a hole — mc's phases run to 2, so 3
   is the highest a goal may take`). Each
@@ -452,8 +451,8 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    (`goalSession`, `goals.js`) — `build · ready` with a criterion (a build),
    `review · ready` (a review), `finish · ready` (a finish session), unqueued
    `merge · blocked`, and legacy `merge · ready` whose last entry is the merger's red and none of whose pull requests
-   is in the merger's line (a mend session) — never `draft · ready` or
-   `Martin`. Eligible work is in the phase their programme is in or an earlier one
+   is in the merger's line (a mend session) — no delivery session on `draft · ready` or
+   `Martin`. The next-draft assignment is added separately to the candidates. Eligible work is in the phase their programme is in or an earlier one
    (*Phases*), and not held, on any repository (a lane serves them all), the
    one whose last entry is oldest. A review that cannot run now (step 3) is
    left out of the pick, so it does not stand in front of every other goal;
@@ -515,9 +514,9 @@ and merge-failure mend ranks with finish before review; no pre-merge mend exists
 
 ## Finish and mend
 
-Headless plan is gone (Martin, 2026-11-07: the plan role did not work as one
-overarching role the runner woke at different moments). Plan is interactive,
-`mc plan`; the goal work it did headless is two roles with one job each:
+The broad headless plan role was retired on 2026-11-07. Interactive planning
+remains `mc plan`; next-draft planning returns under the bounded assignment
+below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
 
 - **A finish session** (`MC_ROLE=finish-session`, `canon/roles/finish-session.md`)
   takes a goal in `finish · ready`: it fixes what review found, runs criterion
@@ -558,8 +557,8 @@ that ends the session and releases its lane. Neither performs Martin's acts:
 deploy, production data, credentials or admin override. The programme turns
 headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
 disabled: their instructions were too poor to use (Martin, 2026-11-07), and
-`programme-plan.js` is removed; a later goal may bring programme planning
-back with new instructions. `MC_PLAN_REASON` is gone with them.
+`programme-plan.js` and `MC_PLAN_REASON` remain removed. Next-draft planning
+below uses the existing goal-session mechanism instead.
 
 ## What a build session does
 
@@ -683,8 +682,8 @@ existing decision and does not move a goal to `merge` on its own.
 
 Each stage has one owner, and a goal passes each once:
 
-- `draft` — the interactive plan session writes the goal; nothing happens to
-  it, and the runner never takes it. The plan session moves it to `build`
+- `draft` — a plan session writes the goal, interactively or through the
+  next-draft assignment below. The plan session moves it to `build`
   when it is ready to be built. (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin.
@@ -722,5 +721,29 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
 - **No close-out document.** `mc goal archive` moves a finished goal aside
   and writes one row; nothing is written into a repository.
 
-Programme planning does not run headless (Martin, 2026-11-07): what a
-programme does next is decided in the interactive plan session, `mc plan`.
+## Next draft planning
+
+Martin, 2026-11-09 supersedes the prohibition on all headless programme planning:
+when a programme has at least one draft and all its goals are `draft`, `done`
+or `dropped`, the runner may start one plan session to complete its next draft.
+Any build/review/finish/merge goal excludes it, regardless of status; unreadable
+goal data excludes it too. Empty programmes and programmes with no drafts launch
+nothing. `dropped` has the same terminal meaning as in phase eligibility.
+
+The next draft is selected by ascending phase, creation time, then name. The
+selected draft must be ready; one waiting on Martin holds planning rather than
+being bypassed. Only one goal session per programme may be held while planning
+starts, including current records from a predecessor runner. Admission rechecks
+the trigger before spawning. The plan uses that draft's goal worktrees and branch,
+role `plan`, kind `plan`, MC_GOAL and MC_HEADLESS=1, with existing routing, lane
+and reserved-act rules. Interactive planning checkouts remain separate.
+
+Complete exactly the selected draft's goal, contract, exclusions, documents,
+protection scope and executable criteria, reconcile the programme README and
+phases, and move it to build immediately when ready. Resolve a remaining policy
+choice through goal-bound mc ask. Do not implement the draft or process the
+proposal backlog in the headless planning turn. A completed session leaving
+`draft · ready` waits on Martin with an incomplete-session diagnostic; provider
+refusals/offline failures keep their existing retries. Broader programme design
+and proposal intake remain interactive. This restores neither no-draft nor
+daily-proposal turns.

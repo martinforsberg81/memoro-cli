@@ -293,6 +293,11 @@ function withBrief(prompt, brief) {
   return brief ? `${prompt}\n\nThe goal, as \`mc goal show\` renders it:\n\n${brief.trimEnd()}` : prompt;
 }
 
+/** One unattended planning assignment; the role keeps interactive planning separate. */
+export function goalPlanPrompt({ name, dir, worktree, branch, brief = null }) {
+  return withBrief(`You are the headless plan session for the next draft ${name}. Read the programme README at \`${dir}/../../README.md\` first. Its other goals are done, dropped or draft. Your assignment is to complete exactly this draft: investigate its code and decided standards, finish its brief, contract, exclusions, documents and executable success checks, reconcile the programme README and phases, and move it to build immediately when ready using mc goal. Use goal-bound mc ask for an unresolved product or policy choice. Do not implement the draft or process other drafts/proposals in this turn. Your directory is \`${dir}\`; your worktree is \`${worktree}\`, on branch \`${branch}\`. Use the headless next-draft section of your plan role.`, brief);
+}
+
 /**
  * What a goal session is told: where the goal is and where it works, and the
  * goal itself (`brief`). The rest is the build role's
@@ -372,6 +377,10 @@ export function goalMendCheckInPrompt({ minutes, count }) {
  * (ruling 18). Nothing is killed on elapsed time; instead the session is
  * asked to judge whether it is still moving the goal.
  */
+export function goalPlanCheckInPrompt({ minutes, count }) {
+  return `Planning check-in after ${minutes} minutes (${count}). Complete the selected draft and move it to build when ready. Resolve technical details locally; use goal-bound mc ask for a remaining policy choice. Keep this turn to the one draft's planning assignment.`;
+}
+
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,

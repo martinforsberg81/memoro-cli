@@ -5,8 +5,8 @@
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
  * session on an open goal, a review session on a goal in review, a finish
  * session on a goal in finish, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
- * process in the goal's worktree. The runner never starts a plan session:
- * plan is interactive, `mc plan` (Martin, 2026-11-07). The runner decides
+ * process in the goal's worktree. A plan session completes the next draft
+ * when its programme has only draft or finished goals (Martin, 2026-11-09). The runner decides
  * nothing with a model: it reads files, runs git and gh, starts the session
  * through the launch adapter and waits for it. It is the parent of the
  * process it starts.
@@ -69,7 +69,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, mergeAnswered, mergeFailures, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -111,7 +111,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalFinishCheckInPrompt, goalFinishPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalFinishCheckInPrompt, goalFinishPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -124,7 +124,7 @@ const ADMISSION_RETRY_MS = 1000;
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** The role each goal session kind runs with (`goalSession`). */
-const GOAL_ROLES = Object.freeze({ build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE });
+const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE });
 
 /*
  * Disk: no session starts unless the shared policy admits it
@@ -1355,13 +1355,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
     }
     all = goals();
-    return all
+    const drafts = [...new Set(all.map(goal => goal.programme))]
+      .map(programme => nextDraft(all, programme)).filter(Boolean);
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && ![...held].some(name => name.startsWith(`goal:${goal.programme}/`)))
+      .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
+    return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
         && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
-      });
+      })];
   }
 
   /** A build or review is `goal`'s variant (a project's was the other); a finish or a mend has none (`session-kind.js`). */
@@ -1372,9 +1376,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The session a goal gets (`goalSession`): `mend` only for unqueued merge failures,
    * `review` in review, `finish` in finish, else `build`. Only a candidate of
-   * `goalWork` comes here, so the merger's line is not asked again.
+   * `goalWork` comes here, so the merger's line is not asked again. Drafts
+   * receive the separate, programme-gated plan assignment.
    */
   function goalKind(goal) {
+    if (goal.stage === 'draft') return 'plan';
     if (goal.stage === 'merge') return 'mend';
     if (goal.stage === 'review') return 'review';
     return goal.stage === 'finish' ? 'finish' : 'build';
@@ -1666,6 +1672,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const [repoName] = goal.repos;
     const worktree = join(goal.dir, repoName);
     const kind = goalKind(goal);
+    const planning = kind === 'plan';
     const review = kind === 'review';
     const finish = kind === 'finish';
     const mend = kind === 'mend';
@@ -1734,7 +1741,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
       const brief = goal.title ? renderGoalText(goalOfRecord(goal)) : null;
       const told = { name: `${goal.programme}/${goal.goal}`, dir: goal.dir, worktree, branch, brief };
-      const prompt = review
+      const prompt = planning
+        ? goalPlanPrompt(told)
+        : review
         ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head })
         : finish
         ? goalFinishPrompt({ ...told, why: goal.log.at(-1) })
@@ -1789,6 +1798,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // and the existing finally blocks release admission and the slot.
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
+        if (planning && nextDraft(goals(), goal.programme)?.goal !== goal.goal) {
+          say(`${name}: programme changed during admission — planning deferred`);
+          return 'skipped:programme-changed';
+        }
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
         // A session whose `mc goal stage merge` ends it: review, finish, and a mend in merge.
         const canHandoff = (review || finish || mend) && scratchEnv.MC_SCRATCH;
@@ -1804,7 +1817,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             catch { return false; }
           } : null,
           ...watchFor(launch, settings, {
-            prompt, name, checkInText: finish ? goalFinishCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
+            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : finish ? goalFinishCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
             onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
           }),
           env: {
@@ -1839,6 +1852,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
+      else if (planning) {
+        const now = stateNow(goal);
+        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
+          goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
+        }
+      }
       else if (finish && !read.quota && !read.interrupted) afterFinish(goal, name);
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.

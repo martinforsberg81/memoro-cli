@@ -72,7 +72,7 @@ order without a model call:
    `merge · blocked`, or `merge · ready` after its first red or moved head
    and once it is no longer in the merger's line. Only a merge failure wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
    waits for the person. `draft · ready`, `done` and `dropped` do not start a
-   goal session; the runner never starts a plan session.
+   delivery session. A focused plan session may complete the next draft under the programme rule below.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
 4. Exclude goals already claimed or named by a live current file, and goals
@@ -160,8 +160,7 @@ role tells the session to read LOG.md first.
   with the goal still `finish · ready` is set `finish · Martin`.
 - A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree on the goal's class, like a
   build, and write the merge handoff when they queue. See
-  [finish and mend](mc-goals.md#finish-and-mend). The runner starts no plan
-  session and no programme planning turn (Martin, 2026-11-07).
+  [finish and mend](mc-goals.md#finish-and-mend). Planning is a separate next-draft assignment under the rule below.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment
@@ -505,3 +504,27 @@ nothing about it.
 clock and process boundaries. `tests/mc/goals.test.js` covers phase and stage
 eligibility. `tests/mc/run-doc.test.js` compares the documented defaults and
 routing rules with the code. These tests start no real coding session.
+
+## Next draft planning
+
+Martin, 2026-11-09: a programme with at least one draft and every goal in
+`draft`, `done` or `dropped` may run one plan session to complete its next draft.
+Any unfinished delivery goal, including a goal waiting on Martin, holds this
+trigger. Unreadable goal data holds it too. Select lowest phase, oldest creation
+time, then goal name; a selected draft waiting on Martin cannot be bypassed.
+
+The runner offers this assignment after build in the existing lane picker.
+Claims and live current records prevent concurrent planning in one programme,
+including across runner handover. Recheck the programme after admission awaits
+before spawning. Use the selected goal's first repository worktree, role `plan`,
+kind `plan`, `MC_GOAL` and `MC_HEADLESS=1`; keep the normal routing, admission,
+provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
+checkouts are not runner work areas. The assignment is to finish the brief and
+reconcile the README and phases, then move that draft to build. An unresolved
+choice goes through goal-bound mc ask. An ordinary completed plan session
+leaving draft ready waits on Martin with an incomplete-session diagnostic,
+preventing an unchanged-work launch loop. Provider refusals and offline endings
+retain normal retry behavior and are not evidence of planning failure.
+
+No draft means no plan session. Proposal arrival and daily proposal processing
+remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-planning).
