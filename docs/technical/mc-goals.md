@@ -709,7 +709,7 @@ Each stage has one owner, and a goal passes each once:
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
-- `dropped` — delivery abandoned (`mc goal drop`), by a person or plan, from any
+- `dropped` — delivery abandoned (`mc goal drop`), by a person, plan or interactive Martin, from any
   stage. Final; it holds no later phase back, and is immediately finalized and
   archived when cleanup is safe. A dropped goal never wakes a mend session or
   accepts an old merger answer.

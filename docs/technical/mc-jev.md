@@ -89,6 +89,11 @@ Build, review, finish, mend, plan and interactive Martin may set Martin within t
 runner's own recovery settings of `Martin` (`src/mc/run.js`) do not go
 through the verb and never ask jev.
 
+The Martin role's interactive-only restriction also applies to `mc ask`,
+with or without a goal. An unattended Martin call is refused before any
+goal/log/ledger mutation, key read or provider request; ordinary headless
+stage roles retain their existing bounded ask permissions.
+
 ## The flow
 
 1. **Not asked.** `--reserved <act>`, or a caller with `MC_TOOL` unset or

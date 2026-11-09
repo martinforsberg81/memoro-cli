@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { run, get } from '../../../src/mc/commands/martin.js';
+import { run as ask } from '../../../src/mc/commands/ask.js';
+import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
 import { goalJson } from '../_helpers/goal-file.js';
 
@@ -28,8 +30,76 @@ function fixture() {
 }
 const log = (at, status, comment, tool = 'person') => `## ${at} · ${tool} · build · ${status}\n\nComment: ${comment}`;
 function io() { const out = { stdout: '', stderr: '' }; return { out, stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } } }; }
+function askFixture(home, reference, env = {}) {
+  const output = io(); const effects = [];
+  const deps = {
+    ...output, home, env: { MC_ROLE: 'martin', MC_TOOL: 'codex', ...env },
+    read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+    write: (path, text) => { effects.push('write'); writeFileSync(path, text); },
+    readKeys: () => { effects.push('keys'); return { TYPESAFE_API_KEY: 'isolated-fixture-key' }; },
+    ledger: () => { effects.push('ledger'); },
+  };
+  return { ...output, effects, call: async ({ question = 'Original unresolved policy?', p = 0.5, at = '2026-01-01T00:00:00Z', reserved = false } = {}) => ask([
+    ...(reference ? [reference] : []), '--reason', question,
+    '--option', 'a: keep rule', '--option', 'b: change rule', '--recommend', 'a',
+    '--evidence', 'Investigated evidence for this rule.', ...(reserved ? ['--reserved', 'admin'] : []),
+  ], { ...deps, now: () => new Date(at), jev: {
+    transport: async () => { effects.push('provider'); return { status: 200, text: async () => JSON.stringify({ model: 'jev-1.14.0', answers: {
+      answer: { choice: 'a', probabilities: { a: p } }, fits: { noul: 0.99 }, settled: { noul: 0.99 },
+    } }) }; }, timer: () => new Promise(() => {}),
+  } }) };
+}
 
 describe('mc martin get', () => {
+  it('keeps the unresolved real ask and its ordering after a different consultation is answered', async () => {
+    const f = fixture();
+    f.make('alpha', 'waiting', { status: 'ready' });
+    f.make('beta', 'later', {}, [log('2026-01-01T12:00Z', 'Martin', 'Martin is asked: Later policy?')]);
+    f.make('alpha', 'questionless', {}, [log('2026-01-03T00:00Z', 'Martin', 'runner failure: missing evidence')]);
+    const writer = askFixture(f.home, 'alpha/waiting');
+    assert.equal(await writer.call(), 1, writer.out.stderr);
+    assert.equal(await writer.call({ question: 'Settled implementation detail?', p: 0.99, at: '2026-01-02T00:00:00Z' }), 0, writer.out.stderr);
+    const questionless = askFixture(f.home, 'alpha/questionless');
+    assert.equal(await questionless.call({ question: 'Another settled detail?', p: 0.99, at: '2026-01-04T00:00:00Z' }), 0, questionless.out.stderr);
+    const before = snapshot(f.home);
+    const result = collectMartinQueue({ home: f.home });
+    assert.deepEqual(result.items.map(i => i.reference), ['alpha/waiting', 'beta/later', 'alpha/questionless']);
+    assert.equal(result.items[0].question.question, 'Original unresolved policy?');
+    assert.equal(result.items[0].question.at, '2026-01-01T00:00:00Z');
+    assert.equal(result.items[0].status, 'Martin');
+    assert.equal(result.items[2].question.reason, 'runner failure: missing evidence');
+    assert.equal(result.items[2].question.at, '2026-01-03T00:00Z');
+    assert.match(result.items[2].question.limitation, /No structured question/u);
+    assert.deepEqual(snapshot(f.home), before);
+  });
+
+  it('preserves real ask readings and every populated tail field in text and JSON outside the question tail', async () => {
+    const f = fixture(); const dir = f.make('alpha', 'waiting', { status: 'ready' });
+    const writer = askFixture(f.home, 'alpha/waiting');
+    assert.equal(await writer.call(), 1, writer.out.stderr);
+    for (const day of [2, 3, 4]) appendEntry({ dir, entry: {
+      at: `2026-01-0${day}T00:00Z`, tool: 'codex', role: 'martin', stage: 'build', status: 'Martin',
+      done: `Failure evidence ${day}`, comment: `Brief comment ${day}`, next: `Recovery instructions ${day}`,
+    }, read: (path) => readFileSync(path, 'utf8'), write: writeFileSync });
+    const before = snapshot(f.home);
+    const result = collectMartinQueue({ home: f.home }); const item = result.items[0];
+    const reading = writer.out.stdout.trim();
+    assert.match(reading, /^mc: jev did not settle it: a .*not answered: p 0\.50/u);
+    assert.equal(item.question.jev, reading);
+    assert.deepEqual(item.question.options, [{ key: 'a', text: 'keep rule' }, { key: 'b', text: 'change rule' }]);
+    assert.equal(item.question.recommendation, 'a');
+    assert.deepEqual(item.log.map(e => e.at), [2, 3, 4].map(day => `2026-01-0${day}T00:00Z`));
+    const text = io(); const json = io();
+    assert.equal(get([], { home: f.home, ...text }), 0);
+    assert.equal(get(['--json'], { home: f.home, ...json }), 0);
+    assert.deepEqual(JSON.parse(json.out.stdout).items[0], item);
+    assert.ok(text.out.stdout.includes(reading));
+    assert.ok(text.out.stdout.includes('Investigated evidence for this rule.'));
+    assert.ok(text.out.stdout.includes('Original unresolved policy?'));
+    for (const entry of item.log) for (const field of ['done', 'comment', 'next']) assert.ok(text.out.stdout.includes(entry[field]), `${field}: ${entry[field]}`);
+    assert.deepEqual(snapshot(f.home), before, 'get has no write-on-read effects');
+  });
+
   it('filters live cross-programme records, preserves old current questions, orders stably, and dedupes programme context', () => {
     const f = fixture();
     f.make('alpha', 'older', {}, [log('2026-01-01T00:00Z', 'Martin', 'Martin is asked: Keep or change?\nOption keep: Keep it\nOption change: Change it\nRecommended: change\njev: recommended change') , ...[1,2,3,4].map(n => log(`2026-01-0${n+1}T00:00Z`, 'Martin', `continuation ${n}`, 'claude'))]);
@@ -88,6 +158,32 @@ describe('mc martin get', () => {
     const items = collectMartinQueue({ home: f.home, read: () => null });
     assert.equal(items.items.length, 0);
     assert.match(items.issues[0].path, /opaque\/GOAL\.json$/u);
+  });
+});
+
+describe('Martin ask authority', () => {
+  it('refuses unattended Martin before goal, ledger, key or provider effects, with and without a named goal', async () => {
+    const f = fixture(); f.make('alpha', 'waiting', { status: 'ready' });
+    for (const reference of ['alpha/waiting', null]) for (const reserved of [false, true]) {
+      const before = snapshot(f.home);
+      const writer = askFixture(f.home, reference, { MC_HEADLESS: '1' });
+      assert.equal(await writer.call({ reserved }), 2, writer.out.stdout + writer.out.stderr);
+      assert.match(writer.out.stderr, /interactive-only/u);
+      assert.deepEqual(writer.effects, []);
+      assert.deepEqual(snapshot(f.home), before);
+    }
+  });
+
+  it('retains interactive Martin and existing headless stage-role ask permissions with attributed logs', async () => {
+    const f = fixture();
+    for (const [role, stage] of [['martin', 'build'], ['build-session:goal', 'build'], ['review-session:goal', 'review'], ['finish-session', 'finish'], ['mend-session', 'merge']]) {
+      const name = role.replaceAll(':', '-'); const dir = f.make('alpha', name, { stage, status: 'ready' });
+      const writer = askFixture(f.home, `alpha/${name}`, { MC_ROLE: role, ...(role === 'martin' ? {} : { MC_HEADLESS: '1' }) });
+      assert.equal(await writer.call({ reserved: true }), 1, writer.out.stderr);
+      assert.equal(JSON.parse(readFileSync(join(dir, 'GOAL.json'), 'utf8')).status, 'Martin');
+      assert.match(readFileSync(join(dir, 'LOG.md'), 'utf8'), new RegExp(`by ${role}`));
+      assert.equal(writer.effects.includes('provider'), false);
+    }
   });
 });
 

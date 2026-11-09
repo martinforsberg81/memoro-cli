@@ -92,19 +92,21 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
 /** Preserve the newest unresolved structured question, not merely the log tail. */
 export function currentQuestion(log, status) {
   if (status !== 'Martin') return null;
-  let start = log.findLastIndex((entry) => entry.status !== 'Martin') + 1;
-  const current = log.slice(start).filter((entry) => entry.status === 'Martin');
+  const start = log.findLastIndex((entry) => entry.status !== 'Martin') + 1;
+  const current = log.slice(start).filter((entry) => entry.status === 'Martin' && !/^jev was asked:/mu.test(String(entry.comment || '')));
   for (let i = current.length - 1; i >= 0; i -= 1) {
     const entry = current[i];
     const comment = String(entry.comment || '');
-    const q = comment.match(/(?:Martin is asked|jev was asked):\s*(.+)/u);
+    // Answered consultations retain Martin status but do not replace its
+    // pending decision. Both ask writers label only unresolved calls this way.
+    const q = comment.match(/^Martin is asked:\s*(.+)/mu);
     if (!q) continue;
     const options = [...comment.matchAll(/^Option ([a-z][a-z0-9_]*):\s*(.*)$/gmu)].map((m) => ({ key: m[1], text: m[2] }));
     const recommendation = comment.match(/^Recommended:\s*(\S+)/mu)?.[1] || null;
-    const jev = comment.match(/^(jev unavailable:.*|jev:.*|jev not asked:.*)$/gmu)?.at(-1) || null;
+    const jev = comment.match(/^(jev unavailable:.*|jev:.*|jev not asked:.*|mc: jev did not settle it:.*|mc: reserved act .* — Martin decides, jev is not asked)$/gmu)?.at(-1) || null;
     return { at: entry.at, question: q[1], options, recommendation, jev, reason: comment };
   }
-  const entry = current.at(-1) || log.at(-1);
+  const entry = current.at(-1);
   const comment = String(entry?.comment || '');
   return { at: entry?.at || null, reason: comment || entry?.done || 'The goal is Martin but the current log has no recorded reason.', limitation: 'No structured question/options/recommendation were recorded.' };
 }
@@ -127,8 +129,15 @@ export function renderMartinQueue(result, { json = false } = {}) {
     lines.push(item.goal_markdown.trimEnd(), `Question: ${item.question?.question || item.question?.reason || 'No current question recorded.'}`);
     if (item.question?.options?.length) lines.push(`Options: ${item.question.options.map((o) => `${o.key}: ${o.text}`).join('; ')}`, `Recommended: ${item.question.recommendation || 'not recorded'}`);
     if (item.question?.jev) lines.push(`jev: ${item.question.jev}`);
+    if (item.question?.question && item.question.reason) lines.push(`Source question record:\n${item.question.reason}`);
     if (item.question?.limitation) lines.push(item.question.limitation);
-    lines.push(`LOG: [full LOG.md](${item.log_reference}) (${item.log.length} latest entries)`, ...item.log.map((e) => `  ${e.at} · ${e.tool}${e.role ? `/${e.role}` : ''} · ${e.status}: ${e.comment || e.done || e.next || '—'}`));
+    lines.push(`LOG: [full LOG.md](${item.log_reference}) (${item.log.length} latest entries)`);
+    for (const entry of item.log) {
+      lines.push(`  ${entry.at} · ${entry.tool}${entry.role ? `/${entry.role}` : ''} · ${entry.stage} · ${entry.status}`);
+      for (const [field, label] of [['done', 'Done'], ['comment', 'Comment'], ['next', 'Next']]) {
+        if (entry[field]) lines.push(`    ${label}: ${entry[field]}`);
+      }
+    }
     lines.push(`Worktrees/evidence: ${[...(item.worktrees || []).map((w) => w.path), ...(item.evidence_paths || [])].join(', ') || '(none)'}`, `Rulings references: ${(item.rulings || []).join(', ') || '(none)'}`);
   }
   lines.push('', renderIssues(result.issues).trimEnd());

@@ -25,6 +25,13 @@ from returning. If a runner sets Martin without structured options, get shows
 the recorded failure reason and the missing-question limitation. It never
 manufactures options or rewrites historical evidence.
 
+Answered consultations (`jev was asked:`) leave the goal's status unchanged;
+they are not unresolved questions and never supersede a pending `Martin is
+asked:` record. Preserve the source writer's jev reading or failure verbatim,
+including `mc ask`'s `mc: jev did not settle it:` format. Text includes the
+full source question record and every populated Done/Comment/Next field of
+each tail entry, just as JSON does; tail membership remains bounded to three.
+
 Each item carries goal/contract/exclusions/criteria/documents, stage/status/
 phase, current question/options/recommendation/jev reading or failure, last
 three log entries and log/worktree/evidence paths. Each selected programme's
