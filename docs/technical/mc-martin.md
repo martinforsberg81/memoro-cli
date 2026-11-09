@@ -35,14 +35,13 @@ each tail entry, just as JSON does; tail membership remains bounded to three.
 Each item carries goal/contract/exclusions/criteria/documents, stage/status/
 phase, current question/options/recommendation/jev reading or failure, last
 three log entries and log/worktree/evidence paths. Each selected programme's
-README and applicable rulings from known existing goal checkouts are included
-once per programme. Text and JSON share stable ordering. Existing sessions
+README is included once per programme; no `docs/project/` file is read. Text and JSON share stable ordering. Existing sessions
 call `get` rather than starting another desk.
 
 ## Authority and decision synthesis
 
 The role investigates each source question against relevant shared technical
-contracts and programme README/design/rulings. Details answered there are
+contracts and the programme README and design. Details answered there are
 resolved without escalation. A remaining product, privacy, cost, test
 strategy or other design choice is presented only after synthesis: scope and
 general rule, evidence, uncertainty, alternatives/tradeoffs, recommendation,

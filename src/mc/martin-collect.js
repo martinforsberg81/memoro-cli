@@ -55,16 +55,10 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
     let context = programme_context.get(programme);
     if (!context) {
       const readmeText = read(README);
-      context = { programme, README: readmeText === null ? null : { path: README, text: readmeText }, rulings: [] };
+      context = { programme, README: readmeText === null ? null : { path: README, text: readmeText } };
       if (readmeText === null) issues.push({ path: README, error: 'missing or unreadable README.md' });
       programme_context.set(programme, context);
     }
-    const rulings = parsed.repos.flatMap((repo) => {
-      const candidates = [join(home, programme, repo, 'docs', 'project', programme, 'rulings.md'), join(dir, repo, 'docs', 'project', programme, 'rulings.md')];
-      const found = candidates.flatMap((path) => { const text = read(path); return text === null ? [] : [{ repo, path, text }]; });
-      for (const ruling of found) if (!context.rulings.some((item) => item.path === ruling.path)) context.rulings.push(ruling);
-      return found.map((item) => item.path);
-    });
     const record = {
       programme, goal, reference: `${programme}/${goal}`, dir,
       stage: parsed.stage, status: parsed.status, phase: parsed.phase,
@@ -76,7 +70,6 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
       log_reference: pathToFileURL(logPath).href,
       worktrees: parsed.repos.map((repo) => ({ repo, path: join(dir, repo) })),
       evidence_paths: parsed.documents.map((doc) => doc.path),
-      rulings,
     };
     items.push(record);
   }
@@ -123,7 +116,6 @@ export function renderMartinQueue(result, { json = false } = {}) {
       const context = result.programme_context.find((p) => p.programme === item.programme);
       lines.push(`README: ${context?.README?.path || '(unreadable or missing)'}`);
       if (context?.README?.text) lines.push(context.README.text.trimEnd());
-      for (const ruling of context?.rulings || []) lines.push(`Rulings (${ruling.repo}): ${ruling.path}\n${ruling.text.trimEnd()}`);
       shownProgrammes.add(item.programme);
     }
     lines.push(item.goal_markdown.trimEnd(), `Question: ${item.question?.question || item.question?.reason || 'No current question recorded.'}`);
@@ -138,7 +130,7 @@ export function renderMartinQueue(result, { json = false } = {}) {
         if (entry[field]) lines.push(`    ${label}: ${entry[field]}`);
       }
     }
-    lines.push(`Worktrees/evidence: ${[...(item.worktrees || []).map((w) => w.path), ...(item.evidence_paths || [])].join(', ') || '(none)'}`, `Rulings references: ${(item.rulings || []).join(', ') || '(none)'}`);
+    lines.push(`Worktrees/evidence: ${[...(item.worktrees || []).map((w) => w.path), ...(item.evidence_paths || [])].join(', ') || '(none)'}`);
   }
   lines.push('', renderIssues(result.issues).trimEnd());
   return `${lines.filter(Boolean).join('\n')}\n`;

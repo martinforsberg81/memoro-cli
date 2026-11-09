@@ -47,7 +47,7 @@ It uses the same validation, request, thresholds and ledger as `mc goal martin`,
 but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. For a goal-bound valid unresolved question it sets that goal Martin after logging evidence; answered calls leave stage/status unchanged. A no-goal call changes no goal. A named goal (or `MC_GOAL`) supplies exactly the
 `jevContext` state of `mc goal martin`. Without a goal, programme context is
 `MC_PROGRAMME`, otherwise the programme containing the working directory under
-`~/mc/programs/`; its README and repository planning-worktree rulings are sent,
+`~/mc/programs/`; its README is sent,
 and `goal` is null. With no programme, it carries only question, options,
 evidence and documents. The questions say “this work” when there is no goal;
 the goal-bound instruction texts remain unchanged.
@@ -108,7 +108,7 @@ stage roles retain their existing bounded ask permissions.
      its contract and the decided standards in the state.*
    - `fits` — a Noul: *One of the options in `options` is a correct way for
      this goal to proceed.*
-   - `settled` — a Noul: *The goal, its contract, the programme's rulings or
+   - `settled` — a Noul: *The goal, its contract, the programme README or
      the technical standards in the state already decide which option is
      right, so no new product or policy decision by Martin is needed.*
 3. **Answered** when all hold, else **Martin**.
@@ -134,17 +134,17 @@ The state is one JSON object:
 - `question`, `options` (key to text), `evidence`;
 - `goal` — title, goal, contract, out of scope, the criteria with check and
   met, stage, status;
-- `programme` — `~/mc/programs/<programme>/README.md`, and
-  `docs/project/<programme>/rulings.md` from each of the goal's repository
-  worktrees when present;
+- `programme` — `~/mc/programs/<programme>/README.md`. Nothing under
+  `docs/project/` is read or sent: a decision still in force lives in the
+  README or in `docs/technical/`;
 - `documents` — the goal's documents and each `--document`, as path (and
   label) and text; one that cannot be read is said on stderr and not sent;
 - `log` — the last five LOG.md entries.
 
 The serialized state stays within 240,000 characters (`STATE_BUDGET`).
 Trimmed in this order: the oldest log entries, then document text largest
-first (cut, ending `[truncated]`), then the programme README (then its
-rulings), then whole documents largest first if still necessary. The question,
+first (cut, ending `[truncated]`), then the programme README, then whole
+documents largest first if still necessary. The question,
 options, evidence and goal are never trimmed; if they alone exceed the budget,
 the call is refused with a return instruction to shorten them.
 

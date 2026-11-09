@@ -17,20 +17,20 @@ about an unplanned decision means the programme was not designed.
   the README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions
   ([proposals](proposals.md)).
-- `docs/project/<programme>/rulings.md` — programme-only decisions. Cross-
-  programme standards go in `docs/technical/`; the README points to them.
+- `docs/technical/` (memoro, memoro-cli) — what runs; the README points to it.
+  No session writes `docs/project/`.
 - `evidence/<date>-<slug>/` — measured evidence, linked from the README.
   No `PLAN.md`, `decisions/` or second plan format.
 
 ## Design, in order
 
 1. Define the aim and measurable meaning of better/done.
-2. Read the affected code, technical standards, rulings and proposals; design
+2. Read the affected code, technical standards, the programme README and proposals; design
    claims cite files actually opened.
 3. Resolve every product/policy choice and exception with Martin (2–4 options,
-   tradeoffs, recommendation). Record the answer in the ruling or technical
-   standard, then in affected goals. Add a needed technical standard within the
-   app's direction. No goal is written with its decision still open.
+   tradeoffs, recommendation). Record the answer in the programme README or its goal,
+   or in the technical standard if it reaches beyond it, then in affected goals. Add a
+   needed technical standard within the app's direction. No goal is written with its decision still open.
 4. Cut work into goals buildable start to finish by headless sessions. Do
    investigation, measurement and design before the cut, not as the goal's first
    task ([goal design](references/goal-design.md)).
@@ -40,7 +40,7 @@ about an unplanned decision means the programme was not designed.
    including goals waiting for earlier phases. `draft` means an unfinished brief,
    never a parking queue.
 7. Write/read back the README as a headless session will; each goal stands on
-   a decision and prerequisite the design holds.
+   a decision and prerequisite the design holds, and landed sections leave it.
 
 ## Faithful scope correction and handoff
 

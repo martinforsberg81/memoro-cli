@@ -51,7 +51,7 @@ export const MAX_OPTIONS = 4;
 export const INSTRUCTIONS = Object.freeze({
   answer: 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state',
   fits: 'One of the options in `options` is a correct way for this goal to proceed',
-  settled: 'The goal, its contract, the programme\'s rulings or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
+  settled: 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
 });
 
 /** Goal-less sessions use the same questions, phrased for the work at hand. */
@@ -159,14 +159,14 @@ const size = (value) => JSON.stringify(value).length;
  * `{ state, text, trimmed }`, or `{ problems }` when the core alone — question,
  * options, evidence, goal — is over it. Trimmed in this order: the oldest log
  * entries, then documents largest first (cut, ending `[truncated]`), then the
- * programme (its README, then its rulings), then documents dropped whole,
+ * programme README, then documents dropped whole,
  * largest first if still needed. `trimmed` names each part cut or dropped.
  * Every string is redacted first, so the budget holds for what is sent.
  */
 export function buildState({ question, options, evidence, goal, programme, documents, log }, { secrets = [], budget = STATE_BUDGET } = {}) {
   const state = redactValue({
     question, options, evidence: evidence ?? '', goal,
-    programme: { readme: programme?.readme ?? null, rulings: programme?.rulings ?? [] },
+    programme: { readme: programme?.readme ?? null },
     documents: documents ?? [], log: (log ?? []).slice(-LOG_ENTRIES),
   }, secrets);
   const core = { question: state.question, options: state.options, evidence: state.evidence, goal: state.goal };
@@ -192,7 +192,6 @@ export function buildState({ question, options, evidence, goal, programme, docum
   const bySize = [...state.documents].sort((a, b) => size(b) - size(a));
   for (const document of bySize) cut(document, 'text', `document ${document.path} truncated`);
   cut(state.programme, 'readme', 'programme README truncated');
-  for (const ruling of state.programme.rulings) cut(ruling, 'text', `rulings ${ruling.path} truncated`);
   for (const document of bySize) {
     if (size(state) <= budget) break;
     state.documents.splice(state.documents.indexOf(document), 1);
