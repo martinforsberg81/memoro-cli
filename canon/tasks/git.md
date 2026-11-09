@@ -19,12 +19,16 @@ and its `index.lock` are every session's at once.
 - **Commits.** Read `git status` and the diff; stage only the task's files and
   leave unrelated changes alone. A short imperative English subject (`Fix
   session expiry check`), no Conventional Commit prefix.
-- **Branches.** A runner step's or goal's branch is built to the end on its
-  pull request, and merges `origin/main` when the merger reports a conflict.
-  A concrete conflict reported by `mc publish` also permits the owning
-  interactive session to reconcile that goal's existing worktree (Martin,
-  2026-11-09). Preserve both intents, merge without rewriting history, and
-  rerun affected acceptance before publication; this is not routine catch-up.
+- **Branches.** Keep the goal's existing branch, worktree and pull request.
+  Integrate main when needed for a concrete publication/merger conflict, a
+  named already-landed prerequisite or a demonstrated upstream acceptance
+  obstacle. The owning build/finish/mend or interactive session records the
+  reason, prerequisite commits and fixed main revision before merging it.
+  Follow `docs/technical/mc-goals.md`, *Integrating main into a goal*.
+  Preserve both intents and history, reconcile generated artefacts deliberately,
+  and complete affected final-tree acceptance before publication and handoff.
+  Main advancing alone does not justify synchronization. Reviewers send repairs
+  to finish; integration does not grant them edit authority.
   New work starts from a fresh `origin/main`. A branch that has merged is
   finished: building on it lands the same content twice under two SHAs. A
   branch stacked on an open one is rebuilt from `main` once its parent lands,

@@ -155,7 +155,9 @@ pressure tidy remain the retry path, so nothing here adds a time-based rule.
 
 `runGoal` works in the first repository's existing goal worktree and keeps its
 branch. An unbuilt branch is remade from origin/main before its first build
-when it has no commits of its own; built work never merges main to keep up.
+when it has no commits of its own. Main advancing alone does not justify
+synchronization; necessary dependency, acceptance or conflict integration is
+owned by the working session under mc-goals.md, *Integrating main into a goal*.
 A missing worktree is recreated on its goal branch when possible. A missing
 role or tool skips launch; a worktree failure is recorded in LOG.md. The
 prompt includes the rendered goal (goal, contract, boundaries, documents and criteria), and the

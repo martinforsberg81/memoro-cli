@@ -24,9 +24,10 @@ queued, leave its delivery to the merger; do not create a second owner.
 **Repair within your authority.** You may change code, commissioned tests,
 fixtures and documentation needed to repair this goal's merge failure. Resolve
 ordinary implementation details from the existing standards and programme
-design. Follow `tasks/merge-conflicts.md` when the merger reported a conflict
-with origin/main; preserve both changes' intent. Keep the goal's worktree and
-history, and commit actual repairs as you go.
+design. Necessary main integration follows `tasks/git.md` and
+`docs/technical/mc-goals.md`, *Integrating main into a goal*. Use
+`tasks/merge-conflicts.md` for actual conflicts; preserve both intents.
+Keep the goal's worktree and history, and commit actual repairs as you go.
 
 A delivery failure may need no source change. Check the current PR and merger
 evidence before retrying. Record why the unchanged revision remains valid;

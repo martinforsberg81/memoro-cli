@@ -54,15 +54,40 @@ any      ── person or interactive Martin may move backward ───▶ an e
 
 ## Layout
 
-### Publication conflicts
+### Integrating main into a goal
 
-Martin, 2026-11-09: a concrete conflict reported by `mc publish`, as well as
-a merger-reported conflict, permits the owning interactive session to merge
-`origin/main` into the goal's existing worktree. Preserve both changes'
-intents, retain history without rebase or force-push, and rerun affected
-acceptance before publishing. This is not permission for routine main
-catch-up, another checkout, an admin merge or deployment. A publication
-conflict is ordinary delivery repair, not a reserved admin act.
+A goal keeps one branch, one worktree per repository and its existing pull
+request through delivery. Main advancing is not, by itself, a reason to
+synchronize it. Integration is ordinary delivery work when it resolves a
+concrete publication or merger conflict, brings in a named already-landed
+prerequisite, or resolves a demonstrated acceptance obstacle caused by an
+upstream change. A textual merge conflict is not required for a dependency
+or acceptance integration.
+
+The owning build, finish or mend session, or the interactive session taking
+over the goal, establishes the need from code, gate evidence and landed
+commits. Before merging, record the obstacle, prerequisite commits and fixed
+main revision in LOG.md. Merge that revision into the existing worktree,
+preserving history and both intents; do not rebase, force-push or create
+another checkout. Reconcile generated artefacts against the intended contract,
+not by accepting every newly measured value. A review session does not edit
+or integrate; it sends necessary repair to finish.
+
+Integration does not expand the goal's authored scope or protection commission.
+Consume shared repairs from their owning delivery; do not repair shared
+components in passing. Measure authored scope against the recorded merge base
+of the judged HEAD and frozen acceptance base, so integrated upstream work
+is not attributed to the goal. An incorrect shared base-relative check still
+belongs to its owner; integration does not certify that check as repaired.
+
+After integration, run the affected criterion checks and complete final-tree
+whole-selection GREEN before publication and the normal review or finish
+handoff. Record the judged head, frozen base, logs and ran/reused provenance.
+Direct goal landing adds no candidate gate or head/base validation; do not
+defer this acceptance to the merger. This procedure authorizes no test waiver,
+budget change, product-scope change, admin override or deployment. Only a
+remaining product/policy choice or reserved act goes to Martin; the need for
+ordinary integration alone does not.
 
 ```
 ~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria, its stage and status
@@ -203,9 +228,9 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   repository is fetched first; then GOAL.json — a skeleton with the title and
   no criterion — LOG.md, and a worktree of each on
   `goal/<g>` from `origin/main` (or that branch as it stands, when it exists).
-  **One branch, built to the end**: the goal is built on this branch, and
-  whether `main` moves meanwhile is not the build's concern — the merger
-  brings the candidate up to date when it lands it.
+  **One branch, built to the end**: the goal stays on this branch. Main
+  advancing alone requires no synchronization; necessary dependency,
+  acceptance or conflict integration follows *Integrating main into a goal*.
 - **`set <p>/<g> title|goal|contract|out-of-scope --text "…"`** — replaces that
   field. A prose field takes a paragraph per block between blank lines, and an
   empty text clears it; an empty title is refused. Build, review, finish and
@@ -559,7 +584,7 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   owns the reported merge failure through its repair and final handoff. It
   diagnoses from the current goal, merger evidence and judged revision, and
   may change code, commissioned tests, fixtures and documentation within the
-  contract. A merger-reported conflict permits the existing conflict procedure;
+  contract. Necessary integration follows *Integrating main into a goal*;
   a delivery retry may require no source change or commit. It does not change
   goal text, acceptance, product/privacy policy or test protection scope.
   After a content-changing repair it establishes affected criterion evidence
@@ -596,10 +621,11 @@ below uses the existing goal-session mechanism instead.
 The role is `canon/roles/build-session.md`, started as `build-session:goal`:
 what every headless build does is written once, in the shared part, and the
 `goal` part keeps only what is a goal's — its
-brief, LOG.md and the criterion verbs. It works on the branch as it is, never
-fetching or merge `origin/main` to keep up: a conflict the merger reports
-is the one time a build merges `origin/main`. It works item after item until
-the criteria hold, and ends at a boundary between two only when the work is
+brief, LOG.md and the criterion verbs. It keeps the existing goal branch;
+main advancing alone does not justify a catch-up merge. A concrete conflict,
+landed prerequisite or demonstrated upstream acceptance obstacle follows
+*Integrating main into a goal*, including final-tree acceptance. It works item
+after item until the criteria hold, and ends at a boundary between two only when the work is
 done, when it is blocked, or when its turns cost more than a fresh session
 reading the log would — a finished part that reads well is not a reason to
 stop. It runs each criterion's check and records the ones that hold with
@@ -613,7 +639,8 @@ evidence. An actual design choice or reserved act goes through goal-bound
 goal Martin. No build exit goes through pre-merge mend. `blocked` is for
 compatibility only: a `blocked` goal before merge, left by an older session, is
 reconciled to Martin by the runner without a session and wakes no mend. A build session
-publishes, and never merges, sets `done` or moves the goal anywhere else.
+publishes; it never authorizes PR landing, sets `done` or moves the goal
+anywhere else. Necessary main integration is distinct from PR landing.
 
 ## What a review session does
 

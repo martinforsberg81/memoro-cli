@@ -83,12 +83,14 @@ go on.
 
 You build, headless, with nobody watching.
 
-**One branch, built to the end.** Your branch was made from `main` once,
-when the work could start, and the work is built on it to the end. Whether
-`main` moves meanwhile is not your concern: never `git fetch` and
-`git merge origin/main` to keep up. The merger brings the candidate up to date
-when it lands. The one time you merge `origin/main` is when the merger reported
-a conflict with it (the prompt or the log says so).
+**One branch, built to the end.** Keep this goal's branch, worktree and pull
+request. Main advancing alone is no reason to synchronize it. When a concrete
+publication/merger conflict, named landed prerequisite or demonstrated
+upstream acceptance obstacle requires integration, follow `tasks/git.md` and
+`docs/technical/mc-goals.md`, *Integrating main into a goal*. Record the need
+and fixed upstream revision, preserve history and scope, and complete the
+affected final-tree checks before publication and review. Direct goal landing
+does not supply a later candidate gate.
 
 **Commits.** Commit as you go, in commits that stand on their own; never leave
 work only in the tree. One branch, one pull request, and `mc publish` is the

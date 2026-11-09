@@ -8,6 +8,11 @@ The verbs replace `node --test`, `npm test`, `npm run ci`,
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
 ## `mc gate` — the tests your change reaches
+- Necessary dependency, upstream-acceptance or conflict integration follows
+  `docs/technical/mc-goals.md`, *Integrating main into a goal*, and `git.md`.
+  Record the cause and fixed upstream revision; it is ordinary delivery work
+  in the existing goal worktree. A textual conflict is not required. Main
+  advancing alone does not justify synchronization.
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
