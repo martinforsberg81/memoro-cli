@@ -55,11 +55,5 @@ provider, data or DPA prerequisites. Before handoff reconcile README, briefs,
 phases and actual stages; name remaining gaps. Do not hand unresolved planning
 prerequisites to build with a ceremonial LOG.md hold.
 
-## Runner-assigned next draft
-
-A headless plan turn completes the one draft named by MC_GOAL. Apply the same
-planning and readiness rules to it and reconcile the existing README and
-phases. Other drafts and proposal intake stay for later turns or interactive
-planning. An unresolved product/policy choice uses goal-bound mc ask; a
-complete brief moves to build immediately. The trigger and ordering are in
-mc-goals.md, Next draft planning.
+A runner-assigned plan completes only its selected draft under the same rules;
+see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.
