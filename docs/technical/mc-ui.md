@@ -619,21 +619,34 @@ runs.tsv keeps the header it was created with; a shorter header that is a
 prefix of `RUNS_HEADER` is read with `RUNS_HEADER`, so the appended columns
 (`model` and the rest) are not lost.
 
-**Pipeline.** One frame per stage — proposals, draft, build, review, finish,
-merge — joined by `▶` and filling the hero frame's width. A frame has two
-lines. The first is the count: waiting proposals (programmes and the root), or
-goals in that stage, followed by `⚑n` for goals waiting on Martin and `⊘n` for
-blocked goals in that stage. The second has one mark per session working there:
-interactive plan sessions on proposals, headless plan sessions on draft, build,
-review and finish sessions on their stage, and on merge `◎` per gate round in
-flight and `↺` per mend session. More marks than fit are drawn as `●×n`.
-`done` and `dropped` have no frame; what landed is in the hero frame. Below 99
-columns the frames are three to a row, and below 17 columns each the padding
-inside the borders is dropped. Complete header fields wrap within the frame on
-narrow terminals. `mc manager` (or `m` at the page prompt) opens the session
-for priorities, blockers and proposals across all programmes. Manager's open
-state is shown below the pipeline, including foreground records from before the
-rename.
+**Pipeline.** One small box per stage — proposals, draft, build, review, finish,
+merge — under the hero frame at its indent. Each box is four rows: the stage
+name set into the top border (`┌─ build ──┐`), the count with its flags, the
+marks, and the bottom border. A box is as wide as its widest content — the name
+with its `─ ` and ` ─`, the count, the marks — plus one space each side, and
+never wider; the count and the marks are centred in it. Boxes are joined by
+` ──▶ ` on the count row, with spaces on the other rows. All six sit on one row
+when that fits the hero frame's width less its indent; otherwise they are joined
+by ` ▶ `; otherwise three and three on two rows, each keeping its arrows with
+` ──▶ ` when both rows fit and ` ▶ ` when not.
+The count is the waiting proposals (programmes and the root) for proposals, and
+the goals in the stage otherwise, followed by `⚑n` for goals waiting on Martin
+and `⊘n` for blocked goals there. The marks are one per session working in the
+stage, drawn green: build, review and finish sessions on their stage; on draft,
+every plan session, interactive (`data.sessions.planning_sessions`) and headless
+(runner `plan` sessions); proposals carries none; on merge `◎` per gate round in
+flight and `↺` per mend session, in mend's yellow. A box shows at most eight
+marks of one kind; more are drawn `●×n`. The border carries the stage's state:
+red when a goal there is blocked, else green when a session works there, else
+yellow when it holds work, else grey — the terminal's real grey (`ESC[90m`), which
+the grey-to-white mapping above does not touch, so the boxes recede. The name is
+bold in the terminal's own foreground; a count is bold above zero and grey at
+zero; the arrows are grey; `⚑` and `⊘` keep their yellow and red. `done` and
+`dropped` have no box; what landed is in the hero frame. Complete header fields
+wrap within the hero frame on narrow terminals. `mc manager` (or `m` at the page
+prompt) opens the session for priorities, blockers and proposals across all
+programmes. Manager's open state is shown below the pipeline, including
+foreground records from before the rename.
 
 Maintenance groups repository measurements beneath their names. Below its
 title it carries the interactive helper's open state and last collection from
