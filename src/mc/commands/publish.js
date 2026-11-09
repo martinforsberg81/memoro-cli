@@ -260,7 +260,7 @@ function spawnGit(_git, args, { cwd, timeout } = {}) {
   return runGit(cwd, args, { timeoutMs: timeout });
 }
 
-function ghCommand(args, cwd) {
+export function ghCommand(args, cwd) {
   const r = spawnSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000 });
   return { ok: r.status === 0, stdout: r.stdout || '', text: `${r.stdout || ''}${r.stderr || ''}`.trim() };
 }
