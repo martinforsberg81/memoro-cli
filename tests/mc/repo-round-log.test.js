@@ -29,11 +29,13 @@ const NOW = new Date('2026-08-23T21:00:00.000Z');
 describe('every round leaves a line', () => {
   it('a merged round, a red round and a refused lease are all lines, with stopped_at and cost', () => {
     const root = home();
+    const unmeasured = { files: ['slow.test.js'], gates: ['browser'] };
+    const alone = { files: [{ file: 'slow.test.js', outcome: 'passed', seconds: 31, argv: ['--test-timeout=600000'] }], gates: [{ name: 'browser', outcome: 'passed', seconds: 2 }] };
     try {
       recordRound({
         repo: '/x/memoro', pr: { number: 401 }, holder: 'pm', ok: true, merged: true,
         stopped_at: null, reason: null, duration_ms: 300_000, started_at: '2026-08-23T20:00:00.000Z',
-        gate: { timings: { suite: 146_000 }, candidate: { red: [] } },
+        gate: { timings: { suite: 146_000 }, candidate: { red: [] }, unmeasured, alone },
       }, { root, now: NOW });
       recordRound({
         repo: '/x/memoro', pr: { number: 402 }, holder: 'pm', ok: false, merged: false,
@@ -52,6 +54,9 @@ describe('every round leaves a line', () => {
         [[402], 'red', []],
         [[403], 'suite-lease', []],
       ]);
+      assert.deepEqual(rounds[0].unmeasured, unmeasured);
+      assert.deepEqual(rounds[0].alone, alone);
+      assert.equal(rounds[1].unmeasured, null);
       assert.equal(rounds[1].red, 2);
       // By NAME, not only by count: the two names that flapped 55 → 57 → 55
       // could not be pointed at afterwards, because every log carried only

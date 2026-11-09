@@ -518,13 +518,6 @@ export async function landJob(batch, {
   const label = `${job.repo} ${numbers.map((n) => `#${n}`).join(' ')}`;
   let report = null;
   let said = null;
-  // A test file killed from outside the round is measured once more; a second
-  // `file-killed` is answered red with its reason (ruling 38).
-  let killedOnce = false;
-  // So is a red that passed alone on the base and on the candidate, or a file
-  // whose tests were all cancelled (`red-under-load`): the second is answered
-  // red, saying the files passed alone and the round twice did not.
-  let underLoadOnce = false;
   for (; !report;) {
     // Waited for before the round rather than inside it, so a busy gate is
     // not a round-log line every fifteen seconds. An orphaned lease is in
@@ -581,25 +574,10 @@ export async function landJob(batch, {
         : { ok: false, merged: false, stopped_at: 'pushed', reason: gone.reason };
       break;
     }
-    if (report?.stopped_at === 'file-killed' && !killedOnce) {
-      killedOnce = true;
-      const files = (report.killed_files || []).map((one) => one.file).join(', ') || 'a test file';
-      say(`${label}: ${files} was killed from outside the round — measuring again`);
-    } else if (report?.stopped_at === 'red-under-load' && !underLoadOnce) {
-      underLoadOnce = true;
-      const files = (report.under_load_files || []).join(', ') || 'the red files';
-      say(`${label}: ${files} red only under load — measuring again`);
-    } else if (!shouldWait(report)) {
-      // Lost the race between "both free" and the round's own lock otherwise.
-      break;
-    }
+    if (!shouldWait(report)) break;
     report = null;
     await sleep(MERGER_POLL_MS);
   }
-  if (report?.stopped_at === 'red-under-load' && underLoadOnce) {
-    report = { ...report, reason: `${report.reason}; red under load in two rounds running` };
-  }
-
   for (const one of answersFor(jobs, report)) await answer(one.job, one.landed, one.report);
   return answers;
 }
@@ -636,16 +614,10 @@ export function landerFor(deps) {
 }
 
 /**
- * The stops that are put back in line instead of answered: a red that passed
- * alone on both commits (`red-under-load`) and a file killed from outside
- * the round (`file-killed`), each after the merger has already measured it
- * twice. Answered red, the step went back to `ready` and the runner started a
- * session to "fix it on the same pull request" that found nothing to fix —
- * note-steps #13897 paid two on 2026-10-19. Back in line instead, after
- * `REQUEUE_DELAY_MS` so the load has a chance to pass, at most
- * `MAX_REQUEUES` times; then answered red as before.
+ * A stalled round goes back in line, without a session, after REQUEUE_DELAY_MS,
+ * at most MAX_REQUEUES times. An exhausted requeue is answered as before.
  */
-export const REQUEUE_STOPS = Object.freeze(['red-under-load', 'file-killed']);
+export const REQUEUE_STOPS = Object.freeze(['stalled']);
 export const MAX_REQUEUES = 2;
 export const REQUEUE_DELAY_MS = 15 * 60_000;
 

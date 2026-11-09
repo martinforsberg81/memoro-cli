@@ -29,7 +29,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
-import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, ROUND_STALL_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { runSessionGate } from '../../src/mc/session-gate-run.js';
 import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
 import { measureDocs } from '../../src/mc/docs-measure.js';
@@ -53,7 +53,7 @@ async function receiptThrough(cwd, files, flags, run) {
   });
   return { receipt: saved, result };
 }
-import { fileOutcomes, outputCut, progressTracker } from '../../src/mc/test-times.js';
+import { fileOutcomes, outputCut, progressTracker, readTooSlow } from '../../src/mc/test-times.js';
 import { gateReceipt, persistGateReceipt, recordReceiptGreen } from '../../src/mc/session-gate-evidence.js';
 import { declarationFor } from '../../src/mc/repo-gate-table.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
@@ -1639,7 +1639,7 @@ describe('a repository that selects by diff', () => {
     } finally { fx.cleanup(); }
   });
 
-  describe('command gates beside the suite', () => {
+  describe('command gates after the suite', () => {
     const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
     const twoGates = [
       { id: 'sql', packageScript: 'sql:pr-ci', passBaseRef: true, resourceClass: 'standard', selectedBy: ['sql'] },
@@ -1659,48 +1659,41 @@ describe('a repository that selects by diff', () => {
       return { ran, run };
     }
 
-    it('starts the gates with the suite, one at a time in the selector\'s order, and awaits both', async () => {
+    it('starts no command gate before the suite run ended, and runs gates in selector order', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
-      const gates = stubShell();
-      // The suite does not end until a gate has started, so a gate that waited
-      // for the suite is seen as one rather than raced against a timer: the
-      // light lane runs this suite beside a memoro round, and on that loaded
-      // machine every timer fires late (#872, 2026-10-11). The ten seconds
-      // only keep a gate that never starts from hanging the test.
-      let gateStartedInSuite = null;
-      const tests = async ({ files: ran }) => {
-        const deadline = Date.now() + 10_000;
-        while (gates.ran.length === 0 && Date.now() < deadline) await wait(5);
-        gateStartedInSuite = gates.ran.length > 0;
-        return { code: 0, tap: tapWith([], { tests: ran.length * 3 }) };
-      };
+      const spawns = [];
+      let suiteEnded = false;
+      let tick = 0;
       try {
-        const report = await fx.report({ tests, shell: gates.run });
+        const report = await fx.report({
+          clock: () => tick, monotonic: () => tick,
+          tests: async () => {
+            spawns.push('suite start');
+            await new Promise(resolve => setImmediate(resolve));
+            tick += 25;
+            suiteEnded = true;
+            spawns.push('suite end');
+            return { code: 0, tap: tapWith([]) };
+          },
+          shell: async (command, { env }) => {
+            spawns.push(command);
+            assert.equal(suiteEnded, true, 'a command gate started before the suite run ended');
+            assert.equal(env.MC_GATE_ROUND, 'merge');
+            tick += 10;
+            return { status: 0 };
+          },
+        });
         assert.equal(report.ok, true, report.reason);
-        const wall = report.timings.gates_beside_suite_ms;
-        assert.equal(gateStartedInSuite, true, 'the first gate waited for the suite');
-        assert.ok(gates.ran[1].from >= gates.ran[0].to, 'the gates ran at once rather than one after another');
-        assert.deepEqual(report.extra_gates.map((gate) => gate.name), ['sql:pr-ci', 'css:lint'], 'in the order the selector gave');
-        assert.equal(gates.ran[0].command, 'npm run sql:pr-ci -- --base-ref base1111');
-        assert.ok(wall >= 300, 'the gates were not awaited');
-        assert.ok(report.timings['selected gates'] >= 300, 'the gates\' own time is still measured');
-        // The intervals as they ran, not their sum: the suite and a gate overlap, and the gates
-        // beside the suite enclose both. Ordering is asserted, not the clock's values.
-        const at = (step) => report.intervals.filter((one) => one.step === step);
-        const [beside] = at('gates beside suite');
-        const [suite] = at('suite');
-        const gatesRan = at('selected gates');
-        assert.equal(gatesRan.length, 2, 'each serial gate has its own interval');
-        assert.ok(suite && beside, 'the suite and the gates beside it are intervals');
-        assert.ok(gatesRan.every((one) => one.start_ms >= beside.start_ms && one.end_ms <= beside.end_ms), 'each gate lies within the gates-beside interval');
-        assert.ok(suite.start_ms >= beside.start_ms && suite.end_ms <= beside.end_ms, 'the suite lies within it too');
-        assert.ok(gatesRan[0].start_ms < suite.end_ms, 'a gate started before the suite ended: they overlap');
-        assert.ok(report.intervals.every((one) => one.end_ms >= one.start_ms && one.ms === one.end_ms - one.start_ms
-          && Date.parse(one.start_wall) <= Date.parse(one.end_wall)), 'every interval has an ordered start and end, wall and monotonic');
+        assert.deepEqual(spawns, ['suite start', 'suite end', 'npm run sql:pr-ci -- --base-ref base1111', 'npm run css:lint']);
+        assert.equal(report.timings['selected gates'], 20);
+        assert.equal(report.timings.gates_beside_suite_ms, undefined);
+        const suite = report.intervals.find(one => one.step === 'suite');
+        const gates = report.intervals.filter(one => one.step === 'selected gates');
+        assert.ok(gates.every(one => one.start_ms >= suite.end_ms));
       } finally { fx.cleanup(); }
     });
 
-    it('a failed gate beside a green suite is selected-gate, naming every failure', async () => {
+    it('a failed gate after a green suite is selected-gate, naming every failure', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
       const gates = stubShell({ ms: 10, failing: ['sql:pr-ci', 'css:lint'] });
       try {
@@ -1712,7 +1705,7 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    it('a red suite beside a failed gate is red, and the failed gate is still listed', async () => {
+    it('a red suite followed by a failed gate is red, and the failed gate is still listed', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates, candidateRed: ['broken by the change'] });
       const gates = stubShell({ ms: 10, failing: ['css:lint'] });
       try {
@@ -1725,7 +1718,7 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    it('a gate shell that throws makes no green beside a green suite', async () => {
+    it('a gate shell that throws makes no green after a green suite', async () => {
       const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
       let suiteDone = false;
       const tests = async ({ files: ran }) => {
@@ -2083,28 +2076,6 @@ describe('a repository that selects by diff', () => {
      * names `retry_once` is run once more alone before it is red.
      */
     describe('a declared timing test gets one more run alone (retry_once)', () => {
-      it('does not retry a per-test timeout and gives its name and duration for rebuild', async () => {
-        const slowFile = 'tests/slow.test.js';
-        const slowTap = [
-          'TAP version 13', '# Subtest: slow operation', 'not ok 1 - slow operation', '  ---',
-          "  type: 'test'", `  location: '/somewhere/candidate/${slowFile}:8:1'`,
-          "  failureType: 'testTimeoutFailure'", "  error: 'test timed out after 30000ms'", '  ...',
-          '1..1', '# tests 1', '# pass 0', '# fail 1',
-        ].join('\n');
-        const fx = selecting({ files: [slowFile], candidateTap: slowTap, retryOnce: { files: [slowFile] } });
-        const said = [];
-        try {
-          const report = await fx.report({ onProgress: (line) => said.push(line) });
-          assert.equal(report.stopped_at, 'red');
-          assert.equal(report.reason, 'reached the stall guard — rebuild: slow operation (cut at 30 s)');
-          assert.deepEqual(report.too_slow, [{ file: slowFile, name: 'slow operation', duration_ms: 30_000 }]);
-          assert.equal(fx.runs.length, 1, 'the timeout test was run again');
-          assert.ok(said.includes(report.reason));
-          assert.equal(report.ok, false);
-          assert.match(gateLines(report).join('\n'), /RED — 1 test reached the stall guard — rebuild:\n {6}stall guard — rebuild: slow operation \(cut at 30 s\)/u);
-        } finally { fx.cleanup(); }
-      });
-
       it('a test over the 1 s indicator but under the stall guard is not red: the round is green and the report names it slow', async () => {
         const fx = selecting({ files: [own], measured: [
           { file: own, name: 'slow but passing', line: 3, seconds: 1.4, failed: false, timeout: null },
@@ -2237,20 +2208,104 @@ describe('a repository that selects by diff', () => {
       return lines.join('\n');
     }
 
-    it('a timed-out before hook is red-under-load, without running anything again', async () => {
+    it('a timeout-cancelled hook file green alone is green, without a main replay', async () => {
       const fx = selecting({ files: [scanner, own] });
-      const probed = [];
+      const runs = [];
+      try {
+        const report = await fx.report({ tests: async options => {
+          runs.push(options);
+          return { code: runs.length === 1 ? 1 : 0, tap: runs.length === 1 ? hookTimedOut(scanner) : tapWith([]) };
+        } });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.unmeasured.files, [scanner]);
+        assert.deepEqual(report.alone.files.map(row => [row.file, row.outcome]), [[scanner, 'passed']]);
+        assert.equal(runs[1].env.MC_TEST_LANES, '1');
+        assert.equal(runs[1].lanes, 1);
+        assert.deepEqual(report.alone.files[0].argv.filter(arg => arg.startsWith('--test-timeout')), ['--test-timeout=600000']);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a thrown hook is red with its message, not an unmeasured hook timeout', async () => {
+      const fx = selecting({ files: [scanner], candidateTap: hookTimedOut(scanner).replace('failed running before hook', 'seed exploded') });
+      try {
+        const report = await fx.report();
+        assert.equal(report.stopped_at, 'red');
+        assert.match(report.reason, /seed exploded/u);
+        assert.deepEqual(report.unmeasured.files, []);
+        assert.deepEqual(report.alone.files, []);
+      } finally { fx.cleanup(); }
+    });
+
+    for (const outcome of ['passed', 'assertion red', 'never ends']) {
+      it(`a stall-cut test ${outcome} alone uses one lane and the 600 s limit`, async () => {
+        const file = 'tests/slow.test.js';
+        const timeoutTap = ms => [
+          'TAP version 13', '# Subtest: slow operation', 'not ok 1 - slow operation', '  ---',
+          "  type: 'test'", `  location: '/somewhere/candidate/${file}:8:1'`,
+          "  failureType: 'testTimeoutFailure'", `  error: 'test timed out after ${ms}ms'`, '  ...',
+          '1..1', '# tests 1', '# pass 0', '# fail 1',
+        ].join('\n');
+        const fx = selecting({ files: [file] });
+        const tablePath = join(fx.mcHome, 'repo-gates.json');
+        const table = JSON.parse(readFileSync(tablePath, 'utf8'));
+        table.repo.pr_tests_flags = ['--import', './x.mjs', '--test-timeout', '30000', '--test-concurrency=4'];
+        writeJson(tablePath, table);
+        const work = join(fx.mcHome, 'work');
+        const spawns = [];
+        try {
+          const report = await fx.report({ env: { ...process.env, MC_WORK_ROOT: work }, tests: async options => {
+            spawns.push(options);
+            if (spawns.length === 1) return { code: 1, tap: timeoutTap(30000) };
+            const tap = outcome === 'passed' ? tapWith([]) : outcome === 'never ends' ? timeoutTap(600000)
+              : timeoutTap(30000).replace('test timed out after 30000ms', 'expected 1, actual 2');
+            return { code: outcome === 'passed' ? 0 : 1, tap, batches: [spawnedBatch(options)], tests: outcome === 'passed'
+              ? [{ file, name: 'slow operation', seconds: 31, failed: false, timeout: null }] : [] };
+          } });
+          assert.equal(report.verdict, outcome === 'passed' ? 'green' : 'red', report.reason);
+          assert.equal(spawns.length, 2, 'the interrupted test must run alone');
+          assert.deepEqual(spawns[1].files, [file]);
+          assert.equal(spawns[1].lanes, 1);
+          assert.equal(spawns[1].env.MC_TEST_LANES, '1');
+          assert.deepEqual(report.alone.files[0].argv.filter(arg => arg.startsWith('--test-timeout')), ['--test-timeout=600000']);
+          assert.ok(report.alone.files[0].argv.includes('--test-concurrency=1'));
+          assert.ok(report.alone.files[0].argv.includes('./x.mjs'), 'the declared loader remains');
+          assert.deepEqual(report.alone.files[0].argv.filter(arg => arg.startsWith('--test-concurrency')), ['--test-concurrency=1']);
+          assert.deepEqual(report.unmeasured.files, [file]);
+          if (outcome === 'passed') assert.deepEqual(readTooSlow({ root: work, repo: 'repo' }).map(row => [row.file, row.name, row.where]), [[file, 'slow operation', '#7']]);
+          if (outcome === 'never ends') assert.match(report.reason, /never ends: slow operation/u);
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    it('a command gate that exited 124 and passed alone is green after own tests', async () => {
+      const fx = selecting({ files: [own], commands: [{ packageScript: 'browser' }],
+        gitAlso: args => args[0] === 'diff' ? { status: 0, stdout: `${own}\n`, stderr: '' } : undefined });
+      let calls = 0;
+      const spawns = [];
       try {
         const report = await fx.report({
-          tests: () => Promise.resolve({ code: 1, tap: hookTimedOut(scanner) }),
-          readMainEvidence: async (args) => { probed.push(args); return { red_on_main: [], breaks: [] }; },
+          tests: async ({ files }) => { spawns.push(`files: ${files.join(', ')}`); return { code: 0, tap: tapWith([]) }; },
+          shell: async () => { spawns.push(`gate ${++calls}`); return { status: calls === 1 ? 124 : 0 }; },
         });
-        assert.equal(report.stopped_at, 'red-under-load');
-        assert.equal(report.verdict, 'stopped');
-        assert.deepEqual(report.under_load_files, [scanner]);
-        assert.deepEqual(report.cancelled_files, [scanner]);
-        assert.equal(report.reason, `${scanner} had tests cancelled and none failed — measured again`);
-        assert.deepEqual(probed, [], 'a cancelled file is not asked of the base');
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.deepEqual(report.unmeasured.gates, ['browser']);
+        assert.deepEqual(report.alone.gates.map(row => [row.name, row.outcome]), [['browser', 'passed']]);
+        assert.deepEqual(spawns, [`files: ${own}`, 'gate 1', `files: ${own}`, 'gate 2'], 'the alone gate follows the suite, first gate and own tests');
+        assert.equal(calls, 2);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a signalled command gate is measured alone in check mode', async () => {
+      const fx = selecting({ files: [own], commands: [{ packageScript: 'browser' }] });
+      const spawns = [];
+      try {
+        const report = await fx.report({ mode: 'check', shell: async (command, options) => {
+          spawns.push({ command, mode: options.env.MC_GATE_ROUND });
+          return spawns.length === 1 ? { status: null, signal: 'SIGTERM' } : { status: 0 };
+        } });
+        assert.equal(report.ok, true, report.reason);
+        assert.deepEqual(spawns, [{ command: 'npm run browser', mode: 'check' }, { command: 'npm run browser', mode: 'check' }]);
+        assert.equal(report.alone.gates[0].outcome, 'passed');
       } finally { fx.cleanup(); }
     });
 
@@ -2349,29 +2404,57 @@ describe('a repository that selects by diff', () => {
       return lines.join('\n');
     }
 
-    it('the only red file was killed: file-killed, and the main-red probe is never asked', async () => {
-      const fx = selecting({ files: [scanner, own] });
-      const probed = [];
-      try {
-        const report = await fx.report({
-          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner] }) }),
-          readMainEvidence: async (args) => { probed.push(args); return null; },
-        });
-        assert.equal(report.ok, false);
-        assert.equal(report.stopped_at, 'file-killed');
-        assert.equal(report.verdict, 'stopped');
-        assert.equal(report.reason, `${scanner} ended by SIGTERM from outside the round — not a verdict on this change`);
-        assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
-        assert.deepEqual(probed, [], 'a killed file is not asked of the base');
-      } finally { fx.cleanup(); }
-    });
+    for (const phase of ['selected', 'whole suite', 'own tests']) for (const kills of [1, 2, 3]) {
+      it(`a killed file is rerun alone from ${phase}; ${kills} external kills ${kills === 3 ? 'stall' : 'then green'}`, async () => {
+        const fx = selecting({ files: [scanner, own], full: phase === 'whole suite',
+          gitAlso: args => phase === 'own tests' && args[0] === 'diff'
+            ? { status: 0, stdout: `${scanner}\n`, stderr: '' } : undefined });
+        let calls = 0;
+        let candidateDir;
+        const spawns = [];
+        const killedRun = ({ cwd }) => {
+          candidateDir = cwd;
+          const killed = ++calls <= kills;
+          // A real killed child has BOTH the parent's signal TAP and an
+          // unfinished reporter file. Whole-suite cuts use absolute paths.
+          return { code: killed ? 1 : 0,
+            tap: killed ? withKilled({ killed: [scanner] }).replaceAll('/somewhere/candidate', cwd) : tapWith([]),
+            cut: killed ? [phase === 'whole suite' ? join(cwd, scanner) : scanner] : [] };
+        };
+        try {
+          const report = await fx.report({
+            ...(phase === 'whole suite' ? { suite: async options => killedRun(options) } : {}),
+            tests: async options => {
+              spawns.push(options);
+              if (phase === 'own tests' && spawns.length === 1) return { code: 0, tap: tapWith([]) };
+              return killedRun(options);
+            },
+          });
+          const file = phase === 'whole suite' ? join(candidateDir, scanner) : scanner;
+          assert.equal(report.stopped_at, kills === 3 ? 'stalled' : null, report.reason);
+          assert.equal(calls, kills === 3 ? 3 : kills + 1);
+          assert.deepEqual(report.unmeasured.files, [file]);
+          assert.deepEqual(report.alone.files.map(row => [row.file, row.outcome]),
+            Array.from({ length: kills === 3 ? 2 : kills }, (_, index) =>
+              [file, kills === 3 || index < kills - 1 ? 'killed' : 'passed']));
+          assert.equal(report.alone.files.at(-1).outcome, kills === 3 ? 'killed' : 'passed');
+          for (const options of spawns.slice(phase === 'whole suite' ? 0 : phase === 'own tests' ? 2 : 1)) {
+            assert.deepEqual(options.files, [file]);
+            assert.equal(options.lanes, 1);
+            assert.equal(options.env.MC_TEST_LANES, '1');
+          }
+          for (const row of report.alone.files) assert.deepEqual(
+            row.argv.filter(arg => arg.startsWith('--test-timeout')), ['--test-timeout=600000']);
+        } finally { fx.cleanup(); }
+      });
+    }
 
     it('one killed and one red: red over the second alone, the killed one listed beside it', async () => {
       const fx = selecting({ files: [scanner, own] });
       const probed = [];
       try {
         const report = await fx.report({
-          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }) }),
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }), cut: [scanner] }),
           readMainEvidence: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
         });
         assert.equal(report.stopped_at, 'red');
@@ -2380,7 +2463,8 @@ describe('a repository that selects by diff', () => {
         assert.deepEqual(report.candidate.red_files, [own]);
         assert.deepEqual(report.killed_files, [{ file: scanner, signal: 'SIGTERM' }]);
         assert.deepEqual(probed, [[own]], 'only the change\'s red is asked of the base');
-        assert.doesNotMatch(report.reason, /scan\.test\.js/u);
+        assert.deepEqual(report.unmeasured.files, [scanner]);
+        assert.deepEqual(report.alone.files, [], 'assertion red stops without rerunning unmeasured files');
       } finally { fx.cleanup(); }
     });
 
@@ -2417,19 +2501,33 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    it('a merge round whose candidate run was cut short is not green, and names the file it did not finish', async () => {
-      const fx = selecting({ files: [scanner, own] });
-      const tap = '# tests 3\n# pass 3\n# fail 0\n';
-      try {
-        const report = await fx.report({
-          // The batch's own tracker found `own` started and never ended: its exit and summary read clean.
-          tests: () => Promise.resolve({ code: 0, tap, cut: [own] }),
-          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
-        });
-        assert.notEqual(report.stopped_at, 'green');
-        assert.match(report.reason ?? '', new RegExp(`output cut: ${own.replace(/[./]/gu, '\\$&')}`, 'u'));
-      } finally { fx.cleanup(); }
-    });
+    for (const phase of ['selected', 'whole suite', 'own tests', 'alone']) for (const siblingKilled of [false, true]) {
+      it(`an unexplained output cut in ${phase} refuses measurement${siblingKilled ? ' even beside a named killed file' : ''}`, async () => {
+        const fx = selecting({ files: [scanner, own], full: phase === 'whole suite',
+          gitAlso: args => phase === 'own tests' && args[0] === 'diff'
+            ? { status: 0, stdout: `${scanner}\n${own}\n`, stderr: '' } : undefined });
+        let calls = 0;
+        const cutRun = ({ cwd }) => ({ code: siblingKilled ? 1 : 0,
+          tap: siblingKilled ? withKilled({ killed: [scanner] }).replaceAll('/somewhere/candidate', cwd)
+            : '# tests 3\n# pass 3\n# fail 0\n',
+          cut: [own, ...(siblingKilled ? [scanner] : [])] });
+        try {
+          const report = await fx.report({
+            ...(phase === 'whole suite' ? { suite: async options => cutRun(options) } : {}),
+            tests: async options => {
+              calls++;
+              if (phase === 'own tests' && calls === 1) return { code: 0, tap: tapWith([]) };
+              if (phase === 'alone' && calls === 1) return { code: 1, tap: withKilled({ killed: [own] }), cut: [own] };
+              return cutRun(options);
+            },
+            readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+          });
+          assert.equal(report.verdict, phase === 'alone' ? 'red' : 'stopped');
+          assert.equal(report.stopped_at, phase === 'alone' ? 'red' : phase === 'own tests' ? 'pr-tests' : 'suite');
+          assert.match(report.reason ?? '', new RegExp(`output cut: ${own.replace(/[./]/gu, '\\$&')}`, 'u'));
+        } finally { fx.cleanup(); }
+      });
+    }
 
     /** The pull request's last round, as `gate-rounds.jsonl` keeps it. */
     function lastRound(fx, line) {
@@ -3427,160 +3525,112 @@ describe('the selected files run in their resource classes', () => {
   });
 });
 
-describe('the round ceiling holds in every phase, whatever child is stuck', () => {
-  // The declared ceiling, as the repository's table carries it. The round arms
-  // it through `armCeiling`, and the test fires it the moment the stuck child
-  // is reached, rather than waiting it out: what is pinned is what the round
-  // does when the ceiling comes while that child is stuck, not how long a
-  // timer takes.
-  const CEILING_MS = 1_500;
-  // A margin for a loaded machine, not a second chance: once the ceiling has
-  // come, the round is back within it or not at all.
-  const MARGIN_MS = 3_000;
-
-  /**
-   * The ceiling, armed by the round and fired by the test: `reached()` is
-   * called by the stuck child, and the ceiling comes on the next turn, when
-   * the round is waiting on that child.
-   */
-  function ceilingAtTheStuckChild() {
-    const state = { armedMs: null, firedAt: null, fire: null, early: false };
-    const fire = () => { state.firedAt = Date.now(); state.fire(); };
-    return {
-      state,
-      armCeiling: (f, ms) => {
-        state.armedMs = ms;
-        state.fire = f;
-        if (state.early) setImmediate(fire);
-        return () => { state.fire = () => {}; };
-      },
-      reached: () => { if (state.fire) setImmediate(fire); else state.early = true; },
-    };
-  }
-
-  // The declaration the round reads, as a repository's own table (`repo-gates.json`).
+describe('the round stall rule in every phase, whatever child is stuck', () => {
+  const CEILING_MS = 1500;
   function declare(fx, extra = {}) {
-    writeFileSync(join(fx.mcHome, 'repo-gates.json'), JSON.stringify({ repo: {
-      prepare: null, prepare_why: 'the fixture has no dependencies',
-      select: null, select_why: 'the fixture selects nothing by itself',
-      extra_gates: [], merge_log: null,
-      round_timeout_ms: CEILING_MS, round_timeout_why: 'a short ceiling for the test',
-      ...extra,
-    } }));
+    writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: {
+      prepare: null, prepare_why: 'no dependencies', select: null, select_why: 'fixture',
+      extra_gates: [], merge_log: null, round_timeout_ms: CEILING_MS, round_timeout_why: 'fixture', ...extra,
+    } });
   }
-  // A selector that names one test file and the given command gates, as a repository's selector prints it.
   const selector = (commands = []) => `printf '%s\\n' '${JSON.stringify({ files: ['tests/a.test.js'], commands })}'`;
-
-  // Each phase gets the fixture and a child that is stuck there: `stuck` for a
-  // stub that never answers and ignores its signal, `sleeping` for a real
-  // child that runs until the round stops it (the signal must reach it). The
-  // real child says it has started by creating `started` in its own directory.
   const phases = [
-    ['fetching the base', (fx, { stuck }) => ({ git: (args, opts) => (args[0] === 'fetch' ? stuck() : fx.git(args, opts)) })],
-    ['reading the pull request', (fx, { stuck }) => ({ gh: stuck })],
-    ['preparing the candidate', (fx, { sleeping }) => { declare(fx, { prepare: sleeping, prepare_why: 'sleeps' }); return {}; }],
-    ['selecting the files', (fx, { sleeping }) => { declare(fx, { select: sleeping, select_why: 'sleeps' }); return {}; }],
-    ['running the whole suite', (fx, { stuck }) => ({ suite: stuck })],
-    ['running the selected files', (fx, { stuck }) => { declare(fx, { select: selector() }); return { tests: stuck }; }],
-    ['running a command gate', (fx, { stuck }) => { declare(fx, { select: selector([{ packageScript: 'lint:x' }]) }); return { shell: stuck }; }],
-    ['retrying a command gate', (fx, { stuck }) => {
-      declare(fx, { select: selector([{ packageScript: 'lint:x' }]), retry_once: { gates: ['lint:x'] }, retry_once_why: 'flips under load' });
+    ['fetch', (fx, stuck) => ({ git: (args, opts) => args[0] === 'fetch' ? stuck() : fx.git(args, opts) })],
+    ['pull request', (_fx, stuck) => ({ gh: stuck })],
+    ['whole suite', (_fx, stuck) => ({ suite: stuck })],
+    ['tests/a.test.js', (fx, stuck) => { declare(fx, { select: selector() }); return { tests: stuck }; }],
+    ['npm run lint:x', (fx, stuck) => { declare(fx, { select: selector([{ packageScript: 'lint:x' }]) }); return { shell: stuck }; }],
+    ['retry once', (fx, stuck) => {
+      declare(fx, { select: selector([{ packageScript: 'lint:x' }]), retry_once: { gates: ['lint:x'] }, retry_once_why: 'fixture' });
       let call = 0;
-      return { shell: () => (call++ === 0 ? Promise.resolve({ status: 1, stdout: '', stderr: 'lint failed', signal: null }) : stuck()) };
+      return { shell: () => call++ === 0 ? { status: 1 } : stuck() };
     }],
-    ['running an extra gate', (fx, { sleeping }) => { declare(fx, { extra_gates: [{ name: 'sleeper', command: sleeping }] }); return {}; }],
+    ['tests/own.test.js', (fx, stuck) => { declare(fx, { select: selector() }); return { tests: options => options.files.includes('tests/own.test.js') ? stuck() : fx.tests(options) }; }],
   ];
-
-  // The round step each phase is, as the timings name it (`report.timings`).
-  const STEP = {
-    'fetching the base': ['fetch'], 'preparing the candidate': ['prepare'], 'selecting the files': ['selection'],
-    'running the whole suite': ['suite'], 'running the selected files': ['suite'], 'running a command gate': ['suite', 'selected gates'],
-    'retrying a command gate': ['retry once'], 'running an extra gate': ['extra gates'],
-  };
   for (const [phase, make] of phases) {
-    it(`a stuck child while ${phase} is red inside the ceiling, and the lane is released`, async () => {
-      const fx = fixture({ changed: ['tests/a.test.js'] });
-      const ceiling = ceilingAtTheStuckChild();
-      const flag = join(fx.root, 'child');
-      mkdirSync(flag);
-      // Only the child's own file: a watcher may also report the directory's creation.
-      const watcher = watch(flag, () => { if (existsSync(join(flag, 'started'))) ceiling.reached(); });
+    it(`a stuck child ${phase} stops stalled and releases the lane under the fixture clock`, async () => {
+      const fx = fixture({ changed: ['tests/own.test.js'] });
+      let now = 0;
+      let poll;
+      let report;
+      let reached;
+      const atChild = new Promise(resolve => { reached = resolve; });
+      const stuck = () => { reached(); return new Promise(() => {}); };
       try {
         declare(fx);
-        const stuck = () => { ceiling.reached(); return new Promise(() => {}); };
-        const sleeping = `: > '${join(flag, 'started')}' && exec sleep 60`;
-        const extra = make(fx, { stuck, sleeping });
-        const report = await fx.run({ ...extra, armCeiling: ceiling.armCeiling });
-        assert.equal(ceiling.state.armedMs, CEILING_MS, 'the ceiling armed is the one the repository declares');
-        assert.ok(ceiling.state.firedAt, 'the round ended before its stuck child was reached');
-        const took = Date.now() - ceiling.state.firedAt;
-        assert.ok(took < MARGIN_MS, `the round took ${took} ms past its ceiling`);
-        assert.equal(report.ok, false);
-        assert.equal(report.stopped_at, 'red');
-        assert.match(report.reason, /ceiling/u);
-        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the lane was not released');
-        // The stuck child was the one this phase names: the round got that far.
-        if (STEP[phase]) assert.ok(STEP[phase].every((step) => step in report.timings), `the round never reached ${phase}`);
+        const round = fx.run({ ...make(fx, stuck), clock: () => now,
+          armCeiling: (_fire, ms) => { assert.equal(ms, CEILING_MS); return () => {}; },
+          armStall: (fire, ms) => { poll = fire; assert.equal(ms, ROUND_STALL_MS); return () => {}; },
+        }).then(value => { report = value; });
+        await atChild;
+        poll(); // sample current progress before advancing the fixture clock
+        now += ROUND_STALL_MS;
+        poll();
+        for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
+        assert.ok(report, 'a child making no progress must end stalled under the fixture clock');
+        await round;
+        assert.equal(report.stopped_at, 'stalled');
+        assert.match(report.reason, /no progress for 15 min/u);
+        if (phase.includes('test.js') || phase.startsWith('npm')) assert.ok(report.reason.includes(phase), report.reason);
+        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null);
+      } finally { fx.cleanup(); }
+    });
+  }
+  for (const phase of ['prepare', 'selection', 'extra gates']) {
+    it(`a real stuck child in ${phase} is stopped by the stall signal`, async () => {
+      const fx = fixture();
+      let now = 0;
+      let poll;
+      const flag = join(fx.root, 'flag');
+      mkdirSync(flag);
+      const watcher = watch(flag, () => {
+        if (!existsSync(join(flag, 'started'))) return;
+        poll();
+        now = ROUND_STALL_MS;
+        poll();
+      });
+      const sleeping = `: > '${join(flag, 'started')}' && exec sleep 60`;
+      try {
+        declare(fx, phase === 'prepare' ? { prepare: sleeping, prepare_why: 'fixture child' }
+          : phase === 'selection' ? { select: sleeping, select_why: 'fixture child' }
+          : { extra_gates: [{ name: 'sleeper', command: sleeping }] });
+        const report = await fx.run({ clock: () => now, armCeiling: () => () => {},
+          armStall: fire => { poll = fire; return () => {}; },
+        });
+        assert.equal(report.stopped_at, 'stalled');
+        assert.ok(report.reason.includes(phase), report.reason);
+        if (phase === 'extra gates') assert.ok(report.reason.includes(sleeping), report.reason);
+        assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null);
       } finally { watcher.close(); fx.cleanup(); }
     });
   }
 
-  it('a timeout after the selected tests finish names the command phase, not completed files', async () => {
+  it('file progress within the stall window keeps going past the ceiling and ends green', async () => {
     const fx = fixture();
-    const ceiling = ceilingAtTheStuckChild();
-    try {
-      declare(fx, { select: selector([{ packageScript: 'lint:x' }]) });
-      const report = await fx.run({
-        tests: (options) => {
-          const file = join(fx.root, 'completed-times.jsonl');
-          options.times.track(file);
-          writeFileSync(file, [
-            { file: join(options.cwd, 'tests/a.test.js'), started: true },
-            { file: join(options.cwd, 'tests/a.test.js'), done: true, ms: 2400 },
-          ].map(line => JSON.stringify(line)).join('\n'));
-          options.times.complete(file);
-          rmSync(file);
-          return fx.tests(options);
-        },
-        shell: () => { ceiling.reached(); return new Promise(() => {}); },
-        armCeiling: ceiling.armCeiling,
-      });
-      assert.equal(report.ok, false);
-      assert.deepEqual(report.red_files, []);
-      assert.deepEqual(report.slowest_files, [{ file: 'tests/a.test.js', seconds: 2.4 }]);
-      assert.match(report.timeout_phase, /selected gates/u);
-      assert.doesNotMatch(report.reason, /unfinished: tests\/a/u);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a timeout in own tests does not relabel the completed selection unfinished', async () => {
-    const fx = fixture({ changed: ['tests/own.test.js'] });
-    const ceiling = ceilingAtTheStuckChild();
+    let now = 0;
+    let ceiling;
+    let poll;
+    const lines = [];
     try {
       declare(fx, { select: selector() });
-      const report = await fx.run({
-        tests: (options) => {
-          if (!options.files.includes('tests/own.test.js')) return fx.tests(options);
-          ceiling.reached(); return new Promise(() => {});
+      const report = await fx.run({ clock: () => now, onProgress: line => lines.push(line),
+        armCeiling: fire => { ceiling = fire; return () => {}; },
+        armStall: fire => { poll = fire; return () => {}; },
+        tests: async options => {
+          const file = join(fx.root, 'progress.jsonl');
+          options.times.track(file);
+          now = 1000;
+          writeFileSync(file, JSON.stringify({ file: join(options.cwd, 'tests/a.test.js'), done: true, ms: 1000 }));
+          poll();
+          now += ROUND_STALL_MS - 1;
+          ceiling();
+          poll();
+          options.times.complete(file);
+          return fx.tests(options);
         },
-        armCeiling: ceiling.armCeiling,
       });
-      assert.equal(report.ok, false);
-      assert.deepEqual(report.red_files, ['tests/own.test.js']);
-      assert.doesNotMatch(report.reason, /unfinished: tests\/a/u);
-      assert.equal(report.timeout_phase, 'pr tests');
-    } finally { fx.cleanup(); }
-  });
-
-  it('a whole-suite round names no file it did not hear of, and says so', async () => {
-    const fx = fixture({ changed: ['tests/a.test.js'] });
-    const ceiling = ceilingAtTheStuckChild();
-    try {
-      declare(fx);
-      const report = await fx.run({ suite: () => { ceiling.reached(); return new Promise(() => {}); }, armCeiling: ceiling.armCeiling });
-      assert.equal(report.stopped_at, 'red');
-      assert.deepEqual(report.red_files, []);
-      assert.match(report.reason, /no test file was named as unfinished/u);
+      assert.equal(report.ok, true, report.reason);
+      assert.ok(lines.some(line => /past its 2 s ceiling at load .*1 of 1 files finished, going on/u.test(line)), lines.join('\n'));
     } finally { fx.cleanup(); }
   });
 });

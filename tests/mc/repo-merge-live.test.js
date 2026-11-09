@@ -171,29 +171,26 @@ function repository(options = {}) {
   };
 }
 
-/**
- * The round's ceiling, fired at the moment its stuck child is reached rather
- * than waited out (as in repo-gate.test.js): what is pinned is what the round
- * does when the ceiling comes while that child hangs, and that the ceiling it
- * armed is the one the repository declares.
- */
-function ceilingAtTheStuckChild() {
-  const state = { armedMs: null, firedAt: null, fire: null, early: false };
-  const fire = () => { state.firedAt = Date.now(); state.fire(); };
+/** The fixture clock reaches a no-progress stall as soon as the child starts. */
+function stallAtTheStuckChild() {
+  let now = Date.now();
+  let poll;
+  const state = { ceilingMs: null, stallMs: null, firedAt: null };
   return {
-    state,
-    armCeiling: (f, ms) => {
-      state.armedMs = ms;
-      state.fire = f;
-      if (state.early) setImmediate(fire);
-      return () => { state.fire = () => {}; };
-    },
-    reached: () => { if (state.fire) setImmediate(fire); else state.early = true; },
+    state, clock: () => now,
+    armCeiling: (_fire, ms) => { state.ceilingMs = ms; return () => {}; },
+    armStall: (fire, ms) => { poll = fire; state.stallMs = ms; return () => {}; },
+    reached: () => setImmediate(() => {
+      state.firedAt = Date.now();
+      poll();
+      now += state.stallMs;
+      poll();
+    }),
   };
 }
 
 describe('the merge round, with modelled git', () => {
-  it('a round ceiling kills a hanging test red and releases its lane', async () => {
+  it('a no-progress stall kills a hanging test and releases its lane without landing', async () => {
     const fx = repository({ hangingBranch: true });
     writeFileSync(fx.logPath, '| Datum | PR | Kontroller | Klass | Beslut | Anteckning |\n|---|---|---|---|---|---|\n');
     writeFileSync(join(fx.mcHome, 'repo-gates.json'), JSON.stringify({ repo: {
@@ -202,23 +199,23 @@ describe('the merge round, with modelled git', () => {
       select_why: 'the fixture selects the hanging branch test', extra_gates: [], merge_log: null,
       round_timeout_ms: 5_000, round_timeout_why: 'short timeout fixture', pr_tests_flags: ['--test-timeout=30000'],
     } }));
-    const ceiling = ceilingAtTheStuckChild();
+    const stall = stallAtTheStuckChild();
     mkdirSync(fx.hangFlag);
-    const watcher = watch(fx.hangFlag, () => { if (existsSync(join(fx.hangFlag, 'started'))) ceiling.reached(); });
+    const watcher = watch(fx.hangFlag, () => { if (existsSync(join(fx.hangFlag, 'started'))) stall.reached(); });
     try {
       const report = await runMergeRound({
         repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: fx.logPath,
-        gate: (options) => runGate({ ...options, armCeiling: ceiling.armCeiling }),
+        gate: (options) => runGate({ ...options, armCeiling: stall.armCeiling, armStall: stall.armStall, clock: stall.clock }),
       });
-      assert.equal(ceiling.state.armedMs, 5_000, 'the ceiling armed is the one the repository declares');
-      assert.ok(ceiling.state.firedAt, 'the round ended before its hanging test was reached');
-      const took = Date.now() - ceiling.state.firedAt;
-      assert.ok(took < 3_000, `the round took ${took} ms past its ceiling`);
+      assert.equal(stall.state.ceilingMs, 5_000, 'the ceiling armed is the one the repository declares');
+      assert.ok(stall.state.firedAt, 'the round ended before its hanging test was reached');
+      const took = Date.now() - stall.state.firedAt;
+      assert.ok(took < 3_000, `the round took ${took} ms past its stall`);
       assert.equal(report.ok, false);
-      assert.equal(report.stopped_at, 'red');
-      assert.match(report.reason, /ceiling.*tests\/b\.test\.js/u);
-      assert.deepEqual(report.red_files, ['tests/b.test.js'], JSON.stringify(report));
-      assert.deepEqual(report.gate.red_files, ['tests/b.test.js'], 'the gate verdict handed to the round log names the file');
+      assert.equal(report.stopped_at, 'stalled');
+      assert.match(report.reason, /no progress.*tests\/b\.test\.js/u);
+      assert.equal(report.merged, false, JSON.stringify(report));
+      assert.deepEqual(report.gate.stalled_files, ['tests/b.test.js'], 'the gate verdict handed to the round log names the file');
       assert.equal(runningRound({ root: fx.mcHome, lane: 'repo' }), null, 'the next job can claim the released lane');
       assert.equal(fx.mainAt(), git(fx.repo, ['rev-parse', 'refs/remotes/origin/main']).trim(), 'a red round does not land');
     } finally { watcher.close(); fx.cleanup(); }

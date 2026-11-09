@@ -220,69 +220,23 @@ describe('landJob — one job, landed or answered', () => {
     assert.equal(m.rows.at(-1).note, 'merged');
   });
 
-  const killed = {
-    ok: false, merged: false, stopped_at: 'file-killed', verdict: 'stopped',
-    reason: 'tests/b.test.js ended by SIGTERM from outside the round — not a verdict on this change',
-    killed_files: [{ file: 'tests/b.test.js', signal: 'SIGTERM' }],
-  };
-
-  it('a test file killed from outside the round is measured once more, and then lands', async () => {
-    const m = machine([killed, green]);
-    await landJob(JOB, m.deps);
-    assert.equal(m.rounds.length, 2);
-    assert.ok(m.said.includes('memoro-cli #671: tests/b.test.js was killed from outside the round — measuring again'));
-    assert.equal(m.rows.at(-1).note, 'merged');
-  });
-
-  it('killed twice is put back in line, with no session and no attempt counted', async () => {
-    const m = machine([killed, killed, green]);
+  const stalled = { ok: false, merged: false, stopped_at: 'stalled', verdict: 'stopped',
+    reason: 'no progress for 15 min — files in flight: tests/b.test.js; load 40' };
+  it('stalled goes back in line with no session and no attempt counted', async () => {
+    const m = machine([stalled, green]);
     const answers = await landJob(JOB, m.deps);
-    assert.equal(m.rounds.length, 2, 'once more, not on and on');
+    assert.equal(m.rounds.length, 1, 'no in-round measuring-again loop');
     assert.equal(answers[0].requeued, true);
-    assert.ok(m.said.some((line) => /back in line in 15 min \(requeue 1 of 2\), no session started/u.test(line)));
+    assert.ok(m.said.some(line => /back in line in 15 min \(requeue 1 of 2\), no session started/u.test(line)));
   });
-
-  it('killed twice once the requeues are spent is answered red with that reason, and nothing is mended', async () => {
-    const m = machine([killed, killed, green]);
+  it('stalled with exhausted requeues is answered red with the stall diagnostic', async () => {
+    const m = machine([stalled, green]);
     const answers = await landJob({ ...JOB, requeues: MAX_REQUEUES }, m.deps);
-    assert.equal(m.rounds.length, 2, 'once more, not on and on');
+    assert.equal(m.rounds.length, 1);
     assert.equal(answers[0].landed, false);
-    assert.equal(answers[0].report.stopped_at, 'file-killed');
-    assert.equal(answers[0].report.reason, killed.reason);
-    assert.equal(m.rows[0].note, 'red,file-killed');
-    assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0);
-  });
-
-  const underLoad = {
-    ok: false, merged: false, stopped_at: 'red-under-load', verdict: 'stopped',
-    reason: 'tests/b.test.js red in the round, green alone on the base and on the candidate — measured again',
-    under_load_files: ['tests/b.test.js'],
-  };
-
-  it('a red that passes alone on the base and the candidate is measured once more, and then lands', async () => {
-    const m = machine([underLoad, green]);
-    await landJob(JOB, m.deps);
-    assert.equal(m.rounds.length, 2);
-    assert.ok(m.said.includes('memoro-cli #671: tests/b.test.js red only under load — measuring again'));
-    assert.equal(m.rows.at(-1).note, 'merged');
-  });
-
-  it('red under load twice is put back in line, not handed to a session', async () => {
-    const m = machine([underLoad, underLoad, green]);
-    const answers = await landJob(JOB, m.deps);
-    assert.equal(answers[0].requeued, true);
-    assert.equal(answers[0].report.stopped_at, 'red-under-load');
-  });
-
-  it('red under load twice once the requeues are spent is answered red, saying the files passed alone on base and head', async () => {
-    const m = machine([underLoad, underLoad, green]);
-    const answers = await landJob({ ...JOB, requeues: MAX_REQUEUES }, m.deps);
-    assert.equal(m.rounds.length, 2, 'once more, not on and on');
-    assert.equal(answers[0].landed, false);
-    assert.equal(answers[0].report.stopped_at, 'red-under-load');
-    assert.match(answers[0].report.reason, /green alone on the base and on the candidate/u);
-    assert.match(answers[0].report.reason, /red under load in two rounds running/u);
-    assert.equal(m.said.filter((line) => /mend/u.test(line)).length, 0);
+    assert.equal(answers[0].report.stopped_at, 'stalled');
+    assert.equal(answers[0].report.reason, stalled.reason);
+    assert.equal(m.rows[0].note, 'red,stalled');
   });
 
   it('a job that is nobody\'s goal gets the round and nothing else', async () => {
@@ -338,12 +292,12 @@ describe('an offline round is put back in line, not answered red', () => {
     assert.equal(m.rounds.length, 1, 'no second round before the backoff has passed');
   });
 
-  it('writeAnswer preserves a real red-under-load diagnostic through parse and merge collection', async () => {
+  it('writeAnswer preserves a real stalled diagnostic through parse and merge collection', async () => {
     mkdirSync(join(root, 'runner'), { recursive: true });
     writeFileSync(mergesPath(root), JSON.stringify([{ ...JOB, since: '2026-11-08T11:00:00Z' }]));
     const now = () => new Date('2026-11-08T12:00:00Z');
     const report = {
-      ok: false, merged: false, stopped_at: 'red-under-load',
+      ok: false, merged: false, stopped_at: 'stalled',
       reason: 'tests/x.test.js red in the round, green alone on base and candidate',
     };
     let written = false;
@@ -360,12 +314,12 @@ describe('an offline round is put back in line, not answered red', () => {
     const [entry] = parseQueue(readFileSync(mergesPath(root), 'utf8'));
     assert.equal(entry.not_before, '2026-11-08T12:15:00.000Z');
     assert.equal(entry.requeues, 1);
-    assert.deepEqual(entry.retry_diagnostic, { category: 'red-under-load', explanation: report.reason });
+    assert.deepEqual(entry.retry_diagnostic, { category: 'stalled', explanation: report.reason });
     const section = mergesSection({ queued: parseQueue(readFileSync(mergesPath(root), 'utf8')),
       now: new Date('2026-11-08T12:00:00Z'), merger: null });
     assert.deepEqual(section.repos[1].waiting[0].retry, {
       eligible_at: '2026-11-08T12:15:00.000Z', remaining_seconds: 900,
-      category: 'red-under-load', explanation: report.reason, requeues: 1, offline: 0,
+      category: 'stalled', explanation: report.reason, requeues: 1, offline: 0,
       next: 'The merger will retry automatically when eligible; start time is not guaranteed.',
       retry_now: 'mc merge memoro-cli 671',
     });
