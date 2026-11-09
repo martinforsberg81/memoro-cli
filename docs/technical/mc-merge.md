@@ -124,6 +124,16 @@ evidence that nobody else is working there. A synchronous requesting process
 and its waiting ancestors may hand over their own checkout. A missing, dirty, busy or mismatched
 checkout stops with its reason; it never triggers another checkout.
 
+Keep the existing branch checkout while its PR remains open, including after
+publication without queue admission and after failed acceptance. A pushed branch
+is recoverable source, but it is not a checkout the merger can borrow. Manual
+cleanup must use the same open-PR retention boundary as tidy; disk pressure does
+not authorize deleting an open PR's only checkout. After landing or closing,
+normal safe cleanup applies. If an earlier cleanup already removed it, delivery
+repair may restore that same branch at its original path after checking the
+pushed head and that no other checkout holds it. This restores the original
+working area; the merger still never creates another measurement checkout.
+
 The measurement temporarily detaches HEAD in that directory, merges the
 current fetched base, prepares and tests that combined tree, then returns to
 the original branch without moving it. A batch starts from its fetched base
