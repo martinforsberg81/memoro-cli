@@ -181,7 +181,7 @@ describe('SESSIONS', () => {
     runner.day.by_kind = day;
     const dayAt = (columns) => renderPageLines(pageData({ runner }), { columns, now: NOW, expand: true }).find((l) => /^ {2}24 h /u.test(l));
     const counts = '  24 h · build 6 (1 merged, 2 built, 1 blocked, 1 failed, 1 timed out) · review 2 (1 queued) · plan 1 (1 open) · other 2';
-    assert.equal(dayAt(160), `${counts} · ≈$8.07 list (opus, 2026-06)`);
+    assert.equal(dayAt(160), `${counts} · ≈$8.07 list (per model, 2026-06)`);
     // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
     assert.equal(dayAt(140), `${counts} · ≈$8.07 list`);
     assert.equal(dayAt(122), counts);
@@ -1525,9 +1525,11 @@ describe('the page', () => {
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
-    // Sessions and goal statuses have separate summaries in the header.
-    assert.match(text, /1 in flight · 1 build · 0 review · 0 finish · 0 mend/u);
-    assert.match(text, /Goals: 3 total · status: 2 ready · 0 blocked · 1 Martin/u);
+    // Where work stands is the pipeline under the hero frame: a frame per
+    // stage, its count and flags, and a mark per session working in it.
+    assert.match(text, /│ 3 build ⚑1 +│▶│/u);
+    assert.match(text, /│ 1 proposals +│▶│ 0 draft +│/u);
+    assert.doesNotMatch(text, /in flight ·|Goals: \d+ total/u, 'the old count lines are gone');
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
     assert.match(text, /runner pid 4242/u);
     assert.match(text, /■ stopping since an unknown time/u);
