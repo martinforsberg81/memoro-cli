@@ -397,8 +397,9 @@ function layerSources({ shipped, own, override }) {
  * The test timeout is the one field that is not plain precedence
  * (`timeoutPolicy`): a layer whose `pr_tests_flags` wins keeps its loaders,
  * but cannot drop or loosen the measured tree's own timeout in silence.
- * `ok: false` with `kind` `malformed` or `timeout` is a stop for a session
- * too, which otherwise falls back to the test script when nothing is declared.
+ * Every `ok: false` that carries a reason is a stop for a session too (`kind`
+ * `malformed`, `timeout` or `invalid`). The one that is not is `undeclared`: a
+ * repository with no declaration at all, which falls back to the test script.
  */
 export function declarationFor(repoPath, { root = mcHome(), env = process.env, contentDir = repoPath } = {}) {
   const name = basenameOf(repoPath);
@@ -431,6 +432,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
     return {
       ok: false,
       name,
+      kind: 'invalid',
       known: normalise(declared, env),
       reason: `${name} declares itself in ${repoDeclarationPath(contentDir)}, but says nothing about `
         + 'its preparation — and mc ships no entry for it, so nothing else does either. '
@@ -447,6 +449,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
       return {
         ok: false,
         name,
+        kind: 'invalid',
         known: normalise({ ...declared, prepare: null }, env),
         reason: `${name} is declared, but its preparation step is not: ${declared.prepare_why || 'no reason recorded'}. `
           + `What is known about it — ${describeKnown(declared)} — is not enough to run a round on. `
@@ -462,6 +465,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
       return {
         ok: false,
         name,
+        kind: 'invalid',
         reason: `${name} declares retry_once ${JSON.stringify(declared.retry_once)}, which is not `
           + '{"files": ["<test file>", …], "gates": ["<package script>", …]} — each list optional, every entry a path or a script name.',
       };
@@ -475,6 +479,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
       return {
         ok: false,
         name,
+        kind: 'invalid',
         reason: `${name} must declare a positive integer round_timeout_ms and round_timeout_why in its repository gate table — a gate without a measured ceiling may hold its lane indefinitely`,
       };
     }
@@ -483,6 +488,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
       return {
         ok: false,
         name,
+        kind: 'invalid',
         reason: `${name} declares select_changed_path ${JSON.stringify(declared.select_changed_path)}, which is not `
           + 'true or false — true says its `select` command takes `--changed-path <path>` (repeatable) in place of its diff.',
       };
@@ -524,6 +530,7 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env, c
   return {
     ok: false,
     name,
+    kind: 'undeclared',
     reason: `${name} has no gate declaration, and ${nothing.why} — so mc cannot tell whether its suite `
       + `needs anything installed first. Declare it in the repository itself, ${repoDeclarationPath(contentDir)}: `
       + '{"prepare": "<command>", "prepare_why": "<where that was decided>"} '

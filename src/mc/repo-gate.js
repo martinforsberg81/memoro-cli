@@ -778,7 +778,7 @@ export async function runGate({
     // below are spawned with (`realTests` resolves the same way from `flags` and `headDir`).
     const plan = resolveTestPlan({ flags, script: testScriptOf(headDir) });
     if (plan.invalid) return finish('declaration', `timeout policy: ${plan.invalid} — nothing was run`);
-    const is =facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
+    const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
 
     // What each pull request changed against the base, asked of git once a
     // round: the red that is main's needs it to know the change left a red

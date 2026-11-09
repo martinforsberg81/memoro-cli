@@ -33,11 +33,12 @@ export function changedAgainst(io, root, mergeBase) {
  * `.mc/test.json` read is the worktree's own (`contentDir: root`), never the
  * common directory's, which a bare repository does not have.
  *
- * Null when git cannot say or nothing is declared — the `test` script's
- * flags stand then. `{ stop }` when the worktree's declaration is present and
- * malformed, or a layer drops or loosens its timeout ambiguously: the gate
- * refuses before anything is spawned. Otherwise `{ primary, contentDir,
- * declaration, notice }`, `notice` the timeout-inheritance line to print.
+ * Null when git cannot say, or the repository has no declaration at all
+ * (`undeclared`) — the `test` script's flags stand then. `{ stop }` when the
+ * worktree's declaration is present and invalid, whatever the reason: the gate
+ * refuses before anything is spawned, never with the script's flags. Otherwise
+ * `{ primary, contentDir, declaration, notice }`, `notice` the timeout-inheritance
+ * line to print.
  */
 export function measuredDeclaration(io, { root, env }) {
   const common = io.git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
@@ -45,22 +46,9 @@ export function measuredDeclaration(io, { root, env }) {
   const primary = repositoryDir(common);
   let declared = null;
   try { declared = io.declaration(primary, { env, contentDir: root }); } catch { return null; }
-  if (declared && !declared.ok && declared.kind) return { stop: declared.reason };
+  if (declared && !declared.ok && declared.kind !== 'undeclared') return { stop: declared.reason };
   return declared?.ok && declared.declaration
     ? { primary, contentDir: root, declaration: declared.declaration, notice: declared.notice ?? null } : null;
-}
-
-/** Kept for its callers: `measuredDeclaration` without the stop. */
-export function primaryCheckoutDeclaration(io, options) {
-  const measured = measuredDeclaration(io, options);
-  return measured?.declaration ? measured : null;
-}
-
-/**
- * The `node --test` flags the measured worktree declares (`pr_tests_flags`), or null when it declares none — then the `test` script's own flags stand.
- */
-export function declaredTestFlags(io, { root, env }) {
-  return flagsOf(primaryCheckoutDeclaration(io, { root, env })?.declaration);
 }
 
 /** A declaration's nonempty `pr_tests_flags`, copied, or null. */
