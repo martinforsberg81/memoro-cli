@@ -901,24 +901,32 @@ saying `<files> was killed from outside the round — measuring again`. A second
 `file-killed` is answered red with that reason: there is nothing in the change
 to fix.
 
-Martin, 2026-11-09 (manager session): a `before` hook that **throws** is the
-change's red, named with the hook's message; only a hook node cut at its
-timeout is cancelled under load. Twelve of fifteen `red-under-load` rounds
-since 2026-11-05 were one thrown hook ("No dev server database matches this
-tree's 412 migrations"), requeued and met again. The goal `mc/hook-error-is-red`
-carries it into `cancelledFiles` and rewrites this section. The decision of
-2026-11-04 stands: no green-alone exemption, no base replay in a PR round.
-
 **Cancelled tests are not attributed to the PR** (`red-under-load`).
-The former base-then-candidate replay and `green_alone` exemption are retired:
-without existing exact-base evidence a failure remains red, not silently
-subtracted. Explicit `retry_once` on the candidate remains as described above.
-A red file whose own entries are
-cancelled tests and none failed (`cancelledFiles` in `tap-red.js`: a `before`
-hook that ran out of time, as memoro's `build-bundle.test.js` on #13470) is
-taken out of the red without any re-run, as if it had passed alone; with
-nothing else red the round is `red-under-load`. A file with a failed test stays
-red whatever else it has. The merger runs a `red-under-load` round once more,
+Only a hook node cut at its timeout is cancelled under load: `cancelledFiles`
+in `tap-red.js` recognises a `hookFailed` suite only when its error is node's
+`failed running <kind> hook` line, and `cancelledByParent` entries under that
+suite. A file with any other failure stays red; `subtestsFailed` attribution
+is unchanged. Timeout-cancelled files are taken out of the red without a rerun;
+with nothing else red the round stops `red-under-load`. This records observed
+timeout cancellations, not a measured pass or proof of machine overload.
+
+A `before` hook that **throws** is the change's ordinary red, even when all
+its children are cancelled and node's totals say zero failed. Its file and
+hook message are kept in `red_files` and `red_tests`, with the full-message
+diagnostic digest used for standing main-red matching. The reason names
+`<file>: before hook failed — <first line of the message>`; the ordinary
+merge-red handoff carries the error to mend. Without existing exact-base
+evidence the failure remains red, not silently subtracted. Explicit
+`retry_once` on the candidate remains as described above. Session gates also
+refuse GREEN for a run containing cancelled tests, including after settlement
+or a successful worker exit; its receipt is not green.
+
+Measured on 2026-11-09: twelve of fifteen `red-under-load` rounds since
+2026-11-05 were one thrown hook ("No dev server database matches this tree's
+412 migrations"); eight requeues for two PRs met the same error. A thrown
+hook is a message for the author, not a request to measure the same error again.
+
+The merger runs a `red-under-load` round once more,
 saying `<files> red only under load — measuring again`. A second one — and a
 second `file-killed` — is put back in line rather than answered
 (`REQUEUE_STOPS`, `mayRequeue` in `merger.js`): the entry is `queued` again with
