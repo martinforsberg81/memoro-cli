@@ -25,6 +25,15 @@ describe('COST', () => {
     assert.equal(estimateCost({ input: 1e6 }, 'gemini'), null);
     assert.equal(estimateCost({ cacheRead: 1e6 }, 'opus'), 0.5);
   });
+
+  it('prices OpenAI cached input out of its input, at its own listed rate', () => {
+    // Codex reports 5.2 M input of which 5.1 M cached: only 0.1 M is full price.
+    const cost = estimateCost({ input: 5_200_000, cacheRead: 5_100_000, output: 100_000 }, 'gpt-6.1-sol');
+    assert.equal(Math.round(cost * 1000) / 1000, 0.2 + 0.51 + 1);
+    assert.equal(estimateCost({ input: 1e6, cacheRead: 1e6 }, 'gpt-6-luna'), 0.01);
+    // Anthropic's input excludes the cache, so the same numbers add up instead.
+    assert.equal(estimateCost({ input: 1e6, cacheRead: 1e6 }, 'opus'), 5.5);
+  });
 });
 
 describe('NOW', () => {

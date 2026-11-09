@@ -573,25 +573,53 @@ checks that routing without opening a coding tool.
 - `src/mc/status-collect.js`, `status-render.js`, `foreground.js`: shared readers,
   primitives and foreground records.
 
-`tests/mc/page.test.js` builds sections from fixtures, compares the palette
+`tests/mc/landed.test.js` pins the 24-hour outcome and which sessions each
+stage frame counts. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
 menu routing and piped output. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
 
 ## Manager header
 
-The framed MC header separates active and dormant programmes, in-flight
-sessions by kind, and goals by status and stage (including zero counts and
-terminal stages). Goal totals cover the current programme goals, excluding
-archives. Waiting proposals include programmes and the root; the daily cost
-uses the existing list-price estimate. Throughput shows completed build,
-review, finish and mend sessions (and plan, for rows from before 2026-11-07)
-and merged PRs over the last 24 hours, followed by
-the latest successful deploy date in UTC (or `none recorded`). Complete fields
-wrap within the frame on narrow terminals. `mc manager` (or `m` at the page
-prompt) opens the session for priorities,
-blockers and proposals across all programmes. Manager's open state is shown in
-the header, including foreground records from before the rename.
+The framed MC header says what mc is and what came out of it; the pipeline
+under it says where work stands now.
+
+**Hero frame.** Active and dormant programmes, the day's list-price cost, busy
+lanes of the lanes set, and the latest successful deploy in UTC (or
+`none recorded`). Then the last 24 hours' outcome, from runs.tsv alone
+(`landed.js`, `data.landed`):
+
+- **Landed:** distinct goals merged (merge rows named `goal:…` whose note says
+  `merged`), distinct pull requests merged without a goal (merge rows named
+  after a repository), pull requests landed of all merge attempts, and first
+  pass — the share of landed goals that never needed a finish or mend session.
+- **Per goal:** mean sessions, and the median and total list-price cost of each
+  landed goal, priced per row by its own `model` (`rowCost`,
+  [mc-status.md](mc-status.md#the-cost-estimate)). A session whose model has
+  no list price is named beside the cost.
+- **Session time per goal:** the sum of every non-merge session a landed goal
+  ever had — its whole life, not only the day — as a histogram over
+  `<15, <30, <60, <120, <240, ≥240` minutes, then median, p25–p75, p90 and max.
+
+runs.tsv keeps the header it was created with; a shorter header that is a
+prefix of `RUNS_HEADER` is read with `RUNS_HEADER`, so the appended columns
+(`model` and the rest) are not lost.
+
+**Pipeline.** One frame per stage — proposals, draft, build, review, finish,
+merge — joined by `▶` and filling the hero frame's width. A frame has two
+lines. The first is the count: waiting proposals (programmes and the root), or
+goals in that stage, followed by `⚑n` for goals waiting on Martin and `⊘n` for
+blocked goals in that stage. The second has one mark per session working there:
+interactive plan sessions on proposals, headless plan sessions on draft, build,
+review and finish sessions on their stage, and on merge `◎` per gate round in
+flight and `↺` per mend session. More marks than fit are drawn as `●×n`.
+`done` and `dropped` have no frame; what landed is in the hero frame. Below 99
+columns the frames are three to a row, and below 17 columns each the padding
+inside the borders is dropped. Complete header fields wrap within the frame on
+narrow terminals. `mc manager` (or `m` at the page prompt) opens the session
+for priorities, blockers and proposals across all programmes. Manager's open
+state is shown below the pipeline, including foreground records from before the
+rename.
 
 Maintenance groups repository measurements beneath their names. Below its
 title it carries the interactive helper's open state and last collection from

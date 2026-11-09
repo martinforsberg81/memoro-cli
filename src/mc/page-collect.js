@@ -92,7 +92,8 @@ import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } f
 import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
 import { gitDirOf } from './repos.js';
-import { PRICES_DATED, estimateCost } from './prices.js';
+import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
+import { landedSection, readRunRows } from './landed.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import {
   REPO_NAMES, RUNNER_MODEL, nowBlock, pidAlive, readCurrents,
@@ -306,9 +307,12 @@ export function runnerSection({
       ...summariseRuns(rows),
       by_kind: dayByKind(rows),
       tokens,
-      cost: estimateCost(tokens, RUNNER_MODEL),
-      model: RUNNER_MODEL,
+      // Each row at its own model's price; rows from before the model column at the runner's.
+      cost: rows.reduce((sum, row) => sum + (rowCost(row, RUNNER_MODEL) ?? 0), 0),
+      unpriced: rows.filter((row) => Number(row.output) > 0 && rowCost(row, RUNNER_MODEL) == null).length,
+      model: 'per model',
       prices_dated: PRICES_DATED,
+      openai_prices_dated: OPENAI_PRICES_DATED,
     },
   };
 }
@@ -1493,7 +1497,9 @@ export async function collectPage({
 
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
-  const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
+  // Read with the current header, so each row keeps its `model` for pricing (landed.js).
+  const daySince = now.getTime() - DAY_MS;
+  const rows = readRunRows(tsv).filter((row) => Date.parse(row.ts) >= daySince);
   const live = liveAreas(run);
 
   const stop = existsSync(join(root, 'runner', 'STOP'));
@@ -1592,6 +1598,8 @@ export async function collectPage({
     }),
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
+    // What landed in the last 24 hours and what each goal took (landed.js).
+    landed: landedSection({ rows: readRunRows(tsv), now }),
     intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
     programmes,
     // File reads only, as DEPLOY's are: the page never runs a read.

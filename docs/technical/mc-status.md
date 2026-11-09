@@ -21,24 +21,40 @@ routing is `src/mc-verbs.js`, and `tests/mc/front-door.test.js` runs it.
 
 ## The cost estimate
 
-`prices.js` is a dated list-price table — `PRICES_DATED = '2026-06'` — with
-cache writes at 2× input and cache reads at 0.1× input when a usage line
-does not say which TTL it wrote (2× is the 1-hour rate, the claude default).
-A write is priced at the TTL it carried — 1.25× input for 5 minutes, 2× for
-1 hour — and since ruling 40 that TTL is the role's (build and review 5m,
-the rest 1h). `streamSummary` sums each message's `usage.cache_creation`
-split (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`) and hands
-it to `estimateCost`, which returns dollars for one usage line, or `null`
-for a model not in the table.
+`prices.js` is a dated list-price table: Anthropic's `PRICES_DATED = '2026-06'`
+and OpenAI's `OPENAI_PRICES_DATED = '2026-11-09'` (standard tier, short
+context, from platform.openai.com/docs/pricing).
+
+The two providers count cached tokens differently, and `estimateCost` follows
+each:
+
+- **Anthropic:** `input_tokens` exclude the cache. Without a TTL split:
+  cache writes at 2× input and cache reads at 0.1× input. A write is priced at the TTL it carried — 1.25× input for 5 minutes, 2× for
+  1 hour — and at 2× when the usage line does not split it (the claude
+  default). Since ruling 40 the TTL is the role's (build and review 5m, the
+  rest 1h). `streamSummary` sums each message's `usage.cache_creation` split
+  (`ephemeral_5m_input_tokens`, `ephemeral_1h_input_tokens`) and hands it to
+  `estimateCost`.
+- **OpenAI:** `input_tokens` include `cached_input_tokens` (runs.tsv's
+  `cache_read` for a codex row), so the uncached part is the difference, and
+  cached input has its own listed price (gpt-6.1-sol $0.10 against $2.00).
+  Codex reports no cache-write tokens; writes are priced as plain input, an
+  underestimate of at most the 1.25× 30-minute write premium.
+
+`estimateCost` returns dollars for one usage line, or `null` for a model not in
+the table. `rowCost` prices one runs.tsv row by its own `model`; a row from
+before the `model` column is priced at the runner's model, `opus`
+(`RUNNER_MODEL`).
 
 Two things are true about the number and both are printed with it:
 
 - **It is a list-price estimate, never what Martin pays.** The subscription's
   quota is the real limit; the page says so and points at `/status`.
-- **The page still aggregates at one model.** It sums usage at the runner's
-  model, `opus` (`RUNNER_MODEL` in `status-collect.js`). Current runs.tsv
-  rows carry their routed model, but `runnerSection` does not yet price that
-  split. A non-Opus session can therefore be mispriced here.
+- **Each session is priced at its own model.** `runnerSection` sums `rowCost`
+  over the day's rows; `day.unpriced` counts rows with tokens whose model has
+  no price. (Until 2026-11-09 every token was priced as Opus input, which put
+  codex's cached input at full price and the day at roughly nine times its
+  list cost.)
 
 The estimate is large and dominated by cache reads: a historical day of about 30 sessions
 comes to roughly $120 list. The number is only summed on the page.

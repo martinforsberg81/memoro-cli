@@ -48,7 +48,6 @@ import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { ageWords } from './page-cache.js';
-import { STAGES, STATUSES } from './goals.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
   KIND_TONE, PR_QUIET_S, PR_TONE, STATE_TONE, clipCell, duration, kindTone, stateTone,
@@ -694,13 +693,26 @@ function dockerLine(lines, c, wide, docker) {
   say(lines, c, wide, 2, parts.join(' · '));
 }
 
-/** Global work and its Manager share one header above programme details. */
+/** The stages drawn as frames, in the order work moves through them. */
+export const PIPELINE = Object.freeze(['proposals', 'draft', 'build', 'review', 'finish', 'merge']);
+
+/** The histogram's bars, lowest to highest. */
+const BARS = '▁▂▃▄▅▆▇█';
+
+/** Counts as one bar each, scaled to the largest; an empty bucket is a space. */
+export function sparkline(counts = []) {
+  const top = Math.max(0, ...counts);
+  return counts.map((n) => (!n || !top ? ' ' : BARS[Math.min(BARS.length - 1, Math.ceil((n / top) * BARS.length) - 1)])).join('');
+}
+
+/**
+ * Hero frame: what mc is, and what came out of it in the last 24 hours
+ * (`data.landed`, landed.js). Where work stands now is the pipeline below it.
+ */
 function headerLines(lines, c, wide, data, version) {
   const room = wide - 6;
   const frame = (text) => lines.push(`  ${c('│', 'grey')} ${text}${' '.repeat(Math.max(0, room - width(text)))} ${c('│', 'grey')}`);
   const rule = (left, right) => lines.push(`  ${c(left + '─'.repeat(wide - 4) + right, 'grey')}`);
-  const statuses = data.programmes?.statuses || {};
-  const proposals = (data.intake?.proposals || 0) + (data.programmes?.programmes || []).reduce((n, group) => n + (group.proposals || 0), 0);
   lines.push('');
   rule('┌', '┐');
   const brand = `MC${version ? `  ${version}` : ''}`;
@@ -720,45 +732,122 @@ function headerLines(lines, c, wide, data, version) {
   };
   const groups = data.programmes?.programmes || [];
   const dormant = data.programmes?.dormant ?? groups.filter(group => group.dormant).length;
+  const lanes = data.runner?.setting?.lanes;
   summary([
     { text: `Programs: ${data.programmes?.active ?? groups.length - dormant} active` },
     { text: `${dormant} dormant`, styles: ['grey'] },
-    { text: `${proposals} proposals`, styles: proposals ? ['yellow'] : ['grey'] },
     { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
+    { text: lanes ? `${(data.runner?.sessions || []).length}/${lanes} lanes` : '', styles: ['grey'] },
+    { text: `deploy ${data.runner?.production?.at?.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/u, ' UTC') || 'none recorded'}`, styles: ['grey'] },
   ]);
-  const sessions = data.runner?.sessions || [];
-  const kinds = ['build', 'review', 'finish', 'mend'];
-  const inFlight = Object.fromEntries(kinds.map(kind => [kind, 0]));
-  for (const session of sessions) {
-    const kind = session.kind || 'unknown';
-    inFlight[kind] = (inFlight[kind] || 0) + 1;
+  const landed = data.landed;
+  if (landed) {
+    const share = landed.measured ? Math.round((landed.first_pass / landed.measured) * 100) : null;
+    summary([
+      { text: `Landed 24 h: ${landed.goals} goals`, styles: landed.goals ? ['green'] : ['grey'] },
+      { text: `${landed.without_goal} without goal` },
+      { text: `${landed.prs} PRs of ${landed.attempts} merge attempts`, styles: ['grey'] },
+      { text: share == null ? '' : `first pass ${share} %` },
+    ]);
+    if (landed.measured) {
+      const cost = landed.cost || {};
+      summary([
+        { text: `Per goal: ${landed.sessions_per_goal} sessions` },
+        { text: cost.median == null ? '' : `cost ${money(cost.median)} median, ${money(cost.total)} total` },
+        { text: cost.unpriced_sessions ? `${cost.unpriced_sessions} sessions unpriced` : '', styles: ['grey'] },
+      ]);
+      const time = landed.time;
+      summary([
+        { text: `Session time per goal: <${time.buckets_min[0]}m ${sparkline(time.histogram)} ${time.buckets_min.at(-2) / 60}h+`, styles: ['cyan'] },
+        { text: `median ${time.median_min} min` },
+        { text: `p25–p75 ${time.p25_min}–${time.p75_min}`, styles: ['grey'] },
+        { text: `p90 ${time.p90_min}`, styles: ['grey'] },
+        { text: `max ${time.max_min}`, styles: ['grey'] },
+      ]);
+    }
   }
-  summary([
-    { text: `${sessions.length} in flight` },
-    ...Object.entries(inFlight).map(([kind, count]) => ({ text: `${count} ${kind}`, styles: kindTone(kind) })),
-  ]);
-  summary([
-    { text: `Goals: ${data.programmes?.count ?? groups.reduce((n, group) => n + (group.goals?.length || 0), 0)} total` },
-    ...[...new Set([...STATUSES, ...Object.keys(statuses)])].map(status => ({
-      text: `${status === STATUSES[0] ? 'status: ' : ''}${statuses[status] || 0} ${status}`,
-      styles: statuses[status] ? statusTone(status) : ['grey'],
-    })),
-  ]);
-  const stages = Object.fromEntries(STAGES.map(stage => [stage, 0]));
-  for (const goal of groups.flatMap(group => group.goals || [])) {
-    const stage = goal.stage || 'unknown';
-    stages[stage] = (stages[stage] || 0) + 1;
-  }
-  summary([
-    ...Object.entries(stages).map(([stage, count]) => ({ text: `${stage === STAGES[0] ? 'Stage: ' : ''}${count} ${stage}`, styles: count ? statusTone(stage) : ['grey'] })),
-  ]);
-  summary([
-    ...kinds.map(kind => ({ text: `${kind === kinds[0] ? 'Throughput 24 h: ' : ''}${data.runner?.day?.by_kind?.[kind]?.sessions || 0} ${kind}`, styles: kindTone(kind) })),
-    { text: `${(data.merges?.repos || []).reduce((n, repo) => n + (repo.day_count || 0), 0)} merges`, styles: ['green'] },
-    { text: `latest deploy: ${data.runner?.production?.at?.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/u, ' UTC') || 'none recorded'}`, styles: ['grey'] },
-  ]);
   rule('└', '┘');
+  pipelineLines(lines, c, wide, data);
   lines.push('');
+}
+
+/**
+ * Where work stands now: one frame per stage, its count on the first line and
+ * one mark per session working in it on the second. Martin (⚑) and blocked (⊘)
+ * goals are flagged on the count line of the stage they stand in.
+ */
+export function pipelineStages(data) {
+  const groups = data.programmes?.programmes || [];
+  const goals = groups.flatMap(group => group.goals || []);
+  const sessions = data.runner?.sessions || [];
+  const proposals = (data.intake?.proposals || 0) + groups.reduce((n, group) => n + (group.proposals || 0), 0);
+  const interactive = Object.values(data.sessions?.planning_sessions || {}).reduce((n, list) => n + (list?.length || 0), 0);
+  const ofKind = (kind) => sessions.filter(session => session.kind === kind).length;
+  const rounds = (data.merges?.repos || []).reduce((n, repo) => n + (repo.landings?.length || 0), 0);
+  return PIPELINE.map((stage) => {
+    const here = goals.filter(goal => (goal.stage || 'unknown') === stage);
+    const marks = stage === 'proposals' ? [{ mark: '●', count: interactive, styles: kindTone('plan') }]
+      : stage === 'draft' ? [{ mark: '●', count: ofKind('plan'), styles: kindTone('plan') }]
+        : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: kindTone('gate') }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
+          : [{ mark: '●', count: ofKind(stage), styles: kindTone(stage) }];
+    return {
+      stage,
+      count: stage === 'proposals' ? proposals : here.length,
+      martin: here.filter(goal => goal.status === 'Martin').length,
+      blocked: here.filter(goal => goal.status === 'blocked').length,
+      marks,
+    };
+  });
+}
+
+/** Narrowest frame: `149 proposals` between its borders, no padding. */
+const FRAME_MIN = 15;
+
+function pipelineLines(lines, c, wide, data) {
+  const stages = pipelineStages(data);
+  const room = wide - 2;
+  // One row of frames joined by arrows when they fit, else three to a row.
+  const perRow = room >= stages.length * FRAME_MIN + stages.length - 1 ? stages.length : 3;
+  // The frames fill the hero frame's width; the first ones take the remainder.
+  const base = Math.floor((room - (perRow - 1)) / perRow);
+  const spare = room - (perRow - 1) - base * perRow;
+  // A space inside each border while the frame has room for it.
+  const gap = base >= FRAME_MIN + 2 ? ' ' : '';
+  const tone = (stage) => (stage === 'proposals' ? ['yellow'] : stage === 'draft' ? kindTone('plan') : statusTone(stage));
+  for (let at = 0; at < stages.length; at += perRow) {
+    const row = stages.slice(at, at + perRow);
+    const top = []; const counts = []; const marks = []; const bottom = [];
+    row.forEach((item, index) => {
+      const outer = base + (index < spare ? 1 : 0);
+      const inner = outer - 2 - 2 * gap.length;
+      const cell = (parts) => {
+        const text = paint(c, parts, inner);
+        return `${c('│', 'grey')}${gap}${text}${' '.repeat(Math.max(0, inner - width(text)))}${gap}${c('│', 'grey')}`;
+      };
+      const arrow = index === row.length - 1 ? '' : ' ';
+      top.push(c(`┌${'─'.repeat(outer - 2)}┐`, 'grey') + arrow);
+      bottom.push(c(`└${'─'.repeat(outer - 2)}┘`, 'grey') + arrow);
+      const flags = [
+        item.martin ? { text: ` ⚑${item.martin}`, styles: ['yellow'] } : null,
+        item.blocked ? { text: ` ⊘${item.blocked}`, styles: ['red'] } : null,
+      ].filter(Boolean);
+      counts.push(cell([{ text: `${item.count} ${item.stage}`, styles: item.count ? tone(item.stage) : ['grey'] }, ...flags])
+        + (index === row.length - 1 ? '' : c('▶', 'grey')));
+      const shown = [];
+      let used = 0;
+      for (const { mark, count, styles } of item.marks) {
+        if (!count) continue;
+        const sep = used ? 1 : 0;
+        // Marks up to the room; past it, the marks that fit and the count.
+        const fits = used + sep + count <= inner;
+        const text = fits ? mark.repeat(count) : `${mark}×${count}`;
+        shown.push({ text: `${sep ? ' ' : ''}${text}`, styles });
+        used += sep + text.length;
+      }
+      marks.push(cell(shown) + arrow);
+    });
+    for (const line of [top, counts, marks, bottom]) lines.push(`  ${line.join('')}`);
+  }
 }
 
 /* ------------------------------------------------------------------- page */
