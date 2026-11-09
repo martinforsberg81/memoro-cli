@@ -657,7 +657,25 @@ test('a scratch directory that cannot be made is said, and the session starts wi
 
 test('the session end: the end marker and finalized logs are written first, then this session\'s own scratch is swept, once', async () => {
   const f = goalFixture({ alpha: {} });
+  const events = [];
+  const write = f.deps.write;
+  f.deps.write = (path, text) => {
+    write(path, text);
+    if (path.endsWith('.jsonl') && path.includes('/runner/log/')) events.push('finalized logs');
+  };
+  const writeJson = f.deps.writeJson;
+  f.deps.writeJson = (path, value) => {
+    writeJson(path, value);
+    if (path.endsWith('/.mc-scratch.json') && value.ended) events.push('end marker');
+  };
+  f.sweepHook.answer = (scratch) => {
+    events.push('scoped cleanup');
+    const stem = scratch.split('/').at(-1);
+    assert.ok(f.files[`/w/runner/log/${stem}.jsonl`], 'finalized log bytes exist before cleanup');
+    return { removed: [], kept: [] };
+  };
   await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual(events, ['end marker', 'finalized logs', 'scoped cleanup']);
   assert.equal(f.calls.sessions.length, 1);
   const scratch = f.calls.sessions[0].env.MC_SCRATCH;
   assert.deepEqual(f.calls.sweeps, [{ scratch, ended: true, logged: true }], 'only this session, after its end marker and its finalized log');

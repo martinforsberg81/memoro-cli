@@ -18,7 +18,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { open as openHandle } from 'node:fs/promises';
-import { basename, dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { once } from 'node:events';
 
 import { writeJsonAtomic } from './atomic-write.js';
@@ -117,6 +117,14 @@ export const realGit = {
 /* ----------------------------------------------------------- small helpers */
 
 const lstatOrNull = (path) => { try { return lstatSync(path); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; } };
+function plainAncestors(path) {
+  for (let cursor = resolve(path); ; cursor = dirname(cursor)) {
+    const stat = lstatOrNull(cursor);
+    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error('a scratch ancestor is a link or not a directory');
+    if (dirname(cursor) === cursor) break;
+  }
+}
+
 const sha256 = (text) => createHash('sha256').update(text).digest('hex');
 const digestOf = (value) => sha256(JSON.stringify(value));
 
@@ -208,6 +216,8 @@ export function ownerOf(scratch, env = process.env, { open = true } = {}) {
   if (!scratch) throw new Error('MC_SCRATCH is not set — exports belong to a runner session\'s scratch directory');
   const stem = basename(scratch);
   const expected = join(runnerScratchDir(env), stem);
+  if (resolve(scratch) !== expected) throw new Error('MC_SCRATCH does not name the exact runner directory');
+  plainAncestors(expected);
   const stat = lstatOrNull(expected);
   if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) throw new Error('MC_SCRATCH is not a runner scratch directory');
   if (realpathSync(scratch) !== realpathSync(expected)) throw new Error('MC_SCRATCH does not name the runner scratch directory it was given');
@@ -223,6 +233,7 @@ const chains = new Map();
 
 /** One session's create/reuse/release at a time: in this process, and across processes by a lock file. */
 export async function withSessionLock(stemDir, fn) {
+  plainAncestors(join(stemDir, RECEIPTS_DIR));
   const previous = chains.get(stemDir) ?? Promise.resolve();
   let finish;
   const current = new Promise((resolve) => { finish = resolve; });
@@ -248,6 +259,7 @@ export async function withSessionLock(stemDir, fn) {
  */
 export function withSessionLockSync(stemDir, fn) {
   const dir = join(stemDir, RECEIPTS_DIR);
+  plainAncestors(dir);
   if (!lstatOrNull(dir)) return fn();
   const lock = join(dir, '.lock');
   acquireFileLock(lock);
@@ -273,17 +285,18 @@ function acquireFileLock(lock) {
 const receiptPath = (stemDir, id) => join(stemDir, RECEIPTS_DIR, `${id}.json`);
 
 /** Each `<id>.json` under `.mc-exports/`, read but not verified. Names that are not a valid id are not receipts. */
-export function listReceipts(stemDir) {
+export function listReceipts(stemDir, onlyId = null) {
   const dir = join(stemDir, RECEIPTS_DIR);
   let names;
-  try { names = readdirSync(dir); } catch { return []; }
+  try { plainAncestors(dir); names = onlyId === null ? readdirSync(dir) : [`${onlyId}.json`]; } catch { return []; }
   const out = [];
   for (const name of names.sort()) {
     const match = /^(.+)\.json$/u.exec(name);
     if (!match || !ID.test(match[1])) continue;
     const path = join(dir, name);
     try {
-      const stat = lstatSync(path);
+      const stat = lstatOrNull(path);
+      if (!stat && onlyId !== null) continue;
       if (!stat.isFile()) throw new Error('receipt is not a regular file');
       const raw = readFileSync(path, 'utf8');
       out.push({ id: match[1], path, raw, receipt: JSON.parse(raw), error: null });
@@ -395,11 +408,16 @@ function attachmentIdentity(target) {
  * commit say. `allowMissing` is for a removal that already started: files may
  * be gone, but nothing may be added or changed. Returns `{ ok, why, bytes }`.
  */
-export function verifyExport({ stemDir, receipt, git, repos, allowMissing = false }) {
+export function verifyExport({ stemDir, id, receipt, git, repos, allowMissing = false }) {
   const bad = (why) => ({ ok: false, why, bytes: 0 });
-  const id = receipt?.id;
+  if (!ID.test(id || '')) return bad('no requested export id');
+  try { plainAncestors(stemDir); plainAncestors(join(stemDir, RECEIPTS_DIR)); } catch (error) { return bad(error.message); }
   const shape = validReceipt(receipt, id);
   if (shape) return bad(shape);
+  if (receipt.owner.stem !== basename(stemDir)) return bad('receipt names another scratch stem');
+  let canonical;
+  try { canonical = normalizePaths(receipt.paths); } catch (error) { return bad(error.message); }
+  if (JSON.stringify(canonical) !== JSON.stringify(receipt.paths)) return bad('receipt paths are not canonical');
   const expectKey = exportKey(receipt.repo.name, receipt.commit, receipt.paths);
   if (receipt.key !== expectKey || receipt.id !== exportIdOf(receipt.commit, expectKey)) return bad('receipt key does not match its source and selection');
   // The owner: the same session, the same start, and the same directory the runner made.
@@ -410,7 +428,7 @@ export function verifyExport({ stemDir, receipt, git, repos, allowMissing = fals
   }
   const root = lstatOrNull(stemDir);
   if (!root || !root.isDirectory() || root.isSymbolicLink()) return bad('the scratch directory is not a plain directory');
-  if (root.dev !== receipt.owner.root.dev || root.ino !== receipt.owner.root.ino) return bad('the scratch directory was replaced');
+  if (root.dev !== receipt.owner.root?.dev || root.ino !== receipt.owner.root?.ino || root.birthtimeMs !== receipt.owner.root?.birthtimeMs) return bad('the scratch directory was replaced');
   const repo = (repos || []).find((candidate) => candidate.name === receipt.repo.name);
   if (!repo) return bad(`${receipt.repo.name} is no longer a configured repository`);
   let repoReal = null;
@@ -434,6 +452,8 @@ export function verifyExport({ stemDir, receipt, git, repos, allowMissing = fals
   if (stat.dev !== receipt.export.dev || stat.ino !== receipt.export.ino) return bad('the export directory was replaced');
   // The content, against the inventory: exact names and modes, every file's id.
   const attached = receipt.attachment ? 'node_modules' : null;
+  const attachedStat = attached ? lstatOrNull(join(exportDir, attached)) : null;
+  if (attachedStat && !attachedStat.isSymbolicLink()) return bad('node_modules is a real directory, not the recorded link');
   const tree = walkTree(exportDir);
   const wanted = new Map(claimed.map((entry) => [entry.path, entry]));
   for (const rel of tree.links.keys()) {
@@ -542,8 +562,10 @@ export async function createExport({
     if (existing) {
       if (existing.error) throw new Error(`export ${id} has an unreadable receipt (${existing.error}) — it is kept`);
       const prior = existing.receipt;
+      const shape = validReceipt(prior, id);
+      if (shape) throw new Error(`export ${id} has an invalid receipt (${shape}) — it is kept`);
       if (prior.state === 'ready' && prior.key === key && prior.owner.session === owner.marker.session && prior.owner.started === owner.marker.started) {
-        const proof = verifyExport({ stemDir: owner.dir, receipt: prior, git, repos });
+        const proof = verifyExport({ stemDir: owner.dir, id, receipt: prior, git, repos });
         if (!proof.ok) throw new Error(`export ${id} changed (${proof.why}) — it is kept with its receipt and not overwritten`);
         return { id, path: dir, reused: true, receipt: prior };
       }
@@ -579,7 +601,7 @@ export async function createExport({
         inventory, bytes, inventory_digest: digestOf(inventory), attachment,
       };
       // The tree is checked against what was just written before it is published as ready.
-      const proof = verifyExport({ stemDir: owner.dir, receipt, git, repos });
+      const proof = verifyExport({ stemDir: owner.dir, id, receipt, git, repos });
       if (!proof.ok) throw new Error(`new export did not verify: ${proof.why}`);
       writeJsonAtomic(receiptPath(owner.dir, id), receipt);
       return { id, path: dir, reused: false, receipt };
@@ -631,13 +653,22 @@ export function exportDecision(item) {
  * the tree. Callers hold the session lock (`withSessionLockSync`). The receipt says `removing` first and `released` after, so a
  * partial removal is kept visible and retried safely. Returns `{ ok, why }`.
  */
-export function removeExport({ stemDir, receipt, identity, explicit = false, at = Date.now() }) {
-  const p = receiptPath(stemDir, receipt.id);
-  const exportDir = join(stemDir, EXPORTS_DIR, receipt.id);
+export function removeExport({ stemDir, id, identity, explicit = false, git = realGit, repos,
+  standing, openIn, runnerGone, excludePid = null, clock = Date.now, removeTree = rmTree }) {
   try {
-    // The receipt as it is on disk now must be the one the decision read.
-    const now = sha256(readFileSync(p, 'utf8'));
-    if (identity && now !== identity.receipt_sha256) return { ok: false, why: 're-check: the receipt changed since the list' };
+    if (!ID.test(id || '')) return { ok: false, why: 'no requested export id' };
+    // Candidate-scoped, under the caller's session lock, after any earlier
+    // candidate's inspection/removal. Never trust the inventory-time receipt.
+    const at = clock();
+    const [item] = gatherExports({ stemDir, id, git, repos, standing, openIn, runnerGone, explicit, excludePid });
+    const verdict = item && exportDecision(item);
+    if (!verdict?.target) return { ok: false, why: `re-check: ${verdict?.why || 'receipt disappeared'}` };
+    if (!identity || JSON.stringify(verdict.identity) !== JSON.stringify(identity)) {
+      return { ok: false, why: 're-check: the receipt or export identity changed since the list' };
+    }
+    const receipt = item.receipt;
+    const p = receiptPath(stemDir, id);
+    const exportDir = join(stemDir, EXPORTS_DIR, id);
     writeJsonAtomic(p, { ...receipt, state: 'removing', removing: { at: new Date(at).toISOString(), explicit } });
     if (receipt.attachment) {
       const link = join(exportDir, 'node_modules');
@@ -647,8 +678,8 @@ export function removeExport({ stemDir, receipt, identity, explicit = false, at 
         unlinkSync(link);
       }
     }
-    if (!rmTree(exportDir)) return { ok: false, why: 'partial removal: the export directory could not be removed; it is kept and retried' };
-    writeJsonAtomic(p, { ...receipt, state: 'released', released: { at: new Date(at).toISOString(), explicit, bytes: receipt.bytes || 0 } });
+    if (!removeTree(exportDir)) return { ok: false, why: 'partial removal: the export directory could not be removed; it is kept and retried' };
+    writeJsonAtomic(p, { ...receipt, state: 'released', released: { at: new Date(clock()).toISOString(), explicit, bytes: receipt.bytes || 0 } });
     return { ok: true, why: null };
   } catch (error) {
     return { ok: false, why: `partial removal: ${String(error?.message || error).split('\n')[0].slice(0, 160)}` };
@@ -656,13 +687,13 @@ export function removeExport({ stemDir, receipt, identity, explicit = false, at 
 }
 
 /** Facts for each export under one scratch directory, gathered without deciding: what tidy reads once for its plan. */
-export function gatherExports({ stemDir, env = process.env, git = realGit, repos = [], standing, openIn, runnerGone = () => null, explicit = false, excludePid = null }) {
+export function gatherExports({ stemDir, id = null, env = process.env, git = realGit, repos = [], standing, openIn, runnerGone = () => null, explicit = false, excludePid = null }) {
   const stem = basename(stemDir);
   let marker = null;
   let markerError = null;
   try { marker = readMarker(stemDir); } catch (error) { markerError = String(error?.message || error).split('\n')[0].slice(0, 200); }
   const items = [];
-  for (const entry of listReceipts(stemDir)) {
+  for (const entry of listReceipts(stemDir, id)) {
     const item = {
       id: entry.id, path: join(stemDir, EXPORTS_DIR, entry.id), stem, stem_dir: stemDir, receipt_path: entry.path, raw: entry.raw,
       receipt: entry.receipt, error: entry.error, marker: null, explicit, ended: false, live: null, open: null, verify: null, bytes: 0,
@@ -678,7 +709,7 @@ export function gatherExports({ stemDir, env = process.env, git = realGit, repos
     try {
       item.live = standing(item.path, { excludePid });
       item.open = item.live === null ? null : openIn(item.path);
-      item.verify = verifyExport({ stemDir, receipt: entry.receipt, git, repos, allowMissing: entry.receipt.state === 'removing' });
+      item.verify = verifyExport({ stemDir, id: entry.id, receipt: entry.receipt, git, repos, allowMissing: entry.receipt.state === 'removing' });
       item.bytes = entry.receipt.bytes || 0;
     } catch (error) {
       item.error = `error: ${String(error?.message || error).split('\n')[0].slice(0, 200)}`;
@@ -693,11 +724,11 @@ export function gatherExports({ stemDir, env = process.env, git = realGit, repos
  * receipt, then the removal re-reads the receipt and its identity and removes
  * only what that plan still describes. Returns what went and what stayed.
  */
-export function sweepSession({ stemDir, env = process.env, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null }) {
-  return withSessionLockSync(stemDir, () => sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid }));
+export function sweepSession({ stemDir, env = process.env, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null, clock = Date.now, removeTree = rmTree }) {
+  return withSessionLockSync(stemDir, () => sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid, clock, removeTree }));
 }
 
-function sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid }) {
+function sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid, clock, removeTree }) {
   const removed = [];
   const kept = [];
   const items = gatherExports({ stemDir, env, git, repos, standing, openIn, excludePid });
@@ -707,7 +738,7 @@ function sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludeP
     const verdict = exportDecision(item);
     if (!verdict.target) { kept.push({ id: item.id, why: verdict.why }); continue; }
     writeJsonAtomic(join(stemDir, RECEIPTS_DIR, `${item.id}.plan.json`), { schema: EXPORT_SCHEMA, id: item.id, at: new Date(now).toISOString(), identity: verdict.identity, why: verdict.why });
-    const outcome = removeExport({ stemDir, receipt: item.receipt, identity: verdict.identity, at: now });
+    const outcome = removeExport({ stemDir, id: item.id, identity: verdict.identity, git, repos, standing, openIn, excludePid, clock, removeTree });
     if (outcome.ok) removed.push({ id: item.id, bytes: verdict.bytes, why: verdict.why });
     else kept.push({ id: item.id, why: outcome.why });
   }
@@ -721,14 +752,14 @@ function sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludeP
  * and removes nothing. `apply` acts only on that saved plan: the receipt and
  * the identity it names must still be the ones the fresh decision finds.
  */
-export function releaseExport({ scratch, env = process.env, id, apply = false, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null }) {
+export function releaseExport({ scratch, env = process.env, id, apply = false, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null, clock = Date.now, removeTree = rmTree }) {
   if (!ID.test(id || '')) throw new Error(`not an export id: ${id}`);
   const owner = ownerOf(scratch, env, { open: false });
-  return withSessionLockSync(owner.dir, () => releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env }));
+  return withSessionLockSync(owner.dir, () => releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env, clock, removeTree }));
 }
 
-function releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env }) {
-  const items = gatherExports({ stemDir: owner.dir, env, git, repos, standing, openIn, explicit: true, excludePid });
+function releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env, clock, removeTree }) {
+  const items = gatherExports({ stemDir: owner.dir, id, env, git, repos, standing, openIn, explicit: true, excludePid });
   const item = items.find((candidate) => candidate.id === id);
   if (!item) throw new Error(`no export ${id} in this session`);
   const verdict = item.error ? { target: false, why: item.error } : exportDecision(item);
@@ -743,7 +774,7 @@ function releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, ex
   if (JSON.stringify(plan.identity) !== JSON.stringify(verdict.identity)) {
     return { id, path: item.path, applied: false, target: false, why: 're-check: the export changed since its preview; it is kept' };
   }
-  const outcome = removeExport({ stemDir: owner.dir, receipt: item.receipt, identity: verdict.identity, explicit: true, at: now });
+  const outcome = removeExport({ stemDir: owner.dir, id, identity: plan.identity, explicit: true, git, repos, standing, openIn, excludePid, clock, removeTree });
   if (outcome.ok) { try { unlinkSync(planPath); } catch { /* the plan is evidence, not data */ } }
   return { id, path: item.path, applied: outcome.ok, target: true, why: outcome.ok ? verdict.why : outcome.why, bytes: item.bytes || 0 };
 }

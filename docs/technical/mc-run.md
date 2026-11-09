@@ -142,7 +142,8 @@ The end follows a fixed order. The runner writes the end marker, then the
 session's finalized logs (`writeSessionLogs`), and only then awaits
 `mc scratch sweep` for this session's scratch directory, in a child process
 bounded at 120 s, so the event loop is not held. The sweep removes this
-session's own registered source exports whose trees still verify
+session's own registered source exports, rechecking each candidate immediately
+before removal with fresh activity, ownership, source and content evidence
 (`mc-tidy.md`, Registered source exports); it never scans other scratch,
 evidence, worktrees or caches. The same rule runs for a successful, failed or
 interrupted-but-resolved session. A refused or failed sweep is recorded as

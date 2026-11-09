@@ -128,7 +128,7 @@ describe('--days', () => {
  * the repository that owns a compare tree.
  */
 function machine() {
-  const home = mkdtempSync(join(tmpdir(), 'mc-tidy-'));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'mc-tidy-')));
   const work = join(home, 'mc');
   const claude = join(home, 'claude');
   const projects = join(claude, 'projects');
@@ -2292,4 +2292,38 @@ describe('(S) registered source exports (scratch.js) in the routine and pressure
       assert.equal(readFileSync(join(contentMade.path, 'src', 'a.js'), 'utf8'), 'Xommitted a\n', 'the changed bytes are not overwritten');
     } finally { x.m.cleanup(); }
   });
+  it('ordinary and pressure apply recheck content, ownership and cwd after another candidate was inspected', async () => {
+    for (const pressure of [false, true]) {
+      for (const change of ['content', 'owner', 'cwd', 'unknown-open']) {
+        const x = exportMachine();
+        try {
+          const firstDir = x.session('a-first'); const first = await x.exportIn(firstDir); x.end(firstDir);
+          const secondDir = x.session('z-second'); const second = await x.exportIn(secondDir); x.end(secondDir);
+          const preview = runTidy({ pressure, ...x.exportDoors() });
+          assert.deepEqual(targetsOf(preview.list, 'scratch-export'), [first.path, second.path].sort());
+          let changed = false;
+          const outcome = applyTidy({ listPath: preview.listPath, pressure, ...x.exportDoors({
+            openIn: (path) => {
+              if (path === second.path && !changed) {
+                changed = true;
+                if (change === 'content') writeFileSync(join(first.path, 'src/a.js'), 'NEW USER EVIDENCE');
+                if (change === 'owner') {
+                  const p = join(firstDir, '.mc-scratch.json');
+                  writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p)), session: 'goal:mc/replacement' }));
+                }
+                if (change === 'cwd') x.m.cwds.push({ pid: 81, cwd: join(first.path, 'src') });
+              }
+              return change === 'unknown-open' && changed && path === first.path ? null : [];
+            },
+          }) });
+          assert.equal(present(join(first.path, 'src/a.js')), true, `${pressure}/${change}: changed or occupied candidate survives`);
+          assert.equal(readFileSync(join(first.path, 'src/a.js'), 'utf8'), change === 'content' ? 'NEW USER EVIDENCE' : 'committed a\n');
+          assert.deepEqual(outcome.applied.filter((item) => item.kind === 'scratch-export' || [first.path, second.path].includes(item.path)).map((item) => [item.path, item.ok]).sort(), [[first.path, false], [second.path, true]].sort());
+          assert.equal(readFileSync(join(firstDir, 'gate.log'), 'utf8'), 'red');
+          assert.equal(present(second.path), false);
+        } finally { x.m.cleanup(); }
+      }
+    }
+  });
+
 });

@@ -10,7 +10,7 @@
  * that trusts a receipt without the tree it describes.
  */
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, cpSync, renameSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -239,6 +239,81 @@ describe('scratch exports: explicit release', () => {
     } finally { m.cleanup(); }
   });
 
+  it('a forged filename/payload id cannot redirect release or sweep to an unselected export', async () => {
+    const m = machine();
+    try {
+      const dir = m.session('forged-id');
+      const a = await m.create(dir, { paths: ['src/a.js'] });
+      const b = await m.create(dir, { paths: ['run.sh'] });
+      const aReceipt = join(dir, RECEIPTS_DIR, `${a.id}.json`);
+      writeFileSync(aReceipt, read(join(dir, RECEIPTS_DIR, `${b.id}.json`)));
+      const base = { scratch: dir, env: m.env, id: a.id, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen };
+      const preview = releaseExport(base);
+      const applied = releaseExport({ ...base, apply: true });
+      assert.equal(exists(b.path), true, 'an unselected export must survive release of another id');
+      assert.equal(exists(a.path), true, 'the forged selected export stays too');
+      assert.equal(preview.target, false);
+      assert.equal(applied.applied, false);
+      assert.match(preview.why, /another export/u);
+      // Sweep sees only the forged filename; B is now unregistered and must stay.
+      unlinkSync(join(dir, RECEIPTS_DIR, `${b.id}.json`));
+      const marker = join(dir, '.mc-scratch.json');
+      writeFileSync(marker, JSON.stringify({ ...JSON.parse(read(marker)), ended: '2026-11-09T09:00:00Z' }));
+      const sweep = sweepSession({ ...base, stemDir: dir });
+      assert.deepEqual(sweep.removed, []);
+      assert.equal(read(join(b.path, 'run.sh')), '#!/bin/sh\necho committed\n');
+      assert.equal(read(join(a.path, 'src/a.js')), 'committed a, second\n');
+    } finally { m.cleanup(); }
+  });
+
+  it('explicit release inspects only its selected receipt and tree, never sibling contents', async () => {
+    const m = machine();
+    try {
+      const dir = m.session('scoped');
+      const a = await m.create(dir, { paths: ['src/a.js'] });
+      const b = await m.create(dir, { paths: ['run.sh'] });
+      const base = { scratch: dir, env: m.env, id: a.id, git: m.gitBoundary, repos: m.repos,
+        standing: (path) => { assert.equal(path, a.path, 'never inspect the sibling'); return []; }, openIn: nothingOpen };
+      assert.equal(releaseExport(base).target, true);
+      assert.equal(releaseExport({ ...base, apply: true }).applied, true);
+      assert.equal(exists(a.path), false);
+      assert.equal(read(join(b.path, 'run.sh')), '#!/bin/sh\necho committed\n');
+    } finally { m.cleanup(); }
+  });
+
+  it('sweep rechecks each candidate after sibling inspection, preserving newly changed evidence and using fresh activity and time', async () => {
+    const m = machine();
+    try {
+      const dir = m.session('sweep-race');
+      const exports = [await m.create(dir, { paths: ['src/a.js'] }), await m.create(dir, { paths: ['run.sh'] })].sort((a, b) => a.id.localeCompare(b.id));
+      const [first, second] = exports;
+      const file = join(first.path, first.receipt.inventory[0].path);
+      const marker = join(dir, '.mc-scratch.json');
+      writeFileSync(marker, JSON.stringify({ ...JSON.parse(read(marker)), ended: '2026-11-09T09:00:00Z' }));
+      let changed = false;
+      let time = Date.parse('2026-11-09T10:00:00Z');
+      const base = { stemDir: dir, env: m.env, git: m.gitBoundary, repos: m.repos, standing: nothingStands,
+        openIn: (path) => {
+          if (path === second.path && !changed) { writeFileSync(file, 'NEW USER EVIDENCE'); changed = true; }
+          return [];
+        }, clock: () => { time += 1000; return time; } };
+      const outcome = sweepSession(base);
+      assert.equal(exists(file), true, 'changed content must survive deletion-time recheck');
+      assert.equal(read(file), 'NEW USER EVIDENCE');
+      assert.deepEqual(outcome.removed.map((item) => item.id), [second.id]);
+      assert.match(outcome.kept.find((item) => item.id === first.id).why, /changed/u);
+      const released = JSON.parse(read(join(dir, RECEIPTS_DIR, `${second.id}.json`)));
+      assert.equal(released.released.at, new Date(time).toISOString());
+      // Restore committed bytes, then let activity appear only at deletion.
+      writeFileSync(file, first.receipt.inventory[0].path === 'run.sh' ? '#!/bin/sh\necho committed\n' : 'committed a, second\n');
+      let inspections = 0;
+      const busy = sweepSession({ ...base, openIn: () => ++inspections === 1 ? [] : [81] });
+      assert.deepEqual(busy.removed, []);
+      assert.match(busy.kept.find((item) => item.id === first.id).why, /process 81/u);
+      assert.equal(exists(file), true);
+    } finally { m.cleanup(); }
+  });
+
   it('a dependency link is unlinked without following it: its target and its contents survive', async () => {
     const m = machine();
     try {
@@ -305,6 +380,7 @@ describe('scratch exports: explicit release', () => {
       const stale = releaseExport({ ...base, apply: true });
       assert.equal(stale.applied, false);
       assert.match(stale.why, /missing|changed|re-check|content/u);
+      assert.equal(exists(join(made.path, 'src', 'sub', 'b.txt')), true, 'changed evidence must survive stale apply');
       assert.equal(read(join(made.path, 'src', 'sub', 'b.txt')), 'changed after the preview\n', 'the changed file survives');
       writeFileSync(join(made.path, 'src', 'sub', 'b.txt'), 'committed b\n');
       releaseExport({ ...base });
@@ -316,23 +392,80 @@ describe('scratch exports: explicit release', () => {
     } finally { m.cleanup(); }
   });
 
-  it('a removal that stopped part way is kept visible and finished on retry; a file added in the meantime still keeps it', async () => {
+  it('permission and partial filesystem removal failures leave visible removing receipts and retry without losing evidence', async () => {
     const m = machine();
     try {
-      const dir = m.session('s32', { ended: undefined });
-      const made = await m.create(dir);
-      const base = { scratch: dir, env: m.env, id: made.id, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen };
-      // What a removal that stopped after its first file leaves: state `removing`, one file gone.
-      const receipt = JSON.parse(read(join(dir, RECEIPTS_DIR, `${made.id}.json`)));
-      writeFileSync(join(dir, RECEIPTS_DIR, `${made.id}.json`), JSON.stringify({ ...receipt, state: 'removing' }, null, 2));
-      unlinkSync(join(made.path, 'run.sh'));
-      releaseExport({ ...base });
-      assert.equal(releaseExport({ ...base, apply: true }).applied, true, 'the retry finishes');
-      assert.equal(exists(made.path), false);
-      const again = await m.create(dir, { ref: m.first, paths: ['src/a.js'] });
-      writeFileSync(join(again.path, 'src', 'extra.txt'), 'x');
-      writeFileSync(join(dir, RECEIPTS_DIR, `${again.id}.json`), JSON.stringify({ ...JSON.parse(read(join(dir, RECEIPTS_DIR, `${again.id}.json`))), state: 'removing' }));
-      assert.match(releaseExport({ ...base, id: again.id }).why, /added to the export/u, 'added content keeps even a removing export');
+      for (const partial of [false, true]) {
+        const dir = m.session(`failure-${partial}`);
+        const made = await m.create(dir);
+        writeFileSync(join(dir, 'gate.log'), 'preserve evidence');
+        const base = { scratch: dir, env: m.env, id: made.id, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen };
+        releaseExport(base);
+        const failed = releaseExport({ ...base, apply: true, removeTree: (path) => {
+          assert.equal(path, made.path);
+          assert.equal(JSON.parse(read(join(dir, RECEIPTS_DIR, `${made.id}.json`))).state, 'removing');
+          if (partial) unlinkSync(join(path, 'run.sh'));
+          throw Object.assign(new Error('EACCES: fixture removal denied'), { code: 'EACCES' });
+        } });
+        assert.equal(failed.applied, false, 'an actual failed apply is visible');
+        assert.match(failed.why, /partial removal: EACCES/u);
+        assert.equal(exists(made.path), true);
+        assert.equal(exists(join(made.path, 'run.sh')), !partial);
+        assert.equal(read(join(made.path, 'src/a.js')), 'committed a, second\n');
+        assert.equal(JSON.parse(read(join(dir, RECEIPTS_DIR, `${made.id}.json`))).state, 'removing');
+        assert.equal(read(join(dir, 'gate.log')), 'preserve evidence');
+        // Added evidence after a partial failure blocks the retry as well.
+        writeFileSync(join(made.path, 'new-evidence'), 'keep');
+        assert.match(releaseExport(base).why, /added to the export/u);
+        assert.equal(read(join(made.path, 'new-evidence')), 'keep');
+        unlinkSync(join(made.path, 'new-evidence'));
+        assert.equal(releaseExport(base).target, true, 'a new preview reconciles remaining files');
+        assert.equal(releaseExport({ ...base, apply: true }).applied, true);
+        assert.equal(exists(made.path), false);
+        assert.equal(JSON.parse(read(join(dir, RECEIPTS_DIR, `${made.id}.json`))).state, 'released');
+        assert.equal(read(join(dir, 'gate.log')), 'preserve evidence');
+      }
+    } finally { m.cleanup(); }
+  });
+
+  it('preview replacements of root, export, generation, ancestors and dependency identity retain every candidate and outside byte', async () => {
+    const m = machine();
+    try {
+      for (const kind of ['root', 'export', 'generation', 'ancestor', 'receipt-ancestor', 'attachment', 'link', 'local-deps', 'source-conflict']) {
+        const dir = m.session(`replace-${kind}`);
+        const deps = join(m.root, `deps-${kind}`);
+        mkdirSync(deps); writeFileSync(join(deps, DEPS_MARK), '{}'); writeFileSync(join(deps, 'unique'), 'outside dependency bytes');
+        const made = await m.create(dir, { attachDeps: deps });
+        const base = { scratch: dir, env: m.env, id: made.id, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen };
+        releaseExport(base);
+        let expected;
+        if (kind === 'root') { renameSync(dir, `${dir}-old`); cpSync(`${dir}-old`, dir, { recursive: true, verbatimSymlinks: true }); expected = /scratch directory was replaced/u; }
+        if (kind === 'export') { renameSync(made.path, `${made.path}-old`); cpSync(`${made.path}-old`, made.path, { recursive: true, verbatimSymlinks: true }); expected = /export directory was replaced/u; }
+        if (kind === 'generation') {
+          const p = join(dir, RECEIPTS_DIR, `${made.id}.json`);
+          writeFileSync(p, JSON.stringify({ ...JSON.parse(read(p)), generation: 2 })); expected = /changed since its preview/u;
+        }
+        if (kind === 'ancestor') { renameSync(join(dir, EXPORTS_DIR), join(dir, 'kept-exports')); symlinkSync(join(dir, 'kept-exports'), join(dir, EXPORTS_DIR)); expected = /exports directory is a link/u; }
+        if (kind === 'receipt-ancestor') { renameSync(join(dir, RECEIPTS_DIR), join(dir, 'kept-receipts')); symlinkSync(join(dir, 'kept-receipts'), join(dir, RECEIPTS_DIR)); expected = /scratch ancestor is a link/u; }
+        if (kind === 'link') { unlinkSync(join(made.path, 'node_modules')); symlinkSync(m.root, join(made.path, 'node_modules')); expected = /dependency link points elsewhere/u; }
+        if (kind === 'attachment') { renameSync(deps, `${deps}-old`); mkdirSync(deps); writeFileSync(join(deps, DEPS_MARK), '{}'); writeFileSync(join(deps, 'unique'), 'replacement bytes'); expected = /dependency target changed/u; }
+        if (kind === 'local-deps') { unlinkSync(join(made.path, 'node_modules')); mkdirSync(join(made.path, 'node_modules')); writeFileSync(join(made.path, 'node_modules/local'), 'unique local bytes'); expected = /directory was added|real directory/u; }
+        if (kind === 'source-conflict') { m.git.retained.set(m.second, 'f'.repeat(40)); expected = /retained source ref/u; }
+        if (kind === 'receipt-ancestor') {
+          assert.throws(() => releaseExport({ ...base, apply: true }), expected);
+          assert.equal(read(join(made.path, 'src/a.js')), 'committed a, second\n');
+          assert.equal(read(join(deps, 'unique')), 'outside dependency bytes');
+          continue;
+        }
+        const applied = releaseExport({ ...base, apply: true });
+        assert.equal(applied.applied, false, kind);
+        assert.match(applied.why, expected, kind);
+        assert.equal(exists(made.path), true, `${kind}: tree survives`);
+        assert.equal(read(join(made.path, 'src/a.js')), 'committed a, second\n');
+        assert.equal(read(join(kind === 'attachment' ? `${deps}-old` : deps, 'unique')), 'outside dependency bytes');
+        if (kind === 'local-deps') assert.equal(read(join(made.path, 'node_modules/local')), 'unique local bytes');
+        m.git.retained.set(m.second, m.second);
+      }
     } finally { m.cleanup(); }
   });
 
@@ -380,7 +513,7 @@ describe('scratch exports: explicit release', () => {
       const dir = m.session('s33');
       const made = await m.create(dir);
       const forged = { ...made.receipt, inventory: made.receipt.inventory.map((entry) => (entry.path === 'run.sh' ? { ...entry, mode: '100644' } : entry)) };
-      const proof = verifyExport({ stemDir: dir, receipt: forged, git: m.gitBoundary, repos: m.repos });
+      const proof = verifyExport({ stemDir: dir, id: made.id, receipt: forged, git: m.gitBoundary, repos: m.repos });
       assert.equal(proof.ok, false);
       assert.match(proof.why, /does not reconcile with the retained commit/u);
       assert.equal(read(join(made.path, 'run.sh')), '#!/bin/sh\necho committed\n', 'the tree is untouched by the check');

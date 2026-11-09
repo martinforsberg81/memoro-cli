@@ -9,4 +9,5 @@ section: Added
   preview still describes. Symlinks and submodules are refused, and `--attach-deps <dir>` links `node_modules` to a
   prepared tree that is recorded and never removed. Tidy lists an ended session's verified export as rule S, and the
   runner removes its own session's exports once the session's end and logs are recorded (`mc scratch sweep`). A
-  refused removal says why, and nothing else changes. Documented in `mc-tidy.md` (Registered source exports).
+  refused removal says why, and nothing else changes. Filename/id binding and fresh per-candidate checks prevent
+  a forged receipt or stale inventory from deleting another export or newly changed evidence. Documented in `mc-tidy.md` (Registered source exports).

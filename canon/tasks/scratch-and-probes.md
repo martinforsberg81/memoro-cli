@@ -10,7 +10,7 @@ Initialize once and reuse:
 MC_SCRATCH="${MC_SCRATCH:-$(mktemp -d "${TMPDIR:-/tmp}/mc-probes.XXXXXX")}" || exit 1
 export MC_SCRATCH
 ```
-A session's `MC_SCRATCH` is its runner scratch directory; what it holds goes when the session ends ([mc-tidy.md § Registered source exports](../../docs/technical/mc-tidy.md#registered-source-exports)).
+A session's `MC_SCRATCH` is its runner scratch directory; only eligible registered exports may be reclaimed when the session ends; the root, receipts, logs, patches, results and all unregistered or changed contents remain protected ([mc-tidy.md § Registered source exports](../../docs/technical/mc-tidy.md#registered-source-exports)).
 
 To read a commit's files, export only the paths you need from the commit you mean: `mc scratch export --repo <repo> --ref <sha> --path <path>…`. It writes the committed bytes, never the working tree, and reuses an unchanged export. Release each one (`mc scratch release <id>` previews, `--apply` removes) before the next. Never export a whole tree per commit in a loop, and never `git worktree add` or copy a `.git` to read a file.
 

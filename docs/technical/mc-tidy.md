@@ -347,7 +347,9 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   directory's device, inode and birth time), repository (name and real path),
   commit, paths, retained ref, export directory identity (device, inode),
   inventory (path, mode, blob id, size) with its digest, bytes and the attachment
-  if any. A receipt's own digest is never proof of its tree.
+  if any. A receipt's own digest is never proof of its tree. The requested/listed
+  id, receipt filename and payload id, export path and removal receipt path must
+  agree; a mismatch is retained, never redirected.
 - **Verification.** Every reuse, release and tidy removal runs the same check:
   the receipt's shape and key; the owner record names the same session and
   start, and the same directory; the configured repository and its real path; the
@@ -375,7 +377,12 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   receipt, the tree, the link or the owner changed since the preview, it removes
   nothing and says so. The owning session may release while it still runs; no
   other process may stand in or hold a file open in the tree, and unknown process
-  or open-file evidence keeps it. Removal order: the receipt becomes `removing`,
+  or open-file evidence keeps it. Explicit release reads only the selected
+  receipt/tree. Immediately before each deletion, under that session's lock,
+  re-read this candidate's receipt, owner, source, tree and attachment, compare
+  with the saved plan, and refresh wall time, cwd and open-file evidence. Earlier
+  inventory or another candidate's inspection is not deletion-time proof.
+  Reject symlinked ancestors. Removal order: the receipt becomes `removing`,
   the recorded link is unlinked, the tree is removed through `rmTree` (which never
   follows a link), and the receipt becomes `released` with its time and bytes. The
   receipt, the plan's absence and every log, patch and record beside it remain.

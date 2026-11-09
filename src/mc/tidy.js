@@ -1542,7 +1542,17 @@ export function applyTidy({
           applied.push({ path, ok: false, why: 're-check: its receipt, tree or dependency link changed since the list' });
           continue;
         }
-        const outcome = withSessionLockSync(item.stem_dir, () => removeExport({ stemDir: item.stem_dir, receipt: item.receipt, identity: target.identity, at: now }));
+        const outcome = withSessionLockSync(item.stem_dir, () => removeExport({
+          stemDir: item.stem_dir, id: item.id, identity: target.identity,
+          git: { text: doors.git || realGit }, repos: doors.repos || defaultRepos(env),
+          standing: (candidate) => {
+            const running = (doors.cwds || cwdsOfUser)();
+            if (!running?.length || running.complete === false) return null;
+            return processesStandingIn([candidate], { cwds: running }).map((p) => p.pid);
+          },
+          openIn: doors.openIn || openFilesIn,
+          runnerGone: (marker) => runnerGone(marker, { alive: doors.alive || pidAlive, commandLine: doors.commandLine || commandLineOf }),
+        }));
         if (!outcome.ok) { applied.push({ path, ok: false, why: outcome.why }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);
