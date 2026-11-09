@@ -110,6 +110,26 @@ incomplete test requests contribute unfinished files: a command-gate timeout
 cannot relabel the already-completed selection as unfinished. Own-test
 requests are tracked separately and name their own pending files.
 
+## Mend eligibility independent of goals
+
+Martin, 2026-11-09: merge recovery is attached to the failed PR and repository,
+not restricted to a goal. A failed eligible merge must be recoverable by mend
+whether it came from a goal, interactive planning, Manager or a direct merge
+request. Goal metadata supplies additional contract and lifecycle context;
+its absence must not suppress recovery or require inventing a goal.
+
+Use the PR's one existing checkout and exact failed revision, preserve its
+author's intent, establish acceptance for the repaired final tree and requeue
+through the ordinary merger. Preserve existing capacity/provider routing,
+retry limits, reserved-act restrictions and stopped/closed PR safety. A goal
+and a PR recovery must never acquire concurrent ownership of the same branch.
+For a PR without a goal, retain recovery attempts, logs and outcome against
+the repository/PR identity. Failed command gates need their command identity
+and diagnostic evidence even when no Node red file was reported.
+
+This decision supersedes goal-only eligibility below. It specifies required
+behaviour; the existing goal-only runner is not evidence of implementation.
+
 ## Reuse the existing checkout
 
 Martin, 2026-11-08: a merge must reuse the checkout the work already has;
