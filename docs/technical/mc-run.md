@@ -138,6 +138,18 @@ the session is over. Scratch is no longer removed by age; tidy's rule S
 reclaims only on that record: an ended session, or one whose runner has gone
 with no end recorded (`mc-tidy.md`, rule S).
 
+The end follows a fixed order. The runner writes the end marker, then the
+session's finalized logs (`writeSessionLogs`), and only then awaits
+`mc scratch sweep` for this session's scratch directory, in a child process
+bounded at 120 s, so the event loop is not held. The sweep removes this
+session's own registered source exports whose trees still verify
+(`mc-tidy.md`, Registered source exports); it never scans other scratch,
+evidence, worktrees or caches. The same rule runs for a successful, failed or
+interrupted-but-resolved session. A refused or failed sweep is recorded as
+cleanup in the runner log, and its exports stay for the next tidy pass; it
+changes no session exit, goal verdict or provider classification. Routine and
+pressure tidy remain the retry path, so nothing here adds a time-based rule.
+
 ## The session
 
 `runGoal` works in the first repository's existing goal worktree and keeps its

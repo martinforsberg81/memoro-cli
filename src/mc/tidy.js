@@ -53,6 +53,9 @@
  *   - (A) A `~/mc/gate-cache/<slug>/<key>/` entry under a slug a repository mc knows has goes when no round has used it for fourteen days
  *     (`meta.at`), and a `<key>.tmp-<pid>` staging directory once it is a day old, through `rmTree`. The dependency cache is bounded by
  *     count (`prepare-cache.js`); this bounds it by age too.
+ *   - (S) Also: a registered source export of a session, `<scratch>/<stem>/exports/<id>`, verified
+ *     against its receipt and retained commit, once its session has ended and no process stands in it
+ *     (`scratch.js`, docs/technical/mc-tidy.md "Registered source exports").
  *   - (S) Inside a runner session's scratch directory
  *     (`~/mc/runner/scratch/<stem>/`), a git worktree and a `DerivedData`
  *     directory are the two things that may go, and only when the directory's
@@ -104,7 +107,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 11;
+export const RULES_VERSION = 12;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
