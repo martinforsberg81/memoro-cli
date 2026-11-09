@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { cancelledFiles, killedFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
+import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -271,13 +271,33 @@ describe('a file that failed to load, and a hook that failed — node v24.10.0 T
     assert.equal(hook.name, 'hooked');
     assert.equal(hook.at, 'hook.test.js:3:24');
     assert.deepEqual(hook.error, ['hook of hooked failed:', 'seed failed']);
-    assert.deepEqual(cancelledFiles(hookThrows, ['hook.test.js']), []);
   });
 
   it('a hook that timed out names which hook it was', () => {
     const [hook] = redTests(hookTimesOut, ['hook2.test.js']);
     assert.equal(hook.name, 'hooked');
     assert.deepEqual(hook.error, ['before hook of hooked failed']);
+  });
+
+  it('a hookFailed suite with node\'s timeout line is cancelled, including cancelledByParent children', () => {
     assert.deepEqual(cancelledFiles(hookTimesOut, ['hook2.test.js']), ['hook2.test.js']);
+    const withChild = hookThrows.replaceAll('hook.test.js', 'hook2.test.js').replace("error: 'seed failed'", "error: 'failed running before hook'");
+    assert.deepEqual(cancelledFiles(withChild, ['hook2.test.js']), ['hook2.test.js']);
+    assert.deepEqual(redTests(withChild, ['hook2.test.js']).map((test) => test.name), ['hooked']);
+  });
+
+  it('a hookFailed suite that throws is failed with its message, including cancelledByParent children', () => {
+    for (const capture of [hookThrows, hookThrows.replace(/    # Subtest: child[\s\S]*?    1\.\.1\n/u, '')]) {
+      assert.deepEqual(cancelledFiles(capture, ['hook.test.js']), []);
+      assert.deepEqual(redFiles(capture, ['hook.test.js']), ['hook.test.js']);
+      assert.deepEqual(redTests(capture, ['hook.test.js']).map(({ name, error }) => ({ name, error })), [
+        { name: 'hooked', error: ['hook of hooked failed:', 'seed failed'] },
+      ]);
+    }
+  });
+
+  it('a cancellation without a timeout-hook parent is not cancelled under load', () => {
+    const childOnly = hookThrows.slice(0, hookThrows.indexOf('not ok 1 - hooked'));
+    assert.deepEqual(cancelledFiles(childOnly, ['hook.test.js']), []);
   });
 });

@@ -298,25 +298,26 @@ export function killedFiles(tap, files) {
  * (`cancelledByParent`); node's totals then say `# cancelled 19`, `# fail 0`.
  * That is what memoro's `build-bundle.test.js` did on #13470 at load ~38: the
  * machine's, not the change's. So a file is named here when it has at least one
- * cancelled test and no other failing entry — a suite failing because of its
- * hook or its children is not one. A file with any test that failed stays red
- * whatever else it has.
+ * timeout-cancelled entry and no other failure. Only node's timeout message
+ * exempts a hookFailed suite; a thrown hook is a failure with its own message.
+ * A suite failing because of its children is unchanged. A file with any other
+ * failure stays red whatever else it has.
  */
 export function cancelledFiles(tap, files) {
   const owner = ownerIn(files);
   const cancelled = new Set();
-  const timeoutHooks = new Set();
   const failed = new Set();
-  for (const block of failingBlocks(tap)) {
+  const blocks = failingBlocks(tap);
+  const timedOut = blocks.filter((block) => block.type === 'suite' && block.failureType === 'hookFailed'
+    && block.error.length === 1 && HOOK_TIMEOUT.test(block.error[0]));
+  for (const block of blocks) {
     const file = [...block.locations, block.own].map(owner).find(Boolean);
     if (!file) continue;
-    if (block.failureType === 'cancelledByParent') cancelled.add(file);
-    else if (block.failureType === 'hookFailed') {
-      if (block.error.some(line => HOOK_TIMEOUT.test(line))) { cancelled.add(file); timeoutHooks.add(file); }
-      else failed.add(file);
-    } else if (!(block.type === 'suite' && block.failureType === 'subtestsFailed')) failed.add(file);
+    if (timedOut.includes(block) || (block.failureType === 'cancelledByParent'
+      && timedOut.some((parent) => block.name.startsWith(`${parent.name} › `)))) cancelled.add(file);
+    else if (!(block.type === 'suite' && block.failureType === 'subtestsFailed')) failed.add(file);
   }
-  return [...cancelled].filter((file) => timeoutHooks.has(file) && !failed.has(file));
+  return [...cancelled].filter((file) => !failed.has(file));
 }
 
 /** How many lines of a test's error are kept: the assertion's first lines, not its whole diff. */

@@ -883,6 +883,18 @@ interrupted members separately. There is no base replay or green-alone
 exemption (Martin, 2026-11-04). Only a stalled round is requeued; interrupted
 members are resolved within the same round, not by a session.
 
+A `before` hook that **throws** is the change's ordinary red, even when all
+its children are cancelled and node's totals say zero failed. Its file and
+hook message are kept in `red_files` and `red_tests`, with the full-message
+diagnostic digest used for standing main-red matching. The reason names
+`<file>: before hook failed — <first line of the message>`; the ordinary
+merge-red handoff carries the error to mend. Without existing exact-base
+evidence the failure remains red, not silently subtracted. Explicit
+`retry_once` on the candidate remains as described above. Session gates also
+refuse GREEN for a run containing cancelled tests, including after settlement
+or a successful worker exit; its receipt is not green.
+
+
 The queued retry record retains `not_before`, retry counts and a bounded
 `retry_diagnostic` (`category` from the actual report's `stopped_at`, and
 `explanation` from its actual `reason`). The diagnostic is not an inference

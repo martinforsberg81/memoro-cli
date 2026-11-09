@@ -814,9 +814,8 @@ export async function runGate({
       return null;
     };
 
-    // A red the round measured, and whose red it is. `alone` is a run of the
-    // red files by themselves on the candidate already — the previous red
-    // phase — which is the second sample the probe would otherwise take.
+    // A red the round measured, and whose red it is. `alone` records the
+    // previous-red phase's candidate-only run; main is never run here.
     // Returns the finished report, or null when every red file is main's and
     // the change touches none of them: the round goes on.
     const retry = declared.declaration.retry_once || { files: [], gates: [] };
@@ -855,16 +854,16 @@ export async function runGate({
       const within = (files) => Boolean(result.red_files?.length)
         && result.red_files.every((file) => files.has(file))
         && (result.red_tests || []).every((test) => files.has(test.file));
-      // Main's already, by this round's own probe of the previous red files —
-      // and untouched, which that probe's turn checked: not asked twice.
+      // Already matched to standing exact-base evidence and left untouched
+      // during this round's previous-red phase: not asked twice.
       if (within(new Set(report.main_red_files || [])) && result.red_tests?.length
         && result.red_tests.every(test => report.main_red?.tests?.some(known => sameFailure(known, test)))) {
         return mainRedGoesOn(result);
       }
       // Red only in files declared to flip under load (ruling 44 § 5): run
       // once more alone on the candidate. Green, and the round goes on with
-      // the flip recorded; whatever stays red goes to the probe as today,
-      // and that run is the probe's second sample alone on the candidate.
+      // the flip recorded; whatever stays red is matched only to standing
+      // exact-base evidence, never to a live base run.
       let retried = false;
       if (retry.files.length && within(new Set(retry.files))) {
         const headCommit = trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null;
@@ -914,8 +913,13 @@ export async function runGate({
             : 'could not read what this change touches — red as before');
         }
       }
-      const errors = (result.red_tests || []).flatMap(test => test.error || []);
-      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
+      const hooks = (result.red_tests || []).filter((test) => /^(?:\w+ )?hook of .+ failed:$/u.test(test.error?.[0] || ''));
+      const hookReasons = hooks.map((test) => {
+        const kind = /^(\w+) hook of /u.exec(test.error[0])?.[1] || 'before';
+        return `${test.file}: ${kind} hook failed — ${test.error[1] || 'unknown error'}`;
+      });
+      const errors = (result.red_tests || []).filter(test => !hooks.includes(test)).flatMap(test => test.error || []);
+      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${hookReasons.length ? `; ${hookReasons.join('; ')}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
     };
 
     // The files this pull request's last round found red, alone on the
@@ -1107,8 +1111,7 @@ export async function runGate({
     // time" are two different claims, and only the first was measured).
     report.candidate.tree = trim((await askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir })).stdout) || null;
 
-    // The suite and gates have finished, so the probe for main red never runs beside
-    // a gate.
+    // Both halves have finished before reading standing main-red evidence.
     if (!reused) say(`${after.result.red.length} red`);
     if (after.result.red.length) {
       const stop = await stopRed(after.result);
@@ -1786,7 +1789,8 @@ function failedGatesText(gates) {
     + `${gates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`;
 }
 
-/** Why a round stopped `red-under-load`: which files passed alone, and which were cancelled with none failed. */
+/** Current producer: timeout-cancelled files with no other failure, not proof of overload.
+ * `alone` renders historical reports only (retired 2026-11-04); no current caller supplies it. */
 export function underLoadReason({ alone = [], cancelled = [] }) {
   const parts = [];
   if (alone.length) parts.push(`${alone.join(', ')} red in the round, green alone on the base and on the candidate`);
@@ -2329,8 +2333,8 @@ export function executedTimeoutOf(argv) {
  * counting it red (`measure`, `measureSelected`).
  */
 /**
- * Historical green-alone limit, retained for readers of old evidence. Current
- * rounds never excuse assertion red by replaying the base and candidate.
+ * Historical limit, used until 2026-11-04 for the retired base-then-candidate
+ * replay (`green_alone`). Kept for compatibility; no current round reads it.
  */
 export const GREEN_ALONE_MAX = 3;
 

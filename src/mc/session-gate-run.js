@@ -422,7 +422,8 @@ async function executeSessionGate(request, {
           details = details.filter((test) => settled.red.includes(test.file));
           testResult = { ...testResult, settled: { alone: settled.alone, main: settled.main, base: settled.base } };
         }
-        if (!settled || settled.red.length) code = 1;
+        // Settlement cannot turn a run containing cancelled tests GREEN.
+        if (!settled || settled.red.length || totals.cancelled > 0) code = 1;
       }
       for (const test of details) write(`✖ ${test.name}\n${test.at ? `    at ${test.at}\n` : ''}${test.error.map((line) => `    ${line}\n`).join('')}`);
     } catch (error) {
