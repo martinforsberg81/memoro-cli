@@ -149,7 +149,9 @@ test('a fast goal on a refused claude runs on codex through the adapter, and lan
     { name: 'goal:mc/cx', kind: 'build-goal', exit: '0', pr: '-', turns: '-', input: '1200', output: '340', cacheRead: '900', cacheWrite: '-', session: 'codex-thread-42', note: 'success,no-log' },
   );
   assert.match(seconds, /^\d+$/u);
-  assert.deepEqual(cells.slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan']);
+  // The cost is the totals at gpt-6-luna's list price: 300 uncached input at
+  // $0.10, 900 cached at $0.01 and 340 output at $0.50 per million = $0.000209.
+  assert.deepEqual(cells.slice(14), ['gpt-6-luna', 'fast', 'codex', 'high', 'plan', '0.0002']);
 
   // The launch, in runner.log where a night is read back from.
   const log = readFileSync(join(work, 'runner', 'log', 'runner.log'), 'utf8');
