@@ -382,11 +382,13 @@ export function sessionName(areaName) {
  * The directories directly under `~/mc` that are mc's own and not an area:
  * every kind's root, and the homes of the things beside them. Anything else
  * there that is not a legacy runner area is a stray (`listStrays`,
- * work-area.js). Dot-directories are left out by the caller.
+ * work-area.js). Dot-directories are left out by the caller. `private` holds
+ * commissioned private evidence outside every repository (assistant-avatar's
+ * pixel-framing commission: `~/mc/private/pixel-evidence/`, mode 0700).
  */
 export const STATE_HOMES = new Set([
   'runner', PLAN_HOME, STEP_HOME, WORK_HOME, PROGRAMS_HOME, ARCHIVE_HOME, REPOS_HOME, SELF_HOME, 'gate', 'gate-cache', 'brief', 'manager', 'proposals', 'intake',
-  'node_modules', 'bin', 'npm', 'status', 'helper', 'martin', 'pm',
+  'node_modules', 'bin', 'npm', 'status', 'helper', 'martin', 'pm', 'private',
 ]);
 
 /** Canonical Manager desk; legacy brief transcripts are discovered at launch. */
