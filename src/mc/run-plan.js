@@ -35,7 +35,7 @@ import { estimateCost } from './prices.js';
  * routed to, the work class it was asked for (`-` for a concrete plan), and
  * the billing it ran on. Rows written before them have no such cells.
  */
-export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model', 'class', 'tool', 'effort', 'billing'];
+export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds', 'model', 'class', 'tool', 'effort', 'billing', 'cost'];
 
 /**
  * What a session runs on when neither its step nor its plan says otherwise,
@@ -554,10 +554,15 @@ export function streamSummary(stdout) {
       into.cacheWrite1hTokens = (into.cacheWrite1hTokens || 0) + (u.cache_creation.ephemeral_1h_input_tokens || 0);
     }
   }
+  // Each message is one request, priced on its own so a long-prompt tier
+  // (Haiku 5.5 over 100k) applies to the requests that crossed it.
   let cost = 0;
-  for (const [m, u] of Object.entries(modelUsage)) {
-    const c = estimateCost({ input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens, cacheWrite5m: u.cacheWrite5mTokens, cacheWrite1h: u.cacheWrite1hTokens }, m);
-    if (c != null) { u.costUSD = c; cost += c; }
+  for (const { model: m, usage: u } of messages.values()) {
+    const split = u.cache_creation ? { cacheWrite5m: u.cache_creation.ephemeral_5m_input_tokens || 0, cacheWrite1h: u.cache_creation.ephemeral_1h_input_tokens || 0 } : {};
+    const c = estimateCost({ input: u.input_tokens || 0, output: u.output_tokens || 0, cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0, ...split }, m, { request: true });
+    if (c == null) continue;
+    modelUsage[m].costUSD = (modelUsage[m].costUSD || 0) + c;
+    cost += c;
   }
   return { type: 'result', subtype: 'killed', is_error: false, session_id: session, num_turns: messages.size, usage, modelUsage, total_cost_usd: cost, model, last_usage: last };
 }
@@ -613,8 +618,8 @@ export function sessionResult(stdout) {
  * and its note is `stalled`. `timedOut` alone is the helper turn's own
  * wall-clock cap, which that lane keeps, and stays `timeout`.
  */
-export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false, now = new Date() }) {
-  const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', quotaReset: null };
+export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false, now = new Date(), model = null }) {
+  const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', quotaReset: null, cost: null };
   // A limit answer is what the tool says when it refuses: one or two turns
   // and the limit text as the whole result. Session prose that mentions a
   // quota (a PR body about quota rows, say) is not a limit — 2026-08-29 the
@@ -627,9 +632,14 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     // 2026-10-29 a crashed step read as one and every lane slept 30 min.
     const text = `${codexErrors(stdout)}\n${stderr}`;
     const quota = exitCode !== 0 && quotaSeen(text);
-    return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
+    const events = readCodexEvents(stdout);
+    // Codex reports session totals only, so its cost is priced on them (`prices.js`).
+    const cost = events.output == null ? null : estimateCost({ input: Number(events.input) || 0, output: Number(events.output) || 0, cacheRead: Number(events.cacheRead) || 0 }, model);
+    return { ...dash, ...events, cost, note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota, quotaReset: quota ? quotaResetAt(text, now) : null };
   }
   const json = sessionResult(stdout);
+  // Every claude session's cost is priced per request from its stream, with or without a result line.
+  const cost = streamSummary(stdout)?.total_cost_usd ?? null;
   if (!json) {
     // No answer: the runner killed the session (a landing through `mc merge`,
     // rc=143), or the API ended it without a result line. Whether the quota
@@ -651,7 +661,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
       cacheRead: String(stream.usage.cache_read_input_tokens),
       cacheWrite: String(stream.usage.cache_creation_input_tokens),
     } : {};
-    return { ...dash, ...counts, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? (refused?.resetsAt ?? quotaResetAt(stderr, now)) : null };
+    return { ...dash, ...counts, cost, note: quota ? 'quota' : 'no-json', quota, quotaReset: quota ? (refused?.resetsAt ?? quotaResetAt(stderr, now)) : null };
   }
   const usage = json.usage || {};
   const pick = (v) => (v == null ? '-' : String(v));
@@ -668,6 +678,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     ...(quota || interrupted ? { interrupted: quota ? 'quota' : interrupted.kind, said: interrupted?.said ?? null, creditsUntil: interrupted?.until ?? null } : {}),
     turns: pick(json.num_turns),
     session: pick(json.session_id),
+    cost,
     input: pick(usage.input_tokens),
     output: pick(usage.output_tokens),
     cacheRead: pick(usage.cache_read_input_tokens),
@@ -863,13 +874,15 @@ export function quotaResetAt(text, now = new Date()) {
 
 /* --------------------------------------------------------------------- log */
 
-export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing }) {
+export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing, cost }) {
   const cell = (v) => String(v ?? '-').replace(/[\t\n]/gu, ' ');
+  // The session's list-price cost, priced per request (`streamSummary`); `-` when unknown.
+  const dollars = typeof cost === 'number' && Number.isFinite(cost) ? cost.toFixed(4) : '-';
   // `seconds` is the session; `land_seconds` is the gated round that followed
   // it. They are separate because the gate costs 20–35 minutes on memoro where
   // the old `gh pr merge` cost seconds, and a reader of runs.tsv asking where
   // a night went can only see that if the two are not added up here.
-  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing].map(cell).join('\t');
+  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds, model, cls, tool, effort, billing, dollars].map(cell).join('\t');
 }
 
 export function tsvHeader() {
