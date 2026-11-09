@@ -44,6 +44,7 @@ const stepLine = (label) => `\n${CYAN}▸ ${label}${RESET}\n`;
  * falls over, printing what the real one prints on the way. */
 function fakeScript({
   steps = [], build = '23533', commit = SHA, verify = true, code = 0, failure = '', production = '', retries = 0,
+  last = '',
 } = {}) {
   return async ({ onOutput }) => {
     for (const label of steps) onOutput(stepLine(label));
@@ -55,6 +56,7 @@ function fakeScript({
       onOutput(`\n${RED}✗ Deploy failed${RESET}\n${DIM}${failure}${RESET}\n`);
       if (production) onOutput(`\n  ${BOLD}Production ${RESET}${production}\n`);
     }
+    if (last) onOutput(`${last}\n`);
     return { code };
   };
 }
@@ -1235,6 +1237,100 @@ describe('mc deploy — the record', () => {
     assert.match(out.stdout, /verified live \(after 1 retry on network faults\)/u);
   });
 
+  describe('a branch the script made', () => {
+    const BRANCH = 'deploy-pins/1a2b3c4d5e6f-20261109-120000Z';
+    const NAMED = `Deploy branch: ${BRANCH}`;
+    const OPEN = { ok: true, stdout: 'https://github.com/example/memoro/pull/15170\n', text: '' };
+    const GOOD_RUN = { steps: FULL_RUN };
+    const FAILED_RUN = { steps: ['Deploy source preflight', 'wrangler deploy'], code: 1, failure: 'npx wrangler deploy exited 1' };
+
+    /** gh and mc merge at their boundary; every call kept. */
+    function pr({ gh = () => OPEN, merge = async () => 0 } = {}) {
+      const calls = { gh: [], merge: [] };
+      return {
+        calls,
+        gh: (args) => { calls.gh.push(args); return gh(args); },
+        merge: async (args) => { calls.merge.push(args); return merge(args); },
+      };
+    }
+    const ghFails = () => ({ ok: false, stdout: '', text: 'GraphQL: Could not resolve to a Repository' });
+
+    for (const [name, script, expected, outcome] of [
+      ['deployed', GOOD_RUN, 0, 'deployed'],
+      ['failed', FAILED_RUN, 1, 'failed'],
+    ]) {
+      it(`a branch named by a ${name} deploy gets a pull request to main, queued, and the PR is in the output and the row`, async () => {
+        const { out, stdout, stderr } = io();
+        const fake = pr();
+        const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...script, last: NAMED }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+        assert.equal(code, expected);
+        const create = fake.calls.gh.find((args) => args[1] === 'create');
+        assert.deepEqual(create.slice(0, 6), ['pr', 'create', '--base', 'main', '--head', BRANCH]);
+        assert.deepEqual(fake.calls.merge, [['memoro', '15170']], 'queued for the merger');
+        assert.match(out.stdout, new RegExp(`${BRANCH} → memoro#15170 https://github\\.com/example/memoro/pull/15170 — queued for the merger`, 'u'));
+        const row = lastAttempt({ MC_WORK_ROOT: work });
+        assert.equal(row.outcome, outcome);
+        assert.match(row.note, /deploy-pins\/1a2b3c4d5e6f-20261109-120000Z landed through memoro#15170, queued/u);
+      });
+
+      it(`a ${name} deploy whose pull request cannot be opened keeps the script's exit code and outcome, and says so`, async () => {
+        const { out, stdout, stderr } = io();
+        const fake = pr({ gh: ghFails });
+        const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...script, last: NAMED }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+        assert.equal(code, expected);
+        assert.deepEqual(fake.calls.merge, [], 'nothing to queue');
+        assert.match(out.stderr, /the pull request for deploy-pins\/\S+ — gh pr create failed: GraphQL: Could not resolve to a Repository; the deploy's outcome is unchanged/u);
+        const row = lastAttempt({ MC_WORK_ROOT: work });
+        assert.equal(row.outcome, outcome);
+        assert.match(row.note, /has no pull request \(gh pr create failed/u);
+      });
+
+      it(`a ${name} deploy whose pull request cannot be queued keeps the script's exit code and outcome, and says so`, async () => {
+        const { out, stdout, stderr } = io();
+        const fake = pr({ merge: async () => 1 });
+        const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...script, last: NAMED }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+        assert.equal(code, expected);
+        assert.match(out.stderr, /mc merge memoro 15170 exited 1/u);
+        const row = lastAttempt({ MC_WORK_ROOT: work });
+        assert.equal(row.outcome, outcome);
+        assert.match(row.note, /opened as memoro#15170, not queued/u);
+      });
+    }
+
+    it('a gh that throws is a report, not a crash', async () => {
+      const { out, stdout, stderr } = io();
+      const fake = pr({ gh: () => { throw new Error('gh is not installed'); } });
+      const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...GOOD_RUN, last: NAMED }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+      assert.equal(code, 0);
+      assert.match(out.stderr, /gh is not installed/u);
+      assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
+    });
+
+    for (const [what, last] of [
+      ['no branch line', ''],
+      ['a branch that was not pushed', `Deploy branch not pushed: ${BRANCH} — the push failed`],
+      ['a change that was not recorded', 'Deploy branch not recorded: the file differs by more than the script wrote'],
+    ]) {
+      it(`opens nothing for ${what}`, async () => {
+        const { out, stdout, stderr } = io();
+        const fake = pr();
+        const code = await run([], { ...deps({ spawnDeploy: fakeScript({ ...GOOD_RUN, last }) }), gh: fake.gh, merge: fake.merge, stdout, stderr });
+        assert.equal(code, 0);
+        assert.deepEqual(fake.calls.gh, []);
+        assert.deepEqual(fake.calls.merge, []);
+        assert.doesNotMatch(out.stdout, /pull|queued/u);
+        assert.equal(lastAttempt({ MC_WORK_ROOT: work }).note, '');
+      });
+    }
+
+    it('reads the branch from the script\'s last line, colours or not, and only the exact line', () => {
+      assert.equal(readScriptOutput(`${stepLine('Verify live version')}\n${NAMED}\n`).branch, BRANCH);
+      assert.equal(readScriptOutput(`${DIM}${NAMED}${RESET}\n`).branch, BRANCH);
+      assert.equal(readScriptOutput(`noise Deploy branch: ${BRANCH}\n`).branch, '');
+      assert.equal(readScriptOutput('').branch, '');
+    });
+  });
+
   it('says so when a green deploy verified no live version', async () => {
     const { stdout, stderr } = io();
     await run([], { ...deps({ spawnDeploy: fakeScript({ steps: FULL_RUN, verify: false }) }), stdout, stderr });
@@ -1364,7 +1460,7 @@ describe('what the script said', () => {
   it('is empty cells and not a crash when the script says none of it', () => {
     assert.deepEqual(readScriptOutput('some other tool wrote this\n'), {
       stopped_at: '', build: '', live_commit: '', live_build: '', verified: false, failure: '',
-      production: '', cause: '', retries: 0,
+      production: '', cause: '', retries: 0, branch: '',
     });
     assert.equal(readScriptOutput('').stopped_at, '');
     assert.equal(readScriptOutput(null).build, '');

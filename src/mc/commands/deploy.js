@@ -73,6 +73,7 @@ import {
   runningDeploy,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
+import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
 import { mcDiskPressure } from '../disk-admission.js';
 import { POLL_MS as DISK_POLL_MS } from '../disk-pressure.js';
@@ -87,6 +88,8 @@ import { mcHome, workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { realLock } from '../runner-lock.js';
 import { currentHolder } from '../repo-lease.js';
+import { ghCommand } from './publish.js';
+import { run as mergeRun } from './merge.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 
@@ -207,6 +210,9 @@ const OUTPUT_TAIL = 256 * 1024;
  *   `Production <what production runs now>`        — e.g. `unchanged — …`
  *   `Cause <why, and whether a rerun helps>`
  *   `↻ <wrangler call> failed after …`             — one per retry
+ * And, from 2026-11-09, the last line of a deploy that made a change of its own
+ * on a branch (`deploy-branch.js`):
+ *   `Deploy branch: <branch>`                      — pushed; `ship` opens its pull request
  * Only the summary's lines count, the ones after `✗ Deploy failed`: a retry
  * prints `Production meanwhile: …` too, and a deploy that then went through is
  * not described by it.
@@ -227,6 +233,7 @@ export function readScriptOutput(text) {
   let production = '';
   let cause = '';
   let retries = 0;
+  const branch = branchNamed(lines);
   lines.forEach((line, index) => {
     const step = /^▸\s+(.+)$/u.exec(line);
     if (step) { stoppedAt = step[1].trim(); return; }
@@ -260,6 +267,7 @@ export function readScriptOutput(text) {
     production,
     cause,
     retries,
+    branch: branch || '',
   };
 }
 
@@ -528,13 +536,14 @@ export function planLines(plan, { now = Date.now() } = {}) {
 
 /** The row's last cell: why it ended that way, in one line, or nothing when
  * there is nothing to say beyond `deployed`. */
-function endNote({ result, said, ok }) {
-  if (result.error) return `mc could not run npm run deploy — ${result.error}`;
-  if (result.signal) return `killed by ${result.signal}`;
-  if (!ok && result.interrupted && !said.failure) return `interrupted by ${result.interrupted}`;
+function endNote({ result, said, ok, pin = null }) {
+  const withPin = (text) => (pin ? [text, pinNote(said.branch, pin)].filter(Boolean).join('; ') : text);
+  if (result.error) return withPin(`mc could not run npm run deploy — ${result.error}`);
+  if (result.signal) return withPin(`killed by ${result.signal}`);
+  if (!ok && result.interrupted && !said.failure) return withPin(`interrupted by ${result.interrupted}`);
   if (!ok) {
     const why = said.failure ? `exit ${result.code} — ${said.failure}` : `exit ${result.code}`;
-    return said.production ? `${why} — production ${said.production}` : why;
+    return withPin(said.production ? `${why} — production ${said.production}` : why);
   }
   // A green deploy whose live version nobody checked is worth saying: the
   // script skips its own verification on MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY.
@@ -542,7 +551,7 @@ function endNote({ result, said, ok }) {
   const notes = [];
   if (!said.verified) notes.push('the script verified no live version');
   if (said.retries) notes.push(`went through after ${retryCount(said.retries)}`);
-  return notes.join('; ');
+  return withPin(notes.join('; '));
 }
 
 function retryCount(n) {
@@ -945,6 +954,22 @@ export async function ship(job, deps = {}) {
     }
     const said = readScriptOutput(tail);
     const ok = result.code === 0;
+    // A branch the script made is landed through a pull request, whatever the
+    // deploy's outcome; failing to open it changes neither the exit code nor
+    // the outcome (`openBranchPr` never throws).
+    const pin = said.branch
+      ? await openBranchPr({
+        worktree,
+        branch: said.branch,
+        short: short(shipping),
+        repo: REPO,
+        git,
+        gh: deps.gh || ((args) => ghCommand(args, worktree)),
+        merge: deps.merge || mergeRun,
+        stdout: job.json ? stderr : stdout,
+        stderr,
+      })
+      : null;
     recordEnd(key, {
       sha: shipping,
       outcome: ok ? DEPLOYED : FAILED,
@@ -952,12 +977,17 @@ export async function ship(job, deps = {}) {
       live_commit: said.live_commit,
       live_build: said.live_build,
       stopped_at: ok ? '' : said.stopped_at,
-      note: endNote({ result, said, ok }),
+      note: endNote({ result, said, ok, pin }),
     }, env);
 
     if (result.error) stderr.write(`mc: could not run npm run deploy in ${worktree} — ${result.error}\n`);
     if (result.signal) stderr.write(`mc: the deploy was killed by ${result.signal}\n`);
-    if (job.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said }, null, 2)}\n`);
+    if (pin) {
+      const out = job.json ? stderr : stdout;
+      if (pin.number) out.write(`mc: ${said.branch} → ${pin.ref}${pin.url ? ` ${pin.url}` : ''}${pin.queued ? ' — queued for the merger' : ''}\n`);
+      if (pin.error) stderr.write(`mc: the pull request for ${said.branch} — ${pin.error}; the deploy's outcome is unchanged\n`);
+    }
+    if (job.json) stdout.write(`${JSON.stringify({ sha: shipping, exit_code: result.code, deployed: ok, ...said, ...(pin ? { pin_pr: pin.number } : {}) }, null, 2)}\n`);
     else if (!ok) stderr.write(failureLine(result.code, said, result.interrupted));
     else if (said.live_commit) {
       const retried = said.retries ? ` (after ${retryCount(said.retries)})` : '';

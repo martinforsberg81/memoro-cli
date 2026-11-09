@@ -90,8 +90,29 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    passed through untouched, its output in the deployer's log as it happens.
    Its stdin is closed: a wrangler that wants a login stops with its own words
    in the log — `wrangler login` at a terminal, then `mc deploy` again.
-10. **The row completed** — outcome, build, the live version the script verified,
-    and the step it stopped at when it failed.
+10. **The branch, when the script made one.** Whenever `deploy.mjs` changed a
+    tracked file of its own while it ran (today: it built and pinned a stale
+    container image, which rewrites lines of `wrangler.toml`), it ends with that
+    checkout clean on `main` at the deployed sha, the change committed on a new
+    branch from that sha and pushed to origin — never to `main` — and one last
+    line, `Deploy branch: <branch>`. When the output has that line the deployer
+    opens a pull request from the branch to `main` (`gh pr create --base main
+    --head <branch>`, titled and described by the branch's own commit) and queues
+    it for the merger exactly as `mc publish` does (`mc merge memoro <n>`), and
+    says `mc: <branch> → memoro#<n> <url> — queued for the merger`. The pull
+    request is opened whether the deploy went through or failed, because the
+    script pushes the branch in both. Opening or queueing can fail (no `gh`, no
+    network, a refusal): that is one line on stderr and a phrase in the row's
+    note, and the exit code and the outcome stay the script's. Until that pull
+    request lands, a second deploy of the same sha makes the same change again —
+    it costs time, never a failure — and its branch gets a pull request of its
+    own. A line that is not exactly `Deploy branch: <branch>` — the script's
+    `Deploy branch not pushed: …` and `Deploy branch not recorded: …` say that
+    the change could not be sent — opens nothing.
+11. **The row completed** — outcome, build, the live version the script verified,
+    the step it stopped at when it failed, and, when there was a branch, the
+    pull request in the note (`<branch> landed through memoro#<n>, queued`;
+    `opened as memoro#<n>, not queued (<why>)`; `has no pull request (<why>)`).
 
 A real reading, run in this workarea on 2026-09-07 — `~/memoro` is where `main`
 happened to be that day, and the line says so whichever worktree it is:
@@ -292,7 +313,8 @@ way*.
 The spawn pipes stdout and stderr and echoes every chunk straight on, rather than
 inheriting them, so the row can say what happened while the person still watches
 the steps as they happen. Four lines are matched, after the colours are
-stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04:
+stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04 (a fifth,
+`Deploy branch: <branch>`, since 2026-11-09, below the table):
 
 | line | where | what it fills |
 |---|---|---|
@@ -300,6 +322,10 @@ stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04:
 | `Live /api/version verified: build <n> · <sha>` | `verifyLiveVersion()`, line 495 | `live_commit`, `live_build` |
 | `✓ Deploy complete build <n> · <sha>` | the success banner, line 801 | `build` |
 | `✗ Deploy failed` + the line under it | the catch, line 814 | `note` |
+
+The fifth line is the script's last: `Deploy branch: <branch>`, matched exactly,
+anywhere in the kept output, the last one winning. It is the only thing mc reads
+of a change the script made on its own; it fills no cell, and step 10 acts on it.
 
 The parsing is tolerant on purpose, and only the last 256 KB of output is kept —
 a container build prints megabytes before any of these. **A deploy that worked
@@ -398,7 +424,20 @@ The boundary is a rule, not a judgement call:
   that.
 - **mc knows nothing about containers, Docker or Wrangler auth.**
   `MEMORO_DEPLOY_CONTAINERS`, the OrbStack preflight and every credential the
-  deploy needs are the environment's, passed through untouched.
+  deploy needs are the environment's, passed through untouched. A stale
+  container image is the script's to build, push and pin; what reaches mc is
+  only a branch.
+- **mc handles a branch the deploy produced, not what is on it.** The script
+  must leave the checkout clean on `main` (mc refuses anything else there and
+  never resets it), so a change it made — the pin lines of an image it built —
+  is committed on a new branch from the deployed sha with git plumbing (HEAD and
+  the index never move), pushed, and named in one line, `Deploy branch:
+  <branch>`, whether the deploy succeeded, failed or was interrupted. mc opens a
+  pull request from that branch and queues it for the merger (step 10); it never
+  pushes to `main`, never opens a branch of its own, and does not look at the
+  diff. The only way a change reaches `main` is the merger, as for every other
+  change. A failure to open or queue the pull request changes nothing about the
+  deploy.
 - **The exit code is the script's.** mc adds no verdict of its own to a deploy
   that ran.
 
