@@ -2404,17 +2404,47 @@ describe('a repository that selects by diff', () => {
       return lines.join('\n');
     }
 
-    for (const kills of [1, 2, 3]) {
-      it(`a killed file is rerun alone; ${kills} external kills ${kills === 3 ? 'stall' : 'then green'}`, async () => {
-        const fx = selecting({ files: [scanner, own] });
+    for (const phase of ['selected', 'whole suite', 'own tests']) for (const kills of [1, 2, 3]) {
+      it(`a killed file is rerun alone from ${phase}; ${kills} external kills ${kills === 3 ? 'stall' : 'then green'}`, async () => {
+        const fx = selecting({ files: [scanner, own], full: phase === 'whole suite',
+          gitAlso: args => phase === 'own tests' && args[0] === 'diff'
+            ? { status: 0, stdout: `${scanner}\n`, stderr: '' } : undefined });
         let calls = 0;
+        let candidateDir;
+        const spawns = [];
+        const killedRun = ({ cwd }) => {
+          candidateDir = cwd;
+          const killed = ++calls <= kills;
+          // A real killed child has BOTH the parent's signal TAP and an
+          // unfinished reporter file. Whole-suite cuts use absolute paths.
+          return { code: killed ? 1 : 0,
+            tap: killed ? withKilled({ killed: [scanner] }).replaceAll('/somewhere/candidate', cwd) : tapWith([]),
+            cut: killed ? [phase === 'whole suite' ? join(cwd, scanner) : scanner] : [] };
+        };
         try {
-          const report = await fx.report({ tests: async () => ({ code: ++calls <= kills ? 1 : 0,
-            tap: calls <= kills ? withKilled({ killed: [scanner] }) : tapWith([]) }) });
+          const report = await fx.report({
+            ...(phase === 'whole suite' ? { suite: async options => killedRun(options) } : {}),
+            tests: async options => {
+              spawns.push(options);
+              if (phase === 'own tests' && spawns.length === 1) return { code: 0, tap: tapWith([]) };
+              return killedRun(options);
+            },
+          });
+          const file = phase === 'whole suite' ? join(candidateDir, scanner) : scanner;
           assert.equal(report.stopped_at, kills === 3 ? 'stalled' : null, report.reason);
           assert.equal(calls, kills === 3 ? 3 : kills + 1);
-          assert.deepEqual(report.unmeasured.files, [scanner]);
+          assert.deepEqual(report.unmeasured.files, [file]);
+          assert.deepEqual(report.alone.files.map(row => [row.file, row.outcome]),
+            Array.from({ length: kills === 3 ? 2 : kills }, (_, index) =>
+              [file, kills === 3 || index < kills - 1 ? 'killed' : 'passed']));
           assert.equal(report.alone.files.at(-1).outcome, kills === 3 ? 'killed' : 'passed');
+          for (const options of spawns.slice(phase === 'whole suite' ? 0 : phase === 'own tests' ? 2 : 1)) {
+            assert.deepEqual(options.files, [file]);
+            assert.equal(options.lanes, 1);
+            assert.equal(options.env.MC_TEST_LANES, '1');
+          }
+          for (const row of report.alone.files) assert.deepEqual(
+            row.argv.filter(arg => arg.startsWith('--test-timeout')), ['--test-timeout=600000']);
         } finally { fx.cleanup(); }
       });
     }
@@ -2424,7 +2454,7 @@ describe('a repository that selects by diff', () => {
       const probed = [];
       try {
         const report = await fx.report({
-          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }) }),
+          tests: () => Promise.resolve({ code: 1, tap: withKilled({ killed: [scanner], red: [own] }), cut: [scanner] }),
           readMainEvidence: async (args) => { probed.push(args.files); return { red_on_main: [], breaks: [] }; },
         });
         assert.equal(report.stopped_at, 'red');
@@ -2471,19 +2501,33 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    it('a merge round whose candidate run was cut short is not green, and names the file it did not finish', async () => {
-      const fx = selecting({ files: [scanner, own] });
-      const tap = '# tests 3\n# pass 3\n# fail 0\n';
-      try {
-        const report = await fx.report({
-          // The batch's own tracker found `own` started and never ended: its exit and summary read clean.
-          tests: () => Promise.resolve({ code: 0, tap, cut: [own] }),
-          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
-        });
-        assert.notEqual(report.stopped_at, 'green');
-        assert.match(report.reason ?? '', new RegExp(`output cut: ${own.replace(/[./]/gu, '\\$&')}`, 'u'));
-      } finally { fx.cleanup(); }
-    });
+    for (const phase of ['selected', 'whole suite', 'own tests', 'alone']) for (const siblingKilled of [false, true]) {
+      it(`an unexplained output cut in ${phase} refuses measurement${siblingKilled ? ' even beside a named killed file' : ''}`, async () => {
+        const fx = selecting({ files: [scanner, own], full: phase === 'whole suite',
+          gitAlso: args => phase === 'own tests' && args[0] === 'diff'
+            ? { status: 0, stdout: `${scanner}\n${own}\n`, stderr: '' } : undefined });
+        let calls = 0;
+        const cutRun = ({ cwd }) => ({ code: siblingKilled ? 1 : 0,
+          tap: siblingKilled ? withKilled({ killed: [scanner] }).replaceAll('/somewhere/candidate', cwd)
+            : '# tests 3\n# pass 3\n# fail 0\n',
+          cut: [own, ...(siblingKilled ? [scanner] : [])] });
+        try {
+          const report = await fx.report({
+            ...(phase === 'whole suite' ? { suite: async options => cutRun(options) } : {}),
+            tests: async options => {
+              calls++;
+              if (phase === 'own tests' && calls === 1) return { code: 0, tap: tapWith([]) };
+              if (phase === 'alone' && calls === 1) return { code: 1, tap: withKilled({ killed: [own] }), cut: [own] };
+              return cutRun(options);
+            },
+            readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+          });
+          assert.equal(report.verdict, phase === 'alone' ? 'red' : 'stopped');
+          assert.equal(report.stopped_at, phase === 'alone' ? 'red' : phase === 'own tests' ? 'pr-tests' : 'suite');
+          assert.match(report.reason ?? '', new RegExp(`output cut: ${own.replace(/[./]/gu, '\\$&')}`, 'u'));
+        } finally { fx.cleanup(); }
+      });
+    }
 
     /** The pull request's last round, as `gate-rounds.jsonl` keeps it. */
     function lastRound(fx, line) {

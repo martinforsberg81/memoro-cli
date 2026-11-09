@@ -98,6 +98,10 @@ by signal are **unmeasured**, not red. `report.unmeasured` names their files
 and gates. Genuine assertion red ends red without retrying these members,
 which remain named as not measured beside the red. A thrown hook is red with
 its own message; cancellation by itself is not evidence of a hook timeout.
+A killed file cannot finish its reporter output: a signal naming that same
+file in the parent TAP explains that file's output cut in suite, selected,
+own-test and alone runs. Other cut files still refuse measurement, even beside
+a named kill; nonempty completed TAP totals remain required.
 
 After the suite, command gates and PR's own tests, the round measures each
 unmeasured file alone, one at a time with `MC_TEST_LANES=1`. Declared loaders

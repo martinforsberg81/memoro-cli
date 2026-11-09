@@ -47,7 +47,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { claimLease, releaseLease } from './repo-lease.js';
@@ -1372,7 +1372,8 @@ async function measure({ suite, git, cwd, command, say, is }) {
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
-  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
+  const cut = unexplainedCuts(run, null, cwd);
+  if (cut.length) return { ok: false, reason: cutReason(cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
   }
@@ -1711,7 +1712,8 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
   if (run.aborted) return { ok: false, aborted: true, reason: 'was stopped before it finished' };
   const totals = tapTotals(run.tap);
   if (run.timedOut) return { ok: false, stalled: true, reason: `ran past ${Math.round(run.timeoutMs / 60_000)} min and was stopped — a test that never ends` };
-  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut) };
+  const cut = unexplainedCuts(run, files, cwd);
+  if (cut.length) return { ok: false, reason: cutReason(cut) };
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
   }
@@ -1740,6 +1742,16 @@ function killedOf(tap, files) {
     cancelled_files: cancelled,
     cancelled_red: redNamesIn(tap, cancelled),
   };
+}
+
+/**
+ * A killed file cannot finish its reporter output. Only a signal naming that
+ * same file in the parent TAP explains its cut; every other incomplete file
+ * still refuses measurement. Callers separately require nonempty TAP totals.
+ */
+function unexplainedCuts(run, files, cwd) {
+  const killed = new Set(killedFiles(run.tap, files).map(one => resolve(cwd, one.file)));
+  return (run.cut || []).filter(file => !killed.has(resolve(cwd, file)));
 }
 
 /**
@@ -2111,7 +2123,8 @@ async function ownTests({ tests, cwd, changed, say, flags = [], classify = null 
     classify(result);
     red = result.red;
   }
-  if (run.cut?.length) return { ok: false, reason: cutReason(run.cut), result };
+  const cut = unexplainedCuts(run, files, cwd);
+  if (cut.length) return { ok: false, reason: cutReason(cut), result };
   if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
   if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
   if (red.length) {
