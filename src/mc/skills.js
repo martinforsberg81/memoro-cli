@@ -130,8 +130,13 @@ export function skillStatus(env = process.env, options = {}) {
   catch (error) { return { rows: [], invalid: [error.message] }; }
 }
 
-function replaceBundle(at, files) {
+/** An unowned install, a real directory or a symlink, is never replaced. */
+function refuseUnowned(at) {
   if (lstatSync(at, { throwIfNoEntry: false }) && !owned(at)) throw new Error(`refusing to replace an unowned mc skill: ${at}`);
+}
+
+function replaceBundle(at, files) {
+  refuseUnowned(at);
   mkdirSync(join(at, '..'), { recursive: true });
   // Staging is outside skills/, so even recursive skill discovery sees no
   // temporary entrypoint or backup. Rename only after all writes succeeded.
@@ -159,6 +164,11 @@ function replaceBundle(at, files) {
 export function syncSkills(env = process.env, options = {}) {
   const wanted = wantedSkills(env, options)[0]; // Invalid source leaves all installs intact.
   const { rows } = statusFor(env, wanted);
+  // Refuse before any target is written, so one refused home cannot leave the other migrated.
+  for (const target of skillTargets(env)) {
+    const bundle = rows.find((row) => row.tool === target.tool && row.name === 'mc');
+    if (bundle.state !== 'ok') refuseUnowned(join(target.dir, 'mc'));
+  }
   const changed = [];
   for (const target of skillTargets(env)) {
     const mine = rows.filter((row) => row.tool === target.tool);
