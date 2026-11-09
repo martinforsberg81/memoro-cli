@@ -55,14 +55,10 @@ the goal anywhere but `merge`, and never back.
 Then end the session, in that same turn. A finish session that ends with the goal still `finish · ready` is set directly to `finish · Martin` by the runner; no mend session is launched.
 
 **Every finish.** Keep the goal's existing worktree, branch and pull request.
-Main advancing alone does not justify synchronization. Necessary integration
-for conflicts, landed prerequisites or upstream acceptance follows `tasks/git.md`
-and `docs/technical/mc-goals.md`, *Integrating main into a goal*, with recorded
-cause/revision, preserved scope/history and complete final-tree acceptance.
-Direct landing does not supply a later candidate gate. Commit as you go.
-Nothing in the background. Checks are yours to run as often as the diagnosis
-needs; no run counts against a
-budget. Record the commissioned proof — the gate logs with their paths, the
+Apply `tasks/git.md` when main integration is needed; the technical procedure
+is mc-goals.md, *Integrating main into a goal*. Commit as you go. Nothing in
+the background. Checks are yours to run as often as the diagnosis needs; no
+run counts against a budget. Record the commissioned proof — the gate logs with their paths, the
 timings, the head judged — in `LOG.md` with its commands and results, never
 only in the pull request.
 
