@@ -574,7 +574,8 @@ checks that routing without opening a coding tool.
   primitives and foreground records.
 
 `tests/mc/landed.test.js` pins the 24-hour outcome and which sessions each
-stage frame counts. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
+stage frame counts; `tests/mc/desk-cost.test.js` pins which transcripts are
+interactive, the incremental reading and the partial first reading. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
 menu routing and piped output. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
@@ -584,22 +585,35 @@ menu routing and piped output. `tests/mc/page-live.test.js` and
 The framed MC header says what mc is and what came out of it; the pipeline
 under it says where work stands now.
 
-**Hero frame.** Active and dormant programmes, the day's list-price cost, busy
-lanes of the lanes set, and the latest successful deploy in UTC (or
-`none recorded`). Then the last 24 hours' outcome, from runs.tsv alone
-(`landed.js`, `data.landed`):
+**Hero frame.** Active and dormant programmes, the runner's list-price cost
+today (`runner ≈$…`, its own sessions only), busy lanes of the lanes set, and
+the latest successful deploy in UTC (or `none recorded`). Then the last 24
+hours' outcome, from runs.tsv alone (`landed.js`, `data.landed`):
 
 - **Landed:** distinct goals merged (merge rows named `goal:…` whose note says
   `merged`), distinct pull requests merged without a goal (merge rows named
   after a repository), pull requests landed of all merge attempts, and first
   pass — the share of landed goals that never needed a finish or mend session.
-- **Per goal:** mean sessions, and the median and total list-price cost of each
-  landed goal, priced per row by its own `model` (`rowCost`,
-  [mc-status.md](mc-status.md#the-cost-estimate)). A session whose model has
-  no list price is named beside the cost.
-- **Session time per goal:** the sum of every non-merge session a landed goal
-  ever had — its whole life, not only the day — as a histogram over
+- **Per goal:** the goal's own work only — its build, review, finish and mend
+  sessions over its whole life, not only the day. Its planning is not the
+  goal's (Martin, 2026-11-09): headless plan rows are left out here and
+  counted on the planning line. Mean sessions, and the median and total
+  list-price cost (`rowCost`, [mc-status.md](mc-status.md#the-cost-estimate)).
+  A session whose model has no list price is named beside the cost.
+- **Session time per goal:** the same sessions' time, as a histogram over
   `<15, <30, <60, <120, <240, ≥240` minutes, then median, p25–p75, p90 and max.
+- **Planning & desks 24 h:** the list cost of every interactive session in the
+  last 24 hours — plan, manager, Martin's desk, the helper, on claude or
+  codex — and how many, then the headless plan sessions' cost from runs.tsv.
+  runs.tsv holds no interactive session, so these are read from the tools' own
+  transcripts (`desk-cost.js`, `data.desk_cost`): a claude transcript whose
+  `entrypoint` is `cli` (the runner's are `sdk-cli`), each message priced once
+  at its last reading as one request; a codex session whose `originator` is
+  `codex-tui`, its running total less its last reading before the window. A
+  cache (`~/mc/runner/desk-cost.json`) keeps each file's read offset, so a
+  collect reads only appended bytes, at most once a minute. The first reading
+  of a day (some 300 MB) is spread over collects at 24 MB each, and the line
+  says `so far` until it is complete.
 
 runs.tsv keeps the header it was created with; a shorter header that is a
 prefix of `RUNS_HEADER` is read with `RUNS_HEADER`, so the appended columns

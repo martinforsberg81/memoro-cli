@@ -23,6 +23,8 @@ describe('landed in the last 24 hours', () => {
     row('2026-11-09T11:00:00Z', 'goal:mc/b', 'finish', 600, 'success'),
     row('2026-11-09T12:00:00Z', 'goal:mc/b', 'merge', 5, 'red', { pr: '2', model: '-' }),
     row('2026-11-09T13:00:00Z', 'goal:mc/b', 'merge', 5, 'merged', { pr: '2', model: '-' }),
+    // Planning a goal is not the goal's own work.
+    row('2026-11-09T08:00:00Z', 'goal:mc/a', 'plan', 9000, 'success'),
     // A plan branch's PR, and one landed before the window.
     row('2026-11-09T14:00:00Z', 'memoro-cli', 'merge', 5, 'merged', { pr: '3', model: '-' }),
     row('2026-11-08T10:00:00Z', 'goal:mc/c', 'merge', 5, 'merged', { pr: '4', model: '-' }),
@@ -36,7 +38,7 @@ describe('landed in the last 24 hours', () => {
     assert.equal(landed.attempts, 4);
   });
 
-  it('sums each landed goal over its whole life, and a finish means not first pass', () => {
+  it('sums each landed goal over its whole life without its planning, and a finish means not first pass', () => {
     assert.equal(landed.first_pass, 1);
     assert.equal(landed.sessions_per_goal, 2.5);
     assert.equal(landed.time.max_min, 120);
@@ -49,6 +51,8 @@ describe('landed in the last 24 hours', () => {
     assert.equal(landed.cost.unpriced_sessions, 0);
     // A million output tokens: $20 on opus (Opus 5.5), $10 on gpt-6.1-sol.
     assert.equal(landed.cost.total, 20 + 20 + 20 + 10 + 20);
+    assert.equal(landed.plan_sessions, 1);
+    assert.equal(landed.plan_cost, 20, 'the planning is counted beside the goals');
   });
 });
 
