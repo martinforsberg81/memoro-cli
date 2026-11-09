@@ -2687,6 +2687,7 @@ describe('a repository that selects by diff', () => {
       try {
         const report = await fx.report({ prs: [7, 8] });
         assert.equal(report.reused, null);
+        assertReuse(fx, report, { mode: 'none', why: 'batch' });
         assert.ok(fx.runs.some((run) => run.files.length === files.length), 'the selection ran');
       } finally { fx.cleanup(); }
     });
@@ -2697,6 +2698,7 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report();
         assert.equal(report.reused, null);
         assert.equal(fx.suites.length, 1, 'the whole suite ran');
+        assertReuse(fx, report, { mode: 'none', why: 'full' });
       } finally { fx.cleanup(); }
     });
 
@@ -2713,11 +2715,20 @@ describe('a repository that selects by diff', () => {
     });
   });
 
+  /** Exercise the durable round record, not only the in-memory decision. */
+  function assertReuse(fx, report, expected) {
+    assert.deepEqual(report.reuse, expected);
+    recordRound(report, { root: fx.mcHome });
+    const line = JSON.parse(readFileSync(join(fx.mcHome, 'gate-rounds.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.deepEqual(line.reuse, expected);
+    assert.deepEqual(line.reused, report.reused, 'legacy success-only field is retained');
+  }
+
   describe('opt-in receipt reuse', () => {
     const files = ['tests/a.test.js', 'tests/b.test.js'];
     const commands = [{ packageScript: 'lint', passBaseRef: true }];
     const tree = 'c'.repeat(40);
-    function receiptRound({ limited = false, record = true } = {}) {
+    function receiptRound({ limited = false, record = true, measuredFiles = files, measuredCommands = commands } = {}) {
       let repository;
       const fx = selecting({ files, commands, scripts: { lint: marking('lint'), required: marking('required') },
         gitAlso: (args) => {
@@ -2744,10 +2755,10 @@ describe('a repository that selects by diff', () => {
         goal_revision: evidence.goalRevision, configuration: gateConfiguration(declaration, plan.flags, identity),
         base: 'a'.repeat(40), candidate }, before: candidate, after: candidate,
         started: '2026-01-01T00:00:00Z', ended: '2026-01-01T00:00:01Z', result: { ok: true, code: 0,
-          coverage: { kind: limited ? 'named' : 'affected', files, commands, pattern: null, flags: plan.flags, execution: identity },
+          coverage: { kind: limited ? 'named' : 'affected', files: measuredFiles, commands: measuredCommands, pattern: null, flags: plan.flags, execution: identity },
           execution: { tests: { exit: 0, finished: true, totals: { tests: 2, pass: 2, fail: 0 },
-            batches: files.length ? [spawnedBatch({ plan, files })] : [] },
-            commands: [{ exit: 0, ok: true }] } } });
+            batches: measuredFiles.length ? [spawnedBatch({ plan, files: measuredFiles })] : [] },
+            commands: measuredCommands.map(() => ({ exit: 0, ok: true })) } } });
       const path = persistGateReceipt({ root: fx.mcHome, receipt });
       if (record) recordReceiptGreen({ root: fx.mcHome, receipt, path });
       return { ...fx, evidence, path, tablePath, table };
@@ -2759,13 +2770,59 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report({ evidence: fx.evidence });
         assert.equal(report.verdict, 'green', report.reason);
         assert.equal(report.reused.mode, 'exact');
+        assertReuse(fx, report, { ...report.reused });
         assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']]);
         assert.equal(fx.mark('lint'), null);
         assert.equal(fx.mark('required'), '', 'required merge gate still ran');
       } finally { fx.cleanup(); }
     });
 
-    for (const condition of ['missing', 'limited', 'legacy', 'wrong-run', 'wrong-repo', 'configuration', 'version']) {
+    it('a same-tree superset receipt is exact reuse in the report and record', async () => {
+      const fx = receiptRound({ measuredFiles: [...files, 'tests/extra.test.js'],
+        measuredCommands: [...commands, { packageScript: 'types', passBaseRef: false }] });
+      try {
+        const report = await fx.report({ evidence: fx.evidence });
+        assert.equal(report.verdict, 'green', report.reason);
+        assert.equal(report.reused?.mode, 'exact');
+        assertReuse(fx, report, { ...report.reused, superset: true });
+        assert.deepEqual(fx.runs.map((run) => run.files), [['tests/a.test.js']]);
+        assert.equal(fx.mark('lint'), null);
+        assert.equal(fx.mark('required'), '');
+      } finally { fx.cleanup(); }
+    });
+
+    for (const [what, measuredFiles, measuredCommands] of [
+      ['files', [files[0]], commands],
+      ['command invocation', files, [{ ...commands[0], passBaseRef: false }]],
+      ['missing command', [...files, 'tests/extra.test.js'], []],
+    ]) {
+      it(`selection-differs (${what}) is in the report and record, with both counts`, async () => {
+        const fx = receiptRound({ measuredFiles, measuredCommands });
+        const said = [];
+        try {
+          const report = await fx.report({ evidence: fx.evidence, onProgress: line => said.push(line) });
+          assert.equal(report.verdict, 'green', report.reason);
+          assert.equal(report.reused, null);
+          assertReuse(fx, report, { mode: 'none', why: 'selection-differs',
+            receipt_files: measuredFiles.length, selected_files: files.length,
+            receipt_commands: measuredCommands.length, selected_commands: commands.length });
+          assert.deepEqual(fx.runs.map((run) => run.files), [files, ['tests/a.test.js']]);
+          assert.ok(said.some(line => line.startsWith('session green not reused — selection-differs (receipt ')));
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    it('no-affected-green-for-head is in the report and record without a cache entry', async () => {
+      const fx = receiptRound({ record: false });
+      try {
+        const report = await fx.report({ evidence: fx.evidence });
+        assert.equal(report.verdict, 'green', report.reason);
+        assertReuse(fx, report, { mode: 'none', why: 'no-affected-green-for-head' });
+        assert.deepEqual(fx.runs.map((run) => run.files), [files, ['tests/a.test.js']]);
+      } finally { fx.cleanup(); }
+    });
+
+    for (const condition of ['missing', 'limited', 'legacy', 'wrong-run', 'wrong-repo', 'configuration', 'version', 'execution', 'files']) {
       it(`${condition} evidence measures the relevant selection instead`, async () => {
         const fx = receiptRound({ limited: condition === 'limited', record: condition !== 'legacy' });
         try {
@@ -2781,11 +2838,21 @@ describe('a repository that selects by diff', () => {
             fx.table.repo.pr_tests_flags.push('--conditions=changed');
             writeJson(fx.tablePath, fx.table);
           }
+          if (condition === 'execution' || condition === 'files') {
+            const receipt = JSON.parse(readFileSync(fx.path, 'utf8'));
+            if (condition === 'execution') receipt.execution.tests.batches[0].forceExit = false;
+            else receipt.execution.tests.finished = false;
+            writeJson(fx.path, receipt);
+          }
           if (condition === 'legacy') recordGreen({ root: fx.mcHome, entry: {
             repo: 'repo', tree, selection: selectionHash({ files, commands }), gate_version: GATE_MEASUREMENT_VERSION } });
           const report = await fx.report({ evidence });
           assert.equal(report.verdict, 'green', report.reason);
           assert.equal(report.reused, null);
+          assertReuse(fx, report, condition === 'limited' ? { mode: 'none', why: 'no-affected-green-for-head' }
+            : { mode: 'none', why: 'receipt-invalid',
+              reason: ['missing', 'legacy', 'files', 'wrong-run'].includes(condition) ? 'files'
+                : ['wrong-repo', 'configuration'].includes(condition) ? 'configuration' : condition });
           assert.deepEqual(fx.runs.map((run) => run.files), [files, ['tests/a.test.js']]);
           assert.equal(fx.mark('lint'), '--base-ref base1111');
           assert.equal(fx.mark('required'), '');
@@ -2840,7 +2907,8 @@ describe('a repository that selects by diff', () => {
       });
       if (declare) {
         const table = JSON.parse(readFileSync(join(fx.mcHome, 'repo-gates.json'), 'utf8'));
-        table.repo.select_changed_path = true;
+        // Exercise memoro-cli's shipped opt-in through the real round's delta path.
+        table.repo.select_changed_path = declarationFor('/repos/memoro-cli', { root: fx.mcHome }).declaration.select_changed_path;
         writeJson(join(fx.mcHome, 'repo-gates.json'), table);
       }
       if (record) {
@@ -2880,6 +2948,7 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report({ onProgress: (line) => said.push(line) });
         assert.equal(report.verdict, 'green', report.reason);
         assert.deepEqual(report.reused, { mode: 'delta', at: AT, session: 'delta-session', delta_paths: 0, rerun_files: 0, rerun_commands: [] });
+        assertReuse(fx, report, { ...report.reused });
         assert.deepEqual(fx.runs.map((run) => run.files), [[own]], 'only the pull request\'s own tests');
         assert.equal(fx.mark('lint'), null);
         assert.equal(fx.mark('selector-delta'), null, 'no paths, no selector');
@@ -2888,7 +2957,7 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    it('a delta that reaches nothing selected is a whole reuse', async () => {
+    it('memoro-cli declaration reuses the head green across main movement reaching nothing selected', async () => {
       const fx = moved({ delta: { files: ['tests/elsewhere.test.js'] } });
       try {
         const report = await fx.report();
@@ -2896,6 +2965,7 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.reused.mode, 'delta');
         assert.equal(report.reused.delta_paths, 1);
         assert.equal(report.reused.rerun_files, 0);
+        assertReuse(fx, report, { ...report.reused });
         assert.deepEqual(fx.runs.map((run) => run.files), [[own]]);
         assert.equal(fx.mark('selector-delta'), "--list --json --base-ref origin/main --changed-path src/moved.js");
       } finally { fx.cleanup(); }
@@ -2945,11 +3015,11 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
-    for (const [what, options] of [
-      ['the green\'s base is not an ancestor of the base', { ancestor: 1 }],
-      ['git cannot say whether it is', { ancestor: 128 }],
-      ['the selector fails for the delta', { deltaExit: 3 }],
-      ['the selector prints no files for the delta', { delta: { nope: true } }],
+    for (const [what, options, kind] of [
+      ['the green\'s base is not an ancestor of the base', { ancestor: 1 }, 'not-ancestor'],
+      ['git cannot say whether it is', { ancestor: 128 }, 'ancestry-unknown'],
+      ['the selector fails for the delta', { deltaExit: 3 }, 'selector-exit'],
+      ['the selector prints no files for the delta', { delta: { nope: true } }, 'selector-files'],
     ]) {
       it(`${what}: the whole selection, said`, async () => {
         const fx = moved({ delta: { files: ['tests/b.test.js'] }, ...options });
@@ -2961,6 +3031,7 @@ describe('a repository that selects by diff', () => {
           assert.deepEqual(fx.runs.map((run) => run.files), [files, [own]]);
           assert.equal(fx.mark('lint'), '--base-ref base1111');
           assert.ok(said.some((line) => line.startsWith('delta reuse not taken — ')), said.join('\n'));
+          assertReuse(fx, report, { mode: 'none', why: 'delta-fallback', kind, reason: report.reuse?.reason });
         } finally { fx.cleanup(); }
       });
     }
@@ -2968,7 +3039,7 @@ describe('a repository that selects by diff', () => {
     for (const [what, options] of [
       ['a green from before base and files were recorded', { green: { base: undefined, files: undefined, head_tree: undefined } }],
       ['no green for the head', { record: false }],
-      ['a declaration that does not say select_changed_path', { declare: false }],
+      ['head-green-but-no-delta-declaration: a declaration that does not say select_changed_path', { declare: false }],
     ]) {
       it(`${what}: the whole selection`, async () => {
         const fx = moved({ delta: { files: [] }, ...options });
@@ -2978,6 +3049,10 @@ describe('a repository that selects by diff', () => {
           assert.equal(report.reused, null);
           assert.deepEqual(fx.runs.map((run) => run.files), [files, [own]]);
           assert.equal(fx.mark('selector-delta'), null);
+          assertReuse(fx, report, { mode: 'none', ...(options.declare === false
+            ? { why: 'head-green-but-no-delta-declaration' }
+            : options.record === false ? { why: 'no-affected-green-for-head' }
+              : { why: 'delta-fallback', kind: 'missing-base-or-files' }) });
         } finally { fx.cleanup(); }
       });
     }

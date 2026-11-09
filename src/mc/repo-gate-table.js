@@ -136,6 +136,11 @@ export const SHIPPED = Object.freeze({
     // asserts against `repo-gate.js`'s source that no merge call is in it, and
     // an import graph cannot see that.
     select: 'node scripts/affected-tests.js --base-ref origin/main',
+    select_changed_path: true,
+    select_changed_path_why: 'scripts/affected-tests.js:39,383 accepts repeatable --changed-path with --base-ref. '
+      + 'Measured 2026-11-09: 16 of 55 green merge rounds since 2026-11-05 that reused nothing '
+      + 'had valid same-version whole-selection head greens and identical files, but lacked this declaration '
+      + '(mc/evidence/2026-11-09-merge-rounds/measurement.md, The last five days and its reuse analysis)',
     select_why: 'measured 2026-08-30 on this repository\'s own gate work: 17 of 257 test files, '
       + '241 tests in 25 s, against 2,353 tests in ~100 s for the whole suite — twice, once a side. '
       + 'It fails closed to the full suite whenever a changed path is not source it can trace',
