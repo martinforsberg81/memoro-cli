@@ -95,7 +95,7 @@ import { PREPARE_CACHE_MAX_AGE_MS } from './prepare-cache.js';
 import { rmTree } from './rm-tree.js';
 import { ATTACHED_MARK } from './shared-deps.js';
 import {
-  SCRATCH_MARKER, SCRATCH_SCHEMA, exportDecision, exportShapeOk, gatherExports, removeExport,
+  SCRATCH_MARKER, SCRATCH_SCHEMA, exportDecision, exportShapeOk, gatherExports, removeExport, withSessionLockSync,
 } from './scratch.js';
 import { realLock } from './runner-lock.js';
 import { CACHE_KIND_ROOT, cachePathAllowed, gatherCacheFacts, rebuildableCache } from './tidy-caches.js';
@@ -1542,7 +1542,7 @@ export function applyTidy({
           applied.push({ path, ok: false, why: 're-check: its receipt, tree or dependency link changed since the list' });
           continue;
         }
-        const outcome = removeExport({ stemDir: item.stem_dir, receipt: item.receipt, identity: target.identity, at: now });
+        const outcome = withSessionLockSync(item.stem_dir, () => removeExport({ stemDir: item.stem_dir, receipt: item.receipt, identity: target.identity, at: now }));
         if (!outcome.ok) { applied.push({ path, ok: false, why: outcome.why }); continue; }
       } else if (target.kind === 'transcript') {
         const sibling = join(dirname(path), TRANSCRIPT.exec(basename(path))[1]);

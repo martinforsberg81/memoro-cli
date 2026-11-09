@@ -356,6 +356,24 @@ describe('scratch exports: explicit release', () => {
     } finally { m.cleanup(); }
   });
 
+  it('a session whose exports another mc process holds is left alone: release and sweep refuse, and the tree stays', async () => {
+    const m = machine();
+    try {
+      const dir = m.session('s34', { ended: undefined });
+      const made = await m.create(dir);
+      // A lock held by a live process (this one): the create, reuse, release and sweep of the session wait their turn.
+      writeFileSync(join(dir, RECEIPTS_DIR, '.lock'), `${process.pid}\n`);
+      const base = { scratch: dir, env: m.env, id: made.id, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen };
+      assert.throws(() => releaseExport({ ...base, apply: true }), /another mc process is changing this session/u);
+      assert.throws(() => sweepSession({ stemDir: dir, env: m.env, git: m.gitBoundary, repos: m.repos, standing: nothingStands, openIn: nothingOpen }), /another mc process/u);
+      await assert.rejects(() => m.create(dir), /another mc process/u);
+      assert.equal(read(join(made.path, 'src', 'a.js')), 'committed a, second\n', 'the tree is untouched while it is held');
+      unlinkSync(join(dir, RECEIPTS_DIR, '.lock'));
+      releaseExport({ ...base });
+      assert.equal(releaseExport({ ...base, apply: true }).applied, true, 'and released once the lock is gone');
+    } finally { m.cleanup(); }
+  });
+
   it('verifyExport refuses a receipt whose inventory does not reconcile with the retained commit', async () => {
     const m = machine();
     try {

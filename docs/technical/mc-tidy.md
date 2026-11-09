@@ -332,9 +332,9 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   resolved once to a full commit. Paths are literal relative names, normalized,
   deduplicated and sorted. Absolute, traversing, wildcard, empty and `.git`
   selections are refused; `.` is the whole repository. The inventory is one
-  `git ls-tree -r -l -z`. Contents stream from `git cat-file --batch` in 1 MiB
-  pieces, and each object's id and size are checked before its file is written
-  with `wx`. Regular and executable files (modes 100644, 100755) are written as
+  `git ls-tree -r -l -z`. Contents stream from `git cat-file --batch` in whatever
+  pieces the pipe delivers, never buffered whole; each object's id and size are
+  checked before its file is written with `wx`. Regular and executable files (modes 100644, 100755) are written as
   committed. A selected symbolic link, submodule or other entry is refused, not
   omitted. No checkout and no `.git` is made. A failed creation removes its own
   partial tree; an interrupted one leaves a directory that no receipt names, and
@@ -354,7 +354,8 @@ What it means in `src/mc/scratch.js` and `mc scratch` (the command help is `mc s
   retained ref names the commit; `ls-tree` at the commit for the literal paths
   equals the inventory exactly; the tree holds no entry that is not in the
   inventory, no directory outside it, and no link except a recorded `node_modules`;
-  each file has the recorded size, mode and blob id (streamed, bounded memory).
+  each file has the recorded size, mode and blob id (read in 1 MiB pieces, so
+  memory is bounded).
   A `removing` receipt (a removal that stopped part way) may lack files, never
   add or change any. A receipt that does not verify is kept with its reason.
 - **Reuse.** A repeated request in the same session, with the same key, returns

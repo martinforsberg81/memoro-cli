@@ -240,6 +240,20 @@ export async function withSessionLock(stemDir, fn) {
   }
 }
 
+/**
+ * The same session lock around a synchronous step (release, sweep and tidy's
+ * removal). Process-local calls cannot interleave a synchronous step, so the
+ * lock file is what another mc process has to wait for. A session with no
+ * `.mc-exports` directory has nothing to lock.
+ */
+export function withSessionLockSync(stemDir, fn) {
+  const dir = join(stemDir, RECEIPTS_DIR);
+  if (!lstatOrNull(dir)) return fn();
+  const lock = join(dir, '.lock');
+  acquireFileLock(lock);
+  try { return fn(); } finally { try { unlinkSync(lock); } catch { /* gone already */ } }
+}
+
 function acquireFileLock(lock) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try { writeFileSync(lock, `${process.pid}\n`, { flag: 'wx' }); return; } catch (error) {
@@ -614,7 +628,7 @@ export function exportDecision(item) {
 
 /**
  * Remove a verified export: the dependency link alone (never its target), then
- * the tree. The receipt says `removing` first and `released` after, so a
+ * the tree. Callers hold the session lock (`withSessionLockSync`). The receipt says `removing` first and `released` after, so a
  * partial removal is kept visible and retried safely. Returns `{ ok, why }`.
  */
 export function removeExport({ stemDir, receipt, identity, explicit = false, at = Date.now() }) {
@@ -680,6 +694,10 @@ export function gatherExports({ stemDir, env = process.env, git = realGit, repos
  * only what that plan still describes. Returns what went and what stayed.
  */
 export function sweepSession({ stemDir, env = process.env, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null }) {
+  return withSessionLockSync(stemDir, () => sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid }));
+}
+
+function sweepLocked({ stemDir, env, git, repos, standing, openIn, now, excludePid }) {
   const removed = [];
   const kept = [];
   const items = gatherExports({ stemDir, env, git, repos, standing, openIn, excludePid });
@@ -706,6 +724,10 @@ export function sweepSession({ stemDir, env = process.env, git = realGit, repos,
 export function releaseExport({ scratch, env = process.env, id, apply = false, git = realGit, repos, standing, openIn, now = Date.now(), excludePid = null }) {
   if (!ID.test(id || '')) throw new Error(`not an export id: ${id}`);
   const owner = ownerOf(scratch, env, { open: false });
+  return withSessionLockSync(owner.dir, () => releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env }));
+}
+
+function releaseLocked({ owner, id, apply, git, repos, standing, openIn, now, excludePid, env }) {
   const items = gatherExports({ stemDir: owner.dir, env, git, repos, standing, openIn, explicit: true, excludePid });
   const item = items.find((candidate) => candidate.id === id);
   if (!item) throw new Error(`no export ${id} in this session`);
