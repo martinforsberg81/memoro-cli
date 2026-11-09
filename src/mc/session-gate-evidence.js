@@ -1,10 +1,10 @@
 /** Immutable local measurements. A receipt describes checks, not permission to
  * publish or merge. Limited runs never enter the merger's full-selection cache. */
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, executionComplete, filesComplete, fullCoverage, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, executionComplete, filesComplete, fullCoverage, greensPath, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -175,7 +175,77 @@ export function persistGateReceipt({ root, receipt }) {
       writeFileSync(join(index, receipt.run), '', { flag: 'wx', mode: 0o600 });
     } catch { /* the next attempt on this content measures in full */ }
   }
+  // Retention follows the durable write and can never fail it (docs/technical/mc-gate-evidence.md, Retention).
+  try { pruneGateEvidence({ root }); } catch { /* skipped: the next session gate tries again */ }
   return path;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Retention horizons by file mtime (docs/technical/mc-gate-evidence.md, Retention). */
+export const RETENTION = Object.freeze({ selectorMs: 7 * DAY_MS, receiptMs: 30 * DAY_MS, tempMs: DAY_MS, everyMs: DAY_MS / 24 });
+const PRUNED = '.pruned';
+const RECEIPT_FILE = /^([a-zA-Z0-9-]+)\.json$/u;
+const SELECTOR_FILE = /^([a-zA-Z0-9-]+)\.selector\.json$/u;
+const TEMP_FILE = /^\.([a-zA-Z0-9-]+)\.[0-9a-f]{12}\.tmp$/u;
+const RUN_ID = /^[a-zA-Z0-9-]+$/u;
+const CONTENT_KEY = /^[0-9a-f]{64}$/u;
+
+/** The mtime of a regular file, or null when it is absent or not one. */
+function fileMtime(path) {
+  try { const stat = lstatSync(path); return stat.isFile() ? stat.mtimeMs : null; } catch { return null; }
+}
+
+function namesIn(path) {
+  try { return readdirSync(path); } catch { return []; }
+}
+
+/** The receipt files some gate-greens.jsonl line names. A line that does not parse names none. */
+function receiptsNamedByGreens(root) {
+  const named = new Set();
+  let text = '';
+  try { text = readFileSync(greensPath(root), 'utf8'); } catch { return named; }
+  for (const line of text.split('\n')) {
+    try { const entry = JSON.parse(line); if (typeof entry?.receipt === 'string') named.add(basename(entry.receipt)); }
+    catch { /* not a green line */ }
+  }
+  return named;
+}
+
+/**
+ * Bounded, best-effort retention of `<root>/gate-evidence/`, at most once an hour (the
+ * `.pruned` marker's mtime). Ages are file mtimes. Removes: selector sidecars over 7
+ * days; receipts over 30 days that no gate-greens.jsonl line names through `receipt`;
+ * temporary files over a day; content-index markers whose receipt is gone, and content
+ * directories left empty. Only names the writers produce are touched. Returns the
+ * removed names, or [] when it ran within the hour. A removal that fails is skipped.
+ */
+export function pruneGateEvidence({ root, now = Date.now() }) {
+  const dir = join(root, 'gate-evidence');
+  const marker = join(dir, PRUNED);
+  const last = fileMtime(marker);
+  if (last !== null && now - last < RETENTION.everyMs) return [];
+  writeFileSync(marker, '', { mode: 0o600 });
+  const removed = [];
+  const remove = (path, name) => { try { rmSync(path); removed.push(name); } catch { /* the next run retries */ } };
+  const aged = (path, horizonMs) => { const mtime = fileMtime(path); return mtime !== null && now - mtime > horizonMs; };
+  const named = receiptsNamedByGreens(root);
+  for (const name of namesIn(dir)) {
+    const path = join(dir, name);
+    if (RECEIPT_FILE.test(name)) { if (!named.has(name) && aged(path, RETENTION.receiptMs)) remove(path, name); }
+    else if (SELECTOR_FILE.test(name)) { if (aged(path, RETENTION.selectorMs)) remove(path, name); }
+    else if (TEMP_FILE.test(name) && aged(path, RETENTION.tempMs)) remove(path, name);
+  }
+  const content = join(dir, 'content');
+  for (const key of namesIn(content)) {
+    if (!CONTENT_KEY.test(key)) continue;
+    const keyDir = join(content, key);
+    for (const run of namesIn(keyDir)) {
+      const path = join(keyDir, run);
+      if (RUN_ID.test(run) && fileMtime(join(dir, `${run}.json`)) === null && fileMtime(path) !== null) remove(path, `content/${key}/${run}`);
+    }
+    if (!namesIn(keyDir).length) { try { rmdirSync(keyDir); removed.push(`content/${key}/`); } catch { /* not empty after all */ } }
+  }
+  return removed;
 }
 
 /** One directory name for one repository's exact content: repository, tree and raw-byte fingerprint. */

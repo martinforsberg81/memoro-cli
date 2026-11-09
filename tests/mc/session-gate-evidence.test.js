@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { it } from 'node:test';
-import { captureWorktree, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, sameContent, selectorSidecar } from '../../src/mc/session-gate-evidence.js';
+import { captureWorktree, contentKey, findPublicationReceipt, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, pruneGateEvidence, sameContent, selectorSidecar } from '../../src/mc/session-gate-evidence.js';
 import { findGreen, findGreenForHead, GATE_MEASUREMENT_VERSION, gateConfiguration, readGreenReceipt, selectionHash } from '../../src/mc/gate-greens.js';
 import { selectorCommand, runSessionGate as sessionGate } from '../../src/mc/session-gate-run.js';
 import { deltaFromGreen, executedTimeoutOf, executionIdentity, realTests, resolveTestPlan, selectFiles } from '../../src/mc/repo-gate.js';
@@ -759,4 +759,73 @@ it('a selector reference never completes a receipt: a pending selected command s
   assert.equal(receipt.outcome, 'incomplete', 'one selected command never ran: not green, whatever the reference says');
   assert.deepEqual(receipt.selector, selector);
   assert.equal(receipt.phases, null, 'a receipt without phase intervals is still a receipt');
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const agedBy = (path, ms) => { const at = (Date.now() - ms) / 1000; utimesSync(path, at, at); };
+/** Every name under `dir`, relative, directories with a trailing slash, sorted. */
+function listTree(dir) {
+  const names = [];
+  const walk = (rel) => {
+    for (const name of readdirSync(join(dir, rel))) {
+      const next = rel ? `${rel}/${name}` : name;
+      if (lstatSync(join(dir, next)).isDirectory()) { names.push(`${next}/`); walk(next); }
+      else names.push(next);
+    }
+  };
+  walk('');
+  return names.sort();
+}
+
+it('prune removes exactly the expired evidence and keeps what a retained green names', async (t) => {
+  const { request } = fixture(t);
+  const req = { ...request(), files: null, select: 'selector' };
+  const dir = join(req.gate.root, 'gate-evidence');
+  const options = { write: () => {}, select: async () => ({ ok: true, files: ['a.test.js'], commands: [] }),
+    tests: reporting({ code: 0, tap: GREEN }) };
+  const green = receiptOf(await runSessionGate(req, options));
+  assert.equal(green.outcome, 'green');
+  const key = contentKey('repo', req.measurement.candidate);
+  const other = contentKey('repo', { repository: req.measurement.candidate.repository, tree: 'c'.repeat(40), fingerprint: 'f' });
+  const empty = 'e'.repeat(64);
+  const file = (rel, ms, text = '') => { const path = join(dir, rel); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); agedBy(path, ms); };
+  agedBy(join(dir, 'gate-one.json'), 40 * DAY);
+  file('gate-one.selector.json', 8 * DAY, '{}\n');
+  file('fresh.selector.json', 6 * DAY, '{}\n');
+  file('fresh.json', DAY, '{}\n');
+  file('young.json', 29 * DAY, '{}\n');
+  file('expired.json', 31 * DAY, '{}\n');
+  file('.gate-one.abcdef012345.tmp', 2 * DAY);
+  file('.fresh.abcdef012345.tmp', 60 * 60 * 1000);
+  file('notes.txt', 40 * DAY, 'kept: not a writer name\n');
+  file(`content/${key}/gate-one`, 0);
+  file(`content/${key}/fresh`, 0);
+  file(`content/${key}/expired`, 0);
+  file(`content/${key}/gone`, 0);
+  file(`content/${key}/notes.v1`, 0);
+  file(`content/${other}/expired`, 0);
+  file('content/notes/gone', 0);
+  mkdirSync(join(dir, 'content', empty), { recursive: true });
+  // The marker written by the run is an hour old, so the next prune is due.
+  agedBy(join(dir, '.pruned'), 2 * 60 * 60 * 1000);
+  const before = listTree(dir);
+  const removed = pruneGateEvidence({ root: req.gate.root });
+  const expectedRemoved = [
+    '.gate-one.abcdef012345.tmp', 'expired.json', 'gate-one.selector.json',
+    `content/${key}/expired`, `content/${key}/gone`, `content/${other}/`, `content/${other}/expired`, `content/${empty}/`,
+  ].sort();
+  const expectedSurvivors = [
+    '.fresh.abcdef012345.tmp', '.pruned', 'content/', `content/${key}/`, `content/${key}/fresh`, `content/${key}/gate-one`,
+    `content/${key}/notes.v1`, 'content/notes/', 'content/notes/gone', 'fresh.json', 'fresh.selector.json', 'gate-one.json', 'notes.txt', 'young.json',
+  ].sort();
+  assert.deepEqual([...removed].sort(), expectedRemoved);
+  assert.deepEqual(listTree(dir), expectedSurvivors);
+  assert.deepEqual([...expectedSurvivors, ...expectedRemoved].sort(), before, 'nothing outside the two lists changed');
+  assert.equal(existsSync(join(dir, 'content', other)), false, 'the content directory of a removed receipt is gone');
+  const found = findGreen({ root: req.gate.root, repo: 'repo', tree: green.tree, selection: selectionHash(green.coverage) });
+  assert.equal(found?.receipt, join(dir, 'gate-one.json'), 'the retained green is still found without its sidecar');
+  // Within the hour nothing is removed, even with an expired receipt present.
+  file('late.json', 40 * DAY, '{}\n');
+  assert.deepEqual(pruneGateEvidence({ root: req.gate.root }), []);
+  assert.equal(existsSync(join(dir, 'late.json')), true, 'the hourly marker, not an empty pass, held it back');
 });
