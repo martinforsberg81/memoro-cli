@@ -8,7 +8,7 @@
  * round kept no selection to check against.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -276,22 +276,79 @@ describe('red files are read from where node says the failure is', () => {
   });
 });
 
-it('only completed exact-SHA main evidence can classify standing failures, without any execution', () => {
+it('per-commit exact-SHA coverage reads covered_green, covered_red and not_covered; a completed green run clears red', () => {
   const root = mkdtempSync(join(tmpdir(), 'mc-main-red-evidence-'));
   try {
-    const query = { root, repo: 'memoro', baseCommit: 'base-sha', files: ['tests/a.test.js'] };
-    assert.ok(readMainRed(query).stopped);
-    const result = { totals: { finished: true }, red_files: query.files,
-      red_tests: [{ file: 'tests/a.test.js', name: 'existing failure' }] };
-    assert.equal(recordMainRed({ root, repo: 'memoro.git', commit: 'base-sha', result }), true);
+    const query = { root, repo: 'memoro', baseCommit: 'base-sha', files: ['tests/a.test.js', 'tests/green.test.js', 'tests/unknown.test.js'] };
+    assert.deepEqual(Object.values(readMainRed(query).states).map(one => one.state), ['not_covered', 'not_covered', 'not_covered']);
+    const result = { totals: { finished: true }, red_files: ['tests/a.test.js'],
+      red_tests: [{ file: 'tests/a.test.js', name: 'existing failure', diagnostic: 'digest' }] };
+    assert.equal(recordMainRed({ root, repo: 'memoro.git', commit: 'base-sha', result, covered: query.files.slice(0, 2) }), true);
     const evidence = readMainRed(query);
-    assert.deepEqual(evidence.red_on_main, query.files);
+    assert.deepEqual(Object.values(evidence.states).map(one => one.state), ['covered_red', 'covered_green', 'not_covered']);
+    assert.deepEqual(evidence.states['tests/a.test.js'].tests, result.red_tests);
     assert.deepEqual(evidence.tests, result.red_tests);
     assert.equal(evidence.cached, true);
+    assert.ok(!existsSync(join(root, 'main-red/memoro.json')), 'never write the legacy path');
+    assert.equal(JSON.parse(readFileSync(join(root, 'main-red/memoro/base-sha.json'))).from, 'full');
     assert.ok(readMainRed({ ...query, baseCommit: 'new-sha' }).stopped);
     assert.equal(recordMainRed({ root, repo: 'memoro', commit: 'base-sha', result: { totals: { finished: false } } }), false);
     assert.deepEqual(readMainRed(query), evidence, 'incomplete health runs cannot replace known evidence');
-    assert.equal(recordMainRed({ root, repo: 'memoro', commit: 'base-sha', result: { totals: { finished: true } } }), true);
-    assert.ok(readMainRed(query).stopped, 'a completed green run clears standing-red evidence');
+    assert.equal(recordMainRed({ root, repo: 'memoro', commit: 'base-sha', covered: query.files, result: { totals: { finished: true } } }), true);
+    assert.deepEqual(readMainRed(query).red_on_main, [], 'a completed green run clears standing-red evidence');
+    assert.deepEqual(readMainRed(query).green_on_main, query.files);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('legacy main evidence is read only at its commit, red is covered and unlisted files stay unknown', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-main-red-legacy-'));
+  try {
+    const legacy = { commit: 'legacy', files: ['red'], tests: [{ file: 'red', name: 'failure', diagnostic: 'digest' }] };
+    mkdirSync(join(root, 'main-red'));
+    const path = join(root, 'main-red/memoro.json');
+    writeFileSync(path, JSON.stringify(legacy));
+    const query = { root, repo: 'memoro', baseCommit: 'legacy', files: ['red', 'other'] };
+    assert.deepEqual(readMainRed(query).states, { red: { state: 'covered_red', tests: legacy.tests }, other: { state: 'not_covered' } });
+    assert.equal(readMainRed({ ...query, baseCommit: 'different' }).cached, false);
+    recordMainRed({ root, repo: 'memoro', commit: 'next', from: 'landing', baseCommit: 'legacy', covered: ['other'], result: {} });
+    assert.deepEqual(readMainRed({ ...query, baseCommit: 'next' }).green_on_main, ['other']);
+    assert.deepEqual(JSON.parse(readFileSync(path)), legacy, 'landings never rewrite legacy evidence');
+    writeFileSync(join(root, 'main-red/memoro/next.json'), '{}');
+    assert.equal(readMainRed({ ...query, baseCommit: 'next' }).cached, false, 'malformed records cannot grant coverage');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('landing inheritance replaces the measured selection, preserves other coverage and reds, and a gap breaks the chain', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-main-red-chain-'));
+  try {
+    const write = options => recordMainRed({ root, repo: 'memoro', ...options });
+    const tests = [{ file: 'fixed', name: 'old', diagnostic: 'old' }, { file: 'standing', name: 'still red', diagnostic: 'digest' }];
+    write({ commit: 'base', covered: ['fixed', 'standing', 'green'], result: { totals: { finished: true }, red_tests: tests } });
+    write({ commit: 'landed', baseCommit: 'base', from: 'landing', covered: ['fixed', 'new'], result: {} });
+    const query = { root, repo: 'memoro', baseCommit: 'landed', files: ['fixed', 'standing', 'green', 'new', 'unknown'] };
+    const proof = readMainRed(query);
+    assert.deepEqual(proof.tests, [tests[1]]);
+    assert.deepEqual(proof.green_on_main, ['fixed', 'green', 'new']);
+    assert.deepEqual(proof.not_covered, ['unknown']);
+    assert.equal(proof.inherited_from, 'base');
+    write({ commit: 'after-admin', baseCommit: 'admin-gap', from: 'landing', covered: ['new'], result: {} });
+    assert.equal(readMainRed({ ...query, baseCommit: 'after-admin' }).states.green.state, 'not_covered');
+    // A full run replaces rather than inheriting previous coverage.
+    write({ commit: 'landed', baseCommit: 'base', covered: ['new'], result: { totals: { finished: true } } });
+    assert.equal(readMainRed(query).states.green.state, 'not_covered');
+    assert.equal(readMainRed(query).inherited_from, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it('main evidence retains the newest 200 commits by at, not filename', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-main-red-retention-'));
+  try {
+    const dir = join(root, 'main-red/memoro');
+    mkdirSync(dir, { recursive: true });
+    const start = Date.parse('2026-11-01T00:00:00Z');
+    for (let i = 0; i < 201; i++) writeFileSync(join(dir, `commit-${i}.json`), JSON.stringify({ at: new Date(start + i * 1000).toISOString() }));
+    recordMainRed({ root, repo: 'memoro', commit: 'newest', at: new Date(start + 202000).toISOString(), covered: [], result: { totals: { finished: true } } });
+    const expected = [...Array.from({ length: 199 }, (_, i) => `commit-${i + 2}.json`), 'newest.json'].sort();
+    assert.deepEqual(readdirSync(dir).sort(), expected);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

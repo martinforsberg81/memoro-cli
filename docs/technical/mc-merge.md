@@ -631,14 +631,40 @@ their results, inheriting the base commit's record for files outside its
 selection — and a PR round reads three states at its exact base: covered and
 green, covered and red (name and digest), not covered. The exemption below is
 unchanged in what it exempts. Measured: in 986 rounds over the fortnight to
-2026-11-09 the exemption fired 0 times, because its only writer is the
-whole-suite run and memoro's nightly completed 0 of 7 ticks. The nightly stays
-the meter. The goal `mc/main-evidence-from-landings` carries it into the code.
+2026-11-09 the exemption fired 0 times: before the landing chain, evidence
+required a completed whole-suite run and memoro's nightly failed 7 of 7 ticks.
+The nightly stays the meter.
 
 **Main's red is not investigated on a PR's clock** (Martin, 2026-11-04).
-A completed main-only run records its base SHA, failing test files, names and
-diagnostics under `<mc home>/main-red/<repo>.json`. A PR round may read that
-already-measured evidence for its exact base SHA. Every candidate failure must
+Every green landing whose landed tree is byte-identical to its measured tree
+writes `<mc home>/main-red/<repo>/<commit>.json` for its new main commit.
+The record is `{ commit, covered, files, tests, from, inherited_from, at }`:
+`covered` names the files measured or reused (including the receipt's members),
+`files` the red files, and `tests` their file, name and diagnostic digest.
+`from` is `landing` or `full`; `at` is the write time. The newest 200 records
+are kept, pruning oldest by `at`. The old `<mc home>/main-red/<repo>.json` is
+read for its commit only and never written again; its unlisted files are
+unknown, not green.
+
+A landing inherits the exact base commit's record outside its selection:
+base record minus this round's selection, plus this round's results. The
+selector defines the change's reach, so files outside it are unchanged in
+reach. The candidate's red (empty on green) and exempted `main_red.tests` are
+carried forward: an untouched standing red stays red on the new main.
+`inherited_from` names that base, or is null without a base record. Without
+one, only this round's coverage is known. A batch writes a record per landed
+commit in order, each inheriting from the one before; the documents-only
+route writes the same evidence from its measurement after proving tree
+identity. A non-identical landing writes nothing. An `--admin` landing writes
+nothing and leaves a gap: the next landing cannot inherit through that commit.
+
+A PR round reads three states per asked file at its exact base SHA:
+`covered_green`, `covered_red` (with its tests), and `not_covered`. Missing,
+stale or malformed records mean `not_covered`, never green by assumption.
+A candidate red in a `covered_green` file is named as green on main at the
+base commit, so mend knows it is the change's; the verdict remains red.
+The reason states the evidence state and which landing (or full run) wrote
+it, including an inherited base when present. Every candidate failure must
 match the recorded file, name and diagnostic, and the PR must leave those test
 files unchanged; otherwise the round remains red. The diagnostic compared is a
 digest of the whole error (`diagnostic` in `red_tests`, from `tap-red.js`), not
@@ -869,7 +895,9 @@ plainly that nothing was merged.
 The former live reproduction and first-parent attribution walk are no longer
 called by `runGate`. `readMainRed` in
 [`src/mc/selector-miss.js`](../../src/mc/selector-miss.js) only reads an
-exact-SHA record from a completed main-only run. The historical diagnostic
+exact-SHA coverage record from the landing chain or a completed full run,
+returning `covered_green`, `covered_red` and `not_covered`. It never bridges an
+`--admin` gap. The historical diagnostic
 helpers and old `selector-misses.jsonl` entries remain available; they are not
 work a PR round performs. See *Main's red is not investigated*, above.
 
@@ -1345,6 +1373,10 @@ It exists because memoro's whole suite ran only when a person typed `npm run
 test:full`, and #10529 is what that produced: four days of merges left 31 tests
 red on `main` while every pull request's affected-selection passed, because
 nothing ever looked at the whole.
+
+The landing chain supplies PR rounds' evidence; the nightly remains the
+whole-suite meter and writes `from: full` with every file it ran and no
+inheritance when it completes.
 
 It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
 nothing it finds refuses a merge, delays a round or changes a verdict. It never

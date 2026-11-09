@@ -24,6 +24,9 @@ import { claimLease, readLease, releaseLease } from '../../src/mc/repo-lease.js'
 import { parseMergeArgs } from '../../src/mc/commands/repo.js';
 
 const parseArgs = (argv) => parseMergeArgs(argv.slice(1));
+import { readMainRed, recordMainRed } from '../../src/mc/selector-miss.js';
+import { measureDocs } from '../../src/mc/docs-measure.js';
+import { runDocsMerge } from '../../src/mc/docs-merge.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { landJob, serve } from '../../src/mc/merger.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
@@ -163,6 +166,92 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
   };
 }
+
+describe('identical landings write main coverage', () => {
+  const selected = ['tests/selected.test.js', 'tests/standing.test.js'];
+  const standing = { file: selected[1], name: 'standing red', diagnostic: 'digest' };
+  const verdict = () => ({ ...green(), selection: { selected }, candidate: { ...green().candidate, tree: LANDED },
+    main_red: { tests: [standing] } });
+
+  it('a green identical landing writes merge_commit coverage, carries main_red tests and inherits the base record', async () => {
+    const fx = fixture({ verdict: verdict() });
+    try {
+      const inherited = { file: 'tests/outside.test.js', name: 'outside red', diagnostic: 'outside' };
+      recordMainRed({ root: fx.mcHome, repo: fx.repoPath, commit: BASE, covered: ['tests/outside.test.js', 'tests/base-green.test.js', selected[0]],
+        result: { totals: { finished: true }, red_tests: [inherited, { file: selected[0], name: 'now fixed', diagnostic: 'old' }] } });
+      const report = await fx.run();
+      assert.equal(report.tree_identical, true);
+      const proof = readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: report.merge_commit,
+        files: [...selected, inherited.file, 'tests/base-green.test.js', 'tests/unknown.test.js'] });
+      assert.equal(proof.cached, true, 'the landing writes evidence for merge_commit');
+      assert.deepEqual(proof.red_on_main, [selected[1], inherited.file]);
+      assert.deepEqual(proof.green_on_main, [selected[0], 'tests/base-green.test.js']);
+      assert.deepEqual(proof.not_covered, ['tests/unknown.test.js']);
+      assert.deepEqual(proof.tests, [inherited, standing]);
+      assert.equal(proof.inherited_from, BASE);
+      assert.equal(proof.from, 'landing');
+      assert.equal(proof.at, '2026-08-17T09:00:00.000Z');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a non-identical landed tree writes no main evidence', async () => {
+    const gate = verdict();
+    gate.candidate.tree = 'different-tree';
+    const fx = fixture({ verdict: gate });
+    try {
+      const report = await fx.run();
+      assert.equal(report.tree_identical, false);
+      assert.equal(existsSync(join(fx.mcHome, 'main-red/repo', `${report.merge_commit}.json`)), false);
+      assert.equal(readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: report.merge_commit, files: selected }).cached, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a reused round covers the receipt members as well as the selection without inventing other coverage', async () => {
+    const gate = verdict();
+    gate.reused = { mode: 'exact', covered: ['tests/receipt-member.test.js'] };
+    const fx = fixture({ verdict: gate });
+    try {
+      const report = await fx.run();
+      const proof = readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: report.merge_commit,
+        files: [...selected, ...gate.reused.covered, 'tests/unknown.test.js'] });
+      assert.deepEqual(proof.green_on_main, [selected[0], ...gate.reused.covered]);
+      assert.deepEqual(proof.red_on_main, [standing.file]);
+      assert.deepEqual(proof.not_covered, ['tests/unknown.test.js']);
+      assert.equal(proof.inherited_from, null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a measured documents-only identical landing writes the same inherited coverage; a mismatch writes nothing', async () => {
+    const fx = fixture();
+    try {
+      recordMainRed({ root: fx.mcHome, repo: fx.repoPath, commit: BASE, covered: ['tests/unchanged.test.js'], result: { totals: { finished: true } } });
+      for (const identical of [true, false]) {
+        const commit = identical ? 'docs-identical' : 'docs-mismatch';
+        const gh = args => ({ ok: true, stdout: JSON.stringify(args.at(-1).includes('files')
+          ? { number: 400, title: 'Documents', state: 'OPEN', baseRefName: 'main', headRefName: 'docs', headRefOid: HEAD, files: [{ path: 'docs/technical/example.md' }] }
+          : args.at(-1) === 'mergeable' ? { mergeable: 'MERGEABLE' }
+            : args.at(-1) === 'headRefOid' ? { headRefOid: HEAD } : { state: 'MERGED', mergeCommit: { oid: commit } }), stderr: '' });
+        const report = await runDocsMerge({ repoPath: fx.repoPath, pr: 400, root: fx.mcHome, gh,
+          git: async args => ({ status: 0, stdout: args[0] === 'rev-parse' ? (identical ? 'measured-tree' : 'different-tree') : '' }),
+          measure: args => measureDocs({ ...args, env: { MC_HOME: fx.mcHome, MC_WORK_ROOT: fx.root }, deps: {
+            git: async args => {
+              if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args[3], { recursive: true });
+              return { status: args.includes('--verify') ? 1 : 0,
+                stdout: args[1] === 'origin/main' ? BASE : args[1] === 'HEAD^{tree}' ? 'measured-tree' : '' };
+            },
+            candidateCwds: () => [], takeLane: async () => {}, releaseLane: () => {},
+            declaration: () => ({ ok: true, declaration: { select: 'select' } }),
+            select: async () => ({ ok: true, files: [selected[0]] }),
+            tests: async () => ({ code: 0, tap: 'TAP version 13\nok 1 - documents\n1..1\n# tests 1\n# pass 1\n# fail 0' }),
+          } }) });
+        assert.equal(report.tree_identical, identical);
+        const proof = readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: commit, files: [selected[0], 'tests/unchanged.test.js'] });
+        assert.equal(proof.cached, identical);
+        assert.deepEqual(proof.green_on_main, identical ? [selected[0], 'tests/unchanged.test.js'] : []);
+      }
+    } finally { fx.cleanup(); }
+  });
+});
 
 describe('a green gate lands the change', () => {
   it('a dropped owner persisted while the real gate runs prevents the GitHub merge', async () => {
@@ -958,20 +1047,27 @@ describe('a batch lands in order, or falls back one by one', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('every landing is checked against the measured build\'s prefix tree, and identity is said (PM\'s ruling)', async () => {
+  it('a batch chains main evidence per landed commit in order, checking each measured prefix tree', async () => {
     // "Verified together" and "landed one at a time" are two claims; the
     // bridge is identity, measured, not assumed. The stub's rev-parse
     // answers LANDED for the tree reads, so prefix trees of LANDED are the
     // measured build reproduced exactly.
-    const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'landed402', 'landed403'] };
+    const verdict = { ...greenBatch(), selection: { selected: ['tests/selected.test.js'] }, candidate_trees: ['landed401', 'landed402', 'landed403'] };
     const fx = batchFixture({ verdict });
     try {
+      recordMainRed({ root: fx.mcHome, repo: fx.repoPath, commit: BASE, covered: ['tests/inherited.test.js'], result: { totals: { finished: true } } });
       // rev-parse origin/main^{tree} → the generic branch of the stub,
       // which answers what the last merge made: landedN.
       const progress = [];
       const report = await fx.run({ refresh: () => ({ ok: true, at: 'abc1234' }), onProgress: (line) => progress.push(line) });
       assert.equal(report.ok, true, report.reason);
       assert.equal(report.tree_identical, true);
+      for (const [index, commit] of ['landed401', 'landed402', 'landed403'].entries()) {
+        const proof = readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: commit,
+          files: ['tests/selected.test.js', 'tests/inherited.test.js'] });
+        assert.deepEqual(proof.green_on_main, ['tests/selected.test.js', 'tests/inherited.test.js'], 'the chained landing inherits coverage outside its selection');
+        assert.equal(proof.inherited_from, index === 0 ? BASE : `landed${400 + index}`);
+      }
       assert.ok(progress.some((line) => /#401 landed byte-identical to the measured build/u.test(line)), progress.join('|'));
     } finally { fx.cleanup(); }
   });

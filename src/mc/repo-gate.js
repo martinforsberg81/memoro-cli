@@ -38,7 +38,7 @@
  * that conflation would license.
  *
  * Main's health is not investigated on a PR's clock (Martin, 2026-11-04).
- * Completed main-only runs record exact-SHA standing failures. A PR may read
+ * Identical landings and completed full runs record exact-SHA coverage. A PR may read
  * that evidence for unchanged test files with the same failing names, but never
  * checks out main, reproduces its failures or walks its history. Missing or stale
  * evidence fails closed; it is not proof that this PR introduced the failure.
@@ -67,7 +67,7 @@ import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
+import { TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -884,7 +884,7 @@ export async function runGate({
       if (alone || retried) report.head_alone = { red: result.red_files };
       if (facts.pr && result.red_files?.length) {
         report.main_red = await readMainEvidence({
-          baseCommit: report.base.commit, files: result.red_files, root, repo: repoPath,
+          baseCommit: report.base.commit, files: [...new Set([...result.red_files, ...(report.main_red_files || [])])], root, repo: repoPath,
         });
         const proof = report.main_red;
         if (proof?.stopped) say(proof.stopped);
@@ -1000,7 +1000,7 @@ export async function runGate({
             killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
           },
         };
-        report.reused = { mode: 'exact', at: green.at ?? null, session: green.session ?? null };
+        report.reused = { mode: 'exact', at: green.at ?? null, session: green.session ?? null, covered: coveredByGreen(green) };
         report.reuse = { ...report.reused, ...(green.selection !== selection.hash ? { superset: true } : {}) };
         say(`the candidate's tree ${tree.slice(0, 7)} was measured green by mc gate at ${green.at} with ${report.reuse.superset ? 'a superset of the selection' : 'the same selection'} — not measured again`);
       }
@@ -1038,7 +1038,7 @@ export async function runGate({
       } else if (delta.kind === 'reuse') {
         const { green } = delta;
         report.reused = {
-          mode: 'delta', at: green.at ?? null, session: green.session ?? null,
+          mode: 'delta', at: green.at ?? null, session: green.session ?? null, covered: coveredByGreen(green),
           delta_paths: delta.paths.length, rerun_files: delta.files.length, rerun_commands: delta.commands.map((entry) => entry.packageScript),
         };
         report.reuse = { ...report.reused };
@@ -1104,7 +1104,7 @@ export async function runGate({
     // The suite and every selected gate have now finished; a process bound is stalled.
     if (!after.ok) return finish(after.stalled ? 'stalled' : 'suite', `the run ${after.reason}${after.stalled ? `; files in flight: ${nameSome(pendingFiles()) || 'none named'}; load ${loadavg()[0]}` : ''}`);
     report.candidate = after.result;
-    if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result });
+    if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result, covered: after.result.covered, from: 'full' });
     // The measured tree's own hash, so a landing can later prove — not
     // assume — that main became exactly what was measured (track 3's
     // correction, 2026-08-23: "verified together" and "landed one at a
@@ -1409,6 +1409,7 @@ async function measure({ suite, git, cwd, command, say, is }) {
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
+      covered: [...new Set([...(run.covered || []), ...(run.tests || []).map(test => test.file).filter(Boolean)])],
       // Each red test's failure, cut out of the run for whoever fixes it.
       red_tests: redTests(run.tap, null, { cwd }),
       // No file list to name them by: the locations as node wrote them.
@@ -1744,7 +1745,7 @@ async function measureSelected({ tests, git, cwd, files, flags, say, is, signal 
   return {
     ok: true,
     result: {
-      commit, is, exit_code: run.code, totals, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
+      commit, is, exit_code: run.code, totals, covered: files, red: redNames(run.tap), red_files: redFiles(run.tap, files), selected: files.length,
       red_tests: redTests(run.tap, files), batches: run.batches || [],
       ...killedOf(run.tap, files),
     },
@@ -1950,6 +1951,18 @@ async function defaultBaseRef({ git, repoPath }) {
   return ref || null;
 }
 
+// findGreen/findGreenForHead already validated the receipt. Preserve its
+// measured members as well as the current selector's reach in a landing.
+function coveredByGreen(green) {
+  if (green.receipt) {
+    try {
+      const receipt = JSON.parse(readFileSync(green.receipt, 'utf8'));
+      return receipt.members?.files?.map(member => member.file) || receipt.coverage.files;
+    } catch { /* older exact-tree entries still name their files */ }
+  }
+  return green.files || [];
+}
+
 /**
  * The clause a red reason gains when some of its red was main's already.
  *
@@ -1957,6 +1970,15 @@ async function defaultBaseRef({ git, repoPath }) {
  * question it answers — "is this my change?" — is the first one they ask.
  */
 export function mainRedClause(probe) {
+  if (probe?.states) {
+    const source = probe.cached ? `${probe.from === 'landing' ? 'landing' : 'full run'} at ${probe.base}`
+      + (probe.inherited_from ? ` (inherited from ${probe.inherited_from})` : '') : null;
+    const clauses = [];
+    if (probe.red_on_main.length) clauses.push(`covered_red: ${probe.red_on_main.join(', ')} — red on main; evidence written by ${source}`);
+    if (probe.green_on_main.length) clauses.push(`covered_green: ${probe.green_on_main.join(', ')} — green on main at ${probe.base}; evidence written by ${source}`);
+    if (probe.not_covered.length) clauses.push(`not_covered: ${probe.not_covered.join(', ')} — unknown on main at ${probe.base}`);
+    return clauses.length ? ` — ${clauses.join('; ')}` : '';
+  }
   if (!probe?.red_on_main?.length) return '';
   const count = probe.red_on_main.length;
   const name = (found) => (found.pr ? `#${found.pr}` : found.commit.slice(0, 7));
@@ -2723,7 +2745,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       rmSync(timesFile, { force: true });
       const tests = testsMeasured(text, cwd);
       recordTooSlow({ root: workRoot(env), repo: times.repo, where: times.where, tests });
-      return { cut, tests };
+      return { cut, tests, covered: Object.keys(measuredSeconds(text, cwd)) };
     };
     const child = spawn(command, {
       cwd,
@@ -2765,9 +2787,9 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
     child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A suite whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
-      const { cut, tests } = noteTimes();
+      const { cut, tests, covered } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
-      resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests });
+      resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests, covered });
     });
   });
 }
