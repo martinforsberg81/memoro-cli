@@ -83,11 +83,11 @@ belongs to its owner; integration does not certify that check as repaired.
 After integration, run the affected criterion checks and complete final-tree
 whole-selection GREEN before publication and the normal review or finish
 handoff. Record the judged head, frozen base, logs and ran/reused provenance.
-Direct goal landing adds no candidate gate or head/base validation; do not
-defer this acceptance to the merger. This procedure authorizes no test waiver,
-budget change, product-scope change, admin override or deployment. Only a
-remaining product/policy choice or reserved act goes to Martin; the need for
-ordinary integration alone does not.
+The merger measures the combined candidate and reuses the session’s evidence;
+the session’s acceptance remains required because it is what the merger reuses.
+This procedure authorizes no test waiver, budget change, product-scope change,
+admin override or deployment. Only a remaining product/policy choice or reserved
+act goes to Martin; the need for ordinary integration alone does not.
 
 ```
 ~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria, its stage and status
@@ -589,11 +589,11 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   goal text, acceptance, product/privacy policy or test protection scope.
   After a content-changing repair it establishes affected criterion evidence
   and completed whole-selection GREEN on the final judged worktree before
-  authorizing direct landing. An unchanged retry may retain still-valid evidence
-  under the existing reuse rules. Explicitly approved verification exceptions
-  keep their exact scope; no later merger gate is assumed. It publishes repairs
-  with `mc publish --no-merge`, records cause, repair and evidence, then requeues
-  every registered PR with `mc goal stage merge` and ends in the same turn.
+  authorizing landing through the round. An unchanged retry may retain still-valid
+  evidence under the existing reuse rules. Explicitly approved verification
+  exceptions keep their exact scope; the merger’s reuse does not replace this acceptance.
+  It publishes repairs with `mc publish --no-merge`, records cause, repair and
+  evidence, then requeues every registered PR with `mc goal stage merge` and ends in the same turn.
   A `ready` completion lets the runner restore missing delivery. Before
   publishing or requeueing, it rereads the goal and preserves any intervening person decision: it cannot
   clear Martin's hold or reactivate a completed/dropped goal. These are session
@@ -659,11 +659,12 @@ checks, in order:
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
 output som ingen läser."* Its output is exactly three things:
 
-- **The stage, always one of two.** OK: `mc goal stage merge`, which directly
-  lands all registered pull requests. Before authorizing it, the review or
-  finish session must complete GREEN `mc gate --whole-selection` on the judged
-  worktrees; landing adds no gate or head validation. See the canonical
-  [publication and direct landing procedure](../../canon/tasks/publish-and-merge.md).
+- **The stage, always one of two.** OK: `mc goal stage merge`, which queues
+  all registered pull requests for the ordinary measured round. Before authorizing
+  it, the review or finish session must complete GREEN `mc gate --whole-selection`
+  on the judged worktrees; the round reuses this receipt (exact or delta) and measures the rest,
+  without re-checking criteria or the reviewed head. See the canonical
+  [publication and landing procedure](../../canon/tasks/publish-and-merge.md).
   Not OK: `REVIEW.md` in
   the goal's directory — the head sha judged, what is wrong and where — then
   `mc goal stage finish`. Nobody reads a review that went to `merge`, so it
@@ -729,8 +730,11 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 
 ## The merger
 
-A session sends a goal to `merge`. Every registered PR is merged directly,
-without another gate, criterion check or reviewed-head check. Each landing is
+A session sends a goal to `merge`. Every registered PR lands through the ordinary
+measured round on the current base, reusing the session’s whole-selection receipt
+(exact when tree and selection match, delta for selected main movement) and
+measuring the rest. The squash is pinned to the head the round measured. The
+merger does not re-check criteria or the reviewed head. Each landing is
 recorded in LOG.md under the shared lock; when the last PR lands the goal is
 `done`. A first or second failed merge sets `merge · blocked` and starts merge-only
 recovery when the PR is not already queued. Mend returns it to `merge · ready`
@@ -738,6 +742,8 @@ for delivery again. The third failed merge sets `merge · Martin`. Failure
 counting uses merger results in LOG.md, not mend-session starts; an interactive
 ready entry starts a new cycle. An in-scope repair that cannot be completed
 still uses the existing escalation path.
+A pushed head leaves the queue with the goal still in merge for mend to re-judge
+it. Ordinary requeue, offline backoff and dropped-goal ownership checks apply.
 The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.

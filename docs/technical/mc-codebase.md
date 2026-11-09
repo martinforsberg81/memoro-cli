@@ -91,12 +91,13 @@ Ordinary `mc merge <repo> <pr>` jobs run `runMergeRound` in
 floor (`src/mc/tap-red.js`, `src/mc/red-ratchet.js`), never a count, so a
 standing red name does not block an unrelated change and a new one does.
 
-Goal jobs take a different route: `mc goal stage merge` authorizes direct
-landing in `src/mc/merger.js`, without another gate or head/base validation.
+Goal jobs take the same measured round: `mc goal stage merge` queues the
+session’s decision in `src/mc/merger.js`. The round reuses its whole-selection
+receipt (exact or delta), measures the rest and pins the squash to the measured head.
 Before that decision, review, finish or mend must complete the affected-selection
 measurement required by the canonical
 [publish-and-merge task](../../canon/tasks/publish-and-merge.md).
-See [mc-merge.md](mc-merge.md) for both landing routes and their bookkeeping.
+See [mc-merge.md](mc-merge.md) for the landing contract and bookkeeping.
 
 ## Credential boundary (normative)
 

@@ -17,7 +17,9 @@ and what the goal's criteria still lack, run each criterion's check and record
 the ones that hold (`mc goal criterion met <n>`), run `mc gate`, commit,
 `mc publish --no-merge`, write your `LOG.md` entry with the evidence, then
 `mc goal stage merge`. Your decision authorizes landing: mc merges every
-registered pull request without another review. Finish all records before
+registered pull request through the ordinary measured round, reusing the
+session’s whole-selection receipt (exact or delta) and measuring the rest,
+without another review or criteria/reviewed-head check. Finish all records before
 that command; in a runner session it ends the session the moment every pull
 request is queued.
 
