@@ -46,6 +46,12 @@ selected, to have completed successfully with known exits and unchanged
 content. The ceiling does not make a selected test set smaller or claim to
 solve the study selector's test-selection ceiling.
 
+## Retention
+
+Selector sidecars are attribution and are kept 7 days. Receipts are kept 30 days, and longer while a retained gate-greens.jsonl entry names them. A pruned receipt only costs reuse: resume and candidate reuse treat a missing receipt as no evidence, never as green. Pruning runs at most hourly after a session gate and never affects its verdict.
+
+Ages are file mtimes. The prune (`pruneGateEvidence`, `src/mc/session-gate-evidence.js`) also removes temporary files over a day, content-index markers whose receipt is gone, and content directories left empty. It touches only names the writers produce; `gate-evidence/.pruned` records the last run. A selector sidecar is written by the session route only (`session-gate-run.js`); the candidate route (`repo-gate.js`) keeps `raw_sha256` and `report.intervals` and writes no sidecar.
+
 ## Settling a red
 
 A command gate that exits nonzero in the round is not called red at once. Its
