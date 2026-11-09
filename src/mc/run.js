@@ -1889,7 +1889,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // recorded as cleanup and changes nothing about the session, the goal or the provider.
       await reclaimSessionExports(scratchEnv.MC_SCRATCH, name);
       noteWindows({ name, launch }, result.stdout);
-      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now() });
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
@@ -1910,7 +1910,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
       const note = spoke ? read.note : `${read.note},no-log`;
-      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       say(`${name}: ${kind} done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
       return 'ran';
     } finally { admission.release?.(); dropSlot(); }

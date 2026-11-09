@@ -79,7 +79,7 @@ describe('SESSIONS', () => {
     assert.deepEqual(timed.stop_requested, { at: '2026-08-29T11:30:00.000Z', age_seconds: 1800 });
     assert.equal(runner.day.steps, 3);
     assert.equal(runner.day.timeout, 1);
-    assert.ok(runner.day.cost > 8 && runner.day.cost < 8.2, `≈ $8.07 list (cache writes at 2×): ${runner.day.cost}`);
+    assert.ok(runner.day.cost > 4.7 && runner.day.cost < 4.85, `≈ $4.78 list on Opus 5.5 (cache writes at 2×): ${runner.day.cost}`);
   });
 
   /**
@@ -181,9 +181,9 @@ describe('SESSIONS', () => {
     runner.day.by_kind = day;
     const dayAt = (columns) => renderPageLines(pageData({ runner }), { columns, now: NOW, expand: true }).find((l) => /^ {2}24 h /u.test(l));
     const counts = '  24 h · build 6 (1 merged, 2 built, 1 blocked, 1 failed, 1 timed out) · review 2 (1 queued) · plan 1 (1 open) · other 2';
-    assert.equal(dayAt(160), `${counts} · ≈$8.07 list (per model, 2026-06)`);
+    assert.equal(dayAt(160), `${counts} · ≈$4.78 list (per model, 2026-11-09)`);
     // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
-    assert.equal(dayAt(140), `${counts} · ≈$8.07 list`);
+    assert.equal(dayAt(140), `${counts} · ≈$4.78 list`);
     assert.equal(dayAt(122), counts);
   });
 

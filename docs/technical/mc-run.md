@@ -271,8 +271,14 @@ user-level servers.
 - **runs.tsv** appends one row after each session or chore, in this order:
 
 ```
-ts name kind exit seconds pr turns input output cache_read cache_write session note land_seconds model class tool effort billing
+ts name kind exit seconds pr turns input output cache_read cache_write session note land_seconds model class tool effort billing cost
 ```
+
+`cost` is the session's list-price cost in dollars, priced when it ends
+([mc-status.md § The cost estimate](mc-status.md#the-cost-estimate)); `-` for
+chores, merge rows and rows written before 2026-11-09. The file keeps the
+header it was created with; readers take a shorter header that is a prefix of
+`RUNS_HEADER` as `RUNS_HEADER` (`readRunRows`, landed.js).
 
 The page reads these files, not a transcript to infer the goal's state.
 Dropped goals are finalized and archived immediately through the shared drop

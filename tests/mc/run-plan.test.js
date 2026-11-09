@@ -126,7 +126,7 @@ test('sessionSettings: a sent plan\'s removed runner key changes nothing', () =>
 test('readSessionOutput: claude json usage fields, dashes when absent', () => {
   const out = JSON.stringify({ subtype: 'success', num_turns: 7, session_id: 's1', usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30 } });
   const r = readSessionOutput({ toolId: 'claude-code', stdout: out, exitCode: 0 });
-  assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
+  assert.deepEqual(r, { turns: '7', session: 's1', input: '10', output: '20', cacheRead: '30', cacheWrite: '-', cost: null, note: 'success', quota: false, quotaReset: null });
   assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: 'garbage', exitCode: 1 }).note, 'no-json');
 });
 
@@ -199,7 +199,7 @@ describe('readSessionOutput on a stream-json run', () => {
 
   it('reads the result line when it is the last one', () => {
     const r = readSessionOutput({ toolId: 'claude-code', stdout: [init, assistant, result()].join('\n'), exitCode: 0 });
-    assert.deepEqual(r, { turns: '4', session: 'sid', input: '10', output: '20', cacheRead: '300', cacheWrite: '40', note: 'success', quota: false, quotaReset: null });
+    assert.deepEqual(r, { turns: '4', session: 'sid', input: '10', output: '20', cacheRead: '300', cacheWrite: '40', cost: null, note: 'success', quota: false, quotaReset: null });
   });
 
   it('reads it with junk after it', () => {
@@ -245,7 +245,7 @@ describe('readSessionOutput on a stream-json run', () => {
     assert.equal(summed.subtype, 'error_during_execution');
     assert.equal(summed.result, 'blocked');
     const r = readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 0 });
-    assert.deepEqual(r, { turns: '32', session: 'sid', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', note: 'failed', quota: false, quotaReset: null });
+    assert.deepEqual(r, { turns: '32', session: 'sid', input: '11', output: '22', cacheRead: '303', cacheWrite: '44', cost: null, note: 'failed', quota: false, quotaReset: null });
   });
 
   it('keeps the quota rule: a short limit answer is quota', () => {
@@ -300,7 +300,20 @@ test('readSessionOutput: a quota answer is logged as quota, never success', () =
 test('readSessionOutput: codex events give what they give', () => {
   const lines = [JSON.stringify({ type: 'thread.started', thread_id: 't9' }), 'not json', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 5, cached_input_tokens: 2, output_tokens: 3 } })].join('\n');
   const r = readSessionOutput({ toolId: 'codex', stdout: lines, exitCode: 0 });
-  assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', note: 'success', quota: false, quotaReset: null });
+  assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', cost: null, note: 'success', quota: false, quotaReset: null });
+  // With its model, a codex session is priced on its totals: 3 uncached and 2 cached input, 3 output.
+  const priced = readSessionOutput({ toolId: 'codex', stdout: lines, exitCode: 0, model: 'gpt-6.1-sol' });
+  assert.equal(priced.cost, (3 * 2 + 2 * 0.1 + 3 * 10) / 1e6);
+});
+
+/** Haiku 5.5 lists a 5× tier for a request whose prompt is over 100k tokens; only a request can cross it. */
+test('streamSummary prices each message on its own, so a long prompt is tiered and a short one is not', () => {
+  const ev = (id, usage) => JSON.stringify({ type: 'assistant', session_id: 's', message: { id, model: 'claude-haiku-5-5', usage } });
+  const stdout = [ev('m1', { input_tokens: 50_000, output_tokens: 1_000 }), ev('m2', { input_tokens: 10, cache_read_input_tokens: 150_000, output_tokens: 1_000 })].join('\n');
+  // m1 at 0.1/0.5; m2 over 100k at 0.5/2.5 with its cache read at 0.1× of 0.5.
+  const expected = (50_000 * 0.1 + 1_000 * 0.5) / 1e6 + (10 * 0.5 + 150_000 * 0.05 + 1_000 * 2.5) / 1e6;
+  assert.ok(Math.abs(streamSummary(stdout).total_cost_usd - expected) < 1e-12);
+  assert.ok(Math.abs(readSessionOutput({ toolId: 'claude-code', stdout, exitCode: 143 }).cost - expected) < 1e-12);
 });
 
 test('readSessionOutput: a codex crash whose work mentions quota is a failure, a refusal event is quota', () => {
@@ -322,13 +335,14 @@ test('readSessionOutput: a codex crash whose work mentions quota is a failure, a
  * and not inserted beside `seconds`, because the header is written once, when
  * the file is created, and the one on this machine still carries thirteen.
  */
-test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time, then the model', () => {
-  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel\tclass\ttool\teffort\tbilling');
+test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time, the model, and the cost', () => {
+  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel\tclass\ttool\teffort\tbilling\tcost');
   const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged', landSeconds: 1830, model: 'sonnet' });
-  assert.equal(row.split('\t').length, 19);
-  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830\tsonnet\t-\t-\t-\t-');
-  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 19);
-  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-\t-\t-\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
+  assert.equal(row.split('\t').length, 20);
+  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830\tsonnet\t-\t-\t-\t-\t-');
+  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 20);
+  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-\t-\t-\t-\t-\t-\t-$/u, 'a step that never reached a landing says so, and a row with no model a dash');
+  assert.match(tsvRow({ ts: 'T', cost: 1.234567 }), /\t1\.2346$/u, 'the session\'s cost, to a hundredth of a cent');
 });
 
 const wait = (checkInMinutes = 60, stallMinutes = 20) => ({ checkInMinutes, stallMinutes });

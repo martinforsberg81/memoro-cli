@@ -47,8 +47,8 @@ describe('landed in the last 24 hours', () => {
   it('prices sessions by their own model, read past the old header', () => {
     assert.equal(landed.cost.priced, 2);
     assert.equal(landed.cost.unpriced_sessions, 0);
-    // A million output tokens: $25 on opus, $10 on gpt-6.1-sol.
-    assert.equal(landed.cost.total, 25 + 25 + 25 + 10 + 25);
+    // A million output tokens: $20 on opus (Opus 5.5), $10 on gpt-6.1-sol.
+    assert.equal(landed.cost.total, 20 + 20 + 20 + 10 + 20);
   });
 });
 

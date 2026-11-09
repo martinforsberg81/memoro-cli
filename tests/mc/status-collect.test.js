@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
-import { estimateCost, priceFor } from '../../src/mc/prices.js';
+import { estimateCost, priceFor, rowCost } from '../../src/mc/prices.js';
 import { nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
 const TSV = [
@@ -20,10 +20,11 @@ const ROWS = parseRuns(TSV).filter((row) => Date.parse(row.ts) >= Date.parse('20
 
 describe('COST', () => {
   it('prices by family, and says n/a for a model it does not know', () => {
-    assert.deepEqual(priceFor('opus'), { input: 5, output: 25 });
+    assert.deepEqual(priceFor('opus'), { input: 4, output: 20, cacheRead: 0.2 }, 'opus is Opus 5.5');
     assert.deepEqual(priceFor('claude-fable-5'), { input: 10, output: 50 });
     assert.equal(estimateCost({ input: 1e6 }, 'gemini'), null);
-    assert.equal(estimateCost({ cacheRead: 1e6 }, 'opus'), 0.5);
+    assert.equal(estimateCost({ cacheRead: 1e6 }, 'opus'), 0.2, 'Opus 5.5 lists cache reads at 0.05×');
+    assert.equal(rowCost({ cost: '1.2345', model: 'opus', output: '9999999' }), 1.2345, 'a recorded cost is the cost');
   });
 
   it('prices OpenAI cached input out of its input, at its own listed rate', () => {
@@ -32,7 +33,7 @@ describe('COST', () => {
     assert.equal(Math.round(cost * 1000) / 1000, 0.2 + 0.51 + 1);
     assert.equal(estimateCost({ input: 1e6, cacheRead: 1e6 }, 'gpt-6-luna'), 0.01);
     // Anthropic's input excludes the cache, so the same numbers add up instead.
-    assert.equal(estimateCost({ input: 1e6, cacheRead: 1e6 }, 'opus'), 5.5);
+    assert.equal(estimateCost({ input: 1e6, cacheRead: 1e6 }, 'opus'), 4.2);
   });
 });
 
