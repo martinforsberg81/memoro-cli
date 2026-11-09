@@ -157,9 +157,11 @@ Next: what the next session should do
   minute; `<tool>` is `MC_TOOL`, `person` or `runner`; `<model>` is `MC_MODEL`
   when set; `<stage> · <status>` is where the goal is after the entry. An entry
   written before stages has `· <status>` alone, and is read with no stage.
-  `· by <role>` names the session that wrote it, from `MC_ROLE`: `build`, `review`,
-  `plan`, `manager`, else the role's name before its `:`. A person's entry, or one
-  with no `MC_ROLE`, has none; so does a runner's. It is not the stage: a build
+  `· by <role>` names the writer from `MC_ROLE` alone: `build`, `review`,
+  `plan`, `manager`, else the role's name before its `:`. `MC_TOOL=person` or an
+  unset `MC_TOOL` does not suppress it; no role, or a word containing whitespace,
+  writes none. This attribution does not change stage/person authorization.
+  It is not the stage: a build
   session that moves a goal to `review` writes `· review · ready · by build`.
 - The labels are `Done:`, `Comment:` and `Next:`, in English like the rest of
   the goal. A log written before 2026-11-03 has `Gjort:`, `Kommentar:` and
@@ -203,6 +205,14 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
   as holding, after its check was run, or takes it back. A number the goal
   has no criterion for is refused.
+- **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`** — rewrites
+  the criterion's text or check and leaves it unmet, logging the old and new
+  text. A build, review, finish or mend role is refused, from `MC_ROLE` alone.
+- **`criterion remove [<p>/<g>] <n> --reason "…"`** — removes the criterion and
+  renumbers those after it, logging its text, check, met state and reason.
+  The same goal-session roles are refused; the only criterion cannot be removed.
+  A criterion verb's refusal of its arguments exits 2 and writes nothing;
+  a missing or unparsable GOAL.json remains exit 1.
 - **`convert [<p>]`** — turns every goal of the programme (of every programme
   when none is named) still written as GOAL.md into GOAL.json (*Converting a
   GOAL.md*), then gives every goal still written with `after` its phase
@@ -524,8 +534,7 @@ overarching role the runner woke at different moments). Plan is interactive,
 - **A finish session** (`MC_ROLE=finish-session`, `canon/roles/finish-session.md`)
   takes a goal in `finish · ready`: it fixes what review found, runs criterion
   checks and `mc gate`, publishes, then queues merge. It changes code within
-  contract, not goal text or product scope. A criterion verb's refusal of its
-  arguments exits 2 and writes nothing. It resolves its own acceptance
+  contract, not goal text or product scope. It resolves its own acceptance
   obstacles; an unresolved design choice/reserved act goes directly to Martin.
   If it ends with `finish · ready`, the runner changes it to `finish · Martin`.
 - **A mend session** (`MC_ROLE=mend-session`, `canon/roles/mend-session.md`)
