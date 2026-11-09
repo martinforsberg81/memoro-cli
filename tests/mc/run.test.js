@@ -3875,3 +3875,95 @@ test('programme priority is reread live within a stage; blocked recovery, review
   f.files[`${base}/goals/new/GOAL.json`] = withGoal(f.files[`${base}/goals/new/GOAL.json`], { phase: 1, status: 'ready' });
   assert.equal(runner.nextWork().name, 'goal:prog/older', 'reset restores oldest first');
 });
+
+
+test('next-draft planning launches one selected goal with PLAN identity and hands its completed brief to build', async () => {
+  const f = goalFixture({ z: { stage: 'draft', phase: 2 }, a: { stage: 'draft' }, done: { stage: 'done' }, gone: { stage: 'dropped' } });
+  f.files[`${GOALS}/a/GOAL.json`] = withGoal(f.files[`${GOALS}/a/GOAL.json`], { success_criteria: [] });
+  f.answer = call => {
+    assert.equal(call.cwd, `${GOALS}/a/memoro`);
+    assert.equal(call.env.MC_ROLE, 'plan');
+    assert.equal(call.env.MC_HEADLESS, '1');
+    assert.equal(call.env.MC_GOAL, 'prog/a');
+    assert.match(call.prompt, /complete exactly this draft/u);
+    assert.match(call.prompt, /Do not implement the draft/u);
+    assert.match(call.prompt, /goal-bound mc ask/u);
+    assert.match(call.checkIn(60, 1), /Complete the selected draft/u);
+    f.files[`${GOALS}/a/GOAL.json`] = withGoal(f.files[`${GOALS}/a/GOAL.json`], { stage: 'build', success_criteria: [{ criterion: 'bounded delivery', check: 'focused fixture', met: false }] });
+    return logsItself(f, 'a')(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 1);
+  assert.equal(where(f, 'a'), 'build · ready');
+  assert.equal(runRows(f.files).at(-1).kind, 'plan');
+  assert.equal(runner.nextWork().kind, 'build');
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('an incomplete ordinary plan waits on Martin and holds later drafts without spinning', async () => {
+  const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 1);
+  assert.equal(where(f, 'a'), 'draft · Martin');
+  assert.match(f.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
+  assert.equal((await runner.pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('planning rechecks programme eligibility after allocation before launching', async () => {
+  const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
+  f.deps.attachDeps = async () => {
+    f.files[`${GOALS}/b/GOAL.json`] = withGoal(f.files[`${GOALS}/b/GOAL.json`], { stage: 'build', status: 'Martin' });
+    return { ok: true };
+  };
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(where(f, 'a'), 'draft · ready');
+  assert.match(f.log.join('\n'), /programme changed during admission/u);
+});
+
+test('a live predecessor session holds programme planning even when its goal has finished', () => {
+  const f = goalFixture({ a: { stage: 'draft' }, old: { stage: 'done' } }, { livePids: [777] });
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ pid: 777, lane: 0, name: 'goal:prog/old', repo: 'memoro' });
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null);
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ pid: 777, lane: 0, repo: 'memoro' });
+  assert.equal(createRunner({ deps: f.deps }).nextWork(), null, 'unknown current ownership holds planning');
+});
+
+test('another lane cannot plan a second draft while the selected draft is held', async t => {
+  const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  f.answer = async () => { await wait; return okSession()(); };
+  t.after(() => release());
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ lane: 0 });
+  await turns();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal((await runner.pass({ lane: 1 })).ran, 0);
+  release();
+  await first;
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('an offline plan ending retains its draft and existing retry hold', async () => {
+  const f = goalFixture({ a: { stage: 'draft' } });
+  f.answer = UNREACHABLE;
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass()).ran, 1);
+  assert.equal(where(f, 'a'), 'draft · ready');
+  assert.equal(f.files[`${GOALS}/a/LOG.md`], '');
+  assert.equal((await runner.pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 1);
+  assert.match(runRows(f.files).at(-1).note, /offline/u);
+});
+
+
+test('a quota refusal during planning preserves draft readiness and records provider backoff', async () => {
+  const f = goalFixture({ a: { stage: 'draft' } });
+  f.answer = REFUSED_429;
+  await createRunner({ deps: f.deps }).pass();
+  assert.equal(where(f, 'a'), 'draft · ready');
+  assert.ok(f.deps.capacity.read().providers.claude.refusal_until);
+  assert.doesNotMatch(f.files[`${GOALS}/a/LOG.md`], /without completing the draft/u);
+});

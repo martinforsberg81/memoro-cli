@@ -4,7 +4,7 @@ A goal is a directory, `~/mc/programs/<programme>/goals/<goal>/`: `GOAL.json`
 (the goal, contract, out of scope, documents, and success criteria, each with a
 check and a `met`) and `LOG.md` (one entry per session). A worktree per
 repository on branch `goal/<goal>` is made at the goal's first use: the runner
-makes it before the first session on the goal (a build, review, finish or mend
+makes it before the first session on the goal (a plan, build, review, finish or mend
 session), and `mc tidy` releases it when no session can use it. Its
 branch stays, and the next use re-adds it as it was. `mc goal --help` is the
 reference; `mc goal show <programme>/<goal>` renders one goal, each criterion
@@ -38,7 +38,7 @@ with ✓/✗ and its check, and each worktree's state.
   Read the entry back with `mc goal show` before moving the stage.
 - **Stage and status.** A goal is `<stage> · <status>`: stage `draft → build
   → review → finish → merge → done` (or `dropped`), status `ready`, `blocked` or `Martin`. The stage only moves forward, each stage with one owner: the
-  interactive plan session writes it in `draft` and moves it to `build`; a build
+  plan session writes it in `draft` and moves it to `build`; a build
   session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
@@ -82,7 +82,7 @@ with ✓/✗ and its check, and each worktree's state.
   merge|finish` from a review, `finish` without REVIEW.md, any but `finish →
   merge` from a finish session, every stage move from a mend session, and
   `review` from a session other than plan while a criterion is not met. The
-  runner starts no session on `draft · ready`, on `Martin`, or a build session
+  runner starts no delivery session on `draft · ready`, no session on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
@@ -93,3 +93,10 @@ with ✓/✗ and its check, and each worktree's state.
   cancelled, and the goal is archived immediately when safe. Shared PRs stay
   open and queued. Failed or unsafe cleanup stays visible and retries through
   the runner without starting a mend/build session.
+
+- **Next draft planning.** With at least one draft and all programme goals in
+  draft, done or dropped, the runner may plan its next draft (lowest phase,
+  oldest creation time, name). Unreadable goal data or a first draft waiting
+  on Martin prevents that launch. One session completes only that draft into
+  build using its goal worktrees. Interactive mc plan remains the person's
+  entrance; empty programmes and proposals alone start no plan turn.

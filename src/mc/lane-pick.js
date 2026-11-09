@@ -6,7 +6,8 @@
  * - `mend` only for an unqueued merge failure;
  * - `finish` for a goal in finish;
  * - `review` for a goal in review;
- * - `build` for a goal in build.
+ * - `build` for a goal in build;
+ * - `plan` for one next draft in a programme with no delivery left.
  *
  * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
  * first repository, and `phaseOpen` (goals in the lowest unfinished valid
@@ -16,7 +17,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * A merge-failure mend goes first, then finish, review, then build. Within the earliest runnable rank, repository fairness reserves a
+ * A merge-failure mend goes first, then finish, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -32,6 +33,7 @@ function rankOf(item) {
   if (item.goal?.status === 'blocked') return 0;
   if (item.kind === 'finish' || item.kind === 'mend') return 1;
   if (item.kind === 'review') return 2;
+  if (item.kind === 'plan') return 5;
   return item.variant === 'goal' ? 4 : 3;
 }
 
@@ -41,7 +43,7 @@ const priorityOf = (item) => Number.isSafeInteger(item.priority) && item.priorit
  * `{ items, held, lanes, carry }` → the item to start, or null. `lanes` is
  * the machine-wide lane cap, not a per-repository allowance.
  *
- * `items`: `{ name, repo, kind: 'review'|'finish'|'mend'|'build', variant: 'project'|'goal'|null,
+ * `items`: `{ name, repo, kind: 'review'|'finish'|'mend'|'build'|'plan', variant: 'project'|'goal'|null,
  * since, resumed, priority }` — caller-approved candidates. `variant: 'project'` and
  * project build/review kinds are retained for compatibility, although
  * `run.js` currently supplies goal sessions only. `held`: one repository per

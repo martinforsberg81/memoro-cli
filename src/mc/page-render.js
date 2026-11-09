@@ -298,7 +298,7 @@ function dayLine(lines, c, wide, day) {
   const kinds = day.by_kind || {};
   const dot = { text: ' · ', styles: ['grey'] };
   const parts = [{ text: '24 h', styles: ['grey'] }];
-  // `plan` is kept for rows written while the runner started headless plan sessions (until 2026-11-07).
+  // `plan` includes historical sessions and the focused next-draft assignment.
   for (const kind of ['build', 'review', 'finish', 'mend', 'plan']) {
     const counted = kinds[kind];
     if (!counted || (['finish', 'mend', 'plan'].includes(kind) && !counted.sessions)) continue;

@@ -155,8 +155,8 @@ export function parsePrRef(text) {
  * first thing. `success_criteria` takes at least one criterion, each with a
  * `check` (`criteria.js`); `draft` lets a goal that has no
  * criterion yet through — `mc goal new`'s skeleton, filled by `mc goal
- * criterion add` — and nothing else. A goal with none is not started by the
- * runner (`nextGoal`) and cannot go to review.
+ * criterion add` — and nothing else. A build goal with none gets no build
+ * session from the runner (`nextGoal`) and cannot go to review.
  */
 export function validateGoal(value, { draft = false } = {}) {
   if (!plain(value)) return ['GOAL.json must be a JSON object'];
@@ -492,7 +492,7 @@ export function waitsOnPerson(goal) {
   return goal.status === 'Martin' && !FINISHED.includes(goal.stage);
 }
 
-/** The role the interactive plan session runs with, `mc plan`'s: `canon/roles/plan-session.md`. The runner never starts one. */
+/** Interactive planning and the runner's next-draft assignment use canon/roles/plan-session.md. */
 export const PLAN_ROLE = 'plan';
 /** The role a goal's finish session runs with: `canon/roles/finish-session.md`. It takes a goal in `finish · ready` to `merge`. */
 export const FINISH_ROLE = 'finish-session';
@@ -520,6 +520,20 @@ export function goalSession(goal, inLine = []) {
   if (goal.stage === 'finish') return 'finish';
   if (mergeRetryDue(goal, inLine)) return 'mend';
   return null;
+}
+
+/** The one draft a programme may plan, or null. Delivery and unreadable data
+ * hold planning; a waiting first draft cannot be bypassed by another draft. */
+export function nextDraft(goals, programme) {
+  const own = goals.filter(goal => goal.programme === programme);
+  if (own.some(goal => goal.problems?.length || !['draft', ...FINISHED].includes(goal.stage))) return null;
+  // Missing dates stay oldest; compare validated creation instants, not ISO spellings.
+  const createdAt = goal => goal.created == null ? -Infinity : Date.parse(goal.created);
+  const drafts = own.filter(goal => goal.stage === 'draft').sort((a, b) =>
+    (a.phase ?? 1) - (b.phase ?? 1)
+    || createdAt(a) - createdAt(b)
+    || a.goal.localeCompare(b.goal));
+  return drafts[0]?.status === 'ready' ? drafts[0] : null;
 }
 
 /**

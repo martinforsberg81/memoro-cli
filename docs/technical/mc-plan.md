@@ -114,8 +114,7 @@ or prompt content. Session ownership and headless restrictions are unchanged.
 
 The plan session owns the coherent programme README/design, prerequisite investigation/decisions, phases, complete goal briefs and executable checks; every finished brief moves to build in its assigned phase. It may also investigate,
 write goals, build and land work itself, or take over a goal's branch when
-that costs less than a new build session. It is interactive only: Martin is
-at the terminal. The runner never starts a plan session (Martin, 2026-11-07);
+that costs less than a new build session. This broad freedom belongs to interactive planning with Martin at the terminal. The runner may complete one next draft under [the programme trigger](mc-goals.md#next-draft-planning) (Martin, 2026-11-09);
 a goal in `finish` gets a finish session and a red merge a mend session (a
 merge failure only; a `blocked` goal before merge is Martin's), each with its own role ([mc-goals.md](mc-goals.md) § *Finish
 and mend*).
