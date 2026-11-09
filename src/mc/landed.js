@@ -5,9 +5,10 @@
  * Read from runs.tsv alone. A merge row whose note says `merged` is one pull
  * request on main; a row named `goal:<programme>/<goal>` is a goal's, every
  * other merge row (named after its repository) is a pull request without a
- * goal. A landed goal's effort is every non-merge session row it ever had —
- * build, review, finish, mend, plan — summed over its whole life, not only
- * the day, because a goal landed today may have been built yesterday.
+ * goal. A landed goal's effort is every build, review, finish and mend row
+ * it ever had, summed over its whole life, not only the day, because a goal
+ * landed today may have been built yesterday. Its planning is not the goal's:
+ * the headless plan rows are `plan_cost`, beside the interactive sessions.
  */
 import { rowCost } from './prices.js';
 import { RUNNER_MODEL } from './status-collect.js';
@@ -69,7 +70,9 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
   const effort = new Map(goals.map((name) => [name, { seconds: 0, sessions: 0, cost: 0, priced: 0, unpriced: 0, again: false }]));
   for (const row of rows) {
     const goal = effort.get(row.name);
-    if (!goal || row.kind === 'merge') continue;
+    // A goal's own work: its merge rows are the merger's, and its planning is
+    // counted with the planning, not the goal (Martin, 2026-11-09).
+    if (!goal || row.kind === 'merge' || row.kind === 'plan') continue;
     goal.seconds += number(row.seconds);
     goal.sessions += 1;
     if (row.kind === 'finish' || row.kind === 'mend') goal.again = true;
@@ -84,8 +87,12 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
   const costs = measured.filter((goal) => goal.priced).map((goal) => goal.cost).sort((a, b) => a - b);
   const round = (value) => (value == null ? null : Math.round(value));
   const cents = (value) => (value == null ? null : Math.round(value * 100) / 100);
+  // Headless planning in the window, for the planning line beside the interactive sessions.
+  const planCost = rows.filter((row) => row.kind === 'plan' && inDay(row)).reduce((n, row) => n + (rowCost(row, RUNNER_MODEL) ?? 0), 0);
   return {
     goals: goals.length,
+    plan_cost: cents(planCost),
+    plan_sessions: rows.filter((row) => row.kind === 'plan' && inDay(row)).length,
     without_goal: withoutGoal.size,
     prs: landed.length,
     attempts: merges.length,

@@ -736,7 +736,7 @@ function headerLines(lines, c, wide, data, version) {
   summary([
     { text: `Programs: ${data.programmes?.active ?? groups.length - dormant} active` },
     { text: `${dormant} dormant`, styles: ['grey'] },
-    { text: data.runner?.day?.cost == null ? '' : `${money(data.runner.day.cost)} today`, styles: ['grey'] },
+    { text: data.runner?.day?.cost == null ? '' : `runner ${money(data.runner.day.cost)} today`, styles: ['grey'] },
     { text: lanes ? `${(data.runner?.sessions || []).length}/${lanes} lanes` : '', styles: ['grey'] },
     { text: `deploy ${data.runner?.production?.at?.replace('T', ' ').replace(/:\d{2}(?:\.\d+)?Z$/u, ' UTC') || 'none recorded'}`, styles: ['grey'] },
   ]);
@@ -766,6 +766,13 @@ function headerLines(lines, c, wide, data, version) {
       ]);
     }
   }
+  const desk = data.desk_cost;
+  const landedPlan = data.landed || {};
+  summary([
+    { text: desk ? `Planning & desks 24 h: ${money(desk.cost) || '$0'}${desk.partial ? ' so far' : ''}` : '' },
+    { text: desk ? `${desk.sessions} interactive sessions` : '', styles: ['grey'] },
+    { text: landedPlan.plan_sessions ? `headless plan ${money(landedPlan.plan_cost) || '$0'} (${landedPlan.plan_sessions})` : '', styles: ['grey'] },
+  ]);
   rule('└', '┘');
   pipelineLines(lines, c, wide, data);
   lines.push('');

@@ -94,6 +94,8 @@ import { DESKS, ownerOf } from './session-owner.js';
 import { gitDirOf } from './repos.js';
 import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
+import { readDeskCost } from './desk-cost.js';
+import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import {
   REPO_NAMES, RUNNER_MODEL, nowBlock, pidAlive, readCurrents,
@@ -1600,6 +1602,8 @@ export async function collectPage({
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     // What landed in the last 24 hours and what each goal took (landed.js).
     landed: landedSection({ rows: readRunRows(tsv), now }),
+    // The interactive sessions' cost, from the tools' own transcripts (desk-cost.js).
+    desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), now, read: readText }),
     intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
     programmes,
     // File reads only, as DEPLOY's are: the page never runs a read.
