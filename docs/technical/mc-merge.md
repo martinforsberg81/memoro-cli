@@ -132,6 +132,20 @@ behaviour; the existing goal-only runner is not evidence of implementation.
 
 ## Reuse the existing checkout
 
+Martin, 2026-11-09 (manager session): superseded. The merger measures every
+candidate — a pull request's round, a batch, the documents-only measurement,
+branch freshening and the whole-suite round — in one standing measurement
+checkout per repository, `<work root>/gate/<slug>/candidate`, which mc owns,
+heals at every use and never creates or removes per round; it is used only
+while the repository's merge lane is held. No round borrows a session's or a
+planning checkout, and the restore rule below goes with the borrowing. The
+reason the 2026-11-08 rule gave — no worktree created and deleted per round —
+holds for the standing checkout too; what it cost was 32 stopped rounds in four
+days (`measure-candidate` "is in use", `worktree`, `worktree-restore`,
+`dependencies` outside the work root; `~/mc/programs/mc/evidence/2026-11-09-merge-rounds/measurement.md`).
+The goal `mc/merger-standing-checkout` carries it into the code and rewrites
+this section; until it lands the paragraphs below describe what runs.
+
 Martin, 2026-11-08: a merge must reuse the checkout the work already has;
 creating and deleting another worktree wastes time and disk. This applies to
 ordinary and documents-only PR measurements, batch candidates and branch
@@ -193,6 +207,18 @@ scanner or framework is commissioned.
 Before the wait and before the gate, the door refuses a pull request GitHub
 reports CONFLICTING, and one whose branch the caller's worktree holds at a head
 origin does not have (ruling 43).
+
+Martin, 2026-11-09 (manager session): a goal's pull requests land through the
+same measured round as every other. `mc goal stage merge` still records the
+session's decision and queues every registered pull request; the merger lands
+them through `runMergeRound` — a candidate with the current base, reuse of the
+session's whole-selection receipt when the tree and selection match or main's
+movement is selected, measurement of the rest, the squash pinned to the head
+measured. The direct `gh pr merge --squash` in `landJob` goes. A session's
+completed GREEN `mc gate --whole-selection` on the final judged worktree remains
+required: it is the receipt the round reuses. The goal
+`mc/goal-landing-through-the-round` carries it into the code and rewrites this
+section; until it lands the paragraph below describes what runs.
 
 **A session decides when a goal merges.** Before a review, finish or mend session
 authorizes direct goal landing with `mc goal stage merge`, the canonical
@@ -574,6 +600,17 @@ second `npm ci` and four modules of machinery (`repo-baseline-cache.js`,
 `compareRed`, the red ratchet) to answer a question a merge does not ask. All of
 it is gone.
 
+Martin, 2026-11-09 (manager session): main's evidence is a by-product of every
+measured landing. A green round whose landed tree equals its measured tree
+writes main evidence for the commit it made — the files it ran or reused and
+their results, inheriting the base commit's record for files outside its
+selection — and a PR round reads three states at its exact base: covered and
+green, covered and red (name and digest), not covered. The exemption below is
+unchanged in what it exempts. Measured: in 986 rounds over the fortnight to
+2026-11-09 the exemption fired 0 times, because its only writer is the
+whole-suite run and memoro's nightly completed 0 of 7 ticks. The nightly stays
+the meter. The goal `mc/main-evidence-from-landings` carries it into the code.
+
 **Main's red is not investigated on a PR's clock** (Martin, 2026-11-04).
 A completed main-only run records its base SHA, failing test files, names and
 diagnostics under `<mc home>/main-red/<repo>.json`. A PR round may read that
@@ -828,6 +865,14 @@ The merger (`landJob`) runs a round that stopped `file-killed` once more,
 saying `<files> was killed from outside the round — measuring again`. A second
 `file-killed` is answered red with that reason: there is nothing in the change
 to fix.
+
+Martin, 2026-11-09 (manager session): a `before` hook that **throws** is the
+change's red, named with the hook's message; only a hook node cut at its
+timeout is cancelled under load. Twelve of fifteen `red-under-load` rounds
+since 2026-11-05 were one thrown hook ("No dev server database matches this
+tree's 412 migrations"), requeued and met again. The goal `mc/hook-error-is-red`
+carries it into `cancelledFiles` and rewrites this section. The decision of
+2026-11-04 stands: no green-alone exemption, no base replay in a PR round.
 
 **Cancelled tests are not attributed to the PR** (`red-under-load`).
 The former base-then-candidate replay and `green_alone` exemption are retired:
