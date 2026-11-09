@@ -509,4 +509,27 @@ test('nextDraft requires unfinished planning only and orders by phase, creation 
     }
   }
   assert.equal(nextDraft([a, { programme: 'other', stage: 'build' }], 'p'), a);
+
+  const dated = (name, created, status = 'ready') => {
+    const parsed = parseGoal(withGoal(GOAL_TEXT, { stage: 'draft', created, status }));
+    assert.equal(parsed.problems, undefined, 'timestamp inputs pass the real goal validator');
+    return { ...parsed, programme: 'p', goal: name };
+  };
+  const older = dated('older', '2026-11-01T01:00:00+02:00', 'Martin');
+  const newer = dated('newer', '2026-11-01T00:30:00Z');
+  assert.equal(nextDraft([newer, older], 'p'), null, 'the chronologically first draft waits on Martin; later drafts cannot bypass it');
+  const olderReady = { ...older, status: 'ready' };
+  assert.equal(nextDraft([newer, olderReady], 'p'), olderReady, 'offsets are compared as instants');
+  const seconds = dated('seconds', '2026-11-01T00:00:00Z');
+  const fraction = dated('fraction', '2026-11-01T00:00:00.001Z');
+  assert.equal(nextDraft([fraction, seconds], 'p'), seconds, 'mixed precision preserves chronological order');
+  const equalA = dated('a', '2026-11-01T00:00:00Z');
+  const equalB = dated('b', '2026-11-01T01:00:00.000+01:00');
+  for (const goals of [[equalB, equalA], [equalA, equalB]]) {
+    assert.equal(nextDraft(goals, 'p'), equalA, 'equal instants tie by goal name, not timestamp spelling or input order');
+  }
+  const missing = dated('z', null);
+  const absent = dated('a', undefined);
+  assert.equal(nextDraft([equalA, missing], 'p'), missing, 'missing creation dates retain their oldest-first treatment');
+  assert.equal(nextDraft([missing, absent], 'p'), absent, 'missing dates tie by goal name');
 });

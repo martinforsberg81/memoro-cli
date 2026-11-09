@@ -155,8 +155,8 @@ export function parsePrRef(text) {
  * first thing. `success_criteria` takes at least one criterion, each with a
  * `check` (`criteria.js`); `draft` lets a goal that has no
  * criterion yet through — `mc goal new`'s skeleton, filled by `mc goal
- * criterion add` — and nothing else. A goal with none is not started by the
- * runner (`nextGoal`) and cannot go to review.
+ * criterion add` — and nothing else. A build goal with none gets no build
+ * session from the runner (`nextGoal`) and cannot go to review.
  */
 export function validateGoal(value, { draft = false } = {}) {
   if (!plain(value)) return ['GOAL.json must be a JSON object'];
@@ -527,9 +527,11 @@ export function goalSession(goal, inLine = []) {
 export function nextDraft(goals, programme) {
   const own = goals.filter(goal => goal.programme === programme);
   if (own.some(goal => goal.problems?.length || !['draft', ...FINISHED].includes(goal.stage))) return null;
+  // Missing dates stay oldest; compare validated creation instants, not ISO spellings.
+  const createdAt = goal => goal.created == null ? -Infinity : Date.parse(goal.created);
   const drafts = own.filter(goal => goal.stage === 'draft').sort((a, b) =>
     (a.phase ?? 1) - (b.phase ?? 1)
-    || String(a.created ?? '').localeCompare(String(b.created ?? ''))
+    || createdAt(a) - createdAt(b)
     || a.goal.localeCompare(b.goal));
   return drafts[0]?.status === 'ready' ? drafts[0] : null;
 }

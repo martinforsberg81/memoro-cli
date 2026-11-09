@@ -105,7 +105,7 @@ export const COMMAND_USAGE = Object.freeze({
     "--reason supplies the entry's comment.\n",
     "A goal has a phase, 1, 2, …: the runner starts no goal in a phase while a goal of its programme in a lower phase is not done or dropped; the goals of one phase run side by side.\n",
     "A phase is at most one past the programme's highest; when the last goal of a phase is archived, the phases after it move down one, so the lowest is always 1.\n",
-    "GOAL.json is written by these verbs only, each write validated. A goal with no criterion is not started; a session other than plan cannot move it to review while a criterion is not met, and the merger does not land it.\n",
+    "GOAL.json is written by these verbs only, each write validated. A build session is not started on a build goal with no criterion; a session other than plan cannot move it to review while a criterion is not met, and the merger does not land it.\n",
     "criterion set and criterion remove are plan's or a person's: a build, review, finish or mend session is refused.\n",
     "mc publish writes its pull request into the goal's prs; the merger or the runner sets done when all have landed.\n",
     "archive refuses an open pull request, uncommitted changes and a dropped branch's unpushed commits; the runner writes its refusal once into the goal's LOG.md.\n",

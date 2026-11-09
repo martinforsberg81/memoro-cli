@@ -30,7 +30,7 @@ Mend is reserved for merge failures; pre-merge acceptance obstacles stay with bu
 stage:  draft → build → review → finish → merge → done     (and dropped, from any)
 status: ready | blocked | Martin
 
-draft    ── the interactive plan session moves it ────────────▶ build
+draft    ── the plan session completes its brief ────────────▶ build
 build    ── build session: done with the task ────────────────▶ review
 build    ── legacy blocked state ──────────────────────────────▶ build · Martin
 build    ── three sessions without a word (runner) ───────────▶ finish
@@ -506,10 +506,11 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    Pre-merge blocked records migrate to Martin without a diagnostic launch.
 
 Each session is a row in `runs.tsv` named `goal:<p>/<g>`, of kind
-`build-goal`, `review-goal`, `finish` or `mend`; rows from before say `goal`
-(read as the build they were) or `plan` (a headless plan session, until
-2026-11-07). On the page it is a `BUILD`, `REVIEW`, `FINISH` or `MEND` row
-under its goal. A build waits behind every review for a free lane; a finish
+`build-goal`, `review-goal`, `finish`, `mend` or `plan`; rows from before say
+`goal` (read as the build they were). `plan` now names the next-draft assignment;
+older `plan` rows retain their historical headless planning meaning. On the page
+it is a `BUILD`, `REVIEW`, `FINISH`, `MEND` or `PLAN` row under its goal.
+A build waits behind every review for a free lane; a finish
 and merge-failure mend ranks with finish before review; no pre-merge mend exists ([mc-run.md](mc-run.md) § *The pick*).
 
 ## Finish and mend
@@ -730,8 +731,10 @@ Any build/review/finish/merge goal excludes it, regardless of status; unreadable
 goal data excludes it too. Empty programmes and programmes with no drafts launch
 nothing. `dropped` has the same terminal meaning as in phase eligibility.
 
-The next draft is selected by ascending phase, creation time, then name. The
-selected draft must be ready; one waiting on Martin holds planning rather than
+The next draft is selected by ascending phase, creation instant, then name.
+Compare creation instants chronologically regardless of offset or precision;
+missing dates sort before dated goals, and equal or missing instants tie by name.
+The selected draft must be ready; one waiting on Martin holds planning rather than
 being bypassed. Only one goal session per programme may be held while planning
 starts, including current records from a predecessor runner. Admission rechecks
 the trigger before spawning. The plan uses that draft's goal worktrees and branch,
