@@ -276,9 +276,10 @@ export function summarizeGate(output, { exitCode, unavailableCommands = [] }) {
     }
   }
   const process_ok = exitCode === 0;
-  const incomplete = process_ok && unavailableCommands.length > 0;
-  return { ok: process_ok && !incomplete, ...(unavailableCommands.length ? {
-    process_ok, complete: false, verdict: process_ok ? 'incomplete' : 'red', incomplete,
+  const cancelled = counts.cancelled > 0;
+  const incomplete = process_ok && !cancelled && unavailableCommands.length > 0;
+  return { ok: process_ok && !cancelled && !incomplete, ...(unavailableCommands.length ? {
+    process_ok, complete: false, verdict: incomplete ? 'incomplete' : 'red', incomplete,
     unavailable_commands: unavailableCommands,
   } : {}), counts, gates, failures: failures.slice(0, FAILURE_LINES), more: Math.max(0, failures.length - FAILURE_LINES) };
 }
