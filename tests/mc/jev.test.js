@@ -160,12 +160,12 @@ test('the key and every keys-source value of 8+ characters are in the Authorizat
   }
 });
 
-test('a budget-busting state stays within 240,000 characters, trimmed oldest log entries, then the largest document, then the README; the ledger names each', async () => {
+test('a budget-busting state stays within 90,000 characters, trimmed oldest log entries, then the largest document, then the README; the ledger names each', async () => {
   const big = (n, c) => c.repeat(n);
   const f = fixture({
     [`${DIR}/LOG.md`]: [1, 2, 3, 4, 5, 6, 7].map((n) => entry(n, big(20_000, String(n)))).join('\n'),
-    '/docs/standard.md': big(150_000, 's'),
-    [`${DIR}/memoro-cli/docs/extra.md`]: big(90_000, 'e'),
+    '/docs/standard.md': big(60_000, 's'),
+    [`${DIR}/memoro-cli/docs/extra.md`]: big(40_000, 'e'),
     [`${HOME}/mc/README.md`]: big(10_000, 'r'),
   });
   assert.equal(await run(CALL, f.deps), 0, f.err());
@@ -175,9 +175,75 @@ test('a budget-busting state stays within 240,000 characters, trimmed oldest log
   assert.equal(ledger.state_length, JSON.stringify(state).length);
   assert.deepEqual(state.log, [], 'every log entry left out first');
   assert.ok(state.documents[0].text.endsWith(TRUNCATED), 'the largest document is cut, with the marker');
-  assert.equal(state.documents[1].text, big(90_000, 'e'), 'the smaller document is whole: the cut of the largest was enough');
+  assert.equal(state.documents[1].text, big(40_000, 'e'), 'the smaller document is whole: the cut of the largest was enough');
   assert.equal(state.programme.readme, big(10_000, 'r'), 'the README is not reached');
   assert.deepEqual(ledger.trimmed, ['log: 5 oldest entries left out', 'document /docs/standard.md truncated']);
+  assert.equal(ledger.budget, STATE_BUDGET, 'the ledger records the budget sent');
+});
+
+/** jev-1.14.0's refusal for its input limit, as measured: 400 with the error_type in `detail`. */
+const refusal = (error_type = 'max_tokens_exceeded') => ({
+  status: 400, headers: { get: () => null }, text: async () => JSON.stringify({ detail: { error_type } }),
+});
+/** The transport for a jev that refuses any state over `chars` characters and answers the rest. */
+function jevLimitedTo(f, chars) {
+  f.deps.jev.transport = (url, init) => {
+    f.requests.push({ url, init });
+    const { state } = JSON.parse(init.body);
+    return JSON.stringify(state).length > chars ? refusal() : ANSWER;
+  };
+}
+
+test('a state over jev\'s input limit is refused with max_tokens_exceeded, rebuilt at 0.7 of the budget and answered; the ledger names the shrink', async () => {
+  const f = fixture({
+    '/docs/standard.md': 'd'.repeat(50_000),
+    [`${DIR}/memoro-cli/docs/extra.md`]: 'e'.repeat(30_000),
+  });
+  jevLimitedTo(f, 70_000);
+  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(f.requests.length, 2, 'one refusal, then one answer');
+  const first = JSON.stringify(JSON.parse(f.requests[0].init.body).state).length;
+  const second = JSON.parse(f.requests[1].init.body).state;
+  const secondLength = JSON.stringify(second).length;
+  assert.ok(first > 70_000 && first <= STATE_BUDGET, `the first state, ${first}, is at the budget and over jev's limit`);
+  assert.ok(secondLength <= 63_000 && secondLength < first, `the rebuilt state, ${secondLength}, is at 0.7 of the budget or less`);
+  assert.match(f.out(), /^mc: jev answered fake_timer /u);
+  const ledger = JSON.parse(f.ledger[0]);
+  assert.deepEqual([ledger.outcome, ledger.budget, ledger.error_type, ledger.state_length], ['answered', 63_000, 'max_tokens_exceeded', secondLength]);
+  assert.ok(ledger.trimmed.includes('budget shrunk to 63000 characters after max_tokens_exceeded'), ledger.trimmed.join('; '));
+});
+
+test('a persistent max_tokens_exceeded is rebuilt twice, at 63,000 then 44,100 characters, and ends unavailable with the error_type in the reason, the LOG entry and the ledger', async () => {
+  const f = fixture();
+  f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return refusal(); };
+  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(f.requests.length, 3, 'the state, and two rebuilds of it');
+  const reason = 'jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the state, the last at 44100 characters';
+  const ledger = JSON.parse(f.ledger[0]);
+  assert.deepEqual([ledger.outcome, ledger.reason, ledger.error_type, ledger.budget], ['martin', reason, 'max_tokens_exceeded', 44_100]);
+  assert.ok(ledger.trimmed.includes('budget shrunk to 44100 characters after max_tokens_exceeded'));
+  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment.split('\n').at(-1), reason);
+});
+
+test('a 400 without an error_type is unavailable as before, with no rebuild', async () => {
+  const f = fixture();
+  f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 400, headers: { get: () => null }, text: async () => '{"detail":"bad request"}' }; };
+  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(f.requests.length, 1, 'no rebuild');
+  const ledger = JSON.parse(f.ledger[0]);
+  assert.deepEqual([ledger.outcome, ledger.reason, ledger.error_type, ledger.budget], ['martin', 'jev unavailable: HTTP 400', null, STATE_BUDGET]);
+});
+
+test('askJev names the error_type of any other non-2xx body, and returns the input-limit 400 as its own result', async () => {
+  const body = (status, error_type) => ({ status, headers: { get: () => null }, text: async () => JSON.stringify({ detail: { error_type } }) });
+  const stalled = () => new Promise(() => {});
+  assert.deepEqual(await askJev({ body: {}, key: KEY, transport: async () => body(400, 'max_tokens_exceeded'), timer: stalled }), { limit: 'max_tokens_exceeded' });
+  assert.deepEqual(await askJev({ body: {}, key: KEY, transport: async () => body(400, 'invalid_schema'), timer: stalled }), { unavailable: 'HTTP 400 (invalid_schema)' });
+  assert.deepEqual(await askJev({ body: {}, key: KEY, transport: async () => body(503, 'overloaded'), sleep: async () => {}, timer: stalled }), { unavailable: 'HTTP 503 (overloaded) after one retry' });
+});
+
+test('the state budget is 90,000 characters or less', () => {
+  assert.ok(STATE_BUDGET <= 90_000, `${STATE_BUDGET} characters`);
 });
 
 test('buildState trims in order: the log alone when that is enough; then documents largest first; then the programme README', () => {

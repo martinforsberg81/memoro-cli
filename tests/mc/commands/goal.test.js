@@ -1389,7 +1389,7 @@ for (const [refusal, argv, said] of [
   ['no --recommend', [...TIMER, ...FAKE, ...REAL], /--recommend <key> is required/u],
   ['no --reason', ['martin', 'mc/plain', ...FAKE, ...REAL, '--recommend', 'fake_timer'], /--reason "<the question>" is required/u],
   ['an unknown --reserved act', [...ASK, '--reserved', 'billing'], /--reserved is deploy, production-data, credentials, admin, not billing/u],
-  ['state core over budget', [...ASK, '--evidence', 'x'.repeat(240_001)], /alone are \d+ characters serialized, over jev's budget of 240000: shorten/u],
+  ['state core over budget', [...ASK, '--evidence', 'x'.repeat(90_001)], /alone are \d+ characters serialized, over jev's budget of 90000: shorten/u],
   ['mc goal log --status Martin', ['log', 'mc/plain', '--status', 'Martin', '--comment', 'which timer?'], /^mc: log is not written — mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin/u],
 ]) {
   test(`mc goal martin refuses ${refusal}: exit 2, GOAL.json and LOG.md byte-identical, stderr says what is wrong and gives a complete example call`, async () => {
@@ -1429,7 +1429,7 @@ test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >=
   assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
   const lines = f.ledger();
   assert.equal(lines.length, 1);
-  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'verb', 'programme', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'model', 'answers', 'outcome', 'reason']);
+  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'verb', 'programme', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'budget', 'error_type', 'model', 'answers', 'outcome', 'reason']);
   assert.deepEqual([lines[0].outcome, lines[0].model, lines[0].answers.answer.choice, lines[0].answers.fits, lines[0].answers.settled], ['answered', 'jev-1.14.0', 'fake_timer', 0.70, 0.70]);
   assert.match(lines[0].state_sha256, /^[0-9a-f]{64}$/u);
 });
@@ -1471,6 +1471,8 @@ for (const [failure, options, reason, requests] of [
   ['an unreadable keys source', { keys: undefined, readKeys: () => { throw new Error('missing'); } }, 'jev unavailable: the mc keys source cannot be read', 0],
   ['401', { replies: [reply(401, { detail: 'bad key' })] }, 'jev unavailable: HTTP 401', 1],
   ['500 twice', { replies: [reply(500, 'oops'), reply(503, 'oops')] }, 'jev unavailable: HTTP 503 after one retry', 2],
+  ['the input limit refused at each of the budgets', { replies: [400, 400, 400].map(() => reply(400, { detail: { error_type: 'max_tokens_exceeded' } })) }, 'jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the state, the last at 44100 characters', 3],
+  ['a 400 with no error_type', { replies: [reply(400, { detail: 'bad request' })] }, 'jev unavailable: HTTP 400', 1],
   ['a timeout', { replies: [() => new Promise(() => {})], timer: async () => {} }, 'jev unavailable: no answer in 15 seconds', 1],
   ['a network error', { replies: [() => Promise.reject(new Error('getaddrinfo ENOTFOUND'))] }, 'jev unavailable: network error (getaddrinfo ENOTFOUND)', 1],
   ['a body that is not JSON', { replies: [reply(200, '<html>')] }, 'jev unavailable: malformed response (not JSON)', 1],

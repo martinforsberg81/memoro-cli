@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
-import { appendLedgerLine, askJev, buildState, documentPath, INSTRUCTIONS, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
+import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, INSTRUCTIONS, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
@@ -71,7 +71,7 @@ export async function run(argv, deps = {}) {
     const said = `mc: reserved act ${call.reserved} — Martin decides, jev is not asked`;
     const ledger = redactValue({ at: now.toISOString(), goal: target?.name ?? null, verb: 'ask', programme: programme ?? null,
       tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend,
-      reserved: call.reserved, documents: [], trimmed: [], state_length: null, state_sha256: null,
+      reserved: call.reserved, documents: [], trimmed: [], state_length: null, state_sha256: null, budget: null, error_type: null,
       model: null, answers: null, outcome: 'reserved', reason: said }, secrets);
     try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
     catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
@@ -88,19 +88,21 @@ export async function run(argv, deps = {}) {
   if (target) context = jevContext(target, goal, flags.document, { read, env, home, stderr: safeStderr, realpath: deps.realpath, cwd: env.cwd || process.cwd() });
   else context = noGoalContext(programme, flags.document, { home, env, read, stderr: safeStderr, list: deps.list, known: deps.known || (() => knownRepositories(env)), realpath: deps.realpath, gitRoot: deps.gitRoot, cwd: env.cwd || process.cwd() });
 
-  const built = buildState({ question: call.question, options: call.options, evidence, ...context }, { secrets });
+  const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+  const { built, answer: result, budget, limit } = await askWithinLimit({
+    build: (within) => buildState({ question: call.question, options: call.options, evidence, ...context }, { secrets, budget: within }),
+    ask: (state) => (values === null ? { unavailable: 'the mc keys source cannot be read' }
+      : askJev({ body: requestBody(state, state.options, target ? INSTRUCTIONS : WORK_INSTRUCTIONS), key, ...(deps.jev || {}) })),
+  });
   if (built.problems) {
     const core = built.problems[0].includes('alone are');
     if (core) { stderr.write(clean(returnInstruction(built.problems, named, 'mc: mc ask is not called').replaceAll('mc goal martin', 'mc ask'))); return 2; }
   }
   let asked;
-  const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
-  let sent = { documents: [], trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null };
+  let sent = { documents: [], trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null, budget: built.text ? budget : null, error_type: limit };
   if (built.problems) asked = { unavailable: 'state over budget after trimming' };
   else {
     if (key) sent.documents = built.state.documents.map((item) => item.path);
-    const result = values === null ? { unavailable: 'the mc keys source cannot be read' }
-      : await askJev({ body: requestBody(built.state, built.state.options, target ? INSTRUCTIONS : WORK_INSTRUCTIONS), key, ...(deps.jev || {}) });
     const parsed = result.unavailable ? result : readAnswers(result.response, call.options);
     if (parsed.unavailable) asked = { unavailable: `jev unavailable: ${parsed.unavailable}` };
     else {
@@ -114,7 +116,7 @@ export async function run(argv, deps = {}) {
     : `mc: jev did not settle it: ${asked.reading ? `${asked.reading} — not answered: ${asked.misses.join('; ')}` : asked.unavailable} — take it to Martin`;
   const ledger = redactValue({ at: now.toISOString(), goal: target?.name ?? null, verb: 'ask', programme: programme ?? null,
     tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend,
-    reserved: null, documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256,
+    reserved: null, documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
     model: asked.model ?? null, answers: asked.answers ?? null, outcome: answered ? 'answered' : (asked.outcome || 'unavailable'), reason: said.replace(/^mc: /u, '') }, secrets);
   try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
   catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
