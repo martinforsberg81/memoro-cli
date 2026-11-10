@@ -47,6 +47,7 @@ describe('ensureCustodyRoot', () => {
   test('loses the set-if-absent race and unwraps the winner instead', async () => {
     const key = await kuk();
     let winner = null;
+    let winnerCrk = null;
     const api = apiStub({
       onStore: async ({ state }) => {
         // Another device stored its CRK first: our POST returns not-ok and
@@ -57,15 +58,30 @@ describe('ensureCustodyRoot', () => {
             portal: PORTAL, vaultKey: key, deps: { api: winnerApi },
           });
           winner = winnerApi.state.wrapped;
+          winnerCrk = res.crk;
           assert.equal(res.ok, true);
         }
         state.wrapped = winner;
         return { ok: false, error: 'CRK_EXISTS' };
       },
     });
-    const res = await ensureCustodyRoot({ portal: PORTAL, vaultKey: key, deps: { api } });
-    assert.equal(res.ok, true);
-    assert.equal(res.adopted, false, 'race loser adopts the stored winner');
+    const raceRes = await ensureCustodyRoot({ portal: PORTAL, vaultKey: key, deps: { api } });
+    assert.equal(raceRes.ok, true);
+    assert.equal(raceRes.adopted, false, 'race loser adopts the stored winner');
+
+    // A row written under the winner's CRK must open with the CRK the loser returns.
+    const label = 'race-gh';
+    const data = { token: 'winner-token' };
+    const body = await encryptForWrite({ vaultKey: key, crk: winnerCrk, label, data });
+    const row = {
+      encrypted_label: body.encryptedLabel, label_iv: body.labelIv,
+      encrypted_data: body.encryptedData, iv: body.iv,
+      wrapped_dek: body.wrappedDek, dek_iv: body.dekIv, class: body.secretClass,
+    };
+    assert.deepEqual(
+      await decryptEnvelopeSecret(raceRes.crk, row).catch((err) => ({ error: err.name })),
+      { label, data },
+    );
   });
 
   test('a wrong key for an existing wrap fails closed', async () => {

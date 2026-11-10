@@ -22,8 +22,11 @@ let portal;
 let vaultKey;
 let vaultKeyBytes;
 let custody;
+// Per-test hook over each portal response; reset in setup().
+let responseHook = null;
 
 async function setup({ envelope = true } = {}) {
+  responseHook = null;
   server = createMockVaultServer();
   vaultKeyBytes = new Uint8Array(32).fill(7);
   vaultKey = await importVaultKey(vaultKeyBytes);
@@ -36,6 +39,7 @@ async function setup({ envelope = true } = {}) {
     ...base,
     memoroFetch: async (apiUrl, path, opts = {}) => {
       const res = await server.memoroFetch(apiUrl, path, opts);
+      responseHook?.(path, opts, res);
       if (path === '/api/vault/status' && custody) {
         return { ...res, vault: { ...res.vault, wrapped_crk: custody.wrapped_crk, crk_iv: custody.crk_iv } };
       }
@@ -106,6 +110,33 @@ describe('readStepCreditKey', () => {
   it('does not read the retired generic label', async () => {
     await addEnvelope('mc-api-key', apiToken());
     assert.deepEqual(await read(), { ok: false, reason: 'no-key' });
+  });
+
+  it('reads the step key without decrypting an unrelated envelope row', async () => {
+    await addEnvelope('other', apiToken('sk-other'));
+    await addEnvelope(STEP_CREDIT_KEY_LABEL, apiToken());
+    let encryptedDataReads = 0;
+    responseHook = (path, opts, res) => {
+      if (path !== '/api/vault/secrets' || (opts.method || 'GET') !== 'GET') return;
+      // vid_1 is the unrelated 'other' envelope. The mock lists newest first,
+      // so it is not necessarily the first element.
+      const other = res.secrets.find((s) => s.id === 'vid_1');
+      const original = other.encrypted_data;
+      Object.defineProperty(other, 'encrypted_data', {
+        enumerable: true,
+        configurable: true,
+        get() {
+          encryptedDataReads += 1;
+          return original;
+        },
+      });
+    };
+    assert.deepEqual(await read(), { ok: true, key: KEY });
+    assert.equal(encryptedDataReads, 0, 'the unrelated envelope row was decrypted');
+
+    const deps = { readCachedVaultKey: cacheStub(), portal };
+    assert.deepEqual(await readStepCreditKey({ label: 'other', provider: 'openai', deps }), { ok: true, key: KEY });
+    assert.deepEqual(await readBillingApiKey('claude', { label: 'other', deps }), { ok: true, key: KEY });
   });
 
   it('finds the key in a legacy row', async () => {

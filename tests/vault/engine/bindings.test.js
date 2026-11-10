@@ -16,7 +16,8 @@ import {
 describe('vault secret bindings', () => {
   it('persists a value-free .mc/secrets.json binding file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bindings-'));
-    const binding = {
+    const canary = { OPENAI_API_KEY: 'fixture-secret-canary' };
+    const metadata = {
       version: 1,
       sources: [
         {
@@ -29,6 +30,11 @@ describe('vault secret bindings', () => {
         },
       ],
     };
+    const binding = {
+      ...metadata,
+      values: canary,
+      sources: [{ ...metadata.sources[0], values: canary }],
+    };
 
     const plan = await planSecretBindingPersistence(binding, { cwd: dir });
     const res = await persistSecretBindingPlan(plan);
@@ -37,8 +43,54 @@ describe('vault secret bindings', () => {
     assert.equal(res.path, '.mc/secrets.json');
     assert.equal(existsSync(secretBindingsPath(dir)), true);
     const body = readFileSync(secretBindingsPath(dir), 'utf8');
-    assert.ok(!body.includes('sk-live-secret-value'), `binding leaked a value: ${body}`);
-    assert.deepEqual(JSON.parse(body), binding);
+    assert.ok(!body.includes('fixture-secret-canary'), `binding leaked a value: ${body}`);
+    assert.deepEqual(JSON.parse(body), metadata);
+  });
+
+  it('persisting a new source to an existing binding file drops a top-level values canary', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bindings-existing-'));
+    const existing = {
+      version: 1,
+      sources: [
+        {
+          file: '.env',
+          format: 'dotenv',
+          materialise: 'file',
+          keys: {
+            OPENAI_API_KEY: 'env:memoro-cli:OPENAI_API_KEY',
+          },
+        },
+      ],
+    };
+    const incoming = {
+      version: 1,
+      sources: [
+        {
+          file: '.dev.vars',
+          format: 'dotenv',
+          materialise: 'file',
+          keys: {
+            GOOGLE_AI_API_KEY: 'wrangler:memoro:GOOGLE_AI_API_KEY',
+          },
+        },
+      ],
+    };
+    mkdirSync(dirname(secretBindingsPath(dir)), { recursive: true });
+    writeFileSync(
+      secretBindingsPath(dir),
+      JSON.stringify({ ...existing, values: { OPENAI_API_KEY: 'fixture-secret-canary' } }, null, 2),
+    );
+
+    const plan = await planSecretBindingPersistence(incoming, { cwd: dir });
+    const res = await persistSecretBindingPlan(plan);
+
+    assert.equal(res.action, 'updated');
+    const body = readFileSync(secretBindingsPath(dir), 'utf8');
+    assert.ok(!body.includes('fixture-secret-canary'), `binding leaked a value: ${body}`);
+    assert.deepEqual(JSON.parse(body), {
+      version: 1,
+      sources: [existing.sources[0], incoming.sources[0]],
+    });
   });
 
   it('merges a new source without clobbering existing repo bindings', () => {
