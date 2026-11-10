@@ -11,9 +11,9 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
@@ -48,27 +48,39 @@ const EXTRA = {
 };
 
 /**
- * A bare origin and a clone whose main holds `docs/project/gone/`, and with
- * `extra` the files of EXTRA beside it.
+ * A bare origin and a clone whose main holds `docs/project/gone/`, with `files`
+ * beside it. A repository home is one such pair.
  */
-function fixture({ goal = null, extra = false } = {}) {
-  const programme = 'gone';
-  const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
-  const origin = join(root, 'origin.git');
-  const repo = join(root, 'memoro-cli');
+function home(root, name, files) {
+  const origin = join(root, `${name}-origin.git`);
+  const repo = join(root, name);
   git(root, ['init', '-q', '--bare', '-b', 'main', origin]);
   git(root, ['clone', '-q', origin, repo]);
   for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(repo, ['config', k, v]);
   mkdirSync(join(repo, 'docs', 'project', 'gone'), { recursive: true });
   writeFileSync(join(repo, 'docs', 'project', 'gone', 'README.md'), '# programme\n');
   writeFileSync(join(repo, 'docs', 'project', 'project_log.md'), LOG);
-  for (const [path, text] of Object.entries(extra ? EXTRA : {})) {
+  for (const [path, text] of Object.entries(files)) {
     mkdirSync(join(repo, path, '..'), { recursive: true });
     writeFileSync(join(repo, path), text);
   }
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'init']);
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
+  return { name, origin, repo };
+}
+
+/**
+ * The consumer fixture: `repos[0]` is memoro-cli with `extra` beside the
+ * programme's directory when asked; `second` adds a second repository home,
+ * its own origin and clone holding the same directory, as `repos[1]`.
+ * `origins` lists every bare origin, for the no-archive-branch check.
+ */
+function fixture({ goal = null, extra = false, second = false } = {}) {
+  const programme = 'gone';
+  const root = mkdtempSync(join(tmpdir(), 'mc-archive-programme-'));
+  const homes = [home(root, 'memoro-cli', extra ? EXTRA : {})];
+  if (second) homes.push(home(root, 'second', {}));
   // A goal lives under the work root's programs/, never in the repository.
   const env = { MC_WORK_ROOT: join(root, 'work') };
   if (goal) {
@@ -78,11 +90,24 @@ function fixture({ goal = null, extra = false } = {}) {
       success_criteria: [{ met: false, criterion: 'x', check: 'y' }],
     }));
   }
-  return { root, origin, repo, env, repos: [{ name: 'memoro-cli', path: repo }] };
+  return {
+    root,
+    origin: homes[0].origin,
+    origins: homes.map((h) => h.origin),
+    repo: homes[0].repo,
+    env,
+    repos: homes.map((h) => ({ name: h.name, path: h.repo })),
+  };
 }
 
-function stubs({ merged = true, area = null } = {}) {
-  const calls = { release: [], merges: [], prs: [] };
+/**
+ * `merged` is what docsMerge answers; `mergedBy` overrides it for a repository
+ * path, since both archive PRs are #42 from the gh stub and the path is what
+ * tells them apart. `area` is what the final release removes; `dry` is what the
+ * dry-run forecast keeps and holds.
+ */
+function stubs({ merged = true, mergedBy = {}, area = null, dry = { kept: [], held_by: [] } } = {}) {
+  const calls = { release: [], merges: [], mergeRepos: [], prs: [] };
   return {
     calls,
     deps: {
@@ -94,15 +119,50 @@ function stubs({ merged = true, area = null } = {}) {
       },
       docsMerge: async (options) => {
         calls.merges.push(options.pr);
-        return merged ? { merged: true, merged_into: 'main' } : { merged: false, stopped_at: 'checks', reason: 'checks failed' };
+        calls.mergeRepos.push(options.repoPath);
+        const landed = options.repoPath in mergedBy ? mergedBy[options.repoPath] : merged;
+        return landed ? { merged: true, merged_into: 'main' } : { merged: false, stopped_at: 'checks', reason: 'checks failed' };
       },
       release: (name, { dryRun }) => {
         calls.release.push(dryRun);
-        if (!dryRun && area) rmSync(area, { recursive: true, force: true });
+        if (dryRun) return { removed: [], kept: dry.kept, held_by: dry.held_by, conversations: [] };
+        if (area) rmSync(area, { recursive: true, force: true });
         return { removed: [], kept: [], held_by: [], conversations: [] };
       },
     },
   };
+}
+
+/** Every file under `dir` with its text, by path under `dir`; empty when there is no directory. */
+function snapshot(dir) {
+  const files = {};
+  const walk = (at) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else files[relative(dir, path)] = readFileSync(path, 'utf8');
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return files;
+}
+
+/**
+ * What a refused or stopped archive must not have done: no archive PR, no docs
+ * merge, no final release, no archive branch on any origin, the area as it was,
+ * and nothing shelved. The exit code alone does not show any of this.
+ */
+function assertNoDestructiveEffect(fx, calls, area, before) {
+  assert.deepEqual(calls.prs, []);
+  assert.deepEqual(calls.merges, []);
+  assert.deepEqual(calls.release.filter((dryRun) => !dryRun), [], 'a final release ran');
+  for (const origin of fx.origins) {
+    const refs = git(origin, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']).stdout.split('\n');
+    assert.deepEqual(refs.filter((name) => name.startsWith(PROGRAMME_ARCHIVE_PREFIX)), [], `an archive branch on ${origin}`);
+  }
+  assert.ok(existsSync(area), 'the area is gone');
+  assert.deepEqual(snapshot(area), before, 'the area changed');
+  assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false, 'the programme was shelved');
 }
 
 function args(fx, deps, extra = {}) {
@@ -270,11 +330,51 @@ describe('archiveProgramme', () => {
 
   it('touches nothing while a goal of the programme is not finished', async () => {
     const fx = fixture({ goal: 'build' });
+    const area = join(fx.root, 'area');
+    mkdirSync(area);
+    writeFileSync(join(area, 'notes.md'), 'notes\n');
+    const before = snapshot(area);
     const { deps, calls } = stubs();
-    const a = args(fx, deps);
-    assert.equal(await archiveProgramme('gone', a), 1);
+    const a = args(fx, deps, { areaPath: area });
+    const code = await archiveProgramme('gone', a);
+    assertNoDestructiveEffect(fx, calls, area, before);
+    assert.deepEqual(calls.release, [true], 'only the forecast ran');
+    assert.equal(code, 1, a.stderr.out.text);
     assert.match(a.stderr.out.text, /goal gone\/g is build/u);
-    assert.deepEqual(calls.prs, []);
+  });
+
+  it('touches nothing when the forecast keeps a file and holds a stray in a layout 2 programme', async () => {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    writeFileSync(join(area, 'rulings.md'), '# rulings\n');
+    writeFileSync(join(area, 'stray'), 'stray\n');
+    const before = snapshot(area);
+    const { deps, calls } = stubs({ dry: { kept: [{ path: fx.repo, why: '2 uncommitted' }], held_by: ['stray'] } });
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area });
+    const code = await archiveProgramme('gone', a);
+    assertNoDestructiveEffect(fx, calls, area, before);
+    assert.equal(code, 1, a.stderr.out.text);
+    assert.ok(a.stderr.out.text.includes(`${fx.repo} would be kept: 2 uncommitted\n`), a.stderr.out.text);
+    assert.ok(a.stderr.out.text.includes(`${area}/stray is not mc's to remove\n`), a.stderr.out.text);
+  });
+
+  it('a second home that does not merge stops the archive there, and the planning session is kept, not released', async () => {
+    const fx = fixture({ second: true });
+    const area = join(fx.root, 'area');
+    mkdirSync(area);
+    writeFileSync(join(area, 'notes.md'), 'notes\n');
+    const before = snapshot(area);
+    const [first, second] = fx.repos.map((repo) => repo.path);
+    const { deps, calls } = stubs({ mergedBy: { [second]: false } });
+    const a = args(fx, deps, { areaPath: area });
+    const code = await archiveProgramme('gone', a);
+    assert.deepEqual(calls.mergeRepos, [first, second]);
+    assert.deepEqual(calls.release, [true]);
+    assert.deepEqual(snapshot(area), before, 'the planning session changed');
+    assert.ok(existsSync(area));
+    assert.equal(code, 1, a.stderr.out.text);
+    assert.match(a.stderr.out.text, /second #42 did not merge — checks failed; the planning session is kept/u);
   });
 
   it('keeps the planning session when the archive PR does not merge', async () => {
