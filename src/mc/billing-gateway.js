@@ -89,7 +89,7 @@ function closeSocket(socket, code, reason) {
 }
 
 /** Create a loopback-only gateway. Keys and grants are never serialized by it. */
-export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Date.now, maxBodyBytes = MAX_GATEWAY_BODY_BYTES, websocketUpstream = UPSTREAM_WEBSOCKET } = {}) {
+export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Date.now, maxBodyBytes = MAX_GATEWAY_BODY_BYTES, websocketUpstream = UPSTREAM_WEBSOCKET, setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout } = {}) {
   if (!keys || !Array.isArray(grants)) throw new TypeError('gateway keys and grants required');
   const requests = new Map();
   const admit = (grant) => {
@@ -153,13 +153,13 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
     const shut = (code, reason = '') => {
       if (done) return;
       done = true;
-      clearTimeout(expiry);
+      clearTimeoutFn(expiry);
       relays.delete(entry);
       closeSocket(client, code, reason);
       closeSocket(upstream, code, reason);
     };
     const left = Date.parse(grant.expiresAt) - now();
-    const expiry = setTimeout(() => shut(1008, 'session grant expired'), Math.max(0, Math.min(left, 2 ** 31 - 1)));
+    const expiry = setTimeoutFn(() => shut(1008, 'session grant expired'), Math.max(0, Math.min(left, 2 ** 31 - 1)));
     expiry.unref?.();
     relays.add(entry);
     client.on('message', (data, isBinary) => {
