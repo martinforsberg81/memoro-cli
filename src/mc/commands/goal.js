@@ -75,7 +75,7 @@ import { NAME_RE } from '../plan-schema.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
-import { appendLedgerLine, askJev, buildState, documentPath, judge, JEV_KEY, ledgerPath, LOG_ENTRIES, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256 } from '../jev.js';
+import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, judge, JEV_KEY, ledgerPath, LOG_ENTRIES, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256 } from '../jev.js';
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
@@ -434,31 +434,31 @@ async function askMartin(args, flags, ctx) {
 
   const tool = env.MC_TOOL || 'person';
   const { question, options, recommend } = call;
-  let sent = { documents: [], trimmed: [], length: null, sha256: null };
+  let sent = { documents: [], trimmed: [], length: null, sha256: null, budget: null, error_type: null };
   let asked = null;
   if (call.reserved) asked = { martin: `jev not asked: reserved act ${call.reserved}` };
   else if (tool === 'person') asked = { martin: 'jev not asked: person' };
   else {
     const context = jevContext(target, goal, flags.document, { ...ctx, stderr: { write: (line) => stderr.write(clean(line)) } });
-    const built = buildState({ question, options, evidence, ...context }, { secrets });
+    const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
+    const { built, answer: result, budget, limit } = await askWithinLimit({
+      build: (within) => buildState({ question, options, evidence, ...context }, { secrets, budget: within }),
+      ask: (state) => (values === null ? { unavailable: 'the mc keys source cannot be read' }
+        : askJev({ body: requestBody(state, state.options), key, ...ctx.jev })),
+    });
     if (built.problems?.[0]?.includes('alone are')) { stderr.write(clean(returnInstruction(built.problems, named))); return 2; }
     if (built.problems) {
       asked = { martin: 'jev unavailable: state over budget after trimming' };
-    }
-    if (built.problems) {
-      sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null };
+      sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null, budget: null, error_type: limit };
     } else {
-    const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
-    sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text) };
-    const answer = values === null ? { unavailable: 'the mc keys source cannot be read' }
-      : await askJev({ body: requestBody(built.state, built.state.options), key, ...ctx.jev });
-    const parsed = answer.unavailable ? answer : readAnswers(answer.response, options);
-    if (parsed.unavailable) asked = { martin: `jev unavailable: ${parsed.unavailable}` };
-    else {
-      const judged = judge(parsed.answers, recommend);
-      asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
-      if (judged.outcome !== 'answered') asked.martin = `jev: ${asked.reading} — not answered: ${judged.misses.join('; ')}`;
-    }
+      sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text), budget, error_type: limit };
+      const parsed = result.unavailable ? result : readAnswers(result.response, options);
+      if (parsed.unavailable) asked = { martin: `jev unavailable: ${parsed.unavailable}` };
+      else {
+        const judged = judge(parsed.answers, recommend);
+        asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
+        if (judged.outcome !== 'answered') asked.martin = `jev: ${asked.reading} — not answered: ${judged.misses.join('; ')}`;
+      }
     }
   }
 
@@ -469,7 +469,7 @@ async function askMartin(args, flags, ctx) {
   const ledger = redactValue({
     at: ctx.now.toISOString(), goal: target.name, verb: 'goal martin', programme: target.programme, tool, role: writerRole(env),
     question, options, recommend, reserved: call.reserved,
-    documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256,
+    documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
     model: asked.model ?? null, answers: asked.answers ?? null,
     outcome: answered ? 'answered' : 'martin', reason: answered ? `jev answered ${asked.reading}` : asked.martin,
   }, secrets);

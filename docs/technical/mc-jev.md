@@ -141,12 +141,29 @@ The state is one JSON object:
   label) and text; one that cannot be read is said on stderr and not sent;
 - `log` — the last five LOG.md entries.
 
-The serialized state stays within 240,000 characters (`STATE_BUDGET`).
+The serialized state stays within 90,000 characters (`STATE_BUDGET`). The
+figure follows jev-1.14.0's input limit, measured 2026-11-10 with synthetic
+text: 195,000 characters gave 32,320 input tokens and 200; 205,000 gave
+`400 max_tokens_exceeded`, so the limit is about 32,000 tokens. Real states
+(JSON, paths, code) run at about 3.5 characters a token, so 90,000 characters
+is about 25,700 tokens.
+
 Trimmed in this order: the oldest log entries, then document text largest
 first (cut, ending `[truncated]`), then the programme README, then whole
 documents largest first if still necessary. The question,
 options, evidence and goal are never trimmed; if they alone exceed the budget,
 the call is refused with a return instruction to shorten them.
+
+**Shrink and retry.** A 400 whose body names `max_tokens_exceeded` is not
+retried as it is: the state is rebuilt at 0.7 of the budget (63,000, then
+44,100 characters) and asked again, at most twice. The ledger row records
+`budget` (the one finally sent) and `error_type`; `trimmed` names the shrink,
+`budget shrunk to <n> characters after max_tokens_exceeded`. If the third
+state is refused too, the call ends unavailable:
+`jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the
+state, the last at 44100 characters`, and Martin is asked. Any other non-2xx
+keeps its handling (429 and 5xx are retried once) and its reason names the
+body's error_type when it has one, e.g. `HTTP 400 (invalid_schema)`.
 
 ## The data rule
 

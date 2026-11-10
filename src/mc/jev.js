@@ -29,8 +29,19 @@ export const JEV_KEY = 'TYPESAFE_API_KEY';
  * They change only with Martin.
  */
 export const THRESHOLDS = Object.freeze({ choice: 0.90, fits: 0.70, settled: 0.70 });
-/** The serialized state's budget, in characters. */
-export const STATE_BUDGET = 240_000;
+/**
+ * The serialized state's budget, in characters. jev-1.14.0 refuses an input over
+ * 32,000 tokens with 400 `max_tokens_exceeded` (measured 2026-11-10 with synthetic
+ * text: 195,000 characters gave 32,320 input tokens and 200; 205,000 gave 400).
+ * Real states, with JSON, paths and code, run at about 3.5 characters a token, so
+ * 90,000 characters is about 25,700 tokens, under the limit with room to spare.
+ */
+export const STATE_BUDGET = 90_000;
+/** The error_type jev names when an input is over its limit. */
+export const LIMIT_ERROR = 'max_tokens_exceeded';
+/** After a refusal for the limit, the state is rebuilt at this share of the budget, `REBUILDS` times at most. */
+export const SHRINK = 0.7;
+export const REBUILDS = 2;
 /** One attempt's limit; the longest `retry-after` honoured; the wait when a retry has none. */
 export const TIMEOUT_MS = 15_000;
 export const RETRY_AFTER_MAX_MS = 10_000;
@@ -237,9 +248,19 @@ export function retryAfterMs(header, now = Date.now()) {
 
 const TIMED_OUT = Symbol('timed out');
 
+/** The error_type a non-2xx body names (`{ "detail": { "error_type": … } }`), or null. */
+async function errorTypeOf(response) {
+  try {
+    const type = JSON.parse(await response.text())?.detail?.error_type;
+    return typeof type === 'string' && type ? oneLine(type).slice(0, 80) : null;
+  } catch { return null; }
+}
+
 /**
  * One request to jev, with one retry on 429 or 5xx: `{ response }` (the parsed
- * body of a 2xx), or `{ unavailable: reason }`. `transport(url, init)` is
+ * body of a 2xx), `{ limit: LIMIT_ERROR }` (a 400 for the input limit, not
+ * retried: askWithinLimit rebuilds the state), or `{ unavailable: reason }`,
+ * where a non-2xx reason names the body's error_type. `transport(url, init)` is
  * fetch's shape; `sleep(ms)` waits for a retry; `timer(ms)` resolves when an
  * attempt has run out of time. Never throws.
  */
@@ -261,7 +282,7 @@ export async function askJev({ body, key, transport = defaultTransport, sleep = 
             try { return { status: response.status, headers: response.headers, bodyText: await response.text() }; }
             catch (error) { return { status: response.status, bodyError: oneLine(error?.message || error) }; }
           }
-          return response;
+          return { status: response?.status, headers: response?.headers, errorType: await errorTypeOf(response) };
         }),
         timed,
       ]);
@@ -274,9 +295,39 @@ export async function askJev({ body, key, transport = defaultTransport, sleep = 
       if (answer.bodyError) return { unavailable: `malformed response (${answer.bodyError})` };
       try { return { response: JSON.parse(answer.bodyText) }; } catch { return { unavailable: 'malformed response (not JSON)' }; }
     }
+    if (status === 400 && answer.errorType === LIMIT_ERROR) return { limit: LIMIT_ERROR };
     const retryable = status === 429 || (status >= 500 && status < 600);
-    if (!retryable || attempt > 1) return { unavailable: `HTTP ${status || 'no status'}${attempt > 1 ? ' after one retry' : ''}` };
+    const named = answer.errorType ? ` (${answer.errorType})` : '';
+    if (!retryable || attempt > 1) return { unavailable: `HTTP ${status || 'no status'}${named}${attempt > 1 ? ' after one retry' : ''}` };
     await sleep(retryAfterMs(answer.headers?.get?.('retry-after') ?? null));
+  }
+}
+
+/**
+ * Asks jev with the state built within the budget. A refusal for jev's input
+ * limit rebuilds the state at SHRINK of the budget and asks again, at most
+ * REBUILDS times; a state sent after a refusal records the shrink in `trimmed`.
+ * `build(budget)` is buildState's result and `ask(state)` is askJev's result
+ * (or `{ unavailable }`). Returns `{ built, answer, budget, limit }`: `budget`
+ * is the one the last state was built at, `limit` is LIMIT_ERROR when a refusal
+ * for it was seen and null if not. `answer` is null when nothing was asked
+ * because the state is over budget.
+ */
+export async function askWithinLimit({ build, ask }) {
+  let budget = STATE_BUDGET;
+  let limit = null;
+  for (let rebuilds = 0; ; rebuilds += 1) {
+    const built = build(budget);
+    if (built.problems) return { built, answer: null, budget, limit };
+    const answer = await ask(built.state);
+    const refused = answer?.limit === LIMIT_ERROR;
+    if (refused) limit = LIMIT_ERROR;
+    if (!refused || rebuilds >= REBUILDS) {
+      if (limit) built.trimmed = [...built.trimmed, `budget shrunk to ${budget} characters after ${limit}`];
+      const unavailable = refused ? { unavailable: `HTTP 400 (${LIMIT_ERROR}) after ${REBUILDS} rebuilds of the state, the last at ${budget} characters` } : null;
+      return { built, answer: unavailable ?? answer, budget, limit };
+    }
+    budget = Math.round(budget * SHRINK);
   }
 }
 

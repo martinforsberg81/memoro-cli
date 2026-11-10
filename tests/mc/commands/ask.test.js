@@ -63,6 +63,21 @@ test('mc ask without a goal asks jev, sends programme context and a confined doc
   assert.deepEqual([f.ledger.length, f.ledger[0].verb, f.ledger[0].programme, f.ledger[0].goal, f.ledger[0].model], [1, 'ask', 'jev', null, 'jev-1.14.0']);
 });
 
+test('mc ask rebuilds a state jev refuses for its input limit and answers from the smaller one; the ledger names the budget sent', async () => {
+  const f = fixture();
+  f.deps.jev.transport = (url, init) => {
+    f.requests.push({ url, init });
+    return f.requests.length === 1
+      ? { status: 400, headers: { get: () => null }, text: async () => JSON.stringify({ detail: { error_type: 'max_tokens_exceeded' } }) }
+      : reply();
+  };
+  assert.equal(await run(options, f.deps), 0, f.err());
+  assert.equal(f.requests.length, 2, 'one refusal, then one answer');
+  assert.match(f.out(), /^mc: jev answered fake_timer /u);
+  assert.deepEqual([f.ledger[0].outcome, f.ledger[0].budget, f.ledger[0].error_type], ['answered', 63_000, 'max_tokens_exceeded']);
+  assert.ok(f.ledger[0].trimmed.includes('budget shrunk to 63000 characters after max_tokens_exceeded'), f.ledger[0].trimmed.join('; '));
+});
+
 test('mc ask asks jev when MC_TOOL is unset or person, but a reserved act never requests', async () => {
   for (const env of [{ cwd: repoDir }, { MC_PROGRAMME: 'jev', MC_TOOL: 'person', cwd: repoDir }]) {
     const f = fixture({ env });
