@@ -146,7 +146,8 @@ export async function runDocsMerge({
     report.tree_identical = landed?.status === 0 && String(landed.stdout || '').trim() === measured.tree;
     if (report.tree_identical && !recordLandingMainRed({ root, repo: repoPath, commit: report.merge_commit,
       baseCommit: measured.base_commit, at: now().toISOString(),
-      verdict: { selection: { selected: measured.selected }, candidate: measured },
+      // The documents' round runs every file it selects (`docs-measure.js`): its selection is what it measured.
+      verdict: { selection: { selected: measured.selected }, candidate: { ...measured, covered: measured.selected } },
     })) onProgress(`WARNING: could not write main evidence for ${report.merge_commit}`);
   }
   return { ...report, duration_ms: now() - started };

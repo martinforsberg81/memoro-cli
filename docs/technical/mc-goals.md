@@ -598,6 +598,11 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   publishing or requeueing, it rereads the goal and preserves any intervening person decision: it cannot
   clear Martin's hold or reactivate a completed/dropped goal. These are session
   obligations, not a claim that the requeue command enforces every boundary.
+  Main's red is never a mend's: the merge round runs untouched red files at
+  its base, goes on past those red there by name and writes a `main-health`
+  repair goal, an ordinary `build · ready` goal the runner takes like any
+  other ([`mc-merge.md`](mc-merge.md) § *The merge judges the pull request
+  against main*, Martin 2026-11-10).
   A queued PR remains the merger's. The failure limit counts merger results:
   failures one and two run mend and retry, failure three waits on Martin.
   Mend's ready handoff does not reset that count. An obstacle outside its

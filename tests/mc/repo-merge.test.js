@@ -170,7 +170,8 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
 describe('identical landings write main coverage', () => {
   const selected = ['tests/selected.test.js', 'tests/standing.test.js'];
   const standing = { file: selected[1], name: 'standing red', diagnostic: 'digest' };
-  const verdict = () => ({ ...green(), selection: { selected }, candidate: { ...green().candidate, tree: LANDED },
+  // What the round ran is its coverage (`candidate.covered`); the selection as such is not.
+  const verdict = () => ({ ...green(), selection: { selected }, candidate: { ...green().candidate, tree: LANDED, covered: selected },
     main_red: { tests: [standing] } });
 
   it('a green identical landing writes merge_commit coverage, carries main_red tests and inherits the base record', async () => {
@@ -206,17 +207,22 @@ describe('identical landings write main coverage', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a reused round covers the receipt members as well as the selection without inventing other coverage', async () => {
+  it('a reused round covers the receipt members and what it ran, never a selected file it neither ran nor reused', async () => {
+    // memoro#15193's delta round, 2026-11-10: 293 selected, 11 run, the rest from
+    // a receipt that did not hold subject-context.test.js — which then read green
+    // on main while it was red.
     const gate = verdict();
-    gate.reused = { mode: 'exact', covered: ['tests/receipt-member.test.js'] };
+    gate.selection = { selected: [...selected, 'tests/selected-not-run.test.js'] };
+    gate.candidate.covered = [selected[0]];
+    gate.reused = { mode: 'delta', covered: ['tests/receipt-member.test.js'] };
     const fx = fixture({ verdict: gate });
     try {
       const report = await fx.run();
       const proof = readMainRed({ root: fx.mcHome, repo: fx.repoPath, baseCommit: report.merge_commit,
-        files: [...selected, ...gate.reused.covered, 'tests/unknown.test.js'] });
+        files: [...selected, ...gate.reused.covered, 'tests/selected-not-run.test.js', 'tests/unknown.test.js'] });
       assert.deepEqual(proof.green_on_main, [selected[0], ...gate.reused.covered]);
       assert.deepEqual(proof.red_on_main, [standing.file]);
-      assert.deepEqual(proof.not_covered, ['tests/unknown.test.js']);
+      assert.deepEqual(proof.not_covered, ['tests/selected-not-run.test.js', 'tests/unknown.test.js']);
       assert.equal(proof.inherited_from, null);
     } finally { fx.cleanup(); }
   });
@@ -1053,6 +1059,7 @@ describe('a batch lands in order, or falls back one by one', () => {
     // answers LANDED for the tree reads, so prefix trees of LANDED are the
     // measured build reproduced exactly.
     const verdict = { ...greenBatch(), selection: { selected: ['tests/selected.test.js'] }, candidate_trees: ['landed401', 'landed402', 'landed403'] };
+    verdict.candidate = { ...verdict.candidate, covered: ['tests/selected.test.js'] };
     const fx = batchFixture({ verdict });
     try {
       recordMainRed({ root: fx.mcHome, repo: fx.repoPath, commit: BASE, covered: ['tests/inherited.test.js'], result: { totals: { finished: true } } });

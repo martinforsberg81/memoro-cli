@@ -302,12 +302,19 @@ export function recordMainRed({ root = mcHome(), repo, commit, result, covered =
   } catch { return false; }
 }
 
-/** Called only after the landed tree has been proved identical. */
+/**
+ * Called only after the landed tree has been proved identical. `covered` is
+ * what the round measured or reused from a receipt that measured it — never
+ * the selection as such: a selected file a delta round neither ran nor reused
+ * is unknown here, and stays whatever the base record says. Until 2026-11-10
+ * the whole selection was written, and memoro's subject-context test, broken
+ * by a landing no round measured, read green on main for eleven landings while
+ * it was red (3af1dc93 onward, memoro#15193's delta round).
+ */
 export function recordLandingMainRed({ root = mcHome(), repo, commit, baseCommit, verdict, at }) {
   const tests = [...(verdict.candidate?.red_tests || []), ...(verdict.main_red?.tests || [])];
   return recordMainRed({ root, repo, commit, baseCommit, from: 'landing', at,
-    covered: [...new Set([...(verdict.selection?.selected || []), ...(verdict.candidate?.covered || []),
-      ...(verdict.reused?.covered || [])])],
+    covered: [...new Set([...(verdict.candidate?.covered || []), ...(verdict.reused?.covered || [])])],
     result: { red_tests: tests, red_files: [...new Set([...(verdict.candidate?.red_files || []), ...tests.map(test => test.file)])] },
   });
 }

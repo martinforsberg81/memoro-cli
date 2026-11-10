@@ -52,6 +52,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
+import { mainsOf, redAtFrozenBase } from './gate-settle.js';
 import { readMainRed, recordMainRed, redAt } from './selector-miss.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
@@ -193,6 +194,9 @@ export async function runGate({
   signals = true,
   // Read already-measured exact-base health, without replaying main (2026-11-04).
   readMainEvidence = readMainRed,
+  // Runs red files the change leaves alone at the round's base, to tell main's red
+  // from the change's (Martin, 2026-11-10); a test stands in for it.
+  redAtBase = redAtFrozenBase,
   // Explicit receipt binding for a caller that has one; null is every round today.
   evidence = null,
   candidateCwds = undefined,
@@ -363,6 +367,10 @@ export async function runGate({
     // untouched by the change (ruling 44 § 4). Named in the verdict as not
     // counted; null when there were none.
     main_red_files: null,
+    // Main's red the round found by running untouched red files at its base:
+    // `{ base, files, tests }`, which the merger turns into a repair goal
+    // (`main-repair.js`). Null when the round found none.
+    main_repair: null,
     // What was red in the round and green when run once more alone, in the
     // files and command gates the declaration names `retry_once` (ruling 44
     // § 5): `{ files, names, gates }`. Null when nothing flipped.
@@ -828,6 +836,51 @@ export async function runGate({
       result.unmeasured = files;
       if (files.length) say(`not measured: ${files.join(', ')} — will run alone after the suite and gates`);
     };
+    // Whether every red test of `result` is red by name at the round's base,
+    // in files no pull request of the round touches: run there once, alone, in
+    // a temporary worktree (`redAtFrozenBase`), never on the candidate's
+    // checkout. Main's files found red are put in `report.main_repair` whether
+    // or not they are all of the red, so a repair is asked for either way.
+    // A run that could not be made or did not finish is no evidence: false.
+    const atBaseSeen = new Map();
+    const redOnMainAtBase = async (result) => {
+      const touched = await touchedPaths();
+      if (!touched) { say('could not read what this change touches — red as before'); return false; }
+      const files = result.red_files.filter((file) => !touched.has(file));
+      if (!files.length) return false;
+      const base = report.base.commit;
+      const here = new Map(files.map((file) => [file, []]));
+      for (const test of result.red_tests || []) if (here.has(test.file)) here.get(test.file).push(test.name);
+      // A file already run at the base in this round is not run there again.
+      const fresh = files.filter((file) => !atBaseSeen.has(file));
+      if (fresh.length) {
+        say(`${fresh.length} red file${fresh.length === 1 ? '' : 's'} this change does not touch — running ${fresh.length === 1 ? 'it' : 'them'} alone at the base ${base.slice(0, 7)}`);
+        const baseFlags = [...withoutConcurrency(withoutTimeouts(plan.flags)), `--test-timeout=${TEST_TIMEOUT_MS}`];
+        const basePlan = { ...resolveTestPlan({ flags: baseFlags }), concurrencyDeclared: false };
+        const atBase = await timed('main red', () => redAtBase({
+          cwd: headDir, base, files: fresh, env, signal, root: workRoot(env), id: `round-${process.pid}-${clock()}`,
+          git: (dir, args) => askGitRaw(args, { cwd: dir }),
+          tests: (options) => runTests({ ...options, flags: basePlan.flags, plan: basePlan, lanes: 1, env: { ...env, MC_TEST_LANES: '1' } }),
+        }));
+        if (!atBase.ok) { say(`could not tell whether the red is main's: ${atBase.reason} — red as before`); return false; }
+        for (const file of fresh) atBaseSeen.set(file, atBase.present.includes(file) ? (atBase.red.get(file) || []) : null);
+      }
+      const present = files.filter((file) => atBaseSeen.get(file) !== null);
+      const main = mainsOf(here, new Map(present.map((file) => [file, atBaseSeen.get(file)])), present);
+      if (!main.length) { say(`not red at ${base.slice(0, 7)} by the same tests — the change's red`); return false; }
+      const tests = (result.red_tests || []).filter((test) => main.includes(test.file));
+      report.main_repair = {
+        base, files: [...new Set([...(report.main_repair?.files || []), ...main])],
+        tests: [...(report.main_repair?.tests || []), ...tests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }))],
+      };
+      // Carried into the landed commit's evidence (`recordLandingMainRed`): an untouched red stays red on main.
+      report.main_red = { ...(report.main_red || {}), base, measured_at_base: true,
+        red_on_main: [...new Set([...(report.main_red?.red_on_main || []), ...main])],
+        tests: [...(report.main_red?.tests || []), ...tests] };
+      const all = main.length === result.red_files.length;
+      say(`red on main too — the same tests red alone at ${base.slice(0, 7)}: ${main.join(', ')}${all ? ' — not this round\'s red; main\'s repair is asked for' : ' — the rest is the change\'s red'}`);
+      return all;
+    };
     const stopRed = async (result, { alone = false, measuringAlone = false } = {}) => {
       if (!measuringAlone) classifyUnmeasured(result);
       if (!result.red.length) return null;
@@ -896,6 +949,14 @@ export async function runGate({
           say(touched ? 'this change touches a red file that is red on main — red as before'
             : 'could not read what this change touches — red as before');
         }
+      }
+      // The merge judges the pull request against main (Martin, 2026-11-10):
+      // red files the change leaves alone run once alone at the round's base.
+      // Every red test red there by name is main's red, not the change's — the
+      // round goes on past it, and the repair of main is asked for
+      // (`report.main_repair`, `main-repair.js`); no mend is started for it.
+      if (facts.pr && result.red_files?.length && report.base?.commit && within(new Set(result.red_files))) {
+        if (await redOnMainAtBase(result)) return mainRedGoesOn(result);
       }
       const hooks = (result.red_tests || []).filter((test) => /^(?:\w+ )?hook of .+ failed:$/u.test(test.error?.[0] || ''));
       const hookReasons = hooks.map((test) => {

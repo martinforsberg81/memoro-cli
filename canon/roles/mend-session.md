@@ -34,6 +34,8 @@ evidence before retrying. Record why the unchanged revision remains valid;
 do not manufacture a commit or claim that an old check was rerun. A failure
 outside the goal's change follows the existing settlement and proposal rules;
 it is not permission to repair another programme's component in passing.
+The merger itself finds main's red, lets the PR through and writes a
+`main-health` repair goal; a red the merger still reports is the change's.
 
 You do not rewrite the goal, contract or criteria; widen product, privacy or
 test scope; weaken acceptance; waive a gate; mark absent proof as met; move

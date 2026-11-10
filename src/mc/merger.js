@@ -47,6 +47,7 @@ import {
   dequeue, enqueue, heldBy, inLine, markLanding, markOffline, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor,
 } from './merge-queue.js';
+import { MAIN_HEALTH_PROGRAMME, requestMainRepair } from './main-repair.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
@@ -439,6 +440,8 @@ export async function landJob(batch, {
   goalsOf = null,
   // A goal entry with no status change (goals.js `appendEntry`).
   noteGoal = appendEntry,
+  // Main's red the round found at its base is asked a repair goal here (`main-repair.js`).
+  repairMain = requestMainRepair,
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
   // immediately before the irreversible GitHub merge call.
@@ -476,7 +479,7 @@ export async function landJob(batch, {
       try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
     }
     await tell(job, landed, given, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain,
     });
     // Outside any lock: the queue's lock, taken twice by this process, waits 5 s.
     if (onAnswer) {
@@ -740,8 +743,17 @@ function tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, move
   }
 }
 
+/**
+ * The main reds a merge report found at its base (`repo-gate.js`
+ * `main_repair`): the single round's gate, or each round of a batch fallback.
+ */
+export function mainRepairsOf(report) {
+  const gates = [report?.gate, ...(report?.batch?.rounds || []).map((round) => round?.gate)];
+  return gates.map((gate) => gate?.main_repair).filter((found) => found?.files?.length && found.base);
+}
+
 /** One job's answer, said and written: the page's cache, the goal, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
@@ -767,6 +779,17 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     const goal = goalOfJob(job, goalsOf);
     if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline });
   }, { name: 'merges' });
+
+  // Main's red the round found at its base (Martin, 2026-11-10): the pull
+  // request was judged against main and is not blamed; main gets a repair goal
+  // of its own (`main-repair.js`), never a mend of this pull request.
+  for (const found of mainRepairsOf(report)) {
+    const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files, tests: found.tests });
+    const where = found.files.join(', ');
+    if (asked.created) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written`);
+    else if (asked.open) say(`${label}: main is red in ${where} — its repair is under way in ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
+    else say(`${label}: main is red in ${where} — no repair goal written: ${asked.skipped}`);
+  }
 
   if (appendRun) {
     try {
