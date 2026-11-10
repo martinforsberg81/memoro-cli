@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 import * as claudeCode from '../../src/adapters/claude-code.js';
 import * as codex from '../../src/adapters/codex.js';
@@ -164,18 +165,28 @@ describe('credential-blind adapter contract', () => {
     });
 
     it(`${name} rejects file and env materialisation without writing`, async () => {
-      const file = join(tmpdir(), `mc-${name}-must-not-exist-${Date.now()}`);
-      for (const location of [{ type: 'file', path: file }, { type: 'env', name: 'SECRET' }]) {
-        const result = await adapter.materializeToken({
-          token: SENTINEL_TOKEN,
-          location,
-        });
-        assert.deepEqual(result, {
-          ok: false,
-          reason: 'plaintext-materialisation-disabled',
-        });
-        assert.equal(existsSync(file), false);
-        assert.doesNotMatch(JSON.stringify(result), new RegExp(SENTINEL_TOKEN));
+      const dir = mkdtempSync(join(tmpdir(), `mc-${name}-must-not-exist-`));
+      const envName = `MC_TEST_MATERIALISE_${randomBytes(8).toString('hex')}`;
+      try {
+        const file = join(dir, 'must-not-exist');
+        assert.equal(process.env[envName], undefined);
+        for (const location of [{ type: 'file', path: file }, { type: 'env', name: envName }]) {
+          const envBefore = process.env[envName];
+          const result = await adapter.materializeToken({
+            token: SENTINEL_TOKEN,
+            location,
+          });
+          assert.deepEqual(result, {
+            ok: false,
+            reason: 'plaintext-materialisation-disabled',
+          });
+          assert.equal(existsSync(file), false);
+          assert.doesNotMatch(JSON.stringify(result), new RegExp(SENTINEL_TOKEN));
+          assert.equal(process.env[envName], envBefore);
+        }
+      } finally {
+        delete process.env[envName];
+        rmSync(dir, { recursive: true, force: true });
       }
     });
   }
