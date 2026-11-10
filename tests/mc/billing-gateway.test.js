@@ -136,7 +136,7 @@ test('codex remote compaction is a route of its own', async (t) => {
 });
 
 // A local server stands in for wss://api.openai.com/v1/responses.
-async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00:00Z', now = () => NOW } = {}) {
+async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00:00Z', now = () => NOW, setTimeoutFn, clearTimeoutFn } = {}) {
   const provider = { headers: null, frames: [], sockets: [], httpCalls: [] };
   const providerEvents = new EventEmitter();
   const fake = new WebSocketServer({ host: '127.0.0.1', port: 0 });
@@ -144,6 +144,7 @@ async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00
   fake.on('connection', (socket, req) => {
     provider.headers = req.headers;
     provider.sockets.push(socket);
+    providerEvents.emit('connection', socket);
     socket.on('message', (data) => {
       provider.frames.push(JSON.parse(data.toString()));
       providerEvents.emit('frame', provider.frames.at(-1));
@@ -159,6 +160,8 @@ async function socketFixture(t, { maxRequests = 2, expiresAt = '2026-10-29T13:00
       return new Response('{}', { status: 200 });
     },
     websocketUpstream: `ws://127.0.0.1:${fake.address().port}/v1/responses`,
+    setTimeoutFn,
+    clearTimeoutFn,
   });
   const base = await listenBillingGateway(gateway);
   t.after(async () => {
@@ -301,6 +304,94 @@ test('one request budget is shared when WebSocket consumes before HTTP', async (
   assert.equal((await send({ model: 'gpt-6.1-sol', input: [] })).status, 429);
   assert.equal(provider.httpCalls.length, 0, 'the exhausted HTTP request never reaches upstream');
   assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
+});
+
+// Arms nothing: the expiry timer is recorded and fired by the test. Each handle
+// is a fresh object, so a clear of any other timer cannot match the clear check.
+function recordingScheduler() {
+  const scheduled = [];
+  const cleared = [];
+  return {
+    scheduled,
+    cleared,
+    setTimeoutFn: (callback, delay) => {
+      const handle = { id: scheduled.length + 1 };
+      scheduled.push({ callback, delay, handle });
+      return handle;
+    },
+    clearTimeoutFn: (handle) => { cleared.push(handle); },
+  };
+}
+
+// Admit one response.create while the grant is valid, then send a second with
+// the injected clock at `at`. The real expiry timer is an hour away, so only the
+// frame-time check can refuse the second frame. Budget is left and the model is
+// allowed, so no other refusal can produce the closure.
+async function secondFrameAt(t, at) {
+  let clock = NOW;
+  const { provider, providerEvents, connect } = await socketFixture(t, { now: () => clock });
+  const upstreamConnected = boundedEvent(providerEvents, 'connection');
+  const session = connect();
+  await session.opened;
+  const upstream = await upstreamConnected;
+  const firstFrame = boundedEvent(providerEvents, 'frame');
+  session.socket.send(create('gpt-6.1-sol'));
+  await firstFrame;
+  // Registered before the second send: the provider's close can arrive first.
+  const upstreamClosed = boundedEvent(upstream, 'close', (code) => code);
+  upstreamClosed.catch(() => {}); // a failing assertion above must not leave this rejection unhandled
+  const outcome = boundedAny([
+    { target: session.socket, name: 'close', project: (code, reason) => ({ kind: 'closed', code, reason: reason.toString() }) },
+    { target: providerEvents, name: 'frame', project: (frame) => ({ kind: 'forwarded', frame }) },
+  ]);
+  clock = at;
+  session.socket.send(create('gpt-6.1-sol'));
+  return { provider, outcome, upstreamClosed };
+}
+
+test('an admitted socket that sends at exact expiry is closed 1008 and nothing more reaches upstream', async (t) => {
+  const { provider, outcome, upstreamClosed } = await secondFrameAt(t, Date.parse('2026-10-29T13:00:00Z'));
+  assert.deepEqual(await outcome, { kind: 'closed', code: 1008, reason: 'session grant expired' });
+  await upstreamClosed;
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
+});
+
+test('an admitted socket that sends 1 ms after expiry is closed 1008 and nothing more reaches upstream', async (t) => {
+  const { provider, outcome, upstreamClosed } = await secondFrameAt(t, Date.parse('2026-10-29T13:00:00Z') + 1);
+  assert.deepEqual(await outcome, { kind: 'closed', code: 1008, reason: 'session grant expired' });
+  await upstreamClosed;
+  assert.equal(provider.frames.filter((frame) => frame.type === 'response.create').length, 1);
+});
+
+test('the expiry timer closes an admitted socket with no frame sent', async (t) => {
+  const timers = recordingScheduler();
+  const { provider, providerEvents, connect } = await socketFixture(t, { setTimeoutFn: timers.setTimeoutFn, clearTimeoutFn: timers.clearTimeoutFn });
+  const upstreamConnected = boundedEvent(providerEvents, 'connection');
+  const session = connect();
+  await session.opened;
+  await upstreamConnected;
+  assert.equal(timers.scheduled.length, 1, 'one expiry timer is scheduled per relay');
+  assert.equal(timers.scheduled[0].delay, Date.parse('2026-10-29T13:00:00Z') - NOW);
+  // Registered before the callback runs. A missing close is a value the deepEqual rejects.
+  const closed = boundedEvent(session.socket, 'close', (code, reason) => ({ kind: 'closed', code, reason: reason.toString() }))
+    .catch(() => ({ kind: 'still-open' }));
+  timers.scheduled[0].callback();
+  assert.deepEqual(await closed, { kind: 'closed', code: 1008, reason: 'session grant expired' });
+  assert.deepEqual(provider.frames, []);
+});
+
+test('a normal close clears the expiry timer it scheduled', async (t) => {
+  const timers = recordingScheduler();
+  const { providerEvents, connect } = await socketFixture(t, { setTimeoutFn: timers.setTimeoutFn, clearTimeoutFn: timers.clearTimeoutFn });
+  const upstreamConnected = boundedEvent(providerEvents, 'connection');
+  const session = connect();
+  await session.opened;
+  const upstream = await upstreamConnected;
+  assert.equal(timers.scheduled.length, 1, 'one expiry timer is scheduled per relay');
+  const upstreamClosed = boundedEvent(upstream, 'close', (code) => code);
+  session.socket.close(1000, 'done');
+  assert.equal(await upstreamClosed, 1000);
+  assert.deepEqual(timers.cleared, [timers.scheduled[0].handle]);
 });
 
 test('closing either side closes the other', async (t) => {
