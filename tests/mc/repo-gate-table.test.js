@@ -54,7 +54,7 @@ describe('an operator override changes the fields it states and keeps the rest (
       const plainRoot = mkdtempSync(join(tmpdir(), 'mc-plain-'));
       const plain = declarationFor('/x/memoro', { root: plainRoot });
       rmSync(plainRoot, { recursive: true, force: true });
-      for (const field of ['select', 'suite', 'round_timeout_ms', 'pr_tests_flags', 'retry_once', 'derived']) {
+      for (const field of ['select', 'suite', 'round_timeout_ms', 'pr_tests_flags', 'retry_once']) {
         assert.ok(plain.declaration[field] != null, `shipped memoro declares ${field}`);
         assert.deepEqual(answer.declaration[field], plain.declaration[field], field);
       }
@@ -85,6 +85,29 @@ describe('an operator override changes the fields it states and keeps the rest (
       assert.equal(dropped.ok, false);
       assert.match(dropped.reason, /round_timeout_ms/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('memoro derived list has one governing layer: the repository (mc/derived-list-one-layer)', () => {
+  it('the shipped memoro entry declares no derived list, so there is no second copy to go stale', () => {
+    assert.equal('derived' in SHIPPED.memoro, false);
+  });
+
+  it('a repository derived list wins over an operator override that does not state it', () => {
+    const fx = repo('memoro', { name: 'memoro', scripts: { test: 'node scripts/testing/ci.mjs' } });
+    try {
+      const derived = [
+        { command: 'npm run db:local-schema', paths: ['scripts/dev/local-schema.sql'] },
+        { command: 'node scripts/scan-ocr-languages-mirror.mjs', paths: ['public/js/msr/cards/document-scan/generated/locales.js'] },
+      ];
+      fx.declare({ derived, derived_why: 'fixture: the repository declares its own derived list' });
+      fx.override({ memoro: { prepare: 'npm ci --prefer-offline', prepare_why: 'machine-local fixture' } });
+      const answer = fx.ask();
+      assert.equal(answer.ok, true, answer.reason);
+      assert.deepEqual(answer.declaration.derived.map(({ command, paths }) => ({ command, paths })), derived);
+      assert.equal(answer.sources.derived, 'repository');
+      assert.equal(answer.sources.prepare, 'override');
+    } finally { fx.cleanup(); }
   });
 });
 

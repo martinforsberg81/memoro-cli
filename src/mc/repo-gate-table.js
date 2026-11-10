@@ -230,40 +230,9 @@ export const SHIPPED = Object.freeze({
     // gate-consolidation plan says the same thing from its end — the contract
     // suite belongs inside `npm run ci`, not beside it.
     extra_gates: Object.freeze([]),
-    // The SQL inventory and coverage snapshots left with their scripts
-    // (memoro #14313, sql-shape-rules step 1): rules derived from the code
-    // replaced them, so there is nothing under `docs/plans/sql/` to regenerate.
-    // The 3D avatar runtime bundle is committed and is a function of the
-    // lockfile (three, @pixiv/three-vrm, esbuild): #13177 bumped three-vrm
-    // without rebuilding it, and every deploy stopped at its post-build git
-    // preflight until #13232. Rebuilt after `npm ci`, main never carries a
-    // stale copy. The same holds for the generated session validator (ajv and
-    // src/schemas/; mc deploy runs build:validators too, and check:validators
-    // is not selected for a lockfile bump). The TipTap bundle is not here:
-    // memoro's email-compose (#14707) deletes it and its `build:tiptap`
-    // script. The design-token stylesheets and their
-    // document are written from `sdk/tokens/*.json` alone (2026-10-12: steps
-    // regenerated them by hand, one-window-path 8 among them). The SDK corpus
-    // results and `card-html-digests.json` are not here: memoro re-records
-    // them only as a decision that the output moved (`sdk/corpus/README.md`,
-    // `scripts/corpus-card-html-digests.mjs`), so a merge must not.
-    derived: Object.freeze([
-      Object.freeze({
-        command: 'npm run build:assistant-3d-avatar',
-        paths: Object.freeze(['public/js/ui/avatars/assistant-3d-avatar-runtime.bundle.js']),
-      }),
-      Object.freeze({ command: 'npm run build:validators', paths: Object.freeze(['src/tenancy/validators.generated.mjs']) }),
-      Object.freeze({
-        command: 'npm run tokens:build',
-        paths: Object.freeze(['public/css/tokens/', 'public/css/theme/theme-memoro-light.css', 'public/css/theme/theme-memoro-dark.css']),
-      }),
-      Object.freeze({ command: 'npm run tokens:docs', paths: Object.freeze(['docs/technical/design-tokens.md']) }),
-      // The scan card's mirror of src/i18n/locales.js (a test compares them).
-      Object.freeze({
-        command: 'node scripts/scan-ocr-languages-mirror.mjs',
-        paths: Object.freeze(['public/js/msr/cards/document-scan/generated/locales.js']),
-      }),
-    ]),
+    // memoro declares its derived artefacts in its own .mc/test.json, where
+    // their reasons now live (mc/memoro-derived-in-repository, 2026-11). mc
+    // ships none for memoro, so there is no second copy to go stale.
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro.md' }),
     // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs
     // `node --test --import ./tests/_helpers/browser-paths.mjs`, which
