@@ -19,6 +19,24 @@ proof; role instructions define who commissions, implements and judges work.
 These are priorities, not a demand to add a suite to every domain. Expand
 protection only where a concrete risk and missing evidence justify it.
 
+## Commission by consequence, not by finding
+
+An audit finding, review note or proposal is a candidate, not a commission.
+It becomes test work only when all three hold:
+
+1. the fault would have a consequence in the table above;
+2. it is plausible, and nothing already detects it: other tests, the merge
+   round, review or a runtime refusal;
+3. closing it costs less than the gap, counting test, maintenance and review
+   cost.
+
+A test-cost optimisation is commissioned only from a measured cost that matters
+for the affected round, never from inspection alone. Documentation drift is
+fixed by the work that touches the document, or in one bounded pass per
+repository. Anything else is declined with its reason and a one-line residual
+risk. A weak but harmless test stays as it is: rewriting a test that works is
+a cost, not a gain.
+
 ## Use the cheapest credible level
 
 | Subject | Suitable evidence |
@@ -47,8 +65,10 @@ one local change. Check for existing protection before adding another layer.
 Fault evidence must exercise the relevant assertion: a test failing because
 an import is broken or setup crashes does not establish fault detection.
 For a regression, reproduce the original failure where practical; otherwise
-record the deliberate faulty case and its limits. This is focused evidence,
-not a requirement for a new mutation-testing framework or full-suite replay.
+record the deliberate faulty case and its limits. One deliberate fault per
+protected behaviour is enough; the proof is proportionate to the consequence,
+not an exhaustive fault list, a mutation-testing framework or a full-suite
+replay.
 
 ## Budget execution and maintenance
 
@@ -69,10 +89,13 @@ part of adopting this strategy.
 
 ## Apply the strategy to the existing estate
 
-Audit in bounded batches, prioritising costly fixtures, source-text assertions
-and overlapping checks. For each decision record the path, protected behaviour,
-evidence examined, keep/rebuild/consolidate/retire verdict and next action.
-Use measured runtime when available; static inspection is not a timing result.
+Existing checks are revisited only where a consequential area lacks credible
+evidence, a cost is measured, or a test blocks work. There is no estate-wide
+audit, path-by-path disposition or closeout: an untouched legacy test is
+neither certified nor scheduled. For each decision taken, record the path,
+protected behaviour, evidence examined, keep/rebuild/consolidate/retire
+verdict and next action. Use measured runtime when available; static
+inspection is not a timing result.
 
 Before retiring a check, identify any unique protection, the replacement that
 actually covers it, or the residual risk accepted in planning. Keep useful
