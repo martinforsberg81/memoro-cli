@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { parseGoal } from '../../src/mc/goals.js';
+import { writeRedDetail } from '../../src/mc/merge-red.js';
 import { MAIN_HEALTH_PROGRAMME, requestMainRepair } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
@@ -1620,5 +1621,59 @@ describe('requestMainRepair — the repair goal', () => {
     mkdirSync(programs, { recursive: true });
     assert.match(requestMainRepair({ ...request, home: programs, now }).skipped, /no programme main-health/u);
     assert.equal(requestMainRepair({ ...request, files: [], home: home(), now }).skipped, 'nothing to repair');
+  });
+});
+
+// Martin, 2026-11-10: every red says exactly what did not pass, kept in the
+// merge-red file and said into merger.log, so nothing is run again to find out.
+describe('what failed is kept and said, for every failed stop', () => {
+  const gateRed = {
+    ok: false, merged: false, stopped_at: 'selected-gate', reason: '1 command gate the selection chose failed: test:browser-contracts (exit 1)',
+    gate: {
+      stopped_at: 'selected-gate', candidate: { red_tests: [] },
+      extra_gates: [
+        { name: 'test:browser-contracts', id: 'browser-contracts', command: 'npm run test:browser-contracts', ok: false, ran: true, exit_code: 1, duration_ms: 51500,
+          output_path: '/work/runner/gate-output/memoro-15149/test_browser-contracts.log',
+          failure: { tests: [], spec: ['test at tests/browser/picker.test.js:31:3', '✖ the picker keeps focus (40ms)', "  'body' !== 'input'"], tail: [] } },
+        { name: 'legal:gate', ok: true, ran: true, exit_code: 0 },
+      ],
+    },
+  };
+  const testRed = {
+    ok: false, merged: false, stopped_at: 'red', reason: '1 test red: s › a',
+    gate: { candidate: { red_files: ['tests/a.test.js'], red_tests: [{ file: 'tests/a.test.js', name: 's › a', at: 'tests/a.test.js:12:3',
+      error: ['Expected values to be strictly deep-equal:'], detail: ['Expected values to be strictly deep-equal:', '+ actual - expected', '  [', "+   { id: 'evt_budget' }", '  ]'] }] } },
+  };
+
+  it('a failed command gate writes its failing tests and output path, and merger.log says them', async () => {
+    const m = machine([gateRed]);
+    const [answer] = await landJob(JOB, m.deps);
+    const path = join(root, 'runner', 'merge-red', 'memoro-cli-671.txt');
+    assert.equal(answer.report.red_detail, path);
+    const text = readFileSync(path, 'utf8');
+    assert.match(text, /command gate test:browser-contracts \(browser-contracts\) — exit 1, 51\.5 s/u);
+    assert.match(text, /whole output: \/work\/runner\/gate-output\/memoro-15149\/test_browser-contracts\.log/u);
+    assert.match(text, /✖ the picker keeps focus \(40ms\)\n {4}'body' !== 'input'/u);
+    assert.doesNotMatch(text, /legal:gate/u, 'a gate that passed is not listed');
+    assert.ok(m.said.includes(`memoro-cli #671: what failed (all of it in ${path}):`), m.said.join('\n'));
+    assert.ok(m.said.includes("memoro-cli #671:       'body' !== 'input'"), m.said.join('\n'));
+  });
+
+  it('a red test keeps its whole error, not its first lines', async () => {
+    const m = machine([testRed]);
+    await landJob(JOB, m.deps);
+    const text = readFileSync(join(root, 'runner', 'merge-red', 'memoro-cli-671.txt'), 'utf8');
+    const at = text.indexOf('  ✗ s › a\n    at tests/a.test.js:12:3\n');
+    assert.ok(at >= 0, text);
+    assert.ok(text.includes(['    Expected values to be strictly deep-equal:', '    + actual - expected', '      [', "    +   { id: 'evt_budget' }", '      ]'].join('\n')), text);
+  });
+
+  it('a stop that measured nothing writes no file; every failed stop does', () => {
+    for (const stop of ['lease', 'gone', 'offline', 'fetch']) {
+      assert.equal(writeRedDetail({ root, repo: 'memoro', pr: 1, report: { ok: false, stopped_at: stop, reason: 'x' } }), null, stop);
+    }
+    for (const stop of ['red', 'selected-gate', 'extra-gate', 'pr-tests', 'stalled', 'prepare', 'derived']) {
+      assert.ok(writeRedDetail({ root, repo: 'memoro', pr: 2, report: { ok: false, stopped_at: stop, reason: `${stop} said why` } }), stop);
+    }
   });
 });
