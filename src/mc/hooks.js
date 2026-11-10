@@ -215,7 +215,7 @@ export function protectedGoalFile(path, { programs = programsHome() } = {}) {
  * What a session is told when it reaches for the suite: there is none to run
  * in a worktree. The merger measures the pull request once, in its lane.
  */
-const SUITE_REASON = 'The whole suite is the merger\'s, not this session\'s: `mc publish` queues the pull request and the merge round measures it once, in its lane. Run the tests your change reaches with `mc gate <files…>` (or bare `mc gate`: the test files this branch changed).';
+const SUITE_REASON = 'The whole suite is the nightly\'s, not this session\'s: `mc publish` queues the pull request and the merge round measures the change\'s affected selection once, in its lane. Run the tests your change reaches with `mc gate <files…>` (or bare `mc gate`: the test files this branch changed).';
 
 /**
  * What a session is told when it installs the tree itself: a memoro checkout

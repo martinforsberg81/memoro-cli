@@ -24,9 +24,9 @@ in it and say why in the reply.
   Bash call `timeout: 600000`. Past budget: `RUNNING`, exit 3; `mc gate --wait`
   reads the same log. Do not poll or run in the background. Red: fix, then run
   its `re-run:` line.
-- `--full` and bypasses (`npm test`, `npm run ci`, bare `node --test`) are
-  refused: the whole suite is the merger's. Never run `npm ci`/`npm install`;
-  memoro re-attaches its cache with `npm run deps:ensure`.
+- `--full` and bypasses (`npm test`, `npm run ci`, bare `node --test`) are refused:
+  the whole suite is the nightly's; the merge round measures the affected selection.
+  Never run `npm ci`/`npm install`; memoro re-attaches its cache with `npm run deps:ensure`.
 - Never lower a threshold, or skip, weaken or delete a test to turn it green.
 ## `mc publish` — push and open the pull request
 - Refuses on `main`, a dirty tree or moved origin; never forces. Then pushes and

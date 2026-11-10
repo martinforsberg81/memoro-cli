@@ -15,7 +15,12 @@ Completed attempts are stored as exclusive, immutable JSON files under
 `<mc home>/gate-evidence/<gate run id>.json`. They identify the repository name
 and common Git directory, gate run, optional session run and goal revision,
 frozen base SHA, measured tree/raw fingerprint, measurement version, timestamps,
-actual selected files/commands/flags/pattern and execution outcome. A repeated
+actual selected files/commands/flags/pattern, configuration (the effective gate
+declaration and test-flag hash), execution (the executed timeout, Node version and
+each batch's argv), members (files and commands reused from earlier passing
+content), selector (the sidecar reference, or why it could not be written), phases
+(`phaseLedger`) and execution outcome. What makes a receipt green is the
+`executionComplete` paragraph of [mc-merge.md](mc-merge.md). A repeated
 write must have identical bytes. The detached worker, not the waiting command,
 writes the receipt before publishing its result and exit marker. The waiting
 command then clears the matching worktree exclusion lock.
@@ -23,8 +28,10 @@ command then clears the matching worktree exclusion lock.
 Only completed checks with known successful exits and unchanged content produce
 a green receipt. No checks, zero executed tests, unknown exits, interruption,
 failed checks and content mutations are not green. An explicitly allowed
-unavailable command may retain its existing v1 gate verdict, but cannot mint a
-green receipt. An interrupted worker may leave no receipt; absence is not green.
+unavailable command gives the verdict `incomplete` (`ok` false, `complete` false,
+printed `INCOMPLETE`, no receipt line; `gate-local.js`, `commands/gate.js`). Its
+exit is 0, because the process held, and its stored receipt's outcome is
+`incomplete`, never green (`session-gate-evidence.js`). An interrupted worker may leave no receipt; absence is not green.
 A command reporting `RUNNING` does not create a receipt on the worker's behalf.
 
 After selection, the local session gate starts its test run and its selected
@@ -45,6 +52,20 @@ receipt constructor requires every selected command and the test half, when
 selected, to have completed successfully with known exits and unchanged
 content. The ceiling does not make a selected test set smaller or claim to
 solve the study selector's test-selection ceiling.
+
+## Raw and normalized selection
+
+The session route keeps the selector's answer twice. The selector sidecar,
+`<mc home>/gate-evidence/<gate run id>.selector.json` (`session-gate-run.js`,
+`selectorSidecar`), holds the raw selector stdout and its sha256 beside the
+normalized plan: `selected`, `added_tests`, `main_only_excluded`, `reused_files`,
+`run_files`, `deferred`, `covered`, `commands` and `classes`. The receipt's
+`selector` names the sidecar and the raw hash. A sidecar that cannot be written
+records `selector.status` `unavailable` with its reason; it changes neither the
+verdict nor the membership. The phase ledger (`phaseLedger`) takes its total from
+the enclosing execution interval, never the sum of its overlapping children
+(selection, tests, commands, the fingerprints and the sidecar). It names the pairs
+that overlapped, and the clocks it did not observe: `caller` and `fixture`.
 
 ## Retention
 
@@ -130,15 +151,19 @@ Every completed worker result carries the selected coverage shape (`kind`,
 `files`, `commands` and `pattern`) and the exact `deferred` file members in its
 result JSON, whether or not the attempt can produce a reusable receipt. An
 ordinary gate with deferred files is explicitly `partial`: those files were
-not measured, and direct goal landing does not promise another gate. Use
-`mc gate --whole-selection` for a complete affected-selection measurement;
+not measured until `mc gate --whole-selection` or the merge round measures them.
+Every goal pull request now goes through the merge round (#1449;
+[publish-and-merge](../../canon/tasks/publish-and-merge.md)), which does not defer
+(`commands/gate.js` defers only a bare session gate). `mc gate --whole-selection`
+is the complete affected-selection measurement;
 timeouts, interruption and incomplete execution remain red.
 
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
 unfiltered affected selection can populate the existing `gate-greens.jsonl`
-cache, after its receipt is durable. Version 3 of the shared measurement
-contract invalidates older cache entries. Added-test discovery, repository
+cache, after its receipt is durable. The shared measurement contract's current
+version (`GATE_MEASUREMENT_VERSION`, 5, `src/mc/gate-greens.js`; see
+[mc-merge.md](mc-merge.md)) invalidates older cache entries. Added-test discovery, repository
 imports, resource batching and lane reservations remain the existing gate's.
 
 A valid full receipt may serve a smaller selection of the same tree when its

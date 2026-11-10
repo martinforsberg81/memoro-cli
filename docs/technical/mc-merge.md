@@ -588,9 +588,10 @@ frozen base and check scope. Only complete, unchanged, unfiltered affected
 selections populate the existing green cache; named runs remain limited.
 
 **An ordinary session gate may defer costly selected files.** Every run
-records each test file's measured seconds in `~/mc/test-times/<repo>.json`
-(`test-times.js`, a second reporter beside TAP; half the new measurement, half
-the old). An unnamed ordinary `mc gate` runs the test files the change touches,
+records each test file's estimated seconds in `~/mc/test-times/<repo>.json`:
+the sum of the file's top-level test durations, an estimate that excludes import
+and process startup (`test-times.js`, a second reporter beside TAP; half the new
+measurement, half the old). An unnamed ordinary `mc gate` runs the test files the change touches,
 then others cheapest first while the estimate fits 180 s, and exposes the
 exact files it deferred as unmeasured. Its coverage is `partial`, never
 reusable evidence; it cannot replace the session’s required acceptance. The public

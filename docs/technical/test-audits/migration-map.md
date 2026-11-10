@@ -78,6 +78,8 @@ Every suffix-matched path appears exactly once. UNREVIEWED means no value-audit 
 | tests/mc/roles-decisions.test.js | CONSOLIDATE, preserving unique guidance | Prior bounded audit subject; no migration decision or protection change. | package test; affected selection dynamic; isolated home |
 | tests/mc/branch-landed.test.js | REBUILD cost hotspots; keep real Git evidence | Prior bounded audit subject; no migration decision or protection change. | package test; affected selection dynamic; isolated home |
 
+> **Superseded 2026-11-10.** The branch-landed row's "keep real Git evidence" is superseded by #1410 and by the modelled-Git rule in [mc-codebase.md](../mc-codebase.md) (Martin, 2026-11-09): routine suites model Git; real Git is proved only by a commissioned, bounded, isolated probe. The row above is kept as written.
+
 ### First three risk-prioritised follow-up batches
 
 No batch authorises protection changes; each stays unreviewed until separately audited.

@@ -126,7 +126,7 @@ describe('mc hook — shell commands that have an mc verb', () => {
       ['gh pr edit 12 --body-file x', 'pr-edit', /mc publish/u],
       ['gh pr merge 12 --squash --match-head-commit abc', 'pr-merge', /mc merge <repo> <pr>/u],
       ['npm run ci -- --base-ref origin/main', 'ci', /mc gate <files…>/u],
-      ['npm test', 'npm-test', /the merger's/u],
+      ['npm test', 'npm-test', /merge round/u],
       ['cd memoro && npm run test 2>&1 | tail', 'npm-test', /mc gate/u],
       ['node --test tests/a.test.js 2>&1 | tail -20', 'node-test', /mc gate <files…>/u],
       ['node --import ./tests/_isolate-home.mjs --test tests/a.test.js', 'node-test', /gate lane/u],

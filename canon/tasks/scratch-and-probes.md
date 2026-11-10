@@ -18,6 +18,8 @@ A probe that runs mc's own code from a worktree — a review trying a branch, a 
 
 For a worktree's `mc skills sync` or `mc hook install`, isolate `HOME` and `CLAUDE_CONFIG_DIR` under that root too; otherwise it writes `~/.claude` and `~/.agents`.
 
+An evidence manifest or checksum is written only after every writer of the files it covers has exited, or the completed gate receipt is cited instead.
+
 ## Independent fault replay
 
 For a commissioned source fault, replay in the goal's own worktree: the one checkout of the goal branch, `goals/<goal>/<repo>`. Add no git worktree or other checkout. Name the judged SHA, the worktree and the source file, then record HEAD and status:

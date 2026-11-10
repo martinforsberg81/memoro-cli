@@ -128,6 +128,8 @@ the preserved obligations by review, not a new permanent report-wording test.
 
 ## 3. `branch-landed.test.js` — rebuild cost hotspots; keep real Git evidence
 
+> **Superseded 2026-11-10.** "Keep real Git evidence" is superseded by #1410 and by the modelled-Git rule in [mc-codebase.md](../mc-codebase.md) (Martin, 2026-11-09): routine suites model Git; real Git is proved only by a commissioned, bounded, isolated probe. The text below is the 2026-11-04 record, kept as written.
+
 **Protection and consequence.** [The test](../../../tests/mc/branch-landed.test.js)
 exercises [branchLanded](../../../src/mc/branch-landed.js#L35) against real squash,
 ahead, conflict and absent-base histories. It checks actual worktree/branch

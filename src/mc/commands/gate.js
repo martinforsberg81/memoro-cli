@@ -22,7 +22,7 @@
  * No lane and no queue: the detached worker starts at once, at low priority,
  * beside any merge round (only a deploy or iOS build of memoro goes first).
  * A bare gate may defer costly selected files by measured time (test-times.js);
- * they are unmeasured, and direct goal landing does not run them. Use
+ * they are unmeasured until the merge round or --whole-selection measures them. Use
  * --whole-selection to run every selected check without cost deferral.
  *
  * Each test the change adds or changes (the tests the diff against the base
@@ -313,7 +313,7 @@ async function answer(io, { lock, lockPath, budget, waitedFrom, json, stdout }) 
     `✖ ${test.name}${stallGuardOf(test)}`, ...(test.at ? [`    at ${test.at}`] : []), ...(test.error || []).map((line) => `    ${line}`),
   ]);
   const deferredFiles = result?.deferred || [];
-  const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: ${deferredFiles.join(' ')}` : '';
+  const left = deferredFiles.length ? `\nPARTIAL COVERAGE — deferred files were not measured; the merge round or mc gate --whole-selection measures them: ${deferredFiles.join(' ')}` : '';
   const resumed = resumedLine(result);
   const settled = settledLine(result);
   const receipt = summary.ok && !summary.incomplete ? settledReceiptLine(result) : null;
