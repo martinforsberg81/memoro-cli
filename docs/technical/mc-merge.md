@@ -1382,12 +1382,33 @@ finishes what it holds, as before. The next
 `merger on <commit> · main <commit>` to its line while the merger's commit
 and the installed checkout's HEAD differ.
 
-**What a red round keeps** (ruling 44). Every round that finishes `red` writes
+**Every red says exactly what did not pass, and nothing is run again to find
+out** (Martin, 2026-11-10). Every stop that is a failure — `red`,
+`selected-gate`, `extra-gate`, `pr-tests`, `stalled`, `prepare`, `derived` and
+the rest, all but the stops that measured nothing (`NO_DETAIL_STOPS`: lease,
+gone, offline, moved, dropped, fetch, pr) — writes the file below, and the
+merger says its lines into `merger.log` under the pull request's label (at
+most 400, naming the file that has all of them). Each red test keeps its whole
+error and stack (`detail`, at most 400 lines a test, from `redTests`), beside
+the six display lines (`error`) the reason uses. A failed command gate keeps
+its selector id, command, exit, signal and time; its whole stdout and stderr
+in a file of the round's own (`<work root>/runner/gate-output/<repo>-<prs>-<time>/<gate>.log`,
+`output_path`); and what failed in it (`failure`, `command-failure.js`): its
+red tests when it printed TAP, node's spec reporter's `✖ failing tests:`
+section verbatim when it printed one, else its last 150 lines. The reason
+names a failed gate's red tests too. Until 2026-11-10 a red test kept six
+lines of its error — memoro's `subject-context` red showed two lines of a
+deep-equality diff — and a failed command gate kept `stderr || stdout`
+trimmed and wrote no file: memoro#15149's `test:browser-contracts` left
+`exit 1` and a warning.
+
+**What a red round keeps** (ruling 44). Every round that finishes failed writes
 its failures to `~/mc/runner/merge-red/<repo>-<pr>.txt`
 ([`src/mc/merge-red.js`](../../src/mc/merge-red.js)): one file per pull
 request, a batch's from each one's own fallback round. The next red overwrites
 it and a landing removes it. The file holds, per red test, its file, its name,
-where it failed and the assertion's first lines, at most 200 lines in all. The
+where it failed and its whole error; the pull request's own red tests; and
+each failed command gate as above, at most 6000 lines in all. The
 gate cuts these blocks out of the suite's TAP and out of the selected files'
 TAP (`redTests` in [`src/mc/tap-red.js`](../../src/mc/tap-red.js)) after the
 killed and cancelled files are taken out of the red. The path is on the report

@@ -60,6 +60,7 @@ import { runShell as runShellAsync, runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { measurementCheckout, measurementCheckoutPath } from './measurement-checkout.js';
 import { log } from './logger.js';
+import { commandFailure, combinedOutput, writeCommandOutput } from './command-failure.js';
 import { mcHome, workGatePath, workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { dependencyTree } from './dependency-tree.js';
@@ -321,6 +322,9 @@ export async function runGate({
     return result;
   };
   const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
+  // Where this round writes a failed command gate's whole output: one directory
+  // per round under the work root's runner, named in the gate's record.
+  const commandOutputDir = join(workRoot(env), 'runner', 'gate-output', `${repoNameOf(repoPath)}-${numbers.length ? numbers.join('-') : 'full'}-${new Date(Number.isFinite(startedAt) ? startedAt : Date.now()).toISOString().replace(/[:.]/gu, '-')}`);
   // What a command gate that needs Docker is leased and labelled with.
   const dockerIo = docker || { ensure: ensureDocker, release: releaseDocker };
   const dockerLabel = { run: `${gateMode} ${label}`, repo: repoNameOf(repoPath) };
@@ -1148,7 +1152,7 @@ export async function runGate({
       : await timed('suite', () => measure({ suite: runSuite, git: askGit, cwd: headDir, command: commandLine.run, say, is })));
     const selectedGates = !reused && runCommands?.length ? await runSelectedCommands({
       commands: runCommands, cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, timed, clock, shell: trackedCommand,
-      docker: dockerIo, holderPid, dockerLabel, root, signal,
+      docker: dockerIo, holderPid, dockerLabel, root, signal, outputDir: commandOutputDir,
     }) : [];
     if (signal?.aborted) {
       if (stalled) return finish('stalled', stallReason);
@@ -1191,7 +1195,7 @@ export async function runGate({
       const again = await runSelectedCommands({
         commands: selection.commands.filter((entry) => names.includes(entry.packageScript)),
         cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, clock, shell: trackedCommand,
-        docker: dockerIo, holderPid, dockerLabel, root, signal,
+        docker: dockerIo, holderPid, dockerLabel, root, signal, outputDir: commandOutputDir,
         timed: (step, fn) => timed('retry once', fn),
       });
       for (const gate of failedGates) {
@@ -1275,7 +1279,11 @@ export async function runGate({
         // The red names when the gate printed TAP that finished, null when it
         // did not — the difference between "these failed" and "it failed".
         red: head.red,
-        output: trim(outcome.stderr) || trim(outcome.stdout) || null,
+        output: lastLines(combinedOutput(outcome)) || null,
+        ...(head.ran && !head.ok ? {
+          failure: commandFailure({ stdout: outcome.stdout, stderr: outcome.stderr, cwd: headDir }),
+          output_path: writeCommandOutput({ dir: commandOutputDir, name: gate.name, command: gate.command, exit: head.exit_code, signal: outcome.signal, stdout: outcome.stdout, stderr: outcome.stderr }),
+        } : {}),
       });
       if (gateInterrupted(report.extra_gates.at(-1))) { queueGate(report.extra_gates.at(-1)); continue; }
       if (!head.ran) return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
@@ -1324,7 +1332,7 @@ export async function runGate({
           commands: [{ packageScript: name, ...selection?.commands?.find(entry => entry.packageScript === name),
             ...(original.source === 'declaration' ? { command: original.command } : {}) }],
           cwd: headDir, env, mode: gateMode, baseRef: report.base.commit || baseRef, say, timed, clock, shell: trackedCommand,
-          docker: dockerIo, holderPid, dockerLabel, root, signal,
+          docker: dockerIo, holderPid, dockerLabel, root, signal, outputDir: commandOutputDir,
         });
         report.alone.gates.push({ name, outcome: gateInterrupted(ran) ? 'unmeasured' : ran.ok ? 'passed' : 'failed', seconds: (clock() - from) / 1000 });
         progressed();
@@ -1697,6 +1705,8 @@ function shellQuote(value) {
 async function runSelectedCommands({
   commands, cwd, env, baseRef, say, timed, clock, shell: run = commandShell,
   docker = null, holderPid = process.pid, dockerLabel = { run: null, repo: null }, root, signal = null, mode = 'merge',
+  // Where a failed gate's whole output is written (`writeCommandOutput`); null writes none.
+  outputDir = null,
 }) {
   const results = [];
   // The one thing the round's environment must not carry in: node sets
@@ -1772,11 +1782,18 @@ async function runSelectedCommands({
       duration_ms: duration,
       resource_class: entry.resourceClass,
       selected_by: entry.selectedBy,
-      // The last thing it said, so a red gate names something. The full
-      // output belongs in a log, not in a verdict.
-      output: trim(outcome.stderr) || trim(outcome.stdout) || null,
+      // The selector's id for the gate, which `mc gate --command` takes.
+      id: entry.id ?? null,
+      // The last lines it said, stdout and stderr together. The whole output
+      // of a failed gate is a file (`output_path`), and what failed in it is
+      // read out (`failure`), so nobody runs it again to find out.
+      output: lastLines(combinedOutput(outcome)) || null,
     });
     const last = results[results.length - 1];
+    if (ran && !last.ok) {
+      last.failure = commandFailure({ stdout: outcome.stdout, stderr: outcome.stderr, cwd });
+      last.output_path = writeCommandOutput({ dir: outputDir, name: entry.packageScript, command: invocation, exit: last.exit_code, signal: last.signal, stdout: outcome.stdout, stderr: outcome.stderr });
+    }
     say(`command gate ${entry.packageScript}: ${unavailable ? 'unavailable on this machine, not counted red' : last.ok ? 'passed' : `FAILED (exit ${last.exit_code})`} in ${seconds(duration)}`);
   }
   return results;
@@ -1858,7 +1875,22 @@ export function previousRedFiles({ root = mcHome(), repoPath, pr }) {
 /** What a round says of the command gates the selection chose that failed: each by name and exit code. */
 function failedGatesText(gates) {
   return `${gates.length} command gate${gates.length === 1 ? '' : 's'} the selection chose failed: `
-    + `${gates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`;
+    + `${gates.map((gate) => `${gate.name} (exit ${gate.exit_code})${failureWords(gate.failure)}`).join(', ')}`;
+}
+
+/** A failed gate's failure in the reason: its red tests by name, or the spec reporter's first failing lines. */
+function failureWords(failure) {
+  if (!failure) return '';
+  if (failure.tests?.length) return ` — red: ${nameSome(failure.tests.map((test) => test.name))}${failure.tests[0].error?.length ? ` — ${failure.tests[0].error.join('; ')}` : ''}`;
+  const named = (failure.spec || []).filter((line) => /^\s*✖ /u.test(line)).map((line) => line.trim().replace(/^✖ /u, ''));
+  if (named.length) return ` — red: ${nameSome(named)}`;
+  const last = (failure.tail || []).map((line) => line.trim()).filter(Boolean).at(-1);
+  return last ? ` — said last: ${last}` : '';
+}
+
+/** At most `count` last lines of a text. */
+function lastLines(text, count = 40) {
+  return String(text || '').split('\n').slice(-count).join('\n').trim();
 }
 
 /** Current producer: timeout-cancelled files with no other failure, not proof of overload.

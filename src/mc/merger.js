@@ -568,7 +568,7 @@ export async function landJob(batch, {
     } finally {
       stopWatch();
     }
-    keepRed(report, { root, repo: job.repo, pr: job.pr, batch: jobs.length > 1, now });
+    keepRed(report, { root, repo: job.repo, pr: job.pr, batch: jobs.length > 1, now, say: (line) => say(`${label}: ${line}`) });
     record(report, { mode: 'merge' });
     // Stopped by the watch: answered as GitHub says. A 'gone' nobody asked for falls through as any other stop.
     if (report?.stopped_at === 'gone' && gone) {
@@ -590,18 +590,32 @@ export async function landJob(batch, {
  * the report as `red_detail` (ruling 44): for one job, the round's; for a
  * batch, each pull request's own fallback round's, by its number.
  */
-function keepRed(report, { root, repo, pr, batch, now }) {
+function keepRed(report, { root, repo, pr, batch, now, say = () => {} }) {
   if (!report) return;
+  // What failed goes into merger.log too, line by line (Martin, 2026-11-10):
+  // the log a person reads first says exactly what did not pass, at most
+  // `LOGGED_RED_LINES` lines, and names the file that has all of it.
+  const tell = (path) => {
+    let text = '';
+    try { text = readFileSync(path, 'utf8'); } catch { return; }
+    const lines = text.trimEnd().split('\n');
+    say(`what failed (all of it in ${path}):`);
+    for (const line of lines.slice(0, LOGGED_RED_LINES)) say(`  ${line}`);
+    if (lines.length > LOGGED_RED_LINES) say(`  … ${lines.length - LOGGED_RED_LINES} more lines in ${path}`);
+  };
   if (batch) {
     for (const round of report.batch?.rounds || []) {
       const path = writeRedDetail({ root, repo, pr: round?.pr?.number, report: round, now: now() });
-      if (path) round.red_detail = path;
+      if (path) { round.red_detail = path; tell(path); }
     }
     return;
   }
   const path = writeRedDetail({ root, repo, pr, report, now: now() });
-  if (path) report.red_detail = path;
+  if (path) { report.red_detail = path; tell(path); }
 }
+
+/** At most this many lines of a red round's file are said into merger.log. */
+export const LOGGED_RED_LINES = 400;
 
 /**
  * The `land` merger-run.js hands `serve`: `landJob` with these deps and the

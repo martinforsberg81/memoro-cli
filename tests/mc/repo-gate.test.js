@@ -1704,8 +1704,44 @@ describe('a repository that selects by diff', () => {
         const report = await fx.report({ shell: gates.run });
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'selected-gate');
-        assert.match(report.reason, /2 command gates the selection chose failed: sql:pr-ci \(exit 2\), css:lint \(exit 2\)/u);
+        assert.match(report.reason, /2 command gates the selection chose failed: sql:pr-ci \(exit 2\) — said last: contract broken, css:lint \(exit 2\) — said last: contract broken/u);
         assert.deepEqual(report.extra_gates.map((gate) => gate.ok), [false, false]);
+        // What failed is kept, not only the exit: the output's last lines, and the whole of it in a file.
+        for (const gate of report.extra_gates) {
+          assert.deepEqual(gate.failure.tests, []);
+          assert.ok(gate.failure.tail.some((line) => line.includes('contract broken')), JSON.stringify(gate.failure));
+          assert.match(readFileSync(gate.output_path, 'utf8'), /contract broken/u);
+        }
+      } finally { fx.cleanup(); }
+    });
+
+    // memoro#15149, 2026-11-10: test:browser-contracts exited 1, its spec
+    // reporter's failing tests on stdout and a warning on stderr; the round kept
+    // the warning and nothing of the failures.
+    it('a failed gate keeps its spec reporter\'s failing tests, though stderr said something too', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], commands: twoGates });
+      const spec = [
+        '▶ browser contracts', '  ✔ renders the shell (12ms)', '  ✖ the picker keeps focus (40ms)', '✖ browser contracts (60ms)',
+        'ℹ tests 2', 'ℹ fail 1', '', '✖ failing tests:', '',
+        'test at tests/browser/picker.test.js:31:3', '✖ the picker keeps focus (40ms)',
+        '  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:', '', "  'body' !== 'input'", '',
+        '      at TestContext.<anonymous> (tests/browser/picker.test.js:38:12)',
+      ].join('\n');
+      const shell = async (command) => (command.includes('npm run css:lint')
+        ? { status: 1, stdout: spec, stderr: '(node:42) ExperimentalWarning: VM Modules is an experimental feature' }
+        : { status: 0, stdout: '', stderr: '' });
+      try {
+        const report = await fx.report({ shell });
+        assert.equal(report.stopped_at, 'selected-gate');
+        assert.match(report.reason, /css:lint \(exit 1\) — red: the picker keeps focus \(40ms\)/u);
+        const gate = report.extra_gates.find((one) => one.name === 'css:lint');
+        assert.equal(gate.id, 'css-lint');
+        assert.ok(gate.failure.spec.includes("  'body' !== 'input'"), gate.failure.spec.join('\n'));
+        assert.ok(gate.failure.spec.includes('test at tests/browser/picker.test.js:31:3'));
+        assert.deepEqual(gate.failure.tail, []);
+        const whole = readFileSync(gate.output_path, 'utf8');
+        assert.match(whole, /ExperimentalWarning/u);
+        assert.match(whole, /✖ failing tests:/u);
       } finally { fx.cleanup(); }
     });
 
@@ -1717,7 +1753,7 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.ok, false);
         assert.equal(report.stopped_at, 'red');
         assert.match(report.reason, /broken by the change/u);
-        assert.match(report.reason, /broken by the change.* — and 1 command gate the selection chose failed: css:lint \(exit 2\)$/u);
+        assert.match(report.reason, /broken by the change.* — and 1 command gate the selection chose failed: css:lint \(exit 2\) — said last: contract broken$/u);
         assert.deepEqual(report.extra_gates.map((gate) => [gate.name, gate.ok]), [['sql:pr-ci', true], ['css:lint', false]]);
       } finally { fx.cleanup(); }
     });
@@ -2547,10 +2583,12 @@ describe('a repository that selects by diff', () => {
         });
         assert.equal(report.stopped_at, 'red');
         assert.deepEqual(report.candidate.red_files, [own]);
-        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, ...test }) => test), [
+        assert.deepEqual(report.candidate.red_tests.map(({ diagnostic, detail, ...test }) => test), [
           { file: own, name: 's › a', own: 'a', at: `${own}:12:12`, error: ['Expected values to be strictly equal:', '1 !== 2'] },
           { file: own, name: 's › b', own: 'b', at: `${own}:22:12`, error: ['boom'] },
         ], 'the leaves, not the suite failing because of them');
+        // The whole error and its stack are kept beside the display lines.
+        assert.deepEqual(report.candidate.red_tests[1].detail, ['boom', `  TestContext.<anonymous> (file:///somewhere/candidate/${own}:22:12)`, '  Test.runInAsyncScope (node:async_hooks:214:14)']);
         const [a, b] = report.candidate.red_tests.map((test) => test.diagnostic);
         assert.match(a, /^[0-9a-f]{64}$/u, 'each red test carries its whole diagnostic');
         assert.notEqual(a, b);

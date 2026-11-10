@@ -322,6 +322,14 @@ export function cancelledFiles(tap, files) {
 
 /** How many lines of a test's error are kept: the assertion's first lines, not its whole diff. */
 const ERROR_LINES = 6;
+/**
+ * At most this many lines of an error are kept whole (`detail`), for the
+ * record a red round leaves (`merge-red.js`): the assertion, its whole diff and
+ * its stack, so nobody runs a test again to see what failed. Until 2026-11-10
+ * only `error`'s first six were kept, and memoro's subject-context red showed
+ * the first two lines of a deep-equality diff and nothing after.
+ */
+export const DETAIL_LINES = 400;
 const TEST_FILE = /\.[cm]?[jt]sx?$/u;
 const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
@@ -350,7 +358,8 @@ export function redTests(tap, files, { cwd = null } = {}) {
     const file = relative([...block.locations, ...named].map(owner).find(Boolean) || null);
     tests.push({
       file, name: block.name, own: block.own, at: placeOf(block, file, relative),
-      error: errorLines(shownError(block)), diagnostic: diagnosticOf(block.error),
+      error: errorLines(shownError(block)), detail: detailLines(shownError(block), block.stack),
+      diagnostic: diagnosticOf(block.error),
     });
   }
   return tests;
@@ -406,6 +415,16 @@ export function sameFailure(known, test) {
   return Boolean(known && test) && known.file === test.file && known.name === test.name
     && typeof known.diagnostic === 'string' && known.diagnostic.length > 0
     && known.diagnostic === test.diagnostic;
+}
+
+/**
+ * The whole error and then its stack, blank lines dropped, at most
+ * `DETAIL_LINES`: what the record of a red keeps.
+ */
+function detailLines(lines, stack = []) {
+  const whole = [...lines, ...stack.map((line) => `  ${line.trim()}`)].map((line) => line.trimEnd()).filter((line) => line.trim());
+  if (whole.length <= DETAIL_LINES) return whole;
+  return [...whole.slice(0, DETAIL_LINES - 1), `… ${whole.length - DETAIL_LINES + 1} more lines in the run's own output`];
 }
 
 /** The first lines of an error, blank ones dropped. */

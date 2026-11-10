@@ -301,3 +301,17 @@ describe('a file that failed to load, and a hook that failed — node v24.10.0 T
     assert.deepEqual(cancelledFiles(childOnly, ['hook.test.js']), []);
   });
 });
+
+describe('a red test keeps its whole error beside its first lines', () => {
+  it('detail has every nonblank line of the error and the stack; error keeps six', () => {
+    const diff = ['Expected values to be strictly deep-equal:', '+ actual - expected', '', '  [', '    {', "+     id: 'evt_budget',", '+     name: null,', '      type: \'entity\'', '    }', '  ]'];
+    const tap = [
+      'TAP version 13', '# Subtest: t', 'not ok 1 - t', '  ---', "  type: 'test'", "  location: '/x/tests/a.test.js:3:1'", "  failureType: 'testCodeFailure'",
+      '  error: |-', ...diff.map((line) => (line ? `    ${line}` : '')), "  code: 'ERR_ASSERTION'", '  stack: |-', '    TestContext.<anonymous> (file:///x/tests/a.test.js:5:10)', '  ...',
+      '1..1', '# tests 1', '# pass 0', '# fail 1',
+    ].join('\n');
+    const [test] = redTests(tap, ['tests/a.test.js'], { cwd: '/x' });
+    assert.equal(test.error.length, 6);
+    assert.deepEqual(test.detail, [...diff.filter(Boolean), '  TestContext.<anonymous> (file:///x/tests/a.test.js:5:10)']);
+  });
+});
