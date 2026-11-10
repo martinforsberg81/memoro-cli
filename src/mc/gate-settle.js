@@ -98,32 +98,61 @@ export async function settleRed({
   if (!touched) return { alone, main: [], red: still, base: null, notes: [...notes, 'could not read what the change touches: the rest stays red'] };
   const untouched = still.filter((file) => !touched.has(file));
   if (!untouched.length) return { alone, main: [], red: still, base: null, notes };
+  const atBase = await redAtFrozenBase({ cwd, base, files: untouched, tests, flags, plan, classes, env, signal, git, attach, root, id });
+  if (!atBase.ok) return { alone, main: [], red: still, base: atBase.checkedOut ? base : null, notes: [...notes, `${atBase.reason}: the rest stays red`] };
+  const main = mainsOf(aloneRed, atBase.red, atBase.present);
+  still = still.filter((file) => !main.includes(file));
+  if (main.length) notes.push(`red on main too — the same tests red alone at ${base.slice(0, 7)}, files this change does not touch: ${main.join(', ')}`);
+  return { alone, main, red: still, base, notes };
+}
+
+/**
+ * The files whose every red test on the candidate (`here`, names by file) is
+ * red by name at the base too (`there`): main's red, not the change's. A file
+ * with no named red test is never main's.
+ */
+export function mainsOf(here, there, files) {
+  return files.filter((file) => {
+    const names = here.get(file) || [];
+    const atBase = new Set(there.get(file) || []);
+    return names.length > 0 && names.every((name) => atBase.has(name));
+  });
+}
+
+/**
+ * Run `files` alone at the frozen `base` in a temporary detached worktree
+ * beside `cwd`, and say which tests are red there by file. Shared by the
+ * session gate's settlement (`settleRed`) and the merge round's own test of
+ * whether a red is main's (`repo-gate.js`, Martin 2026-11-10). Returns
+ * `{ ok: true, red, present }` — `red` a Map of file to red test names,
+ * `present` the asked files the base has — or `{ ok: false, reason }` when
+ * the base could not be checked out or the run did not finish. Nothing here is
+ * evidence when it is not ok.
+ */
+export async function redAtFrozenBase({
+  cwd, base, files, tests, flags = [], plan = null, classes = {}, env = process.env, signal = null,
+  git = (dir, args) => gitAsync(dir, args, signal), attach = attachRepoDepsAsync, root = workRoot(env),
+  id = `${Date.now()}-${process.pid}`,
+}) {
   const dir = join(root, 'runner', 'gate-base', id);
+  // A git that throws or answers synchronously is read the same way as one that resolves.
+  const ask = async (where, args) => { try { return await git(where, args); } catch { return null; } };
   try {
     mkdirSync(join(root, 'runner', 'gate-base'), { recursive: true });
-    const added = await git(cwd, ['worktree', 'add', '--detach', dir, base]);
-    if (added?.status !== 0) return { alone, main: [], red: still, base: null, notes: [...notes, `could not check out ${base.slice(0, 7)}: the rest stays red`] };
+    const added = await ask(cwd, ['worktree', 'add', '--detach', dir, base]);
+    if (added?.status !== 0) return { ok: false, reason: `could not check out ${base.slice(0, 7)}` };
     await attach(dir);
-    const present = untouched.filter((file) => existsSync(join(dir, file)));
-    if (!present.length) return { alone, main: [], red: still, base, notes };
-    const atBase = await tests({ cwd: dir, files: present, flags, plan, classes, env, signal, lanes: 1 });
-    if (signal?.aborted) return { alone, main: [], red: still, base, notes: [...notes, 'interrupted at the base'] };
-    if (atBase.error || atBase.timedOut || atBase.aborted || !tapTotals(atBase.tap).finished) {
-      return { alone, main: [], red: still, base, notes: [...notes, `the run at ${base.slice(0, 7)} did not finish: the rest stays red`] };
+    const present = files.filter((file) => existsSync(join(dir, file)));
+    if (!present.length) return { ok: true, checkedOut: true, red: new Map(), present };
+    const run = await tests({ cwd: dir, files: present, flags, plan, classes, env, signal, lanes: 1 });
+    if (signal?.aborted) return { ok: false, checkedOut: true, reason: 'interrupted at the base' };
+    if (run.error || run.timedOut || run.aborted || !tapTotals(run.tap).finished) {
+      return { ok: false, checkedOut: true, reason: `the run at ${base.slice(0, 7)} did not finish` };
     }
-    const baseRed = redByFile(atBase.tap, present, dir) || new Map();
-    // Main's only when the candidate's red tests have names and each one is red at the base too.
-    const main = present.filter((file) => {
-      const here = aloneRed.get(file);
-      const there = new Set(baseRed.get(file) || []);
-      return here.length > 0 && here.every((name) => there.has(name));
-    });
-    still = still.filter((file) => !main.includes(file));
-    if (main.length) notes.push(`red on main too — the same tests red alone at ${base.slice(0, 7)}, files this change does not touch: ${main.join(', ')}`);
-    return { alone, main, red: still, base, notes };
+    return { ok: true, checkedOut: true, red: redByFile(run.tap, present, dir) || new Map(), present };
   } finally {
-    await git(cwd, ['worktree', 'remove', '--force', dir]).catch(() => null);
+    await ask(cwd, ['worktree', 'remove', '--force', dir]);
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ }
-    await git(cwd, ['worktree', 'prune']).catch(() => null);
+    await ask(cwd, ['worktree', 'prune']);
   }
 }

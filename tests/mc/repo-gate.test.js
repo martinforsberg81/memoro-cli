@@ -1193,6 +1193,7 @@ describe('a repository that selects by diff', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
     const mcHome = join(root, 'home');
+    const baseRuns = [];
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(mcHome, { recursive: true, mode: 0o700 });
     // The command gates run as `npm run <script>` in the candidate worktree, so
@@ -1268,9 +1269,12 @@ describe('a repository that selects by diff', () => {
       mcHome,
       repoPath,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
+      baseRuns,
       report: (extra = {}) => runGate({
         candidateCwds: () => [],
         repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
+        // Green at the base unless a test says otherwise: the red stays the change's.
+        redAtBase: async ({ base, files }) => { baseRuns.push({ base, files }); return { ok: true, red: new Map(), present: files }; },
         env: { ...process.env, MC_WORK_ROOT: root, GATE_MARKS: marks },
         suite: ({ cwd, command }) => {
           if (!full) throw new Error('a selecting round must not run the whole suite');
@@ -2007,8 +2011,12 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    // Martin, 2026-11-10: the merge judges the pull request against main. A red
+    // the standing evidence does not excuse, in files the change leaves alone,
+    // is run once alone at the base in a worktree of its own (`redAtBase`) —
+    // never on the candidate's checkout, and never a history walk.
     for (const kind of ['not_covered', 'covered_green', 'stale', 'new failure', 'new diagnostic', 'legacy evidence', 'touched covered_red', 'matching covered_red']) {
-      it(`standing main evidence is ${kind}: no base replay or history walk`, async () => {
+      it(`standing main evidence is ${kind}: at most one run at the base, no history walk`, async () => {
         const { gitAlso, tests } = onMain({
           redAt: { candidate: [scanner] }, touched: kind === 'touched covered_red' ? [scanner] : [], error: onCandidate,
         });
@@ -2034,15 +2042,57 @@ describe('a repository that selects by diff', () => {
           }
           const report = await fx.report({ tests: (args) => { runs++; return tests(args); } });
           assert.equal(report.ok, kind === 'matching covered_red', report.reason);
-          assert.equal(runs, 1, 'a PR must not replay the red test on any other commit');
+          assert.equal(runs, 1, 'the candidate checkout runs the red test once and is never moved');
           assert.deepEqual(calls.filter(args => ['checkout', 'rev-list', 'log'].includes(args[0])), [
             ['checkout', '--detach', 'abc1234'],
           ]);
-          assert.equal(report.timings['main red'], undefined);
+          // Excused by standing evidence, or touched by the change: the base is not asked.
+          const asked = !['touched covered_red', 'matching covered_red'].includes(kind);
+          assert.deepEqual(fx.baseRuns, asked ? [{ base: report.base.commit, files: [scanner] }] : []);
+          assert.equal(report.timings['main red'] !== undefined, asked);
+          assert.equal(report.main_repair, null);
           if (kind === 'covered_green') assert.ok(report.reason.includes(`green on main at base1111full`), report.reason);
           if (kind === 'not_covered') assert.match(report.reason, /not_covered: .*unknown on main/u);
           if (kind === 'matching covered_red') assert.deepEqual(report.main_red_files, [scanner]);
           else assert.equal(report.main_red_files, null);
+        } finally { fx.cleanup(); }
+      });
+    }
+
+    it('a red the base has by the same names is main\'s: the round goes on and asks for main\'s repair', async () => {
+      const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner] }, touched: [], error: onCandidate });
+      const fx = selecting({ files: [scanner], gitAlso });
+      try {
+        const [red] = redTests(located([scanner], onCandidate), [scanner]);
+        const report = await fx.report({ tests, redAtBase: async ({ base, files }) => {
+          fx.baseRuns.push({ base, files });
+          return { ok: true, red: new Map([[scanner, [red.name]]]), present: files };
+        } });
+        assert.equal(report.ok, true, report.reason);
+        assert.deepEqual(report.main_red_files, [scanner]);
+        assert.deepEqual(fx.baseRuns, [{ base: report.base.commit, files: [scanner] }]);
+        assert.equal(report.main_repair.base, report.base.commit);
+        assert.deepEqual(report.main_repair.files, [scanner]);
+        assert.deepEqual(report.main_repair.tests.map((test) => [test.file, test.name]), [[scanner, red.name]]);
+        assert.deepEqual(report.main_red.red_on_main, [scanner]);
+      } finally { fx.cleanup(); }
+    });
+
+    for (const [kind, answer] of [
+      ['red at the base by another name', (files) => ({ ok: true, red: new Map([[files[0], ['another test']]]), present: files })],
+      ['green at the base', (files) => ({ ok: true, red: new Map(), present: files })],
+      ['absent at the base', () => ({ ok: true, red: new Map(), present: [] })],
+      ['a base run that did not finish', () => ({ ok: false, reason: 'the run at base111 did not finish' })],
+    ]) {
+      it(`${kind}: the change's red, and no repair is asked for`, async () => {
+        const { gitAlso, tests } = onMain({ redAt: { candidate: [scanner] }, touched: [], error: onCandidate });
+        const fx = selecting({ files: [scanner], gitAlso });
+        try {
+          const report = await fx.report({ tests, redAtBase: async ({ files }) => answer(files) });
+          assert.equal(report.ok, false);
+          assert.equal(report.stopped_at, 'red');
+          assert.equal(report.main_red_files, null);
+          assert.equal(report.main_repair, null);
         } finally { fx.cleanup(); }
       });
     }

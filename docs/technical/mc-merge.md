@@ -643,6 +643,36 @@ unchanged in what it exempts. Measured: in 986 rounds over the fortnight to
 required a completed whole-suite run and memoro's nightly failed 7 of 7 ticks.
 The nightly stays the meter.
 
+**The merge judges the pull request against main; main's red is found and repaired, not blamed** (Martin, 2026-11-10).
+A red the standing evidence below does not excuse, in files no pull request
+of the round touches, is run once alone at the round's base commit in a
+temporary detached worktree (`redAtFrozenBase` in
+[`src/mc/gate-settle.js`](../../src/mc/gate-settle.js), the same run a
+session's `mc gate` settles with). When every red test of a file is red there
+by name, the file is main's red: the round goes on past it exactly as past a
+standing `covered_red` (`main_red_files`), lands on green, and carries the
+failure into the landed commit's evidence. Main's red is a side matter for
+the merge — it neither stops it nor counts as one of the pull request's
+failed merges, and it never starts a mend. Instead the round reports
+`main_repair: { base, files, tests }` and the merger writes a repair goal
+(`requestMainRepair` in [`src/mc/main-repair.js`](../../src/mc/main-repair.js)):
+an ordinary goal in the `main-health` programme, `build · ready` with its
+criteria, which the runner takes in a lane like any other goal — its own
+worktree from origin/main, build, review and the measured round. An
+unfinished repair that already names one of the files is named and not
+written again; a red that returns after its repair finished gets a new,
+dated goal. A red test green at the base, absent there, or a base run that
+could not be made or did not finish is the change's red, as before. Touched
+files are never run at the base. Measured: on 2026-11-09/10 memoro#15168 landed
+through the old direct goal landing (closed by #1449) and broke
+`subject-context.test.js`; five unrelated pull requests went red on it three
+times each and reached `merge · Martin`, because each one's mend could not
+repair another programme's fixture. It was repaired by memoro#15203.
+
+This supersedes the 2026-11-04 rule below in one respect only: the round now
+runs the untouched red files once at its base. It still does not move the
+candidate's checkout, walk history, bisect or attribute a landing.
+
 **Main's red is not investigated on a PR's clock** (Martin, 2026-11-04).
 Every green landing whose landed tree is byte-identical to its measured tree
 writes `<mc home>/main-red/<repo>/<commit>.json` for its new main commit.
@@ -684,11 +714,10 @@ command gates and the PR's own tests still run. This is a standing-assertion
 exemption, not proof that unchanged failing assertions cannot hide another
 cause. Unknown, stale or malformed evidence never becomes green by assumption.
 
-PR rounds do not check out main, reproduce its failures, bisect its history or
-write repeated intake notes for an already-known failure. Main-only health
-runs own that work. Missing exact-base evidence leaves an explicitly
-unclassified red; the round does not blame the PR without evidence and does
-not spend additional time obtaining a baseline. No timeout is raised.
+PR rounds do not move the candidate's checkout to main, bisect its history or
+write repeated intake notes for an already-known failure. Missing exact-base
+evidence is answered by the one run of the untouched red files at the base
+described above (2026-11-10), never by a walk. No timeout is raised.
 
 **A declared timing test gets one more run** (ruling 44 § 5). Since 2026-10-07
 memoro's JSC start-up budget, `sql:pr-ci`, dead-CSS and build-bundle went red
@@ -907,7 +936,17 @@ exact-SHA coverage record from the landing chain or a completed full run,
 returning `covered_green`, `covered_red` and `not_covered`. It never bridges an
 `--admin` gap. The historical diagnostic
 helpers and old `selector-misses.jsonl` entries remain available; they are not
-work a PR round performs. See *Main's red is not investigated*, above.
+work a PR round performs. What the evidence does not excuse is run once at the
+base in a worktree of its own (*The merge judges the pull request against
+main*, above), never on the candidate's checkout.
+
+A landing's record covers what its round ran (`candidate.covered`) and the
+members of a receipt it reused, plus its red — never the selection as such.
+Until 2026-11-10 it also wrote the whole selection, so a selected file a delta
+round neither ran nor reused read `covered_green`: memoro#15193's round (293
+selected, 11 run) wrote `subject-context.test.js` green on 3af1dc93 while it
+was red, and eleven landings inherited it. The documents-only route runs its
+whole selection, so there the selection is its measurement.
 
 **Interrupted files are unmeasured, never excused green.** `killedFiles` in
 [`src/mc/tap-red.js`](../../src/mc/tap-red.js) reads a non-null TAP signal;
@@ -916,8 +955,9 @@ threw a non-timeout error. These files join the alone phase described above.
 The hook-timeout marker is `failed running <kind> hook`; a different thrown
 message stays the change's red. A failed test beside cancelled tests stays red.
 With genuine red elsewhere the round stops red immediately, naming the
-interrupted members separately. There is no base replay or green-alone
-exemption (Martin, 2026-11-04). Only a stalled round is requeued; interrupted
+interrupted members separately. There is no green-alone exemption (Martin,
+2026-11-04), and an interrupted file is never run at the base: only a measured
+red is (2026-11-10). Only a stalled round is requeued; interrupted
 members are resolved within the same round, not by a session.
 
 A `before` hook that **throws** is the change's ordinary red, even when all
@@ -1304,7 +1344,9 @@ conflict) read `landing` for the whole 9-minute round of #13375 and #13405.
 The block after the round writes only what `onAnswer` did not: a round that
 threw.
 
-**Where a red goes.** A red answer is red at once, whatever stopped the
+**Where a red goes.** Main's red found by the round is not a red answer: the
+round went on past it and the merger wrote a `main-health` repair goal
+(*The merge judges the pull request against main*). A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
 answered red on #<pr>` entry (`tellGoal`). Failure one or two sets
 `merge · blocked` and wakes mend; its completed repair returns `merge · ready`
