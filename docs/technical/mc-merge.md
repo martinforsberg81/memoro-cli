@@ -194,6 +194,14 @@ merges the base, regenerates declared derived paths and pushes
 checkout may now be behind origin, which `mc publish` explains. A whole-suite
 run starts detached at the fetched default base in this same directory.
 
+Derived artefacts are declared by the repository that writes them. memoro's
+derived list is in its `.mc/test.json`; mc ships none for memoro and the
+operator table keeps none. The layers merge field by field, and the highest
+layer that states `derived` replaces the others whole, so a copy kept beside
+the repository's went stale: measured 2026-11-10 at memoro 3af1dc93b0, the
+operator copy kept four commands, the shipped list had five and the
+repository needed six (goal mc/derived-list-one-layer).
+
 After measurement the checkout stays detached at the measured commit with
 its merged tree, for `git diff` and `git log` inspection. Nothing is restored;
 `worktree-restore` is no longer a stop. A failed or killed round's unfinished
