@@ -55,8 +55,11 @@ async function fixture({ records = 1 } = {}) {
     });
   }
   let leaseToken = null;
-  let renewalCalls = 0;
   let updateCalls = 0;
+  const events = [];
+  const renewQueue = [];
+  const timers = [];
+  const clearedTimers = [];
   const api = {
     getStatus: async () => ({
       ok: true,
@@ -69,6 +72,7 @@ async function fixture({ records = 1 } = {}) {
     unlockVault: async () => ({ ok: true }),
     listSecrets: async () => ({ ok: true, secrets }),
     acquireSecretRefreshLease: async (_portal, secretId, input) => {
+      events.push('acquire');
       assert.equal(secretId, 'secret_1');
       if (leaseToken && leaseToken !== input.refreshLeaseToken) {
         const error = new Error('busy');
@@ -85,16 +89,19 @@ async function fixture({ records = 1 } = {}) {
     renewSecretRefreshLease: async (_portal, secretId, input) => {
       assert.equal(secretId, 'secret_1');
       assert.equal(input.refreshLeaseToken, leaseToken);
-      renewalCalls += 1;
+      events.push('renew');
+      if (renewQueue.length > 0) return renewQueue.shift();
       return { ok: true, renewed: true, leaseExpiresAt: now + 90_000 };
     },
     releaseSecretRefreshLease: async (_portal, secretId, input) => {
+      events.push('release');
       assert.equal(secretId, 'secret_1');
       assert.equal(input.refreshLeaseToken, leaseToken);
       leaseToken = null;
       return { ok: true, released: true };
     },
     updateSecret: async (_portal, secretId, body) => {
+      events.push('update');
       updateCalls += 1;
       const wire = secrets.find((entry) => entry.id === secretId);
       assert.equal(body.expectedRevision, wire.row_revision);
@@ -123,15 +130,50 @@ async function fixture({ records = 1 } = {}) {
       deviceId: 'device',
     }),
     now: () => now,
+    // The keeper's interval is recorded, never fired: no background renewal
+    // can interleave with the order under test.
+    setInterval(callback, intervalMs) {
+      const handle = { callback, intervalMs };
+      timers.push(handle);
+      return handle;
+    },
+    clearInterval(handle) {
+      clearedTimers.push(handle);
+    },
   };
   return {
     api,
     custody,
     deps,
-    getRenewalCalls() { return renewalCalls; },
-    getUpdateCalls() { return updateCalls; },
     secrets,
+    getEvents() { return events; },
+    getLeaseToken() { return leaseToken; },
+    getUpdateCalls() { return updateCalls; },
+    getTimers() { return timers; },
+    getClearedTimers() { return clearedTimers; },
+    queueRenewal(result) { renewQueue.push(result); },
     setLeaseToken(value) { leaseToken = value; },
+  };
+}
+
+function oauthResponse() {
+  return {
+    status: 200,
+    async json() {
+      return {
+        access_token: 'access-new',
+        refresh_token: 'refresh-new',
+        expires_in: 3_600,
+        scope: 'user:profile user:inference',
+      };
+    },
+  };
+}
+
+function oauthSuccess(state) {
+  return async () => {
+    state.getEvents().push('oauth');
+    return oauthResponse();
   };
 }
 
@@ -156,24 +198,18 @@ test('managed Claude rotation holds the distributed lease through durable CAS', 
     portal,
     deps: {
       ...state.deps,
-      fetchImpl: async () => ({
-        status: 200,
-        async json() {
-          return {
-            access_token: 'access-new',
-            refresh_token: 'refresh-new',
-            expires_in: 3_600,
-            scope: 'user:profile user:inference',
-          };
-        },
-      }),
+      fetchImpl: oauthSuccess(state),
     },
   });
+  assert.deepEqual(
+    state.getEvents(),
+    ['acquire', 'renew', 'oauth', 'renew', 'update', 'release'],
+  );
+  assert.equal(state.getLeaseToken(), null);
   assert.equal(rotated.ok, true);
   assert.equal(rotated.refreshed, true);
   assert.equal(rotated.revision, 'fedcba9876543210fedcba9876543210');
   assert.equal(rotated.grant.accessToken, 'access-new');
-  assert.equal(state.getRenewalCalls(), 2);
 
   const opened = await decryptEnvelopeSecret(state.custody.crk, state.secrets[0]);
   const persisted = JSON.parse(opened.data.body).claudeAiOauth;
@@ -295,6 +331,126 @@ test('managed Claude rotation refuses OAuth after refresh lease renewal is lost'
   });
   assert.equal(result.reason, 'managed-claude-refresh-lease-lost');
   assert.equal(providerCalls, 0);
+});
+
+test('managed Claude refresh lease lost before the write refuses the CAS', async () => {
+  const state = await fixture();
+  state.queueRenewal({ ok: true, renewed: true, leaseExpiresAt: now + 90_000 });
+  state.queueRenewal({ ok: false });
+  const result = await rotateManagedClaudeCustody({
+    portal,
+    deps: {
+      ...state.deps,
+      fetchImpl: oauthSuccess(state),
+    },
+  });
+  assert.equal(result.reason, 'managed-claude-refresh-lease-lost');
+  assert.deepEqual(state.getEvents(), ['acquire', 'renew', 'oauth', 'renew', 'release']);
+  assert.equal(state.getUpdateCalls(), 0);
+  assert.equal(state.getLeaseToken(), null);
+});
+
+test('managed Claude refresh lease lost during OAuth aborts the request and writes nothing', async () => {
+  const state = await fixture();
+  state.queueRenewal({ ok: true, renewed: true, leaseExpiresAt: now + 90_000 });
+  state.queueRenewal({ ok: false });
+  let fetchSignal = null;
+  let releaseFetch = () => {};
+  let markFetchStarted = () => {};
+  const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+  const pending = rotateManagedClaudeCustody({
+    portal,
+    deps: {
+      ...state.deps,
+      // Like real fetch: rejects with AbortError once its signal aborts,
+      // otherwise resolves when the test releases it.
+      fetchImpl: (_url, init) => {
+        state.getEvents().push('oauth');
+        fetchSignal = init.signal;
+        markFetchStarted();
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          }, { once: true });
+          releaseFetch = () => resolve(oauthResponse());
+        });
+      },
+    },
+  });
+  try {
+    await Promise.race([fetchStarted, pending]);
+    assert.ok(fetchSignal, 'OAuth started while the lease was held');
+    const [keeper] = state.getTimers();
+    keeper.callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fetchSignal.aborted, true);
+    releaseFetch();
+    const result = await pending;
+    assert.equal(result.reason, 'managed-claude-refresh-lease-lost');
+    assert.deepEqual(state.getEvents(), ['acquire', 'renew', 'oauth', 'renew', 'release']);
+    assert.equal(state.getUpdateCalls(), 0);
+    assert.equal(state.getLeaseToken(), null);
+  } finally {
+    releaseFetch();
+  }
+});
+
+test('managed Claude refresh stops the keeper through the handle it started', async () => {
+  const state = await fixture();
+  const result = await rotateManagedClaudeCustody({
+    portal,
+    deps: {
+      ...state.deps,
+      fetchImpl: oauthSuccess(state),
+    },
+  });
+  assert.equal(result.ok, true);
+  const [started] = state.getTimers();
+  assert.equal(state.getTimers().length, 1);
+  assert.equal(state.getClearedTimers().length, 1);
+  assert.equal(state.getClearedTimers()[0], started);
+});
+
+test('managed Claude refresh reports an unconfirmed lease release', async () => {
+  const state = await fixture();
+  state.api.releaseSecretRefreshLease = async (_portal, secretId) => {
+    state.getEvents().push('release');
+    assert.equal(secretId, 'secret_1');
+    return { ok: true, released: false };
+  };
+  const result = await rotateManagedClaudeCustody({
+    portal,
+    deps: {
+      ...state.deps,
+      fetchImpl: oauthSuccess(state),
+    },
+  });
+  assert.deepEqual(state.getEvents(), ['acquire', 'renew', 'oauth', 'renew', 'update', 'release']);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'managed-claude-refresh-lease-release-unconfirmed');
+});
+
+test('managed Claude custody refuses a write whose row revision did not advance', async () => {
+  const state = await fixture();
+  const updateSecret = state.api.updateSecret;
+  state.api.updateSecret = async (...args) => {
+    const updated = await updateSecret(...args);
+    return {
+      ...updated,
+      secret: { ...updated.secret, row_revision: '0123456789abcdef0123456789abcdef' },
+    };
+  };
+  state.setLeaseToken('E'.repeat(43));
+  const result = await persistManagedClaudeCustody({
+    portal,
+    secretId: 'secret_1',
+    expectedRevision: '0123456789abcdef0123456789abcdef',
+    refreshLeaseToken: 'E'.repeat(43),
+    grant: JSON.parse(authData().body).claudeAiOauth,
+    deps: state.deps,
+  });
+  assert.equal(result.reason, 'managed-claude-custody-write-unconfirmed');
+  assert.deepEqual(state.getEvents(), ['update']);
 });
 
 function envelopeToWire(envelope) {
