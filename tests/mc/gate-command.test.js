@@ -175,12 +175,12 @@ describe('mc gate <test files…>', () => {
     assert.equal(JSON.parse(out.files.get(`${LOG}.request.json`)).defer, false);
   });
 
-  it('text names the exact deferred files as unmeasured and not run by direct goal landing', async () => {
+  it('text names the exact deferred files as unmeasured until the merge round or --whole-selection measures them', async () => {
     const { out, deps, files } = harness({ tests: ['a.test.js'], finishAfter: 1, output: GREEN });
     files.set(`${LOG}.request.json.result`, JSON.stringify({ deferred: ['tests/b.test.js', 'tests/c.test.js'] }));
     deps.write = ((write) => (path, text) => { if (path !== `${LOG}.request.json`) write(path, text); else files.set(path, text); })(deps.write);
     assert.equal(await run(['a.test.js'], deps), 0);
-    assert.match(out.stdout, /PARTIAL COVERAGE — deferred files were not measured; direct goal landing does not run them: tests\/b\.test\.js tests\/c\.test\.js/u);
+    assert.match(out.stdout, /PARTIAL COVERAGE — deferred files were not measured; the merge round or mc gate --whole-selection measures them: tests\/b\.test\.js tests\/c\.test\.js/u);
   });
 
   it('--json keeps partial coverage and deferred members when there is no reusable receipt', async () => {

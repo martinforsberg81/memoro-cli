@@ -1,12 +1,13 @@
 /**
- * What each test file cost when it last ran, per repository: measured by every
- * run, never declared. A declared cost goes stale in silence; memoro-cli's
+ * An estimate of what each test file cost when it last ran, per repository: the
+ * sum of its top-level test durations, measured by every run, never declared. It
+ * excludes import and process startup. A declared cost goes stale in silence; memoro-cli's
  * "light" stood for 60 s long after its suite took seventeen minutes.
  *
  * A session's ordinary gate reads it to defer costly selected files
  * (`sessionFiles`), so nobody waits for them and the machine stays free. A
- * deferred file is unmeasured, never green; direct goal landing does not
- * guarantee another gate. A repository that declares `session_whole` defers nothing.
+ * deferred file is unmeasured, never green, until the merge round or
+ * `mc gate --whole-selection` measures it. A repository that declares `session_whole` defers nothing.
  */
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
