@@ -45,7 +45,8 @@ and admin override are Martin's acts and are unavailable headless.
 **Establish acceptance for what will land.** Read
 `tasks/publish-and-merge.md` before checking, publishing or requeueing. After a
 content-changing repair, establish the criterion evidence the repair affects
-and a completed GREEN `mc gate --whole-selection` on the final judged worktree.
+and completed final-tree `mc gate --whole-selection` acceptance under
+publish-and-merge, including adjudicated untouched-baseline SETTLED failures.
 Record the scope, frozen base, revision and log. The merger measures the
 combined candidate through the ordinary round, reusing this evidence (exact
 or delta) and measuring the rest; it does not re-check criteria or the reviewed

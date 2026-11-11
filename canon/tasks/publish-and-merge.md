@@ -3,20 +3,20 @@ name: publish-and-merge
 description: How a change in an mc repository (memoro, memoro-cli) is tested and gets from a branch to main with mc gate, mc publish and mc merge. Use before running any test, pushing a branch, opening or editing a pull request, or merging one.
 ---
 # Publish and merge
-The verbs replace `node --test`, `npm test`, `npm run ci`,
-`git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
+The verbs replace `node --test`, `npm test`, `npm run ci`, `git push`, `gh pr create`/`edit` and `gh pr merge`; `mc hook pre-tool` turns
 those to the verb. When the raw command is really meant, put `MC_HOOK_ALLOW=1`
 in it and say why in the reply.
 ## `mc gate` — the tests your change reaches
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to test files and command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
-- Before review, finish or mend authorizes `mc goal stage merge`, require
-  completed GREEN `mc gate --whole-selection` on the final judged worktree.
-  Record scope, frozen base, revision and log; finish RUNNING with `mc gate --wait`.
-  Partial, deferred or failed runs are not acceptance; the round reuses this evidence.
-  Repairs need final-tree acceptance; unchanged retries may retain valid evidence
-  under the reuse rules below. Preserve approved verification exceptions.
+- Before review/finish/mend authorizes merge, complete final-tree `mc gate --whole-selection`:
+  GREEN or only adjudicated untouched-baseline `SETTLED` failures (Martin, 2026-11-11).
+  Record scope, revision, frozen base, log and failed members; finish RUNNING with `mc gate --wait`.
+  Baseline-only failures do not hold delivery; receipts stay incomplete: reuse passed members only,
+  with independent merger measurement on its current base, never another Martin question.
+  Partial, deferred, interrupted, unattributed or change-caused failures are not acceptance.
+  Repairs need final-tree acceptance; unchanged retries retain evidence and approved exceptions.
 - A rerun on identical content reuses each file and command gate that passed there and runs
   the rest; a resumed whole selection is a completed GREEN. Any content change means a new whole
   selection; `--fresh` forces a full run. Red files green alone, or untouched and red alike at the base, are `SETTLED`.

@@ -234,8 +234,15 @@ origin does not have (ruling 43).
 **A session decides when a goal merges.** Before a review, finish or mend session
 authorizes goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
-completed green `mc gate --whole-selection` on the final judged worktree. The
-session records scope, frozen base, judged revision and log. A content-changing
+completed `mc gate --whole-selection` on the final judged worktree: green,
+or with only adjudicated `SETTLED` failures on the untouched frozen base
+(Martin, 2026-11-11). A baseline-only settled result permits handoff without
+waiting for the owning repair; it does not make an incomplete receipt green.
+Only passed members are reusable, and the round independently measures and
+adjudicates the candidate against its current base. Partial, deferred,
+interrupted, unattributed or change-caused failures do not authorize handoff.
+The session records scope, frozen base, judged revision, log and any named
+baseline failures and failed members. A content-changing
 mend establishes acceptance for the repaired worktree; an unchanged delivery
 retry may retain still-valid evidence under the existing reuse rules. Explicit
 verification exceptions keep their approved scope. These are session

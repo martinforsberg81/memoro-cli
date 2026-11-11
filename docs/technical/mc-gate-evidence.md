@@ -107,6 +107,15 @@ settled attempt exits 0 but its receipt is not `green` (its round had a
 failure), so it grants no reuse beyond its members: files that passed alone
 are `passed` members and resume, main's red files stay `failed` and run again.
 
+Session authorization and receipt reuse are distinct. Martin, 2026-11-11:
+a completed final whole selection with only adjudicated untouched-baseline
+failures authorizes review/finish/mend handoff under
+[publish-and-merge](../../canon/tasks/publish-and-merge.md); delivery does not
+wait for the owning repair. Retain the frozen base and named failed members.
+The receipt remains incomplete and its failed members cannot be reused as
+passed. The ordinary merger measures and adjudicates against its current base.
+This rule does not admit partial execution or a change-caused criterion failure.
+
 ## Waiting and recovery
 
 Three mechanisms are distinct:

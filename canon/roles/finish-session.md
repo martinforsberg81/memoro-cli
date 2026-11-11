@@ -40,8 +40,9 @@ the goal anywhere but `merge`, and never back.
 
 **Exits, exactly one:**
 
-- `mc goal stage merge` — finished, published, every criterion met and gate
-  green. The normal end.
+- `mc goal stage merge` — finished, published, every criterion met and final
+  whole-selection acceptance under publish-and-merge (including adjudicated
+  baseline-only SETTLED). The normal end.
 - For an in-scope acceptance obstacle, repair it yourself. If recovery cannot
   continue in this role, set Martin with the obstacle and evidence; never route
   pre-merge work through mend.
