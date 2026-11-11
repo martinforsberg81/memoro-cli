@@ -81,8 +81,8 @@ is not attributed to the goal. An incorrect shared base-relative check still
 belongs to its owner; integration does not certify that check as repaired.
 
 After integration, run the affected criterion checks and complete final-tree
-whole-selection GREEN before publication and the normal review or finish
-handoff. Record the judged head, frozen base, logs and ran/reused provenance.
+whole-selection acceptance under the publication procedure before publication
+and the normal review or finish handoff. Record the judged head, frozen base, logs and ran/reused provenance.
 The merger measures the combined candidate and reuses the session’s evidence;
 the session’s acceptance remains required because it is what the merger reuses.
 This procedure authorizes no test waiver, budget change, product-scope change,
@@ -588,8 +588,8 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   a delivery retry may require no source change or commit. It does not change
   goal text, acceptance, product/privacy policy or test protection scope.
   After a content-changing repair it establishes affected criterion evidence
-  and completed whole-selection GREEN on the final judged worktree before
-  authorizing landing through the round. An unchanged retry may retain still-valid
+  and completed whole-selection acceptance under the publication procedure
+  on the final judged worktree before authorizing landing through the round. An unchanged retry may retain still-valid
   evidence under the existing reuse rules. Explicitly approved verification
   exceptions keep their exact scope; the merger’s reuse does not replace this acceptance.
   It publishes repairs with `mc publish --no-merge`, records cause, repair and
@@ -666,9 +666,13 @@ output som ingen läser."* Its output is exactly three things:
 
 - **The stage, always one of two.** OK: `mc goal stage merge`, which queues
   all registered pull requests for the ordinary measured round. Before authorizing
-  it, the review or finish session must complete GREEN `mc gate --whole-selection`
-  on the judged worktrees; the round reuses this receipt (exact or delta) and measures the rest,
-  without re-checking criteria or the reviewed head. See the canonical
+  it, the review or finish session must complete `mc gate --whole-selection`
+  on the judged worktrees: GREEN, or only adjudicated untouched-baseline
+  `SETTLED` failures (Martin, 2026-11-11). The latter does not hold delivery
+  for an owning repair and does not turn the incomplete receipt green. Record
+  failed members, named baseline failures and frozen base. The round reuses
+  valid passing evidence and independently measures the rest on its current
+  base, without re-checking criteria or the reviewed head. See the canonical
   [publication and landing procedure](../../canon/tasks/publish-and-merge.md).
   Not OK: `REVIEW.md` in
   the goal's directory — the head sha judged, what is wrong and where — then
