@@ -51,7 +51,7 @@ export async function run(argv, deps = {}) {
     }
     if (action === 'restore') {
       if (!scanned.flags.archive || !scanned.flags.output) return refusal(stderr, 'mc backup restore needs --archive <path> and --output <inactive-root>');
-      const result = (deps.restore || restoreArchive)(scanned.flags.archive, scanned.flags.output);
+      const result = (deps.restore || restoreArchive)(scanned.flags.archive, scanned.flags.output, { env });
       print(stdout, result, scanned.flags.json);
       return 0;
     }

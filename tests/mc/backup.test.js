@@ -215,6 +215,47 @@ test('backup restore: verifies then atomically publishes byte- and mode-preservi
   assert.throws(() => lstatSync(refused), { code: 'ENOENT' });
 });
 
+test('backup restore: a work-root destination is fenced before publication and remains inactive', (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: join(root, 'work') };
+  const archive = join(root, 'archive');
+  const output = join(env.MC_WORK_ROOT, 'restored-work');
+  const bytes = Buffer.from('inactive programme');
+  createArchive(archive, { programmes: ['restored'], members: [
+    { path: 'restored', type: 'directory', mode: 0o700 },
+    { path: 'restored/README.md', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes },
+  ] });
+
+  const result = restoreArchive(archive, output, { env });
+  assert.equal(result.state, 'inactive');
+  assert.equal(programmeLifecycle('restored', { env }).state, 'inactive');
+  assert.equal(JSON.parse(readFileSync(join(output, '.mc-inactive-restore.json'), 'utf8')).lifecycle_transaction, result.lifecycle_transaction);
+  assert.throws(() => admitWriter(['restored'], { env }), /restored is inactive/u);
+  assert.deepEqual(readFileSync(join(output, 'restored', 'README.md')), bytes);
+});
+
+test('backup restore: a failed final lifecycle receipt leaves published work fenced as importing', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: join(root, 'work') };
+  const archive = join(root, 'archive');
+  const output = join(env.MC_WORK_ROOT, 'restored-work');
+  const bytes = Buffer.from('must remain inactive');
+  createArchive(archive, { programmes: ['restored'], members: [
+    { path: 'restored', type: 'directory', mode: 0o700 },
+    { path: 'restored/README.md', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes },
+  ] });
+
+  assert.throws(() => restoreArchive(archive, output, { env, completeRestore() { throw new Error('receipt persistence failed'); } }), /receipt persistence failed/u);
+  assert.deepEqual(readFileSync(join(output, 'restored', 'README.md')), bytes);
+  assert.equal(programmeLifecycle('restored', { env }).state, 'importing');
+  assert.throws(() => admitWriter(['restored'], { env }), /restored is importing/u);
+  const receipt = JSON.parse(readFileSync(join(output, '.mc-inactive-restore.json'), 'utf8'));
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+  assert.equal(await backupCommand(['status', '--id', receipt.lifecycle_transaction, '--json'], { env, stdout, stderr }), 0);
+  assert.equal(JSON.parse(stdout.value).transaction.state, 'importing');
+});
+
 test('backup command: restore routes only explicit archive and output paths', async (t) => {
   const root = fixture(t);
   const archive = join(root, 'archive');

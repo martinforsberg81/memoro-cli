@@ -2,6 +2,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep, win32 } from 'node:path';
+import { beginInactiveRestore, completeInactiveRestore } from './programme-lifecycle.js';
+import { workRoot } from './paths.js';
 
 export const BACKUP_SCHEMA = 'mc-programme-backup';
 export const BACKUP_VERSION = 2;
@@ -359,7 +361,7 @@ export function inspectArchive(path) {
  * declarations can be resolved; silently restoring only files would imply a
  * complete recovery when branches and worktree registrations are absent.
  */
-export function restoreArchive(archive, output, { now = () => new Date().toISOString() } = {}) {
+export function restoreArchive(archive, output, { now = () => new Date().toISOString(), env = process.env, beginRestore = beginInactiveRestore, completeRestore = completeInactiveRestore } = {}) {
   if (!isAbsolute(output)) throw new Error('restore output must be absolute');
   const verified = verifyArchive(archive);
   const archiveRoot = realpathSync(resolve(archive));
@@ -374,6 +376,14 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
   const parent = realpathSync(dirname(requested));
   rejectSymlinkAncestors(parent);
   const destination = join(parent, basename(requested));
+  const work = realpathSync(resolve(workRoot(env)));
+  const fromWorkRoot = relativePath(work, destination);
+  // Inert roots outside mc's work tree are ordinary portable extractions. If
+  // the destination is addressable as local programme work, establish its
+  // durable fence before creating even the private staging tree.
+  const restoreTransaction = fromWorkRoot !== null
+    ? beginRestore(manifest.programmes, { archive_sha256: manifest_sha256, destination_root: destination, env, now })
+    : null;
   const temp = `${destination}.tmp-${process.pid}-${randomUUID()}`;
   mkdirSync(temp, { mode: 0o700 });
   try {
@@ -402,6 +412,7 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
       schema: 'mc-inactive-programme-restore', version: 1, state: 'inactive',
       archive_sha256: manifest_sha256, programmes: manifest.programmes, created_at: now(),
       completeness: 'content-only; no Git repositories were declared',
+      ...(restoreTransaction ? { lifecycle_transaction: restoreTransaction.id, lifecycle_generation: restoreTransaction.generation } : {}),
     };
     writeDurable(join(temp, '.mc-inactive-restore.json'), Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`));
     // Recheck the parent immediately before publishing, and never replace an
@@ -420,9 +431,15 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
     syncDirectory(temp);
     renameSync(temp, destination);
     syncDirectory(parent);
+    if (restoreTransaction) completeRestore(restoreTransaction.id, restoreTransaction.generation, { env, now });
     return { path: destination, ...receipt };
   } catch (error) {
     rmSync(temp, { recursive: true, force: true });
     throw error;
   }
+}
+
+function relativePath(root, path) {
+  const relative = posix.relative(root.split(sep).join('/'), path.split(sep).join('/'));
+  return relative === '' || (!relative.startsWith('../') && relative !== '..' && !isAbsolute(relative)) ? relative : null;
 }

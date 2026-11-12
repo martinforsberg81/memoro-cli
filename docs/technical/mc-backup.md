@@ -152,10 +152,18 @@ The currently routed command surface is:
   verifies and materializes a content-only archive into a new private sibling
   staging directory, then publishes it with one rename. The output must not
   exist. A `.mc-inactive-restore.json` receipt marks the root inactive and
-  records the archive digest; restore never adds queue entries. This initial
-  restore path refuses archives containing Git bundles until local repository
-  declarations and worktree reconstruction are available. Its receipt says
-  `content-only`; it is not a complete programme recovery or a runnable tree.
+  records the archive digest; restore never adds queue entries. If the resolved
+  output is inside the destination `MC_WORK_ROOT`, restore first durably creates
+  an `importing` transaction and fences every selected programme before it
+  creates the staging tree. After atomic publication it durably advances those
+  fences to `inactive`. A failure at or after publication leaves the durable
+  `importing` fence in place; `mc backup status --id <receipt transaction>` can
+  inspect that transaction, but backup `resume`/`release` cannot clear it. An
+  output outside the work root is still marked by its receipt and is not treated
+  as runnable by mc. This initial restore path refuses archives containing Git
+  bundles until local repository declarations and worktree reconstruction are
+  available. Its receipt says `content-only`; it is not a complete programme
+  recovery or a runnable tree.
 - `mc backup status --id <id> [--json]` reads the durable transaction and its
   admitted writer leases.
 - `mc backup resume --id <id> [--json]` advances an existing `draining`

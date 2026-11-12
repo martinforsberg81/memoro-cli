@@ -97,10 +97,57 @@ export function beginBackup(selection, { id = randomUUID(), env = process.env, l
   }, lock);
 }
 
-function loadTransaction(id, env) {
+/** Fence restored programme names before any reconstructed member is visible. */
+export function beginInactiveRestore(selection, { id = randomUUID(), archive_sha256, destination_root, env = process.env, lock = realLock, now = () => new Date().toISOString() } = {}) {
+  const selected = validateSelection(selection);
+  if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('invalid restore transaction id');
+  if (!/^[a-f0-9]{64}$/u.test(archive_sha256 || '') || typeof destination_root !== 'string' || !destination_root) throw new Error('invalid inactive restore binding');
+  const paths = lifecyclePaths(env);
+  return underLock(env, () => {
+    for (const programme of selected) {
+      const existing = readRecord(fencePath(programme, env), SCHEMA);
+      if (existing) throw new Error(`${programme} is already fenced by transaction ${existing.transaction_id}`);
+    }
+    const install = readRecord(paths.installation, SCHEMA);
+    const installation = install || { schema: SCHEMA, version: LIFECYCLE_VERSION, id: randomUUID() };
+    if (!install) durableWrite(paths.installation, installation);
+    const transaction = {
+      schema: TRANSACTION_SCHEMA, version: LIFECYCLE_VERSION, id, generation: randomUUID(), kind: 'restore',
+      selection: selected, installation_id: installation.id, root: resolve(workRoot(env)),
+      archive_sha256, destination_root: resolve(destination_root), state: 'importing',
+      created_at: now(), updated_at: now(), receipts: [],
+    };
+    durableWrite(transactionPath(id, env), transaction);
+    for (const programme of selected) durableWrite(fencePath(programme, env), {
+      schema: SCHEMA, version: LIFECYCLE_VERSION, transaction_id: id,
+      generation: transaction.generation, state: 'importing',
+    });
+    return transaction;
+  }, lock);
+}
+
+/** Complete an import as inactive. This goal deliberately has no activation transition. */
+export function completeInactiveRestore(id, generation, { env = process.env, lock = realLock, now = () => new Date().toISOString() } = {}) {
+  return underLock(env, () => {
+    const transaction = readRecord(transactionPath(id, env), TRANSACTION_SCHEMA);
+    if (!transaction || transaction.kind !== 'restore' || transaction.state !== 'importing') throw new Error(`cannot complete inactive restore ${id}`);
+    if (transaction.generation !== generation) throw new Error('stale lifecycle generation');
+    transaction.state = 'inactive';
+    transaction.updated_at = now();
+    durableWrite(transactionPath(id, env), transaction);
+    for (const programme of transaction.selection) durableWrite(fencePath(programme, env), {
+      schema: SCHEMA, version: LIFECYCLE_VERSION, transaction_id: id,
+      generation, state: 'inactive',
+    });
+    return transaction;
+  }, lock);
+}
+
+function loadTransaction(id, env, expectedKind = 'backup') {
   const value = readRecord(transactionPath(id, env), TRANSACTION_SCHEMA);
   if (!value) throw new Error(`unknown lifecycle transaction ${id}`);
-  if (!Array.isArray(value.selection) || !value.generation || value.kind !== 'backup') throw new Error(`invalid lifecycle transaction ${id}`);
+  if (!Array.isArray(value.selection) || !value.generation || !['backup', 'restore'].includes(value.kind)
+    || (expectedKind && value.kind !== expectedKind)) throw new Error(`invalid lifecycle transaction ${id}`);
   return value;
 }
 
@@ -169,7 +216,7 @@ export function admitWriter(programmes, { env = process.env, lock = realLock, na
     if (existsSync(transactions)) {
       for (const file of readdirSync(transactions).filter((item) => item.endsWith('.json'))) {
         const transaction = readRecord(join(transactions, file), TRANSACTION_SCHEMA);
-        if (!Array.isArray(transaction.selection) || !transaction.id || !transaction.generation || !['draining', 'held', 'captured', 'moved-away', 'importing', 'verified', 'inactive', 'activating', 'released', 'active', 'aborted'].includes(transaction.state)) throw new Error(`invalid lifecycle transaction ${file}`);
+        if (!Array.isArray(transaction.selection) || !transaction.id || !transaction.generation || !['backup', 'restore'].includes(transaction.kind) || !['draining', 'held', 'captured', 'moved-away', 'importing', 'verified', 'inactive', 'activating', 'released', 'active', 'aborted'].includes(transaction.state)) throw new Error(`invalid lifecycle transaction ${file}`);
         if (!['draining', 'held', 'captured', 'moved-away', 'importing', 'verified', 'inactive', 'activating'].includes(transaction.state)) continue;
         const overlap = selected.filter((name) => transaction.selection.includes(name));
         if (overlap.length) throw new Error(`programme ${overlap.join(', ')} is ${transaction.state} under transaction ${transaction.id}`);
@@ -198,7 +245,7 @@ export function admitWriter(programmes, { env = process.env, lock = realLock, na
 }
 
 export function backupStatus(id, { env = process.env } = {}) {
-  const transaction = loadTransaction(id, env);
+  const transaction = loadTransaction(id, env, null);
   return { transaction, pending_writers: selectedLeases(transaction.selection, env).map(({ id: leaseId, programmes, name, pid, created_at }) => ({ id: leaseId, programmes, name, pid, created_at })) };
 }
 
