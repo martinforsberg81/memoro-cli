@@ -1,14 +1,16 @@
 /** Inspect and verify a locally held programme backup archive. */
 import { backupStatus, resumeBackup as resumeBackupLifecycle, transitionBackup } from '../programme-lifecycle.js';
-import { inspectArchive, verifyArchive } from '../backup-archive.js';
+import { inspectArchive, restoreArchive, verifyArchive } from '../backup-archive.js';
 import { commandUsage } from '../command-help.js';
 import { scanArgs } from './flags.js';
 
 const archiveRoute = { booleans: ['--json'], strictValues: ['--archive'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (flags.archive ? null : 'needs --archive <path>') };
 const idRoute = { booleans: ['--json'], strictValues: ['--id'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (flags.id ? null : 'needs --id <id>') };
+const restoreRoute = { booleans: ['--json'], strictValues: ['--archive', '--output'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (!flags.archive ? 'needs --archive <path>' : (!flags.output ? 'needs --output <inactive-root>' : null)) };
 export const ROUTES = {
   inspect: archiveRoute,
   verify: archiveRoute,
+  restore: restoreRoute,
   status: idRoute,
   resume: idRoute,
   release: idRoute,
@@ -24,7 +26,7 @@ export async function run(argv, deps = {}) {
   const [action, ...rest] = argv;
   if (!Object.hasOwn(ROUTES, action || '')) return refusal(stderr, `unknown mc backup action: ${action || '(missing)'}`);
   const booleans = ['--json'];
-  const values = action === 'status' || action === 'resume' || action === 'release' ? ['--id'] : ['--archive'];
+  const values = action === 'status' || action === 'resume' || action === 'release' ? ['--id'] : action === 'restore' ? ['--archive', '--output'] : ['--archive'];
   const scanned = scanArgs(rest, { booleans, strictValues: values });
   if (scanned.error) return refusal(stderr, scanned.error);
   if (scanned.positional.length) return refusal(stderr, `mc backup ${action || ''} takes no ${scanned.positional[0]}`.trim());
@@ -32,6 +34,12 @@ export async function run(argv, deps = {}) {
     if (action === 'inspect' || action === 'verify') {
       if (!scanned.flags.archive) return refusal(stderr, `mc backup ${action} needs --archive <path>`);
       const result = action === 'inspect' ? (deps.inspect || inspectArchive)(scanned.flags.archive) : summarizeVerified((deps.verify || verifyArchive)(scanned.flags.archive));
+      print(stdout, result, scanned.flags.json);
+      return 0;
+    }
+    if (action === 'restore') {
+      if (!scanned.flags.archive || !scanned.flags.output) return refusal(stderr, 'mc backup restore needs --archive <path> and --output <inactive-root>');
+      const result = (deps.restore || restoreArchive)(scanned.flags.archive, scanned.flags.output);
       print(stdout, result, scanned.flags.json);
       return 0;
     }
@@ -64,6 +72,12 @@ function summarizeVerified({ manifest, manifest_sha256, bytes }) {
 
 function print(stdout, value, json) {
   if (json) { stdout.write(`${JSON.stringify(value, null, 2)}\n`); return; }
+  if (value.state === 'inactive') {
+    stdout.write(`restored inactive content to ${value.path}\n`);
+    stdout.write(`programmes: ${value.programmes.join(', ')}\n`);
+    stdout.write(`completeness: ${value.completeness}\n`);
+    return;
+  }
   if (value.transaction) {
     stdout.write(`backup ${value.transaction.id}: ${value.transaction.state}\n`);
     if (value.pending_writers?.length) stdout.write(`pending writers: ${value.pending_writers.length}\n`);

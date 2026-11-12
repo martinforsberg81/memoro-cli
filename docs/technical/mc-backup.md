@@ -55,6 +55,14 @@ The currently routed command surface is:
 - `mc backup inspect --archive <path> [--json]` verifies the archive before
   reporting its inventory.
 - `mc backup verify --archive <path> [--json]` reports verification details.
+- `mc backup restore --archive <path> --output <inactive-root> [--json]`
+  verifies and materializes a content-only archive into a new private sibling
+  staging directory, then publishes it with one rename. The output must not
+  exist. A `.mc-inactive-restore.json` receipt marks the root inactive and
+  records the archive digest; restore never adds queue entries. This initial
+  restore path refuses archives containing Git bundles until local repository
+  declarations and worktree reconstruction are available. Its receipt says
+  `content-only`; it is not a complete programme recovery or a runnable tree.
 - `mc backup status --id <id> [--json]` reads the durable transaction and its
   admitted writer leases.
 - `mc backup resume --id <id> [--json]` advances an existing `draining`
@@ -64,12 +72,14 @@ The currently routed command surface is:
 - `mc backup release --id <id> [--json]` releases only a transaction already
   in `held`; draining transactions cannot be released through this command.
 
-Create and restore commands are not yet delivered. The archive primitives and
-hold/resume commands do not establish a complete programme inventory or a
-recoverable Git snapshot, and must not be presented as proof of complete
-capture or inactive restoration. Restore must remain inert, validate the full
-archive and local repository declarations before mutation, and must not make
-restored work runnable or enqueue merges.
+`mc backup create` and complete Git reconstruction are not yet delivered. The
+archive primitives and hold/resume commands do not establish a complete
+programme inventory or a recoverable Git snapshot, and must not be presented
+as proof of complete capture or inactive restoration. The delivered
+content-only restore is deliberately limited to archives with no bundles; a
+bundle-bearing programme archive is refused without creating a destination.
+Future Git restore must validate local repository declarations before
+mutation, keep the result inactive, and must not enqueue merges.
 
 Related contracts: [layout and local/restricted data](mc-layout.md),
 [goal lifecycle](mc-goals.md), [runner admission](mc-run.md), and

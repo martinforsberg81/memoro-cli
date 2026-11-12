@@ -1,6 +1,6 @@
 /** Private, checksummed storage and validation for programme backup archives. */
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 
 export const BACKUP_SCHEMA = 'mc-programme-backup';
@@ -164,4 +164,63 @@ export function verifyArchive(path) {
 export function inspectArchive(path) {
   const { manifest, manifest_sha256 } = verifyArchive(path);
   return { schema: manifest.schema, version: manifest.version, created_at: manifest.created_at, programmes: manifest.programmes, members: manifest.members.length, bundles: manifest.bundles.length, manifest_sha256 };
+}
+
+/**
+ * Materialize a content-only archive into a new, explicitly inactive root.
+ * Git bundles are deliberately refused until their local repository
+ * declarations can be resolved; silently restoring only files would imply a
+ * complete recovery when branches and worktree registrations are absent.
+ */
+export function restoreArchive(archive, output, { now = () => new Date().toISOString() } = {}) {
+  if (!isAbsolute(output)) throw new Error('restore output must be absolute');
+  const verified = verifyArchive(archive);
+  const archiveRoot = realpathSync(resolve(archive));
+  const { manifest, manifest_sha256 } = verified;
+  if (manifest.bundles.length) {
+    throw new Error('restore requires local repository declarations for every Git bundle; no destination was created');
+  }
+  const requested = resolve(output);
+  if (existsSync(requested)) throw new Error(`restore output already exists: ${requested}`);
+  mkdirSync(dirname(requested), { recursive: true });
+  const parent = realpathSync(dirname(requested));
+  rejectSymlinkAncestors(parent);
+  const destination = join(parent, basename(requested));
+  const temp = `${destination}.tmp-${process.pid}-${randomUUID()}`;
+  mkdirSync(temp, { mode: 0o700 });
+  try {
+    // Materialize explicit directory records first, then files and links. All
+    // members have passed path/parent validation and the tree is private new
+    // storage, so no archive-controlled parent can redirect extraction.
+    const members = [...manifest.members].sort((a, b) => a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path));
+    for (const member of members) {
+      const target = join(temp, ...member.path.split('/'));
+      if (member.type === 'directory') mkdirSync(target, { recursive: false, mode: member.mode ?? 0o700 });
+      else if (member.type === 'file') {
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+        const bytes = readRegular(archiveRoot, member.payload);
+        const fd = openSync(target, 'wx', member.mode & 0o777);
+        try { writeFileSync(fd, bytes); } finally { closeSync(fd); }
+        chmodSync(target, member.mode & 0o777);
+      } else {
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+        symlinkSync(member.target, target);
+      }
+    }
+    const receipt = {
+      schema: 'mc-inactive-programme-restore', version: 1, state: 'inactive',
+      archive_sha256: manifest_sha256, programmes: manifest.programmes, created_at: now(),
+      completeness: 'content-only; no Git repositories were declared',
+    };
+    writeDurable(join(temp, '.mc-inactive-restore.json'), Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`));
+    // Recheck the parent immediately before publishing, and never replace an
+    // existing output. A sibling rename makes the restored root appear whole.
+    rejectSymlinkAncestors(parent);
+    if (existsSync(destination)) throw new Error(`restore output already exists: ${destination}`);
+    renameSync(temp, destination);
+    return { path: destination, ...receipt };
+  } catch (error) {
+    rmSync(temp, { recursive: true, force: true });
+    throw error;
+  }
 }

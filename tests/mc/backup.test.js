@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createArchive, inspectArchive, validateMemberPath, verifyArchive } from '../../src/mc/backup-archive.js';
+import { createArchive, inspectArchive, restoreArchive, validateMemberPath, verifyArchive } from '../../src/mc/backup-archive.js';
 import { run as backupCommand } from '../../src/mc/commands/backup.js';
 import { admitWriter, beginBackup, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
 
@@ -70,6 +70,46 @@ test('backup archive: verification refuses changed payload bytes and unexpected 
   writeFileSync(join(output, 'elsewhere', 'manifest.json'), '{}');
   symlinkSync(join(output, 'elsewhere', 'manifest.json'), join(output, 'manifest.json'));
   assert.throws(() => verifyArchive(output), /unexpected symlink/u);
+});
+
+test('backup restore: verifies then atomically publishes byte- and mode-preserving inactive content; refuses unsupported bundles', async (t) => {
+  const root = fixture(t);
+  const archive = join(root, 'archive');
+  const output = join(root, 'restored');
+  const bytes = Buffer.from([0, 0xff, 7, 13]);
+  createArchive(archive, { programmes: ['p'], members: [
+    { path: 'p', type: 'directory', mode: 0o750 },
+    { path: 'p/work', type: 'directory', mode: 0o710 },
+    { path: 'p/work/tool', type: 'file', mode: 0o751, size: bytes.length, sha256: digest(bytes), bytes },
+    { path: 'p/work/alias', type: 'symlink', target: 'tool' },
+  ] });
+  const restored = restoreArchive(archive, output, { now: () => '2026-11-12T00:00:00.000Z' });
+  assert.equal(restored.state, 'inactive');
+  assert.deepEqual(readFileSync(join(output, 'p/work/tool')), bytes);
+  assert.equal(lstatSync(join(output, 'p/work/tool')).mode & 0o777, 0o751);
+  assert.equal(readlinkSync(join(output, 'p/work/alias')), 'tool');
+  assert.equal(JSON.parse(readFileSync(join(output, '.mc-inactive-restore.json'), 'utf8')).archive_sha256, restored.archive_sha256);
+  assert.throws(() => restoreArchive(archive, output), /already exists/u);
+
+  const bundled = join(root, 'bundled');
+  createArchive(bundled, { programmes: ['p'], members: [], bundles: [{ repository: 'repo', bytes: Buffer.from('git bundle') }] });
+  const refused = join(root, 'must-not-exist');
+  assert.throws(() => restoreArchive(bundled, refused), /local repository declarations/u);
+  assert.equal(lstatSync(root).isDirectory(), true);
+  assert.throws(() => lstatSync(refused), { code: 'ENOENT' });
+});
+
+test('backup command: restore routes only explicit archive and output paths', async (t) => {
+  const root = fixture(t);
+  const archive = join(root, 'archive');
+  const bytes = Buffer.from('inactive');
+  createArchive(archive, { programmes: ['p'], members: [{ path: 'p/README.md', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes }] });
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+  assert.equal(await backupCommand(['restore', '--archive', archive, '--output', join(root, 'output'), '--json'], { stdout, stderr }), 0);
+  assert.equal(JSON.parse(stdout.value).state, 'inactive');
+  assert.equal(await backupCommand(['restore', '--archive', archive, '--json'], { stdout, stderr }), 2);
+  assert.match(stderr.value, /needs --archive.*--output/u);
 });
 
 test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
