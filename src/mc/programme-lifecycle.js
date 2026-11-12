@@ -138,6 +138,22 @@ export function transitionBackup(id, generation, state, { env = process.env, loc
 }
 
 /**
+ * Reconcile a backup drain after a caller or machine restart. A drain is a
+ * durable hold on admission, not a timed lease: it can advance only when every
+ * writer admitted before the fence has completed and removed its lease.
+ */
+export function resumeBackup(id, { env = process.env, lock = realLock, now = () => new Date().toISOString() } = {}) {
+  const snapshot = backupStatus(id, { env });
+  if (snapshot.transaction.state !== 'draining') {
+    throw new Error(`cannot resume backup from ${snapshot.transaction.state}`);
+  }
+  if (snapshot.pending_writers.length) {
+    throw new Error(`backup still has ${snapshot.pending_writers.length} admitted writer lease(s)`);
+  }
+  return transitionBackup(id, snapshot.transaction.generation, 'held', { env, lock, now });
+}
+
+/**
  * Admit one cooperative writer across its entire caller-owned operation.
  * Lease files have no expiry: a restart cannot mistake an in-flight writer
  * for a completed one. The caller must always invoke release in `finally`.

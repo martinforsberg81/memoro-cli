@@ -41,14 +41,19 @@ The currently routed command surface is:
 - `mc backup verify --archive <path> [--json]` reports verification details.
 - `mc backup status --id <id> [--json]` reads the durable transaction and its
   admitted writer leases.
+- `mc backup resume --id <id> [--json]` advances an existing `draining`
+  transaction to `held` only after the admitted writer census is empty. A
+  pending lease or any other transaction state is refused; restart does not
+  expire the drain.
 - `mc backup release --id <id> [--json]` releases only a transaction already
   in `held`; draining transactions cannot be released through this command.
 
-Capture, resume and restore commands are not yet delivered. The archive
-primitives must not be presented as proof of complete capture or inactive
-restoration. Restore must remain inert, validate the full archive and local
-repository declarations before mutation, and must not make restored work
-runnable or enqueue merges.
+Create and restore commands are not yet delivered. The archive primitives and
+hold/resume commands do not establish a complete programme inventory or a
+recoverable Git snapshot, and must not be presented as proof of complete
+capture or inactive restoration. Restore must remain inert, validate the full
+archive and local repository declarations before mutation, and must not make
+restored work runnable or enqueue merges.
 
 Related contracts: [layout and local/restricted data](mc-layout.md),
 [goal lifecycle](mc-goals.md), [runner admission](mc-run.md), and

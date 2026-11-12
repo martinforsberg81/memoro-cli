@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createArchive, inspectArchive, validateMemberPath, verifyArchive } from '../../src/mc/backup-archive.js';
 import { run as backupCommand } from '../../src/mc/commands/backup.js';
-import { beginBackup, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
+import { admitWriter, beginBackup, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -93,4 +93,23 @@ test('backup command: inspect and verify expose checksummed inventory; status an
   out.value = '';
   assert.equal(await backupCommand(['release', '--id', tx.id, '--json'], { env, stdout: out, stderr: err }), 0);
   assert.equal(programmeLifecycle('p', { env }).state, 'active');
+});
+
+test('backup resume: a completed drain becomes held, but an admitted writer keeps it draining', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  const writer = admitWriter(['selected'], { env, name: 'admitted writer' });
+  const tx = beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000008' });
+  const out = { value: '', write(text) { this.value += text; } };
+  const err = { value: '', write(text) { this.value += text; } };
+
+  assert.equal(await backupCommand(['resume', '--id', tx.id, '--json'], { env, stdout: out, stderr: err }), 1);
+  assert.equal(programmeLifecycle('selected', { env }).state, 'draining');
+  assert.match(err.value, /1 admitted writer lease/u);
+
+  writer.release();
+  out.value = '';
+  assert.equal(await backupCommand(['resume', '--id', tx.id, '--json'], { env, stdout: out, stderr: err }), 0);
+  assert.equal(JSON.parse(out.value).transaction.state, 'held');
+  assert.equal(programmeLifecycle('selected', { env }).state, 'held');
 });

@@ -46,6 +46,7 @@ WORKSPACES
   mc backup inspect --archive <path> [--json]  Verify and inspect a local archive
   mc backup verify --archive <path> [--json]    Verify every archive payload and bundle
   mc backup status --id <id> [--json]           Inspect a durable local hold
+  mc backup resume --id <id> [--json]           Reconcile a completed writer drain into a hold
   mc backup release --id <id> [--json]          Explicitly release a held backup
 
 IN FULL

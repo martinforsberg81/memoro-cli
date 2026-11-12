@@ -611,6 +611,7 @@ export const COMMAND_USAGE = Object.freeze({
     "usage — mc backup inspect --archive <path> [--json]   read the archive inventory after checksum verification\n",
     "        mc backup verify --archive <path> [--json]    verify every checksummed archive payload and bundle\n",
     "        mc backup status --id <id> [--json]            inspect a durable local hold and admitted writers\n",
+    "        mc backup resume --id <id> [--json]            reconcile a drain into a held backup when writers finish\n",
     "        mc backup release --id <id> [--json]           release an explicitly held backup after inspection\n",
     "\n",
     "Archive paths are local directories. Release is refused unless the transaction is held;\n",

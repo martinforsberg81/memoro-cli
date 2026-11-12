@@ -1,5 +1,5 @@
 /** Inspect and verify a locally held programme backup archive. */
-import { backupStatus, transitionBackup } from '../programme-lifecycle.js';
+import { backupStatus, resumeBackup as resumeBackupLifecycle, transitionBackup } from '../programme-lifecycle.js';
 import { inspectArchive, verifyArchive } from '../backup-archive.js';
 import { commandUsage } from '../command-help.js';
 import { scanArgs } from './flags.js';
@@ -10,6 +10,7 @@ export const ROUTES = {
   inspect: archiveRoute,
   verify: archiveRoute,
   status: idRoute,
+  resume: idRoute,
   release: idRoute,
   '*': { check: ({ positional }) => `no backup action ${positional[0] || ''}`.trim() },
 };
@@ -23,7 +24,7 @@ export async function run(argv, deps = {}) {
   const [action, ...rest] = argv;
   if (!Object.hasOwn(ROUTES, action || '')) return refusal(stderr, `unknown mc backup action: ${action || '(missing)'}`);
   const booleans = ['--json'];
-  const values = action === 'status' || action === 'release' ? ['--id'] : ['--archive'];
+  const values = action === 'status' || action === 'resume' || action === 'release' ? ['--id'] : ['--archive'];
   const scanned = scanArgs(rest, { booleans, strictValues: values });
   if (scanned.error) return refusal(stderr, scanned.error);
   if (scanned.positional.length) return refusal(stderr, `mc backup ${action || ''} takes no ${scanned.positional[0]}`.trim());
@@ -34,8 +35,13 @@ export async function run(argv, deps = {}) {
       print(stdout, result, scanned.flags.json);
       return 0;
     }
-    if (action === 'status' || action === 'release') {
+    if (action === 'status' || action === 'resume' || action === 'release') {
       if (!scanned.flags.id) return refusal(stderr, `mc backup ${action} needs --id <id>`);
+      if (action === 'resume') {
+        const resumed = (deps.resumeBackup || resumeBackupLifecycle)(scanned.flags.id, { env });
+        print(stdout, { transaction: resumed, pending_writers: [] }, scanned.flags.json);
+        return 0;
+      }
       const status = (deps.status || backupStatus)(scanned.flags.id, { env });
       if (action === 'release') {
         if (status.transaction.state !== 'held') return refusal(stderr, `backup ${scanned.flags.id} is ${status.transaction.state}; release requires a held backup`);
