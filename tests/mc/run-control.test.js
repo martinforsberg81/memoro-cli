@@ -401,6 +401,30 @@ describe('mc run start', () => {
     assert.ok(paths.runner in legacy.store, 'unknown owner state was not removed');
   });
 
+  it('revalidates each Linux owner identity after the stop snapshot before signalling', async () => {
+    const fx = fixture({ runner: {
+      pid: 300, generation: 'C', bootId: 'boot', starttime: '30',
+      drainers: [{ pid: 200, generation: 'B', bootId: 'boot', starttime: '20' }],
+    }, live: [200, 300] });
+    fx.deps.platform = 'linux';
+    let recycled = false;
+    fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid === 200 && recycled ? 99 : pid / 10) });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.ps = () => '';
+    const kill = fx.deps.kill;
+    fx.deps.kill = (pid, signal) => {
+      kill(pid, signal);
+      if (pid === 300 && signal === 'SIGTERM') recycled = true;
+    };
+
+    const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.killed, [[300, 'SIGTERM']], 'the recycled PID was signalled after snapshot identity changed');
+    assert.ok(paths.stop in fx.store, 'STOP must remain authoritative after an identity changed');
+    assert.ok(!(paths.runner in fx.store), 'the dead current owner was not cleaned after its only drainer identity became stale');
+  });
+
   it('ordinary Linux stop orders the current and chained drainers to finish held work without signalling them', async () => {
     const lane = `${paths.dir}/current-a.json`;
     const fx = fixture({ runner: {
