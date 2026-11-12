@@ -208,6 +208,22 @@ test('backup command: explicit create holds selected content and refuses Git wor
   assert.match(err.value, /Git worktrees/u);
 });
 
+test('backup command: an occupied output is refused before creating a programme hold', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  mkdirSync(join(root, 'programs', 'chosen'), { recursive: true });
+  const archive = join(root, 'existing-archive');
+  mkdirSync(archive);
+  writeFileSync(join(archive, 'keep'), 'original');
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+
+  assert.equal(await backupCommand(['create', '--programme', 'chosen', '--output', archive, '--json'], { env, stdout, stderr }), 1);
+  assert.equal(programmeLifecycle('chosen', { env }).state, 'active', 'path refusal must not fence the selected programme');
+  assert.equal(readFileSync(join(archive, 'keep'), 'utf8'), 'original', 'an existing archive is not overwritten');
+  assert.match(stderr.value, /archive output already exists/u);
+});
+
 test('backup command: selected legacy planning material is archived without colliding with current programme paths', async (t) => {
   const root = fixture(t);
   const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };

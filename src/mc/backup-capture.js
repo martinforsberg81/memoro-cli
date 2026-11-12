@@ -16,6 +16,16 @@ const digest = (members) => createHash('sha256').update(JSON.stringify(members.m
  */
 export function createProgrammeBackup(selection, output, { env = process.env, id, inventory = inventoryProgrammeTree, create = createArchive, begin = beginBackup, status = backupStatus, resume = resumeBackup } = {}) {
   if (!isAbsolute(output)) throw new Error('backup output must be an absolute path');
+  // Reject a known occupied destination before acquiring the durable lifecycle
+  // fence. A failed publication must not strand otherwise runnable work just
+  // because the caller selected an archive path that already exists (including
+  // a dangling symlink, which existsSync intentionally does not report).
+  try {
+    lstatSync(output);
+    throw new Error(`archive output already exists: ${output}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   const transaction = begin(selection, { env, ...(id ? { id } : {}) });
   const pending = status(transaction.id, { env });
   if (pending.pending_writers.length) {
