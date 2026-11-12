@@ -496,6 +496,10 @@ function writeLoginAgent(paths, deps) {
  */
 function takeOver({ state, argv, paths, deps }) {
   const { live } = state;
+  if (deps.platform === 'linux' && [state.held, state.held?.predecessor, ...(state.held?.drainers || [])]
+    .some((owner) => owner?.alive && owner.identityStatus === 'unknown')) {
+    return { ok: false, code: 1, lines: ['a current or draining runner has no verifiable Linux process identity; refusing takeover; inspect runner/runner.json'] };
+  }
   if (!canTakeOver(state)) {
     return {
       ok: false,

@@ -408,6 +408,15 @@ describe('mc run start', () => {
     assert.equal(out.ok, false);
     assert.deepEqual(fx.calls.spawned, [], 'legacy identity was guessed safe to take over');
     assert.match(out.lines.join('\n'), /no verifiable Linux process identity/u);
+
+    const stopped = fixture({ runner: { pid: 200, generation: 'B', bootId: 'boot', starttime: '200', takeover: true, drainers: [{ pid: 100, generation: 'legacy-A' }] }, live: [100, 200], stop: true });
+    Object.assign(stopped.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: (_root, transition) => transition() });
+    const before = stopped.store[paths.runner];
+    const update = await requestUpdate({ root: ROOT, force: true, deps: stopped.deps });
+    assert.equal(update.ok, false, 'explicit update takeover admitted work beside an unverifiable live drainer');
+    assert.deepEqual(stopped.calls.spawned, [], 'explicit update silently dropped the unknown drainer');
+    assert.equal(stopped.store[paths.runner], before);
+    assert.equal(stopped.store[paths.stop], 'stopped\n');
   });
 
   it('forced Linux stop signals every verified draining owner and preserves unknown legacy identities', async () => {
