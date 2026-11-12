@@ -254,6 +254,8 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   // Rediscover only these roots' named processes/scopes, including on failure.
   for (const root of roots) {
     owner(root);
+    root.runnerLog = text(join(root.work, 'runner/log/runner.log'));
+    root.finalOwner = json(join(root.work, 'runner/runner.json'));
     for (const name of (existsSync(join(root.work, 'observed')) ? readdirSync(join(root.work, 'observed')) : [])) {
       const pid = Number(name.replace('.json',''));
       if (!alive(pid)) continue;

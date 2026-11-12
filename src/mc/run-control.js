@@ -1147,7 +1147,7 @@ export async function handOver({ paths, deps, say, checkout = null, predecessor 
   return { ok: true, pid };
 }
 
-function workRootPath(paths) { return dirname(paths.dir); }
+function workRootPath(paths) { return dirname(paths.dir || dirname(paths.runner)); }
 
 /**
  * Fast-forward only, never a merge and never a reset — a checkout with local

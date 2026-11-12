@@ -11,7 +11,7 @@ import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
-import { mcCheckout } from '../../src/mc/run-control.js';
+import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -1771,6 +1771,71 @@ function linuxLifecycleFixture() {
   return f;
 }
 const linuxOwner = (pid, generation) => ({ pid, generation, started: null, bootId: 'boot', starttime: String(pid) });
+
+test('Linux real runLoop UPDATE publishes and admits its successor while held work completes', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242, 9001] });
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: async (_root, transition) => transition() });
+  let finish;
+  const finished = new Promise(resolve => { finish = resolve; });
+  let started;
+  const sessionStarted = new Promise(resolve => { started = resolve; });
+  f.answer = async call => { started(); f.files['/w/runner/UPDATE'] = ''; await finished; return okSession()(call); };
+  f.deps.sleep = () => new Promise(resolve => setImmediate(resolve));
+  let successor, published;
+  const write = f.deps.write;
+  f.deps.write = (path, value) => { write(path, value); if (path === '/w/runner/runner.json' && JSON.parse(value).pid === 9001) published = JSON.parse(value); };
+  f.deps.respawn = ({ env }) => {
+    successor = runLoop({ once: true, awake: false, deps: { ...f.deps, pid: 9001, env: { ...f.deps.env, ...env } } });
+    successor.finally(finish);
+    return 9001;
+  };
+  const running = runLoop({ deps: f.deps, awake: false });
+  await sessionStarted;
+  assert.equal(await running, 0);
+  assert.equal(await successor, 0, 'real Linux handover never admitted its successor');
+  assert.equal(published.pid, 9001);
+  assert.equal(published.predecessor.pid, 4242);
+  assert.deepEqual(published.drainers.map(p => p.pid), [4242]);
+  assert.equal(f.calls.sessions.length, 1, 'successor duplicated held work');
+});
+
+test('Linux direct --once holds ownership against competing manual and automatic claims', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242] });
+  let tail = Promise.resolve();
+  const gate = (_root, transition) => { const result = tail.then(transition); tail = result.catch(() => {}); return result; };
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: gate });
+  let entered, finish;
+  const sessionStarted = new Promise(resolve => { entered = resolve; });
+  const sessionEnd = new Promise(resolve => { finish = resolve; });
+  f.answer = async call => { entered(); await sessionEnd; return okSession()(call); };
+  const direct = runLoop({ once: true, deps: f.deps });
+  await sessionStarted;
+  const current = f.files['/w/runner/runner.json'];
+  let spawned = false;
+  const control = { ...f.deps, env: { ...f.deps.env, MC_RUN_SYSTEMD_CONTEXT: 'scope' }, spawn: () => { spawned = true; return 9001; } };
+  const [manual, boot] = await Promise.all([startRunner({ root: '/w', deps: control }), startRunner({ root: '/w', argv: ['--if-was-running'], deps: control })]);
+  assert.equal(manual.ok, false);
+  assert.equal(boot.pid, undefined);
+  assert.equal(spawned, false);
+  assert.equal(f.files['/w/runner/runner.json'], current);
+  finish();
+  assert.equal(await direct, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('Linux STOP after explicit direct claim remains sticky before its first work admission', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242] });
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }) });
+  let first = true;
+  f.deps.lifecycleLock = async (_root, transition) => {
+    const result = transition();
+    if (first) { first = false; f.files['/w/runner/STOP'] = 'after claim'; }
+    return result;
+  };
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+  assert.equal(f.files['/w/runner/STOP'], 'after claim');
+  assert.deepEqual(f.calls.sessions, [], 'explicit claim erased or ignored a later STOP');
+});
 
 test('Linux exit cleanup is gated, keeps lane-less live drainers and leaves later owners untouched', async () => {
   const f = linuxLifecycleFixture();
