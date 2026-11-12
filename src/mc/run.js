@@ -56,6 +56,7 @@
  * themselves live in run-plan.js.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -88,6 +89,7 @@ import {
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { offlineBackoffMs, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
+import { readLinuxIdentity, withLifecycleLock } from './linux-runner-service.js';
 import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
@@ -467,6 +469,9 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
 export function realDeps(env = process.env) {
   return {
     env,
+    platform: process.platform,
+    lifecycleLock: (root, transition) => withLifecycleLock(root, transition),
+    identity: process.platform === 'linux' ? (pid) => readLinuxIdentity(pid) : undefined,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
     git: (cwd, args, { env } = {}) => shGit(['-C', cwd, ...args], { env }),
@@ -2264,11 +2269,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // (`mc run --update` on a stopping runner); `takeover` says this runner
   // stands down when runner.json names another (`replaced`), which is what
   // makes taking over from it safe (run-control.js `takeOver`).
-  const markRunner = ({ predecessor = null, args = [] } = {}) => {
-    const dir = mcCheckout({ exists: deps.exists });
-    const commit = dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : null;
+  const markRunner = ({ predecessor = null, args = [], generation = null, commit: knownCommit = undefined } = {}) => {
+    const dir = knownCommit === undefined ? mcCheckout({ exists: deps.exists }) : null;
+    const commit = knownCommit === undefined && dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : knownCommit;
     marked = {
       pid, started: stamp(), ...(commit ? { commit } : {}), args, takeover: true, ...(predecessor ? { predecessor } : {}),
+      ...(generation ? { generation } : {}),
+      ...(deps.identity?.(pid) || {}),
     };
     writeJson(paths.runner, marked);
   };
@@ -2360,50 +2367,126 @@ export async function runLoop({
   // moment the pid exists so nobody sees no runner in the second this one
   // takes to load. What it names as the predecessor is the runner this one is
   // taking over from.
-  const ours = held?.pid === runner.pid;
-  const named = ours && held.predecessor?.alive ? held.predecessor : null;
-  if (ours) held = named ? { ...named, alive: true } : null;
+  let replacing = null;
+  if (deps.platform === 'linux') {
+    const workRootPath = workRoot(deps.env);
+    const reservation = deps.env?.MC_RUN_RESERVED_GENERATION;
+    // Local git inspection is intentionally outside the lifecycle gate.
+    const checkout = mcCheckout({ exists: deps.exists });
+    const commit = checkout ? gitOut(checkout, ['rev-parse', '--short', 'HEAD']) : null;
+    let admission;
+    try {
+      admission = await deps.lifecycleLock(workRootPath, () => {
+        const raw = deps.read(runner.paths.runner);
+        if (deps.exists(runner.paths.runner) && raw == null) {
+          runner.say('runner.json is unreadable — refusing Linux runner admission; inspect and repair runner/runner.json');
+          return { ok: false };
+        }
+        let parsed = null;
+        if (raw != null) {
+          try { parsed = JSON.parse(raw); } catch {
+            runner.say('runner.json is corrupt — refusing Linux runner admission; inspect and repair runner/runner.json');
+            return { ok: false };
+          }
+          if (!parsed || !Number.isInteger(Number(parsed.pid)) || Number(parsed.pid) <= 0) {
+            runner.say('runner.json is corrupt — refusing Linux runner admission; inspect and repair runner/runner.json');
+            return { ok: false };
+          }
+        }
+        const current = readRunner({ paths: runner.paths, read: deps.read, alive: isAlive, identity: deps.identity });
+        const ours = current?.pid === runner.pid;
+        const reservedChild = ours && typeof reservation === 'string' && current.generation === reservation;
+        if (reservation && !reservedChild) {
+          runner.say('runner spawn reservation no longer matches runner.json — refusing admission');
+          return { ok: false };
+        }
+        const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
+        const successor = current?.alive && Number.isInteger(successorOf) && successorOf === current.pid ? current : null;
+        if (current?.alive && current.identityStatus === 'unknown') {
+          runner.say(`runner pid ${current.pid} has no verifiable Linux process identity; refusing admission and takeover`);
+          return { ok: false };
+        }
+        if (current?.alive && !ours && !successor) {
+          runner.say(`a runner is already running — pid ${current.pid}${current.started ? `, started ${current.started}` : ''}`);
+          return { ok: false };
+        }
+        if (deps.exists(runner.paths.stop)) {
+          if (reservedChild || successor) {
+            runner.say(`STOP file present (${runner.paths.stop}) — this reserved start will not admit work`);
+            if (ours && current.generation === reservation) deps.remove(runner.paths.runner);
+            return { ok: false };
+          }
+          if (!current?.alive) {
+            deps.remove(runner.paths.stop);
+            runner.say('removed the STOP the last stop left');
+          }
+        }
+        if (current && !current.alive && !ours) {
+          runner.clearRunner();
+          runner.say(`cleared runner.json — the pid it named (${current.pid}) is gone`);
+        }
+        replacing = successor;
+        const predecessor = successor ? { pid: successor.pid, started: successor.started || null } : null;
+        runner.markRunner({ args, generation: reservation || randomUUID(), commit, ...(predecessor ? { predecessor } : {}) });
+        return { ok: true };
+      });
+    } catch (error) {
+      runner.say(`could not claim Linux runner lifecycle lock: ${error.message}`);
+      return 2;
+    }
+    if (!admission.ok) return 2;
+  } else {
+    const ours = held?.pid === runner.pid;
+    const named = ours && held.predecessor?.alive ? held.predecessor : null;
+    if (ours) held = named ? { ...named, alive: true } : null;
   // The one live holder that is no refusal: the runner that has just handed
   // over to this one, which says so in the environment it spawned this
   // process with (`handOver`, `takeOver`). It keeps finishing the sessions it
   // holds; this one starts at once beside it (ruling 28).
-  const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
-  const replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
+    const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
+    replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
   // STOP at start. A successor finding one was stopped during its own
   // handover, and obeys it. Anybody else finds the one the last stop left,
   // and removes it — the way `mc run start` always has, so a foreground
   // `mc run` and a background one are the same switch. Read straight from the
   // disk: `stopRequested` is sticky, and a STOP read here must not outlive
   // its removal.
-  if (deps.exists(runner.paths.stop)) {
-    if (Number.isInteger(successorOf) && successorOf > 0) {
+    if (deps.exists(runner.paths.stop)) {
+      if (deps.env?.MC_RUN_RESERVED_GENERATION && ours) {
+      runner.say(`STOP file present (${runner.paths.stop}) — this reserved start predates the stop and will not admit work`);
+        const latest = readRunner({ paths: runner.paths, read: deps.read, alive: isAlive, identity: deps.identity });
+        if (latest?.pid === runner.pid && latest.generation === deps.env.MC_RUN_RESERVED_GENERATION) deps.remove(runner.paths.runner);
+      return 2;
+    }
+      if (Number.isInteger(successorOf) && successorOf > 0) {
       runner.say(`STOP file present (${runner.paths.stop}) — a stop came during the handover; this runner does not start`);
       if (ours) deps.remove(runner.paths.runner);
       return 2;
     }
-    if (!held?.alive) {
+      if (!held?.alive) {
       deps.remove(runner.paths.stop);
       runner.say('removed the STOP the last stop left');
     }
-  }
-  if (held?.alive && !replacing) {
+    }
+    if (held?.alive && !replacing) {
     const stopping = deps.exists(runner.paths.stop);
     runner.say(`a runner is already ${stopping ? 'stopping' : 'running'} — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
     runner.say(stopping
       ? 'mc run start takes over from it at once · or wait for it to exit'
       : 'mc run stop ends it · mc run --update restarts it on the newest code');
     return 2;
-  }
+    }
   // A file naming a pid that is gone is a killed runner's leftovers, not a
   // reason nothing can start: it is cleared and said, the way `mc run start`
   // clears it. `clearRunner()` takes the `current-<repo>.json` files with it,
   // which are the same runner's other leftovers and would otherwise draw a
   // session that has not been running for hours.
-  if (held && !replacing && !ours) {
+    if (held && !replacing && !ours) {
     runner.clearRunner();
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
+    }
   }
-  runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
+  if (deps.platform === 'linux') runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
   if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the sessions it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
@@ -2419,7 +2502,7 @@ export async function runLoop({
       ? `staying awake (caffeinate ${held.flags.join(' ')} pid ${held.pid}) — ${held.note}`
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
-  runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
+  if (deps.platform !== 'linux') runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
   let stopCapacityTicker = () => {};
   // A handover is the one exit that must not clear runner.json: the runner it
   // handed to has already written its own, and removing it on the way out

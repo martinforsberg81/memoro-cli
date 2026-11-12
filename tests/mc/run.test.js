@@ -1666,6 +1666,23 @@ test('UPDATE file: the successor starts beside its live predecessor, and runner.
   assert.equal(f.calls.sessions.length, 1, 'the successor started the goal its predecessor holds');
 });
 
+test('a STOP after reserved child publication stays sticky and prevents admission', async () => {
+  const f = fixture();
+  const owner = { pid: 4242, generation: 'reserved-g1', started: '2026-08-29T10:00:00Z' };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(owner)}\n`;
+  f.files['/w/runner/STOP'] = 'stopped\n';
+  const code = await runLoop({ deps: {
+    ...f.deps,
+    platform: 'linux',
+    lifecycleLock: (_root, transition) => transition(),
+    env: { ...f.deps.env, MC_RUN_RESERVED_GENERATION: owner.generation },
+  } });
+  assert.equal(code, 2);
+  assert.equal(f.files['/w/runner/STOP'], 'stopped\n', 'the reserved child cleared a later STOP');
+  assert.equal(f.files['/w/runner/runner.json'], undefined, 'the rejected reservation remains published');
+  assert.deepEqual(f.calls.sessions, [], 'a stopped reserved child admitted work');
+});
+
 test('a successor lane waits while its predecessor holds the lane file, skips that goal, then starts it', async () => {
   const f = goalFixture({ a: {}, b: {} }, { livePids: [4242, 7000] });
   f.deps.laneCount = () => ({ lanes: 2 });

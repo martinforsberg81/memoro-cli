@@ -50,6 +50,7 @@
  * with no processes, no files and no `ps`.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -62,6 +63,7 @@ import { mergesPath, parseQueue } from './merge-queue.js';
 import { ageWords } from './page-cache.js';
 import { mcHome, workRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
+import { installBootAdapter, linuxIdentityStatus, readLinuxIdentity, realLinuxServiceDeps, scopeCommand, SYSTEMD_CONTEXT, withLifecycleLock } from './linux-runner-service.js';
 
 /** How long a forced stop waits for a signal to be obeyed before the next one. */
 export const FORCE_WAIT_MS = 2000;
@@ -101,6 +103,7 @@ export function controlPaths(root) {
 export function realControlDeps(env = process.env) {
   return {
     env,
+    platform: process.platform,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
     exists: existsSync,
@@ -109,6 +112,7 @@ export function realControlDeps(env = process.env) {
     remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
     alive: pidAlive,
+    identity: process.platform === 'linux' ? (pid) => readLinuxIdentity(pid) : undefined,
     kill: (pid, signal) => process.kill(pid, signal),
     ps: (args) => {
       const r = spawnSync('ps', args, { encoding: 'utf8' });
@@ -122,6 +126,10 @@ export function realControlDeps(env = process.env) {
       child.unref();
       return child.pid ?? null;
     },
+    linuxService: realLinuxServiceDeps(env),
+    installBoot: (options) => installBootAdapter(options),
+    lifecycleLock: (root, transition) => withLifecycleLock(root, transition),
+    systemdRun: (args) => spawnSync('systemd-run', args, { encoding: 'utf8', timeout: 15_000 }),
     git: (cwd, args) => {
       const r = runGit(undefined, ['-C', cwd, ...args]);
       return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
@@ -206,7 +214,7 @@ export function agentPlist({ execPath, entry, env = {}, log }) {
  * that was killed, or one that died — and the callers say so rather than
  * treating it as nothing.
  */
-export function readRunner({ paths, read, alive }) {
+export function readRunner({ paths, read, alive, identity = null }) {
   let value = null;
   try { value = JSON.parse(read(paths.runner) ?? ''); } catch { return null; }
   const pid = Number(value?.pid);
@@ -214,17 +222,25 @@ export function readRunner({ paths, read, alive }) {
   // A successor names the runner it took over from while that one still
   // finishes the steps it held (run.js `runLoop`, ruling 28).
   const before = Number(value.predecessor?.pid);
+  const processFact = (record, pid) => {
+    const isAlive = alive(pid);
+    const identityStatus = identity ? linuxIdentityStatus(record, identity(pid), isAlive) : undefined;
+    return { alive: identityStatus === 'stale' ? false : isAlive, ...(identityStatus ? { identityStatus } : {}) };
+  };
   const predecessor = Number.isInteger(before) && before > 0
-    ? { pid: before, started: value.predecessor.started || null, alive: alive(before) }
+    ? { pid: before, started: value.predecessor.started || null, ...(value.predecessor.bootId ? { bootId: value.predecessor.bootId } : {}), ...(value.predecessor.starttime ? { starttime: String(value.predecessor.starttime) } : {}), ...processFact(value.predecessor, before) }
     : null;
+  const fact = processFact(value, pid);
   return {
     pid, started: value.started || null, ...(value.commit ? { commit: value.commit } : {}),
+    ...(value.generation ? { generation: String(value.generation) } : {}),
+    ...(value.bootId ? { bootId: value.bootId } : {}), ...(value.starttime ? { starttime: String(value.starttime) } : {}),
     ...(Array.isArray(value.args) ? { args: value.args.map(String) } : {}),
     // A runner that reads runner.json for a successor's pid, and so stands
     // down when one appears (run.js `replaced`). One that predates it would
     // go on taking steps beside the runner that took over from it.
     ...(value.takeover ? { takeover: true } : {}),
-    ...(predecessor ? { predecessor } : {}), alive: alive(pid),
+    ...(predecessor ? { predecessor } : {}), ...fact,
   };
 }
 
@@ -241,7 +257,7 @@ export function readRunner({ paths, read, alive }) {
  * runner.json when it is alive, else the predecessor it names.
  */
 export function runnerState({ paths, deps }) {
-  const held = readRunner({ paths, read: deps.read, alive: deps.alive });
+  const held = readRunner({ paths, read: deps.read, alive: deps.alive, identity: deps.identity });
   const finishing = held?.predecessor?.alive ? held.predecessor : null;
   const live = held?.alive ? held : finishing;
   const stop = deps.exists(paths.stop);
@@ -291,41 +307,65 @@ function clearCurrents(paths, deps) {
  */
 export async function startRunner({ argv = [], root = null, deps = realControlDeps() } = {}) {
   const paths = controlPaths(root ?? workRoot(deps.env));
-  const state = runnerState({ paths, deps });
-  const { held, live } = state;
-  if (argv.includes(IF_WAS_RUNNING)) {
-    const why = notRestarted(state, paths, deps);
-    if (why) return { ok: true, code: 0, lines: why };
-    argv = argv.filter((arg) => arg !== IF_WAS_RUNNING);
-    if (!argv.length && held.args) argv = held.args;
+  const workRootPath = paths.dir.replace(/\/runner$/u, '');
+  if (deps.platform === 'linux' && !deps.env?.[SYSTEMD_CONTEXT] && !argv.includes(IF_WAS_RUNNING)) {
+    const args = scopeCommand({ root: paths.dir.replace(/\/runner$/u, ''), execPath: deps.execPath, entry: deps.entry, argv, deps: deps.linuxService });
+    const scoped = deps.systemdRun?.(args);
+    if (!scoped || scoped.status !== 0) {
+      return { ok: false, code: 1, lines: [`could not start a managed systemd user scope${scoped?.stderr ? `: ${scoped.stderr.trim()}` : ''}`] };
+    }
+    return { ok: true, code: 0, lines: (scoped.stdout || '').trim().split('\n').filter(Boolean).length
+      ? (scoped.stdout || '').trim().split('\n').filter(Boolean)
+      : ['runner start command completed in a managed systemd scope'] };
   }
-  if (state.kind === 'running' || state.kind === 'draining') {
-    return {
-      ok: false,
-      code: 2,
-      lines: [
-        `a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`,
-        ...progressLines(state, paths, deps),
-        state.kind === 'draining'
-          ? 'it hands over to a new runner on its own — nothing to start'
-          : 'mc run --update restarts it on the newest code · mc run stop stops it',
-      ],
-    };
+  const automatic = argv.includes(IF_WAS_RUNNING);
+  const transition = () => {
+    const state = runnerState({ paths, deps });
+    const { held, live } = state;
+    if (deps.platform === 'linux' && held?.alive && held.identityStatus === 'unknown') {
+      return { ok: false, code: 1, lines: [`runner pid ${held.pid} has no verifiable Linux process identity; refusing takeover; inspect runner/runner.json`] };
+    }
+    if (automatic) {
+      const why = notRestarted(state, paths, deps);
+      if (why) return { ok: true, code: 0, lines: why };
+      argv = argv.filter((arg) => arg !== IF_WAS_RUNNING);
+      if (!argv.length && held.args) argv = held.args;
+    }
+    if (state.kind === 'running' || state.kind === 'draining') {
+      return {
+        ok: false, code: 2,
+        lines: [
+          `a runner is already running — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`,
+          ...progressLines(state, paths, deps),
+          state.kind === 'draining' ? 'it hands over to a new runner on its own — nothing to start' : 'mc run --update restarts it on the newest code · mc run stop stops it',
+        ],
+      };
+    }
+    if (live) return takeOver({ state, argv, paths, deps });
+    const lines = [];
+    if (held) {
+      deps.remove(paths.runner);
+      clearCurrents(paths, deps);
+      lines.push(`cleared runner.json — the pid it named (${held.pid}) is gone`);
+    }
+    if (state.stop) {
+      deps.remove(paths.stop);
+      lines.push('removed the STOP the last stop left');
+    }
+    deps.remove(paths.update);
+    return spawnRunner({ argv, paths, deps, lines });
+  };
+  let result;
+  try {
+    result = deps.platform === 'linux' ? await deps.lifecycleLock(workRootPath, transition) : transition();
+  } catch (error) {
+    return { ok: false, code: 1, lines: [`could not claim the runner safely: ${error.message}`] };
   }
-  if (live) return takeOver({ state, argv, paths, deps });
-
-  const lines = [];
-  if (held) {
-    deps.remove(paths.runner);
-    clearCurrents(paths, deps);
-    lines.push(`cleared runner.json — the pid it named (${held.pid}) is gone`);
+  if (result.ok && result.pid && deps.platform === 'linux' && !automatic) {
+    const service = deps.installBoot?.({ root: workRootPath, execPath: deps.execPath, entry: deps.entry, deps: deps.linuxService });
+    if (service) result.lines.push(...service.lines);
   }
-  if (state.stop) {
-    deps.remove(paths.stop);
-    lines.push('removed the STOP the last stop left');
-  }
-  deps.remove(paths.update);
-  return spawnRunner({ argv, paths, deps, lines });
+  return result;
 }
 
 /**
@@ -355,6 +395,7 @@ function notRestarted(state, paths, deps) {
  * (run.js `runLoop`).
  */
 function spawnRunner({ argv, paths, deps, lines, predecessor = null }) {
+  const reservation = deps.platform === 'linux' ? (deps.generation?.() || randomUUID()) : null;
   let fd = null;
   try { fd = deps.openLog(paths.log); } catch (error) {
     return { ok: false, code: 1, lines: [...lines, `could not open ${paths.log} — ${error?.message || error}`] };
@@ -369,14 +410,21 @@ function spawnRunner({ argv, paths, deps, lines, predecessor = null }) {
     bin: deps.execPath,
     args: [deps.entry, 'run', ...argv],
     stdio: ['ignore', 'ignore', fd],
-    ...(predecessor ? { env: { MC_RUN_SUCCESSOR_OF: String(predecessor.pid) } } : {}),
+    ...(predecessor || deps.platform === 'linux' ? { env: {
+      ...(predecessor ? { MC_RUN_SUCCESSOR_OF: String(predecessor.pid) } : {}),
+      ...(reservation ? { MC_RUN_RESERVED_GENERATION: reservation } : {}),
+    } } : {}),
   });
   if (!pid) return { ok: false, code: 1, lines: [...lines, 'the runner did not start'] };
+  const identity = reservation ? deps.identity?.(pid) : null;
+  if (reservation && !identity) return { ok: false, code: 1, lines: [...lines, 'could not verify the spawned Linux runner identity; refusing to publish ownership'] };
   deps.write(paths.runner, `${JSON.stringify({
     pid,
     started: stampOf(deps.now()),
     args: argv,
-    ...(predecessor ? { predecessor: { pid: predecessor.pid, started: predecessor.started || null } } : {}),
+    ...(reservation ? { generation: reservation } : {}),
+    ...(identity ? identity : {}),
+    ...(predecessor ? { predecessor: { pid: predecessor.pid, started: predecessor.started || null, ...(predecessor.bootId ? { bootId: predecessor.bootId } : {}), ...(predecessor.starttime ? { starttime: predecessor.starttime } : {}) } } : {}),
   }, null, 2)}\n`);
   lines.push(`runner started — pid ${pid}${argv.length ? ` (mc run ${argv.join(' ')})` : ''}`);
   lines.push(`log: ${paths.log}`);
@@ -473,7 +521,7 @@ function progressLines(state, paths, deps) {
  */
 export async function stopRunner({ force = false, root = null, deps = realControlDeps() } = {}) {
   const paths = controlPaths(root ?? workRoot(deps.env));
-  const held = readRunner({ paths, read: deps.read, alive: deps.alive });
+  const held = readRunner({ paths, read: deps.read, alive: deps.alive, identity: deps.identity });
   const lines = [];
   // A second stop keeps the first one's time: the stop line says how long the
   // runner has been on its way out, and that began with the first.

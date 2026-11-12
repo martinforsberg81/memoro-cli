@@ -217,6 +217,45 @@ describe('mc run start', () => {
     assert.ok(!(`${paths.dir}/current-memoro.json` in fx.store), 'the ghost step is still there');
     assert.ok(out.lines.some((line) => /cleared runner\.json/u.test(line)));
   });
+
+  it('re-enters an explicit Linux background start in a unique systemd scope', async () => {
+    const fx = fixture();
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_WORK_ROOT = ROOT;
+    fx.deps.linuxService = { canonicalRoot: (path) => path, uuid: () => 'test-scope-id' };
+    fx.deps.systemdRun = (args) => { fx.calls.scope = args; return { status: 0, stdout: 'scope completed\n' }; };
+    const out = await startRunner({ argv: ['--no-merge'], root: ROOT, deps: fx.deps });
+    assert.deepEqual(out.lines, ['scope completed']);
+    assert.ok(fx.calls.scope.includes('--scope'));
+    assert.ok(fx.calls.scope.includes('--expand-environment=no'));
+    assert.ok(fx.calls.scope.includes('--setenv=MC_RUN_SYSTEMD_CONTEXT=scope'));
+    assert.equal(fx.calls.spawned.length, 0, 'the outer SSH command spawned outside its scope');
+  });
+
+  it('does not recurse in an mc-owned Linux scope and reports boot adapter outcomes', async () => {
+    const fx = fixture();
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.identity = (pid) => ({ bootId: 'test-boot', starttime: String(pid) });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.installBoot = ({ root }) => ({ ok: true, ready: false, unit: 'root-unit', lines: [`Linger=no at ${root}; loginctl enable-linger`] });
+    fx.deps.systemdRun = () => { throw new Error('nested scope'); };
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.equal(fx.calls.spawned.length, 1);
+    assert.match(out.lines.join('\n'), /Linger=no.*loginctl enable-linger/u);
+  });
+
+  it('refuses an unavailable Linux scope rather than claiming a managed start', async () => {
+    const fx = fixture();
+    fx.deps.platform = 'linux';
+    fx.deps.linuxService = { canonicalRoot: (path) => path, uuid: () => 'test-scope-id' };
+    fx.deps.systemdRun = () => ({ status: 1, stderr: 'user manager unavailable' });
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, false);
+    assert.match(out.lines.join('\n'), /user manager unavailable/u);
+    assert.equal(fx.calls.spawned.length, 0);
+  });
 });
 
 describe('mc run start --if-was-running', () => {
