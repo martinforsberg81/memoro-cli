@@ -34,7 +34,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
 import { addPr, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
@@ -46,6 +46,7 @@ import { run as merge } from './merge.js';
 import { writerRole } from './goal.js';
 import { commandUsage } from '../command-help.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
+import { admitWriter } from '../programme-lifecycle.js';
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
@@ -91,6 +92,20 @@ export async function run(argv, deps = {}) {
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
 
+  const ownerNames = new Set();
+  if (goal?.name) ownerNames.add(goal.name.split('/')[0]);
+  const programmeHome = resolve(deps.home || programsHome(env));
+  const fromProgrammeHome = relative(programmeHome, resolve(cwd));
+  if (fromProgrammeHome && fromProgrammeHome !== '..' && !fromProgrammeHome.startsWith(`..${sep}`) && !fromProgrammeHome.startsWith(sep)) {
+    ownerNames.add(fromProgrammeHome.split(sep)[0]);
+  }
+  let writer = null;
+  if (ownerNames.size) {
+    try { writer = (deps.lifecycle || admitWriter)([...ownerNames], { env, name: 'mc publish' }); }
+    catch (error) { stderr.write(`mc: publish refused: ${error.message}\n`); return 1; }
+  }
+
+  try {
   const repo = repoName(git(['remote', 'get-url', 'origin']), root);
   const pushed = remoteHead !== localHead;
   if (pushed) {
@@ -163,6 +178,9 @@ export async function run(argv, deps = {}) {
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
   if (!queue) return 0;
   return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
+  } finally {
+    writer?.release();
+  }
 }
 
 /**

@@ -214,6 +214,18 @@ describe('mc publish', () => {
       assert.match(wrong.out.stderr, /--goal ios\/nope is not a goal/u);
       assert.deepEqual(wrong.out.pushed, []);
     });
+
+    it('a held programme refuses the publication before push or GitHub mutation', async () => {
+      const f = withGoal({ deps: { lifecycle: (programmes, options) => {
+        assert.deepEqual(programmes, ['ios']);
+        assert.equal(options.name, 'mc publish');
+        throw new Error('programme ios is draining');
+      } } });
+      assert.equal(await run(['--goal', 'ios/asc'], f.deps), 1);
+      assert.match(f.out.stderr, /publish refused: programme ios is draining/u);
+      assert.deepEqual(f.out.pushed, []);
+      assert.deepEqual(f.out.gh, []);
+    });
   });
 
   it('finds the open pull request rather than opening a second, edits it only when asked, and skips a push the remote already has', async () => {
