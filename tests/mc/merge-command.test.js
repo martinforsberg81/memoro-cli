@@ -16,7 +16,9 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
 import { roundLogPath } from '../../src/mc/repo-round-log.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 let root = null;
 let home = null;
@@ -310,6 +312,35 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
       }),
     };
   }
+
+  function selectedOwner(env) {
+    const dir = join(root, 'programs', 'selected', 'goals', 'goal');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ prs: ['memoro-cli#671'] }));
+    beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000051' });
+  }
+
+  it('--admin refuses a held goal owner before any GitHub read or irreversible merge', async () => {
+    const env = { MC_WORK_ROOT: root, MC_HOME: home };
+    selectedOwner(env);
+    const d = adminRun();
+    const code = await d.run();
+    assert.equal(code, 1);
+    assert.deepEqual(d.merges(), []);
+    assert.match(d.out.err, /cannot admit direct merge of memoro-cli#671: programme selected is draining/u);
+  });
+
+  it('--admin also resolves a programme through a queued job.goal when the goal reference is absent', async () => {
+    const env = { MC_WORK_ROOT: root, MC_HOME: home };
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(root), JSON.stringify([{ repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 671,
+      goal: { programme: 'selected', goal: 'goal', dir: '/stale/path' }, state: 'queued' }]));
+    beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000053' });
+    const d = adminRun();
+    assert.equal(await d.run(), 1);
+    assert.deepEqual(d.merges(), []);
+    assert.match(d.out.err, /programme selected is draining/u);
+  });
 
   it('an open pull request: squashed, pinned to its head, the entry gone', async () => {
     writeQueue([queued(), queued({ pr: 672, since: '2026-10-24T11:05:00Z' })]);

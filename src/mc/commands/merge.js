@@ -26,6 +26,9 @@ import { scanArgs } from './flags.js';
 import { gate, parseMergeArgs, resolveRepoPath } from './repo.js';
 import { repoNameOf } from '../repos.js';
 import { commandUsage } from '../command-help.js';
+import { goalReferences } from '../goals.js';
+import { programsHome } from '../paths.js';
+import { admitWriter } from '../programme-lifecycle.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -62,8 +65,14 @@ export async function run(argv, deps = {}) {
     if (!docsOnly(files)) return (deps.gate || gate)(opts, { ...deps, stdout, stderr, resolveRepo: async () => repoPath });
     stderr.write(`mc: #${opts.pr} changes only documents under docs/ (${files.length} file${files.length === 1 ? '' : 's'}, no script) — landing it as mc merge --docs, now, after the tests that read documents\n`);
   }
-  const report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh,
-    measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
+  let lease;
+  try { lease = admitPullRequestWriter(repoPath, opts.pr, deps); }
+  catch (error) { stderr.write(`mc: cannot admit direct merge of ${repoNameOf(repoPath)}#${opts.pr}: ${error.message}\n`); return 1; }
+  let report;
+  try {
+    report = await (deps.runDocsMerge || runDocsMerge)({ repoPath, pr: opts.pr, gh: deps.gh,
+      measure: deps.measure, onProgress: (m) => stderr.write(`mc: ${m}\n`) });
+  } finally { lease?.release(); }
   // The body is not kept in the round log.
   delete report.body;
   report.holder = currentHolder();
@@ -90,6 +99,15 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
     stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
     return 1;
   }
+  let lease;
+  try { lease = admitPullRequestWriter(repoPath, opts.pr, deps); }
+  catch (error) { stderr.write(`mc: cannot admit direct merge of ${repoNameOf(repoPath)}#${opts.pr}: ${error.message}\n`); return 1; }
+  try { return await runAdminAdmitted(opts, { stdout, stderr, ...deps, repoPath }); }
+  finally { lease?.release(); }
+}
+
+async function runAdminAdmitted(opts, { stdout, stderr, ...deps }) {
+  const repoPath = deps.repoPath;
   const gh = deps.gh || ((args) => runTool('gh', args, { cwd: repoPath }));
   const number = String(opts.pr);
   const view = ghJson(await gh(['pr', 'view', number, '--json', 'number,title,state,headRefOid,headRefName,baseRefName,body,mergeCommit']));
@@ -157,6 +175,37 @@ async function runAdmin(opts, { stdout, stderr, ...deps }) {
   stdout.write(`mc: merged #${opts.pr} into ${view.baseRefName} as ${sha7(sha)} (squash, --admin: no gate round)\n`);
   if (queue === 'landing') stdout.write(`mc: #${opts.pr} is landing in the merger's queue — the merger's round for it stops within a minute and books it\n`);
   return 0;
+}
+
+/**
+ * Direct merge routes have no merger round to provide admission. Resolve every
+ * active and archived goal reference before the first remote operation, and
+ * retain a selected programme's writer lease until outcome reconciliation.
+ * A malformed local ownership census fails closed rather than making a PR
+ * appear ownerless.
+ */
+function admitPullRequestWriter(repoPath, pr, deps) {
+  const env = deps.env || process.env;
+  const references = (deps.goalReferences || goalReferences)({ home: programsHome(env) });
+  if (!Array.isArray(references) || references.some((goal) => goal.problems?.length)) {
+    throw new Error('cannot establish complete pull-request programme ownership');
+  }
+  const repo = repoNameOf(repoPath);
+  let queued;
+  try {
+    queued = JSON.parse(readFileSync(mergesPath(deps.root || workRoot(env)), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') queued = [];
+    else throw new Error('cannot establish complete merge-queue ownership');
+  }
+  if (!Array.isArray(queued)) throw new Error('cannot establish complete merge-queue ownership');
+  const queueOwners = queued.filter((job) => Number(job?.pr) === Number(pr)
+    && (job.repo === repo || (job.repo_path && repoNameOf(job.repo_path) === repo)))
+    .map((job) => job.goal?.programme).filter((programme) => typeof programme === 'string');
+  const programmes = [...new Set([...references
+    .filter((goal) => (goal.prs || []).some((item) => item.repo === repo && item.pr === Number(pr)))
+    .map((goal) => goal.programme), ...queueOwners])];
+  return programmes.length ? (deps.lifecycle || admitWriter)(programmes, { env, name: `direct merge ${repo}#${pr}` }) : null;
 }
 
 /** The JSON of a `gh` answer that succeeded, or null: an answer that failed is no answer. */

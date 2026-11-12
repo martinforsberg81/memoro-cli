@@ -41,6 +41,15 @@ it; the state is read again inside the existing goal-worktree removal lock.
 This guard protects goal checkout bytes and branch registration only, not
 other tidy target kinds or complete backup capture.
 
+The direct irreversible `mc merge <repo> <pr> --admin` and documents-only
+`mc merge` routes have no merger round to own admission. Before their first
+GitHub operation, they inspect active and archived goal PR references; an
+owning programme must admit a writer lease, retained through remote merge and
+local outcome reconciliation. A malformed goal ownership census fails closed.
+This is per referenced PR and does not authorize a held programme through
+`--admin`. Ordinary queued merge-round admission remains separately owned by
+the merger and repository-merge paths described in [mc-merge.md](mc-merge.md).
+
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.
 Archive files are fsynced before close; payload, bundle and archive directories

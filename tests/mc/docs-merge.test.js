@@ -14,6 +14,8 @@ import { describe, it } from 'node:test';
 
 import { docsMergeLines, firstNonDoc, firstScript, runDocsMerge } from '../../src/mc/docs-merge.js';
 import { run } from '../../src/mc/commands/merge.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
+import { goalJson } from './_helpers/goal-file.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
 function stubGh({ files, state = 'OPEN', isDraft = false, mergeable = 'MERGEABLE', unknownFirst = 0, head = 'aaaa111', headAfter = head, branch = 'plan/mc', body = '' }) {
@@ -195,6 +197,28 @@ describe('mc merge --docs, the verb', () => {
     });
     assert.equal(code, 0);
     assert.match(out, /merged #12 into main/u);
+  });
+
+  it('a held programme owning the PR is refused before the direct docs merge', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'mc-merge-docs-held-'));
+    try {
+      const env = { MC_WORK_ROOT: work };
+      const dir = join(work, 'programs', 'selected', 'goals', 'goal');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'GOAL.json'), goalJson({ prs: ['memoro-cli#12'] }));
+      beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000052' });
+      const stub = stubGh({ files: ['docs/a.md'] });
+      const calls = [];
+      const gh = (args) => { calls.push(args); return stub.gh(args); };
+      let err = '';
+      const code = await run(['memoro-cli', '12', '--docs'], {
+        stdout: { write() {} }, stderr: { write: (text) => { err += text; } }, env,
+        gh, resolveRepoPath: async () => '/repos/memoro-cli', measure: measureGreen,
+      });
+      assert.equal(code, 1);
+      assert.match(err, /cannot admit direct merge of memoro-cli#12: programme selected is draining/u);
+      assert.equal(calls.some((args) => args[1] === 'merge'), false);
+    } finally { rmSync(work, { recursive: true, force: true }); }
   });
 
   describe('without --docs, a pull request of documents only is routed here', () => {
