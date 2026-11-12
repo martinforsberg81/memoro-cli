@@ -24,6 +24,11 @@ still converted; it is not reported as a dropped or failed goal. A goal-bound
 `mc ask` checks lifecycle admission at the eventual goal write after the model
 response; a hold that begins during that response leaves the goal files
 unchanged and reports that the answer was not recorded in the goal.
+`mc plan <programme> --archive` also takes a programme lease before its
+preflight fetch and retains it through document merging, worktree release,
+restricted-README reconciliation and the final directory move. A programme
+already draining or held is refused before those side effects. This guard does
+not make other goal/programme cleanup routes safe by implication.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.

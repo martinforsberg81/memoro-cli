@@ -47,6 +47,7 @@ import { listProgrammes } from './brief-collect.js';
 import { FINISHED, programsGoals } from './goals.js';
 import { archivedProgramsHome, programsHome, restrictedProgrammeDir } from './paths.js';
 import { landingNote } from './run-plan.js';
+import { admitWriter } from './programme-lifecycle.js';
 import { isProgrammeArea } from './work-area.js';
 
 /** `path` with the home directory folded to `~`, as every line here prints it. */
@@ -127,7 +128,18 @@ export function archiveVerdict({
  *   release(name, { env, dryRun }) → `releaseWorkArea`'s result
  * Returns the exit code.
  */
-export async function archiveProgramme(programme, { repos, env = process.env, areaName, areaPath, stdout, stderr, deps, now = () => new Date() }) {
+export async function archiveProgramme(programme, options) {
+  const env = options.env || process.env;
+  const lease = (options.lifecycle || admitWriter)([programme], { env, name: 'programme archive' });
+  try {
+    return await archiveProgrammeAdmitted(programme, { ...options, env });
+  } finally {
+    lease.release();
+  }
+}
+
+/** All checks and side effects run under the programme lease held by the exported boundary. */
+async function archiveProgrammeAdmitted(programme, { repos, env = process.env, areaName, areaPath, stdout, stderr, deps, now = () => new Date() }) {
   const say = (line) => stdout.write(`mc: ${line}\n`);
   const gitOut = (cwd, args) => {
     const r = deps.git(cwd, args);

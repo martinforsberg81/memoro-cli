@@ -22,6 +22,7 @@ import {
 import { formatRow, logRows } from '../../src/mc/archive-plan.js';
 import { run } from '../../src/mc/commands/plan.js';
 import { renderGoal } from '../../src/mc/goals.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
 
 function git(cwd, args) {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -229,6 +230,25 @@ describe('removedKind', () => {
 });
 
 describe('archiveProgramme', () => {
+  it('refuses a held programme before any fetch, docs merge or planning cleanup', async () => {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    writeFileSync(join(area, 'notes.md'), 'keep\n');
+    const before = snapshot(area);
+    const { deps, calls } = stubs();
+    let gitCalls = 0;
+    deps.git = (...args) => { gitCalls += 1; return git(...args); };
+    beginBackup(['gone'], { env: fx.env, id: '00000000-0000-4000-8000-000000000009' });
+
+    await assert.rejects(archiveProgramme('gone', args(fx, deps, { areaName: 'programs/gone', areaPath: area })), /draining/u);
+    assert.equal(gitCalls, 0, 'even the preflight fetch is beyond the admission boundary');
+    assert.deepEqual(calls.prs, []);
+    assert.deepEqual(calls.merges, []);
+    assert.deepEqual(calls.release, []);
+    assert.deepEqual(snapshot(area), before);
+  });
+
   it('removes the directory on main with one closed row, then releases the planning session', async () => {
     const fx = fixture();
     mkdirSync(join(fx.root, 'area'));
