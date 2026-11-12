@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createArchive, inspectArchive, restoreArchive, validateMemberPath, verifyArchive } from '../../src/mc/backup-archive.js';
 import { run as backupCommand } from '../../src/mc/commands/backup.js';
 import { admitWriter, beginBackup, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
+import { inventoryProgrammeTree } from '../../src/mc/backup-inventory.js';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -15,6 +16,35 @@ function fixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('backup inventory: reads typed local bytes and links without following Git administration', (t) => {
+  const root = fixture(t);
+  const programme = join(root, 'programme');
+  mkdirSync(join(programme, 'nested', '.git'), { recursive: true });
+  mkdirSync(join(programme, 'nested', 'docs'), { recursive: true });
+  const bytes = Buffer.from([0, 255, 9]);
+  writeFileSync(join(programme, 'nested', 'docs', 'evidence.bin'), bytes, { mode: 0o751 });
+  symlinkSync('docs/evidence.bin', join(programme, 'nested', 'latest'));
+  writeFileSync(join(programme, 'nested', '.git', 'config'), 'must not be archived');
+
+  const inventory = inventoryProgrammeTree(programme, 'programme');
+  assert.deepEqual(inventory.repositories, [{ path: 'programme/nested', admin: join(programme, 'nested', '.git') }]);
+  assert.deepEqual(inventory.members.map(({ path, type }) => [path, type]), [
+    ['programme/nested', 'directory'],
+    ['programme/nested/docs', 'directory'],
+    ['programme/nested/docs/evidence.bin', 'file'],
+    ['programme/nested/latest', 'symlink'],
+  ]);
+  const file = inventory.members.find((member) => member.path.endsWith('evidence.bin'));
+  assert.deepEqual(file.bytes, bytes);
+  assert.equal(file.sha256, digest(bytes));
+  assert.equal(file.mode, 0o751);
+  assert.equal(inventory.members.find((member) => member.type === 'symlink').target, 'docs/evidence.bin');
+  assert.equal(inventory.members.some((member) => member.path.includes('.git')), false);
+  const rootAlias = join(root, 'programme-alias');
+  symlinkSync(programme, rootAlias);
+  assert.throws(() => inventoryProgrammeTree(rootAlias, 'programme'), /not a real directory/u);
+});
 
 test('backup archive: atomically writes a private checksummed archive and verifies file and link records', (t) => {
   const root = fixture(t);
