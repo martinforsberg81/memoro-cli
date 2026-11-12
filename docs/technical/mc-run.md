@@ -96,7 +96,11 @@ alongside the immediate predecessor; session lanes held by all live drainers
 remain excluded and count against the configured total. STOP is written and
 the full owner snapshot taken under the gate; forced signals are identity
 checked outside it and cleanup is conditional on the same owner generation.
-No OS shutdown hook writes STOP.
+Loss of an admitted owner's generation permanently revokes its authority,
+even if its successor is dead or the state is missing/corrupt. An exiting or
+STOP-rejected owner retains all live draining identities, including those
+without lane files; a new claim over a dead newest owner inherits them and
+never clears unrelated live current files. No OS shutdown hook writes STOP.
 
 The opt-in `scripts/check-linux-runner-service.mjs` exercises the delivered
 unit, scope, gate and lifecycle against an isolated real user manager and
@@ -105,6 +109,54 @@ reboot test. Before real workloads, TC still requires interactive lingering
 setup and separate no-login reboot checks after a running start and after a
 deliberate STOP. Neither the deterministic runner gate nor the opt-in check
 establishes those operational acceptance results.
+
+Run the isolated software check from the judged source root on TC:
+
+```sh
+/home/martin/.local/bin/node scripts/check-linux-runner-service.mjs \
+  --scratch /tmp/mc-linux-check-<unique-id> \
+  --output /tmp/mc-linux-check-<unique-id>.json
+```
+
+Use unused absolute paths. Export committed source first with
+`mc scratch export --repo memoro-cli --ref <judged-sha> --path src --path scripts --path package.json --path package-lock.json --json`
+and transfer its receipt and manifest; verify every file after transfer. This
+is not a goal checkout or a replacement for TC's installed checkout. The check
+runs actual generated boot units, runLoop reservation claims, competing starts,
+updates, chained drains, stop and independent-root isolation; only external
+coding/Git/network/chores inputs are inert. It reports exact received boot
+environment, command arrays, identities/cgroups, timings and cleanup.
+
+**Separate interactive operational acceptance (not authorized by the script).**
+Before real workloads, Martin provisions lingering interactively and installs
+the accepted release on TC. Use an empty, authorized root and record its paths,
+release SHA, original lane total and flags. On TC, explicitly:
+
+1. Run `loginctl enable-linger`, then `loginctl show-user "$USER" -p Linger`.
+   Run `mc run start --no-merge --no-caffeinate` (or the agreed flags).
+   Record `cat /proc/sys/kernel/random/boot_id`, `cat "$MC_WORK_ROOT/runner/runner.json"`,
+   `mc run lanes`, `systemctl --user list-unit-files 'mc-runner-boot-*'` and
+   `cat /proc/<owner-pid>/cgroup`. Record enabled state for this root's unit.
+2. Martin runs `sudo reboot` interactively. Do not log in locally or by SSH
+   until the host has had time to boot unattended. Then reconnect with
+   `ssh tc` and record the changed boot ID, `loginctl show-user "$USER" -p Linger`,
+   `systemctl --user status <root-unit>`, owner JSON, process identity/cgroup
+   and saved arguments. Verify exactly one entitled runner and no STOP.
+   Distinguish its pre-SSH start time from the later checking login; an
+   active(exited) adapter alone is not runner proof.
+3. Run `mc run stop`, allow all held work to complete, and verify STOP remains
+   and the owner processes have ended. Martin runs `sudo reboot` again.
+   Wait without login, reconnect, record changed boot ID and confirm STOP is
+   unchanged and no runner was admitted. Run `mc run start` explicitly and
+   verify exactly one owner and the unchanged lane total.
+4. In separately authorized bounded work, verify update keeps predecessor
+   sessions completing without duplicate admission, including STOP during
+   update. Retain identities, session completion and unchanged lane settings.
+
+These interactive results must be recorded separately before workload
+activation. Neither a successful isolated script nor prior VPN/SSH reboot
+evidence certifies them. Root retirement on transfer is the transfer plan's
+responsibility; enabling a new canonical root does not retire the old unit.
 
 ## Staying awake
 

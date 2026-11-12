@@ -1,222 +1,302 @@
 #!/usr/bin/env node
+/** Opt-in real Linux integration; never runs an agent, Git/network or host chores. */
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, renameSync, readdirSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute, join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { isAbsolute, join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 
-function options(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--scratch' || argv[i] === '--output') out[argv[i].slice(2)] = argv[++i];
-    else throw new Error(`unknown argument: ${argv[i]}`);
-  }
-  if (!out.scratch || !out.output || !isAbsolute(out.scratch) || !isAbsolute(out.output)) {
-    throw new Error('usage: check-linux-runner-service.mjs --scratch <unused-absolute-dir> --output <absolute-report.json>');
-  }
-  return out;
+const opts = {};
+for (let i = 2; i < process.argv.length; i += 2) {
+  const key = process.argv[i];
+  if (!['--scratch', '--output'].includes(key) || !process.argv[i + 1] || opts[key]) throw new Error('usage: check-linux-runner-service.mjs --scratch <unused-absolute-dir> --output <absolute-report.json>');
+  opts[key] = process.argv[i + 1];
 }
-
-const args = options(process.argv.slice(2));
-if (process.platform !== 'linux') throw new Error('this integration check requires Linux and a running user systemd manager');
-const scratch = resolve(args.scratch);
-const output = resolve(args.output);
-const priorWorkRoot = process.env.MC_WORK_ROOT || join(process.env.HOME || '', '.memoro', 'mc');
-if (existsSync(scratch)) throw new Error(`scratch path already exists: ${scratch}`);
-if (scratch === resolve(priorWorkRoot) || scratch === resolve(tmpdir())) throw new Error('refusing a default or unsafe scratch root');
-if (output.startsWith(`${scratch}/`)) throw new Error('report output must be outside the scratch tree that is removed after the check');
-if (existsSync(output)) throw new Error(`report output already exists: ${output}`);
-mkdirSync(scratch, { recursive: false, mode: 0o700 });
-const roots = { home: join(scratch, 'home'), work: join(scratch, 'work'), repos: join(scratch, 'repos'), scratch: join(scratch, 'sessions') };
-for (const path of Object.values(roots)) mkdirSync(path, { recursive: true, mode: 0o700 });
-Object.assign(process.env, { MC_HOME: roots.home, MC_WORK_ROOT: roots.work, MC_REPOS_HOME: roots.repos, MC_SCRATCH: roots.scratch, MC_RUN_SYSTEMD_CONTEXT: 'scope' });
-
+if (!isAbsolute(opts['--scratch'] || '') || !isAbsolute(opts['--output'] || '')) throw new Error('scratch and output must be absolute paths');
+if (process.platform !== 'linux') throw new Error('requires Linux with a running user systemd manager');
+const scratch = resolve(opts['--scratch']);
+const output = resolve(opts['--output']);
+if (existsSync(scratch) || existsSync(output)) throw new Error('scratch and output must be unused paths');
+if ([process.env.MC_WORK_ROOT, join(process.env.HOME, 'mc'), join(process.env.HOME, '.memoro/mc'), tmpdir(), '/'].filter(Boolean).map(resolvePath).includes(scratch)) throw new Error('refusing default/unsafe work root');
+if (output === scratch || output.startsWith(`${scratch}/`)) throw new Error('output must be outside scratch');
+function resolvePath(value) { return resolve(value); }
+mkdirSync(scratch, { mode: 0o700 });
+const source = process.cwd();
+const roots = [];
+const scopes = new Set();
+const units = new Map();
+const owners = new Map();
+const children = [];
+const start = performance.now();
 const report = {
-  schema: 1, source: { sha: null, shaKind: null, manifest: null }, versions: {}, roots,
-  commands: [], units: [], owners: [], assertions: [], cleanup: { complete: false, errors: [] },
-  proofBoundary: 'real systemd unit/scope, flock gate, process identity and lifecycle control; session-loop decisions remain deterministic fixture proof, not a provider turn',
+  schema: 2, source: { sha: process.env.MC_LINUX_SOURCE_SHA || null }, versions: { node: process.version },
+  roots, commands: [], units: [], owners: [], assertions: [], cleanup: { complete: false, errors: [] },
+  proofBoundary: 'Real delivered command dispatch, runLoop admission/reservations, start/update/stop, files/processes/flock and systemd unit/scope/cgroups. Only external coding/Git/network/chores inputs are inert. Held chores keep lane-less drainers alive; held coding-session completion and lane-policy/STOP-claim races are deterministic gate proof, not claimed live workloads. No lingering change, reboot, credentials or provider turn.',
 };
-const unitNames = new Set();
-const scopeNames = new Set();
-const pids = new Set();
-function assertThat(name, ok, detail = '') {
-  report.assertions.push({ name, ok: Boolean(ok), detail });
-  if (!ok) throw new Error(`assertion failed: ${name}${detail ? ` — ${detail}` : ''}`);
+function check(name, ok, detail = '') {
+  report.assertions.push({ name, ok: Boolean(ok), detail, elapsedMs: performance.now() - start });
+  if (!ok) throw new Error(`assertion failed: ${name}: ${detail}`);
 }
-function command(bin, argv, { allowFailure = false } = {}) {
-  report.commands.push([bin, ...argv]);
-  const result = spawnSync(bin, argv, { encoding: 'utf8', timeout: 30_000 });
-  if (!allowFailure && result.status !== 0) throw new Error(`${bin} ${argv.join(' ')} failed: ${result.stderr || result.error || result.status}`);
+function command(bin, argv, { env, allowFailure = false } = {}) {
+  const t = performance.now();
+  const result = spawnSync(bin, argv, { encoding: 'utf8', env, timeout: 30000 });
+  report.commands.push({ argv: [bin, ...argv], status: result.status, milliseconds: performance.now() - t, stdout: result.stdout, stderr: result.stderr });
+  if (!allowFailure && result.status !== 0) throw new Error(`${bin}: ${result.stderr || result.error || result.status}`);
   return result;
 }
-function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-function waitUntil(test, ms = 5000) {
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+async function until(fn, ms = 12000) {
   const end = Date.now() + ms;
-  while (Date.now() < end) { if (test()) return true; sleep(50); }
-  return Boolean(test());
+  do { if (fn()) return true; await sleep(40); } while (Date.now() < end);
+  return Boolean(fn());
 }
-function manifest(root) {
+function json(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } }
+function text(path) { try { return readFileSync(path, 'utf8'); } catch { return ''; } }
+function alive(pid) {
+  // A zombie cannot schedule work; kill(0) alone would call it live forever.
+  const stat = text(`/proc/${pid}/stat`);
+  return Boolean(stat) && stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z';
+}
+function track(owner) {
+  if (owner?.pid) owners.set(owner.pid, owner);
+  for (const item of [...(owner?.drainers || []), ...(owner?.predecessor ? [owner.predecessor] : [])]) owners.set(item.pid, item);
+  return owner;
+}
+function owner(root) { return track(json(join(root.work, 'runner/runner.json'))); }
+function manifest() {
   const files = [];
-  const walk = (dir) => {
-    for (const name of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, name.name);
-      if (name.isDirectory()) walk(path);
-      else if (name.isFile()) files.push(path);
-    }
+  const walk = (dir) => { for (const item of readdirSync(join(source, dir), { withFileTypes: true })) {
+    const path = join(dir, item.name);
+    if (item.isDirectory()) walk(path);
+    else if (item.isFile()) files.push(path);
+  } };
+  walk('src'); walk('scripts'); files.push('package.json', 'package-lock.json');
+  const entries = files.sort().map((p) => `${createHash('sha256').update(readFileSync(join(source, p))).digest('hex')}  ${p}`);
+  return { files: entries, sha256: createHash('sha256').update(entries.join('\n')).digest('hex') };
+}
+function makeRoot(name) {
+  const base = join(scratch, name);
+  const root = { base, work: join(base, 'root "$literal%"'), home: join(base, 'mc home'), repos: join(base, 'repos') };
+  for (const path of Object.values(root)) mkdirSync(path, { recursive: true });
+  root.env = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME,
+    PATH: `/home/martin/.local/bin:/usr/bin:/bin:${base}/tool$path%`,
+    MC_HOME: root.home, MC_WORK_ROOT: root.work, MC_REPOS_HOME: root.repos,
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`,
+    DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || `unix:path=/run/user/${process.getuid()}/bus`,
   };
-  for (const path of ['src', 'scripts']) if (existsSync(join(root, path))) walk(join(root, path));
-  for (const path of ['package.json', 'package-lock.json']) if (existsSync(join(root, path))) files.push(join(root, path));
-  const entries = files.sort().map((path) => `${createHash('sha256').update(readFileSync(path)).digest('hex')}  ${path.slice(root.length + 1)}`);
-  return { sha256: createHash('sha256').update(entries.join('\n')).digest('hex'), files: entries };
+  roots.push(root);
+  return root;
 }
-function workerFile() {
-  const path = join(scratch, 'worker.mjs');
-  writeFileSync(path, `import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\nconst args = process.argv.slice(2);\nconst pidFile = args.find((x) => x.startsWith('--pid-file='))?.slice(11);\nif (pidFile) { const child = spawn('/bin/sleep', ['600'], { detached: true, stdio: 'ignore' }); child.unref(); writeFileSync(pidFile, String(child.pid)); }\nif (!pidFile) setInterval(() => {}, 60000);\n`, { mode: 0o600 });
-  return path;
+const primary = makeRoot('primary');
+// Isolate before importing any mc code, including transitive imports.
+Object.assign(process.env, primary.env, { MC_SCRATCH: join(scratch, 'sessions') });
+delete process.env.MC_RUN_SYSTEMD_CONTEXT;
+delete process.env.MC_RUN_RESERVED_GENERATION;
+delete process.env.MC_RUN_SUCCESSOR_OF;
+const fixtureEntry = join(scratch, 'entry "$code%".mjs');
+const url = (p) => pathToFileURL(join(source, p)).href;
+// This entry uses the delivered command router, controller and runLoop. The
+// substitutions are external inputs only; no runner/control/gate is replaced.
+writeFileSync(fixtureEntry, `
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { run } from ${JSON.stringify(url('src/mc/commands/run.js'))};
+import { realControlDeps } from ${JSON.stringify(url('src/mc/run-control.js'))};
+import { realDeps, runLoop } from ${JSON.stringify(url('src/mc/run.js'))};
+const env = process.env;
+const root = env.MC_WORK_ROOT;
+mkdirSync(join(root, 'observed'), { recursive: true });
+writeFileSync(join(root, 'observed', process.pid + '.json'), JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(['HOME','PATH','MC_HOME','MC_WORK_ROOT','MC_REPOS_HOME'].map(k => [k, env[k]])) }));
+const deps = realDeps(env);
+Object.assign(deps, {
+  git: () => ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
+  session: () => { throw new Error('no coding turn authorized'); }, helperTurn: () => { throw new Error('no helper turn authorized'); },
+  collect: async () => { while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
+  nightlyTick: async () => ({ runs: [] }), readDeps: undefined, tidy: undefined,
+  reapDevServers: undefined, dockerSweep: undefined, refreshCodex: undefined, refreshClaude: undefined,
+  pressureTidy: undefined, pressureDocker: undefined,
+  sleep: async ms => new Promise(r => setTimeout(r, Math.min(ms, 40))),
+});
+process.exitCode = await run(process.argv.slice(3), { control: realControlDeps(env), loop: options => runLoop({ ...options, deps }) });
+`, { mode: 0o600 });
+function cli(root, argv, allowFailure = false) {
+  return command(process.execPath, [fixtureEntry, 'run', ...argv], { env: root.env, allowFailure });
 }
-
-let servicePath = null;
-let serviceUnit = null;
-try {
-  report.versions.node = process.version;
-  report.source.manifest = manifest(process.cwd());
-  try { report.source.sha = process.env.MC_LINUX_SOURCE_SHA || command('git', ['rev-parse', 'HEAD'], { allowFailure: true }).stdout.trim() || null; } catch { report.source.sha = process.env.MC_LINUX_SOURCE_SHA || null; }
-  if (!report.source.sha) report.source.sha = report.source.manifest.sha256;
-  report.source.shaKind = process.env.MC_LINUX_SOURCE_SHA ? 'exported git revision' : report.source.sha === report.source.manifest.sha256 ? 'source manifest sha256' : 'git revision';
-  report.versions.systemd = command('systemctl', ['--version']).stdout.split('\n')[0];
-  command('systemctl', ['--user', 'show-environment']);
-  command('flock', ['--version']);
-  const { bootUnit, installBootAdapter, scopeCommand, withLifecycleLock, readLinuxIdentity } = await import(pathToFileURL(join(process.cwd(), 'src/mc/linux-runner-service.js')));
-  const { startRunner, stopRunner, controlPaths, handOver, IF_WAS_RUNNING } = await import(pathToFileURL(join(process.cwd(), 'src/mc/run-control.js')));
-  const env = { HOME: process.env.HOME, PATH: process.env.PATH, MC_HOME: roots.home, MC_WORK_ROOT: roots.work, MC_REPOS_HOME: roots.repos, MC_RUN_SYSTEMD_CONTEXT: 'scope' };
-  const unit = bootUnit({ root: roots.work, execPath: process.execPath, entry: workerFile(), env });
-  serviceUnit = unit.unit;
-  servicePath = join(process.env.HOME, '.config/systemd/user', serviceUnit);
-  const installed = installBootAdapter({ root: roots.work, execPath: process.execPath, entry: workerFile() });
-  unitNames.add(serviceUnit);
-  report.units.push({ name: serviceUnit, path: servicePath, ready: installed.ready, install: installed.lines });
-  assertThat('boot unit installed and enabled without manager restart', installed.ok && existsSync(servicePath), installed.lines.join('; '));
-  assertThat('Linger=no is reported as not boot ready with an interactive remedy', installed.ready || installed.lines.some((line) => /Linger=no.*loginctl enable-linger/u.test(line)), installed.lines.join('; '));
-  command('systemd-analyze', ['--user', 'verify', servicePath]);
-  assertThat('systemd-analyze --user verify accepts the delivered unit', true, servicePath);
-
-  let entered = 0;
-  const lockPath = join(roots.work, 'runner', 'gate-check');
-  mkdirSync(join(roots.work, 'runner'), { recursive: true });
-  const eventsPath = join(scratch, 'gate-events');
-  writeFileSync(eventsPath, '');
-  const transition = (label) => withLifecycleLock(roots.work, () => {
-    const active = join(scratch, 'gate-active');
-    let overlap = existsSync(active);
-    if (!overlap) writeFileSync(active, label, { flag: 'wx' });
-    sleep(100);
-    if (!overlap) rmSync(active, { force: true });
-    writeFileSync(eventsPath, `${readFileSync(eventsPath, 'utf8') || ''}${label}:${overlap ? 'overlap' : 'entered'}\n`);
-    entered += 1;
-    return overlap;
+function concurrentCli(root, argv) {
+  const t = performance.now();
+  const child = spawn(process.execPath, [fixtureEntry, 'run', ...argv], { env: root.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  children.push(child);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', x => { stdout += x; }); child.stderr.on('data', x => { stderr += x; });
+  return new Promise((done, reject) => {
+    child.once('error', reject);
+    child.once('close', status => {
+      report.commands.push({ argv: [process.execPath, fixtureEntry, 'run', ...argv], status, stdout, stderr, milliseconds: performance.now() - t });
+      done({ status, stdout, stderr });
+    });
   });
-  const gates = await Promise.all([transition('a'), transition('b')]);
-  assertThat('real flock lifecycle gate excludes concurrent transitions', entered === 2 && gates.every((value) => value === false), readFileSync(eventsPath, 'utf8'));
-  assertThat('gate uses the separate lifecycle lock path', join(roots.work, 'runner', 'lifecycle.lock') !== join(roots.work, 'runner', 'register.lock'), lockPath);
+}
+let readIdentity;
+try {
+  report.source.manifest = manifest();
+  report.source.shaKind = report.source.sha ? 'exported committed git revision' : 'manifest only';
+  report.versions.systemd = command('systemctl', ['--version']).stdout.split('\n')[0];
+  report.versions.flock = command('flock', ['--version']).stdout.trim();
+  command('systemctl', ['--user', 'show-environment']);
+  const service = await import(url('src/mc/linux-runner-service.js'));
+  readIdentity = service.readLinuxIdentity;
+  const { realControlDeps, stopRunner } = await import(url('src/mc/run-control.js'));
+  function registerUnit(root) {
+    const generated = service.bootUnit({ root: root.work, execPath: process.execPath, entry: fixtureEntry, env: root.env });
+    const path = join(process.env.HOME, '.config/systemd/user', generated.unit);
+    if (existsSync(path)) throw new Error(`refusing pre-existing unit ${path}`);
+    units.set(generated.unit, path);
+    const result = service.installBootAdapter({ root: root.work, execPath: process.execPath, entry: fixtureEntry, deps: service.realLinuxServiceDeps(root.env) });
+    report.units.push({ ...result });
+    check(`${root.base}: adapter installed and enable-only`, result.ok && existsSync(path) && command('systemctl', ['--user', 'is-enabled', generated.unit]).stdout.trim() === 'enabled', result.lines.join('; '));
+    check(`${root.base}: truthful lingering outcome`, result.ready || result.lines.some(l => /Linger=no.*loginctl enable-linger/.test(l)), result.lines.join('; '));
+    command('systemd-analyze', ['--user', 'verify', path]);
+    return generated.unit;
+  }
+  const unit = registerUnit(primary);
+  async function boot(root, unitName) {
+    command('systemctl', ['--user', 'stop', unitName]);
+    const before = readdirSync(join(root.work, 'observed'), { recursive: false });
+    command('systemctl', ['--user', 'start', unitName]);
+    const seen = readdirSync(join(root.work, 'observed')).filter(p => !before.includes(p)).map(p => json(join(root.work, 'observed', p)));
+    const received = seen.find(p => p.argv.includes('--if-was-running'));
+    check('generated boot entry actually ran with exact literal allowlisted environment', received && Object.entries(received.env).every(([k,v]) => v === root.env[k]), JSON.stringify(received));
+  }
+  mkdirSync(join(primary.work, 'observed'), { recursive: true });
+  await boot(primary, unit);
+  check('actual generated boot unit with no history admits no owner', !owner(primary));
+  mkdirSync(join(primary.work, 'runner'), { recursive: true });
+  writeFileSync(join(primary.work, 'runner/STOP'), 'deliberate stop');
+  await boot(primary, unit);
+  check('actual generated boot unit never consumes STOP', !owner(primary) && text(join(primary.work, 'runner/STOP')) === 'deliberate stop');
+  rmSync(join(primary.work, 'runner/STOP'));
+  const flags = ['--no-merge', '--no-caffeinate', '--idle-sleep', '1'];
+  writeFileSync(join(primary.work, 'runner/runner.json'), JSON.stringify({ pid: 2147483647, generation: 'prior-boot', bootId: 'old-boot', starttime: '1', args: flags }));
+  await boot(primary, unit);
+  check('conditional boot restores saved flags through real runLoop admission', await until(() => owner(primary)?.takeover && text(join(primary.work, 'runner/log/runner.log')).includes('runner start')), JSON.stringify(owner(primary)));
+  const bootOwner = owner(primary);
+  check('saved flags survived child reservation claim', JSON.stringify(bootOwner.args) === JSON.stringify(flags));
+  const bootCgroup = command('systemctl', ['--user', 'show', unit, '--property=ControlGroup', '--value']).stdout.trim();
+  check('boot child survives oneshot command exit in its cgroup', alive(bootOwner.pid) && Boolean(bootCgroup) && text(`/proc/${bootOwner.pid}/cgroup`).includes(bootCgroup));
+  const observedEnv = json(join(primary.work, 'observed', `${bootOwner.pid}.json`));
+  check('boot runner receives literal dollar/percent paths unchanged', observedEnv && observedEnv.env.PATH === primary.env.PATH && observedEnv.env.MC_WORK_ROOT === primary.work, JSON.stringify(observedEnv));
+  const stopBoot = await stopRunner({ force: true, root: primary.work, deps: realControlDeps(primary.env) });
+  check('real force stop ends boot child', stopBoot.ok && !alive(bootOwner.pid), stopBoot.lines.join('; '));
+  command('systemctl', ['--user', 'stop', unit]);
 
-  const worker = workerFile();
-  const scopeRoot = join(scratch, 'scope-root');
-  mkdirSync(scopeRoot);
-  const pidFile = join(scratch, 'scope-child.pid');
-  const scopeArgs = scopeCommand({ root: scopeRoot, execPath: process.execPath, entry: worker, argv: [`--pid-file=${pidFile}`] });
-  const scopeName = scopeArgs.find((item) => item.startsWith('--unit='))?.slice(7);
-  scopeNames.add(scopeName);
-  command('systemd-run', scopeArgs);
-  assertThat('scope start returns with its detached child alive', waitUntil(() => existsSync(pidFile)) && existsSync(pidFile), pidFile);
-  const childPid = Number(readFileSync(pidFile, 'utf8'));
-  pids.add(childPid);
-  assertThat('scope child survives its command parent', childPid > 1 && command('kill', ['-0', String(childPid)], { allowFailure: true }).status === 0, String(childPid));
-  const scopeCgroup = command('systemctl', ['--user', 'show', scopeName, '--property=ControlGroup', '--value']).stdout.trim();
-  const childCgroup = readFileSync(`/proc/${childPid}/cgroup`, 'utf8');
-  assertThat('detached successor remains in its managed systemd cgroup', Boolean(scopeCgroup) && childCgroup.includes(scopeCgroup), `${scopeCgroup}\n${childCgroup}`);
+  // Interprocess exclusion, not two synchronous callbacks on one event loop.
+  const gateClient = join(scratch, 'gate-client.mjs');
+  writeFileSync(gateClient, `import { existsSync, writeFileSync, rmSync, appendFileSync } from 'node:fs';
+import { withLifecycleLock } from ${JSON.stringify(url('src/mc/linux-runner-service.js'))};
+const [root, barrier, label] = process.argv.slice(2);
+while (!existsSync(barrier)) await new Promise(r => setTimeout(r, 10));
+await withLifecycleLock(root, () => { const active = barrier + '.active'; const overlap = existsSync(active); if (!overlap) writeFileSync(active, label); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,180); appendFileSync(barrier + '.events', label + ':' + overlap + '\\n'); if (!overlap) rmSync(active); });`);
+  const barrier = join(scratch, 'gate-go');
+  const gateDone = ['a','b','c'].map(label => new Promise((done, reject) => {
+    const child = spawn(process.execPath, [gateClient, primary.work, barrier, label], { env: primary.env, stdio: 'pipe' }); children.push(child);
+    report.commands.push({ argv: [process.execPath, gateClient, primary.work, barrier, label] });
+    child.once('error', reject); child.once('close', status => done(status));
+  }));
+  writeFileSync(barrier, 'go');
+  const statuses = await Promise.all(gateDone);
+  const events = text(`${barrier}.events`).trim().split('\n').sort();
+  check('delivered flock gate excludes three independent processes', statuses.every(s => s === 0) && JSON.stringify(events) === JSON.stringify(['a:false','b:false','c:false']), JSON.stringify({ statuses, events }));
 
-  const paths = controlPaths(roots.work);
-  const controller = join(scratch, 'runner-controller.mjs');
-  const resultFile = join(scratch, 'runner-controller-result.json');
-  const controlUrl = pathToFileURL(join(process.cwd(), 'src/mc/run-control.js')).href;
-  writeFileSync(controller, `import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\nconst { realControlDeps, startRunner, handOver, controlPaths } = await import(${JSON.stringify(controlUrl)});\nconst root = process.env.MC_WORK_ROOT;\nconst worker = ${JSON.stringify(worker)};\nconst deps = realControlDeps(process.env);\ndeps.entry = worker;\nconst started = await startRunner({ root, deps });\nif (!started.ok) throw new Error(started.lines.join('; '));\nconst paths = controlPaths(root);\nconst owner = JSON.parse(deps.read(paths.runner));\ndeps.respawn = ({ env = {} } = {}) => { const child = spawn(process.execPath, [worker, 'run', 'start'], { detached: true, stdio: 'ignore', env: { ...process.env, ...env } }); child.unref(); return child.pid; };\nconst handed = await handOver({ paths, deps, say: () => {}, predecessor: owner.pid, predecessorGeneration: owner.generation });\nif (!handed.ok) throw new Error(handed.why || 'update handover failed');\nwriteFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ predecessor: owner.pid, successor: handed.pid }));\n`, { mode: 0o600 });
-  const runnerScopeArgs = scopeCommand({ root: roots.work, execPath: process.execPath, entry: controller, argv: [] });
-  const runnerScope = runnerScopeArgs.find((item) => item.startsWith('--unit='))?.slice(7);
-  scopeNames.add(runnerScope);
-  command('systemd-run', runnerScopeArgs);
-  assertThat('scoped mc start and update publish two real owners', waitUntil(() => existsSync(resultFile)) && existsSync(paths.runner), resultFile);
-  const controllerResult = JSON.parse(readFileSync(resultFile, 'utf8'));
-  let current = JSON.parse(readFileSync(paths.runner, 'utf8'));
-  const predecessorPid = controllerResult.predecessor;
-  const successorPid = controllerResult.successor;
-  pids.add(predecessorPid); pids.add(successorPid);
-  assertThat('real successor update publishes predecessor and complete drainer identity', current.pid === successorPid && current.predecessor.pid === predecessorPid && current.drainers.some((item) => item.pid === predecessorPid && item.generation), JSON.stringify(current.drainers));
-  const runnerCgroup = command('systemctl', ['--user', 'show', runnerScope, '--property=ControlGroup', '--value']).stdout.trim();
-  const predecessorCgroup = readFileSync(`/proc/${predecessorPid}/cgroup`, 'utf8');
-  const successorCgroup = readFileSync(`/proc/${successorPid}/cgroup`, 'utf8');
-  assertThat('successor inherited the managed cgroup before predecessor exit', predecessorCgroup.includes(runnerCgroup) && successorCgroup.includes(runnerCgroup), `${runnerCgroup}\n${predecessorCgroup}\n${successorCgroup}`);
-  try { process.kill(predecessorPid, 'SIGTERM'); } catch {}
-  assertThat('successor remains alive in the same scope after predecessor exit', waitUntil(() => command('kill', ['-0', String(predecessorPid)], { allowFailure: true }).status !== 0) && command('kill', ['-0', String(successorPid)], { allowFailure: true }).status === 0 && readFileSync(`/proc/${successorPid}/cgroup`, 'utf8').includes(runnerCgroup), String(successorPid));
-  report.owners.push({ pid: predecessorPid, generation: current.predecessor.generation, unit: runnerScope }, { pid: successorPid, generation: current.generation, predecessor: predecessorPid, drainers: current.drainers.map((item) => item.pid), unit: runnerScope });
-  const workerDeps = {
-    platform: 'linux', env, now: () => new Date(), sleep: async (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    exists: existsSync, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
-    write: (path, text) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text); },
-    writeAtomic: (path, text) => { const temp = `${path}.${randomUUID()}.tmp`; mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(temp, text); renameSync(temp, path); },
-    remove: (path) => { try { rmSync(path, { force: true }); } catch {} }, list: (path) => { try { return (awaitDir(path)); } catch { return []; } },
-    alive: (pid) => command('kill', ['-0', String(pid)], { allowFailure: true }).status === 0,
-    identity: (pid) => readLinuxIdentity(pid),
-    kill: (pid, signal) => { try { process.kill(pid, signal); } catch {} },
-    ps: (args) => command('ps', args, { allowFailure: true }).stdout,
-    openLog: (path) => { mkdirSync(join(path, '..'), { recursive: true }); return 2; },
-    spawn: ({ bin, args, stdio, env: extra = {} }) => { const child = spawn(bin, args, { detached: true, stdio, env: { ...process.env, ...extra } }); child.unref(); return child.pid; },
-    execPath: process.execPath, entry: worker, generation: () => randomUUID(),
-    lifecycleLock: (root, transition) => withLifecycleLock(root, transition),
-    systemdRun: (args) => command('systemd-run', args, { allowFailure: true }),
-    linuxService: undefined, installBoot: (options) => installBootAdapter(options),
-    respawn: ({ env: extra = {} } = {}) => { const child = spawn(process.execPath, [worker, 'run', 'start'], { detached: true, stdio: 'ignore', env: { ...process.env, ...extra } }); child.unref(); return child.pid; },
-  };
-  const competingStarts = await Promise.all([startRunner({ root: roots.work, deps: workerDeps }), startRunner({ root: roots.work, deps: workerDeps })]);
-  assertThat('competing real starts admit one owner', competingStarts.filter((result) => result.ok).length === 0 && JSON.parse(readFileSync(paths.runner, 'utf8')).pid === successorPid, competingStarts.map((result) => `${result.ok}:${result.lines.join(' ')}`).join(' | '));
-  current = JSON.parse(readFileSync(paths.runner, 'utf8'));
-  const stopped = await stopRunner({ force: true, root: roots.work, deps: workerDeps });
-  assertThat('forced stop ends the remaining verified owner without requiring the dead predecessor', stopped.ok && !workerDeps.alive(successorPid) && !workerDeps.alive(predecessorPid), stopped.lines.join('; '));
-  const conditionalRoot = join(scratch, 'conditional-work');
-  mkdirSync(conditionalRoot);
-  const conditionalPaths = controlPaths(conditionalRoot);
-  const noHistory = await startRunner({ argv: [IF_WAS_RUNNING], root: conditionalRoot, deps: workerDeps });
-  assertThat('boot recovery with no prior owner starts nothing', noHistory.ok && !existsSync(conditionalPaths.runner), noHistory.lines.join('; '));
-  workerDeps.write(conditionalPaths.stop, 'planned stop\n');
-  const stoppedBoot = await startRunner({ argv: [IF_WAS_RUNNING], root: conditionalRoot, deps: workerDeps });
-  assertThat('boot recovery never consumes deliberate STOP', stoppedBoot.ok && !existsSync(conditionalPaths.runner) && existsSync(conditionalPaths.stop), stoppedBoot.lines.join('; '));
-  workerDeps.remove(conditionalPaths.stop);
-  workerDeps.write(conditionalPaths.runner, `${JSON.stringify({ pid: 2147483647, args: ['--no-merge'] })}\n`);
-  const resumed = await startRunner({ argv: [IF_WAS_RUNNING], root: conditionalRoot, deps: workerDeps });
-  const resumedOwner = JSON.parse(readFileSync(conditionalPaths.runner, 'utf8'));
-  pids.add(resumedOwner.pid);
-  assertThat('boot recovery restores saved runner flags only for previously-running state', resumed.ok && resumedOwner.args.join(' ') === '--no-merge', resumed.lines.join('; '));
-  await stopRunner({ force: true, root: conditionalRoot, deps: workerDeps });
-  assertThat('a second root has independent ownership paths and unit identity', controlPaths(join(scratch, 'other-work')).runner !== paths.runner && bootUnit({ root: join(scratch, 'other-work'), execPath: process.execPath, entry: worker, env }).unit !== serviceUnit);
+  const compete = makeRoot('compete');
+  registerUnit(compete);
+  const results = await Promise.all([concurrentCli(compete, ['start', ...flags]), concurrentCli(compete, ['start', ...flags])]);
+  check('competing starts on an available root yield exactly one successful owner', results.filter(r => r.status === 0).length === 1, JSON.stringify(results));
+  check('winning parent reservation was claimed by delivered runLoop', await until(() => owner(compete)?.takeover));
+  const a = owner(compete);
+  check('direct --once refuses the live winner rather than admitting new work', cli(compete, ['--once'], true).status === 2);
+  const scopesText = command('systemctl', ['--user', 'list-units', '--all', '--plain', '--no-legend', `mc-runner-start-${service.rootIdentity(compete.work).hash}-*.scope`]).stdout;
+  for (const line of scopesText.trim().split('\n')) { const name = line.trim().split(/\s+/)[0]; if (name?.endsWith('.scope')) scopes.add(name); }
+  const cg = text(`/proc/${a.pid}/cgroup`);
+  check('detached admitted child survives its scoped control parent', alive(a.pid) && [...scopes].some(s => cg.includes(s)), cg);
+  const independent = makeRoot('independent');
+  registerUnit(independent);
+  cli(independent, ['start', ...flags]);
+  check('second isolated root has a real admitted owner', await until(() => owner(independent)?.takeover));
+  const otherBeforeUpdate = owner(independent);
+  const independentCgroup = text(`/proc/${otherBeforeUpdate.pid}/cgroup`);
+  cli(independent, ['--update', '--force']);
+  check('independent-root update admits a real successor beside its predecessor', await until(() => owner(independent)?.pid !== otherBeforeUpdate.pid && owner(independent)?.takeover));
+  const other = owner(independent);
+  writeFileSync(join(independent.work, `release-${otherBeforeUpdate.pid}`), 'complete');
+  check('update successor survives predecessor exit in its inherited cgroup', await until(() => !alive(otherBeforeUpdate.pid)) && alive(other.pid) && text(`/proc/${other.pid}/cgroup`) === independentCgroup);
+  const otherBefore = text(join(independent.work, 'runner/runner.json'));
+  const otherCg = text(`/proc/${other.pid}/cgroup`);
+  for (const line of otherCg.split('\n')) { const scope = line.split('/').find(x => x.startsWith('mc-runner-start-') && x.endsWith('.scope')); if (scope) scopes.add(scope); }
+
+  cli(compete, ['--update', '--force']);
+  check('real UPDATE produces admitted B while A is still draining', await until(() => owner(compete)?.pid !== a.pid && owner(compete)?.takeover && alive(a.pid)));
+  const b = owner(compete);
+  cli(compete, ['--update', '--force']);
+  check('second real UPDATE produces admitted C with live A and B', await until(() => owner(compete)?.pid !== b.pid && owner(compete)?.takeover && alive(a.pid) && alive(b.pid)));
+  const c = owner(compete);
+  check('A-to-B-to-C retains complete named live drainer identities with no lane file', [a,b].every(p => c.drainers.some(d => d.pid === p.pid && d.generation === p.generation)) && !readdirSync(join(compete.work, 'runner')).some(n => n.startsWith('current-')), JSON.stringify(c));
+  check('all admitted successors inherited the original managed cgroup', [a,b,c].every(p => text(`/proc/${p.pid}/cgroup`) === cg), JSON.stringify([a,b,c].map(p => p.pid)));
+  const stopping = await stopRunner({ root: compete.work, deps: realControlDeps(compete.env) });
+  check('ordinary STOP preserves all live draining work before release', stopping.ok && [a,b,c].every(p => alive(p.pid)), stopping.lines.join('; '));
+  const forced = await stopRunner({ force: true, root: compete.work, deps: realControlDeps(compete.env) });
+  check('force stop targets every live A/B/C owner in the full chain', forced.ok && [a,b,c].every(p => !alive(p.pid)) && [a,b,c].every(p => forced.lines.some(l => l.includes(`pid ${p.pid} is gone`))), forced.lines.join('; '));
+  check('another live root survives all first-root stop/cleanup unchanged', alive(other.pid) && text(join(independent.work, 'runner/runner.json')) === otherBefore && text(`/proc/${other.pid}/cgroup`) === otherCg && !existsSync(join(independent.work, 'runner/STOP')));
+  report.owners = [...owners.values()];
 } catch (error) {
   report.error = error.stack || String(error);
 } finally {
-  for (const unit of scopeNames) command('systemctl', ['--user', 'stop', unit], { allowFailure: true });
-  for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch {} }
-  if (serviceUnit) command('systemctl', ['--user', 'disable', serviceUnit], { allowFailure: true });
-  if (servicePath) rmSync(servicePath, { force: true });
-  command('systemctl', ['--user', 'daemon-reload'], { allowFailure: true });
-  const leftovers = [...pids].filter((pid) => command('kill', ['-0', String(pid)], { allowFailure: true }).status === 0);
-  const enabledLink = serviceUnit ? join(process.env.HOME, '.config/systemd/user/default.target.wants', serviceUnit) : null;
-  const activeScopes = [...scopeNames].filter((unit) => command('systemctl', ['--user', 'show', unit, '--property=ActiveState', '--value'], { allowFailure: true }).stdout.trim() === 'active');
-  report.cleanup = { complete: leftovers.length === 0 && (!servicePath || !existsSync(servicePath)) && (!enabledLink || !existsSync(enabledLink)) && activeScopes.length === 0, errors: [...leftovers.map((pid) => `process ${pid} remains`), ...(enabledLink && existsSync(enabledLink) ? [`enabled link remains: ${enabledLink}`] : []), ...activeScopes.map((unit) => `scope remains active: ${unit}`)] };
-  mkdirSync(join(output, '..'), { recursive: true });
-  writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+  // Rediscover only these roots' named processes/scopes, including on failure.
+  for (const root of roots) {
+    owner(root);
+    for (const name of (existsSync(join(root.work, 'observed')) ? readdirSync(join(root.work, 'observed')) : [])) {
+      const pid = Number(name.replace('.json',''));
+      if (!alive(pid)) continue;
+      const identity = readIdentity?.(pid);
+      if (identity) owners.set(pid, { pid, ...identity });
+      for (const part of text(`/proc/${pid}/cgroup`).split('/')) {
+        const name = part.trim();
+        if (name.startsWith('mc-runner-start-') && name.endsWith('.scope')) scopes.add(name);
+      }
+    }
+  }
+  const errors = [];
+  for (const [unit, path] of units) {
+    const stopped = command('systemctl', ['--user', 'stop', unit], { allowFailure: true });
+    const disabled = command('systemctl', ['--user', 'disable', unit], { allowFailure: true });
+    if (stopped.status !== 0 || disabled.status !== 0) errors.push(`unit cleanup failed: ${unit}`);
+    rmSync(path, { force: true });
+  }
+  for (const scope of scopes) command('systemctl', ['--user', 'stop', scope], { allowFailure: true });
+  for (const record of owners.values()) {
+    const identity = readIdentity?.(record.pid);
+    if (alive(record.pid) && identity?.bootId === record.bootId && identity?.starttime === record.starttime) {
+      try { process.kill(record.pid, 'SIGKILL'); } catch {}
+    }
+  }
+  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  await until(() => [...owners.values()].every(p => !alive(p.pid)), 5000);
+  const reload = command('systemctl', ['--user', 'daemon-reload'], { allowFailure: true });
+  if (reload.status !== 0) errors.push('cleanup daemon-reload failed');
+  for (const p of owners.values()) if (alive(p.pid)) errors.push(`process remains: ${p.pid}`);
+  for (const [unit, path] of units) {
+    if (existsSync(path) || existsSync(join(dirname(path), 'default.target.wants', unit))) errors.push(`unit/link remains: ${unit}`);
+    if (command('systemctl', ['--user', 'is-active', unit], { allowFailure: true }).status === 0) errors.push(`unit active: ${unit}`);
+  }
+  for (const scope of scopes) if (command('systemctl', ['--user', 'is-active', scope], { allowFailure: true }).status === 0) errors.push(`scope active: ${scope}`);
   rmSync(scratch, { recursive: true, force: true });
+  if (existsSync(scratch)) errors.push('scratch remains');
+  report.cleanup = { complete: errors.length === 0, errors, units: [...units.keys()], scopes: [...scopes], owners: [...owners.values()] };
+  report.milliseconds = performance.now() - start;
+  mkdirSync(dirname(output), { recursive: true });
+  writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
 }
-if (report.error || !report.cleanup.complete || report.assertions.some((item) => !item.ok)) {
-  process.stderr.write(`${report.error || 'Linux runner service check failed'}\n`);
+if (report.error || !report.cleanup.complete || report.assertions.some(a => !a.ok)) {
+  process.stderr.write(`${report.error || JSON.stringify(report.cleanup)}\n`);
   process.exitCode = 1;
-} else process.stdout.write(`Linux runner service check passed — ${report.assertions.length} assertions; report ${output}\n`);
-
-function awaitDir(path) { return readdirSync(path); }
+} else process.stdout.write(`Linux runner service check passed — ${report.assertions.length} assertions, ${report.milliseconds.toFixed(0)} ms; report ${output}\n`);

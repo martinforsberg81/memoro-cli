@@ -21,8 +21,8 @@ describe('Linux runner systemd adapter', () => {
     assert.match(generated.text, /WantedBy=default\.target/u);
     assert.match(generated.text, /ExecStart="\/opt\/node\/bin\/node" "\/opt\/mc\/src\/mc-cli\.js" "run" "start" "--if-was-running"/u);
     assert.match(generated.text, /Environment=HOME="\/home\/test user"/u);
-    assert.match(generated.text, /Environment=PATH="\/bin:\/opt\/tool \$\$dir"/u);
-    assert.ok(generated.text.includes(`Environment=MC_WORK_ROOT=${systemdQuote(root)}`));
+    assert.match(generated.text, /Environment=PATH="\/bin:\/opt\/tool \$dir"/u);
+    assert.ok(generated.text.includes(`Environment=MC_WORK_ROOT=${systemdQuote(root, { exec: false })}`));
     assert.doesNotMatch(generated.text, /TOKEN|MC_EMIT_SHELL_DIRECTIVES|MC_RUN_SUCCESSOR_OF|ExecStop|PIDFile|KeepAlive/u);
     assert.notEqual(rootIdentity('/tmp/root-one').unit, rootIdentity('/tmp/root-two').unit);
   });

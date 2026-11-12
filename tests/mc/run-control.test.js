@@ -96,6 +96,20 @@ describe('readRunner', () => {
 });
 
 describe('mc run start', () => {
+  it('Linux stale-owner start preserves every live drainer and unrelated current file', async () => {
+    const a = { pid: 100, generation: 'A', bootId: 'boot', starttime: '100' };
+    const current = JSON.stringify({ ...a, name: 'goal:fixture/held' });
+    const fx = fixture({ runner: { pid: 7777, generation: 'C', drainers: [a] }, live: [100], files: { [join(paths.dir, 'current-memoro.json')]: current } });
+    Object.assign(fx.deps, {
+      platform: 'linux', env: { MC_RUN_SYSTEMD_CONTEXT: 'scope' },
+      identity: (pid) => ({ bootId: 'boot', starttime: String(pid) }),
+      lifecycleLock: async (_root, transition) => transition(),
+    });
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]).drainers, [{ ...a, started: null }], 'stale newest PID discarded lane-less A');
+    assert.equal(fx.store[join(paths.dir, 'current-memoro.json')], current, 'stale newest PID erased unrelated live current');
+  });
   // stderr to the log and stdout to nothing: `say()` already appends every
   // line it prints, so a runner whose stdout is that same file logs the whole
   // round twice. stderr is the crash that explains a runner that has vanished.

@@ -87,12 +87,12 @@ export function rootIdentity(root) {
 
 // systemd's quoted-string syntax; percent specifiers and ExecStart variable
 // expansion are escaped before any argument reaches the manager.
-export function systemdQuote(value) {
+export function systemdQuote(value, { exec = true } = {}) {
   let out = '"';
   for (const char of String(value)) {
     const code = char.codePointAt(0);
     if (char === '"' || char === '\\') out += `\\${char}`;
-    else if (char === '$') out += '$$';
+    else if (char === '$' && exec) out += '$$';
     else if (char === '%') out += '%%';
     else if (code < 0x20 || code === 0x7f) out += `\\x${code.toString(16).padStart(2, '0')}`;
     else out += char;
@@ -110,7 +110,7 @@ export function bootUnit({ root, execPath, entry, env = {} }) {
     MC_REPOS_HOME: env.MC_REPOS_HOME || join(id.canonical, 'repos'),
   };
   const environment = Object.entries(values)
-    .map(([key, value]) => `Environment=${key}=${systemdQuote(key === 'PATH' ? String(value).split(':').map((part) => resolve(part || '.')).join(':') : resolve(value))}`);
+    .map(([key, value]) => `Environment=${key}=${systemdQuote(key === 'PATH' ? String(value).split(':').map((part) => resolve(part || '.')).join(':') : resolve(value), { exec: false })}`);
   const args = [resolve(execPath), resolve(entry), 'run', 'start', '--if-was-running'];
   return {
     ...id,

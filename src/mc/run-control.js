@@ -279,6 +279,14 @@ export function runnerState({ paths, deps }) {
   return { kind, held, finishing, live, stop, update };
 }
 
+/** Keep unknown live identities discoverable; only a verified death is prunable. */
+export function drainingOwners(held) {
+  const owners = [...(held?.drainers || []), ...(held?.predecessor ? [held.predecessor] : [])];
+  return [...new Map(owners.filter((owner) => owner.alive)
+    .map(({ alive: _alive, identityStatus: _status, ...owner }) =>
+      [`${owner.pid}:${owner.bootId}:${owner.starttime}:${owner.generation}`, owner])).values()];
+}
+
 /** The `started` stamp run.js writes: an ISO time to the second. */
 function stampOf(date) {
   return date.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -339,6 +347,9 @@ export async function startRunner({ argv = [], root = null, deps = realControlDe
     }
     const state = runnerState({ paths, deps });
     const { held, live } = state;
+    if (deps.platform === 'linux' && [...(held?.drainers || []), held?.predecessor].some((owner) => owner?.alive && owner.identityStatus === 'unknown')) {
+      return { ok: false, code: 1, lines: ['a draining runner has no verifiable Linux identity; refusing admission; inspect runner/runner.json'] };
+    }
     if (deps.platform === 'linux' && held?.alive && held.identityStatus === 'unknown') {
       return { ok: false, code: 1, lines: [`runner pid ${held.pid} has no verifiable Linux process identity; refusing takeover; inspect runner/runner.json`] };
     }
@@ -361,8 +372,10 @@ export async function startRunner({ argv = [], root = null, deps = realControlDe
     if (live) return takeOver({ state, argv, paths, deps });
     const lines = [];
     if (held) {
-      deps.remove(paths.runner);
-      clearCurrents(paths, deps);
+      if (deps.platform !== 'linux') {
+        deps.remove(paths.runner);
+        clearCurrents(paths, deps);
+      }
       lines.push(`cleared runner.json — the pid it named (${held.pid}) is gone`);
     }
     if (state.stop) {
@@ -370,7 +383,7 @@ export async function startRunner({ argv = [], root = null, deps = realControlDe
       lines.push('removed the STOP the last stop left');
     }
     deps.remove(paths.update);
-    return spawnRunner({ argv, paths, deps, lines });
+    return spawnRunner({ argv, paths, deps, lines, drainers: deps.platform === 'linux' ? drainingOwners(held) : [] });
   };
   let result;
   try {
@@ -599,7 +612,7 @@ export async function stopRunner({ force = false, root = null, deps = realContro
       try {
         ghosts = await deps.lifecycleLock(root ?? workRoot(deps.env), () => {
           const latest = readRunner({ paths, read: deps.read, alive: deps.alive, identity: deps.identity });
-          if (latest?.pid === held.pid && latest.generation === held.generation && !latest.alive) deps.remove(paths.runner);
+          if (latest?.pid === held.pid && latest.generation === held.generation && !latest.alive && !drainingOwners(latest).length) deps.remove(paths.runner);
           const removed = [];
           for (const name of deps.list(paths.dir).filter((item) => /^current-.+\.json$/u.test(item))) {
             const path = join(paths.dir, name);
@@ -675,7 +688,14 @@ export async function stopRunner({ force = false, root = null, deps = realContro
         let current = null;
         try { current = raw == null ? null : JSON.parse(raw); } catch { return []; }
         const endedPids = new Set(ended.filter((end) => end.ok && !deps.alive(end.pid)).map((end) => end.pid));
-        if (current?.generation === held.generation && Number(current.pid) === held.pid && endedPids.has(held.pid)) deps.remove(paths.runner);
+        if (current?.generation === held.generation && Number(current.pid) === held.pid && endedPids.has(held.pid)) {
+          const fresh = readRunner({ paths, read: deps.read, alive: deps.alive, identity: deps.identity });
+          const retained = drainingOwners(fresh);
+          if (retained.length) {
+            const { predecessor: _before, drainers: _drainers, ...rest } = current;
+            (deps.writeAtomic || deps.write)(paths.runner, `${JSON.stringify({ ...rest, drainers: retained }, null, 2)}\n`);
+          } else deps.remove(paths.runner);
+        }
         const removed = [];
         for (const name of deps.list(paths.dir).filter((item) => /^current-.+\.json$/u.test(item))) {
           const path = join(paths.dir, name);
