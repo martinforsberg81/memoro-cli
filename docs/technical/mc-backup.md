@@ -43,6 +43,11 @@ other tidy target kinds or complete backup capture.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.
+Archive files are fsynced before close; payload, bundle and archive directories
+are fsynced before the sibling-directory rename, and the containing directory
+is fsynced after publication. Restore fsyncs materialized files and staging
+directories before its final rename, then fsyncs the parent. A persistence
+failure refuses publication rather than reporting a durable archive or restore.
 The v2 manifest records typed file, directory and symlink members. Verification
 rejects malformed, escaping, absolute, duplicate, case-colliding and
 symlink-parent paths, unsupported schema versions, and payload or bundle digest

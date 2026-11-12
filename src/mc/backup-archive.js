@@ -1,6 +1,6 @@
 /** Private, checksummed storage and validation for programme backup archives. */
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 
 export const BACKUP_SCHEMA = 'mc-programme-backup';
@@ -50,7 +50,16 @@ function validateMembers(members) {
 
 function writeDurable(path, bytes, mode = 0o600) {
   const fd = openSync(path, 'wx', mode);
-  try { writeFileSync(fd, bytes); } finally { closeSync(fd); }
+  try {
+    writeFileSync(fd, bytes);
+    fsyncSync(fd);
+  } finally { closeSync(fd); }
+}
+
+/** Persist directory entries before publishing their parent directory. */
+function syncDirectory(path) {
+  const fd = openSync(path, 'r');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 function rejectSymlinkAncestors(path, { includeLeaf = true } = {}) {
@@ -112,7 +121,11 @@ export function createArchive(output, { programmes, members, bundles = [], metad
     writeDurable(join(temp, 'manifest.json'), bytes);
     writeDurable(join(temp, 'manifest.sha256'), Buffer.from(`${sha256(bytes)}  manifest.json\n`));
     verifyArchive(temp);
+    syncDirectory(join(temp, 'payload'));
+    syncDirectory(join(temp, 'bundles'));
+    syncDirectory(temp);
     renameSync(temp, root);
+    syncDirectory(dirname(root));
     return { path: root, manifest_sha256: sha256(bytes), programmes: manifest.programmes, members: members.length, bundles: bundleRecords.length };
   } catch (error) {
     rmSync(temp, { recursive: true, force: true });
@@ -200,7 +213,7 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
         const bytes = readRegular(archiveRoot, member.payload);
         const fd = openSync(target, 'wx', member.mode & 0o777);
-        try { writeFileSync(fd, bytes); } finally { closeSync(fd); }
+        try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
         chmodSync(target, member.mode & 0o777);
       } else {
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -217,7 +230,18 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
     // existing output. A sibling rename makes the restored root appear whole.
     rejectSymlinkAncestors(parent);
     if (existsSync(destination)) throw new Error(`restore output already exists: ${destination}`);
+    const directories = new Set();
+    for (const member of members) {
+      const parts = member.path.split('/');
+      for (let i = 1; i < parts.length; i += 1) directories.add(parts.slice(0, i).join('/'));
+      if (member.type === 'directory') directories.add(member.path);
+    }
+    for (const directory of [...directories].sort((a, b) => b.split('/').length - a.split('/').length)) {
+      syncDirectory(join(temp, ...directory.split('/')));
+    }
+    syncDirectory(temp);
     renameSync(temp, destination);
+    syncDirectory(parent);
     return { path: destination, ...receipt };
   } catch (error) {
     rmSync(temp, { recursive: true, force: true });
