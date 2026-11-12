@@ -79,16 +79,58 @@ function rejectSymlinkAncestors(path, { includeLeaf = true } = {}) {
   }
 }
 
+/** Create a missing absolute directory chain without ever traversing a symlink. */
+function ensureSafeDirectory(path) {
+  const absolute = resolve(path);
+  const { root } = parse(absolute);
+  const parts = absolute.slice(root.length).split(sep).filter(Boolean);
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`unexpected non-directory or symlink in archive path ${current}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      mkdirSync(current, { mode: 0o700 });
+      // Re-read the entry: another actor must not have substituted a link.
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`unexpected non-directory or symlink in archive path ${current}`);
+    }
+  }
+  return absolute;
+}
+
+function pathExists(path) {
+  try { lstatSync(path); return true; } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/** macOS exposes its temporary and variable trees through conventional root aliases. */
+function normalizeSystemAlias(path) {
+  const absolute = resolve(path);
+  const { root } = parse(absolute);
+  const first = absolute.slice(root.length).split(sep)[0];
+  if (first !== 'tmp' && first !== 'var') return absolute;
+  const alias = join(root, first);
+  try {
+    if (lstatSync(alias).isSymbolicLink()) return join(realpathSync(alias), absolute.slice(alias.length + 1));
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  return absolute;
+}
+
 /** Publish a complete private archive atomically; callers provide only typed records and bytes. */
 export function createArchive(output, { programmes, members, bundles = [], metadata = {}, now = () => new Date().toISOString() }) {
   if (!isAbsolute(output)) throw new Error('archive output must be absolute');
-  if (existsSync(output)) throw new Error(`archive output already exists: ${output}`);
+  if (pathExists(output)) throw new Error(`archive output already exists: ${output}`);
   validateMembers(members);
   if (!Array.isArray(programmes) || programmes.some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))) throw new Error('invalid programme inventory');
-  const requested = resolve(output);
-  mkdirSync(dirname(requested), { recursive: true });
+  const requested = normalizeSystemAlias(output);
+  ensureSafeDirectory(dirname(requested));
+  rejectSymlinkAncestors(dirname(requested));
   const root = join(realpathSync(dirname(requested)), basename(requested));
-  rejectSymlinkAncestors(dirname(root));
   const temp = `${root}.tmp-${process.pid}-${randomUUID()}`;
   mkdirSync(temp, { mode: 0o700 });
   try {
@@ -193,9 +235,10 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
   if (manifest.bundles.length) {
     throw new Error('restore requires local repository declarations for every Git bundle; no destination was created');
   }
-  const requested = resolve(output);
-  if (existsSync(requested)) throw new Error(`restore output already exists: ${requested}`);
-  mkdirSync(dirname(requested), { recursive: true });
+  const requested = normalizeSystemAlias(output);
+  if (pathExists(requested)) throw new Error(`restore output already exists: ${requested}`);
+  ensureSafeDirectory(dirname(requested));
+  rejectSymlinkAncestors(dirname(requested));
   const parent = realpathSync(dirname(requested));
   rejectSymlinkAncestors(parent);
   const destination = join(parent, basename(requested));

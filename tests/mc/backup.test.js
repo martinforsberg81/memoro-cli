@@ -72,6 +72,26 @@ test('backup archive: verification refuses changed payload bytes and unexpected 
   assert.throws(() => verifyArchive(output), /unexpected symlink/u);
 });
 
+test('backup archive: create and restore refuse symlinked output parents without writing through them', (t) => {
+  const root = fixture(t);
+  const elsewhere = join(root, 'elsewhere');
+  mkdirSync(elsewhere);
+  const link = join(root, 'linked-parent');
+  symlinkSync(elsewhere, link);
+  const bytes = Buffer.from('safe');
+  const members = [{ path: 'p/file', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes }];
+
+  assert.throws(() => createArchive(join(link, 'archive'), { programmes: ['p'], members }), /symlink in archive path/u);
+  assert.throws(() => lstatSync(join(elsewhere, 'archive')),
+    { code: 'ENOENT' }, 'archive creation must not follow the output parent link');
+
+  const archive = join(root, 'archive');
+  createArchive(archive, { programmes: ['p'], members });
+  assert.throws(() => restoreArchive(archive, join(link, 'restored')), /symlink in archive path/u);
+  assert.throws(() => lstatSync(join(elsewhere, 'restored')),
+    { code: 'ENOENT' }, 'restore must not follow the destination parent link');
+});
+
 test('backup restore: verifies then atomically publishes byte- and mode-preserving inactive content; refuses unsupported bundles', async (t) => {
   const root = fixture(t);
   const archive = join(root, 'archive');
