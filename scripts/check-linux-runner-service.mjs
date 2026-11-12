@@ -137,6 +137,28 @@ try {
   assertThat('detached successor remains in its managed systemd cgroup', Boolean(scopeCgroup) && childCgroup.includes(scopeCgroup), `${scopeCgroup}\n${childCgroup}`);
 
   const paths = controlPaths(roots.work);
+  const controller = join(scratch, 'runner-controller.mjs');
+  const resultFile = join(scratch, 'runner-controller-result.json');
+  const controlUrl = pathToFileURL(join(process.cwd(), 'src/mc/run-control.js')).href;
+  writeFileSync(controller, `import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\nconst { realControlDeps, startRunner, handOver, controlPaths } = await import(${JSON.stringify(controlUrl)});\nconst root = process.env.MC_WORK_ROOT;\nconst worker = ${JSON.stringify(worker)};\nconst deps = realControlDeps(process.env);\ndeps.entry = worker;\nconst started = await startRunner({ root, deps });\nif (!started.ok) throw new Error(started.lines.join('; '));\nconst paths = controlPaths(root);\nconst owner = JSON.parse(deps.read(paths.runner));\ndeps.respawn = ({ env = {} } = {}) => { const child = spawn(process.execPath, [worker, 'run', 'start'], { detached: true, stdio: 'ignore', env: { ...process.env, ...env } }); child.unref(); return child.pid; };\nconst handed = await handOver({ paths, deps, say: () => {}, predecessor: owner.pid, predecessorGeneration: owner.generation });\nif (!handed.ok) throw new Error(handed.why || 'update handover failed');\nwriteFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ predecessor: owner.pid, successor: handed.pid }));\n`, { mode: 0o600 });
+  const runnerScopeArgs = scopeCommand({ root: roots.work, execPath: process.execPath, entry: controller, argv: [] });
+  const runnerScope = runnerScopeArgs.find((item) => item.startsWith('--unit='))?.slice(7);
+  scopeNames.add(runnerScope);
+  command('systemd-run', runnerScopeArgs);
+  assertThat('scoped mc start and update publish two real owners', waitUntil(() => existsSync(resultFile)) && existsSync(paths.runner), resultFile);
+  const controllerResult = JSON.parse(readFileSync(resultFile, 'utf8'));
+  let current = JSON.parse(readFileSync(paths.runner, 'utf8'));
+  const predecessorPid = controllerResult.predecessor;
+  const successorPid = controllerResult.successor;
+  pids.add(predecessorPid); pids.add(successorPid);
+  assertThat('real successor update publishes predecessor and complete drainer identity', current.pid === successorPid && current.predecessor.pid === predecessorPid && current.drainers.some((item) => item.pid === predecessorPid && item.generation), JSON.stringify(current.drainers));
+  const runnerCgroup = command('systemctl', ['--user', 'show', runnerScope, '--property=ControlGroup', '--value']).stdout.trim();
+  const predecessorCgroup = readFileSync(`/proc/${predecessorPid}/cgroup`, 'utf8');
+  const successorCgroup = readFileSync(`/proc/${successorPid}/cgroup`, 'utf8');
+  assertThat('successor inherited the managed cgroup before predecessor exit', predecessorCgroup.includes(runnerCgroup) && successorCgroup.includes(runnerCgroup), `${runnerCgroup}\n${predecessorCgroup}\n${successorCgroup}`);
+  try { process.kill(predecessorPid, 'SIGTERM'); } catch {}
+  assertThat('successor remains alive in the same scope after predecessor exit', waitUntil(() => command('kill', ['-0', String(predecessorPid)], { allowFailure: true }).status !== 0) && command('kill', ['-0', String(successorPid)], { allowFailure: true }).status === 0 && readFileSync(`/proc/${successorPid}/cgroup`, 'utf8').includes(runnerCgroup), String(successorPid));
+  report.owners.push({ pid: predecessorPid, generation: current.predecessor.generation, unit: runnerScope }, { pid: successorPid, generation: current.generation, predecessor: predecessorPid, drainers: current.drainers.map((item) => item.pid), unit: runnerScope });
   const workerDeps = {
     platform: 'linux', env, now: () => new Date(), sleep: async (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     exists: existsSync, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
@@ -156,19 +178,10 @@ try {
     respawn: ({ env: extra = {} } = {}) => { const child = spawn(process.execPath, [worker, 'run', 'start'], { detached: true, stdio: 'ignore', env: { ...process.env, ...extra } }); child.unref(); return child.pid; },
   };
   const competingStarts = await Promise.all([startRunner({ root: roots.work, deps: workerDeps }), startRunner({ root: roots.work, deps: workerDeps })]);
-  const first = competingStarts.find((result) => result.ok);
-  assertThat('competing real starts admit one owner', Boolean(first) && competingStarts.filter((result) => result.ok).length === 1, competingStarts.map((result) => `${result.ok}:${result.lines.join(' ')}`).join(' | '));
-  assertThat('real mc start claims and publishes one owner', first.ok && existsSync(paths.runner), first.lines.join('; '));
-  let current = JSON.parse(readFileSync(paths.runner, 'utf8'));
-  report.owners.push({ pid: current.pid, generation: current.generation, unit: serviceUnit });
-  pids.add(current.pid);
-  const handed = await handOver({ paths, deps: workerDeps, say: () => {}, predecessor: current.pid, predecessorGeneration: current.generation });
-  assertThat('real successor update publishes a successor and preserves predecessor', handed.ok && JSON.parse(readFileSync(paths.runner, 'utf8')).predecessor.pid === current.pid, String(handed.pid));
-  pids.add(handed.pid);
+  assertThat('competing real starts admit one owner', competingStarts.filter((result) => result.ok).length === 0 && JSON.parse(readFileSync(paths.runner, 'utf8')).pid === successorPid, competingStarts.map((result) => `${result.ok}:${result.lines.join(' ')}`).join(' | '));
   current = JSON.parse(readFileSync(paths.runner, 'utf8'));
-  report.owners.push({ pid: current.pid, generation: current.generation, predecessor: current.predecessor.pid, drainers: current.drainers.map((item) => item.pid) });
   const stopped = await stopRunner({ force: true, root: roots.work, deps: workerDeps });
-  assertThat('forced stop ends current and predecessor owner', stopped.ok && !workerDeps.alive(current.pid) && !workerDeps.alive(current.predecessor.pid), stopped.lines.join('; '));
+  assertThat('forced stop ends the remaining verified owner without requiring the dead predecessor', stopped.ok && !workerDeps.alive(successorPid) && !workerDeps.alive(predecessorPid), stopped.lines.join('; '));
   const conditionalRoot = join(scratch, 'conditional-work');
   mkdirSync(conditionalRoot);
   const conditionalPaths = controlPaths(conditionalRoot);
