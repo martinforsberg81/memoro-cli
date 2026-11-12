@@ -48,7 +48,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'priority') {
     try {
       const result = setProgrammePriorities(scanned.positional, Number(scanned.flags.set), {
-        home: programsHome(deps.env || process.env), known: listing.programmes.map((item) => item.name),
+        home: programsHome(deps.env || process.env), known: listing.programmes.map((item) => item.name), env: deps.env || process.env,
       });
       if (!result.ok) { stderr.write(`mc: ${result.reason}\n`); return 2; }
       for (const name of result.programmes) stdout.write(`${name}: priority ${result.priority}\n`);

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { run } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
 import { PRIORITY_FILE, readProgrammePriority } from '../../src/mc/programme-priority.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 function fixture(t) {
@@ -23,7 +24,7 @@ function fixture(t) {
   const command = (args) => run(args, {
     env, read, stdout: { write: (text) => { out += text; } }, stderr: { write: (text) => { err += text; } },
   });
-  return { home, read, command, output: () => out, errors: () => err };
+  return { home, env, read, command, output: () => out, errors: () => err };
 }
 
 test('programme priority: real command persists several preferences, preserves others, exposes JSON and resets', async (t) => {
@@ -67,4 +68,18 @@ test('programme priority: malformed or absent files use zero without changing th
     assert.equal(readProgrammePriority('alpha', { home: f.home }), 0);
     assert.equal(readFileSync(path, 'utf8'), text);
   }
+});
+
+test('programme priority: a selected draining programme refuses the real priority write while unrelated work stays writable', async (t) => {
+  const f = fixture(t);
+  const alphaPath = join(f.home, 'alpha', PRIORITY_FILE);
+  const betaPath = join(f.home, 'beta', PRIORITY_FILE);
+  writeFileSync(alphaPath, '{"priority":1}\n');
+  writeFileSync(betaPath, '{"priority":2}\n');
+  const before = readFileSync(alphaPath, 'utf8');
+  beginBackup(['alpha'], { env: f.env });
+  assert.equal(await f.command(['priority', 'alpha', '--set', '8']), 1);
+  assert.equal(readFileSync(alphaPath, 'utf8'), before);
+  assert.equal(await f.command(['priority', 'beta', '--set', '9']), 0);
+  assert.equal(readProgrammePriority('beta', { home: f.home }), 9);
 });
