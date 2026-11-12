@@ -34,6 +34,12 @@ their shared `src/mc/goal-archive.js` boundary. This covers both direct
 `mc goal archive` calls and runner finalization through GitHub close, queue
 reconciliation, worktree/branch removal, goal movement and phase renumbering;
 the lease is retained until all local reconciliation returns.
+The `mc tidy --apply` path rechecks the local programme lifecycle at the final
+goal-worktree removal boundary. A draining, held, moved, corrupt or unreadable
+programme record retains the checkout even when an earlier tidy list selected
+it; the state is read again inside the existing goal-worktree removal lock.
+This guard protects goal checkout bytes and branch registration only, not
+other tidy target kinds or complete backup capture.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.

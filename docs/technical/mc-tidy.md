@@ -154,6 +154,10 @@ outside the allocation/admission critical section. Git removes only
 the checkout without `--force`; its branch and every goal document, including
 `GOAL.json` and `LOG.md`, stay unchanged. When the goal starts, the runner's
 existing `placeGoalWorktrees` recovery calls `addGoalWorktree` on that branch.
+The final removal boundary also rechecks the programme's local lifecycle record
+inside this lock. Any draining, held, moved or unreadable lifecycle state
+retains the checkout, even if a prior list selected it; absence of a fence
+remains ordinary active work.
 During a disk-pressure pass only the 72-hour age condition is relaxed; all
 other checks remain identical. Invalid or unreadable metadata, ignored local
 state, active work, unknown ownership, or changed preview evidence means keep.
