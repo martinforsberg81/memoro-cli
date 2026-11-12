@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path';
 import { createArchive } from './backup-archive.js';
 import { inventoryProgrammeTree } from './backup-inventory.js';
 import { beginBackup, backupStatus, resumeBackup } from './programme-lifecycle.js';
-import { planHome, programsHome } from './paths.js';
+import { planHome, programsHome, restrictedProgrammeDir } from './paths.js';
 
 const digest = (members) => createHash('sha256').update(JSON.stringify(members.map(({ bytes, ...member }) => member))).update(members.filter((member) => member.type === 'file').map((member) => member.bytes).reduce((all, bytes) => Buffer.concat([all, bytes]), Buffer.alloc(0))).digest('hex');
 
@@ -72,6 +72,17 @@ export function createProgrammeBackup(selection, output, { env = process.env, id
     }
     members.push(...second);
     omissions.push(...secondOmissions);
+    // Restricted originals are deliberately outside programme/worktree trees.
+    // Record only that a selected programme has a host-local dependency: do
+    // not enumerate the directory, read its README, or inspect any payload.
+    const restricted = restrictedProgrammeDir(programme, env);
+    try {
+      const stat = lstatSync(restricted);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`restricted programme dependency is not a real directory: ${restricted}`);
+      omissions.push({ path: `restricted/${programme}`, classification: 'restricted-dependency', source: 'mc-layout.md: restricted evidence remains local and is not archived' });
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
   const archive = create(output, {
     programmes: held.selection,

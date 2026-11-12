@@ -107,6 +107,11 @@ The currently routed command surface is:
   no runnable/full-recovery claim is made for work requiring it. These exact
   omissions do not classify any other ignored entry: unclassified ignored data
   and required external dependencies still prevent a complete recovery claim.
+  If `~/mc/restricted/<programme>` exists, create records only a
+  `restricted-dependency` omission for that selected programme. It does not
+  enumerate the restricted directory or read its README or evidence bytes;
+  its non-sensitive dependency facts remain a host-side reconciliation task
+  under [mc-layout.md](mc-layout.md).
   The
   held fence remains until explicit release on refusal. It does not claim a
   complete programme backup.

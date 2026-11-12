@@ -198,6 +198,9 @@ test('backup command: explicit create holds selected content and refuses Git wor
   writeFileSync(join(programme, '.wrangler', 'state', 'local.sqlite'), 'source-local D1 rows');
   mkdirSync(join(programme, 'node_modules', 'fixture'), { recursive: true });
   writeFileSync(join(programme, 'node_modules', 'fixture', 'index.js'), 'generated dependency');
+  mkdirSync(join(root, 'restricted', 'chosen', 'owner-originals'), { recursive: true });
+  writeFileSync(join(root, 'restricted', 'chosen', 'README.md'), 'restricted evidence dependency');
+  writeFileSync(join(root, 'restricted', 'chosen', 'owner-originals', 'account.json'), 'restricted owner bytes');
   const out = { value: '', write(text) { this.value += text; } };
   const err = { value: '', write(text) { this.value += text; } };
   const archive = join(root, 'archive');
@@ -213,9 +216,12 @@ test('backup command: explicit create holds selected content and refuses Git wor
     ['chosen/.dev.vars', 'credential'],
     ['chosen/.wrangler', 'host-dependency'],
     ['chosen/node_modules', 'generated'],
+    ['restricted/chosen', 'restricted-dependency'],
   ]);
   assert.equal(JSON.stringify(manifest).includes('never archive this credential'), false);
   assert.equal(JSON.stringify(manifest).includes('source-local D1 rows'), false);
+  assert.equal(JSON.stringify(manifest).includes('restricted evidence dependency'), false);
+  assert.equal(JSON.stringify(manifest).includes('restricted owner bytes'), false);
 
   const repoProgramme = join(root, 'programs', 'repo-work');
   mkdirSync(join(repoProgramme, 'repo', '.git'), { recursive: true });
