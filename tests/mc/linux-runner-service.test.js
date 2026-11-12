@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { bootUnit, installBootAdapter, linuxIdentityStatus, readLinuxIdentity, rootIdentity, scopeCommand, systemdQuote } from '../../src/mc/linux-runner-service.js';
 
@@ -32,6 +35,16 @@ describe('Linux runner systemd adapter', () => {
     assert.ok(args.includes('--expand-environment=no'));
     assert.ok(args.some((arg) => arg.startsWith('--unit=mc-runner-start-')));
     assert.deepEqual(args.slice(args.indexOf('--') + 1), ['/node', '/mc', 'run', 'start', '--no-merge']);
+  });
+
+  it('uses the same stable adapter identity for a canonical root and its symlink alias', (t) => {
+    const scratch = mkdtempSync(join(tmpdir(), 'mc-linux-root-alias-'));
+    t.after(() => rmSync(scratch, { recursive: true, force: true }));
+    const root = join(scratch, 'root');
+    const alias = join(scratch, 'alias');
+    mkdirSync(root);
+    symlinkSync(root, alias);
+    assert.equal(rootIdentity(root).unit, rootIdentity(alias).unit);
   });
 
   it('installs once, reloads only on change, enables without starting and reports linger', () => {

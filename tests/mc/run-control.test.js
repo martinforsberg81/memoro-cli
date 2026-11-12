@@ -218,6 +218,58 @@ describe('mc run start', () => {
     assert.ok(out.lines.some((line) => /cleared runner\.json/u.test(line)));
   });
 
+  it('inherits every verified live Linux drainer across a further takeover', async () => {
+    const fx = fixture({ runner: {
+      pid: 200, generation: 'B', bootId: 'boot', starttime: '20', takeover: true,
+      predecessor: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
+      drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }],
+    }, live: [100, 200], stop: true });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]).drainers.map(({ pid, generation }) => [pid, generation]), [[100, 'A'], [200, 'B']], JSON.stringify(JSON.parse(fx.store[paths.runner])));
+  });
+
+  it('refuses an existing corrupt Linux owner record instead of treating it as an empty root', async () => {
+    const fx = fixture({ files: { [paths.runner]: '{broken' } });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    const out = await startRunner({ root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, false);
+    assert.match(out.lines.join('\n'), /corrupt or unreadable.*refusing Linux start/u);
+    assert.equal(fx.calls.spawned.length, 0);
+  });
+
+  it('forced Linux stop signals every verified draining owner and preserves unknown legacy identities', async () => {
+    const fx = fixture({ runner: {
+      pid: 200, generation: 'B', bootId: 'boot', starttime: '20',
+      predecessor: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
+      drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }],
+    }, live: [100, 200], files: { [`${paths.dir}/current-a.json`]: JSON.stringify({ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }) } });
+    fx.deps.platform = 'linux';
+    fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.ps = () => '';
+    const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.killed.map(([pid]) => pid).sort((a, b) => a - b), [100, 200]);
+    assert.equal(paths.runner in fx.store, false);
+    assert.equal(`${paths.dir}/current-a.json` in fx.store, false);
+
+    const legacy = fixture({ runner: { pid: 300 }, live: [300] });
+    legacy.deps.platform = 'linux';
+    legacy.deps.identity = () => ({ bootId: 'boot', starttime: '300' });
+    legacy.deps.lifecycleLock = (_root, transition) => transition();
+    const refused = await stopRunner({ force: true, root: ROOT, deps: legacy.deps });
+    assert.equal(refused.ok, false);
+    assert.deepEqual(legacy.calls.killed, [], 'an identity-less live legacy owner was not signalled');
+    assert.ok(paths.runner in legacy.store, 'unknown owner state was not removed');
+  });
+
   it('re-enters an explicit Linux background start in a unique systemd scope', async () => {
     const fx = fixture();
     fx.deps.platform = 'linux';

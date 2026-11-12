@@ -89,7 +89,7 @@ import {
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { offlineBackoffMs, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
-import { readLinuxIdentity, withLifecycleLock } from './linux-runner-service.js';
+import { linuxIdentityStatus, readLinuxIdentity, withLifecycleLock } from './linux-runner-service.js';
 import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
@@ -1817,6 +1817,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
         check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
+        ...(marked?.generation ? { generation: marked.generation } : {}),
+        ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
       };
       writeJson(currentPath, current);
@@ -2052,14 +2054,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const owner = Number(held?.pid);
       const known = Number.isInteger(owner) && owner > 0;
       const foreign = known && owner !== pid;
-      if (foreign && !alive(owner)) {
+      const identityStatus = foreign && deps.platform === 'linux'
+        ? linuxIdentityStatus(held, deps.identity?.(owner), alive(owner)) : null;
+      if (foreign && (!alive(owner) || identityStatus === 'stale')) {
         const to = join(paths.log, `dead-${basename(path, '.json')}-${owner}.json`);
-        if (!deps.move?.(path, to)) remove(path);
+        const discard = () => {
+          let latest = null;
+          try { latest = JSON.parse(deps.read(path) ?? ''); } catch { return false; }
+          if (Number(latest?.pid) !== owner || latest?.generation !== held?.generation) return false;
+          if (!deps.move?.(path, to)) remove(path);
+          return true;
+        };
+        if (deps.platform === 'linux') {
+          try { Promise.resolve(deps.lifecycleLock(root, discard)).catch(() => {}); } catch { /* retain the record if the gate fails */ }
+        } else discard();
         say(`lane file ${basename(path)} names pid ${owner}, which is gone — ${held?.name || 'nothing named'}; moved to log/${basename(to)}`);
         return [];
       }
       const lane = Number.isInteger(held?.lane) && held.lane > 0 ? held.lane : 0;
-      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign }];
+      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign, ...(identityStatus ? { identityStatus } : {}) }];
     });
   }
 
@@ -2200,7 +2213,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (stopRequested()) return;
     // runner.log to runner.log.1 past RUNNER_LOG_MAX_BYTES, before this pass says anything.
     try { deps.rotate?.(paths.runnerLog, RUNNER_LOG_MAX_BYTES); } catch { /* the log goes on growing */ }
-    dropPredecessor();
+    await dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
     askGithub();
@@ -2269,23 +2282,45 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // (`mc run --update` on a stopping runner); `takeover` says this runner
   // stands down when runner.json names another (`replaced`), which is what
   // makes taking over from it safe (run-control.js `takeOver`).
-  const markRunner = ({ predecessor = null, args = [], generation = null, commit: knownCommit = undefined } = {}) => {
+  const markRunner = ({ predecessor = null, drainers = [], args = [], generation = null, commit: knownCommit = undefined } = {}) => {
     const dir = knownCommit === undefined ? mcCheckout({ exists: deps.exists }) : null;
     const commit = knownCommit === undefined && dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : knownCommit;
     marked = {
       pid, started: stamp(), ...(commit ? { commit } : {}), args, takeover: true, ...(predecessor ? { predecessor } : {}),
+      ...(drainers.length ? { drainers } : {}),
       ...(generation ? { generation } : {}),
       ...(deps.identity?.(pid) || {}),
     };
     writeJson(paths.runner, marked);
   };
-  const dropPredecessor = () => {
-    const before = marked?.predecessor;
-    if (!before || alive(before.pid)) return;
-    const { predecessor: _gone, ...rest } = marked;
-    marked = rest;
-    writeJson(paths.runner, marked);
-    say(`pid ${before.pid}, the runner this one took over from, has finished what it held and exited`);
+  const dropPredecessor = async () => {
+    if (!marked) return;
+    const owners = [...(marked.drainers || []), ...(marked.predecessor ? [marked.predecessor] : [])];
+    const dead = (owner) => {
+      const isAlive = alive(Number(owner.pid));
+      if (deps.platform !== 'linux') return !isAlive;
+      const status = linuxIdentityStatus(owner, deps.identity?.(Number(owner.pid)), isAlive);
+      return status === 'dead' || status === 'stale';
+    };
+    const gone = owners.filter(dead);
+    if (!gone.length) return;
+    const prune = () => {
+      let latest = null;
+      try { latest = JSON.parse(deps.read(paths.runner) ?? ''); } catch { return false; }
+      if (Number(latest?.pid) !== pid || latest?.generation !== marked.generation) return false;
+      const retained = owners.filter((owner) => !gone.some((item) => item.pid === owner.pid && (item.generation || '') === (owner.generation || '')));
+      const { predecessor: _old, ...rest } = latest;
+      const immediate = latest.predecessor && retained.find((item) => item.pid === Number(latest.predecessor.pid));
+      marked = { ...rest, ...(retained.length ? { drainers: retained } : {}), ...(immediate ? { predecessor: immediate } : {}) };
+      writeJson(paths.runner, marked);
+      return true;
+    };
+    try {
+      const changed = deps.platform === 'linux'
+        ? await (deps.lifecycleLock || ((_root, fn) => fn()))(root, prune)
+        : prune();
+      if (changed) say(`drainer owner(s) ${gone.map((owner) => owner.pid).join(', ')} have ended; pruning them from runner.json`);
+    } catch { /* do not mutate state without the lifecycle gate */ }
   };
   /**
    * New code on origin/main of mc's own checkout is an UPDATE this runner
@@ -2322,7 +2357,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   return {
     paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested, startCapacityTicker,
-    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, markRunner, dropPredecessor, clearRunner,
+    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner,
   };
 }
 
@@ -2426,8 +2461,19 @@ export async function runLoop({
           runner.say(`cleared runner.json — the pid it named (${current.pid}) is gone`);
         }
         replacing = successor;
-        const predecessor = successor ? { pid: successor.pid, started: successor.started || null } : null;
-        runner.markRunner({ args, generation: reservation || randomUUID(), commit, ...(predecessor ? { predecessor } : {}) });
+        const predecessor = successor ? {
+          pid: successor.pid, started: successor.started || null,
+          ...(successor.generation ? { generation: successor.generation } : {}),
+          ...(successor.bootId ? { bootId: successor.bootId } : {}),
+          ...(successor.starttime ? { starttime: successor.starttime } : {}),
+        } : null;
+        const inherited = [
+          ...(current?.drainers || []).filter((owner) => owner.alive && owner.identityStatus !== 'unknown'),
+          ...(current?.predecessor?.alive && current.predecessor.identityStatus !== 'unknown' ? [current.predecessor] : []),
+          ...(successor ? [successor] : []),
+        ];
+        const unique = new Map(inherited.map((owner) => [`${owner.pid}:${owner.bootId && owner.starttime ? `${owner.bootId}:${owner.starttime}` : owner.generation || ''}`, owner]));
+        runner.markRunner({ args, generation: reservation || randomUUID(), commit, ...(predecessor ? { predecessor } : {}), drainers: [...unique.values()].map(({ alive: _alive, identityStatus: _status, ...owner }) => owner) });
         return { ok: true };
       });
     } catch (error) {
@@ -2533,7 +2579,7 @@ export async function runLoop({
       return true;
     }
     const handed = await (deps.handOver || handOver)({
-      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, finishing: ownInFlight().length,
+      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, predecessorGeneration: runner.generation(), finishing: ownInFlight().length,
     });
     if (handed.ok) { stopCapacityTicker(); handedOver = true; drainMark = deps.now().getTime(); return true; }
     runner.holdUpdate(false);

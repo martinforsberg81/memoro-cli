@@ -53,6 +53,59 @@ After login it starts only if runner.json names a dead pid and no STOP is
 present. A runner deliberately stopped stays stopped. Node loads its module
 graph once, so a landed code change needs a new process to use it.
 
+### Linux user systemd
+
+On Linux, each canonical `MC_WORK_ROOT` has its own
+`mc-runner-boot-<sha256-prefix>.service` user unit and uniquely named transient
+start scopes. A successful explicit background start runs in a
+`systemd-run --user --scope`; the scope command returns after systemd accepts
+it, while the detached runner remains in the scope's cgroup. Starts already
+inside an mc boot unit or start scope do not nest. An unavailable user manager
+fails a background start visibly; `mc run` in the foreground does not require
+the manager.
+
+The persistent unit is a `Type=oneshot`, `RemainAfterExit=yes`, `Restart=no`,
+`KillMode=control-group` adapter wanted by `default.target`. It runs the
+absolute Node and mc entry with `run start --if-was-running`; it has no
+`ExecStop`, PID file, supervisor or watchdog. Explicit successful starts
+rewrite the unit only when its content changes, daemon-reload only after a
+change, and enable it without `--now`; they never stop or restart an existing
+cgroup. Unit environment is restricted to resolved `HOME`, `PATH`, `MC_HOME`,
+`MC_WORK_ROOT` and `MC_REPOS_HOME` values. Unit paths and arguments use
+systemd quoting with specifier and environment expansion escaped. Credentials,
+shell directive flags and runtime successor/session identity are not persisted.
+
+Enabling the unit is not proof that it can start before login. mc reports
+manager and installation errors and reads `loginctl`'s Linger state; with
+`Linger=no` it reports boot recovery not ready and gives the interactive remedy
+`loginctl enable-linger`. mc never invokes sudo or changes lingering. The
+unit's `active (exited)` state says only that the oneshot adapter ran, not that
+the runner remains healthy. An automatic start requires runner state proving
+that a runner previously existed and no STOP; it never removes STOP. Explicit
+start and an explicit update takeover can consume the STOP they claim under
+the local lifecycle gate.
+
+Linux runner ownership transitions use one stable `runner/lifecycle.lock`
+inode separate from the register lock. The short gate is util-linux `flock`
+with a five-second bound and a pipe-held `/bin/cat` helper; only local
+synchronous state transitions run while held. Reservations and owner records
+carry generations and Linux boot ID/process start time. Corrupt state and a
+live owner with an unverifiable identity refuse admission or signalling.
+Repeated handovers retain a deduplicated list of every verified live drainer
+alongside the immediate predecessor; session lanes held by all live drainers
+remain excluded and count against the configured total. STOP is written and
+the full owner snapshot taken under the gate; forced signals are identity
+checked outside it and cleanup is conditional on the same owner generation.
+No OS shutdown hook writes STOP.
+
+The opt-in `scripts/check-linux-runner-service.mjs` exercises the delivered
+unit, scope, gate and lifecycle against an isolated real user manager and
+reports cleanup and a SHA/manifest. Its real systemd/cgroup evidence is not a
+reboot test. Before real workloads, TC still requires interactive lingering
+setup and separate no-login reboot checks after a running start and after a
+deliberate STOP. Neither the deterministic runner gate nor the opt-in check
+establishes those operational acceptance results.
+
 ## Staying awake
 
 A continuous run holds `caffeinate -i -m -s -w <runner pid>` for its lifetime

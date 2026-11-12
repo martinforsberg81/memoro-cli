@@ -1683,6 +1683,22 @@ test('a STOP after reserved child publication stays sticky and prevents admissio
   assert.deepEqual(f.calls.sessions, [], 'a stopped reserved child admitted work');
 });
 
+test('Linux owner pruning removes only verified dead drainers under the matching generation', async () => {
+  const f = fixture();
+  f.deps.platform = 'linux';
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.deps.alive = (pid) => Number(pid) === 200 || Number(pid) === 4242;
+  f.deps.identity = (pid) => Number(pid) === 4242 ? { bootId: 'boot-c', starttime: '4242' } : null;
+  const runner = createRunner({ deps: f.deps });
+  const a = { pid: 100, generation: 'A', bootId: 'boot-a', starttime: '100' };
+  const b = { pid: 200, generation: 'B' }; // legacy live identity: retain, never guess it dead
+  runner.markRunner({ generation: 'C', predecessor: a, drainers: [a, b] });
+  await runner.dropPredecessor();
+  const current = JSON.parse(f.files['/w/runner/runner.json']);
+  assert.deepEqual(current.drainers, [b], 'verified-dead A is pruned while unverifiable live B is preserved');
+  assert.equal(current.predecessor, undefined, 'the dead immediate predecessor is not retained');
+});
+
 test('a successor lane waits while its predecessor holds the lane file, skips that goal, then starts it', async () => {
   const f = goalFixture({ a: {}, b: {} }, { livePids: [4242, 7000] });
   f.deps.laneCount = () => ({ lanes: 2 });

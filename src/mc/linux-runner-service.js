@@ -95,19 +95,20 @@ export function systemdQuote(value) {
 
 export function bootUnit({ root, execPath, entry, env = {} }) {
   const id = rootIdentity(root);
-  const resolved = (key) => {
-    if (key === 'PATH') return env[key].split(':').map((part) => resolve(part || '.')).join(':');
-    return resolve(env[key]);
+  const values = {
+    HOME: env.HOME || homedir(),
+    PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    MC_HOME: env.MC_HOME || join(env.HOME || homedir(), '.memoro', 'mc'),
+    MC_WORK_ROOT: id.canonical,
+    MC_REPOS_HOME: env.MC_REPOS_HOME || join(id.canonical, 'repos'),
   };
-  const environment = ['HOME', 'PATH', 'MC_HOME', 'MC_WORK_ROOT', 'MC_REPOS_HOME']
-    .filter((key) => env[key])
-    .map((key) => `Environment=${key}=${systemdQuote(key === 'MC_WORK_ROOT' ? id.canonical : resolved(key))}`);
-  environment.push(`Environment=${SYSTEMD_CONTEXT}=boot`);
+  const environment = Object.entries(values)
+    .map(([key, value]) => `Environment=${key}=${systemdQuote(key === 'PATH' ? String(value).split(':').map((part) => resolve(part || '.')).join(':') : resolve(value))}`);
   const args = [resolve(execPath), resolve(entry), 'run', 'start', '--if-was-running'];
   return {
     ...id,
     text: [
-      '[Unit]', 'Description=mc runner boot recovery', 'Wants=default.target', 'After=default.target', '',
+      '[Unit]', 'Description=mc runner boot recovery', '',
       '[Service]', 'Type=oneshot', 'RemainAfterExit=yes', 'Restart=no', 'KillMode=control-group',
       `ExecStart=${args.map(systemdQuote).join(' ')}`,
       ...environment,
