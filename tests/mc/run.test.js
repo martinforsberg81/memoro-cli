@@ -1447,6 +1447,19 @@ test('runLoop: --once is refused by the same check — one worktree, one session
   assert.match(f.files['/w/runner/log/runner.log'], /a runner is already running — pid 7777\n/u);
 });
 
+test('Linux direct --once refuses unreadable existing owner state', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [7777] });
+  f.deps.platform = 'linux';
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, generation: 'G', bootId: 'boot', starttime: '77' })}\n`;
+  f.deps.read = (path) => path === '/w/runner/runner.json' ? null : f.files[path] ?? null;
+
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
+  assert.deepEqual(f.calls.sessions, [], 'direct one-shot execution started without checking existing ownership');
+  assert.ok('/w/runner/runner.json' in f.files, 'unreadable owner state was erased');
+  assert.match(f.files['/w/runner/log/runner.log'], /runner\.json is unreadable — refusing Linux runner admission/u);
+});
+
 test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', async () => {
   const f = goalFixture({ a: {} });
   f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
