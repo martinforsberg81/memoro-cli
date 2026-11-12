@@ -208,6 +208,35 @@ test('backup command: explicit create holds selected content and refuses Git wor
   assert.match(err.value, /Git worktrees/u);
 });
 
+test('backup command: selected legacy planning material is archived without colliding with current programme paths', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  mkdirSync(join(root, 'programs', 'chosen', 'README'), { recursive: true });
+  mkdirSync(join(root, 'plan', 'chosen', 'README'), { recursive: true });
+  writeFileSync(join(root, 'programs', 'chosen', 'README', 'current.md'), 'current');
+  writeFileSync(join(root, 'plan', 'chosen', 'README', 'legacy.md'), 'legacy');
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+  const archive = join(root, 'archive');
+
+  assert.equal(await backupCommand(['create', '--programme', 'chosen', '--output', archive, '--json'], { env, stdout, stderr }), 0);
+  const records = verifyArchive(archive).manifest.members;
+  assert.deepEqual(records.map(({ path }) => path).sort(), [
+    'chosen/README', 'chosen/README/current.md',
+    'chosen/legacy-plan/README', 'chosen/legacy-plan/README/legacy.md',
+  ]);
+  assert.deepEqual(readFileSync(join(archive, records.find(({ path }) => path.endsWith('/legacy.md')).payload)), Buffer.from('legacy'));
+
+  mkdirSync(join(root, 'programs', 'broken'), { recursive: true });
+  mkdirSync(join(root, 'plan'), { recursive: true });
+  symlinkSync('missing-legacy-plan', join(root, 'plan', 'broken'));
+  const refusedArchive = join(root, 'broken-archive');
+  assert.equal(await backupCommand(['create', '--programme', 'broken', '--output', refusedArchive, '--json'], { env, stdout, stderr }), 1);
+  assert.equal(programmeLifecycle('broken', { env }).state, 'held', 'an unresolved legacy root cannot be silently omitted');
+  assert.throws(() => lstatSync(refusedArchive), { code: 'ENOENT' });
+  assert.match(stderr.value, /inventory root is not a real directory/u);
+});
+
 test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
   const root = fixture(t);
   const output = join(root, 'archive');

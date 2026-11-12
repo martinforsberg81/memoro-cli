@@ -82,11 +82,14 @@ The currently routed command surface is:
   or `mc backup create --all-programmes --output <absolute-path> [--json]`
   explicitly selects local `programs/<name>` directories. It persists a
   draining hold before inventory, refuses to capture while admitted writers
-  remain, then advances to held before reading. Two no-follow inventories
-  must match before the private archive is published. This is a deliberately
+  remain, then advances to held before reading. When present, the matching
+  legacy `plan/<name>` tree is captured below the archive namespace
+  `<name>/legacy-plan/`, distinct from current `programs/<name>` members.
+  Two no-follow inventories of every selected local tree must match before the
+  private archive is published. This is a deliberately
   incomplete content-only implementation: it refuses selected directories
   containing Git worktrees, and does not yet reconcile listed-only or archived
-  programmes, legacy planning roots, process census, repository identity,
+  programmes, process census, repository identity,
   refs/index semantics, ignored/restricted data or external dependencies. The
   held fence remains until explicit release on refusal. It does not claim a
   complete programme backup.

@@ -9,7 +9,7 @@ import { validateMemberPath } from './backup-archive.js';
  * treated as ordinary content: callers must capture its objects and worktree
  * state through the repository bundle mechanism before claiming completeness.
  */
-export function inventoryProgrammeTree(root, programme) {
+export function inventoryProgrammeTree(root, programme, { memberRoot = programme } = {}) {
   const rootStat = lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`programme inventory root is not a real directory: ${root}`);
   const members = [];
@@ -20,10 +20,10 @@ export function inventoryProgrammeTree(root, programme) {
       const absolute = join(directory, entry.name);
       const rel = relative(root, absolute).split(sep).join('/');
       if (entry.name === '.git') {
-        repositories.push({ path: `${programme}/${relative(root, directory).split(sep).join('/')}`.replace(/\/$/u, ''), admin: absolute });
+        repositories.push({ path: `${memberRoot}/${relative(root, directory).split(sep).join('/')}`.replace(/\/$/u, ''), admin: absolute });
         continue;
       }
-      const path = validateMemberPath(`${programme}/${rel}`);
+      const path = validateMemberPath(`${memberRoot}/${rel}`);
       const stat = lstatSync(absolute);
       if (stat.isSymbolicLink()) {
         members.push({ path, type: 'symlink', target: readlinkSync(absolute) });
