@@ -22,14 +22,23 @@ test('backup inventory: reads typed local bytes and links without following Git 
   const programme = join(root, 'programme');
   mkdirSync(join(programme, 'nested', '.git'), { recursive: true });
   mkdirSync(join(programme, 'nested', 'docs'), { recursive: true });
+  mkdirSync(join(programme, 'nested', '.git', 'worktrees', 'linked'), { recursive: true });
+  mkdirSync(join(programme, 'linked'), { recursive: true });
+  writeFileSync(join(programme, 'linked', '.git'), 'gitdir: ../nested/.git/worktrees/linked\n');
+  writeFileSync(join(programme, 'linked', 'work.md'), 'linked worktree bytes');
   const bytes = Buffer.from([0, 255, 9]);
   writeFileSync(join(programme, 'nested', 'docs', 'evidence.bin'), bytes, { mode: 0o751 });
   symlinkSync('docs/evidence.bin', join(programme, 'nested', 'latest'));
   writeFileSync(join(programme, 'nested', '.git', 'config'), 'must not be archived');
 
   const inventory = inventoryProgrammeTree(programme, 'programme');
-  assert.deepEqual(inventory.repositories, [{ path: 'programme/nested', admin: join(programme, 'nested', '.git') }]);
+  assert.deepEqual(inventory.repositories.sort((a, b) => a.path.localeCompare(b.path)), [
+    { path: 'programme/linked', admin: join(programme, 'linked', '.git'), gitdir: join(programme, 'nested', '.git', 'worktrees', 'linked'), kind: 'linked' },
+    { path: 'programme/nested', admin: join(programme, 'nested', '.git'), kind: 'primary' },
+  ]);
   assert.deepEqual(inventory.members.map(({ path, type }) => [path, type]), [
+    ['programme/linked', 'directory'],
+    ['programme/linked/work.md', 'file'],
     ['programme/nested', 'directory'],
     ['programme/nested/docs', 'directory'],
     ['programme/nested/docs/evidence.bin', 'file'],
@@ -41,6 +50,8 @@ test('backup inventory: reads typed local bytes and links without following Git 
   assert.equal(file.mode, 0o751);
   assert.equal(inventory.members.find((member) => member.type === 'symlink').target, 'docs/evidence.bin');
   assert.equal(inventory.members.some((member) => member.path.includes('.git')), false);
+  assert.equal(inventory.members.some((member) => member.path.endsWith('linked/.git')), false,
+    'linked-worktree gitdir pointers are administration, not programme content');
   const rootAlias = join(root, 'programme-alias');
   symlinkSync(programme, rootAlias);
   assert.throws(() => inventoryProgrammeTree(rootAlias, 'programme'), /not a real directory/u);

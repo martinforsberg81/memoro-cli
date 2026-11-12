@@ -1,7 +1,7 @@
 /** Conservative no-follow filesystem inventory for local programme content. */
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { validateMemberPath } from './backup-archive.js';
 
 const EXCLUDED_NAMES = new Map([
@@ -50,7 +50,24 @@ export function inventoryProgrammeTree(root, programme, { memberRoot = programme
         continue;
       }
       if (entry.name === '.git') {
-        repositories.push({ path: `${memberRoot}/${relative(root, directory).split(sep).join('/')}`.replace(/\/$/u, ''), admin: absolute });
+        const repositoryPath = `${memberRoot}/${relative(root, directory).split(sep).join('/')}`.replace(/\/$/u, '');
+        const stat = lstatSync(absolute);
+        if (stat.isSymbolicLink()) throw new Error(`Git worktree administration must not be a symlink: ${absolute}`);
+        if (stat.isDirectory()) {
+          repositories.push({ path: repositoryPath, admin: absolute, kind: 'primary' });
+          continue;
+        }
+        if (!stat.isFile()) throw new Error(`unsupported Git worktree administration member: ${absolute}`);
+        // Linked worktrees keep their administrative files in the common
+        // repository and expose only a `gitdir:` pointer in the worktree.
+        // Never capture that pointer as user content or follow it recursively.
+        const pointer = readFileSync(absolute, 'utf8');
+        const match = /^gitdir: ([^\r\n]+)\r?\n?$/u.exec(pointer);
+        if (!match) throw new Error(`invalid Git worktree gitdir pointer: ${absolute}`);
+        const gitdir = resolve(dirname(absolute), match[1]);
+        const gitdirStat = lstatSync(gitdir);
+        if (!gitdirStat.isDirectory() || gitdirStat.isSymbolicLink()) throw new Error(`Git worktree gitdir is not a real directory: ${gitdir}`);
+        repositories.push({ path: repositoryPath, admin: absolute, gitdir, kind: 'linked' });
         continue;
       }
       const path = validateMemberPath(`${memberRoot}/${rel}`);
