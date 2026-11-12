@@ -21,6 +21,7 @@ import { appendLog, archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_H
 import { writeFileAtomic } from './atomic-write.js';
 import { repoNameOf } from './repos.js';
 import { dequeue, mergesPath, parseQueue } from './merge-queue.js';
+import { admitWriter } from './programme-lifecycle.js';
 
 /** How long a finished goal stays listed before the runner archives it. */
 export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
@@ -48,7 +49,11 @@ export function goalArchiveDue({ goal, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
  * external failure. `allGoals` includes archived records so an old reference
  * cannot make a manual queue entry look ownerless.
  */
-export function finalizeDroppedGoal(goal, {
+export function finalizeDroppedGoal(goal, options) {
+  return withGoalArchiveLease(goal, options, () => finalizeDroppedGoalAdmitted(goal, options));
+}
+
+function finalizeDroppedGoalAdmitted(goal, {
   allGoals = () => [], root = null, lock = (_root, fn) => fn(), readQueue,
   writeQueue, active = () => false, ...archive
 }) {
@@ -142,7 +147,11 @@ export function moveDir(from, to) {
  * (throws when it fails), `appendText(path, text)`, `read(path)`, `list(path)`,
  * `write(path, text)` and `now`, a Date.
  */
-export function archiveGoal(goal, { home, git, gh, known, move = moveDir, appendText, read, list = listDirsOf, write = writeFileAtomic, exists = existsSync, now, sharedPrs = [], active = () => false }) {
+export function archiveGoal(goal, options) {
+  return withGoalArchiveLease(goal, options, () => archiveGoalAdmitted(goal, options));
+}
+
+function archiveGoalAdmitted(goal, { home, git, gh, known, move = moveDir, appendText, read, list = listDirsOf, write = writeFileAtomic, exists = existsSync, now, sharedPrs = [], active = () => false }) {
   const refuse = (refused) => ({ refused });
   if (goal.problems.length) return refuse(`its GOAL.json does not parse (${goal.problems[0]})`);
   const name = `${goal.programme}/${goal.goal}`;
@@ -205,4 +214,12 @@ export function archiveGoal(goal, { home, git, gh, known, move = moveDir, append
   appendText(logPath, `${read(logPath) === null ? GOAL_LOG_HEAD : ''}${goalLogRow({ date: stamp, goal: goal.goal, status: goal.stage, prs: goal.prs, log: goal.log })}\n`);
   const renumbered = renumberPhases({ home, programme: goal.programme, list, read, write });
   return { to, renumbered };
+}
+
+function withGoalArchiveLease(goal, options, operation) {
+  const env = options.env || process.env;
+  let lease;
+  try { lease = (options.lifecycle || admitWriter)([goal.programme], { env, name: 'goal archive' }); }
+  catch (error) { return { refused: error.message }; }
+  try { return operation(); } finally { lease.release(); }
 }

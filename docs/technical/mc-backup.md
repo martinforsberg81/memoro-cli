@@ -29,6 +29,11 @@ preflight fetch and retains it through document merging, worktree release,
 restricted-README reconciliation and the final directory move. A programme
 already draining or held is refused before those side effects. This guard does
 not make other goal/programme cleanup routes safe by implication.
+Goal archival and dropped-goal finalization each acquire a programme lease at
+their shared `src/mc/goal-archive.js` boundary. This covers both direct
+`mc goal archive` calls and runner finalization through GitHub close, queue
+reconciliation, worktree/branch removal, goal movement and phase renumbering;
+the lease is retained until all local reconciliation returns.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.

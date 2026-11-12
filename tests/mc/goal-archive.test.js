@@ -5,11 +5,15 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { ARCHIVE_HOLD_MS, archiveGoal, finalizeDroppedGoal, goalArchiveDue } from '../../src/mc/goal-archive.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { goalReferences } from '../../src/mc/goals.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
 
 const DIR = '/w/programs/mc/goals/g';
 const NOW = Date.parse('2026-09-01T10:00:00Z');
@@ -217,6 +221,24 @@ test('archiveGoal of a done goal with nothing open: worktree and branch removed 
   assert.equal(calls.appended[0][0], '/w/programs/mc/goals/goal_log.md');
   assert.match(calls.appended[0][1], /^# Archived goals\n/u, 'a new goal_log.md has its heading');
   assert.match(calls.appended[0][1], /\| 2026-09-01 \| g \| done \| — \| — \|\n$/u);
+});
+
+test('manual archive and dropped-goal finalization refuse a selected programme before remote or cleanup calls', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-goal-archive-hold-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = { MC_WORK_ROOT: root };
+  beginBackup(['mc'], { env, id: '00000000-0000-4000-8000-000000000010' });
+  const { ctx, calls } = ctxOf();
+  const shared = { ...ctx, env };
+
+  const direct = archiveGoal(goal(), shared);
+  assert.match(direct.refused, /draining/u, 'direct archive admission is refused');
+  const dropped = finalizeDroppedGoal(goal({ stage: 'dropped' }), { ...shared, allGoals: () => [] });
+  assert.match(dropped.refused, /draining/u, 'drop finalization is refused before closing a PR');
+  assert.deepEqual(calls.gh, []);
+  assert.deepEqual(calls.git, []);
+  assert.deepEqual(calls.moved, []);
+  assert.deepEqual(calls.appended, []);
 });
 
 test('archiveGoal refuses, and touches nothing, for each reason mc goal archive gives', () => {

@@ -19,6 +19,7 @@ import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
+import { admitWriter, beginBackup } from '../../src/mc/programme-lifecycle.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -120,6 +121,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   const sweepHook = { answer: null };
   const deps = {
     env,
+    // Archive integration tests inject the real lifecycle seam explicitly;
+    // other runner model cases have no live programme-state filesystem.
+    lifecycle: () => ({ release() {} }),
     // The runner and tidy share this short owner/allocation lock. Fixture
     // work stays synchronous while exercising the same critical sections.
     lock: (_root, fn) => fn(),
@@ -3400,6 +3404,21 @@ test('the chores archive done goals after 24 hours and dropped goals immediately
   assert.equal((f.files['/w/programs/prog/goals/goal_log.md'].match(/dropped-one/gu) ?? []).length, 1, 'repeat reconciliation does not duplicate archive history');
   assert.equal(goalField(f.files[`${GOALS}/early/GOAL.json`], 'stage'), 'done', 'done 23 hours: it stays');
   assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
+});
+
+test('runner goal archival keeps a selected programme fenced and leaves its finished goal in place', async (t) => {
+  const f = goalFixture({ late: { stage: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') } }, { now: ARCHIVE_NOW });
+  const stateRoot = mkdtempSync(join(tmpdir(), 'mc-runner-archive-hold-'));
+  t.after(() => rmSync(stateRoot, { recursive: true, force: true }));
+  const lifecycleEnv = { MC_WORK_ROOT: stateRoot };
+  beginBackup(['prog'], { env: lifecycleEnv, id: '00000000-0000-4000-8000-000000000011' });
+  f.deps.lifecycle = (programmes, options) => admitWriter(programmes, { ...options, env: lifecycleEnv });
+
+  await createRunner({ deps: f.deps }).chores();
+  assert.ok(f.files[`${GOALS}/late/GOAL.json`], 'the runner did not remove the selected goal');
+  assert.equal(f.files['/w/programs/prog/goals/goal_log.md'], undefined, 'no archive row was written');
+  assert.equal(f.calls.git.some((call) => call.slice(1).includes('remove')), false, 'no selected worktree was removed');
+  assert.match(f.files[`${GOALS}/late/LOG.md`], /not archived — programme prog is draining/u);
 });
 
 test('when the runner archives the last goal of phase 1, phase 2 is phase 1 and phase 3 phase 2', async () => {

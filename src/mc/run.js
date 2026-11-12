@@ -968,7 +968,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
       if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
       const archive = {
-        home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
+        home: programsHome(deps.env), env: deps.env, lifecycle: deps.lifecycle, git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
         appendText: (path, text) => deps.append(path, text), read: deps.read, list: deps.list, write: deps.write, now,
       };

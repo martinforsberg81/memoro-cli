@@ -162,6 +162,7 @@ export async function run(argv, deps = {}) {
     read: deps.read || readTextOrNull,
     realpath: deps.realpath,
     write: deps.write || writeFileAtomic,
+    lifecycle: deps.lifecycle || admitWriter,
     list: deps.list || listDirsOf,
     git: deps.git || gitIn,
     // The merge check before review and merge (main-conflict.js); a test stands in for it.
