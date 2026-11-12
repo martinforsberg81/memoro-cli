@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { admitWriter, backupStatus, beginBackup, installationId, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
+import { appendEntry, LOG_FILE } from '../../src/mc/goals.js';
+import { programsHome } from '../../src/mc/paths.js';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mc-lifecycle-'));
@@ -46,4 +48,21 @@ test('programme lifecycle: release requires held state and malformed transaction
   const state = join(root, 'runner', 'programme-transfers', 'bad.json');
   writeFileSync(state, '{');
   assert.throws(() => admitWriter(['unrelated'], { env }), /unreadable lifecycle record/u);
+});
+
+test('programme lifecycle: the shared goal-log writer refuses selected work and still writes an unrelated programme', (t) => {
+  const { env } = fixture(t);
+  const home = programsHome(env);
+  const selectedDir = join(home, 'selected', 'goals', 'one');
+  const unrelatedDir = join(home, 'unrelated', 'goals', 'one');
+  mkdirSync(selectedDir, { recursive: true });
+  mkdirSync(unrelatedDir, { recursive: true });
+  writeFileSync(join(selectedDir, LOG_FILE), '# selected\n');
+  writeFileSync(join(unrelatedDir, LOG_FILE), '# unrelated\n');
+  beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000004' });
+
+  assert.throws(() => appendEntry({ dir: selectedDir, env, entry: { at: '2026-11-12T00:00Z', tool: 'test', status: 'ready', done: 'must not write' } }), /draining/u);
+  appendEntry({ dir: unrelatedDir, env, entry: { at: '2026-11-12T00:00Z', tool: 'test', status: 'ready', done: 'unrelated continues' } });
+  assert.equal(readFileSync(join(selectedDir, LOG_FILE), 'utf8'), '# selected\n');
+  assert.match(readFileSync(join(unrelatedDir, LOG_FILE), 'utf8'), /unrelated continues/u);
 });

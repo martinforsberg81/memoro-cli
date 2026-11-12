@@ -14,11 +14,12 @@
  * model.
  */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative, sep, resolve, isAbsolute } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
 import { samePr } from './merge-queue.js';
 import { programsHome } from './paths.js';
+import { admitWriter } from './programme-lifecycle.js';
 import { criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
 
@@ -107,6 +108,18 @@ const HEADING = /^## (\S+) · (\S+)(?: (\S+))? · (\S+)(?: · (\S+))?(?: · by (
 
 /** The key a goal named the goals it started after by, before phases (`goal-convert.js` `phaseGoals`), named only to say so. */
 export const LEGACY_AFTER = 'after';
+
+/** Hold a lifecycle lease for writes made through the shared goal primitives.
+ * File-model callers outside the active programmes tree remain injectable and
+ * do not acquire installation state. */
+function withProgrammeWriter(dir, name, fn, { env = process.env, home = programsHome(env), lifecycle = admitWriter } = {}) {
+  const rel = relative(resolve(home), resolve(dir));
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return fn();
+  const [programme, collection] = rel.split(sep);
+  if (collection !== GOALS_DIR || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(programme || '')) return fn();
+  const lease = lifecycle([programme], { env, name });
+  try { return fn(); } finally { lease.release(); }
+}
 
 /** GOAL.json's keys, in the order it is written. */
 export const GOAL_KEYS = Object.freeze([
@@ -583,14 +596,16 @@ export function phaseMoves(goals) {
  * archive`, the runner's archive and `mc goal phase` call it, so the lowest
  * phase left is always 1.
  */
-export function renumberPhases({ home, programme, list = listDirsOf, read = readTextOrNull, write = writeFileAtomic }) {
-  const goals = programsGoals({ home, list: (path) => (path === home ? [programme] : list(path)), read });
-  const made = [];
-  for (const move of phaseMoves(goals)) {
-    const outcome = updateGoal({ dir: move.goal.dir, change: (goal) => ({ ...goal, phase: move.to }), read, write });
-    if (!outcome.problems) made.push(move);
-  }
-  return made;
+export function renumberPhases({ home, programme, list = listDirsOf, read = readTextOrNull, write = writeFileAtomic, env = process.env, lifecycle = admitWriter }) {
+  return withProgrammeWriter(join(home, programme, GOALS_DIR), 'goal-phase-renumber', () => {
+    const goals = programsGoals({ home, list: (path) => (path === home ? [programme] : list(path)), read });
+    const made = [];
+    for (const move of phaseMoves(goals)) {
+      const outcome = updateGoal({ dir: move.goal.dir, change: (goal) => ({ ...goal, phase: move.to }), read, write, env, lifecycle });
+      if (!outcome.problems) made.push(move);
+    }
+    return made;
+  }, { home, env, lifecycle });
 }
 
 /** A goal's name where a runner names sessions: `goal:<programme>/<goal>`, in its current file and its runs.tsv row. */
@@ -744,15 +759,17 @@ export function goalOfPath(cwd, home) {
  * `entry` appended to its log; nothing written when it is already there.
  * Returns `{ added, goal }`, or `{ problems }` when GOAL.json does not parse.
  */
-export function addPr({ dir, repo, pr, entry, read = readTextOrNull, write = writeFileAtomic }) {
-  const path = join(dir, GOAL_FILE);
-  const parsed = parseGoal(read(path) ?? '');
-  if (parsed.problems) return { problems: parsed.problems };
-  if (parsed.prs.some((item) => item.repo === repo && item.pr === Number(pr))) return { added: false, goal: parsed };
-  const goal = { ...parsed, prs: [...parsed.prs, { repo, pr: Number(pr) }] };
-  write(path, renderGoal(goal));
-  if (entry) appendEntry({ dir, entry, read, write });
-  return { added: true, goal };
+export function addPr({ dir, repo, pr, entry, read = readTextOrNull, write = writeFileAtomic, env = process.env, lifecycle = admitWriter }) {
+  return withProgrammeWriter(dir, 'goal-pr-ownership', () => {
+    const path = join(dir, GOAL_FILE);
+    const parsed = parseGoal(read(path) ?? '');
+    if (parsed.problems) return { problems: parsed.problems };
+    if (parsed.prs.some((item) => item.repo === repo && item.pr === Number(pr))) return { added: false, goal: parsed };
+    const goal = { ...parsed, prs: [...parsed.prs, { repo, pr: Number(pr) }] };
+    write(path, renderGoal(goal));
+    if (entry) appendEntry({ dir, entry, read, write, env, lifecycle });
+    return { added: true, goal };
+  }, { env, lifecycle });
 }
 
 /** The archive directory of one programme's goals: `<home>/<programme>/goals/.archive`. */
@@ -780,9 +797,11 @@ export function logStamp(date) {
 }
 
 /** Appends `entry` to the goal's LOG.md in `dir`. */
-export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFileAtomic }) {
-  const path = join(dir, LOG_FILE);
-  write(path, appendLog(read(path) ?? '', entry));
+export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFileAtomic, env = process.env, lifecycle = admitWriter }) {
+  return withProgrammeWriter(dir, 'goal-log-write', () => {
+    const path = join(dir, LOG_FILE);
+    write(path, appendLog(read(path) ?? '', entry));
+  }, { env, lifecycle });
 }
 
 /**
@@ -795,7 +814,8 @@ export function appendEntry({ dir, entry, read = readTextOrNull, write = writeFi
  * `STATUSES`, naming the field; it returns `{ problems }` then, and `{ goal,
  * from }` — the goal as it now is, and the stage it had — otherwise.
  */
-export function setGoalState({ dir, stage, status, entry, read = readTextOrNull, write = writeFileAtomic }) {
+export function setGoalState({ dir, stage, status, entry, read = readTextOrNull, write = writeFileAtomic, env = process.env, lifecycle = admitWriter }) {
+  return withProgrammeWriter(dir, 'goal-state-write', () => {
   const problems = [];
   if (stage !== undefined && !STAGES.includes(stage)) problems.push(`stage: one of ${STAGES.join(', ')}, not ${stage}`);
   if (status !== undefined && !STATUSES.includes(status)) problems.push(`status: one of ${STATUSES.join(', ')}, not ${status}`);
@@ -807,8 +827,9 @@ export function setGoalState({ dir, stage, status, entry, read = readTextOrNull,
   const nextStatus = status ?? (nextStage !== parsed.stage ? 'ready' : parsed.status);
   const goal = { ...parsed, stage: nextStage, status: nextStatus };
   write(path, renderGoal(goal));
-  appendEntry({ dir, entry: { ...entry, stage: nextStage, status: nextStatus }, read, write });
+  appendEntry({ dir, entry: { ...entry, stage: nextStage, status: nextStatus }, read, write, env, lifecycle });
   return { goal, from: parsed.stage };
+  }, { env, lifecycle });
 }
 
 /**
@@ -817,7 +838,8 @@ export function setGoalState({ dir, stage, status, entry, read = readTextOrNull,
  * written, so an invalid GOAL.json is never written. Returns `{ goal }` or
  * `{ problems }`.
  */
-export function updateGoal({ dir, change, read = readTextOrNull, write = writeFileAtomic }) {
+export function updateGoal({ dir, change, read = readTextOrNull, write = writeFileAtomic, env = process.env, lifecycle = admitWriter }) {
+  return withProgrammeWriter(dir, 'goal-metadata-write', () => {
   const path = join(dir, GOAL_FILE);
   const text = read(path);
   if (text === null) return { problems: [`${dir} has no ${GOAL_FILE}`] };
@@ -829,6 +851,7 @@ export function updateGoal({ dir, change, read = readTextOrNull, write = writeFi
   try { rendered = renderGoal(next); } catch (error) { return { problems: [error.message] }; }
   write(path, rendered);
   return { goal: parseGoal(rendered) };
+  }, { env, lifecycle });
 }
 
 /** A file's text, or null when it cannot be read. */
