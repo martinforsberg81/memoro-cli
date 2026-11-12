@@ -111,9 +111,15 @@ const root = env.MC_WORK_ROOT;
 mkdirSync(join(root, 'observed'), { recursive: true });
 writeFileSync(join(root, 'observed', process.pid + '.json'), JSON.stringify({ identity: readLinuxIdentity(process.pid), argv: process.argv.slice(2), env: Object.fromEntries(['HOME','PATH','MC_HOME','MC_WORK_ROOT','MC_REPOS_HOME'].map(k => [k, env[k]])) }));
 const deps = realDeps(env);
+const sourceRoot = ${JSON.stringify(source)};
+const sourceGit = join(sourceRoot, '.git');
+const actualExists = deps.exists;
+deps.exists = path => path === sourceGit || actualExists(path);
 Object.assign(deps, {
   log: line => { if (line.includes('runner start (mc run')) writeFileSync(join(root, 'admitted-' + process.pid), String(Date.now())); process.stdout.write(line + '\\n'); },
-  git: () => ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
+  git: (cwd, args) => cwd === sourceRoot && args.join(' ') === 'rev-parse --short HEAD'
+    ? ({ ok: true, stdout: 'linux-head-2051d17\\n', stderr: '' })
+    : ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
   session: () => { throw new Error('no coding turn authorized'); }, helperTurn: () => { throw new Error('no helper turn authorized'); },
   collect: async () => { writeFileSync(join(root, 'holding-' + process.pid), 'inert chore in flight'); while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
   nightlyTick: async () => ({ runs: [] }), readDeps: undefined, tidy: undefined,
@@ -184,6 +190,7 @@ try {
   await boot(primary, unit);
   check('conditional boot restores saved flags through real runLoop admission', await until(() => admitted(primary) && text(join(primary.work, 'runner/log/runner.log')).includes('runner start')), JSON.stringify(owner(primary)));
   const bootOwner = owner(primary);
+  check('source-checkout HEAD is recorded on the surviving admitted boot owner', bootOwner.commit === 'linux-head-2051d17', JSON.stringify(bootOwner));
   check('saved flags survived child reservation claim', JSON.stringify(bootOwner.args) === JSON.stringify(flags));
   const bootCgroup = command('systemctl', ['--user', 'show', unit, '--property=ControlGroup', '--value']).stdout.trim();
   check('boot child survives oneshot command exit in its cgroup', alive(bootOwner.pid) && Boolean(bootCgroup) && text(`/proc/${bootOwner.pid}/cgroup`).includes(bootCgroup));
