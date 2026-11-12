@@ -77,6 +77,11 @@ test('backup archive: rejects unsafe, duplicate, case-folding and symlink-parent
   assert.throws(() => createArchive(join(root, 'case'), { programmes: ['p'], members: [member('p/A'), member('p/a')] }), /duplicate or case-colliding/u);
   assert.throws(() => createArchive(join(root, 'parent'), { programmes: ['p'], members: [{ path: 'p/link', type: 'symlink', target: 'real' }, member('p/link/file')] }), /non-directory archive parent/u);
   assert.throws(() => createArchive(join(root, 'escape-link'), { programmes: ['p'], members: [{ path: 'p/link', type: 'symlink', target: '../../outside' }] }), /escaping symlink target/u);
+  for (const target of ['C:\\outside', 'C:outside', '\\\\server\\share', 'folder\\..\\outside']) {
+    assert.throws(() => createArchive(join(root, `portable-link-${Buffer.from(target).toString('hex')}`), {
+      programmes: ['p'], members: [{ path: 'p/link', type: 'symlink', target }],
+    }), /invalid symlink record/u, `non-portable link target ${JSON.stringify(target)} must be refused`);
+  }
 });
 
 test('backup archive: verification refuses changed payload bytes and unexpected symlink parents', (t) => {

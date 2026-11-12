@@ -70,7 +70,10 @@ rejects malformed, escaping, absolute, duplicate, case-colliding and
 symlink-parent paths, unknown manifest/member fields, duplicate programme or
 bundle identities, non-content-addressed payload references, unmanifested
 storage files, unsupported schema versions, and payload or bundle digest
-mismatches. Archive output paths must be absolute and existing output is never
+mismatches. Symlink targets must use portable relative POSIX spelling: POSIX
+and Windows absolute or drive-relative targets, NUL and backslash separators
+are refused so an archive cannot gain a different escape meaning on a Windows
+restore host. Archive output paths must be absolute and existing output is never
 overwritten. Verification also refuses caller-supplied archive paths that
 traverse symlinked parents instead of canonicalizing the alias and then
 opening its payloads. These primitives do not by themselves establish a complete

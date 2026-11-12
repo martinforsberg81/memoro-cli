@@ -1,7 +1,7 @@
 /** Private, checksummed storage and validation for programme backup archives. */
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep, win32 } from 'node:path';
 
 export const BACKUP_SCHEMA = 'mc-programme-backup';
 export const BACKUP_VERSION = 2;
@@ -39,7 +39,11 @@ function validateMembers(members, { allowBytes = false } = {}) {
     }
     if (member.type === 'file' && (!Number.isSafeInteger(member.size) || member.size < 0 || !HASH.test(member.sha256) || !validMode(member.mode))) throw new Error(`invalid file record at ${path}`);
     if (member.type === 'directory' && !validMode(member.mode)) throw new Error(`invalid directory record at ${path}`);
-    if (member.type === 'symlink' && (typeof member.target !== 'string' || !member.target || isAbsolute(member.target))) throw new Error(`invalid symlink record at ${path}`);
+    if (member.type === 'symlink' && (typeof member.target !== 'string' || !member.target
+      || member.target.includes('\\') || member.target.includes('\0')
+      || isAbsolute(member.target) || win32.isAbsolute(member.target) || /^[a-z]:/iu.test(member.target))) {
+      throw new Error(`invalid symlink record at ${path}`);
+    }
   }
   for (const member of members) {
     const parts = member.path.split('/');
