@@ -41,6 +41,7 @@ import { runDocsMerge } from '../docs-merge.js';
 import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea, releaseWorkArea } from '../work-area.js';
 import { attachRepoDeps } from '../shared-deps.js';
 import { openInWorkArea } from '../work-open.js';
+import { admitWriter } from '../programme-lifecycle.js';
 import { layoutVersion, planAreaName, planAreaRoot, workRoot } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName, roleSourceOf } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
@@ -129,6 +130,11 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  let lease;
+  try { lease = (deps.lifecycle || admitWriter)([programme], { env, name: opts.archive ? 'plan-archive' : 'plan-session' }); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  try {
+
   // A programme that is over: off main in both repositories, and its planning
   // session released. Never triggered — only typed (archive-programme.js).
   if (opts.archive) {
@@ -198,6 +204,7 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   return result.code ?? 0;
+  } finally { lease.release(); }
 }
 
 /* ----------------------------------------------------------------- the area */

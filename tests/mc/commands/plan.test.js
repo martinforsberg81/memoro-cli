@@ -97,6 +97,24 @@ describe('the plan role', () => {
     assert.equal(code, 1);
     assert.match(stderr.out.text, /canon\/roles\/plan-session\.md with an overlay body/u);
   });
+
+  it('refuses a selected lifecycle hold before creating a planning area or opening a session', async () => {
+    const stdout = sink();
+    const stderr = sink();
+    let sideEffects = 0;
+    const code = await run(['msr-core'], {
+      stdout, stderr, repos: REPOS,
+      lifecycle: (programmes) => {
+        assert.deepEqual(programmes, ['msr-core']);
+        throw new Error('programme msr-core is draining under transaction backup-1');
+      },
+      ensure: () => { sideEffects += 1; return { ok: true, repos: REPOS, path: '/programmes/msr-core' }; },
+      open: () => { sideEffects += 1; return { ok: true, code: 0 }; },
+    });
+    assert.equal(code, 1);
+    assert.equal(sideEffects, 0);
+    assert.match(stderr.out.text, /is draining/u);
+  });
 });
 
 describe('where a planning session lives', () => {
