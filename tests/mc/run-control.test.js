@@ -233,6 +233,52 @@ describe('mc run start', () => {
     assert.deepEqual(JSON.parse(fx.store[paths.runner]).drainers.map(({ pid, generation }) => [pid, generation]), [[100, 'A'], [200, 'B']], JSON.stringify(JSON.parse(fx.store[paths.runner])));
   });
 
+  it('publishes an A-to-B-to-C successor with all verified drainers atomically', async () => {
+    const fx = fixture({ runner: {
+      pid: 200, generation: 'B', bootId: 'boot', starttime: '20', args: ['--once'],
+      predecessor: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
+      drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }],
+    }, live: [100, 200, 300] });
+    fx.deps.platform = 'linux';
+    fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.generation = () => 'C';
+    fx.deps.respawn = ({ env }) => {
+      assert.deepEqual(env, { MC_RUN_SUCCESSOR_OF: '200', MC_RUN_RESERVED_GENERATION: 'C' });
+      return 300;
+    };
+    const out = await handOver({ paths, deps: fx.deps, say: () => {}, predecessor: 200, predecessorGeneration: 'B' });
+    assert.equal(out.ok, true);
+    const published = JSON.parse(fx.store[paths.runner]);
+    assert.equal(published.pid, 300);
+    assert.deepEqual(published.drainers.map(({ pid, generation }) => [pid, generation]), [[100, 'A'], [200, 'B']]);
+    assert.deepEqual(published.predecessor, { pid: 200, started: null, generation: 'B', bootId: 'boot', starttime: '20' });
+  });
+
+  it('refuses a Linux handover when STOP arrives before publication and retains the current owner', async () => {
+    const fx = fixture({ runner: { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' }, live: [200] });
+    fx.deps.platform = 'linux';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.generation = () => 'C';
+    fx.deps.respawn = () => { throw new Error('must not spawn'); };
+    fx.deps.exists = (path) => path === paths.stop || path in fx.store;
+    fx.store[paths.stop] = 'stopped\n';
+    const out = await handOver({ paths, deps: fx.deps, say: () => {}, predecessor: 200, predecessorGeneration: 'B' });
+    assert.equal(out.ok, false);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]), { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' });
+  });
+
+  it('keeps the Linux current owner when successor spawn fails', async () => {
+    const current = { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' };
+    const fx = fixture({ runner: current, live: [200] });
+    fx.deps.platform = 'linux';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.respawn = () => null;
+    const out = await handOver({ paths, deps: fx.deps, say: () => {}, predecessor: 200, predecessorGeneration: 'B' });
+    assert.equal(out.ok, false);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]), current);
+  });
+
   it('refuses an existing corrupt Linux owner record instead of treating it as an empty root', async () => {
     const fx = fixture({ files: { [paths.runner]: '{broken' } });
     fx.deps.platform = 'linux';
@@ -288,6 +334,43 @@ describe('mc run start', () => {
     assert.equal(out.ok, true);
     assert.equal(fx.calls.spawned.length, 1, 'a stale PID incorrectly blocked the fresh owner');
     assert.equal(JSON.parse(fx.store[paths.runner]).generation !== 'old', true, 'the stale generation remained published');
+  });
+
+  it('treats a live PID with a reused process starttime as stale', async () => {
+    const fx = fixture({ runner: { pid: 4242, generation: 'old', bootId: 'boot', starttime: '12' }, live: [4242] });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.identity = () => ({ bootId: 'boot', starttime: '99' });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.installBoot = () => ({ ok: true, lines: [] });
+
+    const out = await startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps });
+
+    assert.equal(out.ok, true);
+    assert.equal(fx.calls.spawned.length, 1, 'a recycled PID incorrectly blocked the fresh owner');
+    assert.notEqual(JSON.parse(fx.store[paths.runner]).generation, 'old', 'the stale generation remained published');
+  });
+
+  it('refuses automatic Linux boot recovery without previously-running state', async () => {
+    const fx = fixture();
+    fx.deps.platform = 'linux';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    const out = await startRunner({ argv: ['--if-was-running'], root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, true);
+    assert.deepEqual(fx.calls.spawned, [], 'boot recovery invented a runner without owner state');
+    assert.match(out.lines.join('\n'), /no runner was running/u);
+  });
+
+  it('refuses takeover of a live Linux legacy owner with unknown identity', async () => {
+    const fx = fixture({ runner: { pid: 4242 }, live: [4242] });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.identity = () => ({ bootId: 'boot', starttime: '4242' });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    const out = await startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps });
+    assert.equal(out.ok, false);
+    assert.deepEqual(fx.calls.spawned, [], 'legacy identity was guessed safe to take over');
+    assert.match(out.lines.join('\n'), /no verifiable Linux process identity/u);
   });
 
   it('forced Linux stop signals every verified draining owner and preserves unknown legacy identities', async () => {
