@@ -1,13 +1,16 @@
 /** Inspect and verify a locally held programme backup archive. */
 import { backupStatus, resumeBackup as resumeBackupLifecycle, transitionBackup } from '../programme-lifecycle.js';
 import { inspectArchive, restoreArchive, verifyArchive } from '../backup-archive.js';
+import { createProgrammeBackup } from '../backup-capture.js';
 import { commandUsage } from '../command-help.js';
 import { scanArgs } from './flags.js';
 
 const archiveRoute = { booleans: ['--json'], strictValues: ['--archive'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (flags.archive ? null : 'needs --archive <path>') };
 const idRoute = { booleans: ['--json'], strictValues: ['--id'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (flags.id ? null : 'needs --id <id>') };
 const restoreRoute = { booleans: ['--json'], strictValues: ['--archive', '--output'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (!flags.archive ? 'needs --archive <path>' : (!flags.output ? 'needs --output <inactive-root>' : null)) };
+const createRoute = { booleans: ['--json', '--all-programmes'], repeatable: ['--programme'], strictValues: ['--output'], check: ({ flags, positional }) => positional.length ? `takes no ${positional[0]}` : (!flags.output ? 'needs --output <absolute-path>' : (Boolean(flags['all-programmes']) === Boolean(flags.programme?.length) ? 'choose --programme <name> or --all-programmes' : null)) };
 export const ROUTES = {
+  create: createRoute,
   inspect: archiveRoute,
   verify: archiveRoute,
   restore: restoreRoute,
@@ -26,11 +29,20 @@ export async function run(argv, deps = {}) {
   const [action, ...rest] = argv;
   if (!Object.hasOwn(ROUTES, action || '')) return refusal(stderr, `unknown mc backup action: ${action || '(missing)'}`);
   const booleans = ['--json'];
-  const values = action === 'status' || action === 'resume' || action === 'release' ? ['--id'] : action === 'restore' ? ['--archive', '--output'] : ['--archive'];
-  const scanned = scanArgs(rest, { booleans, strictValues: values });
+  const values = action === 'status' || action === 'resume' || action === 'release' ? ['--id'] : action === 'restore' ? ['--archive', '--output'] : action === 'create' ? ['--output'] : ['--archive'];
+  const scanned = scanArgs(rest, { booleans: action === 'create' ? createRoute.booleans : booleans, repeatable: action === 'create' ? createRoute.repeatable : [], strictValues: values });
   if (scanned.error) return refusal(stderr, scanned.error);
   if (scanned.positional.length) return refusal(stderr, `mc backup ${action || ''} takes no ${scanned.positional[0]}`.trim());
   try {
+    if (action === 'create') {
+      if (!scanned.flags.output) return refusal(stderr, 'mc backup create needs --output <absolute-path>');
+      if (scanned.flags['all-programmes'] && scanned.flags.programme?.length) return refusal(stderr, 'choose --programme <name> or --all-programmes, not both');
+      const selection = scanned.flags['all-programmes'] ? (deps.listProgrammes || listProgrammeDirectories)(env) : scanned.flags.programme || [];
+      if (!selection.length) return refusal(stderr, 'mc backup create found no programmes to capture');
+      const result = (deps.create || createProgrammeBackup)(selection, scanned.flags.output, { env, id: deps.id, inventory: deps.inventory });
+      print(stdout, result, scanned.flags.json);
+      return result.state === 'draining' ? 1 : 0;
+    }
     if (action === 'inspect' || action === 'verify') {
       if (!scanned.flags.archive) return refusal(stderr, `mc backup ${action} needs --archive <path>`);
       const result = action === 'inspect' ? (deps.inspect || inspectArchive)(scanned.flags.archive) : summarizeVerified((deps.verify || verifyArchive)(scanned.flags.archive));
@@ -65,6 +77,15 @@ export async function run(argv, deps = {}) {
   }
 }
 
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { programsHome } from '../paths.js';
+
+function listProgrammeDirectories(env) {
+  try { return readdirSync(programsHome(env), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+}
+
 function summarizeVerified({ manifest, manifest_sha256, bytes }) {
   return { verified: true, schema: manifest.schema, version: manifest.version, programmes: manifest.programmes,
     members: manifest.members.length, bundles: manifest.bundles.length, manifest_sha256, bytes };
@@ -85,7 +106,8 @@ function print(stdout, value, json) {
   } else if (value.verified !== undefined) {
     stdout.write(`archive verified: ${value.verified ? 'yes' : 'no'}\n`);
     stdout.write(`${value.programmes.length} programme(s), ${value.members} member(s), ${value.bundles} bundle(s)\n`);
-  } else stdout.write(`${value.programmes.join(', ')}: ${value.members} member(s), ${value.bundles} bundle(s) — ${value.manifest_sha256}\n`);
+  } else if (value.archive) stdout.write(`backup ${value.transaction.id}: ${value.archive.path}\n`);
+  else stdout.write(`${value.programmes.join(', ')}: ${value.members} member(s), ${value.bundles} bundle(s) — ${value.manifest_sha256}\n`);
 }
 
 function refusal(stderr, message) { stderr.write(`mc: ${message}\n${usage()}`); return 2; }

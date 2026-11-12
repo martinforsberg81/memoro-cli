@@ -608,6 +608,8 @@ export const COMMAND_USAGE = Object.freeze({
     "wrote; --where names the files it reads.\n",
   ].join(''),
   backup: [
+    "usage — mc backup create --programme <name> [--programme <name> …] --output <path> [--json]   fence and capture selected local programme content\n",
+    "        mc backup create --all-programmes --output <path> [--json]   select every local programme directory explicitly\n",
     "usage — mc backup restore --archive <path> --output <inactive-root> [--json]   materialize a verified content-only archive into a new inactive root\n",
     "usage — mc backup inspect --archive <path> [--json]   read the archive inventory after checksum verification\n",
     "        mc backup verify --archive <path> [--json]    verify every checksummed archive payload and bundle\n",
@@ -615,8 +617,9 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc backup resume --id <id> [--json]            reconcile a drain into a held backup when writers finish\n",
     "        mc backup release --id <id> [--json]           release an explicitly held backup after inspection\n",
     "\n",
-    "Archive paths are local directories. Release is refused unless the transaction is held;\n",
-    "a draining capture is never cleared by status or process expiry.\n",
+    "Create fences selected programmes before capture. It refuses Git worktrees and keeps the hold\n",
+    "when inventory is incomplete; status and release are explicit recovery steps.\n",
+    "Archive paths are local directories. A content-only archive is not complete Git recovery.\n",
   ].join(''),
 });
 

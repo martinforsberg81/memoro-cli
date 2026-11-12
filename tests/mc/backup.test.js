@@ -182,6 +182,32 @@ test('backup command: restore routes only explicit archive and output paths', as
   assert.match(stderr.value, /needs --archive.*--output/u);
 });
 
+test('backup command: explicit create holds selected content and refuses Git worktrees without an archive', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  const programme = join(root, 'programs', 'chosen');
+  mkdirSync(join(programme, 'evidence'), { recursive: true });
+  writeFileSync(join(programme, 'evidence', 'result.md'), 'recoverable evidence');
+  const out = { value: '', write(text) { this.value += text; } };
+  const err = { value: '', write(text) { this.value += text; } };
+  const archive = join(root, 'archive');
+
+  assert.equal(await backupCommand(['create', '--programme', 'chosen', '--output', archive, '--json'], { env, stdout: out, stderr: err }), 0);
+  const receipt = JSON.parse(out.value);
+  assert.equal(receipt.transaction.state, 'held');
+  assert.equal(programmeLifecycle('chosen', { env }).state, 'held');
+  assert.deepEqual(readFileSync(join(archive, 'payload', digest(Buffer.from('recoverable evidence')))), Buffer.from('recoverable evidence'));
+
+  const repoProgramme = join(root, 'programs', 'repo-work');
+  mkdirSync(join(repoProgramme, 'repo', '.git'), { recursive: true });
+  writeFileSync(join(repoProgramme, 'repo', '.git', 'HEAD'), 'ref: refs/heads/plan/demo\n');
+  const refusedArchive = join(root, 'refused-archive');
+  assert.equal(await backupCommand(['create', '--programme', 'repo-work', '--output', refusedArchive, '--json'], { env, stdout: out, stderr: err }), 1);
+  assert.equal(programmeLifecycle('repo-work', { env }).state, 'held', 'an incomplete capture keeps its selected fence');
+  assert.throws(() => lstatSync(refusedArchive), { code: 'ENOENT' });
+  assert.match(err.value, /Git worktrees/u);
+});
+
 test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
   const root = fixture(t);
   const output = join(root, 'archive');
