@@ -1816,6 +1816,7 @@ test('Linux direct --once holds ownership against competing manual and automatic
   const direct = runLoop({ once: true, deps: f.deps });
   await sessionStarted;
   const current = f.files['/w/runner/runner.json'];
+  assert.equal(await runLoop({ once: true, deps: { ...f.deps, pid: 9001 } }), 2, 'a competing direct --once bypassed ownership');
   let spawned = false;
   const control = { ...f.deps, env: { ...f.deps.env, MC_RUN_SYSTEMD_CONTEXT: 'scope' }, spawn: () => { spawned = true; return 9001; } };
   const [manual, boot] = await Promise.all([startRunner({ root: '/w', deps: control }), startRunner({ root: '/w', argv: ['--if-was-running'], deps: control })]);
@@ -1892,7 +1893,7 @@ test('Linux rejected reserved child retains live drainers under STOP without adm
   f.files['/w/runner/STOP'] = 'later stop';
   f.deps.env.MC_RUN_RESERVED_GENERATION = 'C';
   assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
-  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers, [a], 'STOP rejection forgot A');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json'] || 'null')?.drainers, [a], 'STOP rejection forgot A');
   assert.equal(f.files['/w/runner/STOP'], 'later stop');
   assert.deepEqual(f.calls.sessions, []);
 });
