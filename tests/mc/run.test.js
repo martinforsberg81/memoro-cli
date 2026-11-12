@@ -1772,6 +1772,42 @@ function linuxLifecycleFixture() {
 }
 const linuxOwner = (pid, generation) => ({ pid, generation, started: null, bootId: 'boot', starttime: String(pid) });
 
+test('Linux runLoop admits once with source checkout HEAD, and tolerates failed or absent HEAD lookup', async () => {
+  const checkout = mcCheckout({ exists: () => true });
+  const admitted = async ({ gitResult, hasCheckout }) => {
+    const f = goalFixture({ a: {} }, { livePids: [4242] });
+    f.deps.platform = 'linux';
+    f.deps.identity = pid => ({ bootId: 'boot', starttime: String(pid) });
+    f.deps.lifecycleLock = async (_root, transition) => transition();
+    if (hasCheckout) f.files[`${checkout}/.git`] = '';
+    const git = f.deps.git;
+    let headLookups = 0;
+    f.deps.git = (cwd, args) => cwd === checkout && args.join(' ') === 'rev-parse --short HEAD'
+      ? (headLookups += 1, gitResult) : git(cwd, args);
+    const owners = [];
+    const writeJson = f.deps.writeJson;
+    f.deps.writeJson = (path, value) => {
+      writeJson(path, value);
+      if (path === '/w/runner/runner.json') owners.push(value);
+    };
+    assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+    assert.equal(f.calls.sessions.length, 1, 'one goal session was admitted');
+    assert.equal(owners.length, 1, 'one owner record was published');
+    assert.equal(owners[0].pid, 4242);
+    assert.equal(owners[0].bootId, 'boot');
+    assert.equal(owners[0].starttime, '4242');
+    assert.equal(owners[0].commit ?? null, hasCheckout && gitResult?.ok ? String(gitResult.stdout ?? '').trimEnd() || null : null);
+    return { f, owners, headLookups };
+  };
+
+  const known = await admitted({ gitResult: { ok: true, stdout: '2051d17\n' }, hasCheckout: true });
+  assert.equal(known.owners[0].commit, '2051d17');
+  assert.equal(known.headLookups, 1, 'the source checkout HEAD was inspected once');
+  await admitted({ gitResult: { ok: false, stdout: 'ignored' }, hasCheckout: true });
+  const absent = await admitted({ gitResult: { ok: true, stdout: 'must not be read' }, hasCheckout: false });
+  assert.equal(absent.headLookups, 0, 'no checkout means no Git inspection');
+});
+
 test('Linux real runLoop UPDATE publishes and admits its successor while held work completes', async () => {
   const f = goalFixture({ a: {} }, { livePids: [4242, 9001] });
   let tail = Promise.resolve();

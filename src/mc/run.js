@@ -2438,7 +2438,8 @@ export async function runLoop({
     const reservation = deps.env?.MC_RUN_RESERVED_GENERATION;
     // Local git inspection is intentionally outside the lifecycle gate.
     const checkout = mcCheckout({ exists: deps.exists });
-    const commit = checkout ? gitOut(checkout, ['rev-parse', '--short', 'HEAD']) : null;
+    const head = checkout ? deps.git(checkout, ['rev-parse', '--short', 'HEAD']) : null;
+    const commit = head?.ok ? String(head.stdout ?? '').trimEnd() : null;
     let admission;
     try {
       admission = await deps.lifecycleLock(workRootPath, () => {

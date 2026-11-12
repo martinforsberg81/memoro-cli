@@ -89,8 +89,12 @@ Linux runner ownership transitions use one stable `runner/lifecycle.lock`
 inode separate from the register lock. The short gate is util-linux `flock`
 with a five-second bound and a pipe-held `/bin/cat` helper; only local
 synchronous state transitions run while held. Reservations and owner records
-carry generations and Linux boot ID/process start time. Corrupt state and a
-live owner with an unverifiable identity refuse admission or signalling.
+carry generations and Linux boot ID/process start time. Before the gate, a
+source-installed runner inspects its own checkout's short `HEAD` through the
+runner's Git dependency and records it on admission when available. No checkout
+or a failed inspection leaves the commit absent; it does not change admission
+authority. Corrupt state and a live owner with an unverifiable identity refuse
+admission or signalling.
 Repeated handovers retain a deduplicated list of every verified live drainer
 alongside the immediate predecessor; session lanes held by all live drainers
 remain excluded and count against the configured total. STOP is written and
