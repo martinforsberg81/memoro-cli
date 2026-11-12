@@ -290,6 +290,25 @@ describe('mc run start', () => {
     assert.equal(fx.calls.spawned.length, 0);
   });
 
+  it('refuses unreadable Linux owner state for admission and forced signalling', async () => {
+    const fx = fixture({ runner: { pid: 4242, generation: 'G', bootId: 'boot', starttime: '42' }, live: [4242] });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.read = (path) => path === paths.runner ? null : fx.store[path] ?? null;
+
+    const start = await startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps });
+    assert.equal(start.ok, false);
+    assert.match(start.lines.join('\n'), /corrupt or unreadable.*refusing Linux start/u);
+    assert.deepEqual(fx.calls.spawned, [], 'unreadable state was treated as an empty owner slot');
+
+    const stop = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+    assert.equal(stop.ok, false);
+    assert.deepEqual(fx.calls.killed, [], 'an owner was signalled without readable identity state');
+    assert.ok(paths.stop in fx.store, 'STOP was not persisted despite refusing to signal');
+    assert.ok(paths.runner in fx.store, 'unreadable ownership state was erased');
+  });
+
   it('serializes competing Linux boot, manual and direct starts into one owner reservation', async () => {
     const fx = fixture({ runner: { pid: 999, args: ['--no-merge'] } });
     fx.deps.platform = 'linux';
