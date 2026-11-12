@@ -20,7 +20,10 @@ through `src/mc/goals.js` use this admission boundary. Legacy goal conversion
 and phase reconstruction also retain a programme writer lease across their
 direct file writes and renumbering. A runner conversion refused by a selected
 programme hold is deferred for that programme while unrelated programmes are
-still converted; it is not reported as a dropped or failed goal.
+still converted; it is not reported as a dropped or failed goal. A goal-bound
+`mc ask` checks lifecycle admission at the eventual goal write after the model
+response; a hold that begins during that response leaves the goal files
+unchanged and reports that the answer was not recorded in the goal.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.
