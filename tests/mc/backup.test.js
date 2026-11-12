@@ -237,6 +237,31 @@ test('backup command: selected legacy planning material is archived without coll
   assert.match(stderr.value, /inventory root is not a real directory/u);
 });
 
+test('backup command: a local planning root appearing during capture prevents archive publication', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  mkdirSync(join(root, 'programs', 'racing'), { recursive: true });
+  writeFileSync(join(root, 'programs', 'racing', 'README.md'), 'before');
+  let inventories = 0;
+  const inventory = (...args) => {
+    const result = inventoryProgrammeTree(...args);
+    inventories += 1;
+    if (inventories === 1) {
+      mkdirSync(join(root, 'plan', 'racing'), { recursive: true });
+      writeFileSync(join(root, 'plan', 'racing', 'late.md'), 'appeared during capture');
+    }
+    return result;
+  };
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+  const archive = join(root, 'racing-archive');
+
+  assert.equal(await backupCommand(['create', '--programme', 'racing', '--output', archive, '--json'], { env, stdout, stderr, inventory }), 1);
+  assert.equal(programmeLifecycle('racing', { env }).state, 'held');
+  assert.throws(() => lstatSync(archive), { code: 'ENOENT' });
+  assert.match(stderr.value, /local tree set changed during backup capture/u);
+});
+
 test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
   const root = fixture(t);
   const output = join(root, 'archive');

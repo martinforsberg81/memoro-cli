@@ -26,18 +26,19 @@ export function createProgrammeBackup(selection, output, { env = process.env, id
     { base: programsHome(env), memberRoot: (programme) => programme },
     { base: planHome(env), memberRoot: (programme) => `${programme}/legacy-plan` },
   ];
+  const localTrees = (programme) => roots.flatMap(({ base, memberRoot }) => {
+    const directory = join(base, programme);
+    try {
+      lstatSync(directory);
+      return [{ directory, memberRoot: memberRoot(programme) }];
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+  });
   const members = [];
   for (const programme of held.selection) {
-    const selectedRoots = roots.flatMap(({ base, memberRoot }) => {
-      const directory = join(base, programme);
-      try {
-        lstatSync(directory);
-        return [{ directory, memberRoot: memberRoot(programme) }];
-      } catch (error) {
-        if (error.code === 'ENOENT') return [];
-        throw error;
-      }
-    });
+    const selectedRoots = localTrees(programme);
     if (!selectedRoots.length) throw new Error(`programme ${programme} has no local programme or legacy planning directory; listing-only and archived inventory is not yet supported`);
     const first = [];
     const second = [];
@@ -50,6 +51,10 @@ export function createProgrammeBackup(selection, output, { env = process.env, id
       second.push(...after.members);
     }
     if (digest(first) !== digest(second)) throw new Error(`programme ${programme} changed during backup capture`);
+    const finalRoots = localTrees(programme);
+    if (JSON.stringify(finalRoots.map(({ memberRoot }) => memberRoot)) !== JSON.stringify(selectedRoots.map(({ memberRoot }) => memberRoot))) {
+      throw new Error(`programme ${programme} local tree set changed during backup capture`);
+    }
     members.push(...second);
   }
   const archive = create(output, {

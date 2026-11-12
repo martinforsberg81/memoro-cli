@@ -85,8 +85,9 @@ The currently routed command surface is:
   remain, then advances to held before reading. When present, the matching
   legacy `plan/<name>` tree is captured below the archive namespace
   `<name>/legacy-plan/`, distinct from current `programs/<name>` members.
-  Two no-follow inventories of every selected local tree must match before the
-  private archive is published. This is a deliberately
+  Two no-follow inventories of every selected local tree and the before/after
+  set of local roots must match before the private archive is published. This
+  is a deliberately
   incomplete content-only implementation: it refuses selected directories
   containing Git worktrees, and does not yet reconcile listed-only or archived
   programmes, process census, repository identity,
