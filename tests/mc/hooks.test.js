@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -18,6 +18,7 @@ import {
 } from '../../src/mc/hooks.js';
 import { makeRepoLayout } from './_helpers/bare-layout.js';
 import { git as gitIn } from './_helpers/git-fixture.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
 
 const bash = (command) => ({ tool_name: 'Bash', tool_input: { command } });
 
@@ -212,6 +213,22 @@ describe('mc hook — a goal file under ~/mc/programs is mc\'s to change', () =>
   it('lets through the same name under another directory, and the other files of a programme', () => {
     assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: join('/elsewhere', 'x', 'GOAL.json') } }), null);
     assert.equal(deny({ tool_name: 'Edit', tool_input: { file_path: join(programs, 'a', 'rulings.md') } }), null);
+  });
+
+  it('refuses direct editor writes anywhere in a durably draining programme tree', (t) => {
+    const workRoot = mkdtempSync(join(tmpdir(), 'mc-hook-lifecycle-'));
+    t.after(() => rmSync(workRoot, { recursive: true, force: true }));
+    const env = { MC_WORK_ROOT: workRoot };
+    const transaction = beginBackup(['a'], { env });
+    const target = join(programs, 'a', 'goals', 'g', 'memoro', 'src', 'change.js');
+    for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+      const decision = preToolDecision({ tool_name: tool, tool_input: { file_path: target } }, { programs, env });
+      assert.equal(decision?.id, 'programme-lifecycle', tool);
+      assert.match(decision.reason, /programme a is draining/u, tool);
+      assert.match(decision.reason, new RegExp(transaction.id, 'u'), tool);
+    }
+    assert.equal(preToolDecision({ tool_name: 'Write', tool_input: { file_path: join(programs, 'other', 'README.md') } }, { programs, env }), null,
+      'an unrelated programme remains editable');
   });
 
   it('resolves a relative file_path against the session\'s cwd', () => {

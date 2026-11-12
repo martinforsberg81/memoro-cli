@@ -40,6 +40,14 @@ programme record retains the checkout even when an earlier tidy list selected
 it; the state is read again inside the existing goal-worktree removal lock.
 This guard protects goal checkout bytes and branch registration only, not
 other tidy target kinds or complete backup capture.
+The installed mc PreToolUse hook also refuses direct `Write`, `Edit` and
+`MultiEdit` operations whose target is anywhere under a selected programme's
+`programs/<programme>/` tree, including nested goal worktrees. It consults the
+durable lifecycle record for each target: draining, held, moved or inactive
+work is refused, and malformed state fails closed. Unrelated programmes and
+targets outside the programmes root remain editable. This is a cooperative
+editor boundary, not an OS-level prohibition on arbitrary processes or shell
+commands.
 
 The direct irreversible `mc merge <repo> <pr> --admin` and documents-only
 `mc merge` routes have no merger round to own admission. Before their first

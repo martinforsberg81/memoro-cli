@@ -25,6 +25,7 @@ import { run as runGit } from './git.js';
 import { sessionIdentity, sessionRoleLine } from './session-role.js';
 import { defaultRepos, gitDirOf } from './repos.js';
 import { programsHome, workRoot } from './paths.js';
+import { programmeLifecycle } from './programme-lifecycle.js';
 
 /** A branch this far behind origin/main is old enough to be the wrong code. */
 export const BEHIND_WARNING = 50;
@@ -386,7 +387,7 @@ export function headlessSession(env = process.env) {
  * a known repository, where a Playwright script is the repository's own code.
  * `env` is the session's (the hook passes its own); without one, not headless.
  */
-export function preToolDecision(input, { inRepo = () => false, programs = programsHome(), env = {} } = {}) {
+export function preToolDecision(input, { inRepo = () => false, programs = programsHome(), env = {}, lifecycle = programmeLifecycle } = {}) {
   const tool = input?.tool_name;
   const args = input?.tool_input || {};
   if (tool === 'Bash' && headlessSession(env)) {
@@ -413,8 +414,20 @@ export function preToolDecision(input, { inRepo = () => false, programs = progra
   }
   if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit') {
     // A relative path lands where the session's own cwd says, so it is resolved there.
-    if (protectedGoalFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
+    const target = resolve(String(input?.cwd || ''), String(args.file_path || ''));
+    if (protectedGoalFile(target, { programs })) {
       return { id: 'goal-file', reason: GOAL_FILE_REASON };
+    }
+    const programme = programmeForDirectWrite(target, programs);
+    if (programme) {
+      try {
+        const state = lifecycle(programme, { env });
+        if (state.state !== 'active') {
+          return { id: 'programme-lifecycle', reason: `mc: direct tool write refused: programme ${programme} is ${state.state} under transaction ${state.transaction_id}; use mc backup status --id ${state.transaction_id} and follow its safe next step` };
+        }
+      } catch (error) {
+        return { id: 'programme-lifecycle', reason: `mc: direct tool write refused: programme ${programme} lifecycle state is unreadable (${error.message})` };
+      }
     }
   }
   if (tool === 'Write') {
@@ -428,6 +441,15 @@ export function preToolDecision(input, { inRepo = () => false, programs = progra
     }
   }
   return null;
+}
+
+/** The programme whose durable tree would be changed by a direct editor write. */
+function programmeForDirectWrite(path, programs) {
+  const root = resolve(programs);
+  const target = resolve(path);
+  if (!target.startsWith(`${root}${sep}`)) return null;
+  const programme = target.slice(root.length + 1).split(sep)[0];
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(programme) ? programme : null;
 }
 
 /*
