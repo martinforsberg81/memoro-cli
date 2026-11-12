@@ -56,6 +56,7 @@
  * themselves live in run-plan.js.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -73,7 +74,7 @@ import { REVIEW_CLASS } from './plan-schema.js';
 import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
-import { drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
+import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
@@ -88,6 +89,7 @@ import {
 import { inLine, mergesPath, nextJob, parseQueue } from './merge-queue.js';
 import { offlineBackoffMs, queueMerge, readMerger, startMerger } from './merger.js';
 import { pidAlive } from './status-collect.js';
+import { linuxIdentityStatus, readLinuxIdentity, withLifecycleLock } from './linux-runner-service.js';
 import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
@@ -467,6 +469,9 @@ export function streamSession({ bin, args, cwd, env, unsetEnv = [], prompt = nul
 export function realDeps(env = process.env) {
   return {
     env,
+    platform: process.platform,
+    lifecycleLock: (root, transition) => withLifecycleLock(root, transition),
+    identity: process.platform === 'linux' ? (pid) => readLinuxIdentity(pid) : undefined,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
     git: (cwd, args, { env } = {}) => shGit(['-C', cwd, ...args], { env }),
@@ -711,9 +716,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * holds, and leaves runner.json alone — because that is what it is, done
    * from outside rather than by this runner itself.
    */
+  let authorityLost = false;
   function replaced() {
     let named = null;
-    try { named = JSON.parse(deps.read(paths.runner) ?? ''); } catch { return null; }
+    try { named = JSON.parse(deps.read(paths.runner) ?? ''); } catch { /* Linux fails closed below. */ }
+    if (deps.platform === 'linux' && marked?.generation) {
+      authorityLost ||= Number(named?.pid) !== pid || named?.generation !== marked.generation;
+      return authorityLost ? { pid: named?.pid ?? null, reason: 'owner generation lost' } : null;
+    }
     const other = Number(named?.pid);
     if (!Number.isInteger(other) || other <= 0 || other === pid) return null;
     return alive(other) ? { pid: other } : null;
@@ -1812,6 +1822,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
         check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
+        ...(marked?.generation ? { generation: marked.generation } : {}),
+        ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }),
       };
       writeJson(currentPath, current);
@@ -2047,14 +2059,25 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const owner = Number(held?.pid);
       const known = Number.isInteger(owner) && owner > 0;
       const foreign = known && owner !== pid;
-      if (foreign && !alive(owner)) {
+      const identityStatus = foreign && deps.platform === 'linux'
+        ? linuxIdentityStatus(held, deps.identity?.(owner), alive(owner)) : null;
+      if (foreign && (!alive(owner) || identityStatus === 'stale')) {
         const to = join(paths.log, `dead-${basename(path, '.json')}-${owner}.json`);
-        if (!deps.move?.(path, to)) remove(path);
+        const discard = () => {
+          let latest = null;
+          try { latest = JSON.parse(deps.read(path) ?? ''); } catch { return false; }
+          if (Number(latest?.pid) !== owner || latest?.generation !== held?.generation) return false;
+          if (!deps.move?.(path, to)) remove(path);
+          return true;
+        };
+        if (deps.platform === 'linux') {
+          try { Promise.resolve(deps.lifecycleLock(root, discard)).catch(() => {}); } catch { /* retain the record if the gate fails */ }
+        } else discard();
         say(`lane file ${basename(path)} names pid ${owner}, which is gone — ${held?.name || 'nothing named'}; moved to log/${basename(to)}`);
         return [];
       }
       const lane = Number.isInteger(held?.lane) && held.lane > 0 ? held.lane : 0;
-      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign }];
+      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign, ...(identityStatus ? { identityStatus } : {}) }];
     });
   }
 
@@ -2195,7 +2218,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (stopRequested()) return;
     // runner.log to runner.log.1 past RUNNER_LOG_MAX_BYTES, before this pass says anything.
     try { deps.rotate?.(paths.runnerLog, RUNNER_LOG_MAX_BYTES); } catch { /* the log goes on growing */ }
-    dropPredecessor();
+    await dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
     askGithub();
@@ -2264,21 +2287,45 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // (`mc run --update` on a stopping runner); `takeover` says this runner
   // stands down when runner.json names another (`replaced`), which is what
   // makes taking over from it safe (run-control.js `takeOver`).
-  const markRunner = ({ predecessor = null, args = [] } = {}) => {
-    const dir = mcCheckout({ exists: deps.exists });
-    const commit = dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : null;
+  const markRunner = ({ predecessor = null, drainers = [], args = [], generation = null, commit: knownCommit = undefined } = {}) => {
+    const dir = knownCommit === undefined ? mcCheckout({ exists: deps.exists }) : null;
+    const commit = knownCommit === undefined && dir ? gitOut(dir, ['rev-parse', '--short', 'HEAD']) : knownCommit;
     marked = {
       pid, started: stamp(), ...(commit ? { commit } : {}), args, takeover: true, ...(predecessor ? { predecessor } : {}),
+      ...(drainers.length ? { drainers } : {}),
+      ...(generation ? { generation } : {}),
+      ...(deps.identity?.(pid) || {}),
     };
     writeJson(paths.runner, marked);
   };
-  const dropPredecessor = () => {
-    const before = marked?.predecessor;
-    if (!before || alive(before.pid)) return;
-    const { predecessor: _gone, ...rest } = marked;
-    marked = rest;
-    writeJson(paths.runner, marked);
-    say(`pid ${before.pid}, the runner this one took over from, has finished what it held and exited`);
+  const dropPredecessor = async () => {
+    if (!marked) return;
+    const owners = [...(marked.drainers || []), ...(marked.predecessor ? [marked.predecessor] : [])];
+    const dead = (owner) => {
+      const isAlive = alive(Number(owner.pid));
+      if (deps.platform !== 'linux') return !isAlive;
+      const status = linuxIdentityStatus(owner, deps.identity?.(Number(owner.pid)), isAlive);
+      return status === 'dead' || status === 'stale';
+    };
+    const gone = owners.filter(dead);
+    if (!gone.length) return;
+    const prune = () => {
+      let latest = null;
+      try { latest = JSON.parse(deps.read(paths.runner) ?? ''); } catch { return false; }
+      if (Number(latest?.pid) !== pid || latest?.generation !== marked.generation) return false;
+      const retained = owners.filter((owner) => !gone.some((item) => item.pid === owner.pid && (item.generation || '') === (owner.generation || '')));
+      const { predecessor: _old, ...rest } = latest;
+      const immediate = latest.predecessor && retained.find((item) => item.pid === Number(latest.predecessor.pid));
+      marked = { ...rest, ...(retained.length ? { drainers: retained } : {}), ...(immediate ? { predecessor: immediate } : {}) };
+      writeJson(paths.runner, marked);
+      return true;
+    };
+    try {
+      const changed = deps.platform === 'linux'
+        ? await (deps.lifecycleLock || ((_root, fn) => fn()))(root, prune)
+        : prune();
+      if (changed) say(`drainer owner(s) ${gone.map((owner) => owner.pid).join(', ')} have ended; pruning them from runner.json`);
+    } catch { /* do not mutate state without the lifecycle gate */ }
   };
   /**
    * New code on origin/main of mc's own checkout is an UPDATE this runner
@@ -2308,14 +2355,39 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   // runner.json only when it is this runner's, or names nobody alive: a runner
   // that was taken over leaves the file to the one that took over, which
   // until 2026-10-10 nothing could do while this one still ran.
+  // Caller holds the Linux lifecycle gate. An exiting owner is not entitled
+  // to forget older, still-draining owners, even when they have no lane file.
+  const retireOwner = (expectedGeneration) => {
+    const current = readRunner({ paths, read: deps.read, alive, identity: deps.identity });
+    if (current?.pid !== pid || current.generation !== expectedGeneration) return;
+    const retained = drainingOwners(current);
+    if (retained.length) {
+      let raw;
+      try { raw = JSON.parse(deps.read(paths.runner)); } catch { return; }
+      const { predecessor: _before, drainers: _drainers, ...rest } = raw;
+      writeJson(paths.runner, { ...rest, drainers: retained });
+    } else remove(paths.runner);
+  };
   const clearRunner = () => {
+    if (deps.platform === 'linux') {
+      return deps.lifecycleLock(root, () => {
+        if (!marked?.generation) return;
+        retireOwner(marked.generation);
+        for (const path of paths.currents()) {
+          let held;
+          try { held = JSON.parse(deps.read(path)); } catch { continue; }
+          if (Number(held?.pid) === pid && held.generation === marked.generation
+            && linuxIdentityStatus(held, deps.identity?.(pid), alive(pid)) === 'same') remove(path);
+        }
+      });
+    }
     if (!replaced()) remove(paths.runner);
     for (const held of stepsHeld()) if (!held.other) remove(held.path);
   };
 
   return {
     paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested, startCapacityTicker,
-    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, markRunner, dropPredecessor, clearRunner,
+    updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
 
@@ -2360,50 +2432,144 @@ export async function runLoop({
   // moment the pid exists so nobody sees no runner in the second this one
   // takes to load. What it names as the predecessor is the runner this one is
   // taking over from.
-  const ours = held?.pid === runner.pid;
-  const named = ours && held.predecessor?.alive ? held.predecessor : null;
-  if (ours) held = named ? { ...named, alive: true } : null;
+  let replacing = null;
+  if (deps.platform === 'linux') {
+    const workRootPath = workRoot(deps.env);
+    const reservation = deps.env?.MC_RUN_RESERVED_GENERATION;
+    // Local git inspection is intentionally outside the lifecycle gate.
+    const checkout = mcCheckout({ exists: deps.exists });
+    const commit = checkout ? gitOut(checkout, ['rev-parse', '--short', 'HEAD']) : null;
+    let admission;
+    try {
+      admission = await deps.lifecycleLock(workRootPath, () => {
+        const raw = deps.read(runner.paths.runner);
+        if (deps.exists(runner.paths.runner) && raw == null) {
+          runner.say('runner.json is unreadable — refusing Linux runner admission; inspect and repair runner/runner.json');
+          return { ok: false };
+        }
+        let parsed = null;
+        if (raw != null) {
+          try { parsed = JSON.parse(raw); } catch {
+            runner.say('runner.json is corrupt — refusing Linux runner admission; inspect and repair runner/runner.json');
+            return { ok: false };
+          }
+          if (!parsed || !Number.isInteger(Number(parsed.pid)) || Number(parsed.pid) <= 0) {
+            runner.say('runner.json is corrupt — refusing Linux runner admission; inspect and repair runner/runner.json');
+            return { ok: false };
+          }
+        }
+        const current = readRunner({ paths: runner.paths, read: deps.read, alive: isAlive, identity: deps.identity });
+        if ([...(current?.drainers || []), current?.predecessor].some((owner) => owner?.alive && owner.identityStatus === 'unknown')) {
+          runner.say('a draining runner has no verifiable Linux identity; refusing admission; inspect runner/runner.json');
+          return { ok: false };
+        }
+        const ours = current?.pid === runner.pid;
+        const reservedChild = ours && current.identityStatus === 'same' && typeof reservation === 'string' && current.generation === reservation;
+        if (reservation && !reservedChild) {
+          runner.say('runner spawn reservation no longer matches runner.json — refusing admission');
+          return { ok: false };
+        }
+        const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
+        const successor = current?.alive && Number.isInteger(successorOf) && successorOf === current.pid ? current : null;
+        if (current?.alive && current.identityStatus === 'unknown') {
+          runner.say(`runner pid ${current.pid} has no verifiable Linux process identity; refusing admission and takeover`);
+          return { ok: false };
+        }
+        if (current?.alive && !ours && !successor) {
+          runner.say(`a runner is already running — pid ${current.pid}${current.started ? `, started ${current.started}` : ''}`);
+          return { ok: false };
+        }
+        if (!deps.identity?.(runner.pid)) {
+          runner.say('cannot verify this Linux runner process identity; refusing admission');
+          return { ok: false };
+        }
+        if (deps.exists(runner.paths.stop)) {
+          if (reservedChild || successor) {
+            runner.say(`STOP file present (${runner.paths.stop}) — this reserved start will not admit work`);
+            if (ours && current.generation === reservation) runner.retireOwner(reservation);
+            return { ok: false };
+          }
+          if (!current?.alive) {
+            deps.remove(runner.paths.stop);
+            runner.say('removed the STOP the last stop left');
+          }
+        }
+        if (current && !current.alive && !ours) {
+          runner.say(`cleared runner.json — the pid it named (${current.pid}) is gone`);
+        }
+        replacing = successor;
+        const predecessor = successor ? {
+          pid: successor.pid, started: successor.started || null,
+          ...(successor.generation ? { generation: successor.generation } : {}),
+          ...(successor.bootId ? { bootId: successor.bootId } : {}),
+          ...(successor.starttime ? { starttime: successor.starttime } : {}),
+        } : null;
+        const inherited = [
+          ...(current?.drainers || []).filter((owner) => owner.alive && owner.identityStatus !== 'unknown'),
+          ...(current?.predecessor?.alive && current.predecessor.identityStatus !== 'unknown' ? [current.predecessor] : []),
+          ...(successor ? [successor] : []),
+        ];
+        const unique = new Map(inherited.map((owner) => [`${owner.pid}:${owner.bootId && owner.starttime ? `${owner.bootId}:${owner.starttime}` : owner.generation || ''}`, owner]));
+        runner.markRunner({ args, generation: reservation || randomUUID(), commit, ...(predecessor ? { predecessor } : {}), drainers: [...unique.values()].map(({ alive: _alive, identityStatus: _status, ...owner }) => owner) });
+        return { ok: true };
+      });
+    } catch (error) {
+      runner.say(`could not claim Linux runner lifecycle lock: ${error.message}`);
+      return 2;
+    }
+    if (!admission.ok) return 2;
+  } else {
+    const ours = held?.pid === runner.pid;
+    const named = ours && held.predecessor?.alive ? held.predecessor : null;
+    if (ours) held = named ? { ...named, alive: true } : null;
   // The one live holder that is no refusal: the runner that has just handed
   // over to this one, which says so in the environment it spawned this
   // process with (`handOver`, `takeOver`). It keeps finishing the sessions it
   // holds; this one starts at once beside it (ruling 28).
-  const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
-  const replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
+    const successorOf = Number(deps.env?.MC_RUN_SUCCESSOR_OF);
+    replacing = held?.alive && Number.isInteger(successorOf) && successorOf === held.pid ? held : null;
   // STOP at start. A successor finding one was stopped during its own
   // handover, and obeys it. Anybody else finds the one the last stop left,
   // and removes it — the way `mc run start` always has, so a foreground
   // `mc run` and a background one are the same switch. Read straight from the
   // disk: `stopRequested` is sticky, and a STOP read here must not outlive
   // its removal.
-  if (deps.exists(runner.paths.stop)) {
-    if (Number.isInteger(successorOf) && successorOf > 0) {
+    if (deps.exists(runner.paths.stop)) {
+      if (deps.env?.MC_RUN_RESERVED_GENERATION && ours) {
+      runner.say(`STOP file present (${runner.paths.stop}) — this reserved start predates the stop and will not admit work`);
+        const latest = readRunner({ paths: runner.paths, read: deps.read, alive: isAlive, identity: deps.identity });
+        if (latest?.pid === runner.pid && latest.generation === deps.env.MC_RUN_RESERVED_GENERATION) deps.remove(runner.paths.runner);
+      return 2;
+    }
+      if (Number.isInteger(successorOf) && successorOf > 0) {
       runner.say(`STOP file present (${runner.paths.stop}) — a stop came during the handover; this runner does not start`);
       if (ours) deps.remove(runner.paths.runner);
       return 2;
     }
-    if (!held?.alive) {
+      if (!held?.alive) {
       deps.remove(runner.paths.stop);
       runner.say('removed the STOP the last stop left');
     }
-  }
-  if (held?.alive && !replacing) {
+    }
+    if (held?.alive && !replacing) {
     const stopping = deps.exists(runner.paths.stop);
     runner.say(`a runner is already ${stopping ? 'stopping' : 'running'} — pid ${held.pid}${held.started ? `, started ${held.started}` : ''}`);
     runner.say(stopping
       ? 'mc run start takes over from it at once · or wait for it to exit'
       : 'mc run stop ends it · mc run --update restarts it on the newest code');
     return 2;
-  }
+    }
   // A file naming a pid that is gone is a killed runner's leftovers, not a
   // reason nothing can start: it is cleared and said, the way `mc run start`
   // clears it. `clearRunner()` takes the `current-<repo>.json` files with it,
   // which are the same runner's other leftovers and would otherwise draw a
   // session that has not been running for hours.
-  if (held && !replacing && !ours) {
+    if (held && !replacing && !ours) {
     runner.clearRunner();
     runner.say(`cleared runner.json — the pid it named (${held.pid}) is gone`);
+    }
   }
-  runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
+  if (deps.platform === 'linux') runner.say(`runner start (mc run, merge=${merge ? 1 : 0} once=${once ? 1 : 0})`);
   if (replacing) runner.say(`update: taking over from pid ${replacing.pid} — it finishes the sessions it holds, this runner starts every lane it does not`);
   // Before the first round, so a run that is going to be unattended is already
   // holding the assertion by the time anybody walks away from it. `--once` is
@@ -2419,7 +2585,7 @@ export async function runLoop({
       ? `staying awake (caffeinate ${held.flags.join(' ')} pid ${held.pid}) — ${held.note}`
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
-  runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
+  if (deps.platform !== 'linux') runner.markRunner({ args, ...(replacing ? { predecessor: { pid: replacing.pid, started: replacing.started || null } } : {}) });
   let stopCapacityTicker = () => {};
   // A handover is the one exit that must not clear runner.json: the runner it
   // handed to has already written its own, and removing it on the way out
@@ -2450,7 +2616,7 @@ export async function runLoop({
       return true;
     }
     const handed = await (deps.handOver || handOver)({
-      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, finishing: ownInFlight().length,
+      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, predecessorGeneration: runner.generation(), finishing: ownInFlight().length,
     });
     if (handed.ok) { stopCapacityTicker(); handedOver = true; drainMark = deps.now().getTime(); return true; }
     runner.holdUpdate(false);
@@ -2654,6 +2820,6 @@ export async function runLoop({
   } finally {
     stopCapacityTicker();
     stopMonitor?.();
-    if (!handedOver) runner.clearRunner();
+    if (!handedOver) await runner.clearRunner();
   }
 }

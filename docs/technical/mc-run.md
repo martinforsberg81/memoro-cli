@@ -53,6 +53,111 @@ After login it starts only if runner.json names a dead pid and no STOP is
 present. A runner deliberately stopped stays stopped. Node loads its module
 graph once, so a landed code change needs a new process to use it.
 
+### Linux user systemd
+
+On Linux, each canonical `MC_WORK_ROOT` has its own
+`mc-runner-boot-<sha256-prefix>.service` user unit and uniquely named transient
+start scopes. A successful explicit background start runs in a
+`systemd-run --user --scope`; the scope command returns after systemd accepts
+it, while the detached runner remains in the scope's cgroup. Starts already
+inside an mc boot unit or start scope do not nest. An unavailable user manager
+fails a background start visibly; `mc run` in the foreground does not require
+the manager.
+
+The persistent unit is a `Type=oneshot`, `RemainAfterExit=yes`, `Restart=no`,
+`KillMode=control-group` adapter wanted by `default.target`. It runs the
+absolute Node and mc entry with `run start --if-was-running`; it has no
+`ExecStop`, PID file, supervisor or watchdog. Explicit successful starts
+rewrite the unit only when its content changes, daemon-reload only after a
+change, and enable it without `--now`; they never stop or restart an existing
+cgroup. Unit environment is restricted to resolved `HOME`, `PATH`, `MC_HOME`,
+`MC_WORK_ROOT` and `MC_REPOS_HOME` values. Unit paths and arguments use
+systemd quoting with specifier and environment expansion escaped. Credentials,
+shell directive flags and runtime successor/session identity are not persisted.
+
+Enabling the unit is not proof that it can start before login. mc reports
+manager and installation errors and reads `loginctl`'s Linger state; with
+`Linger=no` it reports boot recovery not ready and gives the interactive remedy
+`loginctl enable-linger`. mc never invokes sudo or changes lingering. The
+unit's `active (exited)` state says only that the oneshot adapter ran, not that
+the runner remains healthy. An automatic start requires runner state proving
+that a runner previously existed and no STOP; it never removes STOP. Explicit
+start and an explicit update takeover can consume the STOP they claim under
+the local lifecycle gate.
+
+Linux runner ownership transitions use one stable `runner/lifecycle.lock`
+inode separate from the register lock. The short gate is util-linux `flock`
+with a five-second bound and a pipe-held `/bin/cat` helper; only local
+synchronous state transitions run while held. Reservations and owner records
+carry generations and Linux boot ID/process start time. Corrupt state and a
+live owner with an unverifiable identity refuse admission or signalling.
+Repeated handovers retain a deduplicated list of every verified live drainer
+alongside the immediate predecessor; session lanes held by all live drainers
+remain excluded and count against the configured total. STOP is written and
+the full owner snapshot taken under the gate; forced signals are identity
+checked outside it and cleanup is conditional on the same owner generation.
+Loss of an admitted owner's generation permanently revokes its authority,
+even if its successor is dead or the state is missing/corrupt. An exiting or
+STOP-rejected owner retains all live draining identities, including those
+without lane files; a new claim over a dead newest owner inherits them and
+never clears unrelated live current files. No OS shutdown hook writes STOP.
+
+The opt-in `scripts/check-linux-runner-service.mjs` exercises the delivered
+unit, scope, gate and lifecycle against an isolated real user manager and
+reports cleanup and a SHA/manifest. Its real systemd/cgroup evidence is not a
+reboot test. Before real workloads, TC still requires interactive lingering
+setup and separate no-login reboot checks after a running start and after a
+deliberate STOP. Neither the deterministic runner gate nor the opt-in check
+establishes those operational acceptance results.
+
+Run the isolated software check from the judged source root on TC:
+
+```sh
+/home/martin/.local/bin/node scripts/check-linux-runner-service.mjs \
+  --scratch /tmp/mc-linux-check-<unique-id> \
+  --output /tmp/mc-linux-check-<unique-id>.json
+```
+
+Use unused absolute paths. Export committed source first with
+`mc scratch export --repo memoro-cli --ref <judged-sha> --path src --path scripts --path package.json --path package-lock.json --json`
+and transfer its receipt and manifest; verify every file after transfer. This
+is not a goal checkout or a replacement for TC's installed checkout. The check
+runs actual generated boot units, runLoop reservation claims, competing starts,
+updates, chained drains, stop and independent-root isolation; only external
+coding/Git/network/chores inputs are inert. It reports exact received boot
+environment, command arrays, identities/cgroups, timings and cleanup.
+
+**Separate interactive operational acceptance (not authorized by the script).**
+Before real workloads, Martin provisions lingering interactively and installs
+the accepted release on TC. Use an empty, authorized root and record its paths,
+release SHA, original lane total and flags. On TC, explicitly:
+
+1. Run `loginctl enable-linger`, then `loginctl show-user "$USER" -p Linger`.
+   Run `mc run start --no-merge --no-caffeinate` (or the agreed flags).
+   Record `cat /proc/sys/kernel/random/boot_id`, `cat "$MC_WORK_ROOT/runner/runner.json"`,
+   `mc run lanes`, `systemctl --user list-unit-files 'mc-runner-boot-*'` and
+   `cat /proc/<owner-pid>/cgroup`. Record enabled state for this root's unit.
+2. Martin runs `sudo reboot` interactively. Do not log in locally or by SSH
+   until the host has had time to boot unattended. Then reconnect with
+   `ssh tc` and record the changed boot ID, `loginctl show-user "$USER" -p Linger`,
+   `systemctl --user status <root-unit>`, owner JSON, process identity/cgroup
+   and saved arguments. Verify exactly one entitled runner and no STOP.
+   Distinguish its pre-SSH start time from the later checking login; an
+   active(exited) adapter alone is not runner proof.
+3. Run `mc run stop`, allow all held work to complete, and verify STOP remains
+   and the owner processes have ended. Martin runs `sudo reboot` again.
+   Wait without login, reconnect, record changed boot ID and confirm STOP is
+   unchanged and no runner was admitted. Run `mc run start` explicitly and
+   verify exactly one owner and the unchanged lane total.
+4. In separately authorized bounded work, verify update keeps predecessor
+   sessions completing without duplicate admission, including STOP during
+   update. Retain identities, session completion and unchanged lane settings.
+
+These interactive results must be recorded separately before workload
+activation. Neither a successful isolated script nor prior VPN/SSH reboot
+evidence certifies them. Root retirement on transfer is the transfer plan's
+responsibility; enabling a new canonical root does not retire the old unit.
+
 ## Staying awake
 
 A continuous run holds `caffeinate -i -m -s -w <runner pid>` for its lifetime

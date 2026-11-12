@@ -11,7 +11,7 @@ import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
-import { mcCheckout } from '../../src/mc/run-control.js';
+import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
@@ -1447,6 +1447,19 @@ test('runLoop: --once is refused by the same check — one worktree, one session
   assert.match(f.files['/w/runner/log/runner.log'], /a runner is already running — pid 7777\n/u);
 });
 
+test('Linux direct --once refuses unreadable existing owner state', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [7777] });
+  f.deps.platform = 'linux';
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, generation: 'G', bootId: 'boot', starttime: '77' })}\n`;
+  f.deps.read = (path) => path === '/w/runner/runner.json' ? null : f.files[path] ?? null;
+
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
+  assert.deepEqual(f.calls.sessions, [], 'direct one-shot execution started without checking existing ownership');
+  assert.ok('/w/runner/runner.json' in f.files, 'unreadable owner state was erased');
+  assert.match(f.files['/w/runner/log/runner.log'], /runner\.json is unreadable — refusing Linux runner admission/u);
+});
+
 test('runLoop: a runner.json naming a pid that is gone is cleared, not a wall', async () => {
   const f = goalFixture({ a: {} });
   f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 7777, started: '2026-08-29T06:33:25Z' }, null, 2)}\n`;
@@ -1664,6 +1677,236 @@ test('UPDATE file: the successor starts beside its live predecessor, and runner.
   assert.equal(successorFile.predecessor.pid, 4242, 'runner.json did not name the runner still finishing');
   // The predecessor's session in flight is claimed: the successor did not start it again.
   assert.equal(f.calls.sessions.length, 1, 'the successor started the goal its predecessor holds');
+});
+
+test('a STOP after reserved child publication stays sticky and prevents admission', async () => {
+  const f = fixture({ livePids: [4242] });
+  const owner = { pid: 4242, generation: 'reserved-g1', bootId: 'boot', starttime: '42', started: '2026-08-29T10:00:00Z' };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(owner)}\n`;
+  f.files['/w/runner/STOP'] = 'stopped\n';
+  const code = await runLoop({ deps: {
+    ...f.deps,
+    platform: 'linux',
+    identity: () => ({ bootId: 'boot', starttime: '42' }),
+    lifecycleLock: (_root, transition) => transition(),
+    env: { ...f.deps.env, MC_RUN_RESERVED_GENERATION: owner.generation },
+  } });
+  assert.equal(code, 2);
+  assert.equal(f.files['/w/runner/STOP'], 'stopped\n', 'the reserved child cleared a later STOP');
+  assert.equal(f.files['/w/runner/runner.json'], undefined, 'the rejected reservation remains published');
+  assert.deepEqual(f.calls.sessions, [], 'a stopped reserved child admitted work');
+});
+
+test('a losing reserved child cannot remove a newer explicit owner at admission', async () => {
+  const f = fixture();
+  const reservation = { pid: 4242, generation: 'reserved-g1', bootId: 'boot', starttime: '42' };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(reservation)}\n`;
+  f.files['/w/runner/STOP'] = 'stopped\n';
+  let gates = 0;
+  const code = await runLoop({ deps: {
+    ...f.deps,
+    platform: 'linux',
+    identity: () => ({ bootId: 'boot', starttime: '42' }),
+    lifecycleLock: async (_root, transition) => {
+      gates += 1;
+      if (gates === 1) {
+        f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 5252, generation: 'explicit-g2', bootId: 'boot', starttime: '52' })}\n`;
+      }
+      return transition();
+    },
+    env: { ...f.deps.env, MC_RUN_RESERVED_GENERATION: reservation.generation },
+  } });
+
+  assert.equal(code, 2);
+  assert.equal(gates, 1, 'the losing child did not validate under the lifecycle gate');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']), { pid: 5252, generation: 'explicit-g2', bootId: 'boot', starttime: '52' });
+  assert.equal(f.files['/w/runner/STOP'], 'stopped\n', 'the rejected child removed STOP');
+  assert.deepEqual(f.calls.sessions, [], 'the rejected child admitted work');
+});
+
+test('Linux owner pruning removes only verified dead drainers under the matching generation', async () => {
+  const f = fixture();
+  f.deps.platform = 'linux';
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.deps.alive = (pid) => Number(pid) === 200 || Number(pid) === 4242;
+  f.deps.identity = (pid) => Number(pid) === 4242 ? { bootId: 'boot-c', starttime: '4242' } : null;
+  const runner = createRunner({ deps: f.deps });
+  const a = { pid: 100, generation: 'A', bootId: 'boot-a', starttime: '100' };
+  const b = { pid: 200, generation: 'B' }; // legacy live identity: retain, never guess it dead
+  runner.markRunner({ generation: 'C', predecessor: a, drainers: [a, b] });
+  await runner.dropPredecessor();
+  const current = JSON.parse(f.files['/w/runner/runner.json']);
+  assert.deepEqual(current.drainers, [b], 'verified-dead A is pruned while unverifiable live B is preserved');
+  assert.equal(current.predecessor, undefined, 'the dead immediate predecessor is not retained');
+});
+
+test('Linux C successor retains an A drainer through B and does not claim A’s in-flight work again', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [100, 200, 300] });
+  f.deps.platform = 'linux';
+  f.deps.pid = 300;
+  f.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid) });
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.deps.env = { ...f.deps.env, MC_RUN_RESERVED_GENERATION: 'C', MC_RUN_SUCCESSOR_OF: '200' };
+  const owner = {
+    pid: 300, generation: 'C', bootId: 'boot', starttime: '300', takeover: true,
+    predecessor: { pid: 200, generation: 'B', bootId: 'boot', starttime: '200' },
+    drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '100' }, { pid: 200, generation: 'B', bootId: 'boot', starttime: '200' }],
+  };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(owner)}\n`;
+  f.files['/w/runner/current-memoro.json'] = `${JSON.stringify({ name: 'goal:prog/a', pid: 100, lane: 0, generation: 'A', bootId: 'boot', starttime: '100' })}\n`;
+
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+
+  assert.deepEqual(f.calls.sessions, [], 'C started a goal already in flight under A');
+  assert.ok('/w/runner/current-memoro.json' in f.files, 'A’s live session record was removed by C');
+  assert.match(f.files['/w/runner/log/runner.log'], /once: nothing to run/u, 'C did not observe the inherited A session');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers.map((owner) => owner.generation), ['A', 'B'], 'idle C exit forgot its live draining owners');
+});
+
+function linuxLifecycleFixture() {
+  const f = fixture({ livePids: [100, 200, 4242, 9001] });
+  f.deps.platform = 'linux';
+  f.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid) });
+  f.deps.lifecycleLock = async (_root, transition) => transition();
+  return f;
+}
+const linuxOwner = (pid, generation) => ({ pid, generation, started: null, bootId: 'boot', starttime: String(pid) });
+
+test('Linux real runLoop UPDATE publishes and admits its successor while held work completes', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242, 9001] });
+  let tail = Promise.resolve();
+  const gate = (_root, transition) => { const result = tail.then(transition); tail = result.catch(() => {}); return result; };
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: gate });
+  let finish;
+  const finished = new Promise(resolve => { finish = resolve; });
+  let started;
+  const sessionStarted = new Promise(resolve => { started = resolve; });
+  f.answer = async call => { started(); f.files['/w/runner/UPDATE'] = ''; await finished; return okSession()(call); };
+  f.deps.sleep = () => new Promise(resolve => setImmediate(resolve));
+  let successor, published;
+  const write = f.deps.write;
+  f.deps.write = (path, value) => { write(path, value); if (path === '/w/runner/runner.json' && JSON.parse(value).pid === 9001) published = JSON.parse(value); };
+  f.deps.respawn = ({ env }) => {
+    successor = runLoop({ once: true, awake: false, deps: { ...f.deps, pid: 9001, env: { ...f.deps.env, ...env } } });
+    successor.finally(finish);
+    return 9001;
+  };
+  const running = runLoop({ deps: f.deps, awake: false });
+  await sessionStarted;
+  for (let i = 0; i < 100 && !successor; i += 1) await new Promise(resolve => setImmediate(resolve));
+  if (!successor) { f.files['/w/runner/STOP'] = ''; finish(); await running; }
+  assert.ok(successor, 'real Linux update never spawned a successor');
+  assert.equal(await running, 0);
+  assert.equal(await successor, 0, 'real Linux handover never admitted its successor');
+  assert.equal(published.pid, 9001);
+  assert.equal(published.predecessor.pid, 4242);
+  assert.deepEqual(published.drainers.map(p => p.pid), [4242]);
+  assert.equal(f.calls.sessions.length, 1, 'successor duplicated held work');
+});
+
+test('Linux direct --once holds ownership against competing manual and automatic claims', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242] });
+  let tail = Promise.resolve();
+  const gate = (_root, transition) => { const result = tail.then(transition); tail = result.catch(() => {}); return result; };
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: gate });
+  let entered, finish;
+  const sessionStarted = new Promise(resolve => { entered = resolve; });
+  const sessionEnd = new Promise(resolve => { finish = resolve; });
+  f.answer = async call => { entered(); await sessionEnd; return okSession()(call); };
+  const direct = runLoop({ once: true, deps: f.deps });
+  await sessionStarted;
+  const current = f.files['/w/runner/runner.json'];
+  assert.equal(await runLoop({ once: true, deps: { ...f.deps, pid: 9001 } }), 2, 'a competing direct --once bypassed ownership');
+  let spawned = false;
+  const control = { ...f.deps, env: { ...f.deps.env, MC_RUN_SYSTEMD_CONTEXT: 'scope' }, spawn: () => { spawned = true; return 9001; } };
+  const [manual, boot] = await Promise.all([startRunner({ root: '/w', deps: control }), startRunner({ root: '/w', argv: ['--if-was-running'], deps: control })]);
+  assert.equal(manual.ok, false);
+  assert.equal(boot.pid, undefined);
+  assert.equal(spawned, false);
+  assert.equal(f.files['/w/runner/runner.json'], current);
+  finish();
+  assert.equal(await direct, 0);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+test('Linux STOP after explicit direct claim remains sticky before its first work admission', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [4242] });
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }) });
+  let first = true;
+  f.deps.lifecycleLock = async (_root, transition) => {
+    const result = transition();
+    if (first) { first = false; f.files['/w/runner/STOP'] = 'after claim'; }
+    return result;
+  };
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+  assert.equal(f.files['/w/runner/STOP'], 'after claim');
+  assert.deepEqual(f.calls.sessions, [], 'explicit claim erased or ignored a later STOP');
+});
+
+test('Linux exit cleanup is gated, keeps lane-less live drainers and leaves later owners untouched', async () => {
+  const f = linuxLifecycleFixture();
+  const runner = createRunner({ deps: f.deps });
+  const a = linuxOwner(100, 'A');
+  runner.markRunner({ generation: 'C', drainers: [a] });
+  let release;
+  f.deps.lifecycleLock = (_root, transition) => new Promise((resolve) => { release = () => resolve(transition()); });
+  const exiting = runner.clearRunner();
+  assert.equal(typeof release, 'function', 'exit cleanup bypassed the lifecycle gate');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers, [a]);
+  release(); await exiting;
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers, [a], 'a lane-less live drainer disappeared when C exited');
+  const lateExit = runner.clearRunner();
+  const next = linuxOwner(9001, 'D');
+  f.files['/w/runner/runner.json'] = JSON.stringify(next);
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ ...next, lane: 0 });
+  release(); await lateExit;
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']), next, 'late C cleanup deleted D');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/current-memoro.json']), { ...next, lane: 0 });
+});
+
+test('Linux generation loss permanently revokes admission even if the unseen successor is dead', () => {
+  const f = linuxLifecycleFixture();
+  const runner = createRunner({ deps: f.deps });
+  runner.markRunner({ generation: 'A' });
+  const original = f.files['/w/runner/runner.json'];
+  f.files['/w/runner/runner.json'] = JSON.stringify(linuxOwner(7777, 'C'));
+  assert.equal(runner.updateRequested(), true, 'A became entitled again because unseen C had died');
+  f.files['/w/runner/runner.json'] = original;
+  assert.equal(runner.updateRequested(), true, 'restoring an old record restored lost authority');
+});
+
+test('Linux missing or corrupt state never restores an admitted owner’s authority', () => {
+  for (const value of [undefined, '{broken']) {
+    const f = linuxLifecycleFixture();
+    const runner = createRunner({ deps: f.deps });
+    runner.markRunner({ generation: 'A' });
+    if (value === undefined) delete f.files['/w/runner/runner.json'];
+    else f.files['/w/runner/runner.json'] = value;
+    assert.equal(runner.updateRequested(), true, 'loss of ownership state reopened admission');
+  }
+});
+
+test('Linux rejected reserved child retains live drainers under STOP without admitting work', async () => {
+  const f = linuxLifecycleFixture();
+  const a = linuxOwner(100, 'A');
+  f.files['/w/runner/runner.json'] = JSON.stringify({ ...linuxOwner(4242, 'C'), drainers: [a] });
+  f.files['/w/runner/STOP'] = 'later stop';
+  f.deps.env.MC_RUN_RESERVED_GENERATION = 'C';
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 2);
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json'] || 'null')?.drainers, [a], 'STOP rejection forgot A');
+  assert.equal(f.files['/w/runner/STOP'], 'later stop');
+  assert.deepEqual(f.calls.sessions, []);
+});
+
+test('Linux direct claim over a dead newest owner inherits drainers and preserves live foreign current files', async () => {
+  const f = linuxLifecycleFixture();
+  const a = linuxOwner(100, 'A');
+  const current = { ...a, name: 'goal:fixture/held', lane: 0 };
+  f.files['/w/runner/runner.json'] = JSON.stringify({ ...linuxOwner(7777, 'C'), drainers: [a] });
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify(current);
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers, [a]);
+  assert.deepEqual(JSON.parse(f.files['/w/runner/current-memoro.json'] || 'null'), current, 'claim erased unrelated live lane');
 });
 
 test('a successor lane waits while its predecessor holds the lane file, skips that goal, then starts it', async () => {
