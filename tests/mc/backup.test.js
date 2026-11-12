@@ -17,6 +17,18 @@ function fixture(t) {
   return root;
 }
 
+function repositoryRecord(path) {
+  const oid = 'a'.repeat(40);
+  const index = Buffer.from('synthetic inert index');
+  return {
+    path, kind: 'primary', identity: { name: 'repo', origin: null, object_format: 'sha1' },
+    head: { oid, ref: 'refs/heads/main', detached: false }, refs: [{ name: 'refs/heads/main', oid }],
+    recovery: { reflog_objects: [], index_stage_objects: [] },
+    index: { format: 2, sha256: digest(index), payload_base64: index.toString('base64'), stages: [], semantic_flags: [], unstaged_status_porcelain_v2: '', tracked_paths: [] },
+    source_index_sha256: digest(index), worktree_status: 'clean',
+  };
+}
+
 test('backup inventory: reads typed local bytes and links without following Git administration', (t) => {
   const root = fixture(t);
   const programme = join(root, 'programme');
@@ -65,7 +77,7 @@ test('backup archive: atomically writes a private checksummed archive and verifi
     { path: 'programme/docs/.keep', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o640, bytes },
     { path: 'programme/docs/shortcut', type: 'symlink', target: '.keep' },
   ];
-  const result = createArchive(output, { programmes: ['programme'], members: records, bundles: [{ repository: 'repo', bytes: Buffer.from('bundle') }], now: () => '2026-11-12T00:00:00.000Z' });
+  const result = createArchive(output, { programmes: ['programme'], members: records, bundles: [{ repository: 'repo', bytes: Buffer.from('bundle') }], metadata: { repositories: [repositoryRecord('repo')] }, now: () => '2026-11-12T00:00:00.000Z' });
   assert.equal(result.members, 2);
   assert.equal(lstatSync(output).mode & 0o777, 0o700);
   assert.deepEqual(inspectArchive(output), {
@@ -77,6 +89,24 @@ test('backup archive: atomically writes a private checksummed archive and verifi
     'manifest records refer to content-addressed payloads instead of embedding a second copy');
   assert.deepEqual(readFileSync(join(output, 'payload', digest(bytes))), bytes);
   assert.throws(() => createArchive(output, { programmes: ['programme'], members: [] }), /already exists/u);
+});
+
+test('backup archive: malformed Git identity and index semantics cannot pass verification or restore', (t) => {
+  const root = fixture(t);
+  const archive = join(root, 'archive');
+  createArchive(archive, {
+    programmes: ['p'], members: [], bundles: [{ repository: 'p/work', bytes: Buffer.from('bundle') }],
+    metadata: { repositories: [repositoryRecord('p/work')] },
+  });
+  const manifestPath = join(archive, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.metadata.repositories[0].identity.object_format = 'sha512';
+  const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(manifestPath, bytes);
+  writeFileSync(join(archive, 'manifest.sha256'), `${digest(bytes)}  manifest.json\n`);
+  assert.throws(() => verifyArchive(archive), /invalid repository identity/u);
+  assert.throws(() => restoreArchive(archive, join(root, 'restore')), /invalid repository identity/u);
+  assert.throws(() => lstatSync(join(root, 'restore')), { code: 'ENOENT' });
 });
 
 test('backup archive: rejects unsafe, duplicate, case-folding and symlink-parent member trees', (t) => {
@@ -178,7 +208,7 @@ test('backup restore: verifies then atomically publishes byte- and mode-preservi
   assert.throws(() => restoreArchive(archive, output), /already exists/u);
 
   const bundled = join(root, 'bundled');
-  createArchive(bundled, { programmes: ['p'], members: [], bundles: [{ repository: 'repo', bytes: Buffer.from('git bundle') }] });
+  createArchive(bundled, { programmes: ['p'], members: [], bundles: [{ repository: 'repo', bytes: Buffer.from('git bundle') }], metadata: { repositories: [repositoryRecord('repo')] } });
   const refused = join(root, 'must-not-exist');
   assert.throws(() => restoreArchive(bundled, refused), /local repository declarations/u);
   assert.equal(lstatSync(root).isDirectory(), true);

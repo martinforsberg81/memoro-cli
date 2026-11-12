@@ -70,6 +70,77 @@ function exactKeys(value, keys, label) {
   }
 }
 
+function validObjectId(value, format) {
+  return typeof value === 'string' && new RegExp(`^[a-f0-9]{${format === 'sha256' ? 64 : 40}}$`, 'u').test(value);
+}
+
+/** Git bundle bytes are useful only with the inert, independently checked recovery record. */
+function validateRepositoryRecords(manifest) {
+  const records = manifest.metadata.repositories;
+  if (!manifest.bundles.length) {
+    if (records !== undefined && (!Array.isArray(records) || records.length !== 0)) throw new Error('repository metadata has no matching Git bundles');
+    return;
+  }
+  if (!Array.isArray(records) || records.length !== manifest.bundles.length) throw new Error('Git bundles require one complete repository metadata record each');
+  const seen = new Set();
+  for (const bundle of manifest.bundles) {
+    const record = records.find((candidate) => candidate?.path === bundle.repository);
+    if (!record || seen.has(record.path)) throw new Error(`missing or duplicate repository metadata for ${bundle.repository}`);
+    seen.add(record.path);
+    exactKeys(record, ['path', 'kind', 'identity', 'head', 'refs', 'recovery', 'index', 'source_index_sha256', 'worktree_status'], 'repository metadata');
+    validateMemberPath(record.path);
+    if (!['primary', 'linked'].includes(record.kind)) throw new Error(`invalid repository kind for ${record.path}`);
+    exactKeys(record.identity, ['name', 'origin', 'object_format'], 'repository identity');
+    if (typeof record.identity.name !== 'string' || !/^[A-Za-z0-9._-]+$/u.test(record.identity.name)
+      || !(record.identity.origin === null || (typeof record.identity.origin === 'string' && /^https:\/\/[A-Za-z0-9.-]+\/[A-Za-z0-9._/-]+$/u.test(record.identity.origin)))
+      || !['sha1', 'sha256'].includes(record.identity.object_format)) throw new Error(`invalid repository identity for ${record.path}`);
+    const format = record.identity.object_format;
+    exactKeys(record.head, ['oid', 'ref', 'detached'], 'repository HEAD');
+    if (!validObjectId(record.head.oid, format) || !(record.head.ref === null || (typeof record.head.ref === 'string' && /^refs\/[A-Za-z0-9._/-]+$/u.test(record.head.ref)))
+      || typeof record.head.detached !== 'boolean' || record.head.detached !== (record.head.ref === null)) throw new Error(`invalid repository HEAD for ${record.path}`);
+    if (!Array.isArray(record.refs)) throw new Error(`invalid refs for ${record.path}`);
+    const refNames = new Set();
+    for (const ref of record.refs) {
+      exactKeys(ref, ['name', 'oid'], 'repository ref');
+      if (typeof ref.name !== 'string' || !/^refs\/[A-Za-z0-9._/-]+$/u.test(ref.name) || ref.name.includes('..')
+        || refNames.has(ref.name) || !validObjectId(ref.oid, format)) throw new Error(`invalid or duplicate repository ref for ${record.path}`);
+      refNames.add(ref.name);
+    }
+    if (record.head.ref && record.refs.some(({ name, oid }) => name === record.head.ref && oid !== record.head.oid)) throw new Error(`repository HEAD/ref mismatch for ${record.path}`);
+    exactKeys(record.recovery, ['reflog_objects', 'index_stage_objects'], 'repository recovery');
+    for (const field of ['reflog_objects', 'index_stage_objects']) {
+      if (!Array.isArray(record.recovery[field]) || record.recovery[field].some((oid) => !validObjectId(oid, format))) throw new Error(`invalid ${field} for ${record.path}`);
+    }
+    exactKeys(record.index, ['format', 'sha256', 'payload_base64', 'stages', 'semantic_flags', 'unstaged_status_porcelain_v2', 'tracked_paths'], 'repository index');
+    if (record.index.format !== 2 || !HASH.test(record.index.sha256) || typeof record.index.payload_base64 !== 'string'
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(record.index.payload_base64)
+      || sha256(Buffer.from(record.index.payload_base64, 'base64')) !== record.index.sha256
+      || typeof record.index.unstaged_status_porcelain_v2 !== 'string'
+      || !Array.isArray(record.index.stages) || !Array.isArray(record.index.semantic_flags) || !Array.isArray(record.index.tracked_paths)) throw new Error(`invalid normalized index payload for ${record.path}`);
+    const stagePaths = new Set();
+    for (const stage of record.index.stages) {
+      exactKeys(stage, ['mode', 'oid', 'stage', 'path'], 'repository index stage');
+      validateMemberPath(stage.path);
+      if (![0o100644, 0o100755, 0o120000, 0o160000].includes(stage.mode) || !Number.isInteger(stage.stage) || stage.stage < 0 || stage.stage > 3
+        || (!/^0+$/u.test(stage.oid) && !validObjectId(stage.oid, format))) throw new Error(`invalid repository index stage for ${record.path}`);
+      stagePaths.add(stage.path);
+    }
+    for (const path of record.index.tracked_paths) {
+      validateMemberPath(path);
+      if (!stagePaths.has(path)) throw new Error(`tracked index path has no stage record for ${record.path}`);
+    }
+    const flagPaths = new Set();
+    for (const flags of record.index.semantic_flags) {
+      exactKeys(flags, ['path', 'assume_unchanged', 'skip_worktree', 'intent_to_add'], 'repository semantic flags');
+      validateMemberPath(flags.path);
+      if (flagPaths.has(flags.path) || !stagePaths.has(flags.path)
+        || ['assume_unchanged', 'skip_worktree', 'intent_to_add'].some((key) => typeof flags[key] !== 'boolean')) throw new Error(`invalid semantic flags for ${record.path}`);
+      flagPaths.add(flags.path);
+    }
+    if (!HASH.test(record.source_index_sha256) || !['clean', 'dirty-captured'].includes(record.worktree_status)) throw new Error(`invalid repository status record for ${record.path}`);
+  }
+}
+
 function writeDurable(path, bytes, mode = 0o600) {
   const fd = openSync(path, 'wx', mode);
   try {
@@ -253,6 +324,7 @@ export function verifyArchive(path) {
     const bytes = readRegular(root, bundle.path);
     if (bytes.length !== bundle.size || sha256(bytes) !== bundle.sha256) throw new Error(`bundle checksum mismatch for ${bundle.repository}`);
   }
+  validateRepositoryRecords(manifest);
   const allowedFiles = new Set(['manifest.json', 'manifest.sha256', ...payloadPaths, ...bundlePaths]);
   const actualFiles = [];
   const visit = (directory, prefix = '') => {
