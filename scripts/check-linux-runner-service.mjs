@@ -64,6 +64,7 @@ function track(owner) {
   return owner;
 }
 function owner(root) { return track(json(join(root.work, 'runner/runner.json'))); }
+function admitted(root) { const current = owner(root); return current?.takeover && existsSync(join(root.work, `admitted-${current.pid}`)); }
 function manifest() {
   const files = [];
   const walk = (dir) => { for (const item of readdirSync(join(source, dir), { withFileTypes: true })) {
@@ -110,6 +111,7 @@ mkdirSync(join(root, 'observed'), { recursive: true });
 writeFileSync(join(root, 'observed', process.pid + '.json'), JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(['HOME','PATH','MC_HOME','MC_WORK_ROOT','MC_REPOS_HOME'].map(k => [k, env[k]])) }));
 const deps = realDeps(env);
 Object.assign(deps, {
+  log: line => { if (line.includes('runner start (mc run')) writeFileSync(join(root, 'admitted-' + process.pid), String(Date.now())); process.stdout.write(line + '\\n'); },
   git: () => ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
   session: () => { throw new Error('no coding turn authorized'); }, helperTurn: () => { throw new Error('no helper turn authorized'); },
   collect: async () => { writeFileSync(join(root, 'holding-' + process.pid), 'inert chore in flight'); while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
@@ -179,7 +181,7 @@ try {
   const flags = ['--no-merge', '--no-caffeinate', '--idle-sleep', '1'];
   writeFileSync(join(primary.work, 'runner/runner.json'), JSON.stringify({ pid: 2147483647, generation: 'prior-boot', bootId: 'old-boot', starttime: '1', args: flags }));
   await boot(primary, unit);
-  check('conditional boot restores saved flags through real runLoop admission', await until(() => owner(primary)?.takeover && text(join(primary.work, 'runner/log/runner.log')).includes('runner start')), JSON.stringify(owner(primary)));
+  check('conditional boot restores saved flags through real runLoop admission', await until(() => admitted(primary) && text(join(primary.work, 'runner/log/runner.log')).includes('runner start')), JSON.stringify(owner(primary)));
   const bootOwner = owner(primary);
   check('saved flags survived child reservation claim', JSON.stringify(bootOwner.args) === JSON.stringify(flags));
   const bootCgroup = command('systemctl', ['--user', 'show', unit, '--property=ControlGroup', '--value']).stdout.trim();
@@ -212,7 +214,7 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   registerUnit(compete);
   const results = await Promise.all([concurrentCli(compete, ['start', ...flags]), concurrentCli(compete, ['start', ...flags])]);
   check('competing starts on an available root yield exactly one successful owner', results.filter(r => r.status === 0).length === 1, JSON.stringify(results));
-  check('winning parent reservation was claimed by delivered runLoop', await until(() => owner(compete)?.takeover && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
+  check('winning parent reservation was claimed by delivered runLoop', await until(() => admitted(compete) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const a = owner(compete);
   check('direct --once refuses the live winner rather than admitting new work', cli(compete, ['--once'], true).status === 2);
   const scopesText = command('systemctl', ['--user', 'list-units', '--all', '--plain', '--no-legend', `mc-runner-start-${service.rootIdentity(compete.work).hash}-*.scope`]).stdout;
@@ -222,23 +224,23 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   const independent = makeRoot('independent');
   registerUnit(independent);
   cli(independent, ['start', ...flags]);
-  check('second isolated root has a real admitted owner', await until(() => owner(independent)?.takeover));
+  check('second isolated root has a real admitted owner', await until(() => admitted(independent)));
   const otherBeforeUpdate = owner(independent);
   const independentCgroup = text(`/proc/${otherBeforeUpdate.pid}/cgroup`);
   cli(independent, ['--update', '--force']);
-  check('independent-root update admits a real successor beside its predecessor', await until(() => owner(independent)?.pid !== otherBeforeUpdate.pid && owner(independent)?.takeover));
+  check('independent-root update admits a real successor beside its predecessor', await until(() => owner(independent)?.pid !== otherBeforeUpdate.pid && admitted(independent)));
   const other = owner(independent);
   writeFileSync(join(independent.work, `release-${otherBeforeUpdate.pid}`), 'complete');
   check('update successor survives predecessor exit in its inherited cgroup', await until(() => !alive(otherBeforeUpdate.pid)) && alive(other.pid) && text(`/proc/${other.pid}/cgroup`) === independentCgroup);
-  const otherBefore = text(join(independent.work, 'runner/runner.json'));
+  const otherBefore = { pid: other.pid, generation: other.generation, args: other.args };
   const otherCg = text(`/proc/${other.pid}/cgroup`);
   for (const line of otherCg.split('\n')) { const scope = line.split('/').find(x => x.startsWith('mc-runner-start-') && x.endsWith('.scope')); if (scope) scopes.add(scope); }
 
   cli(compete, ['--update', '--force']);
-  check('real UPDATE produces admitted B while A is still draining', await until(() => owner(compete)?.pid !== a.pid && owner(compete)?.takeover && alive(a.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
+  check('real UPDATE produces admitted B while A is still draining', await until(() => owner(compete)?.pid !== a.pid && admitted(compete) && alive(a.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const b = owner(compete);
   cli(compete, ['--update', '--force']);
-  check('second real UPDATE produces admitted C with live A and B', await until(() => owner(compete)?.pid !== b.pid && owner(compete)?.takeover && alive(a.pid) && alive(b.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
+  check('second real UPDATE produces admitted C with live A and B', await until(() => owner(compete)?.pid !== b.pid && admitted(compete) && alive(a.pid) && alive(b.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const c = owner(compete);
   check('A-to-B-to-C retains complete named live drainer identities with no lane file', [a,b].every(p => c.drainers.some(d => d.pid === p.pid && d.generation === p.generation)) && !readdirSync(join(compete.work, 'runner')).some(n => n.startsWith('current-')), JSON.stringify(c));
   check('all admitted successors inherited the original managed cgroup', [a,b,c].every(p => text(`/proc/${p.pid}/cgroup`) === cg), JSON.stringify([a,b,c].map(p => p.pid)));
@@ -246,7 +248,7 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   check('ordinary STOP preserves all live draining work before release', stopping.ok && [a,b,c].every(p => alive(p.pid)), stopping.lines.join('; '));
   const forced = await stopRunner({ force: true, root: compete.work, deps: realControlDeps(compete.env) });
   check('force stop targets every live A/B/C owner in the full chain', forced.ok && [a,b,c].every(p => !alive(p.pid)) && [a,b,c].every(p => forced.lines.some(l => l.includes(`pid ${p.pid} is gone`))), forced.lines.join('; '));
-  check('another live root survives all first-root stop/cleanup unchanged', alive(other.pid) && text(join(independent.work, 'runner/runner.json')) === otherBefore && text(`/proc/${other.pid}/cgroup`) === otherCg && !existsSync(join(independent.work, 'runner/STOP')));
+  check('another live root retains owner identity, flags, unit and cgroup through first-root stop/cleanup', alive(other.pid) && owner(independent)?.pid === otherBefore.pid && owner(independent)?.generation === otherBefore.generation && JSON.stringify(owner(independent)?.args) === JSON.stringify(otherBefore.args) && text(`/proc/${other.pid}/cgroup`) === otherCg && !existsSync(join(independent.work, 'runner/STOP')) && command('systemctl', ['--user', 'is-enabled', service.rootIdentity(independent.work).unit]).status === 0, JSON.stringify({ before: otherBefore, after: owner(independent) }));
   report.owners = [...owners.values()];
 } catch (error) {
   report.error = error.stack || String(error);
