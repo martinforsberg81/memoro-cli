@@ -58,6 +58,9 @@ export function exportRepository(repository, { env = process.env, run = git } = 
       .split(/\r?\n/u).filter(Boolean);
     const stageRows = git(['ls-files', '--stage', '-z'], { cwd, env: cleanEnv }).stdout.toString('utf8').split('\0').filter(Boolean);
     const stageOids = stageRows.map((row) => row.match(/^\d+ ([0-9a-f]+) \d+\t/u)?.[1]).filter(Boolean);
+    const sourceIndex = readFileSync(join(gitDir, 'index'));
+    const initialStatus = output(['status', '--porcelain=v2', '--untracked-files=all'], { cwd, env: cleanEnv });
+    if (initialStatus) throw new Error(`repository ${repository.path} has working/index changes; normalized index and worktree-state capture is not yet available`);
 
     run(['init', '--bare', '--object-format', identity.object_format, exportRepo], { cwd: isolated, env: cleanEnv });
     const exportObjects = join(exportRepo, 'objects');
@@ -73,7 +76,14 @@ export function exportRepository(repository, { env = process.env, run = git } = 
     const bundle = readFileSync(bundlePath);
     run(['--git-dir', exportRepo, 'bundle', 'verify', bundlePath], { cwd: isolated, env: cleanEnv });
     const status = output(['status', '--porcelain=v2', '--untracked-files=all'], { cwd, env: cleanEnv });
-    if (status) throw new Error(`repository ${repository.path} has working/index changes; normalized index and worktree-state capture is not yet available`);
+    const finalHead = output(['rev-parse', '--verify', 'HEAD'], { cwd, env: cleanEnv });
+    const finalRefs = output(['for-each-ref', '--format=%(refname) %(objectname)'], { cwd, env: cleanEnv });
+    const finalReflogs = output(['reflog', 'show', '--all', '--format=%H'], { cwd, env: cleanEnv });
+    const finalIndex = readFileSync(join(gitDir, 'index'));
+    if (status || finalHead !== head || finalRefs !== refs.map(({ name, oid }) => `${name} ${oid}`).join('\n')
+      || finalReflogs !== reflogs.join('\n') || !finalIndex.equals(sourceIndex)) {
+      throw new Error(`repository ${repository.path} changed during Git bundle capture`);
+    }
     return {
       bundle: { repository: repository.path, bytes: bundle },
       record: {
@@ -83,7 +93,7 @@ export function exportRepository(repository, { env = process.env, run = git } = 
         head: { oid: head, ref: headRef, detached: headRef === null },
         refs,
         recovery: { reflog_objects: reflogs, index_stage_objects: stageOids },
-        source_index_sha256: sha256(readFileSync(join(gitDir, 'index'))),
+        source_index_sha256: sha256(sourceIndex),
         worktree_status: 'clean',
       },
     };
