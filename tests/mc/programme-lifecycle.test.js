@@ -4,8 +4,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { admitWriter, backupStatus, beginBackup, installationId, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
-import { appendEntry, LOG_FILE } from '../../src/mc/goals.js';
+import { addPr, appendEntry, GOAL_FILE, LOG_FILE, setGoalState, updateGoal } from '../../src/mc/goals.js';
 import { programsHome } from '../../src/mc/paths.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mc-lifecycle-'));
@@ -65,4 +66,21 @@ test('programme lifecycle: the shared goal-log writer refuses selected work and 
   appendEntry({ dir: unrelatedDir, env, entry: { at: '2026-11-12T00:00Z', tool: 'test', status: 'ready', done: 'unrelated continues' } });
   assert.equal(readFileSync(join(selectedDir, LOG_FILE), 'utf8'), '# selected\n');
   assert.match(readFileSync(join(unrelatedDir, LOG_FILE), 'utf8'), /unrelated continues/u);
+});
+
+test('programme lifecycle: goal metadata, state and PR-ownership writers refuse selected programme files', (t) => {
+  const { env } = fixture(t);
+  const goalDir = join(programsHome(env), 'selected', 'goals', 'one');
+  mkdirSync(goalDir, { recursive: true });
+  writeFileSync(join(goalDir, GOAL_FILE), goalJson());
+  writeFileSync(join(goalDir, LOG_FILE), '# goal log\n');
+  const goalBefore = readFileSync(join(goalDir, GOAL_FILE), 'utf8');
+  const logBefore = readFileSync(join(goalDir, LOG_FILE), 'utf8');
+  beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000006' });
+
+  assert.throws(() => updateGoal({ dir: goalDir, env, change: (goal) => ({ ...goal, title: 'not written' }) }), /draining/u);
+  assert.throws(() => setGoalState({ dir: goalDir, env, status: 'Martin', entry: { at: '2026-11-12T00:00Z', tool: 'test', done: 'not written' } }), /draining/u);
+  assert.throws(() => addPr({ dir: goalDir, env, repo: 'memoro-cli', pr: 1234 }), /draining/u);
+  assert.equal(readFileSync(join(goalDir, GOAL_FILE), 'utf8'), goalBefore);
+  assert.equal(readFileSync(join(goalDir, LOG_FILE), 'utf8'), logBefore);
 });
