@@ -1906,7 +1906,7 @@ test('Linux direct claim over a dead newest owner inherits drainers and preserve
   f.files['/w/runner/current-memoro.json'] = JSON.stringify(current);
   assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
   assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']).drainers, [a]);
-  assert.deepEqual(JSON.parse(f.files['/w/runner/current-memoro.json']), current, 'claim erased unrelated live lane');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/current-memoro.json'] || 'null'), current, 'claim erased unrelated live lane');
 });
 
 test('a successor lane waits while its predecessor holds the lane file, skips that goal, then starts it', async () => {
