@@ -43,6 +43,10 @@ SEE AND SHIP
 WORKSPACES
   mc prs [--offline] [--json]      Open pull requests and whose they are
   mc tidy [--apply]               Preview removals; --apply rechecks and removes
+  mc backup inspect --archive <path> [--json]  Verify and inspect a local archive
+  mc backup verify --archive <path> [--json]    Verify every archive payload and bundle
+  mc backup status --id <id> [--json]           Inspect a durable local hold
+  mc backup release --id <id> [--json]          Explicitly release a held backup
 
 IN FULL
 WHO USES THE VERBS
@@ -74,6 +78,8 @@ ${commandReference('ask')}
 ${commandReference('programs')}
 
 ${commandReference('proposals')}
+
+${commandReference('backup')}
 
 ${commandReference('run')}
 

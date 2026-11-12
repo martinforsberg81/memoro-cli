@@ -41,6 +41,7 @@ export const VERB_MODULES = {
   ask: './mc/commands/ask.js',
   programs: './mc/commands/programs.js',
   proposals: './mc/commands/proposals.js',
+  backup: './mc/commands/backup.js',
 };
 
 /**

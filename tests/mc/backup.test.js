@@ -5,6 +5,8 @@ import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createArchive, inspectArchive, validateMemberPath, verifyArchive } from '../../src/mc/backup-archive.js';
+import { run as backupCommand } from '../../src/mc/commands/backup.js';
+import { beginBackup, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -66,4 +68,29 @@ test('backup archive: verification refuses changed payload bytes and unexpected 
   writeFileSync(join(output, 'elsewhere', 'manifest.json'), '{}');
   symlinkSync(join(output, 'elsewhere', 'manifest.json'), join(output, 'manifest.json'));
   assert.throws(() => verifyArchive(output), /unexpected symlink/u);
+});
+
+test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
+  const root = fixture(t);
+  const output = join(root, 'archive');
+  const bytes = Buffer.from('receipt');
+  createArchive(output, { programmes: ['p'], members: [{ path: 'p/README.md', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes }] });
+  const out = { value: '', write(text) { this.value += text; } };
+  const err = { value: '', write(text) { this.value += text; } };
+  assert.equal(await backupCommand(['inspect', '--archive', output, '--json'], { stdout: out, stderr: err }), 0);
+  assert.equal(JSON.parse(out.value).manifest_sha256, inspectArchive(output).manifest_sha256);
+  out.value = '';
+  assert.equal(await backupCommand(['verify', '--archive', output, '--json'], { stdout: out, stderr: err }), 0);
+  assert.equal(JSON.parse(out.value).verified, true);
+
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: join(root, 'work') };
+  const tx = beginBackup(['p'], { env, id: '00000000-0000-4000-8000-000000000005' });
+  out.value = '';
+  assert.equal(await backupCommand(['release', '--id', tx.id, '--json'], { env, stdout: out, stderr: err }), 2);
+  assert.equal(programmeLifecycle('p', { env }).state, 'draining');
+  assert.match(err.value, /release requires a held backup/u);
+  transitionBackup(tx.id, tx.generation, 'held', { env });
+  out.value = '';
+  assert.equal(await backupCommand(['release', '--id', tx.id, '--json'], { env, stdout: out, stderr: err }), 0);
+  assert.equal(programmeLifecycle('p', { env }).state, 'active');
 });
