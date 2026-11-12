@@ -314,6 +314,29 @@ test('backup command: a local planning root appearing during capture prevents ar
   assert.match(stderr.value, /local tree set changed during backup capture/u);
 });
 
+test('backup command: worktree bytes changing after inventory refuses publication', async (t) => {
+  const root = fixture(t);
+  const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
+  const programme = join(root, 'programs', 'racing');
+  mkdirSync(programme, { recursive: true });
+  writeFileSync(join(programme, 'notes.md'), 'captured bytes');
+  let inventories = 0;
+  const inventory = (...args) => {
+    const result = inventoryProgrammeTree(...args);
+    inventories += 1;
+    if (inventories === 2) writeFileSync(join(programme, 'notes.md'), 'changed after inventory');
+    return result;
+  };
+  const stdout = { value: '', write(text) { this.value += text; } };
+  const stderr = { value: '', write(text) { this.value += text; } };
+  const archive = join(root, 'racing-archive');
+
+  assert.equal(await backupCommand(['create', '--programme', 'racing', '--output', archive, '--json'], { env, stdout, stderr, inventory }), 1);
+  assert.equal(programmeLifecycle('racing', { env }).state, 'held', 'an unstable snapshot retains its lifecycle fence');
+  assert.throws(() => lstatSync(archive), { code: 'ENOENT' });
+  assert.match(stderr.value, /content changed during backup capture/u);
+});
+
 test('backup command: inspect and verify expose checksummed inventory; status and release preserve explicit hold semantics', async (t) => {
   const root = fixture(t);
   const output = join(root, 'archive');

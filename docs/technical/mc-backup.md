@@ -107,12 +107,18 @@ The currently routed command surface is:
   bare export repositories. The source object database is read as an alternate;
   source refs, reflog tips, stage-entry objects and selected worktree HEAD are
   pinned only in the export repository. No source refs or stash are written.
-  Metadata records worktree path/kind, remote identity, object format, HEAD/ref,
-  refs, recovery object IDs and source index digest. Unsupported remotes/object
-  formats, unreadable Git administration, or any staged, working or untracked
-  changes refuse capture and preserve the hold. Index bytes and semantic flags,
-  dirty worktree state and Git reconstruction are not yet serialized, so this
-  remains incomplete and does not claim complete recovery. Listed-only or
+  A private copy of each source index is normalized to an inert v2 index, with
+  split-index support files copied into scratch before normalization; the
+  source index is compared before and after. Repository metadata carries those
+  normalized bytes as a checksummed base64 record, all index stages,
+  intent-to-add, assume-unchanged and skip-worktree flags, porcelain status and
+  source-index digest. Staged, working and untracked bytes are represented in
+  the programme member inventory; stage objects are pinned in the recovery
+  bundle. A post-bundle inventory must match the captured member bytes before
+  publication. Unsupported remotes/object formats or unreadable Git
+  administration still refuse capture and preserve the hold. Git worktree
+  reconstruction is not yet delivered, index extensions are not yet validated,
+  and this does not claim complete recovery. Listed-only or
   archived programmes, process census, every repository collision, general
   ignored/restricted data and external dependencies are not yet reconciled.
   Before opening entries, the no-follow inventory excludes `.dev.vars`, `.env`
@@ -159,7 +165,8 @@ without creating a destination. Future Git restore must validate local
 repository declarations before mutation, keep the result inactive, and must not
 enqueue merges. The delivered-command real-Git acceptance remains outstanding;
 the fake-Git gate only proves that unreadable Git-shaped administration fails
-closed.
+closed. The normalized index record has not yet been exercised by the
+commissioned source-unavailable real-Git acceptance script.
 
 Related contracts: [layout and local/restricted data](mc-layout.md),
 [goal lifecycle](mc-goals.md), [runner admission](mc-run.md), and

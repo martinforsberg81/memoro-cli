@@ -98,6 +98,25 @@ export function createProgrammeBackup(selection, output, { env = process.env, id
     bundles.push(captured.bundle);
     repositoryRecords.push(captured.record);
   }
+  // Inventory again after Git snapshotting: a stable Git index/ref census does
+  // not prove that ordinary working bytes stayed unchanged while bundles were
+  // being written.
+  const finalMembers = [];
+  const finalOmissions = [];
+  const finalRepositories = [];
+  for (const programme of held.selection) {
+    for (const { directory, memberRoot } of localTrees(programme)) {
+      const final = inventory(directory, programme, { memberRoot });
+      finalMembers.push(...final.members);
+      finalOmissions.push(...final.omissions);
+      finalRepositories.push(...final.repositories);
+    }
+  }
+  if (digest(members) !== digest(finalMembers)
+    || JSON.stringify(omissions.filter(({ classification }) => classification !== 'restricted-dependency')) !== JSON.stringify(finalOmissions)
+    || JSON.stringify(repositories.map(({ path, kind }) => ({ path, kind }))) !== JSON.stringify(finalRepositories.map(({ path, kind }) => ({ path, kind })))) {
+    throw new Error('selected programme content changed during backup capture');
+  }
   const archive = create(output, {
     programmes: held.selection,
     members,

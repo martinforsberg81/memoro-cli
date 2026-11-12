@@ -1,6 +1,6 @@
 /** Self-contained Git recovery bundles made without mutating source repositories. */
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -56,11 +56,32 @@ export function exportRepository(repository, { env = process.env, run = git } = 
       });
     const reflogs = output(['reflog', 'show', '--all', '--format=%H'], { cwd, env: cleanEnv })
       .split(/\r?\n/u).filter(Boolean);
-    const stageRows = git(['ls-files', '--stage', '-z'], { cwd, env: cleanEnv }).stdout.toString('utf8').split('\0').filter(Boolean);
-    const stageOids = stageRows.map((row) => row.match(/^\d+ ([0-9a-f]+) \d+\t/u)?.[1]).filter(Boolean);
     const sourceIndex = readFileSync(join(gitDir, 'index'));
     const initialStatus = output(['status', '--porcelain=v2', '--untracked-files=all'], { cwd, env: cleanEnv });
-    if (initialStatus) throw new Error(`repository ${repository.path} has working/index changes; normalized index and worktree-state capture is not yet available`);
+    const indexCopy = join(isolated, 'index.v2');
+    writeFileSync(indexCopy, sourceIndex, { mode: 0o600 });
+    for (const name of readdirSync(gitDir).filter((item) => /^sharedindex\.[a-f0-9]+$/u.test(item))) {
+      writeFileSync(join(isolated, name), readFileSync(join(gitDir, name)), { mode: 0o600 });
+    }
+    const indexEnv = { ...cleanEnv, GIT_INDEX_FILE: indexCopy, GIT_OPTIONAL_LOCKS: '0' };
+    git(['update-index', '--no-split-index', '--no-untracked-cache', '--no-fsmonitor', '--index-version=2'], { cwd, env: indexEnv });
+    const normalizedIndex = readFileSync(indexCopy);
+    const stageRows = git(['ls-files', '--stage', '-z'], { cwd, env: indexEnv }).stdout.toString('utf8').split('\0').filter(Boolean);
+    const stages = stageRows.map((row) => {
+      const match = /^(\d+) ([0-9a-f]+) (\d+)\t([\s\S]*)$/u.exec(row);
+      if (!match) throw new Error(`unparseable Git index stage record in ${repository.path}`);
+      return { mode: Number.parseInt(match[1], 8), oid: match[2], stage: Number(match[3]), path: match[4] };
+    });
+    const flagRows = (args) => git(['ls-files', ...args, '-z'], { cwd, env: indexEnv }).stdout.toString('utf8').split('\0').filter(Boolean);
+    const assume = new Set(flagRows(['-v']).filter((row) => /^[a-z] /u.test(row)).map((row) => row.slice(2)));
+    const skip = new Set(flagRows(['-t']).filter((row) => /^S /u.test(row)).map((row) => row.slice(2)));
+    const trackedPaths = [...new Set(stages.map(({ path }) => path))].sort();
+    const intentToAdd = new Set(stages.filter((entry) => /^0+$/u.test(entry.oid)).map(({ path }) => path));
+    const flags = [...new Set([...assume, ...skip, ...intentToAdd])].sort().map((path) => ({
+      path, assume_unchanged: assume.has(path), skip_worktree: skip.has(path),
+      intent_to_add: intentToAdd.has(path),
+    }));
+    const stageOids = stages.map(({ oid }) => oid).filter((oid) => !/^0+$/u.test(oid));
 
     run(['init', '--bare', '--object-format', identity.object_format, exportRepo], { cwd: isolated, env: cleanEnv });
     const exportObjects = join(exportRepo, 'objects');
@@ -80,7 +101,7 @@ export function exportRepository(repository, { env = process.env, run = git } = 
     const finalRefs = output(['for-each-ref', '--format=%(refname) %(objectname)'], { cwd, env: cleanEnv });
     const finalReflogs = output(['reflog', 'show', '--all', '--format=%H'], { cwd, env: cleanEnv });
     const finalIndex = readFileSync(join(gitDir, 'index'));
-    if (status || finalHead !== head || finalRefs !== refs.map(({ name, oid }) => `${name} ${oid}`).join('\n')
+    if (status !== initialStatus || finalHead !== head || finalRefs !== refs.map(({ name, oid }) => `${name} ${oid}`).join('\n')
       || finalReflogs !== reflogs.join('\n') || !finalIndex.equals(sourceIndex)) {
       throw new Error(`repository ${repository.path} changed during Git bundle capture`);
     }
@@ -93,8 +114,17 @@ export function exportRepository(repository, { env = process.env, run = git } = 
         head: { oid: head, ref: headRef, detached: headRef === null },
         refs,
         recovery: { reflog_objects: reflogs, index_stage_objects: stageOids },
+        index: {
+          format: 2,
+          sha256: sha256(normalizedIndex),
+          payload_base64: normalizedIndex.toString('base64'),
+          stages,
+          semantic_flags: flags,
+          unstaged_status_porcelain_v2: initialStatus,
+          tracked_paths: trackedPaths,
+        },
         source_index_sha256: sha256(sourceIndex),
-        worktree_status: 'clean',
+        worktree_status: initialStatus ? 'dirty-captured' : 'clean',
       },
     };
   } finally {
