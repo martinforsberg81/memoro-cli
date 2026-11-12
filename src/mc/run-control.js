@@ -1073,6 +1073,7 @@ export async function handOver({ paths, deps, say, checkout = null, predecessor 
   deps.remove(paths.update);
   const dir = checkout ?? mcCheckout({ exists: deps.exists });
   say(dir ? `update: ${fastForward(dir, deps)}` : 'update: mc is not running from a git checkout — nothing to fast-forward');
+  const nextCommit = dir ? head(dir, deps) : null;
   // The successor is told whose runner.json it will find: the one start
   // that does not refuse on a live holder (run.js `runLoop`).
   let pid;
@@ -1100,7 +1101,7 @@ export async function handOver({ paths, deps, say, checkout = null, predecessor 
         const dedup = new Map(inherited.map((item) => [`${item.pid}:${item.bootId && item.starttime ? `${item.bootId}:${item.starttime}` : item.generation || ''}`, item]));
         const { pid: _oldPid, started: _oldStarted, generation: _oldGeneration, bootId: _oldBoot, starttime: _oldStarttime, ...rest } = owner;
         const record = {
-          ...rest, ...owner, ...(current.commit ? { commit: (checkout ? head(checkout, deps) : null) || current.commit } : {}),
+          ...rest, ...owner, ...(nextCommit || current.commit ? { commit: nextCommit || current.commit } : {}),
           ...(Array.isArray(current.args) ? { args: current.args } : {}), takeover: true,
           predecessor: { pid: Number(current.pid), started: current.started || null, ...(current.generation ? { generation: current.generation } : {}), ...(current.bootId ? { bootId: current.bootId } : {}), ...(current.starttime ? { starttime: String(current.starttime) } : {}) },
           drainers: [...dedup.values()],

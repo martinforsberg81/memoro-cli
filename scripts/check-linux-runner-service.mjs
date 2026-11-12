@@ -105,10 +105,11 @@ import { join } from 'node:path';
 import { run } from ${JSON.stringify(url('src/mc/commands/run.js'))};
 import { realControlDeps } from ${JSON.stringify(url('src/mc/run-control.js'))};
 import { realDeps, runLoop } from ${JSON.stringify(url('src/mc/run.js'))};
+import { readLinuxIdentity } from ${JSON.stringify(url('src/mc/linux-runner-service.js'))};
 const env = process.env;
 const root = env.MC_WORK_ROOT;
 mkdirSync(join(root, 'observed'), { recursive: true });
-writeFileSync(join(root, 'observed', process.pid + '.json'), JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(['HOME','PATH','MC_HOME','MC_WORK_ROOT','MC_REPOS_HOME'].map(k => [k, env[k]])) }));
+writeFileSync(join(root, 'observed', process.pid + '.json'), JSON.stringify({ identity: readLinuxIdentity(process.pid), argv: process.argv.slice(2), env: Object.fromEntries(['HOME','PATH','MC_HOME','MC_WORK_ROOT','MC_REPOS_HOME'].map(k => [k, env[k]])) }));
 const deps = realDeps(env);
 Object.assign(deps, {
   log: line => { if (line.includes('runner start (mc run')) writeFileSync(join(root, 'admitted-' + process.pid), String(Date.now())); process.stdout.write(line + '\\n'); },
@@ -261,8 +262,10 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
     for (const name of (existsSync(join(root.work, 'observed')) ? readdirSync(join(root.work, 'observed')) : [])) {
       const pid = Number(name.replace('.json',''));
       if (!alive(pid)) continue;
-      const identity = readIdentity?.(pid);
-      if (identity) owners.set(pid, { pid, ...identity });
+      const identity = json(join(root.work, 'observed', name))?.identity;
+      const observed = readIdentity?.(pid);
+      if (!identity || identity.bootId !== observed?.bootId || identity.starttime !== observed?.starttime) continue;
+      owners.set(pid, { ...owners.get(pid), pid, ...identity });
       for (const part of text(`/proc/${pid}/cgroup`).split('/')) {
         const name = part.trim();
         if (name.startsWith('mc-runner-start-') && name.endsWith('.scope')) scopes.add(name);

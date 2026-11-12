@@ -249,22 +249,27 @@ describe('mc run start', () => {
 
   it('publishes an A-to-B-to-C successor with all verified drainers atomically', async () => {
     const fx = fixture({ runner: {
-      pid: 200, generation: 'B', bootId: 'boot', starttime: '20', args: ['--once'],
+      pid: 200, generation: 'B', bootId: 'boot', starttime: '20', args: ['--once'], commit: 'old-commit',
       predecessor: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
       drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }],
     }, live: [100, 200, 300] });
     fx.deps.platform = 'linux';
     fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
-    fx.deps.lifecycleLock = (_root, transition) => transition();
+    let insideGate = false;
+    const gitInsideGate = [];
+    fx.deps.git = (_cwd, args) => { gitInsideGate.push(insideGate); return { ok: true, stdout: args[0] === 'rev-parse' ? 'new-commit' : '' }; };
+    fx.deps.lifecycleLock = (_root, transition) => { insideGate = true; try { return transition(); } finally { insideGate = false; } };
     fx.deps.generation = () => 'C';
     fx.deps.respawn = ({ env }) => {
       assert.deepEqual(env, { MC_RUN_SUCCESSOR_OF: '200', MC_RUN_RESERVED_GENERATION: 'C' });
       return 300;
     };
-    const out = await handOver({ paths, deps: fx.deps, say: () => {}, predecessor: 200, predecessorGeneration: 'B' });
+    const out = await handOver({ paths, deps: fx.deps, say: () => {}, checkout: '/fixture', predecessor: 200, predecessorGeneration: 'B' });
+    assert.ok(gitInsideGate.length > 0 && gitInsideGate.every(value => value === false), 'Git ran inside the bounded lifecycle transition');
     assert.equal(out.ok, true);
     const published = JSON.parse(fx.store[paths.runner]);
     assert.equal(published.pid, 300);
+    assert.equal(published.commit, 'new-commit');
     assert.deepEqual(published.drainers.map(({ pid, generation }) => [pid, generation]), [[100, 'A'], [200, 'B']]);
     assert.deepEqual(published.predecessor, { pid: 200, started: null, generation: 'B', bootId: 'boot', starttime: '20' });
   });
@@ -432,6 +437,14 @@ describe('mc run start', () => {
     assert.equal(refused.ok, false);
     assert.deepEqual(legacy.calls.killed, [], 'an identity-less live legacy owner was not signalled');
     assert.ok(paths.runner in legacy.store, 'unknown owner state was not removed');
+
+    const unknown = { pid: 100, generation: 'legacy-drainer' };
+    const partial = fixture({ runner: { pid: 300, generation: 'C', bootId: 'boot', starttime: '300', drainers: [unknown] }, live: [100, 300] });
+    Object.assign(partial.deps, { platform: 'linux', lifecycleLock: (_root, transition) => transition(), identity: pid => ({ bootId: 'boot', starttime: String(pid) }), ps: () => '' });
+    const incomplete = await stopRunner({ force: true, root: ROOT, deps: partial.deps });
+    assert.equal(incomplete.ok, false, 'unverifiable drainer stop was reported complete');
+    assert.deepEqual(partial.calls.killed, [[300, 'SIGTERM']], 'unknown drainer was signalled');
+    assert.deepEqual(JSON.parse(partial.store[paths.runner] || 'null')?.drainers, [{ ...unknown, started: null }], 'partial force-stop cleanup forgot its unknown live drainer');
   });
 
   it('revalidates each Linux owner identity after the stop snapshot before signalling', async () => {
