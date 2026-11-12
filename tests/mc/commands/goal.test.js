@@ -71,6 +71,7 @@ function fixture({ files = {}, env = {}, git = allOk, known = KNOWN, absent = []
     ledger: (line) => { ledger.push(line); },
     home: HOME,
     env,
+    lifecycle: () => ({ release() {} }),
     now: () => new Date('2026-11-01T20:00:00Z'),
     stdout: { write: (text) => out.push(text) },
     stderr: { write: (text) => err.push(text) },
@@ -377,6 +378,19 @@ test('dropping refuses to archive while a live current-*.json owns the goal', as
   assert.equal(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], undefined, 'live-owned work is not moved');
   assert.equal(f.store[`${HOME}/mc/goals/goal_log.md`], undefined, 'no archive success is recorded');
   assert.match(f.err(), /live session still owns mc\/plain/u);
+});
+
+test('mc goal direct mutation is admitted as one programme-scoped writer before its injected file writer runs', async () => {
+  const f = fixture({ files: seededGoal(), env: { MC_GOAL: 'mc/plain' } });
+  let writes = 0;
+  f.deps.lifecycle = (programmes, { name }) => {
+    assert.deepEqual(programmes, ['mc']);
+    assert.equal(name, 'goal-set');
+    throw new Error('programme mc is draining under transaction backup-1');
+  };
+  f.deps.write = (...args) => { writes += 1; return f.deps.writeOriginal?.(...args); };
+  assert.equal(await run(['set', 'mc/plain', 'title', '--text', 'held change'], f.deps), 1);
+  assert.equal(writes, 0, 'the injected writer is not reached after hold refusal');
 });
 
 /**

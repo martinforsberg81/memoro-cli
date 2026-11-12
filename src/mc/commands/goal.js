@@ -73,6 +73,7 @@ import { mergesPath, parseQueue } from '../merge-queue.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
 import { mcHome, programsHome } from '../paths.js';
+import { admitWriter } from '../programme-lifecycle.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
 import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, judge, JEV_KEY, ledgerPath, LOG_ENTRIES, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256 } from '../jev.js';
@@ -180,38 +181,60 @@ export async function run(argv, deps = {}) {
     ledger: deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)),
   };
   const { flags } = scanned;
-
-  if (verb === 'new') return newGoal(rest, flags, ctx);
-  if (verb === 'phase') return setPhase(rest, ctx);
-  if (verb === 'set') return setField(rest, flags, ctx);
-  if (verb === 'document add') return addDocument(rest, flags, ctx);
-  if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
-  if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
-  if (verb === 'criterion remove') return removeCriterion(rest, flags, ctx);
-  if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
-  if (verb === 'convert') return convert(rest, ctx);
-  if (verb === 'from-project') return fromProject(rest, ctx);
-  if (verb === 'log') {
-    if (flags.status === 'Martin') {
-      stderr.write(returnInstruction(['mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin, with its options and your recommendation'], rest[0] ?? env.MC_GOAL, 'mc: log is not written'));
-      return 2;
+  const programmes = mutationProgrammes({ verb, rest, env, home: ctx.home, list: ctx.list });
+  let lease = null;
+  try { if (programmes.length) lease = (deps.lifecycle || admitWriter)(programmes, { env, name: `goal-${verb}` }); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  try {
+    if (verb === 'new') return newGoal(rest, flags, ctx);
+    if (verb === 'phase') return setPhase(rest, ctx);
+    if (verb === 'set') return setField(rest, flags, ctx);
+    if (verb === 'document add') return addDocument(rest, flags, ctx);
+    if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
+    if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
+    if (verb === 'criterion remove') return removeCriterion(rest, flags, ctx);
+    if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
+    if (verb === 'convert') return convert(rest, ctx);
+    if (verb === 'from-project') return fromProject(rest, ctx);
+    if (verb === 'log') {
+      if (flags.status === 'Martin') {
+        stderr.write(returnInstruction(['mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin, with its options and your recommendation'], rest[0] ?? env.MC_GOAL, 'mc: log is not written'));
+        return 2;
+      }
+      const texts = entryTexts(flags, ctx);
+      if (texts.error) { stderr.write(`mc: ${texts.error}\n`); return texts.code; }
+      return logEntry(rest, { stage: flags.stage, status: flags.status, ...texts.fields }, ctx);
     }
-    const texts = entryTexts(flags, ctx);
-    if (texts.error) { stderr.write(`mc: ${texts.error}\n`); return texts.code; }
-    return logEntry(rest, { stage: flags.stage, status: flags.status, ...texts.fields }, ctx);
-  }
-  if (verb === 'stage') {
-    if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
-    const stage = rest.pop();
-    return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null }, ctx);
-  }
-  if (verb === 'martin') return askMartin(rest, flags, ctx);
-  if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
-  if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
-  if (verb === 'pr') return carryPrs(rest, ctx);
-  if (verb === 'archive') return archiveGoals(rest, ctx);
-  if (verb === 'show') return showGoal(rest, ctx);
-  return listGoals(rest, ctx);
+    if (verb === 'stage') {
+      if (rest.length < 1 || rest.length > 2) { stderr.write(`mc: stage [<programme>/<goal>] ${STAGES.join('|')}\n`); return 2; }
+      const stage = rest.pop();
+      return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null }, ctx);
+    }
+    if (verb === 'martin') return askMartin(rest, flags, ctx);
+    if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
+    if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
+    if (verb === 'pr') return carryPrs(rest, ctx);
+    if (verb === 'archive') return archiveGoals(rest, ctx);
+    if (verb === 'show') return showGoal(rest, ctx);
+    return listGoals(rest, ctx);
+  } finally { lease?.release(); }
+}
+
+/** Lock command-wide goal operations before direct file/ref/queue writes. */
+function mutationProgrammes({ verb, rest, env, home, list }) {
+  if (verb === 'show' || verb === 'list') return [];
+  const names = [];
+  const add = (value) => {
+    const programme = String(value || '').split('/')[0];
+    if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(programme)) names.push(programme);
+  };
+  if (verb === 'archive') {
+    rest.forEach(add);
+  } else if (verb === 'convert' && !rest[0]) {
+    try { list(home).forEach(add); } catch { throw new Error('programme inventory could not be read before conversion'); }
+  } else if (rest[0]) add(rest[0]);
+  else if (env.MC_GOAL) add(env.MC_GOAL);
+  return [...new Set(names)].sort();
 }
 
 /**
