@@ -9,6 +9,7 @@ import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { appendEntry, goalDirIn, GOAL_FILE, parseGoal, setGoalState } from '../goals.js';
+import { admitWriter } from '../programme-lifecycle.js';
 import { knownRepositories } from '../work-area.js';
 import { jevContext } from './goal.js';
 import { only, scanArgs } from './flags.js';
@@ -76,9 +77,14 @@ export async function run(argv, deps = {}) {
     try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
     catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
     if (target) {
-      const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: true, read, write: deps.write || writeFileAtomic,
-        entry: { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: said.replace(/^mc: /u, ''), comment: clean([`Martin is asked: ${call.question}`, ...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${option}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`, said].join('\n')), next: 'wait for Martin' } });
-      if (why) stderr.write(clean(`mc: ${why}\n`));
+      try {
+        const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: true, read, write: deps.write || writeFileAtomic, env, lifecycle: deps.lifecycle || admitWriter,
+          entry: { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: said.replace(/^mc: /u, ''), comment: clean([`Martin is asked: ${call.question}`, ...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${option}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`, said].join('\n')), next: 'wait for Martin' } });
+        if (why) stderr.write(clean(`mc: ${why}\n`));
+      } catch (error) {
+        stderr.write(clean(`mc: ${error.message} — the ask is not recorded in its goal\n`));
+        return 1;
+      }
     }
     stdout.write(`${clean(said)}\n`);
     return 1;
@@ -124,7 +130,16 @@ export async function run(argv, deps = {}) {
     const lines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${String(option).replace(/\s*\n\s*/gu, ' ')}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`];
     const comment = clean([`${answered ? 'jev was asked' : 'Martin is asked'}: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}`, ...lines, said].join('\n'));
     const entry = { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: answered ? clean(`jev answered ${asked.reading}`) : clean(`Martin is asked: ${asked.reading || asked.unavailable}`), comment, next: answered ? clean(`continue with: ${call.options[asked.answers.answer.choice]}`) : 'wait for Martin' };
-    const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: !answered, entry, read, write: deps.write || writeFileAtomic });
+    let why;
+    try {
+      why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: !answered, entry, read, write: deps.write || writeFileAtomic, env, lifecycle: deps.lifecycle || admitWriter });
+    } catch (error) {
+      // A lifecycle hold may begin while jev is responding. The helper's
+      // eventual write admission is authoritative; never turn that deferred
+      // answer into a goal mutation after the programme starts draining.
+      stderr.write(clean(`mc: ${error.message} — the ask is not recorded in its goal\n`));
+      return 1;
+    }
     if (why) stderr.write(clean(`mc: ${why}\n`));
   }
   stdout.write(`${clean(said)}\n`);
@@ -139,15 +154,15 @@ export async function run(argv, deps = {}) {
  * stage and status, and the question is logged for them. Returns why the goal
  * was left alone, or null.
  */
-function recordGoalAsk({ target, snapshot, roleStage, toMartin, entry, read, write }) {
+function recordGoalAsk({ target, snapshot, roleStage, toMartin, entry, read, write, env = process.env, lifecycle = admitWriter }) {
   const current = goalNow(target, read);
   if (!current) return `${target.name} no longer reads — the ask is not recorded in its goal`;
   if (['done', 'dropped'].includes(current.stage)) return `${target.name} is ${current.stage} — the ask is not recorded in its goal`;
   if (roleStage && current.stage !== roleStage) return `${target.name} is in ${current.stage}, not ${roleStage} — the ask is not recorded in its goal`;
   const stamped = { ...entry, stage: current.stage, status: current.status };
   const moved = current.stage !== snapshot.stage || current.status !== snapshot.status;
-  if (toMartin && !moved) setGoalState({ dir: target.dir, status: 'Martin', entry: stamped, read, write });
-  else appendEntry({ dir: target.dir, entry: stamped, read, write });
+  if (toMartin && !moved) setGoalState({ dir: target.dir, status: 'Martin', entry: stamped, read, write, env, lifecycle });
+  else appendEntry({ dir: target.dir, entry: stamped, read, write, env, lifecycle });
   return toMartin && moved ? `${target.name} is ${current.stage} · ${current.status} now — the question is logged, Martin is not set over it` : null;
 }
 

@@ -6,6 +6,8 @@ import { after, test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/ask.js';
 import { parseLog } from '../../../src/mc/goals.js';
+import { beginBackup } from '../../../src/mc/programme-lifecycle.js';
+import { programsHome } from '../../../src/mc/paths.js';
 import { goalJson } from '../_helpers/goal-file.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'mc-ask-'));
@@ -254,6 +256,33 @@ test('a goal finished or moved by a person while jev is asked is not set over by
   const entry = parseLog(readFileSync(log, 'utf8')).at(-1);
   assert.deepEqual([entry.stage, entry.status], ['build', 'blocked']);
   assert.match(entry.done, /^jev answered /u);
+});
+
+test('a goal-bound answer arriving after backup draining is not written into the selected goal', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-ask-backup-hold-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const env = { MC_WORK_ROOT: root, MC_HOME: join(root, 'state'), MC_PROGRAMME: 'jev', MC_GOAL: 'jev/held-ask', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const home = programsHome(env);
+  const goal = join(home, 'jev', 'goals', 'held-ask');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json');
+  const log = join(goal, 'LOG.md');
+  writeFileSync(file, goalJson({ stage: 'build', title: 'Held ask', goal: ['Do not write after drain.'], repos: ['memoro-cli'] }));
+  writeFileSync(log, '');
+  const before = readFileSync(file, 'utf8');
+  const f = fixture({ env });
+  f.deps.home = home;
+  f.deps.jev.transport = () => {
+    beginBackup(['jev'], { env, id: '00000000-0000-4000-8000-000000000008' });
+    return reply(0.95, 'one');
+  };
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  const argv = ['--reason', 'Which?', '--option', 'one: first', '--option', 'two: second', '--recommend', 'one'];
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 1, f.err());
+  assert.match(f.err(), /jev is draining under transaction 00000000-0000-4000-8000-000000000008 — the ask is not recorded/u);
+  assert.equal(readFileSync(file, 'utf8'), before);
+  assert.equal(readFileSync(log, 'utf8'), '');
+  assert.equal(f.ledger.length, 1, 'the consultation ledger remains evidence of the completed request');
 });
 
 test('goal-bound ask refuses role/goal mismatches and finished goals without mutation', async () => {
