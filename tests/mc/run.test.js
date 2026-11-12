@@ -1699,6 +1699,28 @@ test('Linux owner pruning removes only verified dead drainers under the matching
   assert.equal(current.predecessor, undefined, 'the dead immediate predecessor is not retained');
 });
 
+test('Linux C successor retains an A drainer through B and does not claim A’s in-flight work again', async () => {
+  const f = goalFixture({ a: {} }, { livePids: [100, 200, 300] });
+  f.deps.platform = 'linux';
+  f.deps.pid = 300;
+  f.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid) });
+  f.deps.lifecycleLock = (_root, transition) => transition();
+  f.deps.env = { ...f.deps.env, MC_RUN_RESERVED_GENERATION: 'C', MC_RUN_SUCCESSOR_OF: '200' };
+  const owner = {
+    pid: 300, generation: 'C', bootId: 'boot', starttime: '300', takeover: true,
+    predecessor: { pid: 200, generation: 'B', bootId: 'boot', starttime: '200' },
+    drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '100' }, { pid: 200, generation: 'B', bootId: 'boot', starttime: '200' }],
+  };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(owner)}\n`;
+  f.files['/w/runner/current-memoro.json'] = `${JSON.stringify({ name: 'goal:prog/a', pid: 100, lane: 0, generation: 'A', bootId: 'boot', starttime: '100' })}\n`;
+
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+
+  assert.deepEqual(f.calls.sessions, [], 'C started a goal already in flight under A');
+  assert.ok('/w/runner/current-memoro.json' in f.files, 'A’s live session record was removed by C');
+  assert.match(f.files['/w/runner/log/runner.log'], /once: nothing to run/u, 'C did not observe the inherited A session');
+});
+
 test('a successor lane waits while its predecessor holds the lane file, skips that goal, then starts it', async () => {
   const f = goalFixture({ a: {}, b: {} }, { livePids: [4242, 7000] });
   f.deps.laneCount = () => ({ lanes: 2 });

@@ -244,6 +244,52 @@ describe('mc run start', () => {
     assert.equal(fx.calls.spawned.length, 0);
   });
 
+  it('serializes competing Linux starts so only one owner reservation can publish', async () => {
+    const fx = fixture();
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.identity = (pid) => ({ bootId: 'boot-a', starttime: String(pid) });
+    fx.deps.installBoot = () => ({ ok: true, lines: [] });
+    fx.deps.spawn = ({ bin, args, stdio, env }) => {
+      fx.calls.spawned.push({ bin, args, stdio, ...(env ? { env } : {}) });
+      fx.alive.add(4242);
+      return 4242;
+    };
+    let tail = Promise.resolve();
+    fx.deps.lifecycleLock = async (_root, transition) => {
+      const before = tail;
+      let release;
+      tail = new Promise((resolve) => { release = resolve; });
+      await before;
+      try { return transition(); } finally { release(); }
+    };
+
+    const results = await Promise.all([
+      startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps }),
+      startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps }),
+    ]);
+
+    assert.equal(fx.calls.spawned.length, 1, 'both competing starts spawned a runner');
+    assert.equal(results.filter((result) => result.ok).length, 1, 'there was not exactly one successful claimant');
+    assert.equal(Number(JSON.parse(fx.store[paths.runner]).pid), 4242, 'the sole published owner is not the spawned runner');
+    assert.match(results.find((result) => !result.ok).lines.join('\n'), /already running/u);
+  });
+
+  it('treats a live recycled PID from another boot as stale instead of a foreign owner', async () => {
+    const fx = fixture({ runner: { pid: 4242, generation: 'old', bootId: 'boot-before', starttime: '12' }, live: [4242] });
+    fx.deps.platform = 'linux';
+    fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
+    fx.deps.identity = () => ({ bootId: 'boot-now', starttime: '12' });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.installBoot = () => ({ ok: true, lines: [] });
+
+    const out = await startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps });
+
+    assert.equal(out.ok, true);
+    assert.equal(fx.calls.spawned.length, 1, 'a stale PID incorrectly blocked the fresh owner');
+    assert.equal(JSON.parse(fx.store[paths.runner]).generation !== 'old', true, 'the stale generation remained published');
+  });
+
   it('forced Linux stop signals every verified draining owner and preserves unknown legacy identities', async () => {
     const fx = fixture({ runner: {
       pid: 200, generation: 'B', bootId: 'boot', starttime: '20',
@@ -268,6 +314,27 @@ describe('mc run start', () => {
     assert.equal(refused.ok, false);
     assert.deepEqual(legacy.calls.killed, [], 'an identity-less live legacy owner was not signalled');
     assert.ok(paths.runner in legacy.store, 'unknown owner state was not removed');
+  });
+
+  it('does not let forced-stop cleanup erase a successor published after its snapshot', async () => {
+    const fx = fixture({ runner: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }, live: [100] });
+    fx.deps.platform = 'linux';
+    fx.deps.identity = () => ({ bootId: 'boot', starttime: '10' });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+    fx.deps.ps = () => '';
+    const kill = fx.deps.kill;
+    fx.deps.kill = (pid, signal) => {
+      kill(pid, signal);
+      if (signal === 'SIGTERM') {
+        fx.store[paths.runner] = JSON.stringify({ pid: 200, generation: 'B', bootId: 'boot', starttime: '20' });
+      }
+    };
+
+    const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
+
+    assert.equal(out.ok, true);
+    assert.deepEqual(JSON.parse(fx.store[paths.runner]), { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' });
+    assert.ok(paths.stop in fx.store, 'the stop order was lost while the later owner was preserved');
   });
 
   it('re-enters an explicit Linux background start in a unique systemd scope', async () => {
