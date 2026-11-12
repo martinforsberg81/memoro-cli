@@ -102,12 +102,19 @@ The currently routed command surface is:
   new hold. A matching legacy `plan/<name>` tree is captured below the archive namespace
   `<name>/legacy-plan/`, distinct from current `programs/<name>` members.
   Two no-follow inventories of every selected local tree and the before/after
-  set of local roots must match before the private archive is published. This
-  is a deliberately
-  incomplete content-only implementation: it refuses selected directories
-  containing Git worktrees, and does not yet reconcile listed-only or archived
-  programmes, process census, repository identity,
-  refs/index semantics, general ignored/restricted data or external dependencies.
+  set of local roots must match before the private archive is published. Clean
+  registered repositories are exported to self-contained bundles from isolated
+  bare export repositories. The source object database is read as an alternate;
+  source refs, reflog tips, stage-entry objects and selected worktree HEAD are
+  pinned only in the export repository. No source refs or stash are written.
+  Metadata records worktree path/kind, remote identity, object format, HEAD/ref,
+  refs, recovery object IDs and source index digest. Unsupported remotes/object
+  formats, unreadable Git administration, or any staged, working or untracked
+  changes refuse capture and preserve the hold. Index bytes and semantic flags,
+  dirty worktree state and Git reconstruction are not yet serialized, so this
+  remains incomplete and does not claim complete recovery. Listed-only or
+  archived programmes, process census, every repository collision, general
+  ignored/restricted data and external dependencies are not yet reconciled.
   Before opening entries, the no-follow inventory excludes `.dev.vars`, `.env`
   and `.env.*`, and records credential omissions without values. It also
   records but does not copy generated dependency/build residue (`node_modules`,
@@ -147,11 +154,12 @@ The currently routed command surface is:
 - `mc backup release --id <id> [--json]` releases only a transaction already
   in `held`; draining transactions cannot be released through this command.
 
-Complete Git reconstruction is not yet delivered. The delivered content-only
-restore is deliberately limited to archives with no bundles; a bundle-bearing
-programme archive is refused without creating a destination. Future Git
-restore must validate local repository declarations before mutation, keep the
-result inactive, and must not enqueue merges.
+Git reconstruction is not yet delivered. Restore refuses archives with bundles
+without creating a destination. Future Git restore must validate local
+repository declarations before mutation, keep the result inactive, and must not
+enqueue merges. The delivered-command real-Git acceptance remains outstanding;
+the fake-Git gate only proves that unreadable Git-shaped administration fails
+closed.
 
 Related contracts: [layout and local/restricted data](mc-layout.md),
 [goal lifecycle](mc-goals.md), [runner admission](mc-run.md), and

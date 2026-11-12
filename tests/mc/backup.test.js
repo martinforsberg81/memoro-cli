@@ -33,8 +33,8 @@ test('backup inventory: reads typed local bytes and links without following Git 
 
   const inventory = inventoryProgrammeTree(programme, 'programme');
   assert.deepEqual(inventory.repositories.sort((a, b) => a.path.localeCompare(b.path)), [
-    { path: 'programme/linked', admin: join(programme, 'linked', '.git'), gitdir: join(programme, 'nested', '.git', 'worktrees', 'linked'), kind: 'linked' },
-    { path: 'programme/nested', admin: join(programme, 'nested', '.git'), kind: 'primary' },
+    { path: 'programme/linked', pathOnDisk: join(programme, 'linked'), admin: join(programme, 'linked', '.git'), gitdir: join(programme, 'nested', '.git', 'worktrees', 'linked'), kind: 'linked' },
+    { path: 'programme/nested', pathOnDisk: join(programme, 'nested'), admin: join(programme, 'nested', '.git'), kind: 'primary' },
   ]);
   assert.deepEqual(inventory.members.map(({ path, type }) => [path, type]), [
     ['programme/linked', 'directory'],
@@ -198,7 +198,7 @@ test('backup command: restore routes only explicit archive and output paths', as
   assert.match(stderr.value, /needs --archive.*--output/u);
 });
 
-test('backup command: explicit create holds selected content and refuses Git worktrees without an archive', async (t) => {
+test('backup command: explicit create keeps the fence and publishes nothing when Git capture cannot prove recovery', async (t) => {
   const root = fixture(t);
   const env = { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root };
   const programme = join(root, 'programs', 'chosen');
@@ -241,7 +241,7 @@ test('backup command: explicit create holds selected content and refuses Git wor
   assert.equal(await backupCommand(['create', '--programme', 'repo-work', '--output', refusedArchive, '--json'], { env, stdout: out, stderr: err }), 1);
   assert.equal(programmeLifecycle('repo-work', { env }).state, 'held', 'an incomplete capture keeps its selected fence');
   assert.throws(() => lstatSync(refusedArchive), { code: 'ENOENT' });
-  assert.match(err.value, /Git worktrees/u);
+  assert.match(err.value, /not a git repository/u, 'a Git-shaped but unreadable administration tree cannot be reported complete');
 });
 
 test('backup command: an occupied output is refused before creating a programme hold', async (t) => {

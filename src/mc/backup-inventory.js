@@ -54,7 +54,7 @@ export function inventoryProgrammeTree(root, programme, { memberRoot = programme
         const stat = lstatSync(absolute);
         if (stat.isSymbolicLink()) throw new Error(`Git worktree administration must not be a symlink: ${absolute}`);
         if (stat.isDirectory()) {
-          repositories.push({ path: repositoryPath, admin: absolute, kind: 'primary' });
+          repositories.push({ path: repositoryPath, pathOnDisk: directory, admin: absolute, kind: 'primary' });
           continue;
         }
         if (!stat.isFile()) throw new Error(`unsupported Git worktree administration member: ${absolute}`);
@@ -67,7 +67,7 @@ export function inventoryProgrammeTree(root, programme, { memberRoot = programme
         const gitdir = resolve(dirname(absolute), match[1]);
         const gitdirStat = lstatSync(gitdir);
         if (!gitdirStat.isDirectory() || gitdirStat.isSymbolicLink()) throw new Error(`Git worktree gitdir is not a real directory: ${gitdir}`);
-        repositories.push({ path: repositoryPath, admin: absolute, gitdir, kind: 'linked' });
+        repositories.push({ path: repositoryPath, pathOnDisk: directory, admin: absolute, gitdir, kind: 'linked' });
         continue;
       }
       const path = validateMemberPath(`${memberRoot}/${rel}`);
