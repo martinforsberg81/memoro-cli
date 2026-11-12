@@ -47,30 +47,36 @@ export function createProgrammeBackup(selection, output, { env = process.env, id
     }
   });
   const members = [];
+  const omissions = [];
   for (const programme of held.selection) {
     const selectedRoots = localTrees(programme);
     if (!selectedRoots.length) throw new Error(`programme ${programme} has no local programme or legacy planning directory; listing-only and archived inventory is not yet supported`);
     const first = [];
     const second = [];
+    const firstOmissions = [];
+    const secondOmissions = [];
     for (const { directory, memberRoot } of selectedRoots) {
       const inventoryOptions = { memberRoot };
       const before = inventory(directory, programme, inventoryOptions);
       if (before.repositories.length) throw new Error(`programme ${programme} contains Git worktrees; bundle/index reconstruction is not yet available`);
       first.push(...before.members);
+      firstOmissions.push(...before.omissions);
       const after = inventory(directory, programme, inventoryOptions);
       second.push(...after.members);
+      secondOmissions.push(...after.omissions);
     }
-    if (digest(first) !== digest(second)) throw new Error(`programme ${programme} changed during backup capture`);
+    if (digest(first) !== digest(second) || JSON.stringify(firstOmissions) !== JSON.stringify(secondOmissions)) throw new Error(`programme ${programme} changed during backup capture`);
     const finalRoots = localTrees(programme);
     if (JSON.stringify(finalRoots.map(({ memberRoot }) => memberRoot)) !== JSON.stringify(selectedRoots.map(({ memberRoot }) => memberRoot))) {
       throw new Error(`programme ${programme} local tree set changed during backup capture`);
     }
     members.push(...second);
+    omissions.push(...secondOmissions);
   }
   const archive = create(output, {
     programmes: held.selection,
     members,
-    metadata: { capture: 'programme-content-only', lifecycle_transaction: held.id, lifecycle_generation: held.generation },
+    metadata: { capture: 'programme-content-only', lifecycle_transaction: held.id, lifecycle_generation: held.generation, omissions },
   });
   return { state: 'held', completeness: 'content-only', transaction: held, archive };
 }

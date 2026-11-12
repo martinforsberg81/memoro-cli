@@ -96,7 +96,18 @@ The currently routed command surface is:
   incomplete content-only implementation: it refuses selected directories
   containing Git worktrees, and does not yet reconcile listed-only or archived
   programmes, process census, repository identity,
-  refs/index semantics, ignored/restricted data or external dependencies. The
+  refs/index semantics, general ignored/restricted data or external dependencies.
+  Before opening entries, the no-follow inventory excludes `.dev.vars`, `.env`
+  and `.env.*`, and records credential omissions without values. It also
+  records but does not copy generated dependency/build residue (`node_modules`,
+  `public/dist`, `public/modules`, `scripts/dev/local-schema.sql`, Python
+  `__pycache__`, `.test-timing`, `.venv-*`) using the approved regeneration
+  sources, and host metadata (`.DS_Store`). `.wrangler` is recorded as an
+  excluded host dependency because local D1 state belongs to the source host;
+  no runnable/full-recovery claim is made for work requiring it. These exact
+  omissions do not classify any other ignored entry: unclassified ignored data
+  and required external dependencies still prevent a complete recovery claim.
+  The
   held fence remains until explicit release on refusal. It does not claim a
   complete programme backup.
 

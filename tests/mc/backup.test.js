@@ -193,6 +193,11 @@ test('backup command: explicit create holds selected content and refuses Git wor
   const programme = join(root, 'programs', 'chosen');
   mkdirSync(join(programme, 'evidence'), { recursive: true });
   writeFileSync(join(programme, 'evidence', 'result.md'), 'recoverable evidence');
+  writeFileSync(join(programme, '.dev.vars'), 'never archive this credential');
+  mkdirSync(join(programme, '.wrangler', 'state'), { recursive: true });
+  writeFileSync(join(programme, '.wrangler', 'state', 'local.sqlite'), 'source-local D1 rows');
+  mkdirSync(join(programme, 'node_modules', 'fixture'), { recursive: true });
+  writeFileSync(join(programme, 'node_modules', 'fixture', 'index.js'), 'generated dependency');
   const out = { value: '', write(text) { this.value += text; } };
   const err = { value: '', write(text) { this.value += text; } };
   const archive = join(root, 'archive');
@@ -201,7 +206,16 @@ test('backup command: explicit create holds selected content and refuses Git wor
   const receipt = JSON.parse(out.value);
   assert.equal(receipt.transaction.state, 'held');
   assert.equal(programmeLifecycle('chosen', { env }).state, 'held');
+  const manifest = verifyArchive(archive).manifest;
   assert.deepEqual(readFileSync(join(archive, 'payload', digest(Buffer.from('recoverable evidence')))), Buffer.from('recoverable evidence'));
+  assert.deepEqual(manifest.members.map(({ path }) => path), ['chosen/evidence', 'chosen/evidence/result.md']);
+  assert.deepEqual(manifest.metadata.omissions.map(({ path, classification }) => [path, classification]), [
+    ['chosen/.dev.vars', 'credential'],
+    ['chosen/.wrangler', 'host-dependency'],
+    ['chosen/node_modules', 'generated'],
+  ]);
+  assert.equal(JSON.stringify(manifest).includes('never archive this credential'), false);
+  assert.equal(JSON.stringify(manifest).includes('source-local D1 rows'), false);
 
   const repoProgramme = join(root, 'programs', 'repo-work');
   mkdirSync(join(repoProgramme, 'repo', '.git'), { recursive: true });
