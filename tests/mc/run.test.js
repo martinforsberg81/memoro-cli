@@ -1683,6 +1683,33 @@ test('a STOP after reserved child publication stays sticky and prevents admissio
   assert.deepEqual(f.calls.sessions, [], 'a stopped reserved child admitted work');
 });
 
+test('a losing reserved child cannot remove a newer explicit owner at admission', async () => {
+  const f = fixture();
+  const reservation = { pid: 4242, generation: 'reserved-g1', bootId: 'boot', starttime: '42' };
+  f.files['/w/runner/runner.json'] = `${JSON.stringify(reservation)}\n`;
+  f.files['/w/runner/STOP'] = 'stopped\n';
+  let gates = 0;
+  const code = await runLoop({ deps: {
+    ...f.deps,
+    platform: 'linux',
+    identity: () => ({ bootId: 'boot', starttime: '42' }),
+    lifecycleLock: async (_root, transition) => {
+      gates += 1;
+      if (gates === 1) {
+        f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 5252, generation: 'explicit-g2', bootId: 'boot', starttime: '52' })}\n`;
+      }
+      return transition();
+    },
+    env: { ...f.deps.env, MC_RUN_RESERVED_GENERATION: reservation.generation },
+  } });
+
+  assert.equal(code, 2);
+  assert.equal(gates, 1, 'the losing child did not validate under the lifecycle gate');
+  assert.deepEqual(JSON.parse(f.files['/w/runner/runner.json']), { pid: 5252, generation: 'explicit-g2', bootId: 'boot', starttime: '52' });
+  assert.equal(f.files['/w/runner/STOP'], 'stopped\n', 'the rejected child removed STOP');
+  assert.deepEqual(f.calls.sessions, [], 'the rejected child admitted work');
+});
+
 test('Linux owner pruning removes only verified dead drainers under the matching generation', async () => {
   const f = fixture();
   f.deps.platform = 'linux';

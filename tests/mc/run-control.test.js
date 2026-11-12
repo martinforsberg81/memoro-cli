@@ -290,8 +290,8 @@ describe('mc run start', () => {
     assert.equal(fx.calls.spawned.length, 0);
   });
 
-  it('serializes competing Linux starts so only one owner reservation can publish', async () => {
-    const fx = fixture();
+  it('serializes competing Linux boot, manual and direct starts into one owner reservation', async () => {
+    const fx = fixture({ runner: { pid: 999, args: ['--no-merge'] } });
     fx.deps.platform = 'linux';
     fx.deps.env.MC_RUN_SYSTEMD_CONTEXT = 'scope';
     fx.deps.identity = (pid) => ({ bootId: 'boot-a', starttime: String(pid) });
@@ -310,15 +310,14 @@ describe('mc run start', () => {
       try { return transition(); } finally { release(); }
     };
 
-    const results = await Promise.all([
+    await Promise.all([
+      startRunner({ argv: [], root: ROOT, deps: fx.deps }),
       startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps }),
-      startRunner({ argv: ['--once'], root: ROOT, deps: fx.deps }),
+      startRunner({ argv: ['--if-was-running'], root: ROOT, deps: fx.deps }),
     ]);
 
-    assert.equal(fx.calls.spawned.length, 1, 'both competing starts spawned a runner');
-    assert.equal(results.filter((result) => result.ok).length, 1, 'there was not exactly one successful claimant');
+    assert.equal(fx.calls.spawned.length, 1, 'competing boot/manual/direct claims spawned more than one runner');
     assert.equal(Number(JSON.parse(fx.store[paths.runner]).pid), 4242, 'the sole published owner is not the spawned runner');
-    assert.match(results.find((result) => !result.ok).lines.join('\n'), /already running/u);
   });
 
   it('treats a live recycled PID from another boot as stale instead of a foreign owner', async () => {
@@ -375,17 +374,20 @@ describe('mc run start', () => {
 
   it('forced Linux stop signals every verified draining owner and preserves unknown legacy identities', async () => {
     const fx = fixture({ runner: {
-      pid: 200, generation: 'B', bootId: 'boot', starttime: '20',
-      predecessor: { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
-      drainers: [{ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }],
-    }, live: [100, 200], files: { [`${paths.dir}/current-a.json`]: JSON.stringify({ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }) } });
+      pid: 300, generation: 'C', bootId: 'boot', starttime: '30',
+      predecessor: { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' },
+      drainers: [
+        { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
+        { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' },
+      ],
+    }, live: [100, 200, 300], files: { [`${paths.dir}/current-a.json`]: JSON.stringify({ pid: 100, generation: 'A', bootId: 'boot', starttime: '10' }) } });
     fx.deps.platform = 'linux';
     fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
     fx.deps.lifecycleLock = (_root, transition) => transition();
     fx.deps.ps = () => '';
     const out = await stopRunner({ force: true, root: ROOT, deps: fx.deps });
     assert.equal(out.ok, true);
-    assert.deepEqual(fx.calls.killed.map(([pid]) => pid).sort((a, b) => a - b), [100, 200]);
+    assert.deepEqual(fx.calls.killed.map(([pid]) => pid).sort((a, b) => a - b), [100, 200, 300], 'the no-lane B drainer was not targeted alongside A and current C');
     assert.equal(paths.runner in fx.store, false);
     assert.equal(`${paths.dir}/current-a.json` in fx.store, false);
 
@@ -397,6 +399,32 @@ describe('mc run start', () => {
     assert.equal(refused.ok, false);
     assert.deepEqual(legacy.calls.killed, [], 'an identity-less live legacy owner was not signalled');
     assert.ok(paths.runner in legacy.store, 'unknown owner state was not removed');
+  });
+
+  it('ordinary Linux stop orders the current and chained drainers to finish held work without signalling them', async () => {
+    const lane = `${paths.dir}/current-a.json`;
+    const fx = fixture({ runner: {
+      pid: 300, generation: 'C', bootId: 'boot', starttime: '30',
+      predecessor: { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' },
+      drainers: [
+        { pid: 100, generation: 'A', bootId: 'boot', starttime: '10' },
+        { pid: 200, generation: 'B', bootId: 'boot', starttime: '20' },
+      ],
+    }, live: [100, 200, 300], files: { [lane]: JSON.stringify({ name: 'goal:prog/a', pid: 100, lane: 1, generation: 'A', bootId: 'boot', starttime: '10' }) } });
+    fx.deps.platform = 'linux';
+    fx.deps.identity = (pid) => ({ bootId: 'boot', starttime: String(pid / 10) });
+    fx.deps.lifecycleLock = (_root, transition) => transition();
+
+    const out = await stopRunner({ root: ROOT, deps: fx.deps });
+
+    assert.equal(out.ok, true);
+    assert.ok(paths.stop in fx.store, 'the stop order was not persisted');
+    assert.deepEqual(fx.calls.killed, [], 'ordinary stop interrupted a current or draining owner');
+    assert.ok(paths.runner in fx.store, 'ordinary stop removed owner state before its sessions finished');
+    assert.ok(lane in fx.store, 'ordinary stop removed A’s held lane record');
+    assert.match(out.lines.join('\n'), /pid 100, a draining runner, finishes the steps it holds/u);
+    assert.match(out.lines.join('\n'), /pid 200, the runner it replaced, finishes the steps it holds/u);
+    assert.match(out.lines.join('\n'), /pid 300 takes no new step, finishes the ones in flight/u);
   });
 
   it('does not let forced-stop cleanup erase a successor published after its snapshot', async () => {
