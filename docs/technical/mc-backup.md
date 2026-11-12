@@ -61,8 +61,13 @@ GitHub operation, they inspect active and archived goal PR references; an
 owning programme must admit a writer lease, retained through remote merge and
 local outcome reconciliation. A malformed goal ownership census fails closed.
 This is per referenced PR and does not authorize a held programme through
-`--admin`. Ordinary queued merge-round admission remains separately owned by
-the merger and repository-merge paths described in [mc-merge.md](mc-merge.md).
+`--admin`. A direct `runMergeRound` caller without the merger's explicit
+admission callback similarly resolves every owner in the round's complete PR
+batch from active/archived goal references and queue `goal` references before
+starting the gate. It keeps admitted programme leases through merge outcome
+reconciliation; incomplete ownership or queue state fails closed. Merger
+rounds continue to use the merger-owned lifecycle lease and final generation
+check, as described in [mc-merge.md](mc-merge.md).
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.

@@ -30,6 +30,8 @@ import { runDocsMerge } from '../../src/mc/docs-merge.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 import { landJob, serve } from '../../src/mc/merger.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
+import { beginBackup } from '../../src/mc/programme-lifecycle.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -260,6 +262,33 @@ describe('identical landings write main coverage', () => {
 });
 
 describe('a green gate lands the change', () => {
+  it('a direct batch resolves GOAL.json and queue owners before starting the gate', async () => {
+    const fx = fixture();
+    const env = { MC_HOME: fx.mcHome, MC_WORK_ROOT: fx.root };
+    const selectedGoal = join(fx.root, 'programs', 'selected', 'goals', 'goal');
+    mkdirSync(selectedGoal, { recursive: true });
+    writeFileSync(join(selectedGoal, 'GOAL.json'), goalJson({ prs: ['memoro-cli#400'] }));
+    const queuedGoal = join(fx.root, 'programs', 'queued-owner', 'goals', 'goal');
+    mkdirSync(queuedGoal, { recursive: true });
+    writeFileSync(join(queuedGoal, 'GOAL.json'), goalJson());
+    mkdirSync(join(fx.mcHome, 'runner'), { recursive: true });
+    writeFileSync(mergesPath(fx.mcHome), JSON.stringify([{ repo: 'memoro-cli', repo_path: '/repos/memoro-cli', pr: 401,
+      goal: { programme: 'queued-owner', goal: 'goal', dir: queuedGoal }, state: 'queued' }]));
+    beginBackup(['queued-owner'], { env, id: '00000000-0000-4000-8000-000000000053' });
+    let gateCalls = 0;
+    let ghCalls = 0;
+    try {
+      const report = await runMergeRound({ repoPath: '/repos/memoro-cli', pr: 400, prs: [400, 401],
+        root: fx.mcHome, env, gate: async () => { gateCalls += 1; return green(); }, mergeLog: null,
+        git: async () => ({ status: 0, stdout: '' }), gh: async () => { ghCalls += 1; return { status: 0, stdout: '{}' }; },
+      });
+      assert.equal(report.stopped_at, 'lifecycle');
+      assert.match(report.reason, /programme queued-owner is draining/u);
+      assert.equal(gateCalls, 0, 'no selected batch member is measured or merged after owner refusal');
+      assert.equal(ghCalls, 0, 'no GitHub operation starts after an owner refusal');
+    } finally { fx.cleanup(); }
+  });
+
   it('a dropped owner persisted while the real gate runs prevents the GitHub merge', async () => {
     const fx = fixture();
     const owner = { stage: 'review' };

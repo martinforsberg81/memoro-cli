@@ -26,7 +26,7 @@
  * cost a human action, visible as one — a verb that offered the override would
  * make it look like part of the routine.
  */
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { runTool } from './child-async.js';
@@ -37,11 +37,15 @@ import { isNetworkFailure } from './network-failure.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { gateRedFiles } from './merge-red.js';
-import { mcHome } from './paths.js';
+import { mcHome, programsHome } from './paths.js';
 import { recordLandingMainRed } from './selector-miss.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
+import { goalReferences } from './goals.js';
+import { parsePrRef } from './goals.js';
+import { admitWriter } from './programme-lifecycle.js';
+import { mergesPath } from './merge-queue.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
@@ -99,7 +103,9 @@ export async function runMergeRound({
   signals = true,
   // Stops the round from outside (`runGate`'s signal): the round ends `gone`.
   signal = null,
-  beforeMerge = async () => true,
+  beforeMerge = null,
+  lifecycle = admitWriter,
+  readGoalReferences = goalReferences,
   // The pause between reads of GitHub's head (see `headAsGitHubSeesIt`); a
   // test passes a no-op rather than waiting five seconds a read.
   sleep = defaultSleep,
@@ -168,17 +174,39 @@ export async function runMergeRound({
     return report;
   };
 
+  // Merger rounds supply their own admission callback and retain that lease
+  // across batch ownership reconciliation. Other callers of this module must
+  // establish the complete selected owner set here, before starting a long
+  // gate round. A local queue goal reference is an owner even when its PR is
+  // not repeated in GOAL.json.
+  let lifecycleLease = null;
+  if (beforeMerge === null) {
+    try {
+      const owners = roundProgrammeOwners({ repoPath, numbers, root, env, readGoalReferences });
+      if (owners.length) lifecycleLease = lifecycle(owners, { env, name: `repository merge ${numbers.map((n) => `${repoPath}#${n}`).join(', ')}` });
+    } catch (error) {
+      return finish('lifecycle', `cannot admit repository merge: ${error.message}`);
+    }
+  }
+  const finalMergeCheck = beforeMerge || (async () => true);
+
   // One lease across the whole round. The gate would take its own and give it
   // straight back, which would open exactly the window this round must not have.
   // For the length of this process (lease-owner.js): a merge round cut short
   // leaves a lease its pid answers for.
-  if (holdLease) {
-    const lease = claimLease({ repoPath, errand: `merge round for ${label}`, holder, ownerPid: process.pid, root });
-    if (!lease.ok) {
-      const held = lease.lease;
-      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+  try {
+    if (holdLease) {
+      const lease = claimLease({ repoPath, errand: `merge round for ${label}`, holder, ownerPid: process.pid, root });
+      if (!lease.ok) {
+        const held = lease.lease;
+        lifecycleLease?.release();
+        return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+      }
+      say(`lease taken by ${holder.name} for the whole round`);
     }
-    say(`lease taken by ${holder.name} for the whole round`);
+  } catch (error) {
+    lifecycleLease?.release();
+    throw error;
   }
 
   try {
@@ -338,8 +366,8 @@ export async function runMergeRound({
         say(`#${number} has no measured head to pin the squash to — merging without --match-head-commit`);
       }
       let allowed = false;
-      try { allowed = await beforeMerge({ repo: repoPath, pr: number }); } catch { allowed = false; }
-      if (!allowed) return finish('dropped', `#${number} belongs only to a dropped goal; delivery is abandoned`);
+      try { allowed = await finalMergeCheck({ repo: repoPath, pr: number }); } catch { allowed = false; }
+      if (!allowed) return finish('dropped', `#${number} is no longer admitted for merge; delivery is deferred`);
       const merged = await askGh(['pr', 'merge', String(number), '--squash', ...(pin ? ['--match-head-commit', pin] : [])], { cwd: repoPath });
       if (merged.status !== 0) {
         // A failed call is not a failed merge. On #10844 GitHub took the call,
@@ -453,11 +481,50 @@ export async function runMergeRound({
 
     return finish(null, null);
   } finally {
+    lifecycleLease?.release();
     if (holdLease) {
       releaseLease({ repoPath, holder, root });
       say('lease released');
     }
   }
+}
+
+/** Resolve all local programme owners for a direct repository-round batch. */
+function roundProgrammeOwners({ repoPath, numbers, root, env, readGoalReferences }) {
+  const references = readGoalReferences({ home: programsHome(env) });
+  if (!Array.isArray(references) || references.some((goal) => goal?.problems?.length)) {
+    throw new Error('cannot establish complete pull-request programme ownership');
+  }
+  const repo = basenameOf(repoPath).replace(/\.git$/u, '');
+  const selected = new Set(numbers);
+  const owners = new Set(references.filter((goal) => (goal.prs || []).some((reference) => {
+    const parsed = typeof reference === 'string' ? parsePrRef(reference) : reference;
+    return parsed && parsed.repo === repo && selected.has(Number(parsed.pr));
+  })).map((goal) => goal.programme));
+
+  let queue = [];
+  const queuePath = mergesPath(root);
+  try {
+    const text = readFileSync(queuePath, 'utf8');
+    queue = JSON.parse(text);
+    if (!Array.isArray(queue)) throw new Error('merge queue is not an array');
+    if (queue.some((job) => !job || typeof job !== 'object' || !Number.isSafeInteger(Number(job.pr))
+      || typeof job.repo !== 'string' || !job.repo
+      || (job.goal != null && (typeof job.goal !== 'object' || typeof job.goal.programme !== 'string')))) {
+      throw new Error('merge queue contains an incomplete job record');
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error(`cannot establish complete merge queue ownership (${error.message})`);
+  }
+  for (const job of queue) {
+    if (!selected.has(Number(job?.pr)) || (job.repo !== repo && basenameOf(job.repo_path || '').replace(/\.git$/u, '') !== repo)) continue;
+    if (job.goal == null) continue;
+    if (typeof job.goal.programme !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(job.goal.programme)) {
+      throw new Error(`merge queue has an invalid owner for ${repo}#${job.pr}`);
+    }
+    owners.add(job.goal.programme);
+  }
+  return [...owners].sort();
 }
 
 /**
