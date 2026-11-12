@@ -213,8 +213,11 @@ export function restoreArchive(archive, output, { now = () => new Date().toISOSt
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
         const bytes = readRegular(archiveRoot, member.payload);
         const fd = openSync(target, 'wx', member.mode & 0o777);
-        try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
-        chmodSync(target, member.mode & 0o777);
+        try {
+          writeFileSync(fd, bytes);
+          chmodSync(target, member.mode & 0o777);
+          fsyncSync(fd);
+        } finally { closeSync(fd); }
       } else {
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
         symlinkSync(member.target, target);
