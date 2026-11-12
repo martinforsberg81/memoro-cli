@@ -32,6 +32,8 @@ test('backup archive: atomically writes a private checksummed archive and verifi
     programmes: ['programme'], members: 2, bundles: 1, manifest_sha256: result.manifest_sha256,
   });
   assert.deepEqual(verifyArchive(output).manifest.members[0].path, 'programme/docs/.keep');
+  assert.equal(Object.hasOwn(verifyArchive(output).manifest.members[0], 'bytes'), false,
+    'manifest records refer to content-addressed payloads instead of embedding a second copy');
   assert.deepEqual(readFileSync(join(output, 'payload', digest(bytes))), bytes);
   assert.throws(() => createArchive(output, { programmes: ['programme'], members: [] }), /already exists/u);
 });

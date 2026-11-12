@@ -97,6 +97,8 @@ export function createArchive(output, { programmes, members, bundles = [], metad
         files.set(item.sha256, payload);
       }
       item.payload = payload;
+      // Keep the manifest index-only: content lives once in its checked payload.
+      delete item.bytes;
     }
     const bundleRecords = bundles.map((bundle, index) => {
       if (!bundle || typeof bundle.repository !== 'string' || !Buffer.isBuffer(bundle.bytes)) throw new Error('invalid repository bundle');
