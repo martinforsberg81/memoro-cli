@@ -118,7 +118,7 @@ deps.exists = path => path === sourceGit || actualExists(path);
 Object.assign(deps, {
   log: line => { if (line.includes('runner start (mc run')) writeFileSync(join(root, 'admitted-' + process.pid), String(Date.now())); process.stdout.write(line + '\\n'); },
   git: (cwd, args) => cwd === sourceRoot && args.join(' ') === 'rev-parse --short HEAD'
-    ? ({ ok: true, stdout: 'linux-head-2051d17\n', stderr: '' })
+    ? ({ ok: true, stdout: 'linux-head-2051d17\\n', stderr: '' })
     : ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
   session: () => { throw new Error('no coding turn authorized'); }, helperTurn: () => { throw new Error('no helper turn authorized'); },
   collect: async () => { writeFileSync(join(root, 'holding-' + process.pid), 'inert chore in flight'); while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
