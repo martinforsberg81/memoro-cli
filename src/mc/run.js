@@ -1500,7 +1500,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   function convertAfter() {
     const answers = phaseGoals({ home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, now: deps.now(), tool: 'runner' });
-    for (const answer of answers) say(answer.problems ? `goal:${answer.name}: not converted — ${answer.problems.join('; ')}` : `goal:${answer.name}: phase ${answer.phase}, ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}`);
+    for (const answer of answers) say(answer.deferred
+      ? `goal:${answer.name}: conversion deferred — ${answer.deferred}`
+      : answer.problems
+        ? `goal:${answer.name}: not converted — ${answer.problems.join('; ')}`
+        : `goal:${answer.name}: phase ${answer.phase}, ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}`);
   }
 
   /**
