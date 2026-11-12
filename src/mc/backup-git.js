@@ -63,7 +63,18 @@ export function exportRepository(repository, { env = process.env, run = git } = 
     for (const name of readdirSync(gitDir).filter((item) => /^sharedindex\.[a-f0-9]+$/u.test(item))) {
       writeFileSync(join(isolated, name), readFileSync(join(gitDir, name)), { mode: 0o600 });
     }
-    const indexEnv = { ...cleanEnv, GIT_INDEX_FILE: indexCopy, GIT_OPTIONAL_LOCKS: '0' };
+    // Index normalization must not consult a source repository's fsmonitor
+    // hook. Its command can execute arbitrary local code and its cache state
+    // is not part of the portable v2 index representation. Override even a
+    // repository-local core.fsmonitor setting for this scratch-only index.
+    const indexEnv = {
+      ...cleanEnv,
+      GIT_INDEX_FILE: indexCopy,
+      GIT_OPTIONAL_LOCKS: '0',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.fsmonitor',
+      GIT_CONFIG_VALUE_0: 'false',
+    };
     git(['update-index', '--no-split-index', '--no-untracked-cache', '--no-fsmonitor', '--index-version=2'], { cwd, env: indexEnv });
     const normalizedIndex = readFileSync(indexCopy);
     const stageRows = git(['ls-files', '--stage', '-z'], { cwd, env: indexEnv }).stdout.toString('utf8').split('\0').filter(Boolean);

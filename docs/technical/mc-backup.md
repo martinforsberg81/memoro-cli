@@ -108,8 +108,10 @@ The currently routed command surface is:
   source refs, reflog tips, stage-entry objects and selected worktree HEAD are
   pinned only in the export repository. No source refs or stash are written.
   A private copy of each source index is normalized to an inert v2 index, with
-  split-index support files copied into scratch before normalization; the
-  source index is compared before and after. Repository metadata carries those
+  split-index support files copied into scratch before normalization;
+  `core.fsmonitor` is explicitly disabled for scratch-index normalization so a
+  repository-local monitor hook is not consulted. The source index is compared
+  before and after. Repository metadata carries those
   normalized bytes as a checksummed base64 record, all index stages,
   intent-to-add, assume-unchanged and skip-worktree flags, porcelain status and
   source-index digest. Staged, working and untracked bytes are represented in
