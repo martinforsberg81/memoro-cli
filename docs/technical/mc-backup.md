@@ -40,6 +40,12 @@ programme record retains the checkout even when an earlier tidy list selected
 it; the state is read again inside the existing goal-worktree removal lock.
 This guard protects goal checkout bytes and branch registration only, not
 other tidy target kinds or complete backup capture.
+An apply through `releaseWorkArea` for a `programs/<programme>` planning area
+also acquires the programme writer lease before inspection and retains it
+through worktree/branch removal, pruning and local conversation cleanup. A
+dry-run preview is read-only and does not reserve the later apply; the apply
+must acquire a fresh lease. This covers direct work-area release callers as
+well as archive callers; it does not guard arbitrary external Git commands.
 The installed mc PreToolUse hook also refuses direct `Write`, `Edit` and
 `MultiEdit` operations whose target is anywhere under a selected programme's
 `programs/<programme>/` tree, including nested goal worktrees. It consults the

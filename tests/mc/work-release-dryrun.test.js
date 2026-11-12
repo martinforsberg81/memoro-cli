@@ -7,12 +7,13 @@
  * now serves both modes, and whatever holds the area is named.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { releaseWorkArea } from '../../src/mc/work-area.js';
+import { beginBackup, programmeLifecycle } from '../../src/mc/programme-lifecycle.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000002';
 
@@ -35,6 +36,22 @@ function fixture({ inbox = false } = {}) {
 }
 
 describe('one emptiness forecast for both modes', () => {
+  it('a held programme cannot have its planning worktrees or files released', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-release-held-'));
+    const workRoot = join(root, 'work');
+    const areaPath = join(workRoot, 'programs', 'selected');
+    mkdirSync(join(areaPath, 'nested-worktree'), { recursive: true });
+    writeFileSync(join(areaPath, 'README.md'), 'programme bytes');
+    const env = { ...process.env, MC_WORK_ROOT: workRoot, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex') };
+    try {
+      beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000023' });
+      assert.throws(() => releaseWorkArea('programs/selected', { env, dryRun: false }), /draining/u);
+      assert.equal(readFileSync(join(areaPath, 'README.md'), 'utf8'), 'programme bytes');
+      assert.equal(existsSync(join(areaPath, 'nested-worktree')), true);
+      assert.equal(programmeLifecycle('selected', { env }).state, 'draining');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   // A workarea holds checkouts and nothing else, so a directory that is not one
   // is not work and the release takes it. The point of the assertion is that it
   // is *named before it happens*: the dry run reports the same directory the

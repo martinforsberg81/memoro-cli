@@ -38,6 +38,7 @@ import { attachRepoDeps, ensureSharedDeps } from './shared-deps.js';
 import { branchLanded, mergedPullAtTip } from './branch-landed.js';
 import { stopServersUnder } from './dev-servers.js';
 import { processesStandingIn } from './standing.js';
+import { admitWriter } from './programme-lifecycle.js';
 
 /**
  * The areas the retired workarea verb made: every directory under
@@ -493,8 +494,22 @@ export function releaseWorktree(worktree) {
 }
 
 // `inUse` is who stands in a directory (`directoryInUse`, one lsof per call);
-// a test that pins what release decides hands in the answer.
-export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null, inUse: standing = directoryInUse } = {}) {
+// a test that pins what release decides hands in the answer. An apply to a
+// programme area also holds its shared writer lease through Git and local
+// cleanup. A preview is read-only and is deliberately re-admitted on apply.
+export function releaseWorkArea(name, { env = process.env, dryRun = false, gh = null, inUse: standing = directoryInUse, lifecycle = admitWriter } = {}) {
+  const programme = isProgrammeArea(name, env) ? areaKindOf(name)?.name : null;
+  const writer = !dryRun && programme
+    ? lifecycle([programme], { env, name: 'work-area release' })
+    : null;
+  try {
+    return releaseWorkAreaAdmitted(name, { env, dryRun, gh, standing });
+  } finally {
+    writer?.release();
+  }
+}
+
+function releaseWorkAreaAdmitted(name, { env, dryRun, gh, standing }) {
   const area = inspectWorkArea(name, env);
   const removed = [];
   const kept = [];
