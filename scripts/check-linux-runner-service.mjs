@@ -112,7 +112,7 @@ const deps = realDeps(env);
 Object.assign(deps, {
   git: () => ({ ok: true, stdout: '', stderr: '' }), gh: () => ({ ok: true, stdout: '[]' }),
   session: () => { throw new Error('no coding turn authorized'); }, helperTurn: () => { throw new Error('no helper turn authorized'); },
-  collect: async () => { while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
+  collect: async () => { writeFileSync(join(root, 'holding-' + process.pid), 'inert chore in flight'); while (!existsSync(join(root, 'release-' + process.pid))) await new Promise(r => setTimeout(r, 40)); return null; },
   nightlyTick: async () => ({ runs: [] }), readDeps: undefined, tidy: undefined,
   reapDevServers: undefined, dockerSweep: undefined, refreshCodex: undefined, refreshClaude: undefined,
   pressureTidy: undefined, pressureDocker: undefined,
@@ -212,7 +212,7 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   registerUnit(compete);
   const results = await Promise.all([concurrentCli(compete, ['start', ...flags]), concurrentCli(compete, ['start', ...flags])]);
   check('competing starts on an available root yield exactly one successful owner', results.filter(r => r.status === 0).length === 1, JSON.stringify(results));
-  check('winning parent reservation was claimed by delivered runLoop', await until(() => owner(compete)?.takeover));
+  check('winning parent reservation was claimed by delivered runLoop', await until(() => owner(compete)?.takeover && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const a = owner(compete);
   check('direct --once refuses the live winner rather than admitting new work', cli(compete, ['--once'], true).status === 2);
   const scopesText = command('systemctl', ['--user', 'list-units', '--all', '--plain', '--no-legend', `mc-runner-start-${service.rootIdentity(compete.work).hash}-*.scope`]).stdout;
@@ -235,10 +235,10 @@ await withLifecycleLock(root, () => { const active = barrier + '.active'; const 
   for (const line of otherCg.split('\n')) { const scope = line.split('/').find(x => x.startsWith('mc-runner-start-') && x.endsWith('.scope')); if (scope) scopes.add(scope); }
 
   cli(compete, ['--update', '--force']);
-  check('real UPDATE produces admitted B while A is still draining', await until(() => owner(compete)?.pid !== a.pid && owner(compete)?.takeover && alive(a.pid)));
+  check('real UPDATE produces admitted B while A is still draining', await until(() => owner(compete)?.pid !== a.pid && owner(compete)?.takeover && alive(a.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const b = owner(compete);
   cli(compete, ['--update', '--force']);
-  check('second real UPDATE produces admitted C with live A and B', await until(() => owner(compete)?.pid !== b.pid && owner(compete)?.takeover && alive(a.pid) && alive(b.pid)));
+  check('second real UPDATE produces admitted C with live A and B', await until(() => owner(compete)?.pid !== b.pid && owner(compete)?.takeover && alive(a.pid) && alive(b.pid) && existsSync(join(compete.work, `holding-${owner(compete).pid}`))));
   const c = owner(compete);
   check('A-to-B-to-C retains complete named live drainer identities with no lane file', [a,b].every(p => c.drainers.some(d => d.pid === p.pid && d.generation === p.generation)) && !readdirSync(join(compete.work, 'runner')).some(n => n.startsWith('current-')), JSON.stringify(c));
   check('all admitted successors inherited the original managed cgroup', [a,b,c].every(p => text(`/proc/${p.pid}/cgroup`) === cg), JSON.stringify([a,b,c].map(p => p.pid)));

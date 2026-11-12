@@ -1774,7 +1774,9 @@ const linuxOwner = (pid, generation) => ({ pid, generation, started: null, bootI
 
 test('Linux real runLoop UPDATE publishes and admits its successor while held work completes', async () => {
   const f = goalFixture({ a: {} }, { livePids: [4242, 9001] });
-  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: async (_root, transition) => transition() });
+  let tail = Promise.resolve();
+  const gate = (_root, transition) => { const result = tail.then(transition); tail = result.catch(() => {}); return result; };
+  Object.assign(f.deps, { platform: 'linux', identity: pid => ({ bootId: 'boot', starttime: String(pid) }), lifecycleLock: gate });
   let finish;
   const finished = new Promise(resolve => { finish = resolve; });
   let started;
@@ -1791,6 +1793,9 @@ test('Linux real runLoop UPDATE publishes and admits its successor while held wo
   };
   const running = runLoop({ deps: f.deps, awake: false });
   await sessionStarted;
+  for (let i = 0; i < 100 && !successor; i += 1) await new Promise(resolve => setImmediate(resolve));
+  if (!successor) { f.files['/w/runner/STOP'] = ''; finish(); await running; }
+  assert.ok(successor, 'real Linux update never spawned a successor');
   assert.equal(await running, 0);
   assert.equal(await successor, 0, 'real Linux handover never admitted its successor');
   assert.equal(published.pid, 9001);
