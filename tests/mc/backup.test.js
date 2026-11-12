@@ -52,7 +52,7 @@ test('backup archive: verification refuses changed payload bytes and unexpected 
   createArchive(output, { programmes: ['p'], members: [{ path: 'p/work/file', type: 'file', size: bytes.length, sha256: digest(bytes), mode: 0o600, bytes }] });
   const manifest = JSON.parse(readFileSync(join(output, 'manifest.json'), 'utf8'));
   const payload = join(output, manifest.members[0].payload);
-  writeFileSync(payload, 'tampered');
+  writeFileSync(payload, 'compromised');
   assert.throws(() => verifyArchive(output), /checksum mismatch/u);
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output);
