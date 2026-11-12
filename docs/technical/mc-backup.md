@@ -50,7 +50,9 @@ directories before its final rename, then fsyncs the parent. A persistence
 failure refuses publication rather than reporting a durable archive or restore.
 The v2 manifest records typed file, directory and symlink members. Verification
 rejects malformed, escaping, absolute, duplicate, case-colliding and
-symlink-parent paths, unsupported schema versions, and payload or bundle digest
+symlink-parent paths, unknown manifest/member fields, duplicate programme or
+bundle identities, non-content-addressed payload references, unmanifested
+storage files, unsupported schema versions, and payload or bundle digest
 mismatches. Archive output paths must be absolute and existing output is never
 overwritten. These primitives do not by themselves establish a complete
 programme inventory or a recoverable Git snapshot.

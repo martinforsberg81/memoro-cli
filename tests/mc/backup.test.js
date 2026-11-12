@@ -72,6 +72,24 @@ test('backup archive: verification refuses changed payload bytes and unexpected 
   assert.throws(() => verifyArchive(output), /unexpected symlink/u);
 });
 
+test('backup archive: verification rejects unknown manifest fields and unmanifested storage bytes', (t) => {
+  const root = fixture(t);
+  const output = join(root, 'archive');
+  createArchive(output, { programmes: ['p'], members: [] });
+  const manifestPath = join(output, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, silentlyIgnored: true })}\n`);
+  writeFileSync(join(output, 'manifest.sha256'), `${digest(readFileSync(manifestPath))}  manifest.json\n`);
+  assert.throws(() => verifyArchive(output), /invalid archive manifest fields/u,
+    'unknown schema fields must not be silently accepted as complete');
+
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(join(output, 'manifest.sha256'), `${digest(readFileSync(manifestPath))}  manifest.json\n`);
+  writeFileSync(join(output, 'unmanifested'), 'unaccounted bytes');
+  assert.throws(() => verifyArchive(output), /storage members do not match/u,
+    'extra archive bytes must not disappear behind a verified inventory');
+});
+
 test('backup archive: create and restore refuse symlinked output parents without writing through them', (t) => {
   const root = fixture(t);
   const elsewhere = join(root, 'elsewhere');

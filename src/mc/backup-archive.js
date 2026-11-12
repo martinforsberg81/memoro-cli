@@ -1,6 +1,6 @@
 /** Private, checksummed storage and validation for programme backup archives. */
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 
 export const BACKUP_SCHEMA = 'mc-programme-backup';
@@ -21,7 +21,7 @@ export function validateMemberPath(path) {
   return path;
 }
 
-function validateMembers(members) {
+function validateMembers(members, { allowBytes = false } = {}) {
   if (!Array.isArray(members)) throw new Error('archive members must be an array');
   const exact = new Set();
   const folded = new Set();
@@ -32,7 +32,13 @@ function validateMembers(members) {
     if (exact.has(path) || folded.has(key)) throw new Error(`duplicate or case-colliding archive member ${path}`);
     exact.add(path); folded.add(key); byPath.set(path, member);
     if (!['file', 'directory', 'symlink'].includes(member.type)) throw new Error(`unsupported archive member type at ${path}`);
-    if (member.type === 'file' && (!Number.isSafeInteger(member.size) || member.size < 0 || !HASH.test(member.sha256) || !Number.isInteger(member.mode))) throw new Error(`invalid file record at ${path}`);
+    const keys = member.type === 'file' ? ['path', 'type', 'size', 'sha256', 'mode', 'payload', ...(allowBytes ? ['bytes'] : [])]
+      : member.type === 'directory' ? ['path', 'type', 'mode'] : ['path', 'type', 'target'];
+    if (Object.keys(member).some((key) => !keys.includes(key)) || keys.some((key) => !['payload', 'bytes'].includes(key) && !Object.hasOwn(member, key))) {
+      throw new Error(`unexpected or missing fields in ${member.type} record at ${path}`);
+    }
+    if (member.type === 'file' && (!Number.isSafeInteger(member.size) || member.size < 0 || !HASH.test(member.sha256) || !validMode(member.mode))) throw new Error(`invalid file record at ${path}`);
+    if (member.type === 'directory' && !validMode(member.mode)) throw new Error(`invalid directory record at ${path}`);
     if (member.type === 'symlink' && (typeof member.target !== 'string' || !member.target || isAbsolute(member.target))) throw new Error(`invalid symlink record at ${path}`);
   }
   for (const member of members) {
@@ -45,6 +51,18 @@ function validateMembers(members) {
       const resolvedTarget = posix.normalize(posix.join(posix.dirname(member.path), member.target));
       if (resolvedTarget === '..' || resolvedTarget.startsWith('../') || resolvedTarget.startsWith('/')) throw new Error(`escaping symlink target at ${member.path}`);
     }
+  }
+}
+
+function validMode(mode) {
+  return Number.isInteger(mode) && mode >= 0 && mode <= 0o7777;
+}
+
+function exactKeys(value, keys, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some((key) => !keys.includes(key))
+    || keys.some((key) => !Object.hasOwn(value, key))) {
+    throw new Error(`invalid ${label} fields`);
   }
 }
 
@@ -125,7 +143,7 @@ function normalizeSystemAlias(path) {
 export function createArchive(output, { programmes, members, bundles = [], metadata = {}, now = () => new Date().toISOString() }) {
   if (!isAbsolute(output)) throw new Error('archive output must be absolute');
   if (pathExists(output)) throw new Error(`archive output already exists: ${output}`);
-  validateMembers(members);
+  validateMembers(members, { allowBytes: true });
   if (!Array.isArray(programmes) || programmes.some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))) throw new Error('invalid programme inventory');
   const requested = normalizeSystemAlias(output);
   ensureSafeDirectory(dirname(requested));
@@ -200,18 +218,48 @@ export function verifyArchive(path) {
   let manifest;
   try { manifest = JSON.parse(manifestBytes.toString('utf8')); } catch (error) { throw new Error(`invalid archive manifest: ${error.message}`); }
   if (!manifest || manifest.schema !== BACKUP_SCHEMA || manifest.version !== BACKUP_VERSION) throw new Error('unsupported archive schema or version');
+  exactKeys(manifest, ['schema', 'version', 'created_at', 'programmes', 'metadata', 'members', 'bundles'], 'archive manifest');
   if (!Array.isArray(manifest.programmes) || !Array.isArray(manifest.bundles)) throw new Error('invalid archive inventory');
+  if (manifest.programmes.some((name) => typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(name))
+    || new Set(manifest.programmes).size !== manifest.programmes.length) throw new Error('invalid or duplicate programme inventory');
+  if (!manifest.metadata || typeof manifest.metadata !== 'object' || Array.isArray(manifest.metadata)) throw new Error('invalid archive metadata');
   validateMembers(manifest.members);
+  const payloadPaths = new Set();
   for (const member of manifest.members) {
     if (member.type !== 'file') continue;
+    if (member.payload !== `payload/${member.sha256}`) throw new Error(`invalid content-addressed payload path for ${member.path}`);
+    if (payloadPaths.has(member.payload)) continue;
+    payloadPaths.add(member.payload);
     const bytes = readRegular(root, member.payload);
     if (bytes.length !== member.size || sha256(bytes) !== member.sha256) throw new Error(`payload checksum mismatch for ${member.path}`);
   }
+  const bundlePaths = new Set();
+  const bundleRepositories = new Set();
   for (const bundle of manifest.bundles) {
+    exactKeys(bundle, ['repository', 'path', 'size', 'sha256'], 'bundle record');
     validateMemberPath(bundle.path);
-    if (!bundle.path.startsWith('bundles/')) throw new Error('repository bundle outside bundle directory');
+    if (typeof bundle.repository !== 'string' || !bundle.repository || !Number.isSafeInteger(bundle.size) || bundle.size < 0 || !HASH.test(bundle.sha256)
+      || bundle.path !== `bundles/${String(manifest.bundles.indexOf(bundle)).padStart(4, '0')}-${bundle.sha256}.bundle`
+      || bundlePaths.has(bundle.path) || bundleRepositories.has(bundle.repository)) throw new Error('invalid or duplicate repository bundle record');
+    bundlePaths.add(bundle.path); bundleRepositories.add(bundle.repository);
     const bytes = readRegular(root, bundle.path);
     if (bytes.length !== bundle.size || sha256(bytes) !== bundle.sha256) throw new Error(`bundle checksum mismatch for ${bundle.repository}`);
+  }
+  const allowedFiles = new Set(['manifest.json', 'manifest.sha256', ...payloadPaths, ...bundlePaths]);
+  const actualFiles = [];
+  const visit = (directory, prefix = '') => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const absolute = join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`unexpected symlink in archive path ${rel}`);
+      if (entry.isDirectory()) visit(absolute, rel);
+      else if (entry.isFile()) actualFiles.push(rel);
+      else throw new Error(`unsupported archive storage member ${rel}`);
+    }
+  };
+  visit(root);
+  if (actualFiles.some((file) => !allowedFiles.has(file)) || [...allowedFiles].some((file) => !actualFiles.includes(file))) {
+    throw new Error('archive storage members do not match the manifest');
   }
   return { manifest, manifest_sha256: sha256(manifestBytes), bytes: manifestBytes.length };
 }
