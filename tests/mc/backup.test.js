@@ -103,7 +103,7 @@ test('backup archive: create and restore refuse symlinked output parents without
   assert.throws(() => lstatSync(join(elsewhere, 'archive')),
     { code: 'ENOENT' }, 'archive creation must not follow the output parent link');
 
-  const archive = join(root, 'archive');
+  const archive = join(elsewhere, 'archive');
   createArchive(archive, { programmes: ['p'], members });
   assert.throws(() => restoreArchive(archive, join(link, 'restored')), /symlink in archive path/u);
   assert.throws(() => lstatSync(join(elsewhere, 'restored')),
