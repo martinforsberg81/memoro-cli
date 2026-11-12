@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { admitWriter, backupStatus, beginBackup, installationId, programmeLifecycle, transitionBackup } from '../../src/mc/programme-lifecycle.js';
 import { addPr, appendEntry, GOAL_FILE, LOG_FILE, setGoalState, updateGoal } from '../../src/mc/goals.js';
 import { programsHome } from '../../src/mc/paths.js';
+import { phaseGoals } from '../../src/mc/goal-convert.js';
+import { writeFileAtomic } from '../../src/mc/atomic-write.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 function fixture(t) {
@@ -83,4 +85,27 @@ test('programme lifecycle: goal metadata, state and PR-ownership writers refuse 
   assert.throws(() => addPr({ dir: goalDir, env, repo: 'memoro-cli', pr: 1234 }), /draining/u);
   assert.equal(readFileSync(join(goalDir, GOAL_FILE), 'utf8'), goalBefore);
   assert.equal(readFileSync(join(goalDir, LOG_FILE), 'utf8'), logBefore);
+});
+
+test('programme lifecycle: runner goal conversion defers a held programme and still phases unrelated work', (t) => {
+  const { env } = fixture(t);
+  const home = programsHome(env);
+  const selected = join(home, 'selected', 'goals', 'legacy');
+  const unrelated = join(home, 'unrelated', 'goals', 'legacy');
+  mkdirSync(selected, { recursive: true });
+  mkdirSync(unrelated, { recursive: true });
+  const selectedFile = join(selected, GOAL_FILE);
+  const unrelatedFile = join(unrelated, GOAL_FILE);
+  writeFileSync(selectedFile, goalJson({ stage: 'plan' }));
+  writeFileSync(unrelatedFile, goalJson({ stage: 'plan' }));
+  const before = readFileSync(selectedFile, 'utf8');
+  beginBackup(['selected'], { env, id: '00000000-0000-4000-8000-000000000007' });
+
+  const answers = phaseGoals({ home, env, write: writeFileAtomic, now: new Date('2026-11-12T00:00:00Z'), tool: 'runner' });
+  assert.deepEqual(answers.find((answer) => answer.name === 'selected'), {
+    name: 'selected', deferred: 'programme selected is draining under transaction 00000000-0000-4000-8000-000000000007',
+  });
+  assert.equal(readFileSync(selectedFile, 'utf8'), before);
+  assert.equal(JSON.parse(readFileSync(unrelatedFile, 'utf8')).stage, 'draft');
+  assert.ok(answers.some((answer) => answer.name === 'unrelated/legacy' && answer.stage === 'draft'));
 });

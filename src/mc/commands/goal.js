@@ -890,15 +890,16 @@ function convert(args, ctx) {
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const [programme = null] = args;
   if (programme !== null && !NAME_RE.test(programme)) { stderr.write(`mc: ${programme} is not a programme name\n`); return 2; }
-  const answers = convertGoals({ home, programme, list, read, write, remove });
-  const phased = phaseGoals({ home, programme, list, read, write, now: ctx.now, tool: env.MC_TOOL || 'person' });
+  const answers = convertGoals({ home, programme, list, read, write, remove, env });
+  const phased = phaseGoals({ home, programme, list, read, write, env, now: ctx.now, tool: env.MC_TOOL || 'person' });
   if (!answers.length && !phased.length) { stdout.write('mc: nothing to convert\n'); return 0; }
   for (const answer of answers) {
     if (answer.problems) stderr.write(`mc: ${answer.name} is not converted — ${answer.problems.join('; ')}\n`);
     else stdout.write(`mc: ${answer.name} · converted, ${answer.criteria} criteria\n`);
   }
   for (const answer of phased) {
-    if (answer.problems) stderr.write(`mc: ${answer.name} is not given a phase — ${answer.problems.join('; ')}\n`);
+    if (answer.deferred) stderr.write(`mc: ${answer.name} conversion deferred — ${answer.deferred}\n`);
+    else if (answer.problems) stderr.write(`mc: ${answer.name} is not given a phase — ${answer.problems.join('; ')}\n`);
     else stdout.write(`mc: ${answer.name} · ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}, phase ${answer.phase}${answer.after.length ? ` (was after ${answer.after.join(', ')})` : ''}\n`);
   }
   return [...answers, ...phased].some((answer) => answer.problems) ? 1 : 0;

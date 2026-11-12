@@ -16,7 +16,11 @@ eligible. A writer admitted first retains a local lease until its caller
 releases it; there is no PID/timeout expiry. Transition to `held` requires that
 no selected leases remain. `released` can only follow `held`; a restart does
 not clear a hold. Goal metadata, goal state, PR ownership and goal log writes
-through `src/mc/goals.js` use this admission boundary.
+through `src/mc/goals.js` use this admission boundary. Legacy goal conversion
+and phase reconstruction also retain a programme writer lease across their
+direct file writes and renumbering. A runner conversion refused by a selected
+programme hold is deferred for that programme while unrelated programmes are
+still converted; it is not reported as a dropped or failed goal.
 
 The archive storage format is a private directory with `manifest.json`, its
 SHA-256 sidecar, content-addressed file payloads, and repository bundle slots.

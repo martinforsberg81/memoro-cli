@@ -22,6 +22,7 @@
 import { join } from 'node:path';
 
 import { appendEntry, FINISHED, GOAL_FILE, GOALS_DIR, isPhase, LEGACY_AFTER, LEGACY_STATUSES, LOG_FILE, listDirsOf, logStamp, parseLog, readStage, readTextOrNull, renderGoal, renumberPhases, validateGoal } from './goals.js';
+import { admitWriter } from './programme-lifecycle.js';
 
 /** The stage word `draft` was written as until 2026-11-07; a GOAL.json still carrying it is rewritten once. */
 const RENAMED_STAGE = 'plan';
@@ -160,10 +161,14 @@ export function goalFromMarkdown(text) {
  * problems }` with the GOAL.md left as it is. Dot-directories (`.archive/`)
  * are never listed.
  */
-export function convertGoals({ home, programme = null, list = listDirsOf, read = readTextOrNull, write, remove }) {
+export function convertGoals({ home, programme = null, list = listDirsOf, read = readTextOrNull, write, remove, env = process.env, lifecycle = admitWriter }) {
   const answers = [];
   const programmes = programme ? [programme] : list(home);
   for (const one of programmes) {
+    // Runner callers do not necessarily enter through `mc goal`; hold an
+    // admission lease across the direct GOAL.json write and GOAL.md removal.
+    const writer = lifecycle([one], { env, name: 'legacy goal conversion' });
+    try {
     const goalsDir = join(home, one, GOALS_DIR);
     for (const name of list(goalsDir)) {
       const dir = join(goalsDir, name);
@@ -176,6 +181,9 @@ export function convertGoals({ home, programme = null, list = listDirsOf, read =
       write(join(dir, GOAL_FILE), renderGoal(converted.goal));
       remove(join(dir, LEGACY_GOAL_FILE));
       answers.push({ name: ref, converted: true, criteria: converted.goal.success_criteria.length });
+    }
+    } finally {
+      writer.release();
     }
   }
   return answers;
@@ -196,7 +204,7 @@ export function convertGoals({ home, programme = null, list = listDirsOf, read =
  * validate, left as it is. Goals of other programmes are read to see whether
  * an `after` landed.
  */
-export function phaseGoals({ home, programme = null, list = listDirsOf, read = readTextOrNull, write, now = new Date(), tool = 'person' }) {
+export function phaseGoals({ home, programme = null, list = listDirsOf, read = readTextOrNull, write, now = new Date(), tool = 'person', env = process.env, lifecycle = admitWriter }) {
   const raw = new Map();
   for (const one of list(home)) {
     for (const name of list(join(home, one, GOALS_DIR))) {
@@ -227,29 +235,42 @@ export function phaseGoals({ home, programme = null, list = listDirsOf, read = r
   };
   const answers = [];
   const touched = new Set();
-  for (const [ref, { programme: one, dir, value }] of raw) {
-    if ((programme && one !== programme) || !legacy(value)) continue;
-    const after = Array.isArray(value[LEGACY_AFTER]) ? value[LEGACY_AFTER] : [];
-    const phase = phaseOf(ref);
-    const staged = value.stage === undefined ? stageOfLegacy(value.status, parseLog(read(join(dir, LOG_FILE)) ?? '')) : { stage: readStage(value.stage), status: value.status };
-    const { [LEGACY_AFTER]: _after, stage: _stage, status: _status, ...rest } = value;
-    const next = { ...rest, ...staged, phase };
-    const problems = validateGoal(next, { draft: true });
-    if (problems.length) { answers.push({ name: ref, problems }); continue; }
-    write(join(dir, GOAL_FILE), renderGoal(next));
-    const restaged = value.stage === undefined;
-    const renamed = value.stage === RENAMED_STAGE;
-    if (restaged || renamed || phase !== (isPhase(value.phase) ? value.phase : 1)) {
-      const said = [
-        ...(restaged ? [`${staged.stage} · ${staged.status}, from ${value.status}`] : []),
-        ...(renamed ? [`stage ${staged.stage}, from ${RENAMED_STAGE} (the stage was renamed 2026-11-07)`] : []),
-        after.length ? `phase ${phase}, from after ${after.join(', ')}` : `phase ${phase}`,
-      ];
-      appendEntry({ dir, entry: { at: logStamp(now), tool, model: null, ...staged, done: said.join('; '), comment: null, next: null }, read, write });
+  const selected = programme ? [programme] : list(home);
+  for (const one of selected) {
+    const candidates = [...raw].filter(([, item]) => item.programme === one && legacy(item.value));
+    if (!candidates.length) continue;
+    let writer;
+    try { writer = lifecycle([one], { env, name: 'legacy goal phasing' }); }
+    catch (error) { answers.push({ name: one, deferred: error.message }); continue; }
+    try {
+      for (const [ref, { dir, value }] of candidates) {
+        const after = Array.isArray(value[LEGACY_AFTER]) ? value[LEGACY_AFTER] : [];
+        const phase = phaseOf(ref);
+        const staged = value.stage === undefined ? stageOfLegacy(value.status, parseLog(read(join(dir, LOG_FILE)) ?? '')) : { stage: readStage(value.stage), status: value.status };
+        const { [LEGACY_AFTER]: _after, stage: _stage, status: _status, ...rest } = value;
+        const next = { ...rest, ...staged, phase };
+        const problems = validateGoal(next, { draft: true });
+        if (problems.length) { answers.push({ name: ref, problems }); continue; }
+        write(join(dir, GOAL_FILE), renderGoal(next));
+        const restaged = value.stage === undefined;
+        const renamed = value.stage === RENAMED_STAGE;
+        if (restaged || renamed || phase !== (isPhase(value.phase) ? value.phase : 1)) {
+          const said = [
+            ...(restaged ? [`${staged.stage} · ${staged.status}, from ${value.status}`] : []),
+            ...(renamed ? [`stage ${staged.stage}, from ${RENAMED_STAGE} (the stage was renamed 2026-11-07)`] : []),
+            after.length ? `phase ${phase}, from after ${after.join(', ')}` : `phase ${phase}`,
+          ];
+          appendEntry({ dir, entry: { at: logStamp(now), tool, model: null, ...staged, done: said.join('; '), comment: null, next: null }, read, write });
+        }
+        touched.add(one);
+        answers.push({ name: ref, phase, ...staged, after, from: restaged ? value.status : renamed ? RENAMED_STAGE : null });
+      }
+      if (touched.has(one)) {
+        renumberPhases({ home, programme: one, list, read, write, env, lifecycle: () => ({ release() {} }) });
+      }
+    } finally {
+      writer.release();
     }
-    touched.add(one);
-    answers.push({ name: ref, phase, ...staged, after, from: restaged ? value.status : renamed ? RENAMED_STAGE : null });
   }
-  for (const one of touched) renumberPhases({ home, programme: one, list, read, write });
   return answers;
 }
