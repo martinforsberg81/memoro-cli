@@ -615,6 +615,23 @@ describe('(P) automatic plan goal worktree release', () => {
     } finally { m.cleanup(); }
   });
 
+  it('rechecks the durable programme hold at apply and retains an earlier tidy candidate', () => {
+    const m = machine();
+    try {
+      const f = planGoalTree(m);
+      let state = 'active';
+      const lifecycleState = () => ({ state });
+      const doors = f.doors({ lifecycleState });
+      const preview = runTidy(doors);
+      assert.deepEqual(preview.list.targets.filter((item) => item.kind === 'plan-goal-worktree').map((item) => item.path), [f.path]);
+      state = 'draining';
+      const result = applyTidy({ listPath: preview.listPath, ...doors });
+      assert.deepEqual(result.applied.map((item) => [item.path, item.ok, item.why]), [[f.path, false, 're-check: programme mc is draining; its goal worktree is retained']]);
+      assert.equal(existsSync(f.path), true);
+      assert.equal(m.released.includes(f.path), false);
+    } finally { m.cleanup(); }
+  });
+
   it('limits lock-held discovery to the selected goal and rechecks changes made at lock acquisition', () => {
     const m = machine();
     try {

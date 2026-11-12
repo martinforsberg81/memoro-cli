@@ -98,6 +98,7 @@ import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
 import { currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, parseGoal, phaseOpen, programsGoals } from './goals.js';
+import { programmeLifecycle } from './programme-lifecycle.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
@@ -1872,6 +1873,15 @@ export function applyTidy({
         unlinkSync(path);
       } else if (target.kind === 'plan-goal-worktree') {
         const removeUnderLease = () => {
+          // A tidy preview can predate a backup drain. Re-read the durable
+          // programme fence inside the same final removal boundary; malformed
+          // lifecycle state is a refusal, not permission to release a tree.
+          const lifecycle = doors.lifecycleState || programmeLifecycle;
+          const lifecycleState = lifecycle(target.programme, { env }).state;
+          if (lifecycleState !== 'active') {
+            applied.push({ path, ok: false, why: `re-check: programme ${target.programme} is ${lifecycleState}; its goal worktree is retained` });
+            return;
+          }
           // Only this goal's evidence belongs under the allocation/admission
           // lock. Never inventory unrelated worktrees, caches or transcripts here.
           let running = null;
