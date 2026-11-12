@@ -39,6 +39,8 @@ export async function withLifecycleLock(root, transition, { spawnProcess = spawn
     let stderr = '';
     let acquired = false;
     let settled = false;
+    let transitionValue;
+    let transitionError = null;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -48,11 +50,11 @@ export async function withLifecycleLock(root, transition, { spawnProcess = spawn
         try {
           const value = transition();
           if (value && typeof value.then === 'function') throw new Error('Linux lifecycle transition must be synchronous');
+          transitionValue = value;
           child.stdin.end();
-          child.once('close', () => { if (!settled) { settled = true; resolve(value); } });
         } catch (error) {
+          transitionError = error;
           child.stdin.end();
-          child.once('close', () => { if (!settled) { settled = true; reject(error); } });
         }
       }
     });
@@ -62,6 +64,11 @@ export async function withLifecycleLock(root, transition, { spawnProcess = spawn
     child.once('close', (code, signal) => {
       if (settled) return;
       settled = true;
+      if (acquired) {
+        if (transitionError) reject(transitionError);
+        else resolve(transitionValue);
+        return;
+      }
       reject(new Error(`lifecycle lock acquisition failed${stderr.trim() ? `: ${stderr.trim()}` : ` (flock exit ${code ?? signal})`}`));
     });
     child.stdin.write('mc-lifecycle-ready\n');

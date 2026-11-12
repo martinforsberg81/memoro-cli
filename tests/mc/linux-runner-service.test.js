@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { bootUnit, installBootAdapter, linuxIdentityStatus, readLinuxIdentity, rootIdentity, scopeCommand, systemdQuote } from '../../src/mc/linux-runner-service.js';
+import { bootUnit, installBootAdapter, linuxIdentityStatus, readLinuxIdentity, rootIdentity, scopeCommand, systemdQuote, withLifecycleLock } from '../../src/mc/linux-runner-service.js';
 
 describe('Linux runner systemd adapter', () => {
   it('generates isolated, safely quoted, allowlisted boot units', () => {
@@ -84,5 +86,23 @@ describe('Linux runner systemd adapter', () => {
     assert.equal(linuxIdentityStatus(identity, { bootId: 'boot-b', starttime: '987654' }, true), 'stale');
     assert.equal(linuxIdentityStatus({}, identity, true), 'unknown');
     assert.equal(linuxIdentityStatus(identity, identity, false), 'dead');
+  });
+
+  it('resolves an acquired lifecycle transition when the cat helper exits cleanly', async (t) => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-linux-gate-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    let entered = 0;
+    const result = await withLifecycleLock(root, () => { entered += 1; return 'transitioned'; }, {
+      spawnProcess: () => {
+        setImmediate(() => { child.stdout.write('mc-lifecycle-ready\n'); setImmediate(() => child.emit('close', 0, null)); });
+        return child;
+      },
+    });
+    assert.equal(result, 'transitioned');
+    assert.equal(entered, 1);
   });
 });
