@@ -81,7 +81,10 @@ rejects malformed, escaping, absolute, duplicate, case-colliding and
 symlink-parent paths, unknown manifest/member fields, duplicate programme or
 bundle identities, non-content-addressed payload references, unmanifested
 storage files, unsupported schema versions, and payload or bundle digest
-mismatches. Symlink targets must use portable relative POSIX spelling: POSIX
+mismatches. Every bundle must have one matching repository recovery record;
+verification validates its local identity fields, object format, HEAD/ref
+consistency, recovery object IDs, normalized v2 index digest, stage records and
+semantic flag shape before treating the archive as verified. Symlink targets must use portable relative POSIX spelling: POSIX
 and Windows absolute or drive-relative targets, NUL and backslash separators
 are refused so an archive cannot gain a different escape meaning on a Windows
 restore host. Archive output paths must be absolute and existing output is never

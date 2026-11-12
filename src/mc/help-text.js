@@ -13,13 +13,11 @@ THE PAGE
 PLAN AND FOLLOW
   mc manager                      Person: manage work across all programmes
   mc martin                       Person: resolve goals waiting on Martin
-  mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
   mc ask [<programme>/<goal>]       Ask jev before asking Martin
   mc programs list [--json]        Every programme and its priority
   mc programs priority <p>... --set <n>  Set programme priorities
-  mc proposals [--json]           Waiting proposals by programme and total
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
 
 RUN AND LAND
@@ -43,11 +41,7 @@ SEE AND SHIP
 WORKSPACES
   mc prs [--offline] [--json]      Open pull requests and whose they are
   mc tidy [--apply]               Preview removals; --apply rechecks and removes
-  mc backup inspect --archive <path> [--json]  Verify and inspect a local archive
-  mc backup verify --archive <path> [--json]    Verify every archive payload and bundle
-  mc backup status --id <id> [--json]           Inspect a durable local hold
-  mc backup resume --id <id> [--json]           Reconcile a completed writer drain into a hold
-  mc backup release --id <id> [--json]          Explicitly release a held backup
+  mc backup inspect --archive <path>  Local programme archive
 
 IN FULL
 WHO USES THE VERBS
