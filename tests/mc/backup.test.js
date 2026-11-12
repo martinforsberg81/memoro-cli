@@ -108,6 +108,8 @@ test('backup archive: create and restore refuse symlinked output parents without
   assert.throws(() => restoreArchive(archive, join(link, 'restored')), /symlink in archive path/u);
   assert.throws(() => lstatSync(join(elsewhere, 'restored')),
     { code: 'ENOENT' }, 'restore must not follow the destination parent link');
+  assert.throws(() => verifyArchive(join(link, 'archive')), /symlink in archive path/u,
+    'verification must not open archive members through a caller-supplied symlink parent');
 });
 
 test('backup restore: verifies then atomically publishes byte- and mode-preserving inactive content; refuses unsupported bundles', async (t) => {

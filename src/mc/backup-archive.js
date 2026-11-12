@@ -207,7 +207,11 @@ function readRegular(root, rel) {
 
 /** Validate schema, checksums, member tree and every payload without following links. */
 export function verifyArchive(path) {
-  const requested = resolve(path);
+  const requested = normalizeSystemAlias(path);
+  // Do not canonicalize away an archive path that traverses a caller-supplied
+  // symlink. Archive verification opens many members after this check, so
+  // validating only the resolved target would silently accept that alias.
+  rejectSymlinkAncestors(requested);
   const rootStat = lstatSync(requested);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('archive must be a real directory');
   const root = realpathSync(requested);

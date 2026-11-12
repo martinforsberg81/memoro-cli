@@ -63,7 +63,9 @@ symlink-parent paths, unknown manifest/member fields, duplicate programme or
 bundle identities, non-content-addressed payload references, unmanifested
 storage files, unsupported schema versions, and payload or bundle digest
 mismatches. Archive output paths must be absolute and existing output is never
-overwritten. These primitives do not by themselves establish a complete
+overwritten. Verification also refuses caller-supplied archive paths that
+traverse symlinked parents instead of canonicalizing the alias and then
+opening its payloads. These primitives do not by themselves establish a complete
 programme inventory or a recoverable Git snapshot.
 
 The currently routed command surface is:
