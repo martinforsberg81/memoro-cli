@@ -111,7 +111,7 @@ test('backup archive: malformed Git identity and index semantics cannot pass ver
 
 test('backup archive: rejects unsafe, duplicate, case-folding and symlink-parent member trees', (t) => {
   const root = fixture(t);
-  for (const name of ['/absolute', '../escape', 'a/../b', 'a\\b', 'a//b']) assert.throws(() => validateMemberPath(name), /invalid archive member path/u);
+  for (const name of ['/absolute', 'C:/absolute', 'C:drive-relative', '../escape', 'a/../b', 'a\\b', 'a//b']) assert.throws(() => validateMemberPath(name), /invalid archive member path/u);
   const bytes = Buffer.from('x');
   const member = (path) => ({ path, type: 'file', size: 1, sha256: digest(bytes), mode: 0o600, bytes });
   assert.throws(() => createArchive(join(root, 'duplicate'), { programmes: ['p'], members: [member('p/a'), member('p/a')] }), /duplicate or case-colliding/u);

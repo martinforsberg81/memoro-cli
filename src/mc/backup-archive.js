@@ -11,7 +11,11 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 /** Portable archive names are POSIX-relative; paths cannot alias on common filesystems. */
 export function validateMemberPath(path) {
-  if (typeof path !== 'string' || !path || path.includes('\\') || path.includes('\0') || isAbsolute(path)) {
+  if (typeof path !== 'string' || !path || path.includes('\\') || path.includes('\0') || isAbsolute(path)
+    // Archive paths are POSIX-relative even on a POSIX restore host. Reject
+    // Windows drive-qualified paths here rather than relying on the host's
+    // path.isAbsolute implementation, which would accept `C:/...` as relative.
+    || win32.isAbsolute(path) || /^[a-z]:/iu.test(path)) {
     throw new Error(`invalid archive member path ${JSON.stringify(path)}`);
   }
   const parts = path.split('/');
