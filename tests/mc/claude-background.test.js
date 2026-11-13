@@ -10,7 +10,7 @@ import { SESSION_IDENTITY_ENV, sessionIdentity } from '../../src/mc/session-role
 import { registerForeground, sweep } from '../../src/mc/foreground.js';
 import { openGatewayGrant, GATEWAY_SESSION_MS, GATEWAY_SESSION_REQUEST_LIMIT } from '../../src/mc/billing-gateway-session.js';
 import { attachClaudeBackground, backgroundName, backgroundSettings, deskSessions, holdClaudeBackground,
-  lockDesk, prepareClaudeBackground, readAgents, startDetachedBackground } from '../../src/mc/claude-background.js';
+  lockDesk, notifyBackgroundClient, prepareClaudeBackground, readAgents, startDetachedBackground } from '../../src/mc/claude-background.js';
 
 const env = { HOME: '/test', PATH: '/usr/bin', MC_WORK_ROOT: '/test/mc', MC_HOME: '/test/home', SSH_CONNECTION: 'ssh' };
 const base = { areaRoot: '/test/mc/manager', worktree: { path: '/test/mc/manager' }, env,
@@ -389,4 +389,20 @@ test('the detached holder inherits the desk lock pipe so client death cannot adm
   h.deps.releaseLock = () => { held = false; };
   h.deps.report = result => { assert.equal(result.session.pid, row.pid); assert.equal(held, false, 'registration permits the next selector, not provider death'); };
   await holdClaudeBackground(h.request, h.deps);
+});
+
+
+test('losing the client during startup reports through an error-handled IPC send and cannot abandon holder cleanup', async () => {
+  const f = holderFixture();
+  let notified = false;
+  f.deps.report = result => notifyBackgroundClient(result, { connected: () => true, send: (message, callback) => {
+    assert.equal(message.session.pid, row.pid);
+    assert.equal(typeof callback, 'function', 'the IPC error must have a callback, not an unhandled process error');
+    notified = true;
+    callback(Object.assign(new Error('client left'), { code: 'ERR_IPC_CHANNEL_CLOSED' }));
+  } });
+  assert.equal((await holdClaudeBackground(f.request, f.deps)).ok, true);
+  assert.equal(notified, true);
+  assert.deepEqual(f.removed, [f.request.directory]);
+  notifyBackgroundClient({}, { connected: () => false, send: () => assert.fail('already disconnected') });
 });

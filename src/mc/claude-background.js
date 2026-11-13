@@ -291,6 +291,15 @@ export async function holdClaudeBackground(request, {
   }
 }
 
+/** A vanished attaching client cannot take the trusted holder down with an IPC error. */
+export function notifyBackgroundClient(result, {
+  connected = () => process.connected, send = (message, callback) => process.send(message, callback),
+} = {}) {
+  if (!connected()) return;
+  try { send(result, () => {}); }
+  catch (error) { if (error.code !== 'ERR_IPC_CHANNEL_CLOSED') throw error; }
+}
+
 if (process.argv[1] === WORKER) {
   const path = process.argv[2];
   let reported = false;
@@ -298,7 +307,7 @@ if (process.argv[1] === WORKER) {
   const releaseLock = () => {
     if (ownsLockPipe) { ownsLockPipe = false; fs.closeSync(4); }
   };
-  const report = result => { reported = true; if (process.connected) process.send(result); };
+  const report = result => { reported = true; notifyBackgroundClient(result); };
   try {
     const request = JSON.parse(fs.readFileSync(path, 'utf8'));
     fs.unlinkSync(path);
