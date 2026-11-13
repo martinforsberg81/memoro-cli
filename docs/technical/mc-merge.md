@@ -666,10 +666,10 @@ failed merges, and it never starts a mend. Instead the round reports
 (`requestMainRepair` in [`src/mc/main-repair.js`](../../src/mc/main-repair.js)):
 an ordinary goal in the `main-health` programme, `build · ready` with its
 criteria, which the runner takes in a lane like any other goal — its own
-worktree from origin/main, build, review and the measured round. An
-unfinished repair that already names one of the files is named and not
-written again; a red that returns after its repair finished gets a new,
-dated goal. A red test green at the base, absent there, or a base run that
+worktree from origin/main, build, review and the measured round. A file an
+unfinished repair already names is not written again; the round's other red
+files get a repair of their own. A red that returns after its repair finished
+gets a new, dated goal. A red test green at the base, absent there, or a base run that
 could not be made or did not finish is the change's red, as before. Touched
 files are never run at the base. Measured: on 2026-11-09/10 memoro#15168 landed
 through the old direct goal landing (closed by #1449) and broke

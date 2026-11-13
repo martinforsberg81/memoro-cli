@@ -800,7 +800,8 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   for (const found of mainRepairsOf(report)) {
     const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files, tests: found.tests });
     const where = found.files.join(', ');
-    if (asked.created) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written`);
+    if (asked.created && asked.open) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written; already under way: ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
+    else if (asked.created) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written`);
     else if (asked.open) say(`${label}: main is red in ${where} — its repair is under way in ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
     else say(`${label}: main is red in ${where} — no repair goal written: ${asked.skipped}`);
   }

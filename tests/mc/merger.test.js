@@ -1575,9 +1575,9 @@ describe('main\'s red found by the round asks for a repair goal', () => {
   });
 
   it('a repair under way is named, not written again', async () => {
-    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ open: ['memoro-cli-a-1234abcd'] }) });
+    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ created: 'memoro-cli-b-5678abcd', open: ['memoro-cli-a-1234abcd'] }) });
     await landJob(JOB, m.deps);
-    assert.ok(m.said.some((line) => /its repair is under way in main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /repair goal main-health\/memoro-cli-b-5678abcd written; already under way: main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
   });
 });
 
@@ -1605,6 +1605,35 @@ describe('requestMainRepair — the repair goal', () => {
     assert.deepEqual(requestMainRepair({ ...request, pr: 15178, home: programs, now }), { open: [first.created] });
     const other = requestMainRepair({ ...request, files: ['tests/other.test.js'], tests: [], home: programs, now });
     assert.ok(other.created && other.created !== first.created);
+  });
+
+  it('writes a repair for uncovered files while naming the open repair', () => {
+    const programs = home();
+    const fileA = 'tests/assistant/avatar-motion-qa.test.js';
+    const fileB = 'tests/assistant/avatar-account-repository.test.js';
+    const first = requestMainRepair({ ...request, files: [fileA], tests: [{ file: fileA, name: 'existing repair › fails', error: ['old error'] }], home: programs, now });
+    assert.ok(first.created, JSON.stringify(first));
+
+    const mixed = requestMainRepair({
+      ...request, files: [fileA, fileB],
+      tests: [
+        { file: fileA, name: 'existing repair › fails', error: ['old error'] },
+        { file: fileB, name: 'uncovered repair › fails', error: ['new error'] },
+      ],
+      home: programs, now,
+    });
+
+    assert.deepEqual(mixed.open, [first.created]);
+    assert.ok(mixed.created, JSON.stringify(mixed));
+    const dir = join(programs, MAIN_HEALTH_PROGRAMME, 'goals', mixed.created);
+    const goal = parseGoal(readFileSync(join(dir, 'GOAL.json'), 'utf8'));
+    const contract = goal.contract.join('\n');
+    const criteria = goal.success_criteria.map(({ criterion, check }) => `${criterion}\n${check}`).join('\n');
+    assert.ok(contract.includes(fileB), contract);
+    assert.ok(criteria.includes(fileB), criteria);
+    assert.ok(!contract.includes(fileA), contract);
+    assert.ok(!criteria.includes(fileA), criteria);
+    assert.match(contract, /First classify the red from its error/u);
   });
 
   it('a red that returns after its repair finished gets a new, dated goal', () => {
