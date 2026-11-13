@@ -4,8 +4,8 @@
  * This is the whole of what mc adds to running the tool by hand: it knows which
  * directory the work lives in. The conversation is the tool's, kept in the
  * tool's own store, indexed by that directory — so mc looks it up rather than
- * remembering it. Nothing is written here. There is no runtime host, no
- * journal, no generation: the tool inherits this terminal and mc waits.
+ * remembering it. The tool inherits this terminal and mc waits. Linux SSH
+ * entrances first move that same opener into a persistent tmux terminal.
  *
  * Conversation selection (`pick`):
  *   (nothing)   the most recent conversation here, or a new one if there is none
@@ -73,10 +73,24 @@ export async function openInWorkArea({
   spawn = spawnSync,
   register = registerForeground,
   stderr = process.stderr,
+  platform = process.platform,
+  persistentTerminal = true,
+  terminal = null,
+  onProvider = () => {},
 } = {}) {
   // Every session belongs to a programme or a desk (session-owner.js); one mc
   // would start for nobody is refused before anything is looked up or spawned.
   if (!ownerOf({ verb, area: areaName, programme })) return { ok: false, reason: 'no owner', hint: OWNERLESS_HINT };
+  if (persistentTerminal && platform === 'linux') {
+    const { needsPersistentTerminal, openPersistentTerminal } = await import('./interactive-terminal.js');
+    if (needsPersistentTerminal({ env, platform, isInteractive, verb })) {
+      return (terminal || openPersistentTerminal)({
+        areaRoot, conversationRoots, worktree, tool, pick, resumeTool, model, overlay, prompt,
+        resumePrompt, defaultModel, defaultModelTool, verb, areaName, roleName, programme,
+        roleSource, cache, env, stderr,
+      });
+    }
+  }
   const before = [...new Map(conversationRoots.flatMap(root => listConversations(root, env))
     .sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0))
     .map(item => [`${item.tool}:${item.id}`, item])).values()];
@@ -139,6 +153,7 @@ export async function openInWorkArea({
   const launch = resolveLaunch(wanted);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
   const toolId = launch.id;
+  onProvider(launch.shortName || (toolId === 'claude-code' ? 'claude' : toolId));
   if (!chosen && pick !== 'new') {
     for (const item of before.filter((candidate) => candidate.tool === toolId)) {
       if (!guarded) { chosen = item; break; }

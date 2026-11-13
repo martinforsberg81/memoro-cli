@@ -164,7 +164,7 @@ export async function run(argv, deps = {}) {
  * The bare verb: the foreground conversation in `~/mc/helper/` wearing the
  * `helper` role — the one already there, resumed with no intro, or a new one
  * when there is none or `--new` says so (Martin, 2026-09-13). Same shape as
- * `mc brief` — the terminal's session, never tmux — and its own directory
+ * `mc brief` — with the shared SSH transport when applicable — and its own directory
  * rather than `~/mc/intake/`, which is the intake turn's material and none of
  * its business.
  *
