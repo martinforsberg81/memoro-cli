@@ -267,13 +267,9 @@ export const SHIPPED = Object.freeze({
     // main, in a pull request that edits the test itself, and when nothing else
     // was selected.
     main_only: Object.freeze([
-      'tests/architecture/card-corpus.test.js',
-      'tests/architecture/card-html-digests.test.js',
       'tests/architecture/class-coverage.test.js',
-      'tests/architecture/core-bundle-jsc.test.js',
       'tests/architecture/core-bundle-size.test.js',
       'tests/architecture/css-dead-rules.test.js',
-      'tests/architecture/enacted-affordance.test.js',
       'tests/architecture/outside-ui-reach.test.js',
       'tests/architecture/reduce-first-coverage.test.js',
       'tests/scripts/sql-budget-delta.test.mjs',
