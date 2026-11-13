@@ -37,11 +37,12 @@
  * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
  * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
  * turn ends. `runTidyDaily` and `runDepsDaily` are `mc tidy --apply` and
- * `mc deps`, once a day each. The nightly's tick is the last a chore pass
- * does: `runNightly`, a full run of every repository mc knows when a day has
- * passed since the last one, gated by its own row in runs.tsv. `mc run stop`
- * stops it, between repositories as well as between passes; `--once` runs no
- * chores and so no tick.
+ * `mc deps`, once a day each. The last a chore pass does is `runNightly`: it
+ * starts, without waiting for it, a full run of each repository whose
+ * origin/main moved since its last measured full run and that has none in
+ * flight (Martin, 2026-11-13). `mc run stop` starts no further run and ends the
+ * runs in flight before the runner leaves; `--once` runs no chores and so no
+ * full run.
  *
  * The runner is worked from another terminal by files under `~/mc/runner/`,
  * all read between two picks and never mid-session: `STOP` ends it, `UPDATE`
@@ -566,9 +567,9 @@ export function realDeps(env = process.env) {
     // rather than replaced.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
-    // The nightly's tick — every repository's whole suite, in order — with its
-    // narration in `~/.memoro/mc/nightly/nightly.log`. A dependency so a test
-    // can drive the chore without a suite behind it.
+    // The full runs' pass — each due repository's whole suite started beside
+    // the merge lane — with its narration in `~/.memoro/mc/nightly/nightly.log`.
+    // A dependency so a test can drive the chore without a suite behind it.
     nightlyTick: (options) => loggedTick({ env, ...options }),
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
@@ -1125,54 +1126,72 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The nightly's tick: a full run of every repository mc knows, once a day.
-   * Returns 'ran', 'stopped', 'failed' or null when it was not due.
+   * The full runs (Martin, 2026-11-13): each repository's whole suite on its
+   * main, whenever main moved since its last measured full run, beside the
+   * sessions and the merge rounds. Returns 'ran' when a run was started,
+   * 'stopped', 'failed', or null when none was due.
    *
-   * A chore beside the helper's and shaped like it: `nightlyDue` is the whole
-   * gate and the row in runs.tsv is the whole state, written whether the tick
-   * measured, skipped or threw, so a tick that failed is not retried ten
-   * minutes later. The difference is the cadence — a day since the last tick,
-   * not an hour of the clock — and the length: a tick is about twenty minutes,
-   * which is why it is the last thing a chore pass does.
+   * Not awaited. A full run takes minutes and the chore pass must not wait
+   * behind it, so a pass only starts the runs that are due (`fullRunTick`) and
+   * keeps them in `fullRuns`, which is what makes it one run at a time per
+   * repository across passes; a run that ends starts the next itself when main
+   * moved meanwhile. A row goes in runs.tsv only for a pass that started one,
+   * so an idle pass every few minutes leaves no trace. `mc run stop` and UPDATE
+   * are asked before each start, and the chore loop ends the runs in flight
+   * (`settleFullRuns`) before the runner leaves, so no suite outlives it.
    *
    * It is a meter. It commits nothing, pushes nothing, writes nothing inside a
-   * repository, and a gate round a lane holds ends the tick rather than being
-   * waited for (`nightlyTick`). What it adds to the runner is that `mc run stop`
-   * reaches it: STOP (and UPDATE, which drains the runner) are asked before
-   * each repository, so a tick under way starts no further suite.
+   * repository, and takes no lock a merge round waits for.
    */
+  const fullRuns = new Map();
+  const fullRunsAbort = new AbortController();
   async function runNightly() {
-    const due = nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
-    if (!due.due) return null;
+    if (stopRequested() || updateRequested()) return null;
     const t0 = deps.now().getTime();
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
-    say(`nightly: a full run of every repository${due.why ? ` — ${due.why}` : ''}`);
-    let outcome = 'ran';
+    let outcome = null;
     let note = '';
     try {
       const tick = await deps.nightlyTick({
-        say: (message) => say(`nightly: ${message}`),
+        say: (message) => say(`full run: ${message}`),
         shouldStop: () => stopRequested() || updateRequested(),
+        running: fullRuns,
+        signal: fullRunsAbort.signal,
       });
-      const runs = tick?.runs || [];
-      const unchanged = runs.filter((run) => run.stopped_at === 'unchanged').length;
-      note = `success,${runs.length - unchanged}-measured,${unchanged}-unchanged`
-        + `${tick?.skipped ? ',skipped-behind-a-round' : ''}${tick?.stopped ? ',stopped' : ''}`;
-      if (tick?.stopped) {
-        outcome = 'stopped';
-        say(`nightly: stopped — ${runs.length} repositor${runs.length === 1 ? 'y' : 'ies'} read, the rest wait for the next tick`);
+      const started = tick?.started || [];
+      if (started.length) {
+        outcome = 'ran';
+        note = `started,${started.map((one) => one.repo).join('+')}${tick?.running?.length ? `,running-${tick.running.join('+')}` : ''}`;
       }
+      if (tick?.stopped) outcome = 'stopped';
+      // A run writes its own failure; this is only what would otherwise go unseen.
+      tick?.done?.catch?.((error) => say(`full run: a run failed outside its round — ${error?.message || error}`));
     } catch (error) {
       const reason = error?.message || String(error);
-      say(`nightly: the tick failed — ${reason}. Not retried until the next is due.`);
+      say(`full run: the pass failed — ${reason}. Asked again on the next chore pass.`);
       note = `tick-failed,${reason}`;
       outcome = 'failed';
     }
-    logRun({
-      ts: stamp(), name: NIGHTLY_NAME, kind: NIGHTLY_KIND, exit: outcome === 'failed' ? 1 : 0, seconds: took(), pr: '-',
-      ...dashes, note,
-    });
+    if (outcome) {
+      logRun({
+        ts: stamp(), name: NIGHTLY_NAME, kind: NIGHTLY_KIND, exit: outcome === 'failed' ? 1 : 0, seconds: took(), pr: '-',
+        ...dashes, note,
+      });
+    }
     return outcome;
+  }
+
+  /**
+   * The full runs in flight, ended: aborted through their round's signal and
+   * waited for, so the suites they started are gone before the runner is.
+   * A run cut short this way is written `stopped at gone` and is due again at
+   * once for the runner that comes next (`fullRunDue`).
+   */
+  async function settleFullRuns() {
+    if (!fullRuns.size) return;
+    say(`full run: ending ${fullRuns.size} run${fullRuns.size === 1 ? '' : 's'} in flight before the runner leaves`);
+    fullRunsAbort.abort(new Error('the runner is leaving'));
+    await Promise.allSettled([...fullRuns.values()]);
   }
 
   /**
@@ -2230,9 +2249,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await reapOrphans();
     await sweepDockerChore();
     await runTidyDaily();
-    // Last: the nightly is the long one, and nothing above should wait twenty
-    // minutes behind it. The deps reading goes first: a minute a repository,
-    // and not to be left a day behind by a tick that a STOP ends.
+    // Last: the full runs it starts are the long work, and are not waited
+    // for. The deps reading goes first: a minute a repository.
     await runDepsDaily();
     await runNightly();
   }
@@ -2386,7 +2404,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
@@ -2761,9 +2779,10 @@ export async function runLoop({
       // handover it is the ticker while the lanes sit in their sessions.
       const choreLoop = async () => {
         for (;;) {
-          if (runner.stopRequested()) { runner.say('chores: STOP — exiting'); return {}; }
+          if (runner.stopRequested()) { await runner.settleFullRuns?.(); runner.say('chores: STOP — exiting'); return {}; }
           if (runner.updateRequested()) {
             if (!(await update())) continue;
+            await runner.settleFullRuns?.();
             while (ownInFlight().length > 0 && !runner.stopRequested()) {
               drainTick();
               await deps.sleep(UPDATE_POLL_MS);

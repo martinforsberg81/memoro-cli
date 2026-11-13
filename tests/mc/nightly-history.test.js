@@ -17,8 +17,7 @@ import { describe, it } from 'node:test';
 import {
   HISTORY_LIMIT, nightlyHistoryPath, nightlyReading, readNightlyHistory, recordNightlyRun,
 } from '../../src/mc/nightly-history.js';
-import { nightlyTick } from '../../src/mc/nightly-loop.js';
-import { gateLockPath } from '../../src/mc/gate-lock.js';
+import { fullRunTick } from '../../src/mc/nightly-loop.js';
 
 const REPO = '/repos/memoro';
 const home = () => mkdtempSync(join(tmpdir(), 'mc-nightly-history-'));
@@ -252,11 +251,14 @@ describe('the store', () => {
   });
 });
 
-describe('the tick writes it', () => {
+describe('the full run writes it', () => {
+  // A pass with no remote to ask and no repair to write, waited for to the end.
+  const pass = async (options) => (await fullRunTick({ head: () => null, repair: () => ({ skipped: 'fixture' }), ...options })).done;
+
   it('one entry per repository measured, with the names and the commit', async () => {
     const root = home();
     try {
-      await nightlyTick({
+      await pass({
         root,
         repos: [{ name: 'memoro', path: REPO }],
         round: () => ({
@@ -274,20 +276,17 @@ describe('the tick writes it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('and one for the tick that skipped, so a week behind merge rounds is visible', async () => {
+  it('and one for a run that measured nothing, while the reading it could not replace still stands', async () => {
     const root = home();
     try {
       store(root, measured(0, ['data-bus event names']));
-      writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({
-        pid: process.pid, repo: 'memoro', pr: 11082, since: day(1),
-      }));
-      await nightlyTick({ root, repos: [{ name: 'memoro', path: REPO }], round: () => { throw new Error('the tick ran a round'); } });
+      await pass({ root, repos: [{ name: 'memoro', path: REPO }], round: () => { throw new Error('git fetch failed'); } });
 
       const reading = nightlyReading(REPO, { root });
       assert.equal(reading.runs, 2);
       assert.equal(reading.last.outcome, 'incomplete');
-      assert.equal(reading.last.stopped_at, 'busy');
-      assert.match(reading.last.reason, /another gate round is running/u);
+      assert.equal(reading.last.stopped_at, 'threw');
+      assert.match(reading.last.reason, /git fetch failed/u);
       // And the reading it could not replace still stands, still dated.
       assert.equal(reading.measured.at, day(0));
       assert.equal(reading.red[0].since, day(0));

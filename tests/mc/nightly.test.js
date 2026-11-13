@@ -1,16 +1,17 @@
 /**
  * The full run nobody asks for.
  *
- * The guarantees under test: a tick measures every repository mc knows and
- * writes down what it found — when it started, what it cost, which commit of
- * the branch it measured, and how it came out; a tick that finds `gate-lock`
- * held by a live round records a skip naming that round and does not wait for
- * it; a round that could not measure is never mistaken for one that found
- * nothing; and a STOP that appears between two repositories means the second
- * one's suite is never started.
+ * The guarantees under test: a full run measures each repository mc knows
+ * and writes down what it found — when it started, what it cost, which commit
+ * of the branch it measured, and how it came out; it runs whenever main moved
+ * since the last measurement (Martin, 2026-11-13), one at a time per
+ * repository, and starts the next only if main moved meanwhile; a merge
+ * round's lock does not hold it back; a round that could not measure is never
+ * mistaken for one that found nothing; the reds it finds go to the repair of
+ * main; and a STOP starts no further run.
  *
  * And where it is reached from: `mc test nightly status`, the verb whose round
- * it runs — the only word it has, since the tick is a chore of the runner
+ * it runs — the only word it has, since the full run is a chore of the runner
  * (`tests/mc/run.test.js`) and nothing here starts a process. `mc repo nightly`
  * is the old spelling, and it answers with the new one rather than working — a
  * legacy verb that still works is a verb nobody retires.
@@ -27,7 +28,7 @@ import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
-import { loggedTick, nightlyTick } from '../../src/mc/nightly-loop.js';
+import { fullRunTick, loggedTick, scheduledRound } from '../../src/mc/nightly-loop.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -55,25 +56,39 @@ function report({
   };
 }
 
-describe('a tick', () => {
+const SHA = 'a'.repeat(40);
+const OTHER = 'b'.repeat(40);
+
+/** A pass over `repos` that waits for every run it started, with what it asked and said. */
+async function pass(root, extra = {}) {
+  const asked = [];
+  const said = [];
+  const repaired = [];
+  const outcome = await fullRunTick({
+    root, repos: REPOS, head: () => null, say: (message) => said.push(message),
+    repair: (request) => { repaired.push(request); return { created: 'repair-goal' }; },
+    round: ({ repoPath }) => { asked.push(repoPath); return report(); },
+    ...extra,
+  });
+  const runs = await outcome.done;
+  return { outcome, runs, asked, said, repaired };
+}
+
+describe('a full run', () => {
   it('measures every repository mc knows and writes down what it found', async () => {
     const root = home();
     try {
-      const said = [];
       const asked = [];
-      const outcome = await nightlyTick({
-        root,
-        repos: REPOS,
-        say: (message) => said.push(message),
+      const { outcome, runs, said } = await pass(root, {
         round: ({ repoPath }) => {
           asked.push(repoPath);
           return report({ red: repoPath.endsWith('memoro') ? ['data-bus event names'] : [], verdict: repoPath.endsWith('memoro') ? 'red' : 'green' });
         },
       });
-
       assert.deepEqual(asked, ['/repos/memoro', '/repos/memoro-cli']);
-      assert.equal(outcome.runs.length, 2);
-      assert.equal(outcome.skipped, null);
+
+      assert.deepEqual(outcome.started.map((one) => one.repo), ['memoro', 'memoro-cli']);
+      assert.equal(runs.length, 2);
 
       // The four facts the log has to carry, on one line each.
       const line = said.find((message) => message.startsWith('memoro  red'));
@@ -84,67 +99,29 @@ describe('a tick', () => {
       assert.match(line, /1 red: data-bus event names/u);
 
       // And the round's own facts, for whoever asks "since when" next.
-      assert.equal(outcome.runs[0].commit, 'a'.repeat(40));
-      assert.deepEqual(outcome.runs[0].red, ['data-bus event names']);
-      assert.equal(outcome.runs[1].verdict, 'green');
+      const memoro = runs.find((run) => run.repo === 'memoro');
+      assert.equal(memoro.commit, SHA);
+      assert.deepEqual(memoro.red, ['data-bus event names']);
+      assert.equal(runs.find((run) => run.repo === 'memoro-cli').verdict, 'green');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a gate round already running ends the tick, named, and nothing waits for it', async () => {
+  // Martin, 2026-11-13: a full run does not share or wait for the merge lane.
+  it('a merge round holding the repository\'s lane does not hold the full run back', async () => {
     const root = home();
     try {
-      // A live pid, because a dead one is litter rather than a holder — the
-      // whole of `gate-lock`'s reaping.
       writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({
         pid: process.pid, repo: 'memoro', pr: 11082, since: '2026-09-03T02:00:00.000Z',
       }));
-      const said = [];
-      let ran = 0;
-      const started = Date.now();
-      const outcome = await nightlyTick({
-        root,
-        repos: REPOS,
-        say: (message) => said.push(message),
-        round: () => { ran += 1; return report(); },
-      });
-
-      assert.equal(ran, 0, 'the tick ran a round while another round held the lock');
-      assert.deepEqual(outcome.runs, []);
-      assert.equal(outcome.skipped.pid, process.pid);
-      assert.match(outcome.skipped.reason, /pid \d+/u);
-      assert.match(outcome.skipped.reason, /memoro #11082/u);
-      assert.match(said.join('\n'), /memoro {2}skipped {2}another gate round is running/u);
-      // Not waited for: no retry, no backoff, no queue. The tick is over.
-      assert.ok(Date.now() - started < 2000, 'the tick waited for the lock');
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it('a round that finds the lock taken between the look and the ask is a skip too', async () => {
-    const root = home();
-    try {
-      const said = [];
-      const outcome = await nightlyTick({
-        root,
-        repos: REPOS,
-        say: (message) => said.push(message),
-        // What `runGate` returns when `takeGateLock` refuses it.
-        round: () => report({ verdict: 'stopped', stopped_at: 'busy', reason: 'another gate round is running on this machine (pid 4242, memoro #11082) — one at a time' }),
-      });
-      assert.deepEqual(outcome.runs, [], 'a busy round was counted as a measurement');
-      assert.ok(outcome.skipped);
-      assert.match(outcome.skipped.reason, /one at a time/u);
-      assert.match(said.join('\n'), /skipped/u);
+      const { asked } = await pass(root);
+      assert.deepEqual(asked, ['/repos/memoro', '/repos/memoro-cli']);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('a round that could not measure is never a round that found nothing', async () => {
     const root = home();
     try {
-      const said = [];
-      const outcome = await nightlyTick({
-        root,
-        repos: REPOS,
-        say: (message) => said.push(message),
+      const { runs, said } = await pass(root, {
         round: ({ repoPath }) => {
           if (repoPath.endsWith('/memoro')) throw new Error('git fetch failed');
           return report({ verdict: 'stopped', stopped_at: 'declaration', reason: 'memoro-cli declares select and no suite' });
@@ -153,65 +130,62 @@ describe('a tick', () => {
 
       // Both are runs, and neither is green. A day of these reported as a
       // green streak is the false green this project exists to remove.
-      assert.equal(outcome.runs.length, 2);
-      assert.deepEqual(outcome.runs.map((run) => run.verdict), ['stopped', 'stopped']);
-      assert.equal(outcome.runs[0].stopped_at, 'threw');
-      assert.equal(outcome.runs[0].red, null, 'a run that never ran must not carry an empty red set');
-      assert.equal(outcome.runs[1].stopped_at, 'declaration');
+      const by = Object.fromEntries(runs.map((run) => [run.repo, run]));
+      assert.deepEqual(runs.map((run) => run.verdict), ['stopped', 'stopped']);
+      assert.equal(by.memoro.stopped_at, 'threw');
+      assert.equal(by.memoro.red, null, 'a run that never ran must not carry an empty red set');
+      assert.equal(by['memoro-cli'].stopped_at, 'declaration');
       assert.match(said.join('\n'), /stopped at declaration/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  it('the reds it finds on main are handed to the repair of main', async () => {
+    const root = home();
+    try {
+      const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
+      red.candidate.red_tests = [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }];
+      const { repaired, said } = await pass(root, { repos: [REPOS[1]], round: () => red });
+      assert.deepEqual(repaired, [{
+        repo: 'memoro-cli', base: SHA, files: ['tests/mc/names.test.js'],
+        tests: [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }],
+      }]);
+      assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — repair goal main-health\/repair-goal written/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+    // A green run asks for nothing.
+    const other = home();
+    try {
+      assert.deepEqual((await pass(other, { repos: [REPOS[1]] })).repaired, []);
+    } finally { rmSync(other, { recursive: true, force: true }); }
+  });
 });
 
-describe('a tick, when the branch has not moved', () => {
-  const SHA = 'a'.repeat(40);
-  const OTHER = 'b'.repeat(40);
-  const seed = (root, commit = SHA) => recordNightlyRun({
+describe('a full run, and whether main moved', () => {
+  const seed = (root, commit = SHA, extra = {}) => recordNightlyRun({
     repo: 'memoro', path: '/repos/memoro', started_at: '2026-09-02T02:00:00.000Z', duration_ms: 300_000,
-    commit, verdict: 'red', stopped_at: 'red', reason: null, red: ['data-bus event names'], tests: 17_982,
+    commit, verdict: 'red', stopped_at: 'red', reason: null, red: ['data-bus event names'], tests: 17_982, ...extra,
   }, { root });
-  const tick = (root, head, extra = {}) => {
-    const asked = [];
-    const said = [];
-    return nightlyTick({
-      root, repos: [REPOS[0]], head, say: (message) => said.push(message),
-      round: ({ repoPath }) => { asked.push(repoPath); return report({ red: ['data-bus event names'], verdict: 'red', commit: OTHER }); },
-      ...extra,
-    }).then((outcome) => ({ outcome, asked, said }));
-  };
 
-  it('the head the last measurement covered is not measured, and is written down as measuring nothing', async () => {
+  it('the head the last measurement covered is not measured again, and nothing is written', async () => {
     const root = home();
     try {
       seed(root);
-      const { outcome, asked, said } = await tick(root, () => SHA);
+      const { outcome, asked } = await pass(root, { repos: [REPOS[0]], head: () => SHA });
       assert.deepEqual(asked, []);
-      assert.equal(outcome.runs.length, 1);
-      assert.equal(outcome.runs[0].red, null);
-      const { runs } = readNightlyHistory('/repos/memoro', { root });
-      assert.equal(runs.length, 2);
-      assert.equal(runs[1].red, null);
-      assert.equal(runs[1].outcome, 'incomplete');
-      assert.equal(runs[1].stopped_at, 'unchanged');
-      assert.equal(runs[1].commit, SHA);
-      assert.match(said.join('\n'), /memoro {2}unchanged .*main aaaaaaa — .*last measured 2026-09-02T02:00:00\.000Z/u);
-      // The measurement it did not replace is still the reading.
+      assert.deepEqual(outcome.started, []);
+      assert.match(outcome.waiting[0].why, /main is still aaaaaaa, measured 2026-09-02T02:00:00\.000Z; not measured again/u);
+      // A chore pass every few minutes writing "unchanged" would push the
+      // measurements out of the history.
+      assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 1);
       assert.equal(nightlyReading('/repos/memoro', { root }).measured.at, '2026-09-02T02:00:00.000Z');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('an unchanged repository does not end the tick: the next one is still visited', async () => {
+  it('an unchanged repository does not hold up the next one', async () => {
     const root = home();
     try {
       seed(root);
-      const asked = [];
-      const outcome = await nightlyTick({
-        root, repos: REPOS, head: () => SHA,
-        round: ({ repoPath }) => { asked.push(repoPath); return report(); },
-      });
+      const { asked } = await pass(root, { head: () => SHA });
       assert.deepEqual(asked, ['/repos/memoro-cli']);
-      assert.equal(outcome.runs.length, 2);
-      assert.equal(outcome.skipped, null);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -219,13 +193,15 @@ describe('a tick, when the branch has not moved', () => {
     const root = home();
     try {
       seed(root);
-      const { outcome, asked } = await tick(root, () => OTHER);
-      assert.deepEqual(asked, ['/repos/memoro']);
-      const { runs } = readNightlyHistory('/repos/memoro', { root });
-      assert.equal(runs.length, 2);
-      assert.equal(runs[1].commit, OTHER);
-      assert.deepEqual(runs[1].red, ['data-bus event names']);
-      assert.equal(outcome.runs[0].verdict, 'red');
+      const { runs } = await pass(root, {
+        repos: [REPOS[0]], head: () => OTHER,
+        round: () => report({ red: ['data-bus event names'], verdict: 'red', commit: OTHER }),
+      });
+      const { runs: stored } = readNightlyHistory('/repos/memoro', { root });
+      assert.equal(stored.length, 2);
+      assert.equal(stored[1].commit, OTHER);
+      assert.deepEqual(stored[1].red, ['data-bus event names']);
+      assert.equal(runs[0].verdict, 'red');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -238,11 +214,9 @@ describe('a tick, when the branch has not moved', () => {
       const root = home();
       try {
         seed(root);
-        const { asked } = await tick(root, probe);
+        const { asked } = await pass(root, { repos: [REPOS[0]], head: probe });
         assert.deepEqual(asked, ['/repos/memoro']);
-        const { runs } = readNightlyHistory('/repos/memoro', { root });
-        assert.equal(runs.length, 2);
-        assert.notEqual(runs[1].stopped_at, 'unchanged');
+        assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 2);
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
   }
@@ -250,7 +224,7 @@ describe('a tick, when the branch has not moved', () => {
   it('a repository never measured is measured, whatever the head', async () => {
     const root = home();
     try {
-      const { asked } = await tick(root, () => SHA);
+      const { asked } = await pass(root, { repos: [REPOS[0]], head: () => SHA });
       assert.deepEqual(asked, ['/repos/memoro']);
       assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 1);
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -263,66 +237,82 @@ describe('a tick, when the branch has not moved', () => {
         repo: 'memoro', path: '/repos/memoro', started_at: '2026-09-02T02:00:00.000Z', duration_ms: 1,
         commit: SHA, verdict: 'stopped', stopped_at: 'fetch', reason: 'offline', red: null, tests: null,
       }, { root });
-      const { asked } = await tick(root, () => SHA);
+      const { asked } = await pass(root, { repos: [REPOS[0]], head: () => SHA });
       assert.deepEqual(asked, ['/repos/memoro']);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a live gate round still ends the tick before the probe is asked', async () => {
+  it('a run that stalled on a commit is not started again on it: the next waits for main to move', async () => {
     const root = home();
     try {
-      seed(root);
-      writeFileSync(gateLockPath(root, 'memoro'), JSON.stringify({ pid: process.pid, repo: 'memoro', pr: 1, since: '2026-09-03T02:00:00.000Z' }));
-      let probed = 0;
-      const { outcome, asked } = await tick(root, () => { probed += 1; return SHA; });
-      assert.equal(probed, 0);
-      assert.deepEqual(asked, []);
-      assert.ok(outcome.skipped);
+      seed(root, OTHER);
+      seed(root, SHA, { started_at: '2026-09-03T02:00:00.000Z', verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min', red: null, tests: null });
+      const still = await pass(root, { repos: [REPOS[0]], head: () => SHA });
+      assert.deepEqual(still.asked, []);
+      assert.match(still.outcome.waiting[0].why, /where the last full run stopped at stalled .*the next starts when main moves/u);
+      const moved = await pass(root, { repos: [REPOS[0]], head: () => 'c'.repeat(40) });
+      assert.deepEqual(moved.asked, ['/repos/memoro']);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
-describe('a tick, and a STOP', () => {
-  it('a STOP that appears after the first repository leaves the second unstarted', async () => {
+describe('a full run, one at a time per repository', () => {
+  it('a repository whose run is in flight is not started again', async () => {
     const root = home();
     try {
-      let stop = false;
-      const asked = [];
-      const outcome = await nightlyTick({
-        root,
-        repos: REPOS,
-        head: () => null,
-        shouldStop: () => stop,
-        round: ({ repoPath }) => { asked.push(repoPath); stop = true; return report(); },
-      });
-      assert.deepEqual(asked, ['/repos/memoro'], 'the second repository\'s suite was started after the STOP');
-      // What was measured stays measured, and the tick says it was stopped.
-      assert.equal(outcome.runs.length, 1);
-      assert.equal(outcome.stopped, true);
-      assert.equal(outcome.skipped, null);
-      assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 1);
-      assert.equal(readNightlyHistory('/repos/memoro-cli', { root }).runs.length, 0);
+      const running = new Map([['/repos/memoro', new Promise(() => {})]]);
+      const { outcome, asked } = await pass(root, { running });
+      assert.deepEqual(asked, ['/repos/memoro-cli']);
+      assert.deepEqual(outcome.running, ['memoro']);
+      // Its own run is gone from the map once it has ended; the other is untouched.
+      assert.deepEqual([...running.keys()], ['/repos/memoro']);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('a run that ends starts the next only if main moved meanwhile, and measures the newest main', async () => {
+    const root = home();
+    try {
+      // main moves from a… to b… while the first run measures a…, then stays.
+      let main = SHA;
+      const asked = [];
+      const { runs } = await pass(root, {
+        repos: [REPOS[0]],
+        head: () => main,
+        round: () => {
+          const measured = main;
+          asked.push(measured);
+          main = OTHER;
+          return report({ commit: measured });
+        },
+      });
+      assert.deepEqual(asked, [SHA, OTHER], 'one more run, of the newest main, and then none');
+      assert.deepEqual(runs.map((run) => run.commit), [SHA, OTHER]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('a full run, and a STOP', () => {
   it('a STOP that is already there starts nothing', async () => {
     const root = home();
     try {
-      let ran = 0;
-      const outcome = await nightlyTick({
-        root, repos: REPOS, shouldStop: () => true, round: () => { ran += 1; return report(); },
-      });
-      assert.equal(ran, 0);
+      const { outcome, asked } = await pass(root, { shouldStop: () => true });
+      assert.deepEqual(asked, []);
       assert.equal(outcome.stopped, true);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('without a shouldStop the tick is what it was', async () => {
+  it('a STOP during a run chains no next run, even though main moved', async () => {
     const root = home();
     try {
-      const outcome = await nightlyTick({ root, repos: REPOS, head: () => null, round: () => report() });
-      assert.equal(outcome.runs.length, 2);
-      assert.equal(outcome.stopped, false);
+      let main = SHA;
+      let stop = false;
+      const asked = [];
+      await pass(root, {
+        repos: [REPOS[0]], head: () => main, shouldStop: () => stop,
+        round: ({ repoPath }) => { asked.push(repoPath); main = OTHER; stop = true; return report(); },
+      });
+      assert.deepEqual(asked, ['/repos/memoro']);
+      assert.equal(readNightlyHistory('/repos/memoro', { root }).runs.length, 1);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -332,13 +322,14 @@ describe('the log', () => {
     const root = home();
     try {
       const said = [];
-      await loggedTick({
+      const outcome = await loggedTick({
         root,
         repos: [REPOS[0]],
         head: () => null,
         say: (message) => said.push(message),
         round: ({ say }) => { say('fetch took 1.1s'); say('# tests 17982'); return report(); },
       });
+      await outcome.done;
       assert.equal(said.length, 2, said.join('\n'));
       assert.match(said[0], /^memoro — full run started$/u);
       assert.match(said[1], /^memoro {2}green {2}started .* main aaaaaaa/u);
@@ -346,6 +337,27 @@ describe('the log', () => {
       assert.match(log, /\d{4}-\d\d-\d\dT[\d:.]+Z {2}fetch took 1\.1s\n/u);
       assert.match(log, /# tests 17982/u);
       assert.match(log, /memoro {2}green/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('the scheduled round', () => {
+  it('runs beside the merge lane: no lease, no lock, its own checkout, at the full run\'s lanes', async () => {
+    const root = home();
+    try {
+      const asked = [];
+      const gate = (options) => { asked.push(options); return report(); };
+      await scheduledRound({ repoPath: '/repos/memoro', root, env: { MC_FULL_RUN_LANES: '3' }, gate });
+      assert.equal(asked.length, 1);
+      const [options] = asked;
+      assert.equal(options.full, true);
+      assert.equal(options.isolated, true);
+      assert.equal(options.holdLease, false);
+      assert.equal(options.signals, false);
+      assert.equal(options.lanes, 3);
+      assert.equal(options.env.MC_TEST_LANES, '3');
+      await scheduledRound({ repoPath: '/repos/memoro', root, env: {}, gate });
+      assert.equal(asked[1].lanes, 2, 'the declared default is two lanes');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -405,7 +417,7 @@ describe('mc test nightly status — red, and since when', () => {
 
       const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
-      assert.match(page.stdout, /runner stopped {2}— no tick will happen until mc run start/u);
+      assert.match(page.stdout, /runner stopped {2}— no full run will start until mc run start/u);
       assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+bbbbbbb/u);
       // The streak reaches the oldest run kept, so the date is a floor — said
       // as one, with the name it is about.
@@ -413,7 +425,7 @@ describe('mc test nightly status — red, and since when', () => {
 
       const state = json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env)));
       assert.equal(state.runner.running, false);
-      assert.equal(state.interval_ms, 86_400_000);
+      assert.equal(state.cadence, 'main-moved');
       const reading = state.repos.repo;
       assert.equal(reading.runs, 2);
       assert.equal(reading.measured.commit, 'b'.repeat(40));
@@ -457,39 +469,38 @@ describe('mc test nightly status — red, and since when', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('says the tick is the runner\'s chore, and when it is next due, while the runner runs', async () => {
+  it('says the full runs are the runner\'s chore, started whenever main moves, while the runner runs', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
       const runner = join(fx.workRoot, 'runner');
       mkdirSync(join(runner, 'log'), { recursive: true });
       writeFileSync(join(runner, 'runner.json'), JSON.stringify({ pid: process.pid, started: '2026-09-19T08:00:00Z' }));
+      const started = new Date(Date.now() - 2 * 3_600_000).toISOString();
       const tsv = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
-        + `${new Date(Date.now() - 2 * 3_600_000).toISOString()}\tnightly\tnightly\t0\t900\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-measured,0-unchanged\n`;
+        + `${started}\tnightly\tnightly\t0\t1\t-\t-\t-\t-\t-\t-\t-\tstarted,memoro\n`;
       writeFileSync(join(runner, 'log', 'runs.tsv'), tsv);
 
       const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner running {2}pid \d+/u);
-      assert.match(page.stdout, /the tick is its chore/u);
-      assert.match(page.stdout, /the next is due in 22 h/u);
+      assert.match(page.stdout, /the full runs are its chore/u);
+      // No clock (Martin, 2026-11-13): no "next is due in".
+      assert.match(page.stdout, /whenever its origin\/main moved since its last measured full run/u);
+      assert.match(page.stdout, /the last was started 2 h ago/u);
+      assert.doesNotMatch(page.stdout, /due in/u);
       assert.match(page.stdout, /\n {4}full run\s+never/u, 'the per-repository block is still there');
       const state = json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env)));
       assert.equal(state.runner.running, true);
-      assert.equal(state.tick.due, false);
+      assert.equal(state.tick.last_started, started);
 
-      // Due: the last tick is more than a day old.
-      writeFileSync(join(runner, 'log', 'runs.tsv'), tsv.replace(/^\d{4}-[^\t]*/mu, (m, offset) => (offset ? '2026-09-01T00:00:00.000Z' : m)));
-      const due = (await runVerb(['test', 'nightly', 'status'], fx.env));
-      assert.match(due.stdout, /a tick is due now/u);
-
-      // A STOP beside a live runner: on its way out, no further tick.
+      // A STOP beside a live runner: on its way out, no further full run.
       writeFileSync(join(runner, 'STOP'), '');
-      assert.match((await runVerb(['test', 'nightly', 'status'], fx.env)).stdout, /runner stopping.*no further tick will start/u);
+      assert.match((await runVerb(['test', 'nightly', 'status'], fx.env)).stdout, /runner stopping.*no further full run will start/u);
     } finally { fx.cleanup(); }
   });
 
-  it('says the runner is stopped, and that no tick will happen, when no runner is alive', async () => {
+  it('says the runner is stopped, and that no full run will start, when no runner is alive', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -499,7 +510,7 @@ describe('mc test nightly status — red, and since when', () => {
       writeFileSync(join(runner, 'runner.json'), JSON.stringify({ pid: 2_147_483_000, started: '2026-09-19T08:00:00Z' }));
       const page = (await runVerb(['test', 'nightly', 'status'], fx.env));
       assert.equal(page.status, 0, page.stderr);
-      assert.match(page.stdout, /runner stopped {2}— no tick will happen until mc run start/u);
+      assert.match(page.stdout, /runner stopped {2}— no full run will start until mc run start/u);
       assert.match(page.stdout, /full run\s+never/u, 'the readings are printed whatever the runner is doing');
     } finally { fx.cleanup(); }
   });

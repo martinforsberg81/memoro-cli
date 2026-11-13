@@ -121,8 +121,9 @@ in `gate-rounds.jsonl`.
 `round_timeout_ms` and `round_timeout_why` retain their values: 20 minutes for
 memoro and 15 for memoro-cli. The ceiling only reports
 "past its N s ceiling at load L — F of S files finished, going on".
-Only **no progress** — no test file finished, command gate ended or alone
-member ended — for `MC_ROUND_STALL_MINUTES` (default 15, `ROUND_STALL_MS`)
+Only **no progress** — no test file finished, test file's process exited
+(a whole suite's heartbeat, *A whole suite's progress*), command gate ended or
+alone member ended — for `MC_ROUND_STALL_MINUTES` (default 15, `ROUND_STALL_MS`)
 stops the process group early. The `stalled` report names files and gates in
 flight, phase and load, and releases the lane. The sixty-minute process bound
 (`MC_GATE_SUITE_MINUTES`) remains a last bound and also stops stalled.
@@ -164,9 +165,13 @@ behaviour; the existing goal-only runner is not evidence of implementation.
 ## The measurement checkout
 
 Every repository round — an ordinary or goal PR, batch, documents-only
-measurement, branch freshening and whole-suite run (`--full` or nightly) — uses
+measurement, branch freshening and a person's whole-suite run (`--full`) — uses
 mc's standing checkout at `<work root>/gate/<slug>/candidate` (`~/mc/gate/…`), implemented by
-[`measurement-checkout.js`](../../src/mc/measurement-checkout.js). First use
+[`measurement-checkout.js`](../../src/mc/measurement-checkout.js). The
+runner's scheduled full run uses a sibling standing checkout,
+`<work root>/gate/<slug>/full`, made and healed the same way, because it runs
+beside the merge lane rather than in it (Martin, 2026-11-13; *The full run
+nobody asks for*). First use
 creates it from the repository with `git worktree add --detach <dir> <sha>`;
 subsequent rounds keep it. No round borrows a session or planning checkout or
 creates a per-round worktree. No branch needs to be held by another checkout.
@@ -1437,23 +1442,32 @@ measuring the selection` and goes on as before (`previousRedFiles` in
 
 ## The full run nobody asks for
 
-The runner runs `mc test <repo> --full` for every repository mc knows, once a
-day, with nobody typing anything. It is a **chore of the runner**
-(`runNightly` in `src/mc/run.js`, the last thing a chore pass does, beside the
-helper and the intake drain); until 2026-09-19 it was a detached process of its
-own, started with `mc test nightly start`, with a pid file and a `stop`, and
-that scheduler is gone — there is no second thing to start, stop and remember,
-and nothing on this machine that can start a nightly but the runner. The verb
-that is left is `mc test nightly status`; it is under `mc test` because that is
-the round the tick runs. It was `mc repo nightly` until 2026-09-04, which now
-prints `mc repo nightly is now mc test nightly` and exits 2.
+The runner runs `mc test <repo> --full` for each repository mc knows whenever
+that repository's origin/main has moved since its last measured full run, with
+nobody typing anything, **beside all other work** (Martin, 2026-11-13). This
+reverses the decision of 2026-11-09 that a whole-suite run was "a later
+concern" and replaces the once-a-day tick that preceded it: on mc-server
+(12 cores, 31 GB) Martin ruled that every repository's whole suite runs on main
+continuously and in parallel with all sessions.
+
+It is a **chore of the runner** (`runNightly` in `src/mc/run.js`, the last
+thing a chore pass does), implemented in
+[`nightly-loop.js`](../../src/mc/nightly-loop.js). Until 2026-09-19 it was a
+detached process of its own, started with `mc test nightly start`, with a pid
+file and a `stop`, and that scheduler is gone — there is nothing on this
+machine that can start a full run but the runner. The verb that is left is
+`mc test nightly status`; it is under `mc test` because that is the round a
+full run is. It was `mc repo nightly` until 2026-09-04, which now prints
+`mc repo nightly is now mc test nightly` and exits 2. The file names, the round
+log's `mode: nightly` and the history under `~/.memoro/mc/nightly/` keep the old
+word, because the pages read them.
 
 It exists because memoro's whole suite ran only when a person typed `npm run
 test:full`, and #10529 is what that produced: four days of merges left 31 tests
 red on `main` while every pull request's affected-selection passed, because
 nothing ever looked at the whole.
 
-The landing chain supplies PR rounds' evidence; the nightly remains the
+The landing chain supplies PR rounds' evidence; the full run remains the
 whole-suite meter and writes `from: full` with every file it ran and no
 inheritance when it completes.
 
@@ -1461,55 +1475,112 @@ It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
 nothing it finds refuses a merge, delays a round or changes a verdict. It never
 commits, never pushes, never writes inside a repository and never takes a
 branch. Everything it writes is under mc's home —
-`~/.memoro/mc/nightly/nightly.log` and the per-repository history beside it.
-There is no pid file: a `nightly.json` left by the old scheduler is read by
-nothing and can be deleted. It is optional in the one way the runner is: no
-runner, no tick.
+`~/.memoro/mc/nightly/nightly.log` and the per-repository history beside it —
+and under `<work root>/gate/<slug>/full`, its own checkout. It is optional in
+the one way the runner is: no runner, no full run.
 
 - **The round is the same round.** Not a copy, and not `npm run test:full`
   directly: it calls `runGate` with the `full: true` a person's `--full` passes,
   so the scheduled reading and the asked-for reading cannot disagree about what
-  a repository's whole suite is. Every tick is counted in `gate-rounds.jsonl`
+  a repository's whole suite is. Every run is counted in `gate-rounds.jsonl`
   like any other round, so `mc repo rounds` stays true about what this machine
   did.
-- **A held lock is a skip, never a wait.** The round lock has no expiry on
-  purpose — a round is *supposed* to take minutes, so no clock can tell a slow
-  round from a dead one. So the nightly attempts it, and a live holder ends the
-  tick then and there with a line naming that round's pid. A machine that merged
-  all evening shows a night of skips and one run, and that reads as normal. No
-  queue, no backoff, no notion of a run that is "overdue": a missed night is a
-  missed night and the next tick runs.
-- **The cadence is measured from the last completed tick**, never from a
-  wall-clock hour. A laptop asleep at 03:00 never sees 03:00, and a scheduler
-  that notices the miss on waking fires a catch-up burst at breakfast. Sleep
-  simply stretches the gap here. Once a day, the last tick being the last
-  `kind: nightly` row in `runs.tsv` — that row is the tick's whole state, as the
-  helper's is, and it is written whether the tick measured, was stopped or
-  threw, so a tick that failed is not retried ten minutes later. There is no
-  interval to configure.
-- **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` starts no
-  tick, and the tick asks for STOP (and UPDATE, which drains the runner) before
-  each repository, so `mc run stop` during a tick means the next repository's
-  suite is never started. The suite already running is not killed; it ends by
-  itself and the tick's row says `stopped`. The runner's own `--once` runs no
-  chores, so it runs no tick.
+- **When: whenever main moved** (`fullRunDue`). Each chore pass reads
+  origin/main of each repository with `git ls-remote origin HEAD` and compares
+  it with the commit of the last run that measured something. Equal: the tree
+  is the one already measured, so nothing runs and **nothing is written** — a
+  branch that has not moved is not measured again, and a line per chore pass
+  would push the measurements out of the history. A repository never measured
+  is due. A head that cannot be read is measured, but not again within
+  `FULL_RUN_RETRY_MS` (an hour) of the last attempt, so an offline machine does
+  not start a suite every pass. There is no interval to configure.
+- **One at a time per repository, coalesced.** The runner keeps one map of the
+  runs in flight across chore passes; a repository with a run in flight is not
+  started again however often main moves. A run that ends asks again and starts
+  the next only if origin/main moved since that run was started: ten landings
+  during one run are one more run, of the newest main. Repositories run in
+  parallel with each other. A repository the board lists under two paths is
+  measured once, under the first.
+- **A run that stopped on a commit waits for main to move.** A suite that
+  stalled, could not be prepared, or did not reach its summary will do the same
+  on the same tree, and retrying it would pin cores in a loop. A stop that is
+  the machine's (`fetch`, `threw`, `worktree`, `lease`, `reservation`, `busy`,
+  `base`, `pr`) is tried again after `FULL_RUN_RETRY_MS`. A run the runner cut
+  short itself (`gone`, `killed`) is due again at once.
+- **Beside the merge lane.** A full run takes no round lock (`gate-lock.js`),
+  writes no phase into the lane's lock file and takes no lease: the lease is held
+  by holder name, so the runner's run would give back the merger's lease under
+  the same name, or keep the merger out under another. It measures in its own
+  standing checkout, `<work root>/gate/<slug>/full` (`FULL_RUN_CHECKOUT`,
+  `measurementCheckout({ name })`), never in the merger's `candidate`. Merges,
+  sessions and full runs of the same repository therefore proceed at once
+  (`runGate({ isolated: true })`). A person's `mc test <repo> --full` is
+  unchanged: it is a round in the lane, in `candidate`.
+- **Two test lanes** (`FULL_RUN_LANES`, `MC_FULL_RUN_LANES` overrides). Fixed
+  rather than answered from the load, so a run's length does not depend on when
+  it started. Two is the floor `testLanes` keeps for a session's gate at any
+  load, and half `MERGE_LANES_MIN` (4), which a merge round is guaranteed: a
+  full run and a merge round in each of the two repositories at once take
+  2 × (2 + 4) = 12 lanes, the cores of mc-server, before any session's gate. A
+  full run is a meter nobody waits for, so it is the one that is slower. The
+  lanes reach the suite as `MC_TEST_LANES`: memoro's runner reads it, and
+  memoro-cli's `npm test` passes it as `--test-concurrency` when it is set
+  (node refuses `--test-concurrency` in `NODE_OPTIONS`).
+- **Its reds go to a repair.** A measured run's red on main is main's by
+  construction. The round records it as exact-commit evidence
+  (`recordMainRed`, `from: full`), and the run hands the red files and tests to
+  `requestMainRepair` (`main-repair.js`), the same door a merge round's main red
+  goes through in `merger.js`, so the `main-health` programme gets a repair goal
+  for each red file no unfinished repair names. Before 2026-11-13 the full run
+  wrote the evidence and asked for no repair.
+- **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` or `UPDATE`
+  starts no run and chains none. Before the runner leaves, the chore loop ends
+  the runs in flight through their round's signal and waits for them
+  (`settleFullRuns`), so no suite outlives the runner; each is written
+  `stopped at gone` and is due again for the runner that comes next. The
+  runner's own `--once` runs no chores and so no full run. `runs.tsv` gets a
+  `kind: nightly` row only for a chore pass that started a run.
 - **Three outcomes stay apart.** A run that found nothing, a run that named
-  failures, and a run that produced no suite result at all — the lock was held,
-  the preparation failed, the declaration stopped it, the process died. The
-  third is not zero failures, and a day of them reported as a green streak would
-  be the same false green `--full` was fixed to remove, arriving by another
-  road.
+  failures, and a run that produced no suite result at all — the preparation
+  failed, the declaration stopped it, the process died, it stalled. The third is
+  not zero failures, and a day of them reported as a green streak would be the
+  same false green `--full` was fixed to remove, arriving by another road.
 
-Measured 2026-09-03 on this machine: a tick that found a `mc test memoro-cli
---full` round holding the lock recorded `memoro  skipped  another gate round is
-running on this machine (pid 77336, memoro-cli-1d5e7a04, since …) — one at a
-time` and did not wait.
+### A whole suite's progress
+
+The round's stall watchdog (below, *no progress* for `ROUND_STALL_MS`) reads
+forward motion from the test-times reporter: a test file finished. A whole
+suite run through `npm test` is one `node --test` process, and node reports its
+files in the order it was given them, holding every later file's events until
+the earlier files have reported; a file is not even reported as started until
+one of its tests has ended. So a slow file ahead hides every file finished
+behind it, and the watchdog cannot name it. memoro's runner
+(`scripts/testing/runner.mjs`) strips inherited reporter flags from
+`NODE_OPTIONS`, so for memoro the reporter shows nothing at all.
+
+Measured on mc-server, 2026-11-13: every full run since the move stopped
+`stalled — no progress for 15 min — files in flight: none named`. memoro's ran
+864 s of suite and was stopped at 900 s from the round's start, the reporter
+having shown nothing. memoro-cli's reporter showed 91 files finished within
+15 s and nothing for the next 900 s: `tests/mc/logger.test.js`, next in order,
+never ended, because `mkdirSync('/proc/definitely/not/writable',
+{ recursive: true })` does not return on Linux (node 24), and no timeout can cut
+synchronous code. Its fixture now uses a directory under a regular file.
+
+So `realSuite` gives every test file's process a heartbeat: `--import` of
+`test-progress-preload.mjs` in `NODE_OPTIONS` (which memoro's runner keeps)
+writes one line when a test file's process starts and one when it exits, to a
+file named in `MC_TEST_PROGRESS`, whatever the reporter is still holding back
+(`processProgress`, `progressTracker().processes()` in `test-times.js`). A file
+process that exited is progress; the files whose process is running are the
+files in flight the `stalled` reason names. The window is unchanged. The first
+stall's reason is kept: later polls do not rewrite it.
 
 ### Red, and since when
 
 The number that would have prevented #10529 is not "31 tests are red". It is
 "these 31 tests have been red since Tuesday": one run's red list looks exactly
-like a flake, and the same list twice, dated, does not. So every tick appends to
+like a flake, and the same list twice, dated, does not. So every full run appends to
 a bounded history per repository under `~/.memoro/mc/nightly/` — when, which
 commit of the branch, and the failing test *names* — and `mc repo status` reads
 it back:
@@ -1520,12 +1591,13 @@ it back:
 ```
 
 `mc test nightly status` prints those same rows, one block per repository the
-tick measures, under a header that says where the tick now comes from — the runner running
-(and when the next tick is due), a tick due now, the runner stopping, or the
-runner stopped and no tick therefore coming until `mc run start` — the same
+full runs measure, under a header that says where they come from — the runner
+running (with when it last started one), the runner stopping, or the runner
+stopped and no full run therefore coming until `mc run start` — the same
 `nightlyRows` called rather than copied, so the two pages cannot answer "red,
 and since when" differently. `--json` carries `runner` (`running`, `pid`,
-`started_at`, `stop_requested`), `tick` (`due`, `detail`), `interval_ms`, `log`
+`started_at`, `stop_requested`), `cadence` (`main-moved`), `tick`
+(`last_started`, `detail`), `log`
 and a `repos` object of one reading per repository — the readings themselves
 unchanged. The repository page is where somebody who is asking about a
 repository finds the same fact.
@@ -1539,8 +1611,9 @@ repository finds the same fact.
   enough to say a thing is still red, and more turns a meter into an archive.
   The names are deliberately not capped the way `gate-rounds.jsonl` caps its
   own, because a dropped name comes back next run looking like a test that had
-  gone green and broken again. The bound is the number of runs kept — fourteen,
-  two weeks at the default cadence.
+  gone green and broken again. The bound is the number of runs kept — fifty
+  (`HISTORY_LIMIT`), raised from fourteen on 2026-11-13, when a run began to
+  follow every move of main instead of once a day.
 - **A run that measured nothing is transparent, never green.** It neither
   continues a streak nor breaks one, and it is stored as what it was: the last
   *attempt* is its own row on the page, above the last *measurement* it could

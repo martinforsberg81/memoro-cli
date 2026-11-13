@@ -127,18 +127,18 @@ export function renderNightlyLines(state, {
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
   const { runner, tick } = state;
-  const cadence = `a full run of every repository every ${hours(state.interval_ms)}`;
+  // No clock (Martin, 2026-11-13): a repository's run starts when its main moved.
+  const cadence = 'a full run of each repository whenever its origin/main moved since its last measured full run, '
+    + 'one at a time per repository, beside merges and sessions';
   if (!runner.running) {
-    lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no tick will happen until mc run start', 'grey')}`);
-    lines.push(`  ${c('tick', 'grey')}  ${cadence}, a chore of the runner; ${tick.detail || 'none has run yet'}`);
+    lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no full run will start until mc run start', 'grey')}`);
+    lines.push(`  ${c('full runs', 'grey')}  ${cadence}, a chore of the runner; ${tick.detail || 'none has started yet'}`);
   } else if (runner.stop_requested) {
-    lines.push(`  ${c('runner stopping', 'yellow')}  pid ${runner.pid}  ${c('— a STOP is present; no further tick will start', 'grey')}`);
+    lines.push(`  ${c('runner stopping', 'yellow')}  pid ${runner.pid}  ${c('— a STOP is present; no further full run will start', 'grey')}`);
   } else {
-    lines.push(`  ${c('runner running', 'green')}  pid ${runner.pid}  ${c('— the tick is its chore', 'grey')}`);
+    lines.push(`  ${c('runner running', 'green')}  pid ${runner.pid}  ${c('— the full runs are its chore', 'grey')}`);
     if (runner.started_at) lines.push(`  ${c('since', 'grey')}  ${runner.started_at}`);
-    lines.push(`  ${c('tick', 'grey')}  ${cadence}; ${tick.due
-      ? `a tick is due now — it comes with the runner's next chore pass${tick.detail ? ` (${tick.detail})` : ''}`
-      : tick.detail}`);
+    lines.push(`  ${c('full runs', 'grey')}  ${cadence}; ${tick.detail || 'none has started yet'}`);
   }
   lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
   for (const repo of repos) {
@@ -148,12 +148,6 @@ export function renderNightlyLines(state, {
   }
   lines.push('');
   return lines;
-}
-
-function hours(ms) {
-  const value = Number(ms) || 0;
-  if (value < 3_600_000) return `${Math.round(value / 1000)}s`;
-  return `${Math.round((value / 3_600_000) * 10) / 10}h`;
 }
 
 /** The label is written once; the rows below it line up under the first. */

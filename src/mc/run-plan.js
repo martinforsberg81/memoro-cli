@@ -213,18 +213,20 @@ export const DEPS_NAME = 'deps';
 export const TIDY_KIND = 'tidy';
 
 /**
- * Once a day.
+ * Once a day: the cadence of the daily chores that are gated by their own row
+ * (`DEPS_KIND`, `TIDY_KIND`).
  *
- * The cadence is Martin's day rather than a cron expression: one full reading
- * of every repository mc knows, which is about 400 s of this machine on the
- * two it knows today. The number sits here beside the chore that uses it, as
- * `HELPER_HOUR_UTC` does, and there is no flag to change it.
+ * It was the full run's cadence until 2026-11-13. The full run is no longer on
+ * a clock: each repository's whole suite runs whenever its origin/main moved
+ * since its last measured full run (Martin, 2026-11-13; `fullRunDue`,
+ * `nightly-loop.js`). The name stays because the daily chores are gated by it.
  */
 export const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Is the nightly tick due? Twenty-four hours since the last one, measured from
- * that tick's own row and never from an hour of the clock.
+ * Is a daily chore due? Twenty-four hours since its last row, measured from
+ * that row and never from an hour of the clock. The deps reading and tidy ask
+ * it with their own `kind`; the full run no longer does.
  *
  * This is `helperDue`'s shape and deliberately not its rule. A wall-clock hour
  * is the wrong cadence for a laptop twice over: asleep at the hour it never
@@ -249,6 +251,19 @@ export function nightlyDue({ tsv = '', now = new Date(), intervalMs = NIGHTLY_IN
   const ago = `the last tick was ${spanOf(gone)} ago (${new Date(last).toISOString()})`;
   if (gone >= intervalMs) return { due: true, why: ago };
   return { due: false, why: `${ago}; the next is due in ${spanOf(intervalMs - gone)}` };
+}
+
+/**
+ * When the runner last started a full run, from its `kind: nightly` rows (one
+ * per chore pass that started one): `{ at, note, why }`, or null with none.
+ */
+export function lastFullRunStart({ tsv = '', now = new Date(), kind = NIGHTLY_KIND } = {}) {
+  const rows = parseRuns(tsv).filter((row) => row.kind === kind && !Number.isNaN(Date.parse(row.ts)))
+    .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  const last = rows.at(-1);
+  if (!last) return null;
+  const at = Date.parse(last.ts);
+  return { at: new Date(at).toISOString(), note: last.note || null, why: `the last was started ${spanOf(now.getTime() - at)} ago (${new Date(at).toISOString()})` };
 }
 
 /** A span of time as a person says it: minutes below two hours, hours above. */

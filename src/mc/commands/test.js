@@ -22,16 +22,17 @@
  * `mc test <repo> --full` is the other reading, and the only one here that is
  * about the code rather than about a change: the repository's whole suite on
  * the default branch as fetched. Asked for here, and — since 2026-09-03 — also
- * taken on an interval by the nightly, which runs this same round rather than a
- * copy of it, so the scheduled reading and the asked-for one cannot disagree
+ * taken by the runner's full run whenever main moves, which runs this same round
+ * rather than a copy of it, so the scheduled reading and the asked-for one cannot disagree
  * about what a repository's whole suite is.
  *
  * And since 2026-09-04 the nightly is asked after here too: `mc test nightly
  * status` reads the scheduled form of the round above, under the verb whose
  * round it runs (`mc repo nightly` was the old spelling and answers with this
- * one). Nothing starts or stops it from here: the tick is a chore of the
- * runner, taken when a day has passed since the last (`runNightly`, `run.js`),
- * and `mc run stop` is what stops it.
+ * one). Nothing starts or stops it from here: the full run is a chore of the
+ * runner, started for a repository whenever its origin/main moved since its
+ * last measured full run (Martin, 2026-11-13; `runNightly`, `run.js`), and
+ * `mc run stop` is what stops it.
  *
  * It is a meter and nothing else. Whatever it finds refuses no merge, delays no
  * round and changes no verdict (ruled by Martin, 2026-09-02).
@@ -42,7 +43,7 @@ import { join } from 'node:path';
 import { nightlyReading } from '../nightly-history.js';
 import { nightlyLogPath } from '../nightly.js';
 import { runnerDir } from '../paths.js';
-import { NIGHTLY_INTERVAL_MS, nightlyDue } from '../run-plan.js';
+import { lastFullRunStart } from '../run-plan.js';
 import { pidAlive } from '../status-collect.js';
 import { listServers } from '../dev-servers.js';
 import { log } from '../logger.js';
@@ -518,8 +519,8 @@ function readStdin(stream) {
  * The full run nobody asks for: ask after it.
  *
  * Nothing here starts a process — no page does, and this one would run whole
- * suites, which pin the machine for minutes at a time. The tick is a chore of
- * the runner and happens when it is due and the runner is running.
+ * suites, which pin the machine for minutes at a time. The full run is a chore
+ * of the runner and happens when main moved and the runner is running.
  *
  * It is a meter and nothing else. Whatever it finds refuses no merge, delays
  * no round and changes no verdict (ruled by Martin, 2026-09-02).
@@ -579,7 +580,7 @@ export function tickState({ env = process.env, now = new Date(), alive = pidAliv
   const pid = Number(record?.pid);
   const live = Number.isInteger(pid) && pid > 0 && alive(pid);
   const stopFile = read(join(dir, 'STOP')) !== null;
-  const due = nightlyDue({ tsv: read(join(dir, 'log', 'runs.tsv')) || '', now, intervalMs: NIGHTLY_INTERVAL_MS });
+  const last = lastFullRunStart({ tsv: read(join(dir, 'log', 'runs.tsv')) || '', now });
   return {
     runner: {
       running: live,
@@ -589,8 +590,12 @@ export function tickState({ env = process.env, now = new Date(), alive = pidAliv
       // alive with STOP present is on its way out and will start no tick.
       stop_requested: stopFile,
     },
-    tick: { due: due.due, detail: due.why },
-    interval_ms: NIGHTLY_INTERVAL_MS,
+    // No clock any more (Martin, 2026-11-13): a repository's full run starts
+    // whenever its origin/main moved since its last measured full run, one at a
+    // time per repository (`fullRunDue`, nightly-loop.js). `last_started` is the
+    // runner's last pass that started one.
+    cadence: 'main-moved',
+    tick: { last_started: last?.at ?? null, detail: last?.why ?? null },
     log: nightlyLogPath(),
   };
 }
