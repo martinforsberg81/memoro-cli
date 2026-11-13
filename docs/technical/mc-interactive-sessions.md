@@ -102,6 +102,9 @@ short tool name, model and role record. No launcher-exit hook releases that
 entry. The existing writer sweep removes dead entries, and the page's
 liveness check omits them immediately. There is no second session registry.
 An unreadable agents response is a discovery failure, not an empty desk.
+The holder writes `work.open` provenance using the observed conversation id:
+Claude 2.1.325's background launcher assigns its own id despite `--session-id`.
+This keeps ordinary compatible conversation selection working after exit.
 
 ## Codex: tmux transport
 

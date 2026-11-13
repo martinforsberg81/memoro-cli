@@ -137,7 +137,13 @@ export async function interactiveLaunchPlan({
     if (!chosen) return { ok: false, reason: 'the selected conversation is not available' };
   }
   if (chosen && guarded) {
-    const identity = liveIdentity || identify(chosen);
+    let identity = liveIdentity || identify(chosen);
+    if (!compatible(identity)) {
+      // Joining a live provider uses its proven current launch identity, not
+      // possibly incomplete transcript evidence. A start still needs provenance.
+      const live = await liveConversation(chosen.id);
+      if (live?.conversation?.id === chosen.id && compatible(live.identity)) identity = live.identity;
+    }
     if (!compatible(identity)) {
       const explanation = decision(chosen, identity, 'refuse');
       return { ok: false, reason: `cannot resume ${chosen.id}: ${explanation}`, hint: freshRoute };
@@ -233,31 +239,29 @@ export async function interactiveLaunchPlan({
     }),
   };
   const identity = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName || requestedRole, programme });
-  return { ok: true, launch, tool: toolId, chosen, before, args, model: chosenModel,
-    instructions, billing, identity, record, toolLaunch,
-    opened: () => {
-      log('work.open', {
-        area: areaRoot,
-        cwd: worktree.path,
-        tool: toolId,
-        bin: launch.spec.bin,
-        argc: args.length,
-        resuming: chosen?.id || null,
-        model: chosenModel || null,
-        overlay: Boolean(overlay),
-        // The register goes when the session does; the log is the one record of
-        // which role text this launch handed over that is still there tomorrow.
-        role: requestedRole,
-        programme: requestedProgramme,
-        launched_id: launchedId,
-        instruction_channel: handed.length ? (toolId === 'codex' && guarded ? 'developer_instructions' : toolId === 'claude-code' ? 'append-system-prompt' : 'instructions') : null,
-        role_digest: textDigest(instructions),
-        prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
-        instructions: handed.length > 0,
-        known_here: before.length,
-      });
-    },
+  const openEvent = {
+    area: areaRoot,
+    cwd: worktree.path,
+    tool: toolId,
+    bin: launch.spec.bin,
+    argc: args.length,
+    resuming: chosen?.id || null,
+    model: chosenModel || null,
+    overlay: Boolean(overlay),
+    // The register goes when the session does; the log is the one record of
+    // which role text this launch handed over that is still there tomorrow.
+    role: requestedRole,
+    programme: requestedProgramme,
+    launched_id: launchedId,
+    instruction_channel: handed.length ? (toolId === 'codex' && guarded ? 'developer_instructions' : toolId === 'claude-code' ? 'append-system-prompt' : 'instructions') : null,
+    role_digest: textDigest(instructions),
+    prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
+    instructions: handed.length > 0,
+    known_here: before.length,
   };
+  return { ok: true, launch, tool: toolId, chosen, before, args, model: chosenModel,
+    instructions, billing, identity, record, toolLaunch, openEvent };
+
 }
 
 /** One provider decision; every start uses interactiveLaunchPlan, including the tmux worker. */
@@ -287,9 +291,9 @@ export async function openInWorkArea(options = {}) {
       },
     });
     if (!plan.launch) return plan;
-    plan.opened();
     clearStopMark(options.areaRoot);
     if (entrance) return await entrance.start(plan);
+    log('work.open', plan.openEvent);
     const release = register(plan.record);
     let result;
     try {

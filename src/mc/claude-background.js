@@ -217,7 +217,7 @@ export async function startDetachedBackground(options, plan, name, { io = fs, fo
   const request = join(directory, 'request.json');
   const document = backgroundSettings(plan.args, plan.identity, options.env);
   io.writeFileSync(request, JSON.stringify({ name, cwd: options.worktree.path,
-    billing: plan.billing, record: { ...plan.record, env: undefined }, ...document }), { mode: 0o600, flag: 'wx' });
+    billing: plan.billing, openEvent: plan.openEvent, record: { ...plan.record, env: undefined }, ...document }), { mode: 0o600, flag: 'wx' });
   const child = fork(process.execPath, [WORKER, request, ...(options.lockPipe ? ['--desk-lock-pipe'] : [])], {
     cwd: options.worktree.path, env: terminalEnvironment(options.env), detached: true,
     stdio: ['ignore', 'ignore', 'ignore', 'ipc', ...(options.lockPipe ? [options.lockPipe] : [])],
@@ -242,6 +242,7 @@ export async function holdClaudeBackground(request, {
   env = process.env, io = fs, resolveTool = resolveLaunch, run = spawnSync, agents = readAgents,
   register = registerForeground, alive = pidAlive, now = Date.now, sleep = delay, pause = wait,
   openGrant = openGatewayGrant, readApi = () => readBillingApi(), report = () => {}, releaseLock = () => {},
+  recordOpen = fields => log('work.open', fields),
 } = {}) {
   let grant;
   let session;
@@ -279,6 +280,10 @@ export async function holdClaudeBackground(request, {
       pause(100);
     }
     if (!session) return failure('Claude launch returned, but agents listed no new matching session; retry discovery before starting another');
+    // --bg assigns its own conversation id even when argv includes --session-id
+    // (Claude 2.1.325). Historical provenance must name the observed transcript.
+    if (request.openEvent) recordOpen({ ...request.openEvent,
+      launched_id: request.openEvent.launched_id ? session.sessionId : null });
     register({ ...request.record, pid: session.pid, env, onExit: () => {} });
     releaseLock();
     report({ ok: true, session });

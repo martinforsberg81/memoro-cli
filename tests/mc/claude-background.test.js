@@ -406,3 +406,29 @@ test('losing the client during startup reports through an error-handled IPC send
   assert.deepEqual(f.removed, [f.request.directory]);
   notifyBackgroundClient({}, { connected: () => false, send: () => assert.fail('already disconnected') });
 });
+
+test('background provenance names the provider-assigned conversation id, not the ignored launch uuid', async () => {
+  const plan = await interactiveLaunchPlan({ ...base, overlay: 'Role instructions.' });
+  assert.ok(plan.openEvent.launched_id);
+  assert.notEqual(plan.openEvent.launched_id, row.sessionId);
+  const f = holderFixture();
+  const events = [];
+  f.deps.recordOpen = fields => events.push(fields);
+  await holdClaudeBackground({ ...f.request, openEvent: plan.openEvent }, f.deps);
+  assert.deepEqual(events, [{ ...plan.openEvent, launched_id: row.sessionId }]);
+  assert.equal(events[0].role, 'manager');
+  assert.equal(events[0].instruction_channel, 'append-system-prompt');
+});
+
+test('a matching live registration permits joining held history whose transcript identity is not yet readable', async () => {
+  const { findBackgroundConversation } = await import('../../src/mc/claude-background.js');
+  const f = entrance();
+  const result = await openInWorkArea({ ...base, pick: 'held', identify: () => null,
+    conversations: () => [{ id: 'held-1', tool: 'claude-code' }],
+    liveConversation: prefix => findBackgroundConversation(base, prefix, {
+      agents: f.deps.agents, records: f.deps.records, alive: f.deps.alive,
+    }), background: options => prepareClaudeBackground(options, f.deps),
+  });
+  assert.equal(result.background, row.id);
+  assert.deepEqual(f.calls.filter(Array.isArray), [['attach', row.id]]);
+});
