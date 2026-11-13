@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readlinkSync,
   rmdirSync,
   rmSync,
 } from 'node:fs';
@@ -440,6 +441,14 @@ export function directoryInUse(path) {
   } catch { return null; }
   if (pids.length === 0) return null;
   const names = pids.map((pid) => {
+    // Linux's `comm` is the kernel task name: recent Node versions expose
+    // their main thread as `MainThread`, not the executable. Prefer the
+    // process's executable basename there so release reports the program.
+    if (process.platform === 'linux') {
+      try {
+        return basename(readlinkSync(`/proc/${pid}/exe`)).replace(/ \(deleted\)$/u, '') || `pid ${pid}`;
+      } catch { /* procfs may be unavailable; use ps below */ }
+    }
     try {
       return execFileSync('ps', ['-o', 'comm=', '-p', pid], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
