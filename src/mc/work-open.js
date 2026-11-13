@@ -283,8 +283,11 @@ export async function openInWorkArea(options = {}) {
         if (!eligible) return {};
         if (launch.id === 'codex') return { result: await (terminal || transport.openPersistentTerminal)({ ...options, tool: launch.id, ...(chosen ? { pick: chosen.id } : {}) }) };
         if (launch.id === 'claude-code') {
-          const { prepareClaudeBackground } = await import('./claude-background.js');
-          entrance = await (background || prepareClaudeBackground)({ ...options, env, launch, before, chosen });
+          const { claudeBackgroundDriver } = await import('./claude-background.js');
+          const { prepareSessionEntrance } = await import('./session-entrance.js');
+          const settings = { ...options, env, launch, before, chosen };
+          entrance = background ? await background(settings)
+            : await prepareSessionEntrance(settings, claudeBackgroundDriver());
           return entrance;
         }
         return {};

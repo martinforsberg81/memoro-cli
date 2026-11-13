@@ -70,9 +70,12 @@ answer a trust prompt on the person's behalf.
 `work-open.js` constructs one interactive launch plan: conversation selection,
 provenance, model, instructions, permissions, argv, identity, billing and role
 record. Foreground launches, the Codex tmux worker and the Claude background
-path all use it. `claude-background.js` owns discovery, naming, settings,
-background launch and attachment. It resolves the executable through the
-provider adapter, never a separate binary choice.
+path all use it. `session-entrance.js` owns desk agreement, join/new selection,
+flag rules, names, registration and the post-client status line. Its provider
+driver supplies `list`, `start` and `join`; `claude-background.js` implements
+that driver with agents discovery, settings, background launch and attachment.
+It resolves the executable through the provider adapter, never a separate
+binary choice.
 
 Claude's daemon supplies the provider process environment, not the launching
 mc process. The background launch therefore merges the adapter's settings
@@ -102,6 +105,16 @@ short tool name, model and role record. No launcher-exit hook releases that
 entry. The existing writer sweep removes dead entries, and the page's
 liveness check omits them immediately. There is no second session registry.
 An unreadable agents response is a discovery failure, not an empty desk.
+After a successful launch, a failed read or delayed agents row leaves the
+holder reconciling that start, with its grant and inherited desk lock intact.
+After 50 unsuccessful polls it reports the measured discovery problem to the client;
+client exit does not stop reconciliation. The holder registers the observed
+provider pid before releasing selection, so the next entrance can join it.
+A discovery timeout never authorizes another start or kills the provider.
+If the grant expires first, its gateway and settings are removed on schedule,
+without releasing uncertain ownership or opening a replacement grant. Persistent
+provider discovery failure therefore refuses new starts for that desk rather
+than risking two processes on one conversation.
 The holder writes `work.open` provenance using the observed conversation id:
 Claude 2.1.325's background launcher assigns its own id despite `--session-id`.
 This keeps ordinary compatible conversation selection working after exit.

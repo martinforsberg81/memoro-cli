@@ -9,8 +9,18 @@ import { sessionArgs } from '../../src/adapters/claude-code.js';
 import { SESSION_IDENTITY_ENV, sessionIdentity } from '../../src/mc/session-role.js';
 import { registerForeground, sweep } from '../../src/mc/foreground.js';
 import { openGatewayGrant, GATEWAY_SESSION_MS, GATEWAY_SESSION_REQUEST_LIMIT } from '../../src/mc/billing-gateway-session.js';
-import { attachClaudeBackground, backgroundName, backgroundSettings, deskSessions, holdClaudeBackground,
-  lockDesk, notifyBackgroundClient, prepareClaudeBackground, readAgents, startDetachedBackground } from '../../src/mc/claude-background.js';
+import { backgroundSettings, claudeBackgroundDriver, holdClaudeBackground,
+  notifyBackgroundClient, readAgents, startDetachedBackground } from '../../src/mc/claude-background.js';
+
+import { sessionName as backgroundName, deskSessions, lockDesk, joinSession, prepareSessionEntrance } from '../../src/mc/session-entrance.js';
+
+// Exercise the real provider-neutral entrance with an inert provider boundary.
+function prepareClaudeBackground(options, { agents, attach, start, ...deps }) {
+  return prepareSessionEntrance(options, {
+    list: () => agents(), start,
+    join: (options, session) => attach(options, session),
+  }, deps);
+}
 
 const env = { HOME: '/test', PATH: '/usr/bin', MC_WORK_ROOT: '/test/mc', MC_HOME: '/test/home', SSH_CONNECTION: 'ssh' };
 const base = { areaRoot: '/test/mc/manager', worktree: { path: '/test/mc/manager' }, env,
@@ -47,7 +57,7 @@ function entrance(overrides = {}) {
     agents: () => [row], records: () => [record], alive: () => true, owners: () => [row.pid],
     lock: () => () => calls.push('release'),
     choose: (_title, items) => { calls.push(items); return row.id; },
-    attach: (_options, session) => { calls.push(['attach', session.id]); return { ok: true, background: session.id }; },
+    attach: (_options, session) => { calls.push(['attach', session.id]); return { status: 0 }; },
     start: async (_options, plan, name) => { calls.push(['start', plan, name]); return { ok: true, session: { ...row, id: 'bg-2' } }; },
   };
   return { calls, options, deps };
@@ -211,7 +221,6 @@ function holderFixture(billing = 'plan') {
   const deps = { env, io: f.io, resolveTool: () => launch,
     run: (bin, args, options) => { calls.push({ bin, args, options }); return { status: 0 }; },
     agents: () => ++reads === 1 ? [] : [row], alive: () => living, now: () => clock,
-    pause: () => assert.fail('agents already published'),
     register: value => { calls.push({ record: value }); return () => assert.fail('provider registration must not be released by the holder'); },
     report: value => calls.push({ report: value }),
     sleep: async () => { living = false; },
@@ -326,11 +335,11 @@ test('registration uses the provider pid and survives launcher exit; existing sw
   assert.deepEqual([...entries], []);
 });
 
-test('attach only attaches and reports whether the provider still lives with the entrance to rejoin', () => {
+test('attach only attaches and reports whether the provider still lives with the entrance to rejoin', async () => {
   const lines = [];
   const calls = [];
-  const result = attachClaudeBackground({ ...base, launch }, row, { run: (bin, args) => { calls.push({ bin, args }); return { status: 0 }; },
-    agents: () => [row], alive: () => true, stdout: { write: text => lines.push(text) } });
+  const driver = claudeBackgroundDriver({ run: (bin, args) => { calls.push({ bin, args }); return { status: 0 }; }, agents: () => [row] });
+  const result = await joinSession({ ...base, launch }, row, driver, { alive: () => true, stdout: { write: text => lines.push(text) } });
   assert.equal(result.running, true);
   assert.deepEqual(calls, [{ bin: launch.spec.bin, args: ['attach', row.id] }]);
   assert.deepEqual(lines, ['mc: mc manager is still running; rejoin with mc manager.\n']);
@@ -431,4 +440,82 @@ test('a matching live registration permits joining held history whose transcript
   });
   assert.equal(result.background, row.id);
   assert.deepEqual(f.calls.filter(Array.isArray), [['attach', row.id]]);
+});
+
+
+for (const outage of ['unreadable', 'late row']) test(`successful launch reconciles ${outage} discovery without losing its grant, registration or rejoin`, async () => {
+  const f = holderFixture('credits');
+  let reads = 0;
+  let registered = false;
+  let locked = true;
+  let living = true;
+  const entries = [];
+  const reports = [];
+  f.deps.alive = () => living;
+  f.deps.agents = () => {
+    reads += 1;
+    if (reads === 1) return [];
+    if (reads <= 55) {
+      if (outage === 'unreadable') throw new Error('agents temporarily unavailable');
+      return [];
+    }
+    return [row];
+  };
+  f.deps.register = input => { registered = true; entries.push({ ...record, pid: input.pid }); };
+  f.deps.releaseLock = () => { assert.equal(registered, true); locked = false; };
+  f.deps.report = result => reports.push(result);
+  f.deps.sleep = async () => {
+    assert.deepEqual(f.removed, [], 'uncertain discovery is not session death');
+    assert.equal(f.calls.includes('closed'), false, 'the live session still owns its grant');
+    assert.ok(f.files.has(join(f.request.directory, 'settings.json')));
+    if (!registered) assert.equal(locked, true, 'no second entrance can start while ownership is uncertain');
+    else living = false;
+  };
+  assert.equal((await holdClaudeBackground(f.request, f.deps)).ok, true);
+  assert.deepEqual(reports.map(result => result.ok), [false, true]);
+  assert.match(reports[0].reason, outage === 'unreadable' ? /could not read Claude background agents/u : /listed no new matching live session/u);
+  assert.equal(reports[1].session.pid, row.pid);
+  assert.deepEqual(entries.map(entry => entry.pid), [row.pid]);
+  assert.deepEqual(f.removed, [f.request.directory]);
+  assert.deepEqual(f.calls.filter(call => call.args).map(call => call.args.slice(0, 3)), [['--bg', '--name', row.name]]);
+  const e = entrance();
+  const recovered = await prepareClaudeBackground(e.options, { ...e.deps, records: () => entries,
+    start: () => assert.fail('recovery must join the existing provider, not start another') });
+  assert.equal(recovered.result.background, row.id);
+  assert.deepEqual(e.calls.filter(Array.isArray).at(-1), ['attach', row.id]);
+});
+
+test('grant expiry during uncertain discovery cleans credentials once but preserves ownership until registration recovers', async () => {
+  const f = holderFixture('credits');
+  let reads = 0;
+  let registered = false;
+  let released = false;
+  f.deps.agents = () => ++reads < 4 ? [] : [row];
+  f.deps.sleep = async () => {
+    assert.equal(released, false);
+    if (reads === 2) f.expire();
+    else {
+      assert.deepEqual(f.removed, [f.request.directory]);
+      assert.equal(f.calls.includes('closed'), true);
+    }
+  };
+  f.deps.register = value => { registered = true; assert.equal(value.pid, row.pid); };
+  f.deps.releaseLock = () => { assert.equal(registered, true); released = true; };
+  await holdClaudeBackground(f.request, f.deps);
+  assert.deepEqual(f.removed, [f.request.directory]);
+  assert.deepEqual(f.calls.filter(call => call === 'readKey' || call === 'closed'), ['readKey', 'closed']);
+});
+
+test('the same entrance accepts a different provider driver without changing desk policy', async () => {
+  const options = { ...base, launch: resolveLaunch('codex') };
+  const sessions = [{ ...row, id: 'remote-thread' }];
+  const calls = [];
+  const prepared = await prepareSessionEntrance(options, {
+    list: () => sessions,
+    start: () => assert.fail('join must not start or replace a session'),
+    join: (_options, session) => { calls.push(session.id); return { status: 0 }; },
+  }, { lock: () => () => {}, alive: () => true, owners: () => [row.pid],
+    records: () => [{ ...record, tool: 'codex' }], choose: (_title, choices) => choices[0].value });
+  assert.equal(prepared.result.background, 'remote-thread');
+  assert.deepEqual(calls, ['remote-thread']);
 });
