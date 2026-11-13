@@ -1,5 +1,7 @@
 # mc helper — the desk, and the eye on production
 
+Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+
 Two things get noticed about memoro: what production says, and what Martin
 says. `mc helper` is the door for both, and **the only thing either of them
 produces is a proposal** — a file in `~/mc/proposals/` that nobody
@@ -61,8 +63,7 @@ inside intake is not itself drained.
 
 ## The desk
 
-`mc helper` with no flags opens the foreground session — the terminal's,
-never tmux; the conversation already in `~/mc/helper/` resumed with no
+`mc helper` with no flags opens the interactive session; the conversation already in `~/mc/helper/` resumed with no
 intro, a fresh one when there is none or on `--new` (Martin, 2026-09-13) —
 standing in `~/mc/helper/`, wearing the
 `helper` role (`canon/roles/helper.md`, Sonnet). Its shape is `mc manager`'s:

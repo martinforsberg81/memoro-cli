@@ -1,5 +1,7 @@
 # mc plan — a programme's interactive session
 
+Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+
 ```
 mc plan [<programme>] [--new|--resume [<id>]] [--codex|--claude] [--model <model>]
 mc plan <programme> --archive
