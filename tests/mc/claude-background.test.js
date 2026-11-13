@@ -45,6 +45,7 @@ function memoryFs() {
     writeFileSync(path, value, options) { files.set(path, value); modes.set(path, options?.mode); },
     readFileSync(path) { if (!files.has(path)) throw Object.assign(new Error(), { code: 'ENOENT' }); return files.get(path); },
     readdirSync(path) { return [...files.keys()].filter(key => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/')).map(key => key.slice(path.length + 1)); },
+    unlinkSync(path) { if (!files.delete(path)) throw Object.assign(new Error(), { code: 'ENOENT' }); },
     rmSync(path) { removed.push(path); for (const key of files.keys()) if (key === path || key.startsWith(`${path}/`)) files.delete(key); },
   };
   return { io, files, modes, removed };
@@ -478,7 +479,10 @@ for (const outage of ['unreadable', 'late row']) test(`successful launch reconci
     assert.equal(f.calls.includes('closed'), false, 'the live session still owns its grant');
     assert.ok(f.files.has(join(f.request.directory, 'settings.json')));
     if (!registered) assert.equal(locked, true, 'no second entrance can start while ownership is uncertain');
-    else living = false;
+    else {
+      assert.equal(f.files.has(`${f.request.directory}.pending.json`), false, 'registration empties the intent before releasing selection');
+      living = false;
+    }
   };
   assert.equal((await holdClaudeBackground(f.request, f.deps)).ok, true);
   assert.deepEqual(reports.map(result => result.ok), [false, true]);
@@ -494,25 +498,42 @@ for (const outage of ['unreadable', 'late row']) test(`successful launch reconci
   assert.deepEqual(e.calls.filter(Array.isArray).at(-1), ['attach', row.id]);
 });
 
-test('grant expiry during uncertain discovery cleans credentials once but preserves ownership until registration recovers', async () => {
+test('grant expiry during uncertain discovery exits with clean credentials and recoverable ownership', async () => {
   const f = holderFixture('credits');
-  let reads = 0;
-  let registered = false;
-  let released = false;
-  f.deps.agents = () => ++reads < 4 ? [] : [row];
-  f.deps.sleep = async () => {
-    assert.equal(released, false);
-    if (reads === 2) f.expire();
-    else {
-      assert.deepEqual(f.removed, [f.request.directory]);
-      assert.equal(f.calls.includes('closed'), true);
-    }
-  };
-  f.deps.register = value => { registered = true; assert.equal(value.pid, row.pid); };
-  f.deps.releaseLock = () => { assert.equal(registered, true); released = true; };
-  await holdClaudeBackground(f.request, f.deps);
+  const pending = `${f.request.directory}.pending.json`;
+  let rows = [];
+  let alive = true;
+  const records = [];
+  f.deps.agents = () => [];
+  f.deps.sleep = async () => f.expire();
+  f.deps.releaseLock = () => assert.ok(f.files.has(pending), 'expiry retains unresolved launch ownership');
+  const expired = await holdClaudeBackground(f.request, f.deps);
+  assert.match(expired.reason, /grant expired before provider discovery/u);
   assert.deepEqual(f.removed, [f.request.directory]);
   assert.deepEqual(f.calls.filter(call => call === 'readKey' || call === 'closed'), ['readKey', 'closed']);
+  assert.equal(f.modes.get(pending), 0o600);
+  const intent = f.files.get(pending);
+  assert.doesNotMatch(intent, /bounded-grant|provider-key/u);
+  const driver = claudeBackgroundDriver({ io: f.io, alive: () => alive, agents: () => rows,
+    register: entry => records.push({ ...record, pid: entry.pid }),
+    run: (_bin, args) => { assert.deepEqual(args, ['attach', row.id]); return { status: 0 }; },
+    start: () => assert.fail('a pending launch never authorizes a second start'),
+  });
+  const deps = { lock: () => () => {}, alive: () => true, owners: () => [], records: () => records, choose: () => row.id };
+  const refused = await prepareSessionEntrance({ ...base, launch }, driver, deps);
+  assert.match(refused.result.reason, /pending discovery/u);
+  assert.ok(f.files.has(pending));
+  rows = [row];
+  const recovered = await prepareSessionEntrance({ ...base, launch }, driver, deps);
+  assert.equal(recovered.result.background, row.id);
+  assert.deepEqual(records.map(entry => entry.pid), [row.pid]);
+  assert.equal(f.files.has(pending), false, 'registration empties the pending intent');
+  // A provider that ended before recovery also empties the intent, without
+  // putting a dead session back on the page.
+  records.length = 0; alive = false; f.io.writeFileSync(pending, intent);
+  driver.list({ ...base, launch });
+  assert.deepEqual(records, []);
+  assert.equal(f.files.has(pending), false);
 });
 
 test('the same entrance accepts a different provider driver without changing desk policy', async () => {

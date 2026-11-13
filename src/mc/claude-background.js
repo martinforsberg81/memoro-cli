@@ -1,13 +1,13 @@
 /** Claude owns the provider lifetime; mc owns discovery and the bounded gateway grant. */
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { registerForeground } from './foreground.js';
-import { deskSessions, readRegister, registerSession } from './session-entrance.js';
+import { deskSessions, readRegister, recordMatchesDesk, registerSession } from './session-entrance.js';
 import { terminalEnvironment } from './interactive-terminal.js';
 import { normalizeSessionRole, SESSION_IDENTITY_ENV } from './session-role.js';
 import { workRoot, mcHome } from './paths.js';
@@ -31,30 +31,63 @@ export function readAgents(launch, { run = spawnSync, env = process.env } = {}) 
 
 /** A live session may have no transcript yet; its matching registration is launch evidence. */
 export function findBackgroundConversation(options, prefix, {
-  resolveTool = resolveLaunch, agents = readAgents, records = readRegister, alive = pidAlive,
+  resolveTool = resolveLaunch, agents = readAgents, records = readRegister, alive = pidAlive, io = fs, register = registerForeground,
 } = {}) {
   try {
     const launch = resolveTool('claude-code');
     if (!launch.ok) return null;
-    const matches = deskSessions({ ...options, launch }, agents(launch, { env: options.env }), records(options.env), alive)
+    const desk = { ...options, launch };
+    const rows = reconcilePendingLaunches(desk, agents(launch, { env: options.env }), { io, alive, register });
+    const matches = deskSessions(desk, rows, records(options.env), alive)
       .filter(session => session.sessionId?.startsWith(prefix));
     if (matches.length > 1) return { error: `ambiguous conversation prefix ${prefix}; use a longer id` };
     if (!matches.length) return null;
     return { conversation: { id: matches[0].sessionId, tool: launch.id },
       identity: { role: normalizeSessionRole(options.roleName || options.verb),
         programme: options.programme || null, source: 'live-background-register' } };
-  } catch { return { error: 'could not read Claude background agents or foreground registration for the named conversation' }; }
+  } catch (error) { return { error: error.message || 'could not read Claude background agents or foreground registration for the named conversation' }; }
 }
 
 /** Only provider mechanics cross this boundary; desk policy stays in session-entrance. */
-export function claudeBackgroundDriver({ agents = readAgents, start = startDetachedBackground, run = spawnSync } = {}) {
+export function claudeBackgroundDriver({ agents = readAgents, start = startDetachedBackground, run = spawnSync,
+  io = fs, alive = pidAlive, register = registerForeground,
+} = {}) {
   return {
-    list: options => agents(options.launch, { env: options.env }),
+    list: options => reconcilePendingLaunches(options, agents(options.launch, { env: options.env }), { io, alive, register }),
     start,
     join: (options, session) => run(options.launch.spec.bin, ['attach', session.id], {
       cwd: options.worktree.path, stdio: 'inherit', env: terminalEnvironment(options.env),
     }),
   };
+}
+
+/** A launch intent survives an expired holder, but never counts as a live session. */
+export function reconcilePendingLaunches(options, rows, { io = fs, alive = pidAlive, register = registerForeground } = {}) {
+  const root = join(workRoot(options.env), 'runner', 'claude-background');
+  let names;
+  try { names = io.readdirSync(root); }
+  catch (error) { if (error.code === 'ENOENT') return rows; throw error; }
+  for (const name of names.filter(name => name.endsWith('.pending.json'))) {
+    const path = join(root, name);
+    let pending;
+    try { pending = JSON.parse(io.readFileSync(path, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!pending?.record || !Array.isArray(pending.before)) throw new Error('could not read Claude pending launch identity');
+    if (pending.cwd !== resolve(options.worktree.path) || !recordMatchesDesk(options, pending.record)) continue;
+    const matches = rows.filter(row => !pending.before.includes(row.id) && row.name === pending.name && row.cwd === pending.cwd
+      && Number.isInteger(row.pid) && row.pid > 0);
+    if (matches.length !== 1) throw new Error(`Claude launch ${pending.name} is pending discovery; agents listed ${matches.length} matching provider rows. No second provider was started`);
+    const session = matches[0];
+    if (alive(session.pid)) {
+      if (pending.openEvent) log('work.open', { ...pending.openEvent,
+        launched_id: pending.openEvent.launched_id ? session.sessionId : null });
+      registerSession(pending.record, session, { env: options.env, register });
+    }
+    // Like an outbox: discard the intent only after its observed provider is
+    // registered (or observed dead). It is never authority to start again.
+    io.unlinkSync(path);
+  }
+  return rows;
 }
 
 /** Collapse adapter settings and identity into the only settings document handed to the daemon. */
@@ -112,6 +145,14 @@ export async function holdClaudeBackground(request, {
   let grant;
   let session;
   let cleaned = false;
+  let accepted = false;
+  const pendingPath = `${request.directory}.pending.json`;
+  const removePending = () => {
+    try { io.unlinkSync(pendingPath); }
+    catch (error) {
+      if (error.code !== 'ENOENT') log('work.background-pending-retained', { path: pendingPath, error: error.code || 'unknown' });
+    }
+  };
   const cleanGrant = async () => {
     if (cleaned) return;
     cleaned = true;
@@ -130,6 +171,10 @@ export async function holdClaudeBackground(request, {
     const settingsPath = join(request.directory, 'settings.json');
     io.writeFileSync(settingsPath, JSON.stringify(request.settings), { mode: 0o600, flag: 'wx' });
     const before = new Set(agents(launch, { env, run }).map(row => row.id));
+    // Persist only nonsecret launch identity, before the provider can exist.
+    // Expiry must close the gateway, not erase the ability to recover its owner.
+    io.writeFileSync(pendingPath, JSON.stringify({ name: request.name, cwd: request.cwd,
+      before: [...before], record: { ...request.record, env: undefined }, openEvent: request.openEvent }), { mode: 0o600, flag: 'wx' });
     const args = [...request.args];
     const settingsIndex = args.indexOf('--settings');
     if (settingsIndex < 0) args.unshift('--settings', settingsPath);
@@ -143,20 +188,24 @@ export async function holdClaudeBackground(request, {
       }
       return failure(`Claude background launch did not exit successfully (status ${launched.status ?? 'unknown'}); no session was registered`);
     }
+    accepted = true;
     // --bg returns before agents necessarily publishes its row. Never invent a pid
     // from the short-lived launcher, and never start again after an uncertain read.
     for (let attempt = 0; !session; attempt += 1) {
       let observation = 'agents listed no new matching live session';
       try {
         session = agents(launch, { env, run }).find(row => !before.has(row.id)
-          && row.name === request.name && row.cwd === request.cwd && alive(row.pid));
+          && row.name === request.name && row.cwd === request.cwd && Number.isInteger(row.pid) && row.pid > 0);
       } catch { observation = 'could not read Claude background agents'; }
-      if (session) break;
+      if (session) {
+        if (!alive(session.pid)) return failure('Claude background provider exited before registration');
+        break;
+      }
       // A successful --bg may already own a conversation. Discovery failure is
       // not provider death: keep its grant and the inherited desk lock, then
       // reconcile in this holder even when the attaching client has left.
       if (attempt === 49) report(failure(`Claude launch returned, but ${observation}; the holder is still discovering it and keeps this desk locked. Retry the entrance after discovery recovers`));
-      if (grant?.ok && now() >= Date.parse(grant.expiresAt)) await cleanGrant();
+      if (grant?.ok && now() >= Date.parse(grant.expiresAt)) return failure('Claude gateway grant expired before provider discovery; pending launch identity was retained for the next entrance');
       await sleep(attempt < 49 ? 100 : 1000);
     }
     // --bg assigns its own conversation id even when argv includes --session-id
@@ -164,11 +213,14 @@ export async function holdClaudeBackground(request, {
     if (request.openEvent) recordOpen({ ...request.openEvent,
       launched_id: request.openEvent.launched_id ? session.sessionId : null });
     registerSession(request.record, session, { env, register });
+    removePending();
     releaseLock();
     report({ ok: true, session });
     while (alive(session.pid) && (!grant || now() < Date.parse(grant.expiresAt))) await sleep(1000);
     return { ok: true, session };
   } finally {
+    // An unresolved accepted launch remains recoverable after the holder exits.
+    if (!accepted || session) removePending();
     releaseLock();
     await cleanGrant();
   }

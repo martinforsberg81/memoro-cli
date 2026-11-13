@@ -26,14 +26,18 @@ export function readRegister(env, io = fs) {
   });
 }
 
+/** A register record's desk identity is shared by discovery and pending-start recovery. */
+export function recordMatchesDesk(options, record) {
+  return isSameTool(record.tool, options.launch?.id || options.tool)
+    && normalizeSessionRole(record.role?.name || record.verb) === normalizeSessionRole(options.roleName || options.verb)
+    && (record.programme || null) === (options.programme || null)
+    && (record.area || null) === (options.areaName || null);
+}
+
 /** Both sources must agree: neither a stale record nor an unrelated daemon session is this desk. */
 export function deskSessions(options, agents, records, alive = pidAlive) {
-  const role = normalizeSessionRole(options.roleName || options.verb);
   return agents.flatMap(agent => {
-    const record = records.find(item => item.pid === agent.pid && isSameTool(item.tool, options.launch?.id || options.tool)
-      && normalizeSessionRole(item.role?.name || item.verb) === role
-      && (item.programme || null) === (options.programme || null)
-      && (item.area || null) === (options.areaName || null));
+    const record = records.find(item => item.pid === agent.pid && recordMatchesDesk(options, item));
     return record && typeof agent.id === 'string' && agent.id && agent.cwd === resolve(options.worktree.path) && alive(agent.pid)
       ? [{ ...agent, started: record.started }] : [];
   });

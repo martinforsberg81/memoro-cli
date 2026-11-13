@@ -111,10 +111,16 @@ After 50 unsuccessful polls it reports the measured discovery problem to the cli
 client exit does not stop reconciliation. The holder registers the observed
 provider pid before releasing selection, so the next entrance can join it.
 A discovery timeout never authorizes another start or kills the provider.
-If the grant expires first, its gateway and settings are removed on schedule,
-without releasing uncertain ownership or opening a replacement grant. Persistent
-provider discovery failure therefore refuses new starts for that desk rather
-than risking two processes on one conversation.
+Before launch the holder writes a 0600 nonsecret pending intent beside its
+private directory: desk/launch identity and the agents ids seen before start.
+If the grant expires before discovery recovers, the holder closes its gateway,
+removes the settings directory and exits, retaining only that intent. The next
+entrance reconciles it with agents and registers the observed provider before
+offering join; a pending intent with no unambiguous provider row refuses a
+second start. Observing that provider dead also removes the intent. Registration
+empties the intent, as an outbox; it never counts as a session and never renews
+a grant. Persistent discovery failure therefore refuses new starts rather than
+risking two processes on one conversation.
 The holder writes `work.open` provenance using the observed conversation id:
 Claude 2.1.325's background launcher assigns its own id despite `--session-id`.
 This keeps ordinary compatible conversation selection working after exit.
