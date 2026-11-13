@@ -10,6 +10,7 @@ import { foregroundDir } from './foreground.js';
 import { normalizeSessionRole } from './session-role.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { pidAlive } from './status-collect.js';
+import { toolShortName } from '../adapters/index.js';
 
 const WORKER = fileURLToPath(new URL('./interactive-terminal-worker.js', import.meta.url));
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
@@ -90,7 +91,7 @@ export function openPersistentTerminal(options, {
     if (options.pick != null || options.model) return true;
     if (!options.resumeTool) return false;
     const current = tmux(['show-option', '-qv', '-t', `=${target}`, '@mc-provider']);
-    return current.status !== 0 || String(current.stdout || '').trim() !== options.resumeTool.replace('claude-code', 'claude');
+    return current.status !== 0 || String(current.stdout || '').trim() !== toolShortName(options.resumeTool);
   };
   const attach = () => {
     if (conflicting()) return { ok: false, reason: 'this session is already running; reopen without --new, --resume, --model or a different provider, or exit the existing session first' };

@@ -153,7 +153,7 @@ export async function openInWorkArea({
   const launch = resolveLaunch(wanted);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
   const toolId = launch.id;
-  onProvider(launch.shortName || (toolId === 'claude-code' ? 'claude' : toolId));
+  onProvider(launch.shortName);
   if (!chosen && pick !== 'new') {
     for (const item of before.filter((candidate) => candidate.tool === toolId)) {
       if (!guarded) { chosen = item; break; }
