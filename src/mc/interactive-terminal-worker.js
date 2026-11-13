@@ -8,7 +8,7 @@ try {
   const options = JSON.parse(readFileSync(request, 'utf8'));
   unlinkSync(request);
   const result = await openInWorkArea({ ...options, persistentTerminal: false,
-    onProvider: provider => spawnSync('tmux', ['-L', process.argv[3], 'set-option', '-t', `=${process.argv[4]}`, '@mc-provider', provider]),
+    onProvider: provider => spawnSync('tmux', ['-L', process.argv[3], 'set-option', '-t', process.argv[4], '@mc-provider', provider]),
   });
   if (!result.ok) process.stderr.write(`mc: ${result.reason}${result.hint ? ` — ${result.hint}` : ''}\n`);
   process.exitCode = result.ok ? (result.code ?? 0) : 1;

@@ -786,7 +786,7 @@ describe('Linux SSH interactive continuity', () => {
     } finally { f.cleanup(); }
   });
 
-  it('refuses missing tmux, failed creation and legacy live owners without a direct launch', () => {
+  it('refuses transport failures and legacy owners but preserves created workers on cosmetic failures', () => {
     const f = transportFixture();
     try {
       assert.match(openPersistentTerminal(f.options, { ...f.deps, run: () => ({ error: new Error('ENOENT') }) }).reason, /tmux is required/u);
@@ -798,6 +798,12 @@ describe('Linux SSH interactive continuity', () => {
       assert.equal(openPersistentTerminal(f.options, f.deps).ok, false);
       assert.deepEqual(readdirSync(join(f.root, 'runner', 'interactive-requests')), []);
       assert.equal(f.calls.some(c => c.args[4] === 'attach-session'), false);
+      f.state.fail = false;
+      const created = openPersistentTerminal(f.options, { ...f.deps,
+        run: (args, opts) => args[4] === 'set-option' ? { status: 1 } : f.deps.run(args, opts) });
+      assert.equal(created.ok, true);
+      assert.equal(f.state.starts, 1);
+      assert.equal(readdirSync(join(f.root, 'runner', 'interactive-requests')).length, 1, 'successful worker still owns its unread request');
     } finally { f.cleanup(); }
   });
 

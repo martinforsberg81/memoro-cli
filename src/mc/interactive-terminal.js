@@ -90,7 +90,7 @@ export function openPersistentTerminal(options, {
   const conflicting = () => {
     if (options.pick != null || options.model) return true;
     if (!options.resumeTool) return false;
-    const current = tmux(['show-option', '-qv', '-t', `=${target}`, '@mc-provider']);
+    const current = tmux(['show-option', '-qv', '-t', target, '@mc-provider']);
     return current.status !== 0 || String(current.stdout || '').trim() !== toolShortName(options.resumeTool);
   };
   const attach = () => {
@@ -123,16 +123,18 @@ export function openPersistentTerminal(options, {
     const command = ['exec', '/usr/bin/env', '-i', ...Object.entries(clean).map(([key, value]) => `${key}=${value}`)]
       .map(quote).join(' ') + ' TERM="$TERM" '
       + [process.execPath, WORKER, request, socket, target].map(quote).join(' ');
-    const created = tmux(['new-session', '-d', '-s', target, '-c', options.worktree.path, command,
-      ';', 'set-option', '-t', `=${target}`, 'mouse', 'on',
-      ';', 'set-option', '-t', `=${target}`, 'status', 'off',
-      ';', 'set-option', '-t', `=${target}`, 'history-limit', '50000']);
+    const created = tmux(['new-session', '-d', '-s', target, '-c', options.worktree.path, command]);
     if (created.error || created.status !== 0) {
       // Another client's atomic new-session may have won. Its request is its own.
       if (!created.error && exists().status === 0) return attach();
       return { ok: false, reason: 'tmux could not create the persistent terminal; no direct SSH launch was attempted' };
     }
     createdHere = true;
+    // Creation alone decides ownership. Cosmetic option failures must not look
+    // like a lost creation race or remove the winning worker's unread request.
+    for (const [key, value] of [['mouse', 'on'], ['status', 'off'], ['history-limit', '50000']]) {
+      tmux(['set-option', '-t', target, key, value]);
+    }
     return attachNow();
   } finally {
     // The worker consumes its request before opening; also clean failed/racing calls.
