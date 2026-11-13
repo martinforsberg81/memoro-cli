@@ -188,6 +188,8 @@ test('an unreadable agents response is a discovery failure, not an empty desk', 
 test('the desk lock refuses a concurrent selector and releases through its pipe, not a stale pid file', async () => {
   const f = memoryFs();
   let locked = false;
+  let inherited = false;
+  let releaseHolder;
   const calls = [];
   const spawnProcess = (bin, args, options) => {
     calls.push({ bin, args, options });
@@ -196,14 +198,21 @@ test('the desk lock refuses a concurrent selector and releases through its pipe,
     child.stdin = new EventEmitter();
     child.stdin.write = marker => queueMicrotask(() => {
       if (locked) child.emit('close', 1);
-      else { locked = true; child.stdout.emit('data', marker); }
+      else { locked = true; releaseHolder = () => { locked = false; child.emit('close', 0); }; child.stdout.emit('data', marker); }
     });
+    // Node stdio uses socket pairs: end shuts down the shared endpoint,
+    // whereas destroy closes only this descriptor (also measured with flock).
     child.stdin.end = () => queueMicrotask(() => { locked = false; child.emit('close', 0); });
+    child.stdin.destroy = () => { if (!inherited) queueMicrotask(() => { locked = false; child.emit('close', 0); }); };
     return child;
   };
   const release = await lockDesk(base, { io: f.io, spawnProcess });
   await assert.rejects(lockDesk(base, { io: f.io, spawnProcess }), /another entrance/u);
+  inherited = true;
   await release();
+  await assert.rejects(lockDesk(base, { io: f.io, spawnProcess }), /another entrance/u);
+  inherited = false;
+  releaseHolder();
   await (await lockDesk(base, { io: f.io, spawnProcess }))();
   assert.equal(calls[0].bin, '/usr/bin/flock');
   assert.deepEqual(calls[0].args.slice(0, 3), ['--exclusive', '--nonblock', '--close']);

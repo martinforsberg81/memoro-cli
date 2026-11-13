@@ -72,9 +72,10 @@ export async function lockDesk(options, { io = fs, spawnProcess = spawn } = {}) 
       ready = true;
       let released = false;
       const release = async () => {
-        if (!released) { released = true; child.stdin.end(); }
+        if (!released) { released = true; child.stdin.destroy(); }
         // The holder may still own a copy of the pipe while discovery recovers.
-        // Closing this client's copy must not wait for that independent owner.
+        // Close, do not end: Node's stdio is a socket pair, so end would
+        // half-close the holder's inherited endpoint too and unlock its start.
         child.unref?.();
         child.stdout.destroy?.();
         child.stderr?.destroy?.();
