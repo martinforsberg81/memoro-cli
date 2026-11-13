@@ -1575,6 +1575,12 @@ describe('main\'s red found by the round asks for a repair goal', () => {
   });
 
   it('a repair under way is named, not written again', async () => {
+    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ open: ['memoro-cli-a-1234abcd'] }) });
+    await landJob(JOB, m.deps);
+    assert.ok(m.said.some((line) => /its repair is under way in main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+  });
+
+  it('a newly written repair and a repair already under way are both named', async () => {
     const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ created: 'memoro-cli-b-5678abcd', open: ['memoro-cli-a-1234abcd'] }) });
     await landJob(JOB, m.deps);
     assert.ok(m.said.some((line) => /repair goal main-health\/memoro-cli-b-5678abcd written; already under way: main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
