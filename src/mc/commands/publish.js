@@ -38,8 +38,9 @@ import { basename, join } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
 import { addPr, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
+import { publishMainMend } from '../main-repair.js';
 import { writeFileAtomic } from '../atomic-write.js';
-import { programsHome } from '../paths.js';
+import { programsHome, workRoot } from '../paths.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
@@ -153,6 +154,10 @@ export async function run(argv, deps = {}) {
   try { pr = JSON.parse(viewed.stdout || 'null'); } catch { pr = null; }
   if (!viewed.ok || !pr) { stderr.write(`mc: gh pr view #${number} failed: ${viewed.text}\n`); return 1; }
   if (goal) carryGoal({ goal, repo, number: pr.number, env, now: deps.now ? deps.now() : new Date(), read: deps.readGoal || readTextOrNull, write: deps.writeGoal || writeFileAtomic, stdout, stderr, json: flags.json });
+  if (branch.startsWith(`mend/main-${repo}-`)) {
+    try { (deps.publishMainMend || publishMainMend)({ root: workRoot(env), repo, branch, pr: pr.number }); }
+    catch (error) { stderr.write(`mc: main-red ownership not recorded: ${error.message}\n`); return 1; }
+  }
   if (flags.json) {
     stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
