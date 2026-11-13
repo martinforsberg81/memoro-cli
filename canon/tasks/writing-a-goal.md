@@ -42,15 +42,15 @@ renumbered; a `draft` goal holds later phases back too. The cut into goals and p
   ceiling from evidence: the verdict's wall time is under N s, not enforced by a wrapper. Do not
   set a run count, stage allocation, reserved run or load condition: a check that holds only on a quiet
   machine is a defect to repair. Rerun after a change or diagnosis; failure is evidence, not budget.
+- **What users see:** a UI goal states the intended result per viewport and checks it with `mc shot`
+  there. Plan several build iterations: compare screenshots with the intent until they agree.
 - **Standards:** list the `docs/technical/` documents it holds to; criteria apply them, never set new.
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build.
-- **Test protection:** name protected behaviours, failure consequences, the
-  cheapest credible test level and existing tests to reuse. State the evidence
-  the build must produce, or why no new automated test is warranted. Follow
-  [writing-tests.md](writing-tests.md); do not default every fix to a new test.
-- **Class:** `fast` when the goal says exactly what changes, where and in what
-  order; `large` only for work that must choose and that you cannot choose
-  for. Never a concrete model.
+- **Test protection:** name protected behaviours, failure consequences, the cheapest credible test
+  level and existing tests to reuse. State the evidence the build must produce, or why no new
+  automated test is warranted. Follow [writing-tests.md](writing-tests.md); not every fix needs one.
+- **Class:** `fast` when the goal says exactly what changes, where and in what order; `large` only
+  for work that must choose and that you cannot choose for. Never a concrete model.
 - **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind
   every claim, and only files you opened. A brief that says a state is set wrongly names the caller
   that sets it today and the stage it runs in; its fixture uses that stage. Leave out the case for

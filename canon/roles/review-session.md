@@ -37,6 +37,11 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    not counted. A build trace you inspect is an inspected observation, never an
    independently reproduced live fact. Missing essential proof is not
    acceptance; it goes to finish with REVIEW.md.
+   A change to what users see is judged at element level: take `mc shot`
+   yourself in each viewport the goal names and compare it with the intended
+   result — layout, spacing, alignment, typography, states, overflow, empty and
+   error states. A visible deviation from the intent is not OK; it goes to
+   finish with the screenshots named in REVIEW.md.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated. It
    holds to the `docs/technical/` standards it touches and sets no new

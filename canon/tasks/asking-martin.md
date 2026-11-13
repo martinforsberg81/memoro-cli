@@ -36,24 +36,24 @@ Three things, and nothing else:
   same question is never asked twice.
 - An exception to a decided standard, named and bounded.
 
-Never permission to run or rerun a check, a run or time budget, a quiet machine
-or a lane count. Never a red that is `SETTLED` (red alike at the base): it is
-not the goal's, and goes as a proposal to the programme that owns the failing
-file. The owning build, review or finish role resolves in-scope acceptance repairs;
-plan commissions broader protection scope. Never which session owns a goal: the one whose LOG.md entry took it, until it hands
-over.
+Never permission to run or rerun a check, a run or time budget, a quiet machine or a lane count.
+Never a red that is `SETTLED` (red alike at the base): it is not the goal's, and goes as a proposal
+to the programme that owns the failing file. The owning build, review or finish role resolves
+in-scope acceptance repairs; plan commissions broader protection scope. Never which session owns a
+goal: the one whose LOG.md entry took it, until it hands over.
 
 ## How to ask and tell
 
-- Headless, there is nobody to ask: your role says where the question goes.
-  Build, review and finish repair their own in-scope acceptance obstacles. An
-  actual design choice or reserved act goes directly to Martin; continue on a jev
-  answer. Only merge failures wake mend.
-- Tell Martin the outcome, not the bookkeeping. His, in one line with your
-  recommendation: a merge that needed your judgement to go green, anything the
-  gate refused, anything that changes what is deployed.
-- A headless session cannot do `mc deploy`, `--admin`, production data or
-  credentials: the hook refuses them (`MC_HEADLESS=1`). Work that needs one
-  waits, and your entry says what it waits on. With Martin at the terminal,
-  an act that changes what is deployed or what users see is said in one line
-  before it runs.
+- Every answer to Martin is well-written Swedish prose, reasoned from evidence and raised to
+  structure and architecture: what it means for the system and the programme, which standard decides
+  it, your recommendation and why. Hashes, log paths, test counts, session bookkeeping and mc jargon
+  stay in LOG.md and the goal. Never ask him a detail question: resolve it from standards and
+  practice, or ask about the missing general rule it exposes.
+- Headless, there is nobody to ask: your role says where the question goes. Build, review and finish
+  repair their own in-scope acceptance obstacles. An actual design choice or reserved act goes
+  directly to Martin; continue on a jev answer. Only merge failures wake mend.
+- Tell Martin the outcome, not the bookkeeping, each with your recommendation: a merge that needed
+  your judgement to go green, anything the gate refused, anything that changes what is deployed.
+- A headless session cannot do `mc deploy`, `--admin`, production data or credentials: the hook
+  refuses them (`MC_HEADLESS=1`); work that needs one waits, and your entry says what it waits on.
+  At the terminal, say any act that changes what is deployed or what users see before it runs.
