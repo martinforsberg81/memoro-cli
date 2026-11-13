@@ -13,14 +13,31 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync,
+  accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { delimiter, join, relative } from 'node:path';
 
 import { git, makeTempRepo } from './git-fixture.js';
 
-const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const GIT = process.env.PATH.split(delimiter)
+  .map((directory) => join(directory, 'git'))
+  .find((candidate) => {
+    try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }
+  });
+if (!GIT) throw new Error('repo fixture requires git on PATH');
+const CAT = process.env.PATH.split(delimiter)
+  .map((directory) => join(directory, 'cat'))
+  .find((candidate) => {
+    try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }
+  });
+if (!CAT) throw new Error('repo fixture requires cat on PATH');
+const PS = process.env.PATH.split(delimiter)
+  .map((directory) => join(directory, 'ps'))
+  .find((candidate) => {
+    try { accessSync(candidate, constants.X_OK); return true; } catch { return false; }
+  });
+if (!PS) throw new Error('repo fixture requires ps on PATH');
 
 /**
  * The one `gh` script every fixture's `bin/gh` links to, written once per
@@ -75,6 +92,11 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
 
   const ghLog = join(repo.root, 'gh-calls.log');
   const prsPath = join(repo.root, 'prs.json');
+  // Keep the fixture's PATH hermetic: relying on a system PATH made the
+  // missing-gh case call a host-installed `gh` on machines that had one.
+  symlinkSync(GIT, join(bin, 'git'));
+  symlinkSync(CAT, join(bin, 'cat'));
+  symlinkSync(PS, join(bin, 'ps'));
   if (gh) {
     writeFileSync(prsPath, JSON.stringify(prs));
     symlinkSync(ghStub(), join(bin, 'gh'));
@@ -95,7 +117,7 @@ export function fixture({ gh = false, prs = [], name = 'repo-view' } = {}) {
       MC_WORK_ROOT: workRoot,
       CLAUDE_CONFIG_DIR: join(repo.root, 'claude'),
       CODEX_HOME: join(repo.root, 'codex'),
-      PATH: `${bin}:${SAFE_PATH}`,
+      PATH: bin,
     },
   };
 }
