@@ -36,7 +36,7 @@ export const ROUTES = {
   prepare: { check: ({ positional }) => positional.length > 1 ? 'prepare takes at most one item id' : null },
   ceiling: { check: ({ positional }) => positional.length > 1 ? 'ceiling takes one USD amount or off' : null },
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 1 ? `unknown argument ${positional[1]}` : null },
+  lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
   lessons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
@@ -159,10 +159,10 @@ function lesson(argv, deps) {
   const role = writerRole(env);
   const refusal = lessonRefusal(verb, role);
   if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
-  const parsed = scanArgs(rest, ROUTES.lesson);
+  const parsed = scanArgs(argv, ROUTES.lesson); // the sub-verb is the first positional, the lesson's name the second
   const error = parsed.error || ROUTES.lesson.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
-  const f = parsed.flags, name = parsed.positional[0] ?? null;
+  const f = parsed.flags, name = parsed.positional[1] ?? null;
   const now = (deps.now || (() => new Date()))();
   const fail = (message) => { stderr.write(`mc: ${message}\n`); return 2; };
   if (verb === 'add') {
