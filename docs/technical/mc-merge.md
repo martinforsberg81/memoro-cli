@@ -577,7 +577,11 @@ keeps command-suite membership beside the commands; it never filters the
 six live `main_only` ratchets in `repo-gate-table.js`. Wide selection retains its
 legacy main-only filtering; changed tests and direct importers are not filtered
 out of the change scope. Repositories without full-plan declarations retain
-their declared `suite` fallback.
+their declared `suite` fallback. Repository `full_tests_imports` apply only to
+full execution; memoro uses them to retain its existing scan-edge recorder
+when mc executes the full file plan directly. Contract commands load the same
+recorder only in a write-authorized full run. Wide scan-index maintenance is
+therefore unchanged; neither a merge nor a bare gate writes it.
 
 **A suite finds the toolchain's git first** (`directGitDir` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a

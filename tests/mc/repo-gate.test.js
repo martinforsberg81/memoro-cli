@@ -4010,7 +4010,8 @@ describe('a merge checks the change, while the full run keeps everything', () =>
       const all = ['tests/unit.test.js', 'tests/deferred.test.js', 'tests/main-only.test.js'];
       const commands = ['ci-binding', 'test:contract-audits', 'test:contract-d1-audits', 'test:browser-contracts'];
       writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { prepare: null, prepare_why: 'fixture',
-        select: 'record change', select_full: 'record full', main_only: ['tests/main-only.test.js'], extra_gates: [] } });
+        select: 'record change', select_full: 'record full', main_only: ['tests/main-only.test.js'], extra_gates: [],
+        full_tests_imports: ['./scan-trace.mjs'] } });
       const asked = [];
       const ran = [];
       const report = await fx.run({ pr: null, full: true,
@@ -4022,6 +4023,7 @@ describe('a merge checks the change, while the full run keeps everything', () =>
       assert.deepEqual(asked.map(({ command, mainOnly }) => ({ command, mainOnly })), [{ command: 'record full', mainOnly: [] }]);
       assert.deepEqual(report.selection.selected, all);
       assert.deepEqual(fx.ran('tests').flatMap(call => call.files), all);
+      assert.deepEqual(fx.ran('tests').map(call => call.flags), [['--import', './scan-trace.mjs']]);
       assert.deepEqual(ran, commands.map(name => `npm run ${name}`));
       assert.deepEqual(fx.ran('suite'), []);
     } finally { fx.cleanup(); }

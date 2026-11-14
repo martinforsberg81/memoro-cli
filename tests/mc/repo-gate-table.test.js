@@ -588,6 +588,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
         derived: [],
         merge_log: join(fx.root, 'work', 'runner/log/merge-memoro-cli.md'),
         pr_tests_flags: ['--import', './tests/_isolate-home.mjs', '--test-timeout=30000'],
+        full_tests_imports: [],
         session_whole: true,
         main_only: [],
         affected: null,

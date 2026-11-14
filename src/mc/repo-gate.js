@@ -810,7 +810,8 @@ export async function runGate({
     const measured = declarationFor(repoPath, { root, env, contentDir: headDir });
     if (!measured.ok) return finish('declaration', measured.reason);
     if (measured.notice) say(measured.notice);
-    const flags = measured.declaration.pr_tests_flags || [];
+    const flags = [...(measured.declaration.pr_tests_flags || []),
+      ...(wholeSuite ? (measured.declaration.full_tests_imports || []).flatMap(path => ['--import', path]) : [])];
     // The same resolution the session's `mc gate` makes, on the same declared flags and
     // the candidate's own script: what a green receipt is bound to, and what the tests
     // below are spawned with (`realTests` resolves the same way from `flags` and `headDir`).

@@ -693,6 +693,8 @@ function normalise(entry, env) {
     // files cannot run without. Declared here, the round measures with the
     // repository's own environment rather than an inference about it.
     pr_tests_flags: Array.isArray(entry.pr_tests_flags) ? entry.pr_tests_flags.map(String) : [],
+    // Repository-owned instrumentation needed only by the daily/full plan.
+    full_tests_imports: Array.isArray(entry.full_tests_imports) ? entry.full_tests_imports.map(String) : [],
     // Commands whose first line of stdout `mc deps` prints as a note of its
     // own — run in the primary checkout, because the script is the
     // repository's. Not part of any round.
