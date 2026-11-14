@@ -27,22 +27,30 @@ export function decisionUnfinished(item, now) {
 }
 
 /**
- * The pass ended without settling item `id`. The failure is added to the record read under the lock,
- * and only while that record is still `unfinished`; then `{ item, lessonError }` — the record written —
- * is returned. When the record is missing or was settled meanwhile nothing is written and `item` is null.
- * `brief.md` and the unsettled lesson are written after the hold, only for a record that was written.
+ * The pass ended without settling item `id`. The failure, stamped with the state the item is in, is added to
+ * the record read under the lock, and only while that record is still `unfinished`. The limit is two entries
+ * in the item's current state (an entry without `state` was written while prepared), decided on that record
+ * inside the hold. Then `{ item, lessonError }` — the record written — is returned. When the record is missing
+ * or was settled meanwhile nothing is written and `item` is null.
+ * `brief.md` and the unsettled lesson are written after the hold, only for a record that reached the limit.
  * `lock`, `read` and `writeJson` are the caller's seams for the hold (see `updateDeskItem`).
  */
 export function decisionFailure(id, { reason, at, env, write, writeJson, lock, read, unfinished = (item) => decisionUnfinished(item, new Date()), now = new Date(at) }) {
+  let limited = false;
   const { item, written } = updateDeskItem(id, (current) => {
     if (!current || !unfinished(current)) return null;
-    current.decision_failures = [...(current.decision_failures || []), { at, reason }];
-    if (current.decision_failures.length >= 2) Object.assign(current, { state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null });
+    const state = current.state;
+    current.decision_failures = [...(current.decision_failures || []), { at, reason, state }];
+    const inState = current.decision_failures.filter(failure => (failure.state ?? 'prepared') === state).length;
+    if (inState >= 2) {
+      limited = true;
+      Object.assign(current, { state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null });
+    }
     return current;
   }, { env, ...(lock ? { lock } : {}), ...(read ? { read } : {}), ...(writeJson ? { write: writeJson } : {}) });
   if (!written) return { item: null, lessonError: null };
   // Giving up is a lesson: what this item needed that the pass did not have. The state above stands whether or not it is written.
-  if (item.decision_failures.length < 2) return { item, lessonError: null };
+  if (!limited) return { item, lessonError: null };
   write(join(itemDirectory(item, env), 'brief.md'), `## Vad det gäller\nBeslutspasset kunde inte avgöra ärendet ${item.id}; arbetet kan inte fortsätta automatiskt.\n\n## Alternativ och konsekvenser\n- Undersök underlaget: arbetet kan återupptas när felet är löst.\n- Låt ärendet vänta: arbetet står kvar.\n\n## Rekommendation och skäl\nUndersök underlaget; två beslutssessioner slutade utan att avgöra ärendet.\n\n## Vad som står still\nÄrendet väntar på Martin. Felunderlag:\n${item.decision_failures.map(x => `- ${x.at}: ${x.reason}`).join('\n')}\n\n## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`);
   try {
     const lesson = recordUnsettled({ env, item, failures: item.decision_failures, now: Number.isFinite(now.getTime()) ? now : new Date() });
