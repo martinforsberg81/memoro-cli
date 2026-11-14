@@ -37,7 +37,7 @@ import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import { run as runGit, tryGit } from '../git.js';
-import { addPr, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
+import { addPr, beforeMergeLine, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
 import { publishMainMend } from '../main-repair.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { programsHome, workRoot } from '../paths.js';
@@ -158,16 +158,33 @@ export async function run(argv, deps = {}) {
     try { (deps.publishMainMend || publishMainMend)({ root: workRoot(env), repo, branch, pr: pr.number }); }
     catch (error) { stderr.write(`mc: main-red ownership not recorded: ${error.message}\n`); return 1; }
   }
+  // A goal's pull request reaches the merger only in stage merge: a goal before
+  // it, or one whose stage cannot be read, queues nothing, with or without
+  // --no-merge, and `mc goal stage merge` is what hands it over.
+  const before = goal ? goalBeforeMerge(goal, deps.readGoal || readTextOrNull) : null;
+  const handOff = before ? `mc goal stage merge ${goal.name}` : null;
   if (flags.json) {
-    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify({ ...pr, branch, localHead, pushed, created, repo, described, after, next: handOff || `mc merge ${repo} ${pr.number}` }, null, 2)}\n`);
     return 0;
   }
   const head = String(pr.headRefOid || '');
   const held = head.startsWith(localHead) || localHead.startsWith(head);
-  const queue = !flags['no-merge'] && held;
-  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue })) stdout.write(`${line}\n`);
+  const queue = !flags['no-merge'] && held && !handOff;
+  for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue, handOff: before ? `${beforeMergeLine(before)} — not queued` : null })) stdout.write(`${line}\n`);
   if (!queue) return 0;
   return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
+}
+
+/**
+ * The goal of this publication when it is before stage merge, as `{ name,
+ * stage }` (`stage` null when GOAL.json cannot be read), or null: in merge,
+ * done or dropped it queues as any publication does.
+ */
+function goalBeforeMerge(goal, read) {
+  let parsed;
+  try { parsed = parseGoal(read(join(goal.dir, GOAL_FILE)) ?? ''); } catch { parsed = { problems: ['unreadable'] }; }
+  if (parsed.problems) return { name: goal.name, stage: null };
+  return ['merge', 'done', 'dropped'].includes(parsed.stage) ? null : { name: goal.name, stage: parsed.stage };
 }
 
 /**

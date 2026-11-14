@@ -10,13 +10,15 @@
  * `--admin` is Martin's alone: it lands one pull request past the gate, with
  * GitHub's admin override and no round, and books it (`runAdmin`).
  */
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import { writeJsonAtomic } from '../atomic-write.js';
 import { runTool } from '../child-async.js';
 import { docsMergeLines, docsOnly, prFiles, runDocsMerge } from '../docs-merge.js';
 import { dequeue, mergesPath, parseQueue } from '../merge-queue.js';
-import { workRoot } from '../paths.js';
+import { beforeMergeLine, FINISHED, goalsBeforeMerge, programsGoals } from '../goals.js';
+import { programsHome, workRoot } from '../paths.js';
 import { dropPr } from '../page-cache.js';
 import { realLock } from '../runner-lock.js';
 import { WATCH_TIMEOUT_MIN, followMerge } from '../merge-watch.js';
@@ -40,6 +42,16 @@ export async function run(argv, deps = {}) {
   }
   // Before every other door: no criteria, no docs routing, no queue.
   if (opts.admin) return runAdmin(opts, { stdout, stderr, ...deps });
+  // A goal's pull request reaches the merger, or lands, only in stage merge
+  // (mc-goals.md, What a goal does not have): refused here, for every caller,
+  // before the gate, the docs landing and the documents-only route.
+  if (!opts.check) {
+    const held = await goalBeforeMerge(opts, deps);
+    if (held) {
+      stderr.write(`mc: ${held.pr == null ? '' : `#${held.pr}: `}${beforeMergeLine(held.item)} — nothing was queued or landed\n`);
+      return 1;
+    }
+  }
   // `--check` was the measurement wearing the merge verb's clothes. It still
   // works, and it says where the measurement lives now: a person asking "is
   // this red?" should not have to find it under the verb for landing things.
@@ -71,6 +83,38 @@ export async function run(argv, deps = {}) {
   if (opts.json) { stdout.write(`${JSON.stringify(report, null, 2)}\n`); return report.ok ? 0 : 1; }
   for (const line of docsMergeLines(report)) stdout.write(`${line}\n`);
   return report.ok ? 0 : 1;
+}
+
+/**
+ * The first pull request `opts` names that a goal before stage merge carries,
+ * as `{ pr, item }` (`goalsBeforeMerge`), or null. The goals come from
+ * `deps.goalsOf` (injected) or the programmes' own; a pull request not
+ * registered on its goal is found by its head branch, which `gh` answers.
+ * Nothing else is asked while no goal is open.
+ */
+async function goalBeforeMerge(opts, deps) {
+  const numbers = opts.prs || (opts.pr == null ? [] : [opts.pr]);
+  if (!numbers.length) return null;
+  let goals;
+  try { goals = deps.goalsOf ? deps.goalsOf() : programsGoals({ home: programsHome(deps.env || process.env) }); } catch { return null; }
+  goals = goals.filter((goal) => goal.problems?.length || !FINISHED.includes(goal.stage));
+  if (!goals.length) return null;
+  const repoPath = await (deps.resolveRepoPath || resolveRepoPath)(opts.repo);
+  const repo = repoPath ? repoNameOf(repoPath) : opts.repo;
+  const gh = deps.gh || ((args, options) => spawnSync('gh', args, { cwd: options?.cwd, encoding: 'utf8' }));
+  for (const pr of numbers) {
+    let held = goalsBeforeMerge(goals, repo, pr);
+    if (!held.length && repoPath) {
+      let head = null;
+      try {
+        const answer = await gh(['pr', 'view', String(pr), '--json', 'headRefName'], { cwd: repoPath });
+        if (answer && (answer.status === 0 || answer.ok === true)) head = JSON.parse(answer.stdout)?.headRefName || null;
+      } catch { head = null; }
+      if (head) held = goalsBeforeMerge(goals, repo, pr, head);
+    }
+    if (held.length) return { pr, item: held[0] };
+  }
+  return null;
 }
 
 /**

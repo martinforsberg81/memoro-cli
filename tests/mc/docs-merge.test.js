@@ -205,7 +205,7 @@ describe('mc merge --docs, the verb', () => {
       const stderr = sink();
       const { gh } = stubGh({ files: ['docs/project/mc/x/PLAN.json', 'docs/technical/a.md'] });
       let queued = false;
-      const code = await run(['memoro', '12'], { stdout, stderr, gh, measure: measureGreen, resolveRepoPath: async () => '/repo', gate: async () => { queued = true; return 0; } });
+      const code = await run(['memoro', '12'], { stdout, stderr, gh, measure: measureGreen, resolveRepoPath: async () => '/repo', goalsOf: () => [], gate: async () => { queued = true; return 0; } });
       assert.equal(code, 0);
       assert.equal(queued, false);
       assert.equal(stderr.text, 'mc: #12 changes only documents under docs/ (2 files, no script) — landing it as mc merge --docs, now, after the tests that read documents\n');
@@ -217,7 +217,7 @@ describe('mc merge --docs, the verb', () => {
         const gh = files ? stubGh({ files }).gh : () => ({ ok: false, stdout: '', stderr: 'gh: no' });
         const asked = [];
         const code = await run(['memoro', '12'], {
-          stdout: sink(), stderr: sink(), gh, resolveRepoPath: async () => '/repo',
+          stdout: sink(), stderr: sink(), gh, resolveRepoPath: async () => '/repo', goalsOf: () => [],
           gate: async (opts, deps) => { asked.push([opts.pr, await deps.resolveRepo('memoro')]); return 7; },
         });
         assert.equal(code, 7);
@@ -229,8 +229,8 @@ describe('mc merge --docs, the verb', () => {
       let asked = 0;
       const gh = () => { asked += 1; return { ok: false, stdout: '', stderr: '' }; };
       const gate = async () => 0;
-      assert.equal(await run(['memoro', '12', '--check'], { stdout: sink(), stderr: sink(), gh, gate }), 0);
-      assert.equal(await run(['memoro', '12', '13'], { stdout: sink(), stderr: sink(), gh, gate }), 0);
+      assert.equal(await run(['memoro', '12', '--check'], { stdout: sink(), stderr: sink(), gh, gate, goalsOf: () => [] }), 0);
+      assert.equal(await run(['memoro', '12', '13'], { stdout: sink(), stderr: sink(), gh, gate, goalsOf: () => [] }), 0);
       assert.equal(asked, 0);
     });
   });

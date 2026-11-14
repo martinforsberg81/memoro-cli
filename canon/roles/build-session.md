@@ -20,7 +20,9 @@ Before you finish: `mc gate` on what you changed, fix the red, commit, then
 `mc publish --no-merge --title "…" --body-file <file>` (file in
 `$MC_SCRATCH`). Merging is not yours, nor is review: a review session on another
 model reads the PR, and queues it for the merger when it is OK. The goal is
-`done` when it lands.
+`done` when it lands. mc holds this: a plain `mc publish` or `mc merge` queues
+or lands nothing for a goal before stage `merge`, and says what hands it over
+(`mc goal stage merge`, a review's or finish session's verb, never yours).
 
 **Checks are yours to run.** Run a criterion's check, a gate or a live check
 as often as the work needs: after a fix, after a diagnosis, or to read a

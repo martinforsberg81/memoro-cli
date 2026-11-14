@@ -168,7 +168,7 @@ describe('mc publish', () => {
     /** A goal file model beside the publish fixture. */
     const withGoal = (over = {}) => {
       const f = fixture(over.fixture);
-      const files = { [`${GDIR}/GOAL.json`]: GOAL, [`${GDIR}/LOG.md`]: '' };
+      const files = { [`${GDIR}/GOAL.json`]: over.goal ?? GOAL, [`${GDIR}/LOG.md`]: '' };
       Object.assign(f.deps, {
         home: HOME, now: () => new Date('2026-11-03T09:00:00Z'),
         readGoal: (path) => files[path] ?? null, writeGoal: (path, text) => { files[path] = text; },
@@ -179,12 +179,51 @@ describe('mc publish', () => {
     };
 
     it('--goal writes the pull request into the goal\'s prs, with an entry, and still queues it', async () => {
-      const f = withGoal();
+      const f = withGoal({ goal: goalJson({ stage: 'merge', repos: ['memoro', 'memoro-cli'], title: 'asc' }) });
       assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
       assert.deepEqual(goalField(f.files[`${GDIR}/GOAL.json`], 'prs'), ['memoro#9']);
-      assert.match(f.files[`${GDIR}/LOG.md`], /· person · review · ready\n\nDone: published memoro#9\n/u);
+      assert.match(f.files[`${GDIR}/LOG.md`], /· person · merge · ready\n\nDone: published memoro#9\n/u);
       assert.match(f.out.stdout, /goal ios\/asc carries memoro#9 — done when every pull request it carries has landed\n/u);
       assert.deepEqual(f.out.merged, [['memoro', '9']]);
+    });
+
+    for (const stage of ['draft', 'build', 'review', 'finish']) {
+      it(`a goal in ${stage} is not queued, with or without --no-merge: one line names the goal, its stage and mc goal stage merge`, async () => {
+        for (const extra of [[], ['--no-merge']]) {
+          const f = withGoal({ goal: goalJson({ stage, repos: ['memoro'], title: 'asc' }) });
+          assert.equal(await run(['--goal', 'ios/asc', ...extra], f.deps), 0, f.out.stderr);
+          assert.deepEqual(f.out.merged, []);
+          assert.match(f.out.stdout, new RegExp(`goal ios/asc is in stage ${stage} — a goal's pull request reaches the merger only in stage merge; mc goal stage merge ios/asc hands it over — not queued\\n$`, 'u'));
+          assert.doesNotMatch(f.out.stdout, /next: mc merge/u);
+          assert.doesNotMatch(f.out.stdout, /queued for the merger/u);
+        }
+      });
+    }
+
+    it('a goal whose stage cannot be read queues nothing, and says so', async () => {
+      const f = withGoal({ goal: '{ not json' });
+      assert.equal(await run(['--goal', 'ios/asc'], f.deps), 0, f.out.stderr);
+      assert.deepEqual(f.out.merged, []);
+      assert.match(f.out.stdout, /goal ios\/asc is in a stage mc cannot read.*mc goal stage merge ios\/asc hands it over — not queued\n$/u);
+    });
+
+    it('under --json, next names mc goal stage merge <programme>/<goal> for a goal before merge, and mc merge for one in merge', async () => {
+      const early = withGoal({ goal: goalJson({ stage: 'build', repos: ['memoro'], title: 'asc' }) });
+      assert.equal(await run(['--goal', 'ios/asc', '--json'], early.deps), 0, early.out.stderr);
+      assert.equal(JSON.parse(early.out.stdout).next, 'mc goal stage merge ios/asc');
+      assert.deepEqual(early.out.merged, []);
+      const merge = withGoal({ goal: goalJson({ stage: 'merge', repos: ['memoro'], title: 'asc' }) });
+      assert.equal(await run(['--goal', 'ios/asc', '--json'], merge.deps), 0, merge.out.stderr);
+      assert.equal(JSON.parse(merge.out.stdout).next, 'mc merge memoro 9');
+    });
+
+    it('a goal in merge queues, and a publication that carries no goal queues, as before', async () => {
+      const merge = withGoal({ goal: goalJson({ stage: 'merge', repos: ['memoro'], title: 'asc' }) });
+      assert.equal(await run(['--goal', 'ios/asc'], merge.deps), 0, merge.out.stderr);
+      assert.deepEqual(merge.out.merged, [['memoro', '9']]);
+      const none = withGoal({ goal: goalJson({ stage: 'build', repos: ['memoro'], title: 'asc' }) });
+      assert.equal(await run([], none.deps), 0, none.out.stderr);
+      assert.deepEqual(none.out.merged, [['memoro', '9']]);
     });
 
     it('--goal with a build session\'s environment writes the entry with · by build', async () => {

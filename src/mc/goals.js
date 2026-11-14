@@ -698,6 +698,31 @@ export function goalOfPr(goals, repo, pr) {
 }
 
 /**
+ * The goals that carry `repo`'s pull request `pr` and have not reached stage
+ * `merge`: draft, build, review or finish, or a stage that cannot be read —
+ * each as `{ programme, goal, name, stage }` (`stage` null when GOAL.json does
+ * not parse). A goal carries it when it registers it in `prs`, or — the pull
+ * request not being registered — when `head` is its branch `goal/<g>` and the
+ * goal lists `repo` (a goal whose GOAL.json cannot be read lists nothing, so
+ * the branch alone names it). A done or dropped goal is not asked: its
+ * pull request is another door's (`isDroppedOnly`, repo.js). This is the rule
+ * that a goal's pull request reaches the merger only in stage `merge`
+ * (mc-goals.md, What a goal does not have).
+ */
+export function goalsBeforeMerge(goals, repo, pr, head = null) {
+  return goals
+    .filter((goal) => (goal.prs ?? []).some((item) => item.repo === repo && item.pr === Number(pr))
+      || (head && head === `goal/${goal.goal}` && (goal.problems?.length || goal.repos?.includes(repo))))
+    .filter((goal) => goal.problems?.length || (goal.stage !== 'merge' && !FINISHED.includes(goal.stage)))
+    .map((goal) => ({ programme: goal.programme, goal: goal.goal, name: `${goal.programme}/${goal.goal}`, stage: goal.problems?.length ? null : goal.stage }));
+}
+
+/** The words that say a goal before `merge` is not handed to the merger, and what hands it over. */
+export function beforeMergeLine(item) {
+  return `goal ${item.name} is ${item.stage ? `in stage ${item.stage}` : 'in a stage mc cannot read (GOAL.json does not parse)'} — a goal's pull request reaches the merger only in stage merge; mc goal stage merge ${item.name} hands it over`;
+}
+
+/**
  * Where a goal's pull requests stand, from `stateOf({ repo, pr })` — GitHub's
  * `OPEN`, `MERGED` or `CLOSED`, or null when it cannot say: `{ landed, open,
  * closed, unknown }`, each a list of `<repo>#<n>`, and `done` — at least one
