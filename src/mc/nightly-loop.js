@@ -49,7 +49,9 @@
  * no change in the tree. They are recorded as exact-commit evidence
  * (`recordMainRed`, written by the round) and handed to `requestMainRepair`,
  * the door a merge round's main red goes through: it queues a main-red mend
- * session. A red test never becomes a goal (Martin, 2026-11-13).
+ * session. A red test never becomes a goal (Martin, 2026-11-13). A test that
+ * never ends is red too (Martin, 2026-11-14): the files a stalled run names
+ * as in flight go through the same door, the stall as their failure.
  *
  * ## What it leaves behind
  *
@@ -258,6 +260,22 @@ export async function fullRun(repo, {
     if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
     else if (open.length) say(`${repo.name}: main is red in ${where} — its main-red mend is under way: ${open.join(', ')}`);
     else say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
+  }
+
+  // A test that never ends is a red test (Martin, 2026-11-14): a run stopped
+  // as stalled names the files still in flight (`repo-gate.js`, `stopStalled`),
+  // and each goes to the same main-red mend, with the stall as its failure.
+  // A stall that names no file has nothing to repair; the next day measures again.
+  const hung = [...new Set(report.stalled_files || [])].filter(Boolean).sort();
+  if (repair && report.stopped_at === 'stalled' && run.commit && hung.length) {
+    const error = [`never ended in the full run: ${report.reason || 'stalled'}`];
+    const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })) });
+    const where = hung.join(', ');
+    const created = [].concat(asked?.created || []);
+    const open = [].concat(asked?.open || []);
+    if (created.length) say(`${repo.name}: a test never ended in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
+    else if (open.length) say(`${repo.name}: a test never ended in ${where} — its main-red mend is under way: ${open.join(', ')}`);
+    else say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
   return run;
 }

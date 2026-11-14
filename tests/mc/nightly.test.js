@@ -7,7 +7,8 @@
  * moved since the last measurement (Martin, 2026-11-13), one at a time per
  * repository, and a run starts nothing after it; a merge round's lock does not
  * hold it back; a round that could not measure is never mistaken for one that
- * found nothing; its reds go to the main-red mend (`requestMainRepair`);
+ * found nothing; its reds, and the files of a test that never ended, go to
+ * the main-red mend (`requestMainRepair`);
  * and a STOP starts no further run.
  *
  * And where it is reached from: `mc test nightly status`, the verb whose round
@@ -151,6 +152,24 @@ describe('a full run', () => {
       }]);
       assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — main-red mend queued: mend-1/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
+    // A test that never ends is a red test: the files a stalled run names go
+    // to the same mend, with the stall as their failure. A stall naming none asks nothing.
+    const hung = home();
+    try {
+      const stalled = report({ verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min' });
+      stalled.stalled_files = ['tests/sw.test.js'];
+      const { repaired, said } = await pass(hung, { repos: [REPOS[0]], round: () => stalled });
+      assert.deepEqual(repaired, [{
+        repo: 'memoro', base: SHA, files: ['tests/sw.test.js'],
+        tests: [{ file: 'tests/sw.test.js', name: null, error: ['never ended in the full run: no progress for 15 min'] }],
+      }]);
+      assert.match(said.join('\n'), /a test never ended in tests\/sw\.test\.js at aaaaaaa — main-red mend queued: mend-1/u);
+      const unnamed = report({ verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min' });
+      const quiet = home();
+      try {
+        assert.deepEqual((await pass(quiet, { repos: [REPOS[0]], round: () => unnamed })).repaired, []);
+      } finally { rmSync(quiet, { recursive: true, force: true }); }
+    } finally { rmSync(hung, { recursive: true, force: true }); }
     // A green run asks for nothing.
     const other = home();
     try {

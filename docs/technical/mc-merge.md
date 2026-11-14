@@ -1558,7 +1558,10 @@ the one way the runner is: no runner, no full run.
   (`recordMainRed`, `from: full`), and the run hands the red files and tests to
   `requestMainRepair`, the door a merge round's main red goes through, which
   queues a main-red mend session. A red test never becomes a goal (Martin,
-  2026-11-13).
+  2026-11-13). A test that never ends is red too (Martin, 2026-11-14): a run
+  stopped as stalled hands the files it names as in flight to the same door,
+  with the stall as their failure; a stall that names no file asks for nothing
+  and the next day measures again.
 - **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` or `UPDATE`
   starts no run. Before the runner leaves, the chore loop ends
   the runs in flight through their round's signal and waits for them
