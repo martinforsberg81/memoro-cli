@@ -39,13 +39,40 @@ including while idle or detached; the last turn and the number of attached
 terminals do not determine its lifetime, except by the end rule of a Codex
 session below.
 
-With no session, the entrance starts one (Claude: `--bg`, then `attach <id>`;
-Codex: its own server, then a `--remote` client) and attaches. Otherwise the
-existing numbered `select` prompt lists each session's name and started time, plus “start a new one”. Joining never sends
-a turn, replaces another session or kills a provider. Claude: `Ctrl+Z` detaches;
-losing SSH or closing the attaching terminal leaves the provider in Claude's
-background daemon. After attach returns, mc reports whether the session is
-still running and names the entrance to rejoin.
+With no session, the entrance starts one (Claude: a background session; Codex:
+its own server, then a `--remote` client). Otherwise the existing numbered
+`select` prompt lists each session's name and started time, plus “start a new
+one”. Joining never sends a turn, replaces another session or kills a provider.
+
+Every interactive Claude session mc starts, foreground or background, carries
+Remote Control: `--remote-control <name>`, with the session's name as its value,
+so the session can be reached in the Claude app or at claude.ai/code. The flag
+is added once, where the Claude argv is built (`work-open.js`); the background
+holder adds it to the `--bg` start it runs. It is not recorded per session, and
+no Claude setting is written under `~/.claude`. Headless runs, runner goal
+sessions, helper intake and collect, and Codex get no flag.
+
+`--bg` is decided by the invocation of `mc plan`, `mc manager`, `mc martin` or
+`mc helper`, never remembered per session.
+
+- Without `--bg`, nothing changes: the terminal attaches, `Ctrl+Z` detaches,
+  and losing SSH or closing the attaching terminal leaves the provider in
+  Claude's background daemon. After attach returns, mc reports whether the
+  session is still running and names the entrance to rejoin.
+- With `--bg` on the persistent path (Linux over SSH, or a configured server),
+  start and join run no `claude attach`. They print two lines and return 0:
+  - `mc: <name> is running[ on <host>]. Open it in the Claude app or at claude.ai/code: session "<name>".`
+  - `mc: terminal view: mc <entrance>[ <programme>]`
+- `--bg` is refused before anything starts, with a message and no session:
+  - on a Codex launch: `--bg is for Claude sessions: a Codex session has no client but the terminal`;
+  - off the persistent path: `--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal`.
+
+A session is ended with `/exit` in the app or the terminal, or on its host with
+`claude stop <id>`. A session started before this change carries no Remote
+Control. mc does not check for the flag when it lists or joins a session, so such a
+session is joined as today; a join with `--bg` prints the two lines for it, though the
+Claude app cannot reach it. Stop it with `claude stop <id>`. mc does not add the flag
+to a running session.
 
 - `--new` starts a fresh conversation without asking.
 - `--resume <id>` joins a session already holding that conversation. Otherwise
@@ -67,7 +94,8 @@ still running and names the entrance to rejoin.
 
 Names are `mc <role> <programme>`, or `mc <role>` for a desk without a
 programme. Additional sessions take the lowest unused suffix: ` 2`, ` 3`, …
-Claude receives the name through `--name`; Codex keeps it in its session record.
+Claude receives the name through `--name` and as the `--remote-control` value;
+Codex keeps it in its session record.
 Roles normalize as for session identity:
 `brief` is `manager`, and `plan-session` is `plan`.
 
@@ -257,14 +285,17 @@ or rewrite history to force entry.
 
 ## Evidence boundary
 
-`tests/mc/claude-background.test.js` protects routing, entrance choice,
-conversation exclusion, identity, credentials, holder lifetime and registration
+`tests/mc/claude-background.test.js` protects routing, entrance choice, the
+Remote Control flag and name in the holder's argv, the `--bg` two-line entrance
+and its absence without `--bg`, conversation
+exclusion, identity, credentials, holder lifetime and registration
 with injected process, agents, register, filesystem, gateway and clock
 boundaries. `tests/mc/codex-sessions.test.js` protects the Codex server and
 client argv, environment, directory mode, billing, entrance rules with the
 Codex driver, the session-thread rule, the end rule and the rpc limits with
-injected spawn, rpc, filesystem, liveness and clock boundaries. Existing
-work-open, foreground, session-role and billing tests retain their protection.
+injected spawn, rpc, filesystem, liveness and clock boundaries. `tests/mc/work-open.test.js` protects the flag's place in the argv (leading, name
+as its value, opening prompt last) and its absence on Codex. Existing foreground,
+session-role and billing tests retain their protection.
 Bounded real-binary pty checks separately measure launch, SIGHUP survival,
 rejoin, suffix naming and tool environment for each provider. They do not
 certify a real Mac→TC SSH logout, host reboot, or future provider CLI changes.

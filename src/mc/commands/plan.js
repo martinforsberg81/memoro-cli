@@ -183,6 +183,7 @@ export async function run(argv, deps = {}) {
     resumeTool: opts.tool,
     stdout,
     verb: 'plan',
+    bg: opts.bg,
     areaName: planArea(programme, env),
     roleName: role.name || PLAN_ROLE,
     roleSource: roleSourceOf(role),
@@ -443,7 +444,7 @@ export function parseArgs(argv) {
   if (argv.includes('--repo')) {
     return { error: 'a programme spans both repositories — mc plan takes no --repo' };
   }
-  const scanned = scanArgs(argv, { booleans: ['--local', '--new', '--archive', '--resume'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--local', '--new', '--archive', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error) return { error: scanned.error };
   const words = scanned.positional;
   if (words.length > (scanned.flags.resume ? 2 : 1)) return { error: `unexpected argument ${words[scanned.flags.resume ? 2 : 1]}` };
@@ -454,8 +455,8 @@ export function parseArgs(argv) {
   // and a picker is no way to choose what to remove.
   if (scanned.flags.archive) {
     if (!words[0]) return { error: 'archive which programme? mc plan <programme> --archive' };
-    if (scanned.flags.new || scanned.flags.model || scanned.flags.tool) {
-      return { error: '--archive starts no session — it takes no --new, --model, --codex or --claude' };
+    if (scanned.flags.new || scanned.flags.model || scanned.flags.tool || scanned.flags.bg) {
+      return { error: '--archive starts no session — it takes no --new, --model, --codex, --claude or --bg' };
     }
   }
   return {
@@ -465,5 +466,6 @@ export function parseArgs(argv) {
     fresh: Boolean(scanned.flags.new),
     resume: scanned.flags.resume ? words[1] || true : null,
     archive: Boolean(scanned.flags.archive),
+    bg: Boolean(scanned.flags.bg),
   };
 }

@@ -69,7 +69,7 @@ export async function run(argv, {
     const module = await load(request.entrance);
     let emitted = false;
     const opened = async options => {
-      const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture };
+      const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture, host: request.host };
       const mechanics = launch => {
         const provider = launch.id;
         const measured = run(launch.spec.bin, ['--version'], { encoding: 'utf8', env });
@@ -123,6 +123,9 @@ export async function run(argv, {
     if (emitted && messages.length) stderr.write(messages.join(''));
     if (!emitted) {
       if (status !== 0) throw new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`);
+      // A `--bg` success has no protocol frame: its two app lines are the terminal's text. An attached
+      // success prints nothing here; the client's own status line is the one the person reads.
+      if (!request.json && request.args.includes('--bg') && messages.length) stdout.write(messages.join(''));
       if (request.json) emit(descriptor('result', { status: 0, signal: null }));
     }
     return status;

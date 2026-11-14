@@ -137,11 +137,21 @@ local TUI, not the server.
 ## Claude client
 
 Claude has no local terminal client. The remote driver runs
-`ssh -t <destination> <quoted mc session start|join …>` and returns its status;
-only the server launches `claude attach`. Refusals there also carry the
-forwarded host name. Claude versions are reported by the server, not compared
-with a nonexistent local Claude client. Claude's background persistence is
-unchanged by attachment or disconnection.
+`ssh -t <destination> <quoted mc session start|join …>` and returns its status.
+`--bg` is forwarded to the server unchanged as an entrance flag
+(`mc plan <programme> --bg`, `mc manager --bg`) and is never read as a programme
+name. The server half prints the two `--bg` lines, naming the host, and returns
+0 without attaching; the client prints nothing of its own. Without `--bg` the
+server attaches over `ssh -t`, as the terminal entrance does. Every Claude
+session the server starts carries Remote Control (`--remote-control <name>`).
+A `--bg` on a Codex desk is refused by the client before any start, naming the
+host: `mc: on <host>: --bg is for Claude sessions: a Codex session has no client
+but the terminal`. A session is ended with `/exit` in the app or the terminal,
+or with `claude stop <id>` on the server. Refusals on the server also carry the forwarded
+host name. Claude versions are reported by the server, not compared with a
+nonexistent local Claude client. Claude's background persistence is unchanged by
+attachment or disconnection. `server-link.js` and `server-protocol.js` are
+unchanged by this: the flag travels as ordinary entrance arguments.
 
 ## What survives what
 
@@ -150,7 +160,7 @@ unchanged by attachment or disconnection.
 | Codex clean idle quit, no other client | ends by existing end rule | tunnel/socket removed |
 | Codex clean quit while active or another client attached | survives | tunnel/socket removed |
 | Codex client nonzero/signal, failed startup or lost link | survives | tunnel/socket removed on client return |
-| Claude detach/SSH loss | survives in provider daemon | SSH terminal returns |
+| Claude SSH loss or detach of an attached (unflagged) session | survives in provider daemon | SSH terminal returns; a flagged session's entrance had already returned |
 | Client sleep or network outage | survives; same entrance offers join | connection may be lost |
 | Server reboot/power loss or explicit provider termination | ends | connection fails; history remains resumable |
 
@@ -169,7 +179,10 @@ probe before use. For Codex: one new and one resumed thread, inspecting each
 rollout's `turn_context` for `sandbox_policy`, `approval_policy`, `model` and
 `effort`, along with the new/resume argv split. For Claude: repeat phase 1's
 live check (background launch, role/settings environment, hooks, detach and
-attach). Update the recorded provider version and evidence. There is **no**
+attach), then start one session with `--bg`, read `claude logs <id>` and confirm
+it shows `/remote-control is active`, and check by hand, in the Claude app, that
+the session named `<name>` is reachable. mc itself reads neither the provider
+screen nor `claude logs`. Update the recorded provider version and evidence. There is **no**
 scheduled, automated, recurring or recurring-paid compatibility probe.
 
 ## Evidence limits and residual risks

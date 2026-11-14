@@ -68,6 +68,15 @@ export function sessionName(options, sessions) {
   return `${base} ${suffix}`;
 }
 
+/**
+ * Claude's Remote Control flag, with its name as the value. A bare `--remote-control`
+ * takes the next positional as its optional name, which would be the opening prompt.
+ * The flag leads the argv, so the opening prompt stays the last member.
+ */
+export function withRemoteControl(args, name) {
+  return ['--remote-control', name, ...args];
+}
+
 /** Serialise selection through registration, not attachment: two entrances must not resume one transcript. */
 export async function lockDesk(options, { io = fs, spawnProcess = spawn } = {}) {
   const root = join(workRoot(options.env), 'runner', 'session-entrance');
@@ -119,9 +128,35 @@ export function registerSession(record, session, { env = process.env, register =
   return register({ ...record, pid: session.pid, env, onExit: () => {} });
 }
 
+/** Why `--bg` is refused, named as the entrance says it: a Codex launch, or an entrance with no persistent path. */
+export const BACKGROUND_REFUSALS = Object.freeze({
+  codex: '--bg is for Claude sessions: a Codex session has no client but the terminal',
+  terminal: '--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal',
+});
+
+/**
+ * `--bg` is the invocation's choice: the session keeps running for its app and the entrance returns
+ * with two lines instead of attaching. A remote driver's join is the server half, which decides the
+ * same way on its host, so the client only forwards the flag and adds nothing to what the host printed.
+ */
 export async function joinSession(options, session, driver, {
   alive = pidAlive, stdout = options.stdout || process.stdout } = {}) {
+  const resumed = Boolean(options.joining || options.chosen);
+  const started = options.starting && !options.chosen ? session.sessionId : null;
+  const entrance = `mc ${options.verb}${options.programme ? ` ${options.programme}` : ''}`;
+  if (options.bg && !driver.discover) {
+    const on = options.host ? ` on ${options.host}` : '';
+    stdout.write(`mc: ${session.name} is running${on}. Open it in the Claude app or at claude.ai/code: session "${session.name}".\n`);
+    stdout.write(`mc: terminal view: ${entrance}\n`);
+    return { ok: true, code: 0, background: session.id, conversation: session.sessionId, running: alive(session.pid),
+      resumed, started, kept_nothing: false };
+  }
   const result = await driver.join(options, session);
+  if (options.bg) {
+    return result.error ? failure(`could not reach ${session.name}: ${result.error.message}`)
+      : { ok: true, code: result.status ?? 0, background: session.id, conversation: session.sessionId, running: alive(session.pid),
+        resumed, started, kept_nothing: false };
+  }
   let running;
   try { running = (await driver.list(options)).some(row => row.id === session.id && row.pid === session.pid && alive(row.pid)); }
   catch {
@@ -170,7 +205,8 @@ export async function prepareSessionEntrance(options, driver, {
     }
     if (options.chosen && held.has(options.chosen.id)) return { result: failure('this conversation is held by a provider process without matching desk registration; no second provider was started'), release };
     return { held, release, start: async plan => {
-      const launched = await driver.start({ ...options, lockPipe: release.pipe }, plan, sessionName(options, sessions));
+      const name = sessionName(options, sessions);
+      const launched = await driver.start({ ...options, lockPipe: release.pipe }, plan, name);
       await release();
       if (!launched.ok) {
         log('work.open-failed', { area: options.areaRoot, error: launched.reason });

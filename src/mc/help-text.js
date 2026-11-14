@@ -11,7 +11,7 @@ THE PAGE
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
 
 PLAN AND FOLLOW
-  mc server set <dest>|clear      Set server; entrances accept --local
+  mc server set <dest>|clear      Set server; entrances accept --local, --bg
   mc manager                      Person: manage work across all programmes
   mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue

@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { registerForeground } from './foreground.js';
-import { deskSessions, readRegister, recordMatchesDesk, registerSession, terminalEnvironment } from './session-entrance.js';
+import { deskSessions, readRegister, recordMatchesDesk, registerSession, terminalEnvironment, withRemoteControl } from './session-entrance.js';
 import { normalizeSessionRole, SESSION_IDENTITY_ENV } from './session-role.js';
 import { workRoot, mcHome } from './paths.js';
 import { pidAlive } from './status-collect.js';
@@ -178,7 +178,8 @@ export async function holdClaudeBackground(request, {
     const settingsIndex = args.indexOf('--settings');
     if (settingsIndex < 0) args.unshift('--settings', settingsPath);
     else args[settingsIndex + 1] = settingsPath;
-    const launched = run(launch.spec.bin, ['--bg', '--name', request.name, ...args], {
+    // Every interactive Claude session is in the app through Remote Control, named after the session.
+    const launched = run(launch.spec.bin, ['--bg', '--name', request.name, ...withRemoteControl([], request.name), ...args], {
       cwd: request.cwd, env: terminalEnvironment(env), encoding: 'utf8',
     });
     if (launched.error || launched.status !== 0) {

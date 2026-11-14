@@ -9,7 +9,7 @@ import { descriptor, sessionDescriptor, validateDescriptor, MC_VERSION } from '.
 import { run as serverSession } from '../../src/mc/commands/session.js';
 import { openInWorkArea } from '../../src/mc/work-open.js';
 import { splitLaunchArgs } from '../../src/mc/codex-sessions.js';
-import { routeServerEntrance, remoteEntrance } from '../../src/mc/server-client.js';
+import { routeServerEntrance, remoteEntrance, readEntranceArgs } from '../../src/mc/server-client.js';
 
 const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc manager', resume: null,
   started: '2026-11-14T10:00:00Z', socket: '/server/socket', access: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request'], ...fields }, 'codex', 'codex 0.168.0');
@@ -341,4 +341,38 @@ test('remote plan identifies its programme after a model value when reporting th
   assert.equal(await remoteEntrance('plan', ['--model', 'new-model', 'example', '--new'], link, { stdout: output, stderr: sink() }), 0);
   assert.match(output.value, /with mc plan example\./u);
   assert.doesNotMatch(output.value, /mc plan new-model/u);
+});
+
+// `--bg` is forwarded to the host as an entrance flag, never read as a programme: the server decides the lines it prints.
+test('remote Claude --bg is forwarded to the host with the programme it names, and prints nothing of its own', async () => {
+  const forwarded = []; const output = sink();
+  const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'claude-code', providerVersion: '2.0.0', chosen: null, sessions: [] }),
+    connect: () => { throw new Error('a Claude start is passed through, not connected'); },
+    passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
+  assert.equal(await remoteEntrance('plan', ['--bg', 'example'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['--bg', 'example'], answers: [] }]);
+  assert.equal(output.value, '');
+  // The programme the client derives is the word after `--bg`, not `--bg`'s value or nothing.
+  const read = await readEntranceArgs('plan', ['--bg', 'example']);
+  assert.equal(read.programme, 'example');
+  assert.equal(read.flags.bg, true);
+});
+
+test('remote manager --bg is forwarded to the host as its entrance flag', async () => {
+  const forwarded = []; const output = sink();
+  const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'claude-code', providerVersion: '2.0.0', chosen: null, sessions: [] }),
+    connect: () => { throw new Error('a Claude start is passed through, not connected'); },
+    passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
+  assert.equal(await remoteEntrance('manager', ['--bg'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'manager', args: ['--bg'], answers: [] }]);
+  assert.equal(output.value, '');
+});
+
+test('remote --bg on a Codex desk is refused before any start', async () => {
+  const errors = sink(); let started = false;
+  const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'codex', providerVersion: '1.0.0', chosen: null, sessions: [] }),
+    connect: () => { started = true; return { session: session() }; }, codexClient: () => ({ status: 0 }) };
+  assert.equal(await remoteEntrance('manager', ['--bg'], link, { stdout: sink(), stderr: errors }), 1);
+  assert.equal(started, false);
+  assert.match(errors.value, /on tc: --bg is for Claude sessions/u);
 });
