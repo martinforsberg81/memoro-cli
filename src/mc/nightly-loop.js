@@ -72,6 +72,7 @@ import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { fullRunLanes, runGate } from './repo-gate.js';
 import { repoStatus } from './repo-status.js';
 import { currentHolder } from './work-identity.js';
+import { awaitClaim, claimFullRun, releaseClaim } from './full-run-claim.js';
 
 /**
  * How a scheduled round is written in the round log.
@@ -185,6 +186,43 @@ export function fullRunDue(repo, { root = mcHome(), head = remoteHead, clock = (
   return { due: true, sha, why };
 }
 
+/** The command gates of a round that failed and did not pass alone, as the repair names them. */
+function failedCommandsOf(report) {
+  return (report.extra_gates || []).filter(gate => !gate.ok && !gate.retry?.ok && !gate.unavailable
+    && !(report.alone?.gates || []).some(alone => alone.name === gate.name && alone.outcome === 'passed'))
+    .map(gate => ({ id: gate.id || gate.name, packageScript: gate.name, command: gate.command,
+      exit_code: gate.exit_code, failure: gate.failure, output_path: gate.output_path }));
+}
+
+/**
+ * One round's report as the run the history stores: what was measured, on which
+ * commit, what was red. Shared by the daily run and `mc test <repo> --full`, so
+ * both write the same record.
+ */
+export function runOfReport(repo, report, { startedAt = Date.now(), clock = () => Date.now() } = {}) {
+  const failedCommands = failedCommandsOf(report);
+  return {
+    repo: repo.name,
+    path: repo.path,
+    started_at: report.started_at || new Date(startedAt).toISOString(),
+    duration_ms: report.duration_ms ?? (clock() - startedAt),
+    // The commit of the branch this measured. `--full` checks out the
+    // default branch as `origin` fetched it, so this is the `main` the
+    // answer is about — and without it a red set names no tree and cannot
+    // be compared with the next run's.
+    commit: report.base?.commit || report.candidate?.commit || null,
+    verdict: report.verdict,
+    stopped_at: report.stopped_at,
+    reason: report.reason,
+    // The failing names, for whoever asks "since when". Names only: output
+    // and stack traces turn a meter into an archive.
+    red: failedCommands.length
+      ? [...(report.candidate?.red || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
+      : report.candidate?.red || null,
+    tests: report.candidate?.totals?.tests ?? null,
+  };
+}
+
 /**
  * One full run of one repository, its result written down, its reds handed to
  * a repair. Never throws: a round that threw is this repository's answer and
@@ -193,7 +231,37 @@ export function fullRunDue(repo, { root = mcHome(), head = remoteHead, clock = (
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
   clock = () => Date.now(), signal = null, repair = requestMainRepair,
+  sha = null, claims = {},
 } = {}) {
+  // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
+  // a run already measuring this main — a deploy's, a hand-typed `--full`, the
+  // daily run's — is followed, and what it wrote to the history is the answer.
+  // One whose process died without writing it is no answer, and this starts its
+  // own.
+  for (;;) {
+    const taken = claimFullRun({ repo: repo.name, sha, verb: 'full run', root, ...claims });
+    if (taken.claimed) {
+      try {
+        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair });
+      } finally {
+        releaseClaim(taken.claim, { root, ...claims });
+      }
+    }
+    const other = taken.joined;
+    say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
+    await awaitClaim(other, { root, ...claims });
+    const last = readNightlyHistory(repo.path, { root }).runs.at(-1);
+    if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
+      say(`${repo.name} — the run being followed has ended`);
+      return { ...last, repo: repo.name, path: repo.path, joined: true };
+    }
+    say(`${repo.name} — the run being followed ended without a record; starting one`);
+  }
+}
+
+async function measure(repo, {
+  root, env, say, narrate, round, clock, signal, repair,
+}) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
   let report = null;
@@ -219,30 +287,8 @@ export async function fullRun(repo, {
     return threw;
   }
 
-  const failedCommands = (report.extra_gates || []).filter(gate => !gate.ok && !gate.retry?.ok && !gate.unavailable
-    && !(report.alone?.gates || []).some(alone => alone.name === gate.name && alone.outcome === 'passed'))
-    .map(gate => ({ id: gate.id || gate.name, packageScript: gate.name, command: gate.command,
-      exit_code: gate.exit_code, failure: gate.failure, output_path: gate.output_path }));
-  const run = {
-    repo: repo.name,
-    path: repo.path,
-    started_at: report.started_at || new Date(startedAt).toISOString(),
-    duration_ms: report.duration_ms ?? (clock() - startedAt),
-    // The commit of the branch this measured. `--full` checks out the
-    // default branch as `origin` fetched it, so this is the `main` the
-    // answer is about — and without it a red set names no tree and cannot
-    // be compared with the next run's.
-    commit: report.base?.commit || report.candidate?.commit || null,
-    verdict: report.verdict,
-    stopped_at: report.stopped_at,
-    reason: report.reason,
-    // The failing names, for whoever asks "since when". Names only: output
-    // and stack traces turn a meter into an archive.
-    red: failedCommands.length
-      ? [...(report.candidate?.red || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
-      : report.candidate?.red || null,
-    tests: report.candidate?.totals?.tests ?? null,
-  };
+  const failedCommands = failedCommandsOf(report);
+  const run = runOfReport(repo, report, { startedAt, clock });
   // The history the page reads. It is written here rather than by the round,
   // because `mc test --full` typed by a person can be asked about a pull
   // request, and red names about somebody's branch in this file would make
@@ -310,8 +356,8 @@ export async function fullRunTick({
   const waiting = [];
   const leaving = () => shouldStop() || Boolean(signal?.aborted);
 
-  const launch = (repo) => {
-    const tracked = fullRun(repo, { root, env, say, narrate, round, clock, signal, repair })
+  const launch = (repo, sha = null) => {
+    const tracked = fullRun(repo, { root, env, say, narrate, round, clock, signal, repair, sha })
       .then((ran) => [ran])
       .finally(() => { if (running.get(repo.path) === tracked) running.delete(repo.path); });
     running.set(repo.path, tracked);
@@ -326,7 +372,7 @@ export async function fullRunTick({
     const due = fullRunDue(repo, { root, head, clock, retryMs });
     if (!due.due) { waiting.push({ repo: repo.name, why: due.why }); continue; }
     started.push({ repo: repo.name, why: due.why });
-    chains.push(launch(repo));
+    chains.push(launch(repo, due.sha));
   }
   const done = Promise.all(chains).then((all) => all.flat());
   return { at, started, running: busy, waiting, stopped, done };

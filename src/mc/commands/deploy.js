@@ -88,9 +88,11 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
+import { gateRecord, measureGate, reds, suiteLines } from '../deploy-gate.js';
 import {
-  exerciseApp, gateRecord, measureFull, reds, suiteLines,
-} from '../deploy-gate.js';
+  preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
+  writePreparation,
+} from '../deploy-prepare.js';
 import { mcDiskPressure } from '../disk-admission.js';
 import { POLL_MS as DISK_POLL_MS } from '../disk-pressure.js';
 import { BUILD_LANE, releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
@@ -605,18 +607,26 @@ function failureLine(code, said, interrupted) {
  * so that the reading shows everything.
  */
 export async function gateStage({ plan, opts, env, say, deps = {} }) {
-  const full = await measureFull({
-    sha: plan.sha, path: plan.path, env, dryRun: opts.dryRun, say,
-    deps: deps.gate || {}, root: deps.gate?.root, mendRoot: deps.gate?.mendRoot,
+  const measured = await measureGate({
+    sha: plan.sha, path: plan.path, acceptRed: Boolean(opts.acceptRed), dryRun: opts.dryRun, env, say,
+    deps: deps.gate || {}, suites: deps.suites || {},
   });
+  return judgeGate({ ...measured, plan, opts });
+}
+
+/**
+ * What the two measurements mean for this deploy: the lines to say, the
+ * refusal if there is one, what `--accept-red` takes. The measuring may have
+ * been done long ago, by another process (`deploy-prepare.js`); the judging is
+ * always the asker's, with the asker's flags.
+ */
+export function judgeGate({ full, exercise, plan, opts }) {
   const lines = [...full.lines];
   const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
   const redFull = full.state === 'red' || full.state === 'stalled';
   if (unmeasured || (redFull && !opts.dryRun && !opts.acceptRed)) {
     return { full, exercise: null, lines, accepted: '', refusal: refusalOf({ full, exercise: null, plan }) };
   }
-  say(`mc: suites — starting a local server of ${plan.short} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha: plan.sha, env, say, deps: deps.suites || {} });
   lines.push(...suiteLines(exercise, { sha: plan.sha }));
 
   const found = reds({ full, exercise });
@@ -738,6 +748,8 @@ export async function run(argv, deps = {}) {
   // deploys nothing, so it is the safe thing to type when you are not sure.
   if (opts.dryRun) {
     if (!opts.json) for (const line of planLines(plan)) stdout.write(`${line}\n`);
+    const busy = preparationInFlight({ root: deps.root || workRoot(env), plan, alive: deps.alive || processAlive });
+    if (busy && !opts.json) stdout.write(`${busy}\n`);
     const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
     if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: gateSummary(gate) }, null, 2)}\n`);
     else {
@@ -813,7 +825,15 @@ export async function run(argv, deps = {}) {
   // The commit is measured whole and the app used before anybody is asked
   // anything — and after every refusal that costs nothing to make, so a deploy
   // already running or a dirty main is not found out after a full run.
-  const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
+  const root = deps.root || workRoot(env);
+  const prepared = await prepareStage({
+    plan, opts, env, root, holder, say, stdout, stderr, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
+  });
+  if (prepared.code != null) {
+    if (prepared.note) refuse(prepared.note);
+    return prepared.code;
+  }
+  const gate = judgeGate({ ...prepared.result, plan, opts });
   cells = gateRecord({ full: gate.full, exercise: gate.exercise, accepted: gate.accepted });
   if (opts.json) stdout.write(`${JSON.stringify({ gate: gateSummary(gate) }, null, 2)}\n`);
   else for (const line of gate.lines) stdout.write(`${line}\n`);
@@ -839,7 +859,6 @@ export async function run(argv, deps = {}) {
   // lock the record is final: the check for a running deploy, the closing of
   // an abandoned row, the deployer's start and its row are one step.
   const lock = deps.lock || realLock;
-  const root = deps.root || workRoot(env);
   const startDeployer = deps.startDeployer || startDeployerDefault;
   const started = lock(root, () => {
     if (refuseRunning()) return null;
@@ -1158,6 +1177,124 @@ export async function ship(job, deps = {}) {
   }
 }
 
+/* ------------------------------------------------------------ preparation */
+
+const PREPARER_RUN = fileURLToPath(new URL('../deploy-prepare-run.js', import.meta.url));
+
+/**
+ * The preparation, started detached: `deploy-prepare-run.js` with the job as
+ * its one argument, its output in `deploy-prepare.log`. Its own process group
+ * — a terminal lost on the way, over SSH or at the page, reaches only the
+ * watcher. `{ pid, log }`, or `{ pid: null, error }`.
+ */
+export function startPreparerDefault(job, { env = process.env, spawnProcess = spawn } = {}) {
+  return startDetached(job, {
+    script: join('src', 'mc', 'deploy-prepare-run.js'), fallback: PREPARER_RUN, log: preparationLogPath(job.root),
+    cwd: job.path, env, spawnProcess,
+  });
+}
+
+/** One line for a preparation of `plan.sha` that is running, or null. */
+function preparationInFlight({ root, plan, alive }) {
+  const record = readPreparation(root);
+  if (!record || record.sha !== plan.sha || preparationState(record, { alive }) !== 'running') return null;
+  return `mc: ${plan.short} is being prepared (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}) — mc deploy joins it`;
+}
+
+/**
+ * Everything before the question, in a process of its own: the full run of
+ * the commit that would ship and the app used (`deploy-prepare.js`).
+ *
+ * The record decides, under the register's lock, and exactly by sha: a
+ * preparation of this commit that is running is joined (watched, not started
+ * again); one that finished and answers these flags is read; anything else — none,
+ * an interrupted one, a failed one, one of another main — starts a new one,
+ * and says so in one line. The watching is this process's; a lost terminal
+ * ends it and nothing else.
+ *
+ * `{ result }` when the measurements are in, else `{ code, note }`: the exit
+ * code the deploy ends with and, for a refusal, the row's note.
+ */
+async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps }) {
+  const alive = deps.alive || processAlive;
+  const lock = deps.lock || realLock;
+  const startPreparer = deps.startPreparer || startPreparerDefault;
+  const when = (at) => String(at || '').slice(0, 16).replace('T', ' ');
+
+  const chosen = lock(root, () => {
+    const record = readPreparation(root);
+    const state = preparationState(record, { alive });
+    const same = record?.sha === plan.sha;
+    if (same && state === 'running') return { join: record };
+    if (same && state === 'done' && preparationServes(record, opts)) return { done: record };
+
+    let said = null;
+    if (record && !same) {
+      said = `mc: the last preparation was of ${short(record.sha)}${state === 'running' ? ' and is still running' : ''}, main is ${plan.short} now — starting a new one, of ${plan.short}`;
+    } else if (record && state === 'interrupted') {
+      said = `mc: the preparation of ${plan.short} started ${when(record.started)} was interrupted at ${STAGE_WORDS[record.stage] || record.stage} — starting a new one`;
+    } else if (record && state === 'failed') {
+      said = `mc: the preparation of ${plan.short} failed (${record.error}) — starting a new one`;
+    } else if (record && state === 'done') {
+      said = `mc: the preparation of ${plan.short} skipped the suites, which --accept-red needs — preparing again`;
+    }
+    const log = preparationLogPath(root);
+    const started = new Date().toISOString();
+    const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name };
+    // The record is written before the process exists, so that its first
+    // word about itself finds it and a second asker finds it too.
+    writePreparation(root, { sha: plan.sha, pid: null, started, stage: 'starting', log, accept_red: Boolean(opts.acceptRed), holder: holder.name });
+    const preparer = startPreparer(job, { ...deps, stdout, stderr, env });
+    if (preparer.pid) patchPreparation(root, started, { pid: preparer.pid }, { lock: (r, fn) => fn() });
+    else patchPreparation(root, started, { stage: 'done', ended: new Date().toISOString(), error: `the preparation could not be started (${preparer.error || 'no pid'})` }, { lock: (r, fn) => fn() });
+    return { started: { job, preparer }, said };
+  }, { name: 'deploy-prepare' });
+
+  let record;
+  let watch;
+  if (chosen.done) {
+    say(`mc: ${plan.short} was prepared ${when(chosen.done.ended)} — the gate's answer is read from that, nothing is measured again`);
+    return { result: chosen.done.result };
+  }
+  if (chosen.join) {
+    record = chosen.join;
+    say(`mc: ${plan.short} is already being prepared (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, since ${when(record.started)}) — following it, not starting a second`);
+    watch = { pid: Number(record.pid), log: record.log || preparationLogPath(root) };
+  } else {
+    if (chosen.said) say(chosen.said);
+    const { job, preparer } = chosen.started;
+    record = { started: job.started };
+    if (!preparer.pid) {
+      const note = `the preparation could not be started (${preparer.error || 'no pid'})`;
+      stderr.write(`mc: ${note} — nothing was deployed\n`);
+      return { code: 1, note };
+    }
+    say(`mc: preparing ${plan.short} in its own process (pid ${preparer.pid}) — the full run and the suites; a lost terminal does not stop it, mc deploy joins it`);
+    if (preparer.inline) await preparer.inline();
+    else watch = { pid: preparer.pid, log: preparer.log || job.log };
+  }
+  if (watch) {
+    const stopped = await followLog({
+      log: watch.log, pid: watch.pid, stdout, deps,
+      stopped: `the preparation goes on (pid ${watch.pid}); mc deploy joins it and asks`,
+    });
+    if (stopped !== null) return { code: stopped };
+  }
+  const ended = readPreparation(root);
+  if (!ended || ended.started !== record.started) {
+    // Another asker moved the record on while this one watched: main moved.
+    const note = `the preparation of ${plan.short} was replaced by a newer one while it was watched`;
+    stderr.write(`mc: ${note} — mc deploy again joins the newer one; nothing was deployed\n`);
+    return { code: 1, note };
+  }
+  const state = preparationState(ended, { alive });
+  if (state === 'done' && ended.result) return { result: ended.result };
+  const why = state === 'failed' ? `failed — ${ended.error}` : `was interrupted at ${STAGE_WORDS[ended.stage] || ended.stage} (its process is gone)`;
+  const note = `the preparation of ${plan.short} ${why}`;
+  stderr.write(`mc: ${note} — nothing was deployed; mc deploy starts a new one\n`);
+  return { code: 1, note };
+}
+
 /* --------------------------------------------------------------- deployer */
 
 const DEPLOYER_RUN = fileURLToPath(new URL('../deploy-run.js', import.meta.url));
@@ -1272,6 +1409,16 @@ async function follow({ env, stdout, deps }) {
   const alive = deps.alive || processAlive;
   const running = runningDeploy(env, { alive });
   if (!running) {
+    const root = deps.root || workRoot(env);
+    const record = readPreparation(root);
+    if (preparationState(record, { alive }) === 'running') {
+      stdout.write(`mc: following the preparation of ${short(record.sha)} (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, started ${String(record.started).slice(0, 16).replace('T', ' ')}) — mc deploy joins it and asks\n`);
+      const stopped = await followLog({
+        log: record.log || preparationLogPath(root), pid: Number(record.pid), stdout, deps,
+        stopped: `the preparation goes on (pid ${record.pid}); mc deploy joins it`,
+      });
+      return stopped ?? 0;
+    }
     stdout.write('mc: no deploy is running\n');
     return 0;
   }

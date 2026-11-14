@@ -23,6 +23,7 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
+import { prepare } from '../../../src/mc/deploy-prepare.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
@@ -220,6 +221,9 @@ function deps(extra = {}) {
     // The deployer, run in the test's own process once its row is written
     // (ruling 30): the same `ship` the detached `deploy-run.js` runs.
     startDeployer: (job, d) => ({ pid: process.pid, inline: () => ship(job, d) }),
+    // The preparation, run in the test's own process: the same `prepare` the
+    // detached `deploy-prepare-run.js` runs, its record written for real.
+    startPreparer: (job, d) => ({ pid: process.pid, inline: () => prepare(job, { stdout: d.stdout, env: d.env, deps: d }) }),
     ...extra,
   };
 }

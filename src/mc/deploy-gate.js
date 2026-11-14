@@ -141,9 +141,19 @@ export async function measureFull({
       };
     }
     say(`mc: full run — none of ${short(sha)}; starting one (mc test memoro --full, the round the daily run takes) and following it`);
-    const ran = normalized(await (deps.fullRun || fullRun)({ name: REPO, path }, {
-      root, env, say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
-    }));
+    const start = () => (deps.fullRun || fullRun)({ name: REPO, path }, {
+      root, env, sha, say: (line) => say(`mc:   ${line}`), narrate: (line) => say(`mc:   ${line}`),
+    });
+    let given = await start();
+    // A run this one followed measured what its starter found, which may be a
+    // main that has since moved: the tree that would ship is then still
+    // unmeasured, and is measured now — the followed run is over, so nothing
+    // else is measuring it.
+    if (given?.joined && given.commit && given.commit !== sha) {
+      say(`mc: full run — the one followed measured ${short(given.commit)}, not ${short(sha)}; starting one of ${short(sha)}`);
+      given = await start();
+    }
+    const ran = normalized(given);
     started = true;
     run = ran;
     state = ran.commit && ran.commit !== sha ? 'moved' : classify(ran);
@@ -154,6 +164,32 @@ export async function measureFull({
     ? mendsFor(commit, { root: mendRoot, read: deps.readMends || readMainMends })
     : [];
   return { state, run, commit, mends, started, lines: fullRunLines({ state, run, sha, mends, started }) };
+}
+
+/**
+ * Both measurements of the commit that would ship — the full run, then the app
+ * used — and nothing said about them: `{ full, exercise }`, `exercise` null when
+ * the full run already refuses the deploy and nobody accepts that (the suites
+ * cost minutes and the answer is known), or when it measured nothing about this
+ * tree. A dry run and an accepted red both run the suites, so that the reading
+ * shows everything. `stage` is told `full-run`, then `suites`, as each begins.
+ * This is what the deploy's preparation runs in its own process
+ * (`deploy-prepare.js`); the judging is the asker's (`judgeGate`).
+ */
+export async function measureGate({
+  sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {},
+}) {
+  stage('full-run');
+  const full = await measureFull({
+    sha, path, env, dryRun, say, deps, root: deps.root, mendRoot: deps.mendRoot,
+  });
+  const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
+  const redFull = full.state === 'red' || full.state === 'stalled';
+  if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
+  stage('suites');
+  say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
+  const exercise = await exerciseApp({ sha, env, say, deps: suites });
+  return { full, exercise };
 }
 
 /** What the reading says about the full run. */
