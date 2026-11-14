@@ -199,6 +199,51 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
 }
 
+/** How long a round that was settled as interrupted stays on the page. */
+export const INTERRUPTED_SHOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Settle the rounds that died: a start whose process is gone and which no end
+ * line closes gets one, `stopped_at: 'interrupted'`, written under the start's
+ * own `run` so the pair joins as any other. Without it the round stays a start
+ * with no end for ever — the shape a deploy over SSH left on 2026-11-14 when
+ * the connection took the process with it — and every reader has to rediscover
+ * the death. Returns the rounds settled now and the ones settled before, newest
+ * first, for the page to show. A round whose process lives is left alone.
+ */
+export function settleInterruptedRounds({
+  root = mcHome(), alive = isAlive, now = new Date(), shownMs = INTERRUPTED_SHOWN_MS,
+} = {}) {
+  const { rounds } = readRounds({ root });
+  for (const start of unfinishedRounds(rounds, { alive }).filter((round) => round.verdict === 'died')) {
+    append({
+      schema: ROUND_LOG_SCHEMA,
+      version: ROUND_LOG_VERSION,
+      phase: 'end',
+      at: start.at,
+      ended_at: now.toISOString(),
+      repo: start.repo,
+      mode: start.mode,
+      pid: start.pid,
+      run: start.run,
+      prs: start.prs || [],
+      holder: start.holder || null,
+      ok: false,
+      merged: [],
+      stopped_at: 'interrupted',
+      reason: `process ${start.pid ?? 'unknown'} ended without an end record`,
+    }, root);
+  }
+  const since = now.getTime() - shownMs;
+  return readRounds({ root }).rounds
+    .filter((round) => round.phase === 'end' && round.stopped_at === 'interrupted' && Date.parse(round.ended_at || round.at) >= since)
+    .map((round) => ({
+      repo: round.repo, mode: round.mode, pid: round.pid, prs: round.prs || [],
+      started: round.at, ended: round.ended_at || round.at, reason: round.reason || null,
+    }))
+    .reverse();
+}
+
 /** At most this many names in one field; past it, the count of the rest. */
 const NAME_CAP = 40;
 
