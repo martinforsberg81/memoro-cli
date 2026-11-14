@@ -705,9 +705,10 @@ No red test becomes a goal; repair goals already in flight finish as goals.
 The atomic runner state `~/mc/runner/main-mend/<repo>.json` has version 1 and
 one entry per red file, preserving test names/errors, base, finder (round of
 `<repo>#<pr>`, or the full run) and state: queued, running, published (with PR),
-landed, or Martin. A queued, running or published file asks for nothing new;
-Martin also holds duplicates until resolved. A red after landed gets a fresh
-entry. All read-patch-write transitions use the shared strict runner lock.
+landed, dropped, or Martin. A queued, running or published file asks for nothing new;
+a Martin entry also holds duplicates until `mc repo mend` answers it. A red after landed or dropped gets a
+fresh entry; a dropped entry is finished, so `mainMendReading` omits it and the
+deploy gate's mend words do not name it. All read-patch-write transitions use the shared strict runner lock.
 Queued files of one repository and finder run together, at merge-failure mend
 priority within the existing lane total. A retry retains its original batch,
 branch `mend/main-<repo>-<digest>` and worktree under `runner/work/`; new files
@@ -723,14 +724,38 @@ It proves the named files GREEN with `mc gate --fresh`, none SETTLED, completes
 with title `Repair main's red: <files>` and cause/gate evidence in the body.
 Publication records ownership before queueing so a fast merge cannot lose the
 outcome. The merger marks landed and removes the clean worktree after its
-session releases it; no force-removal of edits. A session without a published
+session releases it; no force-removal of edits. Removal is one function,
+`removeFinishedWorktrees` in `src/mc/main-repair.js`, the only `git worktree
+remove` call (no `--force`); the merger's `tell`, `runMainMend`'s finally and the
+settlement pass all call it. It removes the tree of a landed or dropped entry
+only when no queued, running, published or Martin entry names the same path, no
+live `current-*.json` names it and no runner claim holds its owner; any other tree
+is kept and the keeping is said with its reason. A session without a published
 PR, a dead runner's running request, or a failed merge is an unsuccessful
 outcome. One more mend attempt follows the initial attempt on the same branch;
 a third waits on Martin with the latest session log, visible in
 `mc repo status`, the page's Martin queue and `mc martin get`, without a goal.
+
+**Martin answers a held repair with `mc repo mend <repo> <id> requeue|drop
+--reason "<text>"`** (the person and roles `martin` and `decision`; every other
+role, a headless `martin` and an unknown role are refused with exit 2 and no
+write; so are an unknown repo or id, an entry that does not read Martin and a
+missing or empty reason). `requeue` makes the entry `queued` with failures 0 and
+keeps its branch, worktree, PR, session log and reason, so the runner offers it on
+the same branch and the mend prompt carries the reason. `drop` makes it `dropped`.
+Both record `answered: { verb, by, at, reason }`. A drop first closes an
+exclusive open PR with a comment, confirms the close and removes its merge-queue
+row, each its own hold and each before the state write; a PR another repair
+still carries is left open. When gh cannot say or confirm the close the verb
+exits 1 and the entry stays Martin. No gh call is made under a lock and no lock is
+nested. The final hold re-reads the entry: if it is no longer Martin the verb exits
+1 naming its state, and if a shared PR was left open and no entry carries it any
+more it writes nothing and exits 1 saying the PR is still open. A requeued entry
+that reaches Martin again is a new question to the desk
+([`mc-martin.md`](mc-martin.md) § *Durable desk items*).
 Transient merge requeues do not consume an attempt. The runner settlement pass
 restores missing published queue handoffs and reconciles merged/closed PRs,
-using ordinary idempotent queueing, and retries safe landed-worktree cleanup.
+using ordinary idempotent queueing, and retries safe finished (landed or dropped) worktree cleanup.
 
 A red test green at the base, absent there, or a base run that
 could not be made or did not finish is the change's red, as before. Touched

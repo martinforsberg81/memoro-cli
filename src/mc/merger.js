@@ -47,7 +47,7 @@ import {
   dequeue, enqueue, heldBy, inLine, markLanding, markOffline, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor,
 } from './merge-queue.js';
-import { answerMainMend, mainMendPath, requestMainRepair } from './main-repair.js';
+import { answerMainMend, mainMendPath, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
@@ -442,6 +442,7 @@ export async function landJob(batch, {
   noteGoal = appendEntry,
   // Main's red becomes goal-less mend lane work (`main-repair.js`).
   repairMain = (request) => requestMainRepair({ ...request, root, read, write, lock, now }),
+  sweepMendWorktrees = defaultSweep,
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
   // immediately before the irreversible GitHub merge call.
@@ -479,7 +480,7 @@ export async function landJob(batch, {
       try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
     }
     await tell(job, landed, given, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain, sweepMendWorktrees,
     });
     // Outside any lock: the queue's lock, taken twice by this process, waits 5 s.
     if (onAnswer) {
@@ -767,7 +768,12 @@ export function mainRepairsOf(report) {
 }
 
 /** One job's answer, said and written: the page's cache, the goal, the runs.tsv row. */
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair }) {
+/** The one removal of a finished repair's worktree (`removeFinishedWorktrees`), with git and the file system as they are. */
+function defaultSweep(options) {
+  return removeFinishedWorktrees({ ...options, exists: existsSync, git: (cwd, args) => { const result = runGit(cwd, args); return { ok: result.status === 0, stderr: result.stderr }; } });
+}
+
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair, sweepMendWorktrees = defaultSweep }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
@@ -797,15 +803,10 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
   // Ownership is recorded by mc publish before queueing, even if its session is still ending.
   if (read(mainMendPath(root, job.repo)) != null && (landed || (!back && !requeued && !offline))) {
     const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, read, write, lock });
-    if (landed) for (const path of new Set(repaired.map((entry) => entry.worktree).filter(Boolean))) {
-      // No force: a session still exiting or uncommitted work keeps its tree for cleanup later.
-      let active = false;
-      try { active = readdirSync(join(root, 'runner')).filter((file) => /^current-.+\.json$/u.test(file)).some((file) => {
-        try { return JSON.parse(read(join(root, 'runner', file)))?.worktree === path; } catch { return false; }
-      }); } catch { /* no current files */ }
-      if (active) continue;
-      const removed = runGit(job.repo_path, ['worktree', 'remove', path]);
-      if (removed.status !== 0) say(`${label}: landed main-red repair; worktree retained at ${path}`);
+    // No force: a session still exiting or uncommitted work keeps its tree for cleanup later.
+    if (landed && repaired.length) {
+      const swept = sweepMendWorktrees({ root, repo: job.repo, repoPath: job.repo_path, read });
+      for (const { path, reason } of swept.kept) say(`${label}: landed main-red repair; worktree retained at ${path} — ${reason}`);
     }
   }
   for (const found of mainRepairsOf(report)) {

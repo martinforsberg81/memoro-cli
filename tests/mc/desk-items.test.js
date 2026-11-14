@@ -289,3 +289,30 @@ test('the sync never writes a new record over an item a second sync created and 
   assert.deepEqual(readDeskItem(items[0].id, { env: f.env }), items[0]);
   assert.equal(readdirSync(join(f.env.MC_WORK_ROOT, 'martin', 'items')).filter(n => !n.startsWith('.')).length, 1);
 });
+
+test('a main-red repair that reaches Martin again after an answer is a new desk item; an unanswered one keeps its own', () => {
+  const f = fixture();
+  const dir = join(f.env.MC_WORK_ROOT, 'runner', 'main-mend'); mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'memoro.json');
+  const answeredAt = '2026-11-14T12:00:00.000Z', again = '2026-11-14T15:00:00.000Z';
+  const red = { id: 'red1', file: 'tests/a.test.js', state: 'Martin', created: stamp, reason: 'Repeated red', failures: 2 };
+  const put = (fields) => writeFileSync(path, JSON.stringify({ version: 1, entries: [{ ...red, ...fields }] }));
+  const deps = { env: f.env, home: f.home, now: () => new Date(again), reportIssue: () => {} };
+  const reference = 'main-red:memoro/red1';
+  const items = () => syncDeskItems(deps).filter((item) => item.reference === reference);
+  put({});
+  const [first] = items();
+  assert.equal(first.id, deskItemId('main-red', reference, stamp), 'an unanswered entry keeps the id made from its creation');
+  assert.equal(first.source_at, stamp);
+  put({ state: 'queued', failures: 0, answered: { verb: 'requeue', by: 'person', at: answeredAt, reason: 'retry' } });
+  assert.deepEqual(items().map((item) => [item.state, item.outcome?.by]), [['closed', 'source']], 'a sync alone closes the answered item by source');
+  put({ failures: 2, answered: { verb: 'requeue', by: 'person', at: answeredAt, reason: 'retry' } });
+  const all = items();
+  assert.equal(all.length, 2, 'the entry reaching Martin again opens a new item beside the closed one');
+  const reopened = all.find((item) => item.id !== first.id);
+  assert.equal(reopened.id, deskItemId('main-red', reference, answeredAt));
+  assert.equal(reopened.source_at, answeredAt);
+  assert.equal(reopened.state, 'new');
+  assert.equal(all.find((item) => item.id === first.id).state, 'closed');
+  assert.equal(items().length, 2, 'another sync opens nothing more');
+});
