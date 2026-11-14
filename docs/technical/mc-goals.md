@@ -184,7 +184,7 @@ is read, written and shown exactly as above. Version 2 has the same header
   "change": [{ "id": "C1", "where": "src/mc/goals.js", "what": "…" }],
   "latitude": ["What the build chooses."],
   "preserve": [{ "id": "V1", "text": "…", "upheld_by": "criterion 1" }],
-  "obligations": [{ "area": "Documentation", "stand": "touched", "text": "…", "standard": "memoro-cli/docs/technical/mc-goals.md#GOAL.json" }],
+  "obligations": [{ "area": "memoro-cli/documentation", "stand": "touched", "text": "…", "standard": "memoro-cli/docs/technical/mc-goals.md#GOAL.json" }],
   "risks": [{ "id": "R1", "text": "…", "settled_by": "criterion 1" }],
   "success_criteria": [{ "criterion": "…", "check": "…", "evidence": "…", "met": false }],
   "protection": ["The test protection the goal commissions."],
@@ -206,6 +206,9 @@ is read, written and shown exactly as above. Version 2 has the same header
 - `obligations` — one entry per rule area (`area`, `stand` `touched` or
   `untouched`, `text`, and an optional `standard`
   `<repo>/<path>#<section>`, on either stand). A second write for an area replaces the first.
+  An area is written `<repo>/<id>` where the repository declares rule areas
+  (*Rule areas*); validation of the file takes any non-blank word, and only
+  `mc goal obligation set` checks it against the declarations.
 - `success_criteria` — as in version 1, with an optional `evidence` (what the
   build logs for the criterion).
 - `ids` — for each part letter, the highest number ever given. A new item takes
@@ -276,9 +279,66 @@ Next: what the next session should do
   The merger writes `Done: landed #<pr> as <sha>`, or `Done: merger answered
   red on #<pr>` (`moved` for a head past the judged one, `redMergeText`).
 
+## Rule areas
+
+A repository declares its rule areas in `.mc/areas.json` on `main`, so that an
+obligation names an area both sides know. The declaration is read from the
+repository's `origin/main` (or the revision `--at` names), as `.mc/ios.json` is,
+because a goal is written before its worktree exists and the areas that bind a
+goal are main's.
+
+```json
+{
+  "schema_version": 1,
+  "areas": [
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "covers": "What a change must say in the repository's own words.",
+      "standards": ["docs/technical/mc-goals.md"],
+      "paths": ["docs/", "canon/"],
+      "questions": [{ "when": "a behaviour changes", "ask": "Does docs/technical say what runs?" }]
+    }
+  ]
+}
+```
+
+- The file is `schema_version` 1 and a non-empty `areas`; no other key.
+- An area has exactly `id` (lower-case letters, digits and hyphens, starting
+  with a letter, unique in the file), `name`, `covers`, `standards` (a non-empty
+  array of repository paths), `paths` (an array, possibly empty) and
+  `questions` (a non-empty array of `{ "when", "ask" }`). A blank text, a
+  missing field or an unknown key makes the file invalid.
+- An obligation's `area` is `<repo>/<id>`, `<repo>` being the repository that
+  declares it (`memoro-cli/documentation`).
+- A repository without the file declares no areas and behaves as it did.
+  The file is absent when git says the path is not in the revision; any other
+  git failure — a revision that does not exist, an unreadable repository — is
+  an error, never "declares none".
+- Nothing requires a stand for an area, and no brief or goal text carries the
+  declarations: `mc goal show` does not render them.
+
+**`mc goal areas`** prints each declared area as a block — `<repo>/<id>`, its
+name, what it covers, standards (`(missing)` after one that is not in the
+revision), paths and questions. For a repository that declares none it prints
+one line saying so (exit 0); an unknown repository name exits 2. For a goal it
+prints the blocks of every goal repository that declares areas, each with the
+goal's stand for it (`stand: touched — <text> [<standard>]`, or `no stand`),
+then the obligations whose area no repository declares, and ends
+`<n> of <m> areas have a stand`. A version 1 goal exits 2; a goal that cannot be
+read, a repository that is not known and a declaration that cannot be read or
+is invalid exit 1.
+
+**`mc goal obligation set`** takes, for a goal whose repositories declare any
+area, only a declared `<repo>/<id>`: any other word is refused (exit 2, nothing
+written) with the declared areas listed. A goal none of whose repositories
+declares areas takes any word, and `<repo>/…` is accepted for a goal repository
+that declares none. A declaration that cannot be read or is invalid makes the
+write fail (exit 1); the declaration is read once per write.
+
 ## The verbs
 
-Twenty verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
+Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 `drop` set one field each.
 
 - **`defect [<p>/<g>] --part "…" --found "…" [--evidence "…"|--evidence-file <f>] [--next "…"|--next-file <f>]`** —
@@ -297,6 +357,13 @@ Twenty verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the runner starts nothing on it, and the desk opens one item whose label is
   the entry's first line (`deskItemQuestion` takes the `Martin` entry of
   its minute, so another entry in the same minute does not hide it).
+
+- **`areas <repo> | <p>/<g> [--at <rev>]`** — shows rule areas (*Rule areas*).
+  Given a repository mc knows it prints that repository's declaration at `<rev>`
+  (`origin/main` by default); given a goal, the declarations of the goal's
+  repositories and, for each area, the goal's obligation for it. `MC_GOAL`
+  stands in for the argument. Plan, a person and the learning role may run it;
+  so may a build, review, finish or mend session, which only reads.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
@@ -331,7 +398,10 @@ Twenty verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   is not given again (`ids`).
 - **`obligation set <p>/<g> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`**
   and **`obligation remove <p>/<g> <area> --reason "…"`** — write or take out
-  the goal's obligation for one rule area, logged.
+  the goal's obligation for one rule area, logged. `set` checks the area
+  against the goal's repositories' declarations (*Rule areas*); `remove` takes
+  any area the goal holds. After a `set` it names the declared areas that still
+  have no obligation.
   The item and obligation verbs write the brief like `set`: a build, review,
   finish or mend session is refused (exit 2, nothing written), and so is the
   learning role (it may not make a goal with `--structure 2` either); plan,

@@ -18,7 +18,7 @@ with ✓/✗ and its check, and each worktree's state.
   and contract: `mc goal set <p>/<g> title|aim|outcome|latitude|protection
   --text "…"`, `mc goal item add|set|remove <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope …`
   (it prints the item's id, B, P, D, C, V, R or X and a number, never given
-  twice), `mc goal obligation set|remove <p>/<g> <area> …`, and `--evidence "…"`
+  twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them), and `--evidence "…"`
   on `criterion add|set`. Each version's verbs refuse the other's goal; a
   build, review, finish or mend session cannot write the parts. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
