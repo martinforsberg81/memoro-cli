@@ -9,7 +9,7 @@ import { descriptor, sessionDescriptor, validateDescriptor, MC_VERSION } from '.
 import { run as serverSession } from '../../src/mc/commands/session.js';
 import { openInWorkArea } from '../../src/mc/work-open.js';
 import { splitLaunchArgs } from '../../src/mc/codex-sessions.js';
-import { routeServerEntrance, remoteEntrance } from '../../src/mc/server-client.js';
+import { routeServerEntrance, remoteEntrance, readEntranceArgs } from '../../src/mc/server-client.js';
 
 const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc manager', resume: null,
   started: '2026-11-14T10:00:00Z', socket: '/server/socket', access: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request'], ...fields }, 'codex', 'codex 0.168.0');
@@ -349,9 +349,13 @@ test('remote Claude --bg is forwarded to the host with the programme it names, a
   const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'claude-code', providerVersion: '2.0.0', chosen: null, sessions: [] }),
     connect: () => { throw new Error('a Claude start is passed through, not connected'); },
     passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
-  assert.equal(await remoteEntrance('plan', ['example', '--bg'], link, { stdout: output, stderr: sink() }), 0);
-  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['example', '--bg'], answers: [] }]);
+  assert.equal(await remoteEntrance('plan', ['--bg', 'example'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['--bg', 'example'], answers: [] }]);
   assert.equal(output.value, '');
+  // The programme the client derives is the word after `--bg`, not `--bg`'s value or nothing.
+  const read = await readEntranceArgs('plan', ['--bg', 'example']);
+  assert.equal(read.programme, 'example');
+  assert.equal(read.flags.bg, true);
 });
 
 test('remote manager --bg is forwarded to the host as its entrance flag', async () => {

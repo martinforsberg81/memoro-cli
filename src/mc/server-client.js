@@ -20,11 +20,17 @@ export async function routeServerEntrance(entrance, args, {
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
 
+/** What the client reads from an entrance's argv. `--bg` is known so that it is never taken for `mc plan`'s programme. */
+export async function readEntranceArgs(entrance, args) {
+  const { scanArgs } = await import('./commands/flags.js');
+  const { flags, positional } = scanArgs(args, { booleans: ['--new', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true });
+  return { flags, programme: entrance === 'plan' ? positional[0] || null : null };
+}
+
 export async function remoteEntrance(entrance, args, link, { stdout = process.stdout, stderr = process.stderr,
   choose = select, question = ask } = {}) {
   const { prepareSessionEntrance, BACKGROUND_REFUSALS } = await import('./session-entrance.js');
-  const { scanArgs } = await import('./commands/flags.js');
-  const { flags, positional } = scanArgs(args, { booleans: ['--new', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true });
+  const { flags, programme } = await readEntranceArgs(entrance, args);
   const answers = [];
   let snapshot;
   for (;;) {
@@ -61,7 +67,7 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
       return result;
     },
   };
-  const options = { verb: entrance, programme: entrance === 'plan' ? positional[0] || null : null,
+  const options = { verb: entrance, programme,
     launch: { id: snapshot.provider }, pick: args.includes('--new') ? 'new' : null,
     chosen: snapshot.chosen ? { id: snapshot.chosen } : null, model: flags.model,
     resumeTool: flags.tool, bg: flags.bg, stdout, stderr };

@@ -201,7 +201,7 @@ export async function prepareSessionEntrance(options, driver, {
         return { result: failure('joining an existing session cannot apply --model or a different --tool; start a new one to apply them'), release };
       }
       await release();
-      return { result: await joinSession({ ...options, joining: true }, selected, driver, { alive, records }), release };
+      return { result: await joinSession({ ...options, joining: true }, selected, driver, { alive }), release };
     }
     if (options.chosen && held.has(options.chosen.id)) return { result: failure('this conversation is held by a provider process without matching desk registration; no second provider was started'), release };
     return { held, release, start: async plan => {
@@ -212,7 +212,7 @@ export async function prepareSessionEntrance(options, driver, {
         log('work.open-failed', { area: options.areaRoot, error: launched.reason });
         return launched;
       }
-      return await joinSession({ ...options, chosen: plan.chosen, starting: true }, launched.session, driver, { alive, records });
+      return await joinSession({ ...options, chosen: plan.chosen, starting: true }, launched.session, driver, { alive });
     } };
   } catch (error) {
     await release?.();

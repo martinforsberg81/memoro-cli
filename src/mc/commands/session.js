@@ -104,6 +104,7 @@ export async function run(argv, {
           const join = driver.join;
           driver.join = async (opts, row) => {
             attaching = row;
+            if (request.json && provider !== 'codex') throw new Error('Claude requires ssh -t, not a local Claude client');
             return join(opts, row);
           };
           if (request.operation === 'join') {

@@ -179,10 +179,10 @@ probe before use. For Codex: one new and one resumed thread, inspecting each
 rollout's `turn_context` for `sandbox_policy`, `approval_policy`, `model` and
 `effort`, along with the new/resume argv split. For Claude: repeat phase 1's
 live check (background launch, role/settings environment, hooks, detach and
-attach), and start one session with `--bg` and check by hand, in the Claude app,
-that the session named `<name>` is reachable; the operator may read `claude logs <id>`
-for `/remote-control is active`. mc itself reads neither the provider screen nor
-`claude logs`. Update the recorded provider version and evidence. There is **no**
+attach), then start one session with `--bg`, read `claude logs <id>` and confirm
+it shows `/remote-control is active`, and check by hand, in the Claude app, that
+the session named `<name>` is reachable. mc itself reads neither the provider
+screen nor `claude logs`. Update the recorded provider version and evidence. There is **no**
 scheduled, automated, recurring or recurring-paid compatibility probe.
 
 ## Evidence limits and residual risks
