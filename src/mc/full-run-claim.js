@@ -93,14 +93,22 @@ export function releaseClaim(claim, { root = mcHome(), lock = realLock, alive = 
   }, { name: 'full-run-claim' });
 }
 
-/** Wait until the run `claim` names has ended: its process is gone or it gave the claim back. */
+/**
+ * Wait until the run `claim` names has ended: its process is gone or it gave
+ * the claim back. A wait is not silent: `onWait(elapsedMs)` is called once a
+ * minute (`everyMs`), so whoever waits can say it is still waiting.
+ */
 export async function awaitClaim(claim, {
   root = mcHome(), alive = processAlive, pollMs = CLAIM_POLL_MS,
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+  onWait = null, everyMs = 60_000, clock = () => Date.now(),
 } = {}) {
+  const began = clock();
+  let told = began;
   for (;;) {
     const held = readAll(root).some((other) => other.pid === claim.pid && other.started === claim.started);
     if (!held || !alive(claim.pid)) return;
     await sleep(pollMs);
+    if (onWait && clock() - told >= everyMs) { told = clock(); onWait(told - began); }
   }
 }

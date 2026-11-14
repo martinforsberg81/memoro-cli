@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -2124,7 +2124,7 @@ describe('mc deploy — a headless session cannot deploy', () => {
  * a log, and work that happens only when the test says (`state.pending()`).
  * Its record and history are written for real by the same `prepare`.
  */
-function detachedPreparer(fake) {
+function detachedPreparer(fake, { prepareWith = {} } = {}) {
   const state = { starts: 0, jobs: [], pending: null, up: true };
   const extra = {
     gate: fake.gate,
@@ -2136,7 +2136,7 @@ function detachedPreparer(fake) {
       mkdirSync(dirname(job.log), { recursive: true });
       writeFileSync(job.log, 'mc: full run — measuring\n');
       state.pending = async () => {
-        await prepare(job, { stdout: { write() {} }, env: d.env, deps: d });
+        await prepare(job, { stdout: { write() {} }, env: d.env, deps: d, ...prepareWith });
         state.up = false;
       };
       return { pid: 31337, log: job.log };
@@ -2192,6 +2192,50 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.equal(fake.calls.fullRun.length, 1, 'nothing was measured again');
     assert.match(third.out.stdout, /1a2b3c4 was prepared .* — the gate's answer is read from that, nothing is measured again/u);
     assert.equal(asked.length, 2);
+  });
+
+  it('while it measures, the log — and so mc deploy, --follow and the page — has a line at least each minute', async () => {
+    // A fixture round on a simulated clock: it reports its progress in minutes 1 and
+    // 2, then says nothing for three minutes. The preparation's own beat fills them.
+    const T0 = Date.parse('2026-11-14T10:00:00.000Z');
+    let clock = 0;
+    let tick = null;
+    const lines = [];
+    const fake = gateFake({ runs: [] });
+    const gate = {
+      ...fake.gate,
+      fullRun: async (repo, { say }) => {
+        for (let minute = 1; minute <= 5; minute += 1) {
+          clock += 60_000;
+          if (minute <= 2) say(`progress — ${minute * 40} of ~250 test files done, 3 running, ${minute - 1} red so far, ${minute} min 0 s elapsed`);
+          else tick();
+        }
+        return fullRunOf(SHA);
+      },
+    };
+    const { state, extra } = detachedPreparer({ gate, suites: fake.suites }, {
+      prepareWith: {
+        now: () => new Date(T0 + clock),
+        beat: (fn) => { tick = fn; return () => {}; },
+        stdout: { write: (text) => { lines.push({ at: clock, text: text.replace(/\n$/u, '') }); appendFileSync(state.jobs[0].log, text); } },
+      },
+    });
+    const watched = io();
+    const code = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      stdout: watched.stdout,
+      stderr: watched.stderr,
+    });
+    assert.equal(code, 1, 'a no at the one question');
+    const said = lines.filter((line) => /progress —|still preparing —/u.test(line.text));
+    assert.deepEqual(said.map((line) => line.at / 60_000), [1, 2, 3, 4, 5], 'a line in each of the five minutes');
+    assert.match(said[0].text, /^mc:   progress — 40 of ~250 test files done, 3 running, 0 red so far, 1 min 0 s elapsed$/u);
+    assert.match(said[2].text, /^mc: still preparing — the full run, 3 min so far$/u);
+    assert.match(said[4].text, /^mc: still preparing — the full run, 5 min so far$/u);
+    // What the watcher shows is that log.
+    for (const line of said) assert.ok(watched.out.stdout.includes(line.text), `the watcher shows: ${line.text}`);
+    // No gap between lines reaches a minute and a bit.
+    for (let i = 1; i < lines.length; i += 1) assert.ok(lines[i].at - lines[i - 1].at <= 60_000, `a gap of ${(lines[i].at - lines[i - 1].at) / 1000} s before: ${lines[i].text}`);
   });
 
   it('a finished red preparation refuses as before, and a second mc deploy refuses from it without measuring', async () => {

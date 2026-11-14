@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -740,8 +740,12 @@ describe('collectPage — a deploy preparation and a round that lost its process
     try {
       mkdirSync(join(root, 'runner'), { recursive: true });
       const started = new Date(NOW.getTime() - 4 * 60 * 1000).toISOString();
+      // Its log: the last thing it said is on the page, with when it said it.
+      const log = join(root, 'runner', 'deploy-prepare-test.log');
+      writeFileSync(log, 'mc: full run — measuring\nmc:   progress — 120 of ~250 test files done, 3 running, 1 red so far, 4 min 10 s elapsed\n');
+      utimesSync(log, new Date(NOW.getTime() - 40_000), new Date(NOW.getTime() - 40_000));
       writeFileSync(join(root, 'runner', 'deploy-prepare.json'), JSON.stringify({
-        schema: 'mc-deploy-prepare', sha: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', pid: process.pid, started, stage: 'full-run',
+        schema: 'mc-deploy-prepare', sha: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', pid: process.pid, started, stage: 'full-run', log,
       }));
       // The round the page's own process was running when its SSH connection closed.
       writeFileSync(join(root, 'gate-rounds.jsonl'), `${JSON.stringify({
@@ -761,6 +765,11 @@ describe('collectPage — a deploy preparation and a round that lost its process
       assert.match(readFileSync(join(root, 'gate-rounds.jsonl'), 'utf8'), /"phase":"end".*"stopped_at":"interrupted"/u, 'recorded, not only shown');
       const text = strip(renderPage(data, { columns: 120, now: NOW }));
       assert.match(text, /PREPARING b3e65b6 · the full run/u);
+      assert.equal(production.preparation.progress, 'progress — 120 of ~250 test files done, 3 running, 1 red so far, 4 min 10 s elapsed');
+      // The line wraps inside the frame: the pieces are what is asserted.
+      assert.match(text, /progress — 120 of ~250 test files done, 3/u);
+      assert.match(text, /1 red so far, 4 min 10 s elapsed/u);
+      assert.match(text, /said 40s ago/u);
       assert.match(text, /interrupted gate round · memoro check/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });

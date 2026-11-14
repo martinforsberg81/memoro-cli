@@ -45,7 +45,7 @@
  * digest's shape from helper-collect.js.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 import { join } from 'node:path';
 
@@ -187,11 +187,37 @@ function sameCommit(a, b) {
  * is not worth a line — a finished one stays, because `mc deploy` goes straight
  * to its question.
  */
+/** The last non-empty line of a log, its `mc:` lead cut, and when the log was last written. */
+export function lastLogLine(path) {
+  if (!path) return null;
+  let fd = null;
+  try {
+    fd = openSync(path, 'r');
+    const { size, mtimeMs } = fstatSync(fd);
+    const length = Math.min(size, 4096);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split('\n').map((line) => line.replace(/^mc:\s+/u, '').trim()).filter(Boolean);
+    const text = lines.at(-1);
+    return text ? { text: text.length > 160 ? `${text.slice(0, 159)}…` : text, at: mtimeMs } : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* gone */ } }
+  }
+}
+
 export function preparationOf(record, { alive = pidAlive, now = new Date() } = {}) {
   const state = preparationState(record, { alive, now: now.getTime() });
   if (!state) return null;
   const since = Date.parse(record.started);
+  // What a measuring preparation said last — its progress line (files done of
+  // files, reds so far, elapsed) or its once-a-minute "still preparing" — and
+  // when the log last moved.
+  const last = state === 'running' ? lastLogLine(record.log) : null;
   return {
+    progress: last ? last.text : null,
+    progress_age_seconds: last ? Math.max(0, Math.round((now.getTime() - last.at) / 1000)) : null,
     sha: record.sha,
     short: shortSha(record.sha),
     state,

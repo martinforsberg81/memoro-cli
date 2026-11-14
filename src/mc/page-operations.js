@@ -220,6 +220,9 @@ export function deployLines(lines, c, wide, production, expand) {
       const since = prep.age_seconds == null ? '' : ` · started ${age(prep.age_seconds)}`;
       detail(body, c, room, 6, `${states[prep.state] || prep.state}${since}${pid}`);
       if (prep.error) detail(body, c, room, 6, prep.error, ['red']);
+      if (prep.state === 'running' && prep.progress) {
+        detail(body, c, room, 6, `${prep.progress}${prep.progress_age_seconds == null ? '' : ` · said ${age(prep.progress_age_seconds)}`}`);
+      }
     });
   }
   for (const round of p.interrupted || []) {

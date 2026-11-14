@@ -3775,7 +3775,7 @@ describe('the selected files run in their resource classes', () => {
       const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
       const lines = [];
       const run = realSuite({ cwd: dir, command: 'node --test --test-concurrency=2 a-slow.test.js b-fast.test.js', env, lanes: 2, times, progressMs: 100, onLine: (line) => lines.push(line) });
-      for (let i = 0; i < 500 && !lines.some((line) => /^progress — 1 test files done, 1 running/u.test(line)); i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      for (let i = 0; i < 500 && lines.filter((line) => /^progress — 1 test files done, 1 running/u.test(line)).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
       writeFileSync(flag, '');
       const done = await run;
       assert.equal(done.code, 0, done.tap);
@@ -3783,6 +3783,32 @@ describe('the selected files run in their resource classes', () => {
       assert.ok(progress.length >= 2, `a line at each interval: ${JSON.stringify(lines)}`);
       for (const line of progress) assert.match(line, /^progress — \d+ test files done(, \d running)?, 0 red so far, \d+ s elapsed$/u);
       assert.ok(progress.some((line) => /1 test files done, 1 running/u.test(line)), `the fast file done, the slow one running: ${progress.join(' | ')}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('realTests: says how far a batch of files has got at each interval — files done of files, running, reds so far', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-batch-progress-')));
+    try {
+      const flag = join(dir, 'release');
+      writeFileSync(join(dir, 'a-slow.test.js'), [
+        "import test from 'node:test';",
+        "import { existsSync } from 'node:fs';",
+        `test('waits', async () => { while (!existsSync(${JSON.stringify(flag)})) await new Promise((resolve) => setTimeout(resolve, 20)); });`,
+      ].join('\n'));
+      writeFileSync(join(dir, 'b-fast.test.js'), "import test from 'node:test';\ntest('fast', () => {});\n");
+      const tracker = progressTracker();
+      const times = { root: join(dir, 'home'), repo: 'r', where: 'full', track: tracker.track, complete: tracker.complete,
+        trackProcesses: tracker.trackProcesses, completeProcesses: tracker.completeProcesses };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const lines = [];
+      const run = realTests({ cwd: dir, files: ['a-slow.test.js', 'b-fast.test.js'], env, lanes: 2, times, progressMs: 100, onLine: (line) => lines.push(line) });
+      for (let i = 0; i < 500 && lines.filter((line) => /^progress — 1 of 2 test files done, 1 running/u.test(line)).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      writeFileSync(flag, '');
+      const done = await run;
+      assert.equal(done.code, 0, done.tap);
+      const progress = lines.filter((line) => line.startsWith('progress —'));
+      for (const line of progress) assert.match(line, /^progress — \d+ of 2 test files done(, \d running)?, 0 red so far, \d+ s elapsed$/u);
+      assert.ok(progress.some((line) => /1 of 2 test files done, 1 running/u.test(line)), `the fast file done, the slow one running: ${JSON.stringify(lines)}`);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
 

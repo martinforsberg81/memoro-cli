@@ -357,12 +357,12 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
       if (taken.claimed) { claim = taken.claim; break; }
       if (taken.waitFor) {
         stderr.write(`mc: a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
-        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims });
+        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far\n`) });
         continue;
       }
       const other = taken.joined;
       stderr.write(`mc: a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}) — following it, not starting a second\n`);
-      await awaitClaim(other, { root: historyRoot, ...claims });
+      await awaitClaim(other, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far\n`) });
       const last = readNightlyHistory(repoPath, { root: historyRoot }).runs.at(-1);
       if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
         const answer = last.red === null

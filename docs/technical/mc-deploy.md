@@ -282,6 +282,29 @@ two terminals cannot both start one (`prepareStage`):
 | its process gone before it ended | *"interrupted at `<stage>`"*, and a new one |
 | done without suites and `--accept-red` given | prepares again: the suites are what a red needs |
 
+**A measuring preparation is never silent (2026-11-14).** The full run is tens of
+minutes and the suites more; a watcher that sees nothing for that long cannot tell
+a long run from a stuck one. Whatever stage the preparation is in, its log has a
+line at least once a minute, and the terminal (`mc deploy`, `--follow`) shows that
+log as it grows, as the page's deploy panel shows its last line and when it was
+said. Two things write them:
+
+- the **round's progress line** — `progress — <done> of <files> test files done,
+  <n> running, <n> red so far, <m> min <s> s elapsed` — written by the test run
+  itself each minute (`suiteProgressLine` in `repo-gate.js`; a batch of files
+  counts its own files exactly, a whole suite against the tracked test files,
+  `~`). Files done and running are counted from a test file's process starting and
+  exiting (`test-progress-preload.mjs`), which node's reporter shows only after the
+  files before it have reported; a red is a failed test counted once, not the
+  suites that failed because it did. A run that cannot count files says
+  `test files not counted` and still gives the reds and the elapsed time;
+- the **preparation's own beat** (`prepare`, `PREPARE_BEAT_MS`): a minute with no
+  line from anyone — a stage that reports no progress, such as the suites, or a
+  full run followed in another process — says `mc: still preparing — <stage>, <n>
+  min so far`. A starter that waits for another full run (`awaitClaim`) says the
+  same once a minute: `still following the full run of <sha> (pid <n>), <n> min so
+  far`.
+
 A deploy's full run is never lost to a lease: it runs isolated and holds no
 repository lease (`holdLease: false`), like the daily run. `--dry-run` starts
 nothing and says a preparation is in flight; `--follow` follows a preparation as

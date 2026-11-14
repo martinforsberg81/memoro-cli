@@ -251,12 +251,12 @@ export async function fullRun(repo, {
       // Another tree of this repository is being measured, in the one
       // checkout a full run has: wait for it, then measure this one.
       say(`${repo.name} — a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${sha ? sha.slice(0, 7) : 'main'}`);
-      await awaitClaim(taken.waitFor, { root, ...claims });
+      await awaitClaim(taken.waitFor, { root, ...claims, onWait: (ms) => say(`${repo.name} — still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far`) });
       continue;
     }
     const other = taken.joined;
     say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
-    await awaitClaim(other, { root, ...claims });
+    await awaitClaim(other, { root, ...claims, onWait: (ms) => say(`${repo.name} — still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far`) });
     const last = readNightlyHistory(repo.path, { root }).runs.at(-1);
     if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
       say(`${repo.name} — the run being followed has ended`);

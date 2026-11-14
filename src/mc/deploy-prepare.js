@@ -38,6 +38,15 @@ export const PREPARATION_SCHEMA = 'mc-deploy-prepare';
 /** A record with no pid yet is a start in progress for this long, then an interruption. */
 export const START_GRACE_MS = 60 * 1000;
 
+/** A preparation that has said nothing for this long says that it is still going. */
+export const PREPARE_BEAT_MS = 60 * 1000;
+
+const realBeat = (fn, ms) => {
+  const timer = setInterval(fn, ms);
+  timer.unref?.();
+  return () => clearInterval(timer);
+};
+
 export const STAGES = Object.freeze(['starting', 'full-run', 'suites', 'done']);
 
 /** The words the page and the terminal use for a stage. */
@@ -125,13 +134,28 @@ export function patchPreparation(root, started, fields, { lock = realLock } = {}
  * result into the record. 0 when it measured (whatever it found), 1 when it
  * could not.
  */
-export async function prepare(job, { stdout = process.stdout, env = process.env, deps = {}, now = () => new Date(), lock = realLock } = {}) {
-  const say = (line) => stdout.write(`${line}\n`);
+export async function prepare(job, {
+  stdout = process.stdout, env = process.env, deps = {}, now = () => new Date(), lock = realLock,
+  beat = realBeat, beatMs = PREPARE_BEAT_MS,
+} = {}) {
+  // Whatever stage it is in, a measurement that says nothing for a minute says
+  // that it is going on, how long, and in which stage: a long run never looks
+  // stuck to whoever watches the log or the page. The stages' own progress
+  // (files done of files, reds so far) comes between these lines.
+  const began = now().getTime();
+  let lastSaid = began;
+  let stage = 'starting';
+  const say = (line) => { lastSaid = now().getTime(); stdout.write(`${line}\n`); };
   const patch = (fields) => patchPreparation(job.root, job.started, fields, { lock });
+  const stop = beat(() => {
+    const at = now().getTime();
+    if (at - lastSaid < beatMs - 1000) return;
+    say(`mc: still preparing — ${STAGE_WORDS[stage] || stage}, ${Math.round((at - began) / 60000)} min so far`);
+  }, beatMs);
   try {
     const measured = await measureGate({
       sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), env, say,
-      deps: deps.gate || {}, suites: deps.suites || {}, stage: (stage) => patch({ stage }),
+      deps: deps.gate || {}, suites: deps.suites || {}, stage: (next) => { stage = next; return patch({ stage: next }); },
     });
     patch({ stage: 'done', ended: now().toISOString(), result: measured });
     say('mc: the preparation is done');
@@ -141,5 +165,7 @@ export async function prepare(job, { stdout = process.stdout, env = process.env,
     patch({ stage: 'done', ended: now().toISOString(), error: message });
     say(`mc: the preparation failed — ${message}`);
     return 1;
+  } finally {
+    stop();
   }
 }

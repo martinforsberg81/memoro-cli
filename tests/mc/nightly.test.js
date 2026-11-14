@@ -385,6 +385,27 @@ describe('a full run, one at a time per tree — whoever starts it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('a follower of a long run says each minute that it is still following', async () => {
+    const root = home();
+    try {
+      const claim = held(root);
+      const said = [];
+      let at = 0;
+      let polls = 0;
+      await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null, round: () => report(),
+        claims: {
+          alive: () => true, pollMs: 1, clock: () => at,
+          sleep: async () => { at += 20_000; polls += 1; if (polls === 10) finish(root, claim); },
+        },
+      });
+      const still = said.filter((message) => /still following the full run of/u.test(message));
+      assert.equal(still.length, 3, `one line per minute over 200 s: ${said.join(' | ')}`);
+      assert.match(still[0], /still following the full run of aaaaaaa \(pid 4242\), 1 min so far/u);
+      assert.match(still[2], /3 min so far/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('two starters of the same sha at once call the round once', async () => {
     const root = home();
     try {
