@@ -12,8 +12,7 @@ means the programme was not designed.
 
 - `README.md` — [the programme page](references/programme-readme.md): aim, measures, gap, next
   horizon, phases, Martin-only choices and pointers. Read first; keep its gap current each session.
-- `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not
-  repeat them.
+- `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
 - `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
   `docs/project/`.
