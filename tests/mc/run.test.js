@@ -18,7 +18,7 @@ import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
-import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
+import { goalField, goalJson, goalJsonV2, withGoal } from './_helpers/goal-file.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
 import { run as martinCommand } from '../../src/mc/commands/martin.js';
 import { deskBudget, deskSettingsPath } from '../../src/mc/desk-budget.js';
@@ -4844,4 +4844,17 @@ test('the third main-red attempt waits on Martin with its session log and keeps 
   assert.equal(f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add').length, 1);
   assert.equal(runner.nextWork(), null, 'Martin starts no third session');
   assert.equal(f.calls.sessions.length, 2);
+});
+
+test('a build session on a version 2 goal is handed the goal as `mc goal show` renders it: its parts in order, with each id', async () => {
+  const f = goalFixture({ older: { log: goalLog('2026-08-27T10:00Z') } });
+  f.files[`${GOALS}/older/GOAL.json`] = goalJsonV2({ title: 'older', repos: ['memoro'] });
+  f.answer = logsItself(f, 'older');
+  const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro', lane: 1, tag: 'memoro#2' });
+  assert.equal(r.name, 'goal:prog/older');
+  const [call] = f.calls.sessions;
+  assert.match(call.prompt, /The goal, as `mc goal show` renders it:\n\n# older\n\nAIM\n  Why the goal exists\.\n\nOUTCOME\n/u);
+  assert.match(call.prompt, /\nPROBLEM\n  B1 The brief is one prose field\.\n      basis: measured\n\nPREMISES\n  P1 /u);
+  assert.match(call.prompt, /\nOBLIGATIONS\n  Documentation · touched — mc-goals\.md says both versions\.\n      standard: memoro-cli\/docs\/technical\/mc-goals\.md#GOAL\.json\n/u);
+  assert.match(call.prompt, /\nCRITERIA 0\/1\n  1 ✗ it works\n      check: a test\n      evidence: the gate log\n/u);
 });

@@ -19,12 +19,16 @@ import { join, relative, sep } from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
 import { samePr } from './merge-queue.js';
 import { programsHome } from './paths.js';
-import { criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
+import { CRITERION_KEYS_V2, criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
+import { GOAL_KEYS_V2, partsOf, partsToWrite, renderGoalTextV2, validateParts } from './goal-parts.js';
 
 export const GOAL_FILE = 'GOAL.json';
 export const GOAL_SCHEMA = 'mc-goal';
+/** The version `mc goal new` writes by default, and the one every goal written before the parts has. */
 export const GOAL_VERSION = 1;
+/** The versions of GOAL.json mc reads: 1 has `goal` and `contract` as prose, 2 has numbered parts (`goal-parts.js`). */
+export const GOAL_VERSIONS = Object.freeze([1, 2]);
 export const LOG_FILE = 'LOG.md';
 /** What a review that sends a goal to `finish` writes in its directory, for the finish session: the head judged, what is wrong and where. */
 export const REVIEW_FILE = 'REVIEW.md';
@@ -162,9 +166,10 @@ export function validateGoal(value, { draft = false } = {}) {
   if (!plain(value)) return ['GOAL.json must be a JSON object'];
   const problems = [];
   // A goal written before phases has `after`: `mc goal convert` (or the runner) gives it its phase.
-  for (const key of unknownKeys(value, GOAL_KEYS)) problems.push(key === LEGACY_AFTER ? `${key}: goals run in phases now — mc goal convert gives it one` : `${key}: unknown key`);
+  const version = value.version === 2 ? 2 : 1;
+  for (const key of unknownKeys(value, version === 2 ? GOAL_KEYS_V2 : GOAL_KEYS)) problems.push(key === LEGACY_AFTER ? `${key}: goals run in phases now — mc goal convert gives it one` : `${key}: unknown key`);
   if (value.schema !== GOAL_SCHEMA) problems.push(`schema: must be "${GOAL_SCHEMA}"`);
-  if (value.version !== GOAL_VERSION) problems.push(`version: must be ${GOAL_VERSION}`);
+  if (!GOAL_VERSIONS.includes(value.version)) problems.push(`version: must be ${GOAL_VERSIONS.join(' or ')}`);
   // A goal written before stages has only a status (`open`, `review`, …): `mc goal convert` (or the runner) gives it its stage.
   if (value.stage === undefined && LEGACY_STATUSES.includes(value.status)) problems.push(`stage: missing — goals have a stage now; mc goal convert gives this ${value.status} goal one`);
   else {
@@ -179,10 +184,13 @@ export function validateGoal(value, { draft = false } = {}) {
   if (value.prs !== undefined && !Array.isArray(value.prs)) problems.push('prs: an array of <repo>#<number>, possibly empty');
   else for (const ref of value.prs ?? []) if (!parsePrRef(ref)) problems.push(`prs: ${ref} is not <repo>#<number>`);
   if (!text(value.title)) problems.push('title: what the goal is, in one line');
-  for (const key of ['goal', 'contract', 'out_of_scope']) {
-    if (value[key] !== undefined && !prose(value[key], { min: 0 })) problems.push(`${key}: an array of paragraphs, possibly empty`);
+  if (version === 2) validateParts(value, problems);
+  else {
+    for (const key of ['goal', 'contract', 'out_of_scope']) {
+      if (value[key] !== undefined && !prose(value[key], { min: 0 })) problems.push(`${key}: an array of paragraphs, possibly empty`);
+    }
   }
-  validateCriteria(value.success_criteria, problems, { min: draft ? 0 : 1, what: 'a goal' });
+  validateCriteria(value.success_criteria, problems, { min: draft ? 0 : 1, what: 'a goal', keys: version === 2 ? CRITERION_KEYS_V2 : undefined });
   if (value.documents !== undefined) validateDocuments(value.documents, problems);
   return problems;
 }
@@ -211,9 +219,13 @@ export function parseGoal(text) {
   if (problems.length) return { problems };
   const prs = [];
   for (const ref of (value.prs ?? []).map(parsePrRef)) if (!prs.some((other) => other.repo === ref.repo && other.pr === ref.pr)) prs.push(ref);
-  return {
-    stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
+  const head = {
+    version: value.version, stage: readStage(value.stage), status: value.status, phase: value.phase ?? 1, repos: [...value.repos], class: value.class, created: value.created ?? null,
     prs, title: value.title.trim(),
+  };
+  if (value.version === 2) return { ...head, ...partsOf(value) };
+  return {
+    ...head,
     goal: value.goal ?? [], contract: value.contract ?? [], out_of_scope: value.out_of_scope ?? [],
     success_criteria: value.success_criteria, documents: value.documents ?? [],
   };
@@ -225,12 +237,15 @@ export function parseGoal(text) {
  * writes an invalid GOAL.json.
  */
 export function renderGoal(goal) {
-  const value = {
-    schema: GOAL_SCHEMA, version: GOAL_VERSION, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
+  const version = goal.version === 2 ? 2 : GOAL_VERSION;
+  const head = {
+    schema: GOAL_SCHEMA, version, stage: readStage(goal.stage), status: goal.status, phase: goal.phase ?? 1, repos: goal.repos, class: goal.class,
     created: goal.created ?? null, prs: (goal.prs ?? []).map((item) => (typeof item === 'string' ? item : prRef(item))),
-    title: goal.title, goal: goal.goal ?? [], contract: goal.contract ?? [], out_of_scope: goal.out_of_scope ?? [],
-    success_criteria: goal.success_criteria ?? [], documents: goal.documents ?? [],
+    title: goal.title,
   };
+  const value = version === 2
+    ? { ...head, ...partsToWrite(goal) }
+    : { ...head, goal: goal.goal ?? [], contract: goal.contract ?? [], out_of_scope: goal.out_of_scope ?? [], success_criteria: goal.success_criteria ?? [], documents: goal.documents ?? [] };
   const problems = validateGoal(value, { draft: true });
   if (problems.length) throw new Error(`GOAL.json would not validate: ${problems.join('; ')}`);
   return `${JSON.stringify(value, null, 2)}\n`;
@@ -242,6 +257,7 @@ export function renderGoal(goal) {
  * documents, and each criterion numbered with ✓ or ✗ and its check.
  */
 export function renderGoalText(goal) {
+  if (goal.version === 2) return renderGoalTextV2(goal);
   const lines = [`# ${goal.title}`];
   const section = (heading, paragraphs) => {
     lines.push('', heading);
@@ -369,7 +385,7 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
         goals.push({ ...base, stage: null, status: null, phase: null, repos: [], class: null, created: null, prs: [], title: null, goal_text: [], contract: [], out_of_scope: [], success_criteria: [], documents: [], problems: parsed.problems });
       } else {
         const { goal: goalText, ...rest } = parsed;
-        goals.push({ ...base, ...rest, goal_text: goalText, problems: [] });
+        goals.push({ ...base, ...rest, goal_text: goalText ?? [], problems: [] });
       }
     }
   }

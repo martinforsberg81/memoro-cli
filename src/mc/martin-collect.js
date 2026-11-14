@@ -60,11 +60,14 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
       if (readmeText === null) issues.push({ path: README, error: 'missing or unreadable README.md' });
       programme_context.set(programme, context);
     }
+    const v2 = parsed.version === 2;
     const record = {
       programme, goal, reference: `${programme}/${goal}`, dir,
+      version: parsed.version,
       stage: parsed.stage, status: parsed.status, phase: parsed.phase,
-      title: parsed.title, goal_text: parsed.goal, contract: parsed.contract,
-      exclusions: parsed.out_of_scope, criteria: parsed.success_criteria,
+      title: parsed.title, goal_text: v2 ? parsed.outcome : parsed.goal,
+      contract: v2 ? [...parsed.decisions, ...parsed.preserve].map((item) => item.text) : parsed.contract,
+      exclusions: v2 ? parsed.out_of_scope.map((item) => item.text) : parsed.out_of_scope, criteria: parsed.success_criteria,
       documents: parsed.documents, goal_markdown: renderGoalText(parsed),
       question,
       log: log.slice(-3), log_path: logPath,

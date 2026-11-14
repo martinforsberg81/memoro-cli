@@ -49,7 +49,7 @@ WHO USES THE VERBS
   Person: mc plan, mc manager, mc helper, mc martin open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
-  Session: mc goal new / set / criterion add writes goals; mc goal log
+  Session: mc goal new / set / item / obligation / criterion add writes goals; mc goal log
            records progress; mc gate, mc shot and mc publish do the work.
   Headless sessions (MC_HEADLESS=1, set by the runner) are refused mc deploy,
                  merge --admin, production data and credentials; with

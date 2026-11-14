@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
-import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
+import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
 import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
-import { goalField, goalJson, withGoal } from '../_helpers/goal-file.js';
+import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from '../_helpers/goal-file.js';
 
 const HOME = '/work/programs';
 const DIR = `${HOME}/mc/goals/plain`;
@@ -831,7 +831,7 @@ test('mc goal criterion set refuses no flag, a blank text, a criterion that is n
   const f = fixture({ files: twoCriteria() });
   const before = f.store[`${DIR}/GOAL.json`];
   assert.equal(await run(['criterion', 'set', 'mc/plain', '2'], f.deps), 2);
-  assert.match(f.err(), /criterion set needs --criterion "…" or --check "…"/u);
+  assert.match(f.err(), /criterion set needs --criterion "…", --check "…" or --evidence "…"/u);
   assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--check', '  '], f.deps), 2);
   assert.match(f.err(), /criterion set needs --check with text in it/u);
   assert.equal(await run(['criterion', 'set', 'mc/plain', '9', '--check', 'x'], f.deps), 2);
@@ -1799,4 +1799,232 @@ test('the learning role moves its own goal only from draft to build', async () =
   }
   assert.match(refusedMove({ from: 'build', to: 'review', env: LEARNING }), /learning role/u);
   assert.equal(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), null);
+});
+
+// ---- Version 2: numbered parts, written by item, obligation, set and criterion verbs ----
+
+const V2_FILES = (text = goalJsonV2()) => seededGoal({ [`${DIR}/GOAL.json`]: text });
+const V2_PERSON = { MC_TOOL: 'person' };
+const v2At = (f) => parseGoal(f.store[`${DIR}/GOAL.json`]);
+const lastLog = (f) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+const jevCtx = (f) => ({ read: f.deps.read, env: f.deps.env, home: HOME, stderr: f.deps.stderr, realpath: (path) => path });
+
+test('mc goal new --structure 2 writes a version 2 goal with empty parts and no id given, and its hint names version 2\'s verbs; version 1 and --structure 1 are as before', async () => {
+  const f = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '2'], f.deps), 0, f.err());
+  const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
+  assert.equal(goal.problems, undefined, String(goal.problems));
+  assert.equal(goal.version, 2);
+  assert.deepEqual(goal.ids, { B: 0, P: 0, D: 0, C: 0, V: 0, R: 0, X: 0 });
+  assert.deepEqual([goal.outcome, goal.problem, goal.obligations, goal.success_criteria], [[], [], [], []]);
+  assert.equal(goal.goal, undefined);
+  assert.match(f.out(), /\(version 2\) is to be filled in by verbs: mc goal set mc\/plain aim\|outcome\|latitude\|protection --text "…", mc goal item add mc\/plain problem\|premise\|decision\|change\|preserve\|risk\|out-of-scope --text/u);
+  assert.doesNotMatch(f.out(), /contract/u, 'no version 1 verb in a version 2 hint');
+
+  const one = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '1'], one.deps), 0, one.err());
+  const plain = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain'], plain.deps), 0);
+  assert.equal(one.store[`${DIR}/GOAL.json`], plain.store[`${DIR}/GOAL.json`], '--structure 1 is the default');
+  assert.equal(parseGoal(plain.store[`${DIR}/GOAL.json`]).version, 1);
+  assert.match(plain.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain goal\|contract\|out-of-scope --text "…"/u);
+
+  const bad = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '3'], bad.deps), 2);
+  assert.match(bad.err(), /--structure is 1 or 2, not 3/u);
+  assert.deepEqual(bad.store, { [`${HOME}/mc/PLAN.json`]: '{}' }, 'nothing written');
+});
+
+test('mc goal item add writes each of the seven parts and prints the id; an id is the highest present plus one, and a removed highest is not given again', async () => {
+  const f = fixture({ files: V2_FILES(goalMinimalV2()), env: V2_PERSON });
+  const adds = [
+    [['problem', '--text', 'It is slow.', '--basis', 'inferred'], 'B1'],
+    [['premise', '--text', 'It is one file.', '--source', 'goals.js', '--basis', 'read', '--at', 'abc'], 'P1'],
+    [['decision', '--text', 'Numbered.', '--by', 'Martin', '--on', '2026-11-14'], 'D1'],
+    [['change', '--text', 'Add a verb.', '--where', 'src/mc'], 'C2'],
+    [['preserve', '--text', 'Version 1.', '--upheld-by', 'criterion 1'], 'V1'],
+    [['risk', '--text', 'Data loss.', '--settled-by', 'criterion 1'], 'R1'],
+    [['out-of-scope', '--text', 'Conversion.', '--owner', 'nobody'], 'X1'],
+  ];
+  for (const [argv, id] of adds) {
+    const printed = f.out().length;
+    assert.equal(await run(['item', 'add', 'mc/plain', ...argv], f.deps), 0, `${argv[0]}: ${f.err()}`);
+    assert.ok(f.out().slice(printed).includes(id), `${argv[0]} prints ${id}: ${f.out().slice(printed)}`);
+  }
+  const goal = v2At(f);
+  assert.deepEqual(goal.change.map((item) => item.id), ['C1', 'C2']);
+  assert.deepEqual(goal.problem[0], { id: 'B1', text: 'It is slow.', basis: 'inferred' });
+  assert.deepEqual(goal.premises[0], { id: 'P1', claim: 'It is one file.', source: 'goals.js', basis: 'read', at: 'abc' });
+  assert.deepEqual(goal.out_of_scope[0], { id: 'X1', text: 'Conversion.', owner: 'nobody' });
+  assert.deepEqual(goal.ids, { B: 1, P: 1, D: 1, C: 2, V: 1, R: 1, X: 1 });
+
+  assert.equal(await run(['item', 'remove', 'mc/plain', 'C2', '--reason', 'wrong place'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).change.map((item) => item.id), ['C1']);
+  const printed = f.out().length;
+  assert.equal(await run(['item', 'add', 'mc/plain', 'change', '--text', 'Again.', '--where', 'src'], f.deps), 0);
+  assert.deepEqual(v2At(f).change.map((item) => item.id), ['C1', 'C3'], 'C2 is not given again');
+  assert.ok(f.out().slice(printed).includes('C3'));
+  assert.equal(await run(['item', 'remove', 'mc/plain', 'C1', '--reason', 'gone'], f.deps), 0);
+  assert.equal(await run(['item', 'add', 'mc/plain', 'change', '--text', 'Next.', '--where', 'src'], f.deps), 0);
+  assert.deepEqual(v2At(f).change.map((item) => item.id), ['C3', 'C4'], 'the highest present plus one');
+});
+
+test('mc goal item set logs what each field was and is now and keeps the rest; item remove logs the item and the reason', async () => {
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['item', 'set', 'mc/plain', 'D1', '--text', 'Parts are numbered and stable.'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).decisions[0], { id: 'D1', text: 'Parts are numbered and stable.', by: 'Martin', on: '2026-11-14' });
+  assert.match(lastLog(f).comment, /^D1 rewritten — text was "Parts are numbered\.", now "Parts are numbered and stable\."$/u);
+  assert.equal(await run(['item', 'set', 'mc/plain', 'P1', '--basis', 'measured', '--at', 'def'], f.deps), 0, f.err());
+  assert.match(lastLog(f).comment, /^P1 rewritten — basis was "read", now "measured"; at was "4daf75f3", now "def"$/u);
+  assert.equal(await run(['item', 'remove', 'mc/plain', 'R1', '--reason', 'no longer a risk'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).risks, []);
+  assert.match(lastLog(f).comment, /^R1 removed — .*A writer drops the parts\..*; reason: no longer a risk$/u);
+  assert.equal(v2At(f).ids.R, 1, 'ids keeps R1\'s number');
+});
+
+test('mc goal obligation set replaces the area\'s obligation and logs it; obligation remove takes it out with its reason', async () => {
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Security', '--stand', 'untouched', '--text', 'No data moves.'], f.deps), 0, f.err());
+  assert.equal(v2At(f).obligations.length, 3);
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Documentation', '--stand', 'untouched', '--text', 'No words change.'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).obligations[0], { area: 'Documentation', stand: 'untouched', text: 'No words change.' }, 'replaced in place, its standard gone');
+  assert.equal(v2At(f).obligations.length, 3);
+  assert.match(lastLog(f).comment, /^obligation "Documentation" replaced — it was /u);
+  assert.equal(await run(['obligation', 'remove', 'mc/plain', 'Security', '--reason', 'not an area here'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).obligations.map((item) => item.area), ['Documentation', 'Operations']);
+  assert.match(lastLog(f).comment, /^obligation "Security" removed — .*; reason: not an area here$/u);
+  const before = snapshot(f);
+  assert.equal(await run(['obligation', 'remove', 'mc/plain', 'Nowhere', '--reason', 'x'], f.deps), 2);
+  assert.match(f.err(), /it has no obligation for "Nowhere"/u);
+  assert.equal(snapshot(f), before);
+});
+
+test('mc goal criterion add and set take --evidence on version 2; set --check alone keeps the evidence; version 1 refuses it', async () => {
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'it shows', '--check', 'a test', '--evidence', 'the log'], f.deps), 0, f.err());
+  assert.equal(v2At(f).success_criteria[1].evidence, 'the log');
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--check', 'a better test'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).success_criteria[1], { criterion: 'it shows', check: 'a better test', evidence: 'the log', met: false });
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '2', '--evidence', 'the gate'], f.deps), 0, f.err());
+  assert.equal(v2At(f).success_criteria[1].evidence, 'the gate');
+  assert.match(lastLog(f).comment, /evidence/u);
+
+  const v1 = fixture({ files: seededGoal(), env: V2_PERSON });
+  const before = snapshot(v1);
+  assert.equal(await run(['criterion', 'add', 'mc/plain', '--criterion', 'x', '--check', 'y', '--evidence', 'z'], v1.deps), 2);
+  assert.match(v1.err(), /version 1 goal — --evidence is for version 2/u);
+  assert.equal(await run(['criterion', 'set', 'mc/plain', '1', '--evidence', 'z'], v1.deps), 2);
+  assert.equal(snapshot(v1), before, 'nothing written');
+});
+
+test('mc goal set writes a version 2 goal\'s prose parts as paragraphs, and refuses goal, contract and out-of-scope on it, naming the version', async () => {
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['set', 'mc/plain', 'latitude', '--text', 'One.\n\nTwo.'], f.deps), 0, f.err());
+  assert.deepEqual(v2At(f).latitude, ['One.', 'Two.']);
+  assert.equal(await run(['set', 'mc/plain', 'aim', '--text', 'Why.'], f.deps), 0);
+  const before = snapshot(f);
+  for (const field of ['goal', 'contract', 'out-of-scope']) {
+    assert.equal(await run(['set', 'mc/plain', field, '--text', 'x'], f.deps), 2, field);
+    assert.match(f.err(), new RegExp(`version 2 goal — set ${field} is for version 1`, 'u'));
+  }
+  assert.equal(snapshot(f), before, 'nothing written');
+  const v1 = fixture({ files: seededGoal(), env: V2_PERSON });
+  assert.equal(await run(['set', 'mc/plain', 'outcome', '--text', 'x'], v1.deps), 2);
+  assert.match(v1.err(), /version 1 goal — set outcome is for version 2/u);
+});
+
+test('the version 2 verbs refuse a version 1 goal and bad flags with exit 2, write nothing, and name the version and the verb', async () => {
+  const v1 = fixture({ files: seededGoal(), env: V2_PERSON });
+  const before = snapshot(v1);
+  for (const argv of [
+    ['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'],
+    ['item', 'set', 'mc/plain', 'D1', '--text', 'x'],
+    ['item', 'remove', 'mc/plain', 'D1', '--reason', 'x'],
+    ['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x'],
+    ['obligation', 'remove', 'mc/plain', 'Docs', '--reason', 'x'],
+  ]) {
+    assert.equal(await run(argv, v1.deps), 2, argv.join(' '));
+    assert.match(v1.err(), new RegExp(`version 1 goal — ${argv[0]} ${argv[1]} is for version 2`, 'u'));
+  }
+  assert.equal(snapshot(v1), before);
+
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  const kept = snapshot(f);
+  for (const [argv, words] of [
+    [['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm'], /needs --on/u],
+    [['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd', '--where', 'src'], /takes no --where/u],
+    [['item', 'add', 'mc/plain', 'problem', '--text', 'x', '--basis', 'guessed'], /--basis is measured, reported, inferred, not guessed/u],
+    [['item', 'add', 'mc/plain', 'idea', '--text', 'x'], /item add <programme>\/<goal>/u],
+    [['item', 'set', 'mc/plain', 'D1'], /item set needs --text/u],
+    [['item', 'set', 'mc/plain', 'D9', '--text', 'x'], /it has no item D9/u],
+    [['item', 'set', 'mc/plain', 'Q1', '--text', 'x'], /item set <programme>\/<goal> <id>/u],
+    [['item', 'remove', 'mc/plain', 'D1'], /item remove needs --reason/u],
+    [['obligation', 'set', 'mc/plain', 'Docs', '--text', 'x'], /obligation set needs --stand/u],
+    [['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'maybe', '--text', 'x'], /--stand is touched or untouched, not maybe/u],
+    [['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x', '--standard', 'nowhere'], /--standard is <repo>\/<path>#<section>/u],
+  ]) {
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), words, argv.join(' '));
+  }
+  assert.equal(snapshot(f), kept, 'nothing written');
+});
+
+test('every new writing verb is refused a build, review, finish and mend session, and writes nothing', async () => {
+  const roles = { build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE };
+  for (const [word, role] of Object.entries(roles)) {
+    const f = fixture({ files: V2_FILES(), env: { ...SESSION, MC_ROLE: role, MC_REVIEW_HEAD: 'abc1234def' } });
+    const before = snapshot(f);
+    for (const argv of [
+      ['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'],
+      ['item', 'set', 'mc/plain', 'D1', '--text', 'x'],
+      ['item', 'remove', 'mc/plain', 'D1', '--reason', 'x'],
+      ['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x'],
+      ['obligation', 'remove', 'mc/plain', 'Documentation', '--reason', 'x'],
+      ['criterion', 'add', 'mc/plain', '--criterion', 'x', '--check', 'y', '--evidence', 'z'],
+      ['set', 'mc/plain', 'outcome', '--text', 'x'],
+    ]) {
+      assert.equal(await run(argv, f.deps), 2, `${word}: ${argv.join(' ')}`);
+      assert.match(f.err(), new RegExp(`a ${word} session does not`, 'u'), `${word}: ${argv.slice(0, 2).join(' ')}`);
+    }
+    assert.equal(snapshot(f), before, `${word} wrote nothing`);
+  }
+});
+
+test('the learning role is refused new --structure 2 and the item and obligation verbs, and nothing changes', async () => {
+  const f = fixture({ env: LEARNING });
+  const before = snapshot(f);
+  assert.notEqual(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '2'], f.deps), 0);
+  assert.match(f.err(), /learning/u);
+  assert.equal(snapshot(f), before);
+  const made = fixture({ env: LEARNING });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], made.deps), 0, made.err());
+  const kept = snapshot(made);
+  for (const argv of [['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'], ['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x']]) {
+    assert.notEqual(await run(argv, made.deps), 0, argv.join(' '));
+  }
+  assert.equal(snapshot(made), kept);
+});
+
+test('mc goal convert writes a version 2 goal in the legacy stage plan with every part', async () => {
+  const f = fixture({ files: V2_FILES(goalJsonV2({ stage: 'plan' })), env: V2_PERSON });
+  assert.equal(await run(['convert', 'mc'], f.deps), 0, f.err());
+  assert.doesNotMatch(f.out(), /nothing to convert/u, 'a write happened');
+  assert.equal(f.store[`${DIR}/GOAL.json`], goalJsonV2({ stage: 'draft' }));
+});
+
+test('jevContext gives jev a version 2 goal\'s outcome, decisions, preserve, criteria and what is out of scope; version 1 as before', () => {
+  const f = fixture({ files: V2_FILES(), env: V2_PERSON });
+  const target = { dir: DIR, programme: 'mc' };
+  const context = jevContext(target, parseGoal(f.store[`${DIR}/GOAL.json`]), [], jevCtx(f));
+  assert.deepEqual(context.goal, {
+    title: 'Make the goal plain',
+    outcome: 'Two files and a worktree.\n\nAnd nothing else.',
+    decisions: ['D1 Parts are numbered.'],
+    preserve: ['V1 Version 1 is as before.'],
+    criteria: [{ criterion: 'it works', check: 'a test', met: false }],
+    out_of_scope: ['Converting version 1 goals.'],
+    stage: 'build', status: 'ready',
+  });
+  const one = jevContext(target, parseGoal(GOAL_TEXT), [], jevCtx(f));
+  assert.deepEqual(Object.keys(one.goal), ['title', 'goal', 'contract', 'out_of_scope', 'criteria', 'stage', 'status']);
 });

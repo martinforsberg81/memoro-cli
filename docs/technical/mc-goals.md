@@ -166,6 +166,58 @@ written, and a write that would make one is refused with the field named.
   and it cannot go to review.
 - `documents` — `[{ label, path }]` (`validateDocuments`).
 
+**Version 2.** A GOAL.json of `"version": 2` is made only on request, with
+`mc goal new --structure 2`; nothing that exists changes version, and version 1
+is read, written and shown exactly as above. Version 2 has the same header
+(`stage` to `prs`, `title`) and `success_criteria` and `documents`, and replaces
+`goal` and `contract` with numbered parts, in the order `renderGoal` writes them:
+
+```json
+{
+  "schema": "mc-goal", "version": 2, "stage": "build", "status": "ready", "phase": 1,
+  "repos": ["memoro-cli"], "class": "large", "created": "2026-11-14T10:00:00Z", "prs": [], "title": "Title",
+  "aim": ["Why the goal exists."],
+  "outcome": ["What is true when it lands."],
+  "problem": [{ "id": "B1", "text": "What is wrong.", "basis": "measured" }],
+  "premises": [{ "id": "P1", "claim": "…", "source": "…", "basis": "read", "at": "4daf75f3" }],
+  "decisions": [{ "id": "D1", "text": "…", "by": "Martin", "on": "2026-11-14" }],
+  "change": [{ "id": "C1", "where": "src/mc/goals.js", "what": "…" }],
+  "latitude": ["What the build chooses."],
+  "preserve": [{ "id": "V1", "text": "…", "upheld_by": "criterion 1" }],
+  "obligations": [{ "area": "Documentation", "stand": "touched", "text": "…", "standard": "memoro-cli/docs/technical/mc-goals.md#GOAL.json" }],
+  "risks": [{ "id": "R1", "text": "…", "settled_by": "criterion 1" }],
+  "success_criteria": [{ "criterion": "…", "check": "…", "evidence": "…", "met": false }],
+  "protection": ["The test protection the goal commissions."],
+  "out_of_scope": [{ "id": "X1", "text": "…", "owner": "…" }],
+  "documents": [{ "label": "…", "path": "…" }],
+  "ids": { "B": 1, "P": 1, "D": 1, "C": 1, "V": 1, "R": 1, "X": 1 }
+}
+```
+
+- `aim`, `outcome`, `latitude`, `protection` — arrays of paragraphs. `outcome`
+  must not be empty.
+- `problem` (B), `premises` (P), `decisions` (D), `change` (C), `preserve` (V),
+  `risks` (R), `out_of_scope` (X) — items. Each has an `id` (its part's letter
+  and a number, shown `B1`, `C2`), a text (`claim` for a premise, `what` for a
+  change) and the fields its part names (`goal-parts.js`, `ITEM_PARTS`); no
+  other key. `change` must have at least one item.
+- `obligations` — one entry per rule area (`area`, `stand` `touched` or
+  `untouched`, `text`, and for a touched area an optional `standard`
+  `<repo>/<path>#<section>`). A second write for an area replaces the first.
+- `success_criteria` — as in version 1, with an optional `evidence` (what the
+  build logs for the criterion).
+- `ids` — for each part letter, the highest number ever given. A new item takes
+  `ids[letter] + 1` and removing an item never lowers it, so an id that was
+  given is never given again, and a reader citing `D2` cites the same thing
+  after any later edit.
+
+`renderGoal` writes every part of either version; a write by any verb
+(`addPr`, `setGoalState`, `updateGoal`, `phaseGoals`) keeps the parts it was
+not asked to change. `mc goal convert` writes a version 2 goal in the legacy
+stage `plan` as `draft` with every part. An old `mc` reads a version 2 file as
+a problem (`version`) and starts nothing on it — it fails closed — so the
+installed mc is updated before a version 2 goal is made.
+
 An unknown key, a wrong schema or version, or a bad field is a problem named
 by its field; an `after` (from before phases) is named with `mc goal convert`,
 which gives the goal its phase (*Phases*). A GOAL.json that does not parse is listed by `mc goal list` with
@@ -174,7 +226,11 @@ its problems, and the runner never starts it.
 **Seen, not only stored.** `mc goal show` renders a goal as text
 (`renderGoalText`): the title, then GOAL, CONTRACT, OUT OF SCOPE and DOCUMENTS,
 then `CRITERIA <met>/<all>` with each criterion numbered, ✓ or ✗, and its
-check. That text is the brief the runner gives a goal's build, review and plan
+check. A version 2 goal is shown in its part order — AIM, OUTCOME, PROBLEM,
+PREMISES, DECISIONS, CHANGE, LATITUDE, PRESERVE, OBLIGATIONS, RISKS,
+CRITERIA, PROTECTION, OUT OF SCOPE, DOCUMENTS — each item with its id; OUTCOME,
+CHANGE, OBLIGATIONS and CRITERIA say `none yet` when empty and any other empty
+part is left out. That text is the brief the runner gives a goal's build, review and plan
 session, after the lines that say where the goal is (`goalPrompt`,
 `goalReviewPrompt`, `goalPlanPrompt` in `run-plan.js`). `mc goal list` and the
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
@@ -220,7 +276,7 @@ Next: what the next session should do
 
 ## The verbs
 
-Eighteen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
+Twenty verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 `drop` set one field each.
 
 - **`defect [<p>/<g>] --part "…" --found "…" [--evidence "…"|--evidence-file <f>] [--next "…"|--next-file <f>]`** —
@@ -240,7 +296,7 @@ Eighteen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the entry's first line (`deskItemQuestion` takes the `Martin` entry of
   its minute, so another entry in the same minute does not hide it).
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
+- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
   stage `draft` (awaiting planning; see *Next draft planning*), or
   `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's
@@ -257,17 +313,39 @@ Eighteen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   empty text clears it; an empty title is refused. Build, review, finish and
   mend sessions cannot rewrite the brief; plan, interactive Martin, decision and a person
   may.
+- **`set <p>/<g> title|aim|outcome|latitude|protection --text "…"`** — the
+  same for a version 2 goal. `goal`, `contract` and `out-of-scope` belong to
+  version 1; each verb of a version only takes its own goals and refuses the
+  other's (exit 2, nothing written).
+- **`item add <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope --text "…" <flags>`** —
+  appends an item to that part of a version 2 goal and prints its id. The part
+  takes its own flags: problem `--basis measured|reported|inferred`; premise
+  `--source`, `--basis read|measured|inferred`, `--at`; decision `--by`, `--on`;
+  change `--where`; preserve `--upheld-by`; risk `--settled-by`; out-of-scope
+  `--owner`. `--text` is a premise's claim and a change's what.
+- **`item set <p>/<g> <id> [--text "…"] [<flags>]`** — changes what is given and
+  keeps the rest, logging the item as it was and as it is. **`item remove
+  <p>/<g> <id> --reason "…"`** takes it out, logging it and the reason; its id
+  is not given again (`ids`).
+- **`obligation set <p>/<g> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`**
+  and **`obligation remove <p>/<g> <area> --reason "…"`** — write or take out
+  the goal's obligation for one rule area, logged.
+  The item and obligation verbs write the brief like `set`: a build, review,
+  finish or mend session is refused (exit 2, nothing written), and so is the
+  learning role (it may not make a goal with `--structure 2` either); plan,
+  interactive Martin, decision and a person may. A version 1 goal is refused
+  them.
 - **`document add <p>/<g> --label "…" --path "…"`** — appends a document;
   build, review, finish and mend sessions cannot change the brief.
-- **`criterion add <p>/<g> --criterion "…" --check "…"`** — appends a criterion,
-  not met. Both flags are required: a criterion without a check is refused.
+- **`criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]`** — appends a criterion,
+  not met. `--criterion` and `--check` are required: a criterion without a check is refused. `--evidence` is a version 2 goal's.
   Build, review, finish and mend sessions cannot add acceptance criteria;
   plan, interactive Martin, decision and a person may.
 - **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
   as holding, after its check was run, or takes it back. A number the goal
   has no criterion for is refused.
-- **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`** — rewrites
-  the criterion's text or check and leaves it unmet, logging the old and new
+- **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]`** — rewrites
+  the criterion's text, check or evidence (kept when not given) and leaves it unmet, logging the old and new
   text. A build, review, finish or mend role is refused, from `MC_ROLE` alone.
 - **`criterion remove [<p>/<g>] <n> --reason "…"`** — removes the criterion and
   renumbers those after it, logging its text, check, met state and reason.
