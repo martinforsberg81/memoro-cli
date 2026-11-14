@@ -44,8 +44,21 @@ moves forward. You do one of two things to it, nothing else:
 - **Done with the task:** when every criterion is met and the PR carries it
   all, add `--stage review`. mc refuses it while one is not met, naming it.
 - **Acceptance obstacle:** investigate and repair it within the goal and its
-  commission. If it cannot be resolved in this role, set Martin directly with
-  the obstacle/evidence; do not use pre-merge mend.
+  commission. If it cannot be resolved in this role and the work, the
+  environment or the checkout is what is wrong, take it to Martin with
+  `mc goal martin` (or goal-bound `mc ask`) and the obstacle and its
+  evidence; do not use pre-merge mend. It is not a goal defect: the goal's
+  text is not what is wrong.
+- **The goal itself is wrong:** a criterion that cannot hold, a check that
+  does not test what the criterion says, a premise the code contradicts, two
+  parts of the goal that cannot both be met. That is a goal defect, not an
+  obstacle and not a choice. Verify it against the code, then report it, once,
+  as the session's last act: `mc goal defect --part "<the part or criterion
+  that is wrong>" --found "<what is wrong, with the file and line or the
+  command and output>"`. mc writes one entry, sets the goal `Martin`, and the
+  runner starts no further session on it; the desk amends the goal and sets it
+  ready. Do not work around a wrong premise, and do not ask with options for
+  it: there is no choice to make, the text is wrong. Do not edit the goal.
 - **Unresolved choice:** read relevant technical standards and programme design;
   ordinary details are settled there. Call `mc ask` with `--kind technical` or
   `--kind product`; if jev does not settle a technical question, record your
@@ -58,6 +71,12 @@ mc refuses every other move from a build session — `done`, `dropped`, any
 other stage, any move back. Then end the session, in that same turn. A
 session that ends with no log entry gets one from the runner, and three of
 those in a row move the goal to `finish`, where a finish session takes it.
+A session that does write its entry but commits nothing and meets no
+criterion counts too: three such sessions in a row, with every head unchanged,
+stop the goal with `no progress:` and status `Martin`, and no fourth session
+starts. A commit, a criterion met, or any change of stage or status starts the
+count again. A session that cannot make progress because the goal is wrong
+says so with `mc goal defect`; it does not end quietly.
 
 You never change the goal's text, and never edit `GOAL.json` by hand: the
 criterion verbs are yours. You never start the runner or open another goal's
@@ -77,9 +96,9 @@ test-writing skill for construction and evidence, not a test-count target.
 ## Standards
 
 Hold to the `docs/technical/` standards the work touches. A standard you need
-and do not find, or one the goal contradicts, is a finding for plan (the
-interactive plan session, through a proposal) in your log entry; do not
-settle it in the code. A `SETTLED` red is not yours: name it in the log and
+and do not find is a finding for plan (the interactive plan session,
+through a proposal) in your log entry; do not settle it in the code. A standard
+the goal contradicts is a goal defect: report it with `mc goal defect`. A `SETTLED` red is not yours: name it in the log and
 go on.
 
 ## Every build

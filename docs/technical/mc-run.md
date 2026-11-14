@@ -181,7 +181,10 @@ order without a model call:
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
    `merge · blocked`, or `merge · ready` after its first red or moved head
    and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
-   waits for the desk decision pass, not a delivery session. `draft · ready`, `done` and `dropped` do not start a
+   waits for the desk decision pass, not a delivery session: this includes a
+   goal reported by `mc goal defect` and one stopped after three build sessions
+   without progress (`no progress:`; *What a build session does* in
+   [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.

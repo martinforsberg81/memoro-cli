@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { goalField, goalJson, withGoal } from '../_helpers/goal-file.js';
@@ -1354,6 +1354,93 @@ test('a mend session repairs and requeues only a merge failure, and is refused e
     assert.match(f.err(), said);
     assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
   }
+});
+
+/*
+ * `mc goal defect`: a session that finds its goal wrong reports it, in its own stage, and the goal stops
+ * (docs/technical/mc-goals.md, § The verbs). No jev, no options, no ledger row.
+ */
+const DEFECT = ['defect', '--part', 'criterion 2', '--found', 'its check names tests/x.test.js, which is not on main'];
+const DEFECT_LINE = 'goal defect: criterion 2 — its check names tests/x.test.js, which is not on main';
+
+test('goal defect: a build, a review and a finish session report the goal in their own stage, which then stops and gets no session', async () => {
+  for (const [stage, env, role] of [['build', BUILD, 'build'], ['review', REVIEW, 'review'], ['finish', FINISH, 'finish']]) {
+    const f = fixture({ files: inStage(stage), env, keys: KEYS });
+    assert.equal(await run([...DEFECT, '--evidence', 'tests/x.test.js: no such file, key ts-key-0123456789abcdef', '--next', 'amend criterion 2 with its real check'], f.deps), 0, f.err());
+    assert.equal(stateOf(f), `${stage} · Martin`, `${role}: the stage is kept, the status is Martin`);
+    const written = parseLog(f.store[`${DIR}/LOG.md`]);
+    assert.equal(written.length, 5, `${role}: one entry`);
+    const entry = written.at(-1);
+    assert.deepEqual([entry.status, entry.stage, entry.role, entry.tool, entry.done], ['Martin', stage, role, 'claude', null]);
+    assert.equal(entry.comment.split('\n')[0], DEFECT_LINE, `${role}: the first line is the defect`);
+    assert.match(entry.comment, /^Evidence: tests\/x\.test\.js: no such file, key /mu);
+    assert.doesNotMatch(f.store[`${DIR}/LOG.md`], /ts-key-0123456789abcdef/u, 'a key in the evidence is redacted');
+    assert.equal(entry.next, 'amend criterion 2 with its real check');
+    assert.doesNotMatch(entry.comment, /Martin is asked:|^Option /mu, 'no question and no options');
+    assert.deepEqual([f.requests.length, f.ledger().length], [0, 0], 'jev is not asked and nothing is ledgered');
+    assert.equal(goalSession(parseGoal(f.store[`${DIR}/GOAL.json`])), null, `${role}: the runner starts nothing on it`);
+    assert.equal(f.store[`${DIR}/GOAL.json`], withGoal(inStage(stage)[`${DIR}/GOAL.json`], { status: 'Martin' }), 'nothing else of GOAL.json changed');
+  }
+});
+
+test('goal defect: a person, and the plan role, may report any unfinished goal by name', async () => {
+  for (const env of [{}, PLAN]) {
+    const f = fixture({ files: inStage('review'), env });
+    assert.equal(await run(['defect', 'mc/plain', ...DEFECT.slice(1)], f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'review · Martin');
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, DEFECT_LINE);
+  }
+});
+
+test('goal defect is refused for a finished goal, a build session on a goal not in build, and a mend session, and writes nothing', async () => {
+  for (const [from, env, status, code, said] of [
+    ['done', BUILD, 'ready', 1, /is done — a finished goal has no defect to report/u],
+    ['dropped', FINISH, 'ready', 1, /is dropped — a finished goal has no defect to report/u],
+    ['review', BUILD, 'ready', 2, /build-session:goal cannot set Martin for a goal in review/u],
+    ['finish', BUILD, 'ready', 2, /build-session:goal cannot set Martin for a goal in finish/u],
+    ['build', REVIEW, 'ready', 2, /review-session:goal cannot set Martin for a goal in build/u],
+    ['build', FINISH, 'ready', 2, /a finish session reports a goal defect only for a goal in finish, and this one is build/u],
+    ['merge', MEND, 'blocked', 2, /a mend session does not report a goal defect/u],
+    ['build', MEND, 'blocked', 2, /a mend session is only for merge failures, and this goal is in build/u],
+  ]) {
+    const f = fixture({ files: inStage(from, status), env });
+    assert.equal(await run(DEFECT, f.deps), code, `${from} by ${env.MC_ROLE}: ${f.err()}`);
+    assert.match(f.err(), said);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+    assert.equal(f.store[`${DIR}/GOAL.json`], inStage(from, status)[`${DIR}/GOAL.json`], 'GOAL.json untouched');
+  }
+});
+
+test('goal defect without --part or --found, or with a blank one, exits 2 and says how to call it, and writes nothing', async () => {
+  for (const argv of [
+    ['defect'],
+    ['defect', '--found', 'it cannot run'],
+    ['defect', '--part', 'criterion 2'],
+    ['defect', '--part', '   ', '--found', 'it cannot run'],
+    ['defect', '--part', 'criterion 2', '--found', ''],
+    [...DEFECT, '--evidence', 'a', '--evidence-file', '-'],
+    [...DEFECT, '--next', 'a', '--next-file', '-'],
+  ]) {
+    const f = fixture({ files: inStage('build'), env: BUILD });
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), /goal defect is not reported/u);
+    assert.match(f.err(), /Call it again as: mc goal defect mc\/plain --part "/u);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+    assert.equal(stateOf(f), 'build · ready');
+  }
+});
+
+test('goal defect is in the usage and in mc goal --help', async () => {
+  assert.match(usage(), /mc goal defect \[<programme>\/<goal>\] --part "<[^"]*>" --found "</u);
+  const printed = [];
+  assert.equal(await runModule('./mc/commands/goal.js', ['--help'], { stdout: { write: (text) => printed.push(text) } }), 0);
+  assert.match(printed.join(''), /mc goal defect /u);
+});
+
+test('a finish session told to end elsewhere than merge is pointed at mc goal defect', async () => {
+  const f = fixture({ files: inStage('finish'), env: FINISH });
+  assert.equal(await run(['stage', 'done'], f.deps), 2);
+  assert.match(f.err(), /a wrong goal is reported with mc goal defect --part "…" --found "…", and the session ends/u);
 });
 
 /*

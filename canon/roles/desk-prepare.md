@@ -23,6 +23,11 @@ Write `prepared.md` in the item's directory with these parts:
 The sorts are `mechanical` (a session or merge stopped and no choice is
 involved), `technical`, `product`, `judgement` (someone must look, listen or
 try), and `reserved` (deploy, production data, credentials, admin).
+An item whose first line begins `goal defect:` is a session reporting that the
+goal itself is wrong: its sort is `technical`. An item whose reason begins
+`no progress:` is the runner stopping a build that made none: its sort is
+`mechanical`. Name in `prepared.md` what each says and the goal's current text
+that it concerns; decide nothing.
 
 Then `mc martin item <id> prepared --sort <sort>` and stop.
 Make no recommendation. Change no goal, log, ledger or repository file.

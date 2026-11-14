@@ -27,6 +27,8 @@
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
  *   mc goal martin [<programme>/<goal>] --kind technical|product --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
  *                  [--document <repo>/<path>]… [--reserved <act>]   one jev consultation (`askMartin`)
+ *   mc goal defect [<programme>/<goal>] --part "…" --found "…" [--evidence "…"|--evidence-file <path|->] [--next "…"|--next-file <path|->]
+ *                  the goal itself is wrong: one entry, status Martin, no options and no jev (`reportDefect`)
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
@@ -81,7 +83,7 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved'];
+const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved'];
 /** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
 const REPEATABLE_FLAGS = ['--option', '--document'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
@@ -102,6 +104,7 @@ const VERB_FLAGS = {
   stage: ['--reason'],
   status: ['--reason'],
   martin: ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'],
+  defect: ['--part', '--found', '--evidence', '--evidence-file', '--next', '--next-file'],
   pr: [],
   archive: [],
   show: [],
@@ -215,6 +218,7 @@ export async function run(argv, deps = {}) {
     return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null }, ctx);
   }
   if (verb === 'martin') return askMartin(rest, flags, ctx);
+  if (verb === 'defect') return reportDefect(rest, flags, ctx);
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
   if (verb === 'pr') return carryPrs(rest, ctx);
@@ -497,6 +501,70 @@ async function askMartin(args, flags, ctx) {
   const entry = { at: logStamp(ctx.now), tool, model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: null, stage: goal.stage, status: goal.status };
   appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
   stdout.write(`mc: ${clean(said)}\n`);
+  return 0;
+}
+
+/**
+ * `mc goal defect [<programme>/<goal>] --part "…" --found "…" [--evidence "…" | --evidence-file <path|->]
+ * [--next "…" | --next-file <path|->]` — the goal itself is wrong (a premise that does not hold, clauses that
+ * cannot both be met, a check that cannot run or prove its criterion, a standard the goal contradicts).
+ * One entry with status `Martin`, in the stage the goal is in, whose comment's first line is
+ * `goal defect: <part> — <found>`; no "Martin is asked:" line, no options, no jev, no ledger row: the runner
+ * starts nothing on a `Martin` goal (`goalSession`) and the desk opens an item for it (`syncDeskItems`).
+ * It is the session's ending entry. `--part` and `--found` are required: a call without them exits 2 and
+ * writes nothing. A finished goal is refused; a build, review or finish session reports only the goal in its
+ * own stage, and a mend session never; plan, the desk roles and a person any.
+ */
+function reportDefect(args, flags, ctx) {
+  const { stderr, env, read, write } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const named = args[0] ?? env.MC_GOAL;
+  const problems = [];
+  const part = oneLine(flags.part ?? '').trim();
+  const found = oneLine(flags.found ?? '').trim();
+  if (!part) problems.push('--part "<the part or criterion that is wrong>" is required');
+  if (!found) problems.push('--found "<what is wrong, with the file and line or the command and output>" is required');
+  if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
+  if (flags.next !== null && flags['next-file'] !== null) problems.push('--next and --next-file are one or the other, not both');
+  if (flags['evidence-file'] === '-' && flags['next-file'] === '-') problems.push('stdin is read once: only one of --evidence-file and --next-file may be -');
+  let evidence = flags.evidence ?? '';
+  let next = flags.next;
+  for (const [name, set] of [['evidence', (text) => { evidence = text; }], ['next', (text) => { next = text; }]]) {
+    if (problems.length || flags[`${name}-file`] === null) continue;
+    try { set(ctx.readFile(flags[`${name}-file`]).replace(/\n$/u, '')); }
+    catch (error) { problems.push(`--${name}-file ${flags[`${name}-file`]} cannot be read (${error.message})`); }
+  }
+  if (problems.length) {
+    stderr.write(`mc: goal defect is not reported\n${problems.map((problem) => `  - ${problem}`).join('\n')}\nCall it again as: mc goal defect ${named ?? '<programme>/<goal>'} --part "<the part or criterion that is wrong>" --found "<what is wrong, with the file and line or the command and output>" [--evidence "…"] [--next "…"]\n`);
+    return 2;
+  }
+
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot change ${target.name}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  if (FINISHED.includes(goal.stage)) { stderr.write(`mc: ${target.name} is ${goal.stage} — a finished goal has no defect to report\n`); return 1; }
+  const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env, dir: target.dir });
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  const role = isSession(env) ? writerRole(env) : null;
+  if (role === 'mend') { stderr.write('mc: a mend session does not report a goal defect — a merge failure it cannot repair is Martin\'s (mc goal martin)\n'); return 2; }
+  if (['build', 'review', 'finish'].includes(role) && goal.stage !== role) { stderr.write(`mc: a ${role} session reports a goal defect only for a goal in ${role}, and this one is ${goal.stage}\n`); return 2; }
+
+  const secrets = (() => { try { return secretsOf(ctx.readKeys()); } catch { return []; } })();
+  const comment = redactText([`goal defect: ${part} — ${found}`, ...(evidence ? [`Evidence: ${evidence}`] : [])].join('\n'), secrets);
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: next === null ? null : redactText(next, secrets) };
+  const outcome = setGoalState({ dir: target.dir, status: 'Martin', entry, read, write });
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  ctx.stdout.write(`mc: ${target.name} · ${stageWords(outcome.goal)} — goal defect reported; the goal starts no session until the desk has amended it. End the session now: no separate mc goal log.\n`);
   return 0;
 }
 
@@ -1135,7 +1203,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
     if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked or Martin, not ${status}`;
     if (!moves) return null;
     if (from !== 'finish') return `a finish session moves only a goal in finish, and this one is ${from}`;
-    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is Martin's (mc goal martin --reason "…" --option "<key>: <text>"… --recommend <key>)`;
+    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is reported with mc goal defect --part "…" --found "…", and the session ends`;
     return null;
   }
   if (env.MC_ROLE === MEND_ROLE) {

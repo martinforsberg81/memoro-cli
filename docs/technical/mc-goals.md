@@ -34,6 +34,10 @@ draft    ── the plan session completes its brief ─────────
 build    ── build session: done with the task ────────────────▶ review
 build    ── legacy blocked state ──────────────────────────────▶ build · Martin
 build    ── three sessions without a word (runner) ───────────▶ finish
+build    ── three sessions without progress (runner) ──────────▶ build · Martin
+build    ── mc goal defect (build session) ───────────────────▶ build · Martin
+review   ── mc goal defect (review session) ──────────────────▶ review · Martin
+finish   ── mc goal defect (finish session) ──────────────────▶ finish · Martin
 review   ── review: OK, mc goal stage merge (queues its head) ▶ merge
 review   ── review: not OK, REVIEW.md, mc goal stage finish ──▶ finish
 review   ── no open pull request (runner) ────────────────────▶ finish
@@ -216,8 +220,25 @@ Next: what the next session should do
 
 ## The verbs
 
-Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
+Eighteen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 `drop` set one field each.
+
+- **`defect [<p>/<g>] --part "…" --found "…" [--evidence "…"|--evidence-file <f>] [--next "…"|--next-file <f>]`** —
+  the goal's own text is wrong (a criterion that cannot hold, a check that
+  does not test it, a premise the code contradicts). Appends one entry with
+  status `Martin` and the comment `goal defect: <part> — <found>`, plus an
+  `Evidence:` line when given (redacted like any log text); the stage does not
+  change. It asks nobody (no jev, no ledger) and offers no options: there is no
+  choice, the text is wrong. A build, review or finish session may report it
+  only for its own goal and only in its own stage; a person and the plan role
+  may name any unfinished goal. A finished goal (`done`, `dropped`) is refused
+  (exit 1); a mend session, and a build, review or finish session on a goal in
+  another stage, are refused (exit 2); a call without `--part` or `--found`,
+  or with a blank one, exits 2, says how to call it again and writes nothing.
+  The session ends with it: `goalSession` returns null for a `Martin` goal, so
+  the runner starts nothing on it, and the desk opens one item whose label is
+  the entry's first line (`deskItemQuestion` takes the `Martin` entry of
+  its minute, so another entry in the same minute does not hide it).
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
@@ -628,10 +649,32 @@ stop. It runs each criterion's check and records the ones that hold with
 `mc publish --no-merge` (without the flag mc still queues nothing for a goal
 before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
-them, or, when it cannot go on, asks Martin directly. An acceptance obstacle it
-cannot repair within its scope goes to Martin with `mc goal martin` and its
-evidence. Questions use goal-bound `mc ask` under the question contract in
-[mc-jev.md](mc-jev.md). No build exit goes through pre-merge mend. `blocked` is for
+them, or, when the goal's own text is wrong, reports it with `mc goal defect`
+and ends (*The verbs*). An acceptance obstacle it cannot repair within its
+scope goes to Martin with `mc goal martin` (or goal-bound `mc ask`) and its
+evidence; it is not a goal defect, since the goal's text is not what is wrong.
+Questions use goal-bound `mc ask` under the question contract in
+[mc-jev.md](mc-jev.md). No build exit goes through pre-merge mend.
+
+**A build that makes no progress stops.** After each build session that spoke
+(and did not end by quota, login or interruption), the runner reads the goal's
+heads (`git rev-parse HEAD` of each repository worktree) and its met count. A
+session is *without progress* when it wrote a log entry, left the goal
+`build · ready`, did not raise the met count and left every head unchanged.
+The third such session in a row ends the goal's builds: the runner writes one
+entry with status `Martin` whose comment begins `no progress:` and carries the
+heads, the criteria count and the last `Next`; `goalSession` then returns null,
+so no fourth session starts, and the desk item's label is that line (sort
+`mechanical`). A commit, a higher met count, or any change of stage or status
+starts the count again. The runner's own lines about it (`no progress this
+session (n of 3)`, `progress again: …`, `session not counted for progress: …`)
+are skipped by both counts: they are not a session's word, so a no-progress
+session followed by two silent ones does not go to `finish`, while three silent
+sessions with nothing between still do. An unreadable head, and a quota, login
+or offline ending, are not counted. The stopped goal loses nothing: its branch,
+worktree, pull request and log stay, and `mc goal ready` after the desk has
+amended the text continues it. Progress is never stopped: the count looks
+only at sessions that did nothing. `blocked` is for
 compatibility only: a `blocked` goal before merge, left by an older session, is
 reconciled to Martin by the runner without a session and wakes no mend. A build session
 publishes; it never authorizes PR landing, sets `done` or moves the goal
@@ -757,9 +800,9 @@ Each stage has one owner, and a goal passes each once:
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
   when it is ready to be built. (Named `plan` until 2026-11-07.)
-- `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch.
-- `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin.
-- `finish` — one finish session finishes it to `merge`; an unrecoverable role exit waits directly on Martin.
+- `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
+- `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
+- `finish` — one finish session finishes it to `merge`; an unrecoverable role exit waits directly on Martin. A finish session that finds the goal wrong reports it with `mc goal defect`.
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.
 - `done` — set by the merger or the runner when every pull request the goal
   carries has landed, or by a person. Final.
