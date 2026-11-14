@@ -123,3 +123,30 @@ test('the drain rereads the ceiling after recording a paid turn', async t => {
   assert.deepEqual(said.filter(line => line.includes('ceiling')), ['desk-prepare: desk ceiling holds turns: $1.0000 today (UTC), ceiling $1']);
   assert.equal(readDeskItem(second.id, { env: f.env }).prepare_failures, undefined);
 });
+
+test('a failed turn is counted on the record read under the lock: an item settled meanwhile gets no failure, and a lock that cannot be taken counts none', async t => {
+  const f = fixture(t);
+  const path = join(itemDirectory(f.item, f.env), 'item.json');
+  const holds = []; let competitor = null;
+  // The competing preparation is the real verb, started inside the hold; the verb is synchronous up to its first await.
+  const lock = (root, fn, options) => {
+    holds.push(options); writeFileSync(join(itemDirectory(f.item, f.env), 'prepared.md'), 'Evidence');
+    martin(['item', f.item.id, 'prepared', '--sort', 'technical'], { env: { ...f.env, MC_ROLE: 'decision' }, stdout: { write() {} }, stderr: { write() {} } });
+    competitor = readFileSync(path, 'utf8');
+    return fn();
+  };
+  const done = await f.call({ session: () => result, lock });
+  assert.deepEqual(holds, [{ strict: true, name: 'desk-item' }]);
+  assert.equal(readFileSync(path, 'utf8'), competitor, "the item's bytes are the competitor's");
+  const settled = readDeskItem(f.item.id, { env: f.env });
+  assert.deepEqual([settled.state, settled.sort, settled.prepare_failures], ['prepared', 'technical', undefined], 'the preparation that landed first stands, with no failure added');
+  assert.equal(done.ok, true);
+  // A lock that cannot be had leaves the failure uncounted and the item unchanged, but the paid turn still gets its run row.
+  const g = fixture(t); const gPath = join(itemDirectory(g.item, g.env), 'item.json'); const before = readFileSync(gPath, 'utf8');
+  const refused = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+  const missed = await g.call({ session: () => result, lock: refused });
+  assert.deepEqual([missed.started, missed.ok], [true, false]);
+  assert.match(missed.reason, /the failure was not counted: the runner lock is held by pid 4242 — try again$/u);
+  assert.equal(readFileSync(gPath, 'utf8'), before);
+  assert.deepEqual(readRunRows(readFileSync(deskRunsPath(g.env), 'utf8')).map(row => [row.name, row.kind]), [[g.item.id, 'desk-prepare']], 'the paid turn has its run row');
+});

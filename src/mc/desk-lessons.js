@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
-import { deskItemId, itemDirectory, writeDeskItem } from './desk-items.js';
+import { deskItemId, itemDirectory, updateDeskItem } from './desk-items.js';
 import { goalReferences, isGoalRef, prRef, REVIEW_ROLE } from './goals.js';
 import { martinDir, programsHome } from './paths.js';
 
@@ -196,7 +196,7 @@ export function dismissLesson({ env = process.env, name, reason, role, since = n
  * dismissed with that as its reason. The item is not reversible, so it waits for Martin without limit and
  * no default carries it out.
  */
-export function briefLesson({ env = process.env, name, brief, now = new Date() }) {
+export function briefLesson({ env = process.env, name, brief, now = new Date(), lock }) {
   const lesson = readLesson(name, { env });
   if (!lesson) return { error: `unknown lesson ${name}` };
   if (lesson.state !== 'open') return { error: `lesson ${name} is ${lesson.state}; only an open lesson is brought to Martin` };
@@ -204,10 +204,13 @@ export function briefLesson({ env = process.env, name, brief, now = new Date() }
   const reference = `lesson:${name}`;
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('lesson', reference, lesson.at), kind: 'lesson', reference,
     source_at: lesson.at, opened_at: now.toISOString(), state: 'for-martin', sort: 'product', reversible: false, due_at: null, outcome: null };
-  if (existsSync(join(itemDirectory(item, env), 'item.json'))) return { error: `lesson ${name} has been brought to Martin already` };
-  mkdirSync(itemDirectory(item, env), { recursive: true });
-  writeFileAtomic(join(itemDirectory(item, env), 'brief.md'), `${String(brief).trim()}\n`);
-  writeDeskItem(item, { env });
+  // Whether the item exists is read, and the brief and the item written, in one hold: two briefs of one lesson make one item.
+  const { written } = updateDeskItem(item.id, (current) => {
+    if (current) return null;
+    writeFileAtomic(join(itemDirectory(item, env), 'brief.md'), `${String(brief).trim()}\n`);
+    return item;
+  }, { env, ...(lock ? { lock } : {}) });
+  if (!written) return { error: `lesson ${name} has been brought to Martin already` };
   Object.assign(lesson, { state: 'dismissed', dismissed_at: now.toISOString(), reason: `contradicts a decision of Martin's; brought to him as a product brief (item ${item.id})` });
   writeLesson(lesson, { env });
   return { lesson, item };

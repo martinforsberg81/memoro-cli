@@ -6,7 +6,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { runTool } from './child-async.js';
 import { deskBudget, deskBudgetReason, deskRunsPath } from './desk-budget.js';
-import { itemDirectory, listDeskItems, readDeskItem, writeDeskItem } from './desk-items.js';
+import { itemDirectory, listDeskItems, readDeskItem, updateDeskItem } from './desk-items.js';
 import { chooseCandidate } from './model-choice.js';
 import { readCapacity } from './model-capacity.js';
 import { readModels } from './model-config.js';
@@ -84,17 +84,21 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     try { result = await (deps.session || realSession)({ ...processLaunch, cwd: dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: PREPARE_TIMEOUT_MS, group: true }); }
     catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
-    const current = readDeskItem(id, { env });
-    const prepared = current?.state === 'prepared';
-    const reason = result.timedOut ? 'preparation exceeded fifteen minutes' : `turn exited ${result.status ?? 1} without preparing the item (${summary.note})${result.stderr ? `: ${String(result.stderr).slice(0, 1000)}` : ''}`;
-    if (current?.state === 'new') {
+    let prepared = false;
+    let reason = result.timedOut ? 'preparation exceeded fifteen minutes' : `turn exited ${result.status ?? 1} without preparing the item (${summary.note})${result.stderr ? `: ${String(result.stderr).slice(0, 1000)}` : ''}`;
+    // The failure is counted on the record read under the lock, and only while it is still new.
+    // The turn ran and was paid for: its run row below is written even when the lock cannot be had.
+    try { updateDeskItem(id, current => {
+      prepared = current?.state === 'prepared';
+      if (current?.state !== 'new') return null;
       current.prepare_failures = [...(current.prepare_failures || []), { at: now().toISOString(), reason }];
       if (current.prepare_failures.length >= 2) {
         writeFileSync(join(dir, 'prepared.md'), `Preparation failed twice.\n\n${current.prepare_failures.map(attempt => `${attempt.at}: ${attempt.reason}`).join('\n\n')}\n`);
         current.state = 'prepared'; current.sort = 'mechanical';
       }
-      writeDeskItem(current, { env });
-    }
+      return current;
+    }, { env, ...(deps.lock ? { lock: deps.lock } : {}) }); }
+    catch (error) { reason = `${reason}; the failure was not counted: ${error.message || String(error)}`; }
     const row = { ...summary, ts: now().toISOString(), name: id, kind: 'desk-prepare', exit: result.status ?? 1,
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: prepared ? 'prepared' : reason,
       model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };

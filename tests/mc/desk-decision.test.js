@@ -83,6 +83,15 @@ test('an unfinished item retries once then becomes a non-reversible mechanical b
   assert.deepEqual(readRunRows(readFileSync(deskRunsPath(f.env),'utf8')).map(x=>[x.name,x.kind]),[[item.id,'decision'],[item.id,'decision']]);
 });
 
+test('an unfinished pass whose failure cannot take the item lock still logs the paid turn and leaves the item unchanged', async t => {
+  const f = fixture(t), item = f.add('alpha/first'); const path = join(itemDirectory(item, f.env), 'item.json'); const before = readFileSync(path, 'utf8');
+  const real = f.deps.lock;
+  f.deps.lock = (root, fn, options) => { if (options?.name === 'desk-item') throw new Error('the runner lock is held by pid 4242 — try again'); return real(root, fn, options); };
+  await f.runner().pass();
+  assert.equal(readFileSync(path, 'utf8'), before, 'no failure was counted');
+  assert.deepEqual(readRunRows(readFileSync(deskRunsPath(f.env), 'utf8')).map(x => [x.name, x.kind]), [[item.id, 'decision']], 'the paid turn has its run row');
+});
+
 test('a reversible overdue brief is picked, told it is due, and closed by default', async t => {
   const f = fixture(t), item = f.add('decision:record', {state:'for-martin',sort:'judgement',reversible:true,due_at:'2026-11-14T11:59:59Z'});
   f.deps.session = async call => { assert.match(call.prompt,/This item is DUE/u); assert.match(call.prompt,/close --by default/u); await f.close(item,'default'); return result; };

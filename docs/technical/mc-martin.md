@@ -117,12 +117,14 @@ Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 States are `new` → `prepared` → `for-martin` → `closed`, with `prepared` also
 able to close directly. Sort is null or mechanical, technical, product,
 judgement or reserved; reversible and due time are nullable. Closing records
-`{by, at, summary}` where by is decision, martin, default or source. Sync opens
+`{by, at, summary}` where by is decision, martin, default or source, and, when a
+close replaced a source closure, `replaced`. Sync opens
 waiting goals and main-reds and flagged decided jev ledger rows once. A decided
 row is flagged when jev's chosen key differs from the session recommendation
 or its product reading is at least 0.70. Sync skips ledger rows older than the
 store's first sync, closes open goal/main-red items
-whose source no longer waits, and writes only beneath the item store. It never
+whose source no longer waits and, apart from the runner lock it holds, writes only
+beneath the item store. It never
 changes a source record. Missing, malformed or unreadable goal/main-red files
 are reported and preserve the item: absence from the live queue alone is not
 resolution. A goal closes only on a readable finished/non-Martin state or an
@@ -144,9 +146,16 @@ as `recommend`, which must be an option of `brief.md` (a line `- <key>: its
 consequence`). Closing `--by martin` an item that has a `recommend` requires
 `--chose <key>`, an option of the brief, recorded as `chose`; `--chose` is
 refused with any other `--by`. `close --by decision|martin|default --summary <paragraph>`
-(or `--summary-file`) closes prepared/for-martin. Invalid transitions, roles,
-ids and missing required files are refused with exit 2 and no write. Item JSON
-is written atomically. `mc martin` launches the desk on the opening above;
+(or `--summary-file`) closes prepared/for-martin; an item the source closed
+after it was prepared or briefed (it has a sort) also takes
+`close --by decision|martin|default`, which replaces the source outcome and
+keeps it as `outcome.replaced`. Invalid transitions, roles, ids and missing
+required files are refused with exit 2 and no write. Every write of an item and
+of the store marker is a read-modify-write under the strict runner lock: a
+transition is judged on the state read under the lock and refused when that
+state no longer allows it. When the lock cannot be had nothing is written, and
+an item verb, `mc martin items` and the opening (`mc martin brief`, `mc martin`)
+end with exit 1 and the lock's message. Sync runs in one hold. `mc martin` launches the desk on the opening above;
 `mc martin brief [--json]` prints it; the read-only `mc martin get` remains
 unchanged.
 
@@ -249,7 +258,8 @@ is one decision applied to each, not repeated questions. No budget, allocation,
 exception or new rule is added without measured need.
 
 Settled work is carried out or handed to the appropriate goal stage, then
-closed `--by decision` with a two- or three-sentence Swedish summary. What is
+closed `--by decision` with a two- or three-sentence Swedish summary; a sync that
+closed the item by source in between does not prevent that close. What is
 Martin's gets `brief.md` in Swedish, with only: what the user would notice;
 options as consequences; one recommendation and reason; what waits; whether
 it can be changed afterwards; for a judgement, material paths; for a reserved
