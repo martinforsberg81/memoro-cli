@@ -229,7 +229,7 @@ describe('openInWorkArea in a role area', () => {
         await openInWorkArea({ areaRoot, worktree, env, overlay: role.overlay, roleName: name, cache: role.cache, ...options });
         const { args } = calls[0];
         assert.deepEqual(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 3), [
-          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch', '--strict-mcp-config',
         ], name);
         assert.equal(args.includes('--agents'), false, name);
         assert.equal(args.includes('--resume'), resumed, name);
@@ -502,7 +502,7 @@ describe('startInBackground and --model', () => {
     startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', task: 'go', cache: '5m', env, run: fresh.run });
     assert.equal(creation(fresh.calls), `${QUOTED_IDENTITY} 'claude' ${[...toolArgs(), ...sessionArgs({ cache: '5m' })].map((arg) => `'${arg}'`).join(' ')} 'go'`);
     assert.match(creation(fresh.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"5m"/u);
-    assert.ok(creation(fresh.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent' '--strict-mcp-config'"));
+    assert.ok(creation(fresh.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch' '--strict-mcp-config'"));
 
     const resumed = tmux();
     startInBackground({
@@ -511,7 +511,7 @@ describe('startInBackground and --model', () => {
     });
     assert.equal(creation(resumed.calls), `${QUOTED_IDENTITY} 'claude' '--resume' '${CONVERSATION_ID}' ${QUOTED_SETTINGS} 'go'`);
     assert.match(creation(resumed.calls), /"CLAUDE_CODE_PROMPT_CACHE_TTL":"1h"/u);
-    assert.ok(creation(resumed.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent' '--strict-mcp-config'"));
+    assert.ok(creation(resumed.calls).includes("'--tools' 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch' '--strict-mcp-config'"));
   });
 
   it('the role default follows the role tool here too', () => {

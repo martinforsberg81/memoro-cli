@@ -14,9 +14,9 @@ import * as claude from '../../src/adapters/claude-code.js';
 import * as codex from '../../src/adapters/codex.js';
 
 describe('native delegation switches', () => {
-  it('Claude exposes seven tools including Agent, without mc-defined agents', () => {
+  it('Claude exposes nine tools including Agent and web search, without mc-defined agents', () => {
     assert.deepEqual(claude.toolArgs(), [
-      '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+      '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch', '--strict-mcp-config',
     ]);
   });
 
