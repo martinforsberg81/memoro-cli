@@ -52,8 +52,15 @@ writes the receipt before publishing its result and exit marker. The waiting
 command then clears the matching worktree exclusion lock.
 
 Only completed checks with known successful exits and unchanged content produce
-a green receipt. No checks, zero executed tests, unknown exits, interruption,
-failed checks and content mutations are not green. An explicitly allowed
+a green receipt, with one explicit zero-check case: a readable, classified change
+scope with no own tests or commands (`why.reason: "change"`, explicit empty
+`why.unexplained`). Its affected, unfiltered coverage stores that answer as
+`emptyChange`; execution has no tests or commands. It proves complete empty
+scope for that fingerprinted tree, never that a test ran. It is reusable only
+under the same repository/content/configuration and selection rules; it covers
+no later selected member. Named, filtered, wide/full, legacy and unclassified
+empty plans remain incomplete. Unknown exits, interruption, failed checks and
+content mutations are not green. An explicitly allowed
 unavailable command gives the verdict `incomplete` (`ok` false, `complete` false,
 printed `INCOMPLETE`, no receipt line; `gate-local.js`, `commands/gate.js`). Its
 exit is 0, because the process held, and its stored receipt's outcome is

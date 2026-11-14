@@ -227,8 +227,10 @@ function selectChange({ root, baseRef, mergeBase, changed, all, testFiles }) {
   }
   // Classification still reports uncertainty, but never widens a change into
   // the estate. Documents/configuration are not source modules or test files.
-  const unexplained = changed.filter(path => !SOURCE_FILE.test(path)
-    || !['src/', 'scripts/', 'tests/'].some(prefix => path.startsWith(prefix)));
+  const unexplained = changed.filter(path => {
+    if (DATA_DIRS.some(prefix => path.startsWith(prefix)) || /^(?:README|AGENTS|CLAUDE)\.md$/u.test(path)) return false;
+    return !SOURCE_FILE.test(path) || !['src/', 'scripts/', 'tests/'].some(prefix => path.startsWith(prefix));
+  });
   return { files: Object.keys(selectedBy).sort(), why: {
     reason: 'change', base_ref: baseRef, merge_base: mergeBase, changed: changed.length,
     test_files: testFiles.length, selected_by: selectedBy, unexplained,

@@ -3965,6 +3965,28 @@ it('a selection keeps the selector output exactly, whole, independently of its n
 // Both routes consume the repository's same change-scope answer. The fixture
 // models Git; selectors and command execution are recorded at their boundaries.
 describe('a merge checks the change, while the full run keeps everything', () => {
+  it('a classified empty change completes the round and bare gate without inventing tests or commands', async () => {
+    const fx = fixture({ changed: ['src/mc-cli.js'] });
+    try {
+      writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { prepare: null, prepare_why: 'fixture',
+        select: 'change selector', pr_tests_flags: [], extra_gates: [] } });
+      const select = request => selectFiles({ ...request, run: async () => ({ status: 0,
+        stdout: JSON.stringify({ files: [], commands: [], why: { reason: 'change', unexplained: [] } }) }) });
+      const forbidden = async () => { throw new Error('an empty scope must launch no check'); };
+      const round = await fx.run({ select, tests: forbidden, suite: forbidden, shell: forbidden });
+      assert.equal(round.ok, true, round.reason);
+      assert.equal(round.selection.empty_change, true);
+      assert.deepEqual(round.selection.selected, []);
+      assert.equal(round.candidate.empty_change, true);
+      assert.deepEqual(round.extra_gates, []);
+      const session = await runSessionGate({ cwd: fx.repoPath, select: 'change selector', flags: [] },
+        { snapshot: () => null, write: () => {}, select, tests: forbidden, shell: forbidden });
+      assert.equal(session.ok, true, JSON.stringify(session));
+      assert.deepEqual(session.coverage.files, round.selection.selected);
+      assert.deepEqual(session.commands, round.extra_gates);
+    } finally { fx.cleanup(); }
+  });
+
   for (const repo of ['memoro', 'memoro-cli']) {
     it(`${repo}: merge, bare and whole-selection ask for the right scope`, async () => {
       const fx = fixture({ changed: ['src/route.js'] });

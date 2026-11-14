@@ -806,8 +806,15 @@ declared `allowUnavailable`, and red otherwise, with the reason in its
 a fact about the gate's command, which the selector owns. A gate without `needs`
 is run exactly as before.
 
-An empty selection stops the round: it is not a measurement, and a green from it
-would be the most confident kind of nothing.
+A readable, positively classified change scope can contain no own tests (for
+example, the CLI entrypoint with no direct importer or documentation-only work).
+Only an empty plan with `why.reason: "change"` and an explicit empty
+`why.unexplained` list may complete with no checks executed. The round records
+`selection.empty_change` and `candidate.empty_change`, not a test execution.
+Unreadable, unclassified, wide/full and legacy empty answers still stop. No tests
+are invented to get a nonempty list; clean merge and substantive review remain
+required. A bare session gate applies the same rule and fingerprints the tree
+before and after; its receipt explicitly records the empty scope.
 
 **A green `mc gate` on the same tree is not measured again** (rulings 44 and
 47). Completed full, unfiltered affected gates now write durable

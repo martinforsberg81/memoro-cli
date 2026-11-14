@@ -14,7 +14,7 @@ import { awaitDeploy, deployHolding } from './await-deploy.js';
 import { BUILD_LANE } from './gate-lock.js';
 import { fileOutcomes, readTestTimes, outputCut, progressTracker, sessionFiles, slowTests, touchedTests } from './test-times.js';
 import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, persistSelectorEvidence, recordReceiptGreen, sameContent, selectorSidecar } from './session-gate-evidence.js';
-import { commandIdentity } from './gate-greens.js';
+import { classifiedEmptyChange, commandIdentity, emptyChangeCoverage } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
 
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
@@ -326,13 +326,18 @@ async function executeSessionGate(request, {
   }
   onPhase('selection', false);
   if (deferred.length) write(`deferred, too costly for this partial gate (${deferred.length}; unmeasured): ${deferred.join(' ')}\n`);
-  if (!covered.length && !selection.commands?.length) {
+  const emptyChange = !request.files && !request.commands && !deferred.length && !selected.length
+    && classifiedEmptyChange(selection) ? selection.why : null;
+  const emptyCoverage = { kind: 'affected', files: [], commands: [], flags: [...plan.flags],
+    pattern: request.pattern ?? null, selector: request.select ?? null, emptyChange };
+  if (!covered.length && !selection.commands?.length && !emptyChangeCoverage(emptyCoverage)) {
     write('NOTHING RUN — the repository selector selected no checks\n');
     return { ok: false, code: 2, stopped_at: 'no-checks', files, deferred, coverage: {
       kind: request.files ? 'named' : deferred.length ? 'partial' : 'affected', files, commands: selection.commands || [],
       flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
     } };
   }
+  if (emptyChange) write('No own tests: complete classified empty change scope; no checks executed.\n');
   const selectedCommands = selectedCommandsForRequest;
   let code = 0;
   let details = [];
@@ -367,7 +372,8 @@ async function executeSessionGate(request, {
   const reusedSlow = Object.keys(reusedFiles).flatMap((file) => (prior.files.get(file).tests || []).map((test) => ({ ...test, file })));
   let slow = slowTests(reusedSlow);
   const coverage = { kind: request.files || request.commands ? 'named' : deferred.length ? 'partial' : 'affected', files: covered, commands: selectedCommands,
-    flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null };
+    flags: [...plan.flags], execution: identity, pattern: request.pattern ?? null, selector: request.select ?? null,
+    ...(emptyChange ? { emptyChange } : {}) };
   const snapshot = () => {
     const unavailable = commands.filter((command) => command.unavailable === true).map(({ id, packageScript, command: invocation, exit }) => ({
       id, packageScript, command: invocation, exit,

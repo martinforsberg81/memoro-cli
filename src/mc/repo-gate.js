@@ -72,7 +72,7 @@ import { readRounds, recordRound } from './repo-round-log.js';
 import { PROCESS_PROGRESS_PRELOAD, TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
-import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
+import { classifiedEmptyChange, GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
 import { nodeTestScript, scriptTimeoutAt, timeoutMs as positiveMs, timeoutValues } from './gate-local.js';
@@ -1034,8 +1034,12 @@ export async function runGate({
         raw_sha256: selection.raw?.sha256 ?? null,
       };
       say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
-      if (selection.files.length === 0) {
+      if (selection.files.length === 0 && !classifiedEmptyChange(selection)) {
         return finish('selection', 'the repository selected no test files for this change at all — that is not a measurement');
+      }
+      if (classifiedEmptyChange(selection)) {
+        report.selection.empty_change = true;
+        say('no own tests: complete classified empty change scope; no checks executed');
       }
     }
 
@@ -1170,13 +1174,14 @@ export async function runGate({
     // What the run below measures: the whole selection, or the delta's part.
     const runFiles = rerun ? rerun.files : selection?.files;
     const runCommands = rerun ? rerun.commands : selection?.commands;
-    // A delta that reaches command gates and no test file: the files half is
-    // the recorded green, not an empty run (which reports no tests and stops).
-    const greenFiles = rerun && !rerun.files.length ? {
+    // No test process is needed for a delta with only command work, or for
+    // a positively classified empty change. Neither claims a test execution.
+    const greenFiles = ((rerun && !rerun.files.length) || classifiedEmptyChange(selection)) ? {
       ok: true,
       result: {
         commit: trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null, is, exit_code: 0, totals: null,
         red: [], red_files: [], red_tests: [], selected: 0,
+        ...(classifiedEmptyChange(selection) ? { empty_change: true } : {}),
         killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
       },
     } : null;

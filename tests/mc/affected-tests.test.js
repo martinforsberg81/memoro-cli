@@ -356,8 +356,8 @@ describe('which tests a change reaches', () => {
   });
 
   it('a change that reaches nothing selects nothing, and says so plainly', () => {
-    // Not an error, and not a licence either: the gate refuses to treat an
-    // empty selection as a measurement, so this is where that refusal starts.
+    // Wide scope retains this empty result. Change scope additionally identifies
+    // positively classified emptiness so the gate need not invent any tests.
     const fx = repo({
       base: {
         'src/a.js': 'export const a = 1;\n',
