@@ -131,6 +131,15 @@ resolution. A goal closes only on a readable finished/non-Martin state or an
 established later question; a main-red closes only on readable state showing
 that its entry no longer waits. Chores syncs once each round.
 
+A main-red item is answered at its source: `mc repo mend <repo> <id>
+requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item
+<id> close`, with any `--by`, on a main-red item exits 2 with item.json unchanged
+while the entry reads Martin or the state file is unreadable, and the message
+names `mc repo mend`; after a requeue or drop the close succeeds, and a sync alone
+closes by source. A main-red item's source time is the entry's `answered.at`, else
+its `created`, so an answered entry that reaches Martin again opens a new item
+with a different id and an unanswered one keeps its own.
+
 `mc martin items [--state <state>] [--json]` syncs then lists open items before
 closed ones, by oldest source time. Each label is recovered using the item's
 source time and source history, including closed questions and runner reasons;
