@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import { interactive, select } from './prompt.js';
 import { resolveLaunch } from '../adapters/index.js';
+import { trustClaudeFolder } from './claude-trust.js';
 import { SESSION_IDENTITY_ENV, normalizeSessionRole, sessionLaunchEnvironment } from './session-role.js';
 import { conversationIdentityReader, conversationModel, launchIdentityMarker, listConversations } from './conversations.js';
 import { log } from './logger.js';
@@ -276,7 +277,7 @@ export async function interactiveLaunchPlan({
 /** One provider decision; every start, persistent or not, uses interactiveLaunchPlan. */
 export async function openInWorkArea(options = {}) {
   const { env = process.env, platform = process.platform, isInteractive = interactive,
-    background, spawn = spawnSync, register = registerForeground, onProvider, ...rest } = options;
+    background, spawn = spawnSync, register = registerForeground, onProvider, trust = trustClaudeFolder, ...rest } = options;
   const eligible = entersPersistentSession({ env, platform, isInteractive, verb: options.verb });
   let entrance;
   try {
@@ -295,6 +296,11 @@ export async function openInWorkArea(options = {}) {
       },
     });
     if (!plan.launch) return plan;
+    if (plan.launch.id === 'claude-code') {
+      // Every folder mc opens Claude in is trusted first (claude-trust.js).
+      const trusted = trust(options.worktree.path, { env });
+      if (!trusted.ok || trusted.changed) log(trusted.ok ? 'work.claude-trusted' : 'work.claude-trust-failed', trusted);
+    }
     clearStopMark(options.areaRoot);
     if (entrance) return await entrance.start(plan);
     log('work.open', plan.openEvent);

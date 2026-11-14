@@ -73,11 +73,13 @@ for (const [name, changes, route] of [
 ]) test(name, async () => {
   const reached = [];
   const result = await openInWorkArea({ ...base, ...changes,
+    trust: folder => { reached.push(['trust', folder]); return { ok: true, folder, changed: false }; },
     background: () => ({ start: async plan => { reached.push(plan.tool === 'claude-code' ? 'background' : 'codex-session'); return { ok: true }; } }),
     spawn: () => { reached.push('foreground'); return { status: 0 }; }, register: () => () => {},
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(reached, [route]);
+  // Every Claude launch, foreground or background, trusts its folder first; Codex has no such record.
+  assert.deepEqual(reached, route === 'codex-session' ? [route] : [['trust', base.worktree.path], route]);
 });
 
 test('a named Claude resume resolves provider before routing without a tool flag', async () => {
