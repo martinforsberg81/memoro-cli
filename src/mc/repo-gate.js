@@ -69,7 +69,7 @@ import { ensureSharedDeps } from './shared-deps.js';
 import { prepareCacheDir, prepareCandidate } from './prepare-cache.js';
 import { duplicateRow } from './archive-plan.js';
 import { readRounds, recordRound } from './repo-round-log.js';
-import { TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
+import { PROCESS_PROGRESS_PRELOAD, TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
 import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
@@ -136,6 +136,17 @@ export async function runGate({
   // nightly`, which calls this function with this flag rather than copying
   // what it does.
   full = false,
+  // The scheduled full run of the default branch, beside the merge lane rather
+  // than in it (Martin, 2026-11-13): no round lock, no phase notes in the lane's
+  // lock file, and its own measurement checkout (`<slug>/full`) instead of the
+  // merger's (`<slug>/candidate`), so merges, sessions and full runs proceed at
+  // once. Only with `full` and no pull request; the caller takes no lease for it
+  // (`holdLease: false`), since it merges nothing. A person's `--full` stays in
+  // the lane.
+  isolated = false,
+  // The test lanes, when the caller declares them (the full run's
+  // `fullRunLanes`); null asks `testLanes` for the round's mode.
+  lanes: declaredLanes = null,
   // The round log's own word for what this round is (`check`, `merge`,
   // `full`, `nightly`, …) — the same word `noteGatePhase` and `takeGateLock`
   // write beside the pid, so a reader of the lock sees what a reader of the
@@ -227,9 +238,11 @@ export async function runGate({
   // cannot reach one and miss the other.
   // The repository's lane (gate-lock.js), which this round's lock is in.
   const lane = gateLaneOf(repoPath);
+  // Beside the lane: only a whole suite of the default branch, no pull request.
+  const beside = Boolean(isolated) && Boolean(full) && pr == null && !(Array.isArray(prs) && prs.length);
   const say = (message) => {
     log('gate.say', { text: message });
-    noteGatePhase({ root, message, lane });
+    if (!beside) noteGatePhase({ root, message, lane });
     try { onProgress(message); } catch { /* progress is a courtesy */ }
   };
 
@@ -295,14 +308,17 @@ export async function runGate({
   // merge, check or full round runs at least `MERGE_LANES_MIN`, a session's
   // gate the free cores (`testLanes`). The round record names both.
   const load = Math.round(loadavg()[0] * 10) / 10;
-  const lanes = testLanes({ env, load, mode: gateMode });
+  const lanes = Number.isInteger(declaredLanes) && declaredLanes > 0 ? declaredLanes : testLanes({ env, load, mode: gateMode });
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
-  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete };
+  const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete,
+    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses };
   // Every test the round's runs measured, all on the candidate: the ones over the
   // slow-test indicator are named in the report (`slow_tests`), never its red.
   const measuredTests = [];
   const runSuite = async (options) => {
-    const result = await (suite || ((one) => realSuite({ ...one, env, lanes, signal, times: timesOf })))(options);
+    // `times` goes to an injected suite too: it is how a suite reports its
+    // files' progress to the stall watchdog, and a test drives that through it.
+    const result = await (suite || ((one) => realSuite({ ...one, env, lanes, signal })))({ ...options, times: timesOf });
     measuredTests.push(...(result?.tests || []));
     progressed();
     return result;
@@ -485,13 +501,17 @@ export async function runGate({
   // message, a row on the page and four verbs of its own. Four hundred lines
   // of vocabulary for "one at a time", under a name nobody could say without
   // explaining it.
-  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root, lane });
+  //
+  // The scheduled full run takes none of it (`isolated`): it measures main in a
+  // checkout of its own and never waits for, or holds up, a merge round.
+  const held = beside ? { ok: true, took: false } : takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, mode: gateMode, root, lane });
   if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     return finish(held.error ? 'reservation' : 'busy', held.error || describeRunning(held.running, lane));
   }
   const ownGateLock = held.took;
-  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane`);
+  if (beside) say(`full run started (pid ${process.pid}) — beside the ${lane} lane, in its own checkout, at ${lanes} test lane${lanes === 1 ? '' : 's'}`);
+  else if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time in the ${lane} lane`);
   else say('the round lock could not be written — running anyway; another round could overlap this one');
 
   // The repository ceiling is information, not a verdict. Only no progress
@@ -510,12 +530,17 @@ export async function runGate({
   };
   const pendingFiles = () => {
     const runs = progress.read();
-    return [...new Set([...runs.unfinished.map(relativeFile), ...[...pendingTestRuns].flatMap(request => {
+    // A whole suite's files in flight are the ones whose process is running
+    // (`processes`): the reporter names a file only once a test in it has ended.
+    return [...new Set([...runs.unfinished.map(relativeFile), ...progress.processes().running.map(relativeFile), ...[...pendingTestRuns].flatMap(request => {
       const done = new Set(request.progress.read().finished.map(one => relativeFile(one.file)));
       return request.files.map(relativeFile).filter(file => !done.has(file));
     })])];
   };
   const stopStalled = (why) => {
+    // Once: the poll goes on until the round unwinds, and a later poll must not
+    // rewrite what was in flight at the moment the round was stopped.
+    if (stalled) return;
     stalled = true;
     report.stalled_files = pendingFiles();
     report.stalled_gates = [...activeCommands];
@@ -524,11 +549,17 @@ export async function runGate({
   };
   const cancelCeiling = armCeiling(() => {
     const runs = progress.read();
-    const finished = runs.finished.length;
+    const finished = Math.max(runs.finished.length, progress.processes().exited);
     say(`past its ${Math.ceil(roundTimeoutMs / 1000)} s ceiling at load ${Math.round(loadavg()[0] * 10) / 10} — ${finished} of ${finished + pendingFiles().length} files finished, going on`);
   }, roundTimeoutMs);
+  // Forward motion is a test file the reporter finished, or a test file's
+  // process that exited (`test-progress-preload.mjs`). The second is what a
+  // whole suite shows while node's in-order reporter waits on a slow file ahead;
+  // without it every full run longer than the window was called stalled
+  // (2026-11-13: memoro's reporter is never seen at all, and memoro-cli's froze
+  // at 91 files behind one that never ended).
   const cancelStall = armStall(() => {
-    const signature = JSON.stringify(progress.read().finished);
+    const signature = JSON.stringify([progress.read().finished, progress.processes().exited]);
     if (signature !== progressSeen) { progressSeen = signature; progressed(); }
     if (clock() - lastProgress >= stallMs) stopStalled(`no progress for ${stallMs / 60_000} min`);
   }, stallMs);
@@ -558,7 +589,8 @@ export async function runGate({
 
   report.declaration = { source: declared.source, ...declared.declaration };
 
-  const headDir = measurementCheckoutPath(repoPath, workRoot(env));
+  const checkoutName = beside ? FULL_RUN_CHECKOUT : 'candidate';
+  const headDir = measurementCheckoutPath(repoPath, workRoot(env), checkoutName);
 
   try {
     // What the pull request actually is, rather than what the caller believes.
@@ -616,10 +648,10 @@ export async function runGate({
 
     const candidate = await measurementCheckout({
       repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : baseRef,
-      git: askGit, cwds: candidateCwds, root: workRoot(env),
+      git: askGit, cwds: candidateCwds, root: workRoot(env), name: checkoutName,
     });
     if (!candidate.ok) return finish('worktree', candidate.reason);
-    say(`using the merger's measurement checkout ${headDir}`);
+    say(beside ? `using the full run's own measurement checkout ${headDir}` : `using the merger's measurement checkout ${headDir}`);
 
     if (!facts.pr) {
       say(`measuring ${baseRef} as fetched — the whole suite, one tree`);
@@ -2446,6 +2478,28 @@ export const GREEN_ALONE_MAX = 3;
 /** The fewest lanes a merge, check or full round runs its tests at (`testLanes`). */
 export const MERGE_LANES_MIN = 4;
 
+/** The scheduled full run's own measurement checkout, beside the merger's `candidate`. */
+export const FULL_RUN_CHECKOUT = 'full';
+
+/**
+ * The test lanes of the scheduled full run, which runs beside merges and
+ * sessions (Martin, 2026-11-13): 2, or `MC_FULL_RUN_LANES`.
+ *
+ * Fixed rather than load-answered, so a full run's length does not depend on
+ * when it started. Two is the floor `testLanes` keeps for a session's gate at
+ * any load, the least this code ever measures at, and half `MERGE_LANES_MIN`,
+ * which a merge round is guaranteed: with a full run and a merge round in each
+ * of the two repositories at once, 2 × (2 + 4) = 12 lanes, the cores of this
+ * machine, before any session's gate. A full run is a meter nobody waits for, so
+ * it is the one that is slower rather than the round every step waits on.
+ */
+export const FULL_RUN_LANES = 2;
+
+export function fullRunLanes(env = process.env) {
+  const set = Number(env.MC_FULL_RUN_LANES);
+  return Number.isInteger(set) && set > 0 ? set : FULL_RUN_LANES;
+}
+
 /**
  * How many test files a selected run takes at once. A session's gate (no
  * mode) takes the free cores: `cores - 1 - round(load1)`, between 2 and
@@ -2828,7 +2882,21 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
     const timesFile = times ? join(tmpdir(), `mc-test-times-${randomUUID()}.jsonl`) : null;
     if (timesFile) times.track?.(timesFile);
     const reporters = `--test-reporter=tap --test-reporter-destination=stdout${timesFile ? ` --test-reporter=${TIMES_REPORTER} --test-reporter-destination=${timesFile}` : ''}`;
+    // A heartbeat per test file's process (`test-progress-preload.mjs`), beside
+    // the reporter: node holds back every later file's events until the files
+    // before it have reported, so the reporter alone shows no motion while a slow
+    // file is ahead, and a suite whose runner drops inherited reporters (memoro's)
+    // shows none at all. The round's stall watchdog reads both (2026-11-13).
+    const beatFile = times?.trackProcesses ? join(tmpdir(), `mc-test-progress-${randomUUID()}.jsonl`) : null;
+    if (beatFile) times.trackProcesses(beatFile);
+    const preload = beatFile ? ` --import=${PROCESS_PROGRESS_PRELOAD}` : '';
+    const noteBeats = () => {
+      if (!beatFile) return;
+      times.completeProcesses?.(beatFile);
+      rmSync(beatFile, { force: true });
+    };
     const noteTimes = () => {
+      noteBeats();
       if (!timesFile) return { cut: [], tests: [] };
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
@@ -2845,7 +2913,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       shell: true,
       // The round's lane count, for a suite that runs its own runner (memoro's
       // `runner.mjs` reads it); a caller that set one keeps it.
-      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} ${reporters}`.trim() },
+      env: { MC_TEST_LANES: String(lanes), ...clean, NODE_OPTIONS: `${inherited} ${reporters}${preload}`.trim(), ...(beatFile ? { MC_TEST_PROGRESS: beatFile } : {}) },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
@@ -2877,7 +2945,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
+    child.on('error', (error) => { noteBeats(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A suite whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
       const { cut, tests, covered } = noteTimes();

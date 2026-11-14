@@ -151,7 +151,9 @@ export const SHIPPED = Object.freeze({
     // same claim, and only the first one is checkable.
     suite: 'npm test',
     suite_why: 'its test script is `node --test --import ./tests/_isolate-home.mjs --test-timeout=30000 '
-      + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01',
+      + '"tests/**/*.test.js"` — a glob over the whole tree, not a selector; read off package.json 2026-11-01. '
+      + 'Since 2026-11-13 it takes `--test-concurrency=$MC_TEST_LANES` when that is set, so a whole-suite round '
+      + 'runs at its lanes (node refuses --test-concurrency in NODE_OPTIONS)',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'runner/log/merge-memoro-cli.md' }),
     // The flags its own `test` script gives node, stated rather than parsed.

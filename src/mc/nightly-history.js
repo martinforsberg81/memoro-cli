@@ -56,12 +56,14 @@ export const NIGHTLY_HISTORY_VERSION = 1;
 /**
  * How many runs are kept, oldest dropped.
  *
- * Two weeks at the default cadence of a day — enough to answer "since when"
- * over a week with room for the nights that were skipped, and not a
- * time-series database. A history this size is a few hundred kilobytes at
- * memoro's worst.
+ * It was fourteen, two weeks at the old cadence of a day. Since 2026-11-13 a
+ * full run follows every move of main, coalesced (`nightly-loop.js`): at two
+ * lanes a run is tens of minutes, so a busy day is a few dozen runs. Fifty
+ * keeps "since when" answerable across a day or more of landings and is still
+ * not a time-series database — names only, about two megabytes at memoro's
+ * worst.
  */
-export const HISTORY_LIMIT = 14;
+export const HISTORY_LIMIT = 50;
 
 /** One file per repository, named the way every other mc file about one is. */
 export function nightlyHistoryPath(repoPath, root = mcHome()) {

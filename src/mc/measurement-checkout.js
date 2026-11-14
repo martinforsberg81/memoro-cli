@@ -1,6 +1,11 @@
 /**
  * The merger's standing, detached measurement checkout. Callers hold the
  * repository's merge lane throughout use; no session ever owns this tree.
+ *
+ * `name` picks a sibling checkout under the same `<work root>/gate/<slug>/`:
+ * `candidate` is the merger's, `full` the scheduled full run's (Martin,
+ * 2026-11-13), which runs beside the merge lane and so never stands in the
+ * merger's tree. Both resolve the shared dependency tree the same way.
  */
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -11,12 +16,12 @@ import { ownAncestry } from './work-stop.js';
 
 const failure = (run) => run?.error?.message || String(run?.stderr || '').trim() || `git exited ${run?.status}`;
 
-export function measurementCheckoutPath(repoPath, root = workRoot()) {
-  return join(root, 'gate', repoFileSlug(repoPath), 'candidate');
+export function measurementCheckoutPath(repoPath, root = workRoot(), name = 'candidate') {
+  return join(root, 'gate', repoFileSlug(repoPath), name);
 }
 
-export async function measurementCheckout({ repoPath, sha, git, cwds = cwdsOfUser, root = workRoot() }) {
-  const dir = measurementCheckoutPath(repoPath, root);
+export async function measurementCheckout({ repoPath, sha, git, cwds = cwdsOfUser, root = workRoot(), name = 'candidate' }) {
+  const dir = measurementCheckoutPath(repoPath, root, name);
   let standing;
   try { standing = cwds(); } catch { /* unknown is not idle */ }
   if (!Array.isArray(standing) || standing.complete === false) {

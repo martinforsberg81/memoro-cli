@@ -1,0 +1,3 @@
+section: Changed
+
+- **The daily full run runs beside all other work (Martin, 2026-11-13).** Once a day, the runner starts a full run of each repository whose origin/main moved since its last measured full run, one per repository at a time. A run takes no round lock and no lease, measures in its own checkout (`~/mc/gate/<repo>/full`) at 2 test lanes (`MC_FULL_RUN_LANES`). Its reds on main queue a main-red mend session, as a merge round's do. The stall watchdog now sees a whole suite's progress through a per-file process heartbeat. node's in-order reporter hid it, and every full run on mc-server had been stopped as stalled with no file named. `tests/mc/logger.test.js` no longer hangs on Linux.

@@ -58,7 +58,7 @@ function capacityWith({ claude = null, codex = null, refuse = {} } = {}) {
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }), capacity = null } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, started: [], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }), capacity = null } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -227,7 +227,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     attachDeps: async (worktree) => { calls.attached.push({ worktree, sessionsBefore: calls.sessions.length }); return attach; },
     collect: async (options) => { calls.collects.push(options); return collect(options); },
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
-    // The nightly's tick, faked: what proves it ran is `calls.ticks` and its row.
+    // The full runs' pass, faked: what proves it ran is `calls.ticks` and its row.
     nightlyTick: async (options) => { calls.ticks.push(options); return nightly(options); },
     // The one door, faked (ruling 30): the merger's queue. What the real
     // `queueMerge` writes first — the step `landing` with its pull request —
@@ -2327,45 +2327,51 @@ test('a repository whose deps cannot be read is named in the row, and the others
   assert.match(f.files['/w/runner/log/runner.log'], /deps: memoro not read — npm audit printed no JSON/u);
 });
 
-/* ------------------------------------------------------ the nightly's tick */
+/* ------------------------------------------------------- the full runs */
 
 /**
- * The tick is the third and last thing a chore pass does. Like the helper, a
- * row in runs.tsv is its whole state — but the cadence is a day since the last
- * row, not an hour of the clock, and STOP is asked before it and between the
- * repositories it measures.
+ * The full runs are the last thing a chore pass does, once a day (Martin,
+ * 2026-11-13): a day after the last pass that started one, the pass
+ * (`fullRunTick`) starts the repositories whose main moved, with the map that
+ * keeps one run per repository across passes, and does not wait for the runs. A
+ * row goes in runs.tsv only for a pass that started one; STOP is asked before
+ * it, and the runs in flight are ended before the runner leaves.
  */
 const NIGHTLY_HEADER = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
-const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t900\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-measured,0-unchanged\n`;
+const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t1\t-\t-\t-\t-\t-\t-\t-\tstarted,memoro\n`;
 
-test('the nightly tick is performed when a day has passed since the last, and its row says so', async () => {
-  const f = fixture({
+test('the full runs are asked for once a day: not a minute after a pass that started one, again a day later', async () => {
+  const soon = fixture({
     now: '2026-08-29T10:00:00Z',
-    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-28T09:00:00Z'),
-    nightly: async () => ({ runs: [{ stopped_at: null }, { stopped_at: 'unchanged' }], skipped: null, stopped: false }),
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
   });
+  await createRunner({ deps: soon.deps }).chores();
+  assert.equal(soon.calls.ticks.length, 0, 'the day gate holds');
+
+  const f = fixture({
+    now: '2026-08-30T10:00:00Z',
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
+    nightly: async () => ({ started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(f.calls.ticks.length, 1, 'the row the first pass wrote gates the second');
+  assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
+  assert.ok(f.calls.ticks[0].running instanceof Map);
+  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
+  assert.deepEqual(rows.slice(1).map((row) => ({ name: row.name, exit: row.exit, pr: row.pr, note: row.note })),
+    [{ name: 'nightly', exit: '0', pr: '-', note: 'started,memoro' }]);
+});
+
+test('a pass that started nothing writes no row', async () => {
+  const f = fixture({ nightly: async () => ({ started: [], running: ['memoro'], waiting: [], stopped: false, done: Promise.resolve([]) }) });
   await createRunner({ deps: f.deps }).chores();
   assert.equal(f.calls.ticks.length, 1);
-  assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
-  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(rows.length, 2, 'the old row and the new one');
-  assert.deepEqual({ name: rows[1].name, exit: rows[1].exit, pr: rows[1].pr, note: rows[1].note },
-    { name: 'nightly', exit: '0', pr: '-', note: 'success,1-measured,1-unchanged' });
-  assert.match(f.files['/w/runner/log/runner.log'], /nightly: a full run of every repository — the last tick was 25 h ago/u);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
 });
 
-test('the very first tick is due at once, and a tick 2 h old is not due', async () => {
-  const first = fixture({});
-  await createRunner({ deps: first.deps }).chores();
-  assert.equal(first.calls.ticks.length, 1);
-
-  const recent = fixture({ now: '2026-08-29T10:00:00Z', runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T08:00:00Z') });
-  await createRunner({ deps: recent.deps }).chores();
-  assert.equal(recent.calls.ticks.length, 0);
-  assert.equal(runRows(recent.files).filter((r) => r.kind === 'nightly').length, 1, 'no second row');
-});
-
-test('a STOP file means no tick: the suite is never started', async () => {
+test('a STOP file means no full run: the suite is never started', async () => {
   const f = fixture({});
   f.files['/w/runner/STOP'] = '';
   await round(createRunner({ deps: f.deps }));
@@ -2373,39 +2379,33 @@ test('a STOP file means no tick: the suite is never started', async () => {
   assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
 });
 
-test('a STOP file that appears mid-tick is what the tick sees before its next repository', async () => {
-  const f = fixture({
-    nightly: async ({ shouldStop }) => {
-      const before = shouldStop();
-      f.files['/w/runner/STOP'] = '';
-      return { runs: [{ stopped_at: null }], skipped: null, stopped: !before && shouldStop() };
-    },
-  });
-  await createRunner({ deps: f.deps }).chores();
-  const [row] = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(row.exit, '0');
-  assert.match(row.note, /^success,1-measured,0-unchanged,stopped$/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /nightly: stopped — 1 repository read/u);
-});
-
-test('a tick that throws is a failed row and is not retried in the same day', async () => {
+test('a pass that throws is a failed row', async () => {
   const f = fixture({ nightly: async () => { throw new Error('disk full'); } });
   const runner = createRunner({ deps: f.deps });
   await runner.chores();
-  await runner.chores();
   const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(rows.length, 1, 'the second pass finds the row and waits');
+  assert.equal(rows.length, 1);
   assert.equal(rows[0].exit, '1');
   assert.equal(rows[0].note, 'tick-failed,disk full');
-  assert.equal(f.calls.ticks.length, 1);
 });
 
-test('a UPDATE file ends the tick the way STOP does', async () => {
+test('the runs in flight are ended through their signal before the runner leaves', async () => {
+  let release = null;
   const f = fixture({
-    nightly: async ({ shouldStop }) => { f.files['/w/runner/UPDATE'] = ''; return { runs: [], skipped: null, stopped: shouldStop() }; },
+    nightly: async ({ running, signal }) => {
+      const run = new Promise((resolve) => { release = resolve; signal.addEventListener('abort', () => resolve([]), { once: true }); });
+      running.set('/home/memoro', run);
+      return { started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: run };
+    },
   });
-  await createRunner({ deps: f.deps }).chores();
-  assert.match(runRows(f.files).find((r) => r.kind === 'nightly').note, /,stopped$/u);
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  const [{ signal, running }] = f.calls.ticks;
+  assert.equal(signal.aborted, false, 'the chore pass did not wait for the run');
+  await runner.settleFullRuns();
+  assert.equal(signal.aborted, true);
+  assert.equal(typeof release, 'function');
+  assert.equal(running.size, 1, 'the map is the pass\'s to empty, not the runner\'s');
 });
 
 /* -------------------------------------------------------------- the drain */

@@ -19,9 +19,9 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync, watch } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
@@ -336,6 +336,27 @@ describe('the round measures a state worth measuring', () => {
       assert.deepEqual(git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'remove'), []);
       assert.deepEqual(git.filter(({ args }) => ['update-ref', 'branch'].includes(args[0])), []);
       assert.equal(existsSync(fx.candidateDir), true);
+    } finally { fx.cleanup(); }
+  });
+
+  // Martin, 2026-11-13: the scheduled full run neither shares nor waits for the
+  // merge lane's lock, and never stands in the merger's measurement checkout.
+  it('the scheduled full run takes no round lock, runs beside a merge round in its own checkout, at its declared lanes', async () => {
+    const fx = fixture();
+    try {
+      const lock = gateLockPath(fx.mcHome, 'repo');
+      mkdirSync(dirname(lock), { recursive: true });
+      writeFileSync(lock, JSON.stringify({ pid: process.ppid, repo: 'repo', pr: 7, since: '2026-11-13T10:00:00.000Z' }));
+      const lines = [];
+      const report = await fx.run({ pr: null, full: true, isolated: true, holdLease: false, lanes: 2, onProgress: (line) => lines.push(line) });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.lanes, 2);
+      assert.deepEqual(fx.ran('suite').map((call) => call.cwd), [measurementCheckoutPath(fx.repoPath, fx.workRoot, 'full')]);
+      assert.ok(lines.some((line) => line.startsWith('using the full run\'s own measurement checkout')), lines.join('\n'));
+      assert.equal(JSON.parse(readFileSync(lock, 'utf8')).pr, 7, 'the merge round\'s lock was touched');
+      assert.equal(fx.lease().held, false, 'a lease was taken');
+      // A person's --full is still a round in the lane.
+      assert.equal((await fx.run({ pr: null, full: true })).stopped_at, 'busy');
     } finally { fx.cleanup(); }
   });
 
@@ -3668,6 +3689,35 @@ describe('the selected files run in their resource classes', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
 
+  it('realSuite: a test file\'s process that exited is seen while node still holds its report behind a slower file', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-suite-beat-')));
+    try {
+      const flag = join(dir, 'release');
+      writeFileSync(join(dir, 'a-slow.test.js'), [
+        "import test from 'node:test';",
+        "import { existsSync } from 'node:fs';",
+        `test('waits', async () => { while (!existsSync(${JSON.stringify(flag)})) await new Promise((resolve) => setTimeout(resolve, 20)); });`,
+      ].join('\n'));
+      writeFileSync(join(dir, 'b-fast.test.js'), "import test from 'node:test';\ntest('fast', () => {});\n");
+      const tracker = progressTracker();
+      const times = { root: join(dir, 'home'), repo: 'r', where: 'full', track: tracker.track, complete: tracker.complete,
+        trackProcesses: tracker.trackProcesses, completeProcesses: tracker.completeProcesses };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const run = realSuite({ cwd: dir, command: 'node --test --test-concurrency=2 a-slow.test.js b-fast.test.js', env, lanes: 2, times });
+      for (let i = 0; i < 500 && tracker.processes().exited === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      const seen = tracker.processes();
+      const reported = tracker.read();
+      writeFileSync(flag, '');
+      const done = await run;
+      assert.equal(done.code, 0, done.tap);
+      assert.equal(seen.exited, 1, 'the fast file\'s process was never seen to exit');
+      assert.deepEqual(seen.running.map((file) => basename(file)), ['a-slow.test.js']);
+      // The premise of the heartbeat: the reporter has nothing yet.
+      assert.deepEqual(reported.finished, [], 'node reported the fast file ahead of the slow one');
+      assert.equal(tracker.processes().exited, 2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
   it('realTests: a round already stopped spawns nothing', async () => {
     const controller = new AbortController();
     controller.abort(new Error('stop here'));
@@ -3801,6 +3851,49 @@ describe('the round stall rule in every phase, whatever child is stuck', () => {
       });
       assert.equal(report.ok, true, report.reason);
       assert.ok(lines.some(line => /past its 2 s ceiling at load .*1 of 1 files finished, going on/u.test(line)), lines.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  // 2026-11-13, mc-server: every full run was called stalled. node reports a
+  // run's files in order, so a slow file ahead holds back every file behind
+  // it, and memoro's runner drops mc's reporter altogether. Forward motion of
+  // a whole suite is a test file's process exiting (`test-progress-preload.mjs`).
+  it('a whole suite whose file processes go on exiting is not stalled while the reporter shows none; the one left running is named', async () => {
+    const fx = fixture();
+    let now = 0;
+    let poll;
+    try {
+      declare(fx);
+      const beat = join(fx.root, 'beat.jsonl');
+      const report = await fx.run({ pr: null, full: true, clock: () => now, armCeiling: () => () => {},
+        armStall: (fire) => { poll = fire; return () => {}; },
+        suite: ({ cwd, times }) => {
+          const write = (file, process) => appendFileSync(beat, `${JSON.stringify({ file: join(cwd, file), pid: 1, process })}\n`);
+          times.trackProcesses(beat);
+          write('tests/slow.test.js', 'started');
+          write('tests/a.test.js', 'started');
+          poll();
+          // A file's process exits within the window: motion, though the
+          // reporter never names a file.
+          now += ROUND_STALL_MS - 1;
+          write('tests/a.test.js', 'exited');
+          poll();
+          // A window from the start, not from that exit: a watchdog blind to
+          // exits stops here, with b still in flight.
+          now += ROUND_STALL_MS - 1;
+          write('tests/b.test.js', 'started');
+          poll();
+          now += 1;
+          write('tests/b.test.js', 'exited');
+          poll();
+          // Then a whole window with only the slow file left.
+          now += ROUND_STALL_MS;
+          poll();
+          return new Promise(() => {});
+        },
+      });
+      assert.equal(report.stopped_at, 'stalled');
+      assert.match(report.reason, /files in flight: tests\/slow\.test\.js;/u);
     } finally { fx.cleanup(); }
   });
 });
