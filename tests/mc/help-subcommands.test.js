@@ -46,7 +46,7 @@ describe('help after documented subcommands', () => {
         }
       }
     }
-    for (const command of ['run lanes', 'goal criterion add', 'goal blocked', 'repo watch start', 'shot login prod', 'asc build', 'asc status', 'asc release']) {
+    for (const command of ['run lanes', 'goal criterion add', 'goal blocked', 'repo watch start', 'repo mend', 'shot login prod', 'asc build', 'asc status', 'asc release']) {
       assert.ok(seen.has(command), `the walker missed ${command}`);
     }
   });

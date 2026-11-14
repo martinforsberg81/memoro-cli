@@ -765,8 +765,16 @@ The [merge contract](mc-merge.md) defines request deduplication, acceptance,
 publication and the two attempts (a third waits on Martin), without a goal.
 The runner records sessions ending without publication and recovers a dead
 runner's running request. Its settlement pass restores missing published queue
-handoffs, recognizes merged/closed PRs and retries safe landed-tree cleanup.
+handoffs, recognizes merged/closed PRs and retries safe finished (landed or dropped) worktree cleanup.
 Martin requests show on the page, in `mc repo status` and `mc martin get`.
+A person, `martin` or `decision` answers one with `mc repo mend <repo> <id>
+requeue|drop --reason "<text>"` ([merge contract](mc-merge.md)): a requeued entry
+(failures 0, same branch and worktree) is offered again and its mend prompt
+carries the reason; a dropped one is finished and a new red for its file queues
+afresh. The settlement pass and `runMainMend`'s finally remove a finished
+entry's worktree through the one function in `src/mc/main-repair.js`, `removeFinishedWorktrees`,
+keeping a tree an unfinished entry, a `current-*.json` or a live claim still
+names.
 The daily full run's once-a-day cadence and existing repair goals are unchanged.
 
 
@@ -784,7 +792,8 @@ adds a `decision` row named by item id. The same launch is exposed to the person
 as `mc decision [<id>]`; nesting it inside a session is refused.
 
 The shared daily desk ceiling is rechecked before launch; unset means no
-ceiling. One unfinished ending retries once, then a non-reversible mechanical
-brief waits on Martin instead of looping. Future, irreversible and reserved
-briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+ceiling. One unfinished ending retries once; a second in the item's current
+state, not counting a quota, offline or provider-refusing login ending, makes a
+non-reversible mechanical brief that waits on Martin instead of looping. Future,
+irreversible and reserved briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.

@@ -95,8 +95,8 @@ function classify(run) {
 /**
  * The main-red mends that hold a commit's red: the entries the full run wrote
  * for that base, with the files and commands they name. `landed` is a mend
- * whose repair is already in main, which a newer run no longer sees — it is
- * said, never counted as holding the red.
+ * whose repair is already in main, which a newer run no longer sees, and
+ * `dropped` one a person gave up on; neither is counted as holding the red.
  */
 export function mendsFor(commit, { root = workRoot(), read = readMainMends } = {}) {
   let entries = [];
@@ -105,7 +105,7 @@ export function mendsFor(commit, { root = workRoot(), read = readMainMends } = {
 }
 
 function mendWords(entries) {
-  const holding = entries.filter((entry) => entry.state !== 'landed');
+  const holding = entries.filter((entry) => entry.state !== 'landed' && entry.state !== 'dropped');
   if (!holding.length) return null;
   const parts = holding.map((entry) => `${entry.file} (${entry.state}${entry.pr ? ` #${entry.pr}` : ''})`);
   return `main-red mend: ${parts.join(', ')}`;

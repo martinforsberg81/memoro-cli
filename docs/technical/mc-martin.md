@@ -131,6 +131,15 @@ resolution. A goal closes only on a readable finished/non-Martin state or an
 established later question; a main-red closes only on readable state showing
 that its entry no longer waits. Chores syncs once each round.
 
+A main-red item is answered at its source: `mc repo mend <repo> <id>
+requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item
+<id> close`, with any `--by`, on a main-red item exits 2 with item.json unchanged
+while the entry reads Martin or the state file is unreadable, and the message
+names `mc repo mend`; after a requeue or drop the close succeeds, and a sync alone
+closes by source. A main-red item's source time is the entry's `answered.at`, else
+its `created`, so an answered entry that reaches Martin again opens a new item
+with a different id and an unanswered one keeps its own.
+
 `mc martin items [--state <state>] [--json]` syncs then lists open items before
 closed ones, by oldest source time. Each label is recovered using the item's
 source time and source history, including closed questions and runner reasons;
@@ -282,14 +291,22 @@ text the desk already amended. An item's label is the first
 line of the `Martin` entry of its minute, so a defect is never shown under
 another entry that shares the minute.
 
-A session ending without closing or briefing appends `{at, reason}` to
-`decision_failures`. An unchanged overdue brief also counts as unfinished.
-After one failure the item is eligible once more. After the second, the
-runner writes a Swedish failure brief with the reasons and session log paths,
-sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`, and
-keeps the goal waiting on Martin. Admission refusals spend no attempt. The
-runner's existing mechanical `Martin` settings are unchanged; the pass handles
-what they leave rather than moving their ownership into the runner.
+A session ending without closing or briefing appends `{at, reason, state}` to
+`decision_failures`, `state` being the state the item was in when the session
+failed; an entry without `state` was written while prepared and counts as
+`prepared`. The entry is appended under the runner lock, and the list is never
+shortened. An unchanged overdue brief also counts as unfinished. The limit is
+two failures in the item's current state: after one, the item is eligible once
+more, and a failure in another state (a prepared item briefed reversible and
+then due) starts that state's own count. After the second in the current state,
+the runner writes a Swedish failure brief with every reason and session log
+path, sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`,
+and keeps the goal waiting on Martin. A quota ending, an offline ending, and a
+login ending that refused the provider (a launch that is not codex, on
+subscription billing) write no failure and no goal entry, and spend no attempt:
+the item is taken again when the provider answers. Admission refusals spend no
+attempt. The runner's existing mechanical `Martin` settings are unchanged; the
+pass handles what they leave rather than moving their ownership into the runner.
 
 ## Lessons and the learning pass
 

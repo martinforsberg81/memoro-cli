@@ -1,9 +1,10 @@
 /** Commissioned decision-lane protection: real runner/store, fake tool session and Git. */
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { itemDirectory } from '../../src/mc/desk-items.js';
+import { listLessons } from '../../src/mc/desk-lessons.js';
 import { setDeskCeiling, deskRunsPath } from '../../src/mc/desk-budget.js';
 import { readRunRows } from '../../src/mc/landed.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
@@ -136,4 +137,110 @@ test('decision takes a lane ahead of builds and behind merge-failure mend', t =>
   assert.equal(r.nextWork().name,item.id);
   requestMainRepair({root:f.root,repo:'memoro-cli',base:'main-head',files:['tests/red.test.js'],now:()=>NOW});
   assert.equal(r.nextWork().kind,'mend');
+});
+
+/** A session the API ended, as claude's stream writes it (the shape of run.test.js `streamed`): the output `readSessionOutput` reads. */
+const apiEnded = (text, extra = {}) => ({ status: 0, stderr: '', timedOut: false, stdout: `${JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sid-1' })}\n${JSON.stringify({ type: 'result', subtype: 'success', is_error: true, num_turns: 44, session_id: 'sid-1', terminal_reason: 'api_error', result: text, usage: { input_tokens: 5, output_tokens: 6, cache_read_input_tokens: 7, cache_creation_input_tokens: 8 }, ...extra })}\n` });
+const PROVIDER_ENDINGS = [
+  ['quota', apiEnded("You've hit your 5-hour limit · resets 3pm (UTC)", { api_error_status: 429 }), '(quota)'],
+  ['login', apiEnded('Not logged in · Please run /login', { api_error_status: null }), '(interrupted)'],
+  ['offline', apiEnded("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", { api_error: 'connection_failed', api_error_status: null, num_turns: 1 }), '(offline)'],
+];
+const ends = (f, output) => { f.deps.session = async call => { f.calls.push(call); return output; }; };
+const logOf = f => join(f.root, 'programs/alpha/goals/first/LOG.md');
+const runRows = f => readRunRows(readFileSync(deskRunsPath(f.env), 'utf8'));
+
+for (const [reading, output, note] of PROVIDER_ENDINGS) test(`a decision ending on ${reading === 'offline' ? 'an' : 'a'} ${reading} reading writes nothing to a prepared goal item; the next unsettled ending counts once`, async t => {
+  const f = fixture(t), item = f.add('alpha/first'), r = f.runner(), before = readFileSync(logOf(f), 'utf8');
+  let clock = NOW; f.deps.now = () => clock;
+  ends(f, output);
+  await r.pass();
+  clock = new Date(NOW.getTime() + 120_000); // past the offline hold, if the reading set one
+  await r.pass();
+  assert.equal(f.calls.length, 2, 'both sessions ran');
+  assert.equal(f.state(item).state, 'prepared');
+  assert.equal(f.state(item).decision_failures, undefined, 'no failure was counted');
+  assert.equal(existsSync(join(itemDirectory(item, f.env), 'brief.md')), false, 'no brief.md');
+  assert.deepEqual(listLessons({ env: f.env }), [], 'no lesson');
+  assert.equal(readFileSync(logOf(f), 'utf8'), before, 'the goal LOG.md has no new entry');
+  assert.deepEqual(runRows(f).map(x => [x.name, x.kind]), [[item.id, 'decision'], [item.id, 'decision']]);
+  assert.ok(runRows(f).every(x => x.note.includes(note)), `the run rows say the ${reading} reading`);
+  ends(f, result);
+  clock = new Date(NOW.getTime() + 240_000);
+  await r.pass();
+  assert.equal(f.state(item).state, 'prepared');
+  assert.deepEqual(f.state(item).decision_failures.map(x => x.state), ['prepared'], 'an ordinary ending adds exactly one failure');
+  assert.equal(existsSync(join(itemDirectory(item, f.env), 'brief.md')), false);
+  assert.deepEqual(listLessons({ env: f.env }), []);
+});
+
+test('a decision ending on an offline reading writes nothing to a due goal brief, however often it ends so', async t => {
+  const f = fixture(t), item = f.add('alpha/first', { state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-14T11:00:00Z' });
+  const brief = join(itemDirectory(item, f.env), 'brief.md'); writeFileSync(brief, 'Swedish product brief');
+  const before = readFileSync(logOf(f), 'utf8');
+  let clock = NOW; f.deps.now = () => clock;
+  const r = f.runner();
+  ends(f, PROVIDER_ENDINGS[2][1]);
+  await r.pass();
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-14T11:00:00Z']);
+  assert.equal(readFileSync(brief, 'utf8'), 'Swedish product brief');
+  assert.equal(readFileSync(logOf(f), 'utf8'), before, 'the first ending writes no goal entry');
+  clock = new Date(NOW.getTime() + 120_000);
+  await r.pass();
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-14T11:00:00Z']);
+  assert.equal(readFileSync(brief, 'utf8'), 'Swedish product brief');
+  assert.equal(f.state(item).decision_failures, undefined);
+  assert.equal(readFileSync(logOf(f), 'utf8'), before, 'the second ending writes no goal entry');
+  assert.equal(runRows(f).length, 2);
+});
+
+test('an unsettled ending read as a server error counts once, in the state the item had', async t => {
+  const f = fixture(t), item = f.add('alpha/first'), r = f.runner();
+  ends(f, apiEnded('API Error: 500 Internal server error.', { api_error_status: 500 }));
+  await r.pass();
+  assert.equal(f.state(item).state, 'prepared');
+  assert.deepEqual(f.state(item).decision_failures.map(x => [x.state, /\(interrupted\)/u.test(x.reason)]), [['prepared', true]]);
+});
+
+test('the two-ending limit counts the failures of the item\'s current state: a failure while prepared does not spend the attempt of its due brief', async t => {
+  const f = fixture(t), item = f.add('alpha/first'), r = f.runner(), brief = join(itemDirectory(item, f.env), 'brief.md');
+  let clock = NOW; f.deps.now = () => clock;
+  ends(f, result);
+  await r.pass(); // session 1: unsettled while prepared
+  assert.deepEqual(f.state(item).decision_failures.map(x => [x.state]), [['prepared']]);
+  f.deps.session = async call => { // session 2: briefs it reversible
+    f.calls.push(call); writeFileSync(brief, 'Swedish brief material');
+    assert.equal(await martin(['item', item.id, 'brief', '--sort', 'product', '--reversible', 'yes'], { env: { ...f.env, MC_ROLE: 'decision' }, now: () => NOW, stdout: sink, stderr: sink }), 0);
+    return result;
+  };
+  await r.pass();
+  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-16T12:00:00.000Z']);
+  clock = new Date('2026-11-16T12:00:01Z');
+  ends(f, result);
+  await r.pass(); // session 3: the due brief is unsettled: one failure in for-martin, not the limit
+  const due = f.state(item);
+  assert.deepEqual([due.state, due.sort, due.reversible, due.due_at], ['for-martin', 'product', true, '2026-11-16T12:00:00.000Z']);
+  assert.equal(readFileSync(brief, 'utf8'), 'Swedish brief material');
+  assert.deepEqual(due.decision_failures.map(x => x.state), ['prepared', 'for-martin']);
+  assert.equal(r.nextWork()?.name, item.id, 'the due item is eligible once more');
+  await r.pass(); // session 4: the second in for-martin
+  const ended = f.state(item);
+  assert.deepEqual([ended.state, ended.sort, ended.reversible, ended.due_at], ['for-martin', 'mechanical', false, null]);
+  assert.equal(ended.decision_failures.length, 3);
+  const text = readFileSync(brief, 'utf8');
+  for (const x of ended.decision_failures) assert.ok(text.includes(x.reason), 'the brief lists every failure');
+  assert.deepEqual(listLessons({ env: f.env }).map(x => x.kind), ['unsettled']);
+  assert.equal(r.nextWork(), null);
+});
+
+test('an entry written before the state was recorded counts as prepared, so the next unsettled ending of a prepared item is the second', async t => {
+  const f = fixture(t), item = f.add('alpha/first', { decision_failures: [{ at: '2026-11-14T10:05:00Z', reason: 'an earlier session exited' }] });
+  await f.runner().pass();
+  const ended = f.state(item);
+  assert.deepEqual([ended.state, ended.sort, ended.reversible, ended.due_at], ['for-martin', 'mechanical', false, null]);
+  assert.deepEqual(ended.decision_failures.map(x => x.state ?? null), [null, 'prepared']);
+  assert.match(readFileSync(join(itemDirectory(item, f.env), 'brief.md'), 'utf8'), /an earlier session exited/u);
+  assert.equal(listLessons({ env: f.env }).length, 1);
 });

@@ -24,6 +24,12 @@ LOG.md before changing it. Read relevant technical contracts and the programme
 README and design. For a non-goal item, read its original decision or main-red
 record and evidence instead. Preparation is evidence, not an answer to trust.
 
+A main-red item is a held goal-less repair, and you answer it at its source:
+`mc repo mend <repo> <id> requeue --reason "<text>"` to try again on the same
+branch (the reason goes into the mend prompt), or `drop --reason "<text>"` to
+end it. `mc martin item <id> close` is refused while the entry still reads
+Martin; once you have answered, the close succeeds.
+
 ## Decide here
 
 Three kinds of thing are Martin's, as [asking-martin](../tasks/asking-martin.md)

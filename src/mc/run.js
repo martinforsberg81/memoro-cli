@@ -94,7 +94,7 @@ import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
-import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, updateMainMends } from './main-repair.js';
+import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
@@ -1635,8 +1635,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const ended = deps.deskItems.read(name);
       // A due item unchanged by the session is not a successful for-martin ending.
       const unfinished = decisionUnfinished(ended, deps.now());
+      // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
+      // It counts for nothing and writes nothing; the item is taken again when the provider answers.
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
-      if (unfinished) {
+      if (unfinished && !providerEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };
@@ -1794,9 +1797,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           }
         } finally { admission?.release?.(); dropSlot(); }
       }
-      for (const path of new Set(readMainMends(state).filter((entry) => ids.has(entry.id) && entry.state === 'landed').map((entry) => entry.worktree))) {
-        if (path && deps.exists(path)) deps.git(repo.path, ['worktree', 'remove', path]);
-      }
+      sweepMendWorktrees(repo, (entry) => entry.owner !== name && (claims.has(entry.owner) || stepsHeld().some((held) => held.name === entry.owner)));
     }
   }
 
@@ -1863,6 +1864,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     for (const answer of answers) say(answer.problems ? `goal:${answer.name}: not converted — ${answer.problems.join('; ')}` : `goal:${answer.name}: phase ${answer.phase}, ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}`);
   }
 
+  /** The finished repairs' trees, removed by the one rule (`removeFinishedWorktrees`); `busy(entry)` is the runner's own claim on an entry's owner. */
+  function sweepMendWorktrees(repo, busy) {
+    const swept = removeFinishedWorktrees({ ...mendState(repo.name), repoPath: repo.path, git: deps.git, exists: deps.exists, busy,
+      currents: () => paths.currents().map((path) => { try { return JSON.parse(deps.read(path))?.worktree ?? null; } catch { return null; } }) });
+    for (const { path, reason } of swept.kept) say(`${repo.name}: finished main-red worktree retained at ${path} — ${reason}`);
+    return swept;
+  }
+
   /** Restore a published handoff after a crash; ordinary queueing is idempotent. */
   function settleMainMends() {
     const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
@@ -1883,12 +1892,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           catch (error) { say(`${repo.name}#${pr}: main-red delivery could not be restored — ${error.message}`); }
         }
       }
-      for (const entry of readMainMends(mendState(repo.name)).filter((entry) => entry.state === 'landed')) {
-        if (entry.worktree && deps.exists(entry.worktree) && !claims.has(entry.owner) && !held.has(entry.owner)) {
-          const removed = deps.git(repo.path, ['worktree', 'remove', entry.worktree]);
-          if (!removed.ok) say(`${repo.name}: landed main-red worktree retained at ${entry.worktree} — ${removed.stderr || 'git refused cleanup'}`);
-        }
-      }
+      sweepMendWorktrees(repo, (entry) => claims.has(entry.owner) || held.has(entry.owner));
     }
   }
 

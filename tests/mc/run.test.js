@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { answerMainMend, publishMainMend, readMainMends, requestMainRepair } from '../../src/mc/main-repair.js';
+import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
@@ -4954,6 +4954,75 @@ test('the third main-red attempt waits on Martin with its session log and keeps 
   assert.equal(f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add').length, 1);
   assert.equal(runner.nextWork(), null, 'Martin starts no third session');
   assert.equal(f.calls.sessions.length, 2);
+});
+
+test('a requeued main-red repair is offered again on its own branch with no failures, and its prompt carries the desk\'s reason', async () => {
+  const f = mainRedFixture();
+  const runner = createRunner({ deps: f.deps });
+  const branch = runner.nextWork().branch;
+  f.answer = (call) => { publishMainMend({ ...f.mainState, branch, pr: 42 }); return okSession()(call); };
+  await runner.pass();
+  answerMainMend({ ...f.mainState, pr: 42, landed: false, reason: 'candidate red' });
+  f.answer = okSession();
+  await runner.pass();
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'Martin' && entry.failures === 2));
+  const [{ pr, session_log: sessionLog, worktree }] = f.mainEntries();
+  for (const { id } of f.mainEntries()) {
+    const answered = answerHeldMend({ ...f.mainState, id, verb: 'requeue', reason: 'the browser is installed now', role: 'martin', now: f.deps.now });
+    assert.equal(answered.ok, true, answered.error);
+  }
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'queued' && entry.failures === 0 && entry.branch === branch && entry.worktree === worktree && entry.pr === pr && entry.session_log === sessionLog && entry.answered.verb === 'requeue'));
+  const again = runner.nextWork();
+  assert.equal(again.kind, 'mend');
+  assert.equal(again.branch, branch, 'offered on the same branch');
+  f.answer = (call) => { assert.match(call.prompt, /the browser is installed now/u); return okSession()(call); };
+  await runner.pass();
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'queued' && entry.failures === 1), 'one more failure is one more attempt, not the third that ends at Martin');
+  assert.equal(f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add').length, 1, 'the branch and its worktree are the ones it had');
+  assert.equal(new Set(f.calls.sessions.map((call) => call.cwd)).size, 1);
+  assert.equal(f.calls.sessions.length, 3);
+});
+
+/** Two finished repairs\' trees and what shares them, with the runner's own sweep (`settleMainMends`) reading them. */
+function sharedTreeFixture(states) {
+  const f = mainRedFixture();
+  const paths = ['/w/mend/shared', '/w/mend/alone'];
+  paths.forEach((path) => f.dirs.add(path));
+  updateMainMends(f.mainState, (entries) => {
+    entries.push(...states.map(([state, worktree], i) => ({ ...entries[0], id: `extra${i}`, file: `tests/extra${i}.test.js`, state, worktree, owner: `main-red:extra${i}` })));
+    entries.splice(0, 2); // the fixture's own two queued requests are not part of this case
+  });
+  return f;
+}
+const removals = (f) => f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'remove').map((call) => call.at(-1));
+
+test('the runner removes the tree of a landed and of a dropped repair, once, and not one an unfinished repair still names', async () => {
+  const f = sharedTreeFixture([['landed', '/w/mend/shared'], ['Martin', '/w/mend/shared'], ['dropped', '/w/mend/alone'], ['landed', '/w/mend/alone']]);
+  await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual(removals(f), ['/w/mend/alone'], 'the shared tree stays for the repair on Martin');
+  assert.ok(f.dirs.has('/w/mend/shared'));
+});
+
+test('the runner removes a shared tree once the last repair that named it is finished, and says what git would not remove', async () => {
+  const f = sharedTreeFixture([['landed', '/w/mend/shared'], ['dropped', '/w/mend/shared'], ['landed', '/w/mend/alone']]);
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (args[1] === 'remove' && args.at(-1) === '/w/mend/alone' ? { ...git(cwd, args), ok: false, stderr: 'has uncommitted work' } : git(cwd, args));
+  await createRunner({ deps: f.deps }).pass();
+  assert.deepEqual(removals(f).sort(), ['/w/mend/alone', '/w/mend/shared']);
+  assert.ok(f.calls.git.every((call) => call[1] !== 'worktree' || call[2] !== 'remove' || !call.includes('--force')), 'never forced');
+  assert.match(f.files['/w/runner/log/runner.log'], /finished main-red worktree retained at \/w\/mend\/alone — has uncommitted work/u);
+});
+
+test('a session ending sweeps the finished repairs\' trees by the same rule', async () => {
+  const f = mainRedFixture();
+  f.dirs.add('/w/mend/old');
+  updateMainMends(f.mainState, (entries) => { entries.push({ ...entries[0], id: 'old1', file: 'tests/old.test.js', state: 'dropped', worktree: '/w/mend/old', owner: 'main-red:old1' }); });
+  f.answer = (call) => { publishMainMend({ ...f.mainState, branch: runner.nextWorkBranch, pr: 42 }); return okSession()(call); };
+  const runner = createRunner({ deps: f.deps });
+  runner.nextWorkBranch = runner.nextWork().branch;
+  await runner.pass();
+  assert.deepEqual(removals(f), ['/w/mend/old']);
+  assert.ok(f.dirs.has(f.calls.sessions[0].cwd), 'its own, still unfinished tree is not touched');
 });
 
 test('a build session on a version 2 goal is handed the goal as `mc goal show` renders it: its parts in order, with each id', async () => {

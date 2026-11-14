@@ -71,7 +71,9 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       const entryId = source.reference.split('/').at(-1);
       const entries = sourceMends(source.repo);
       if (!entries) continue;
-      sourceAt = entries.find((x) => x.id === entryId)?.created || entryId;
+      // An answered entry that reaches Martin again is a new question: its source time is the answer's.
+      const entry = entries.find((x) => x.id === entryId);
+      sourceAt = entry?.answered?.at || entry?.created || entryId;
     }
     if (!reference || !sourceAt) continue;
     opens.push({ kind, reference, source_at: sourceAt, question: firstLine(source.question?.question || source.question?.reason || source.reason || 'No source reason recorded.') });

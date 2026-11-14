@@ -10,6 +10,7 @@
  *   mc repo status [repo] [--json] [--offline]
  *   mc repo watch start|stop|status
  *   mc repo claim <repo> "<errand>" / release <repo> [--force] / who <repo>
+ *   mc repo mend <repo> <id> requeue|drop --reason "<text>"
  *
  * It reads. The one thing status writes is a `git fetch` — remote-tracking
  * refs and nothing else — and `--offline` removes even that, at the price of
@@ -43,9 +44,12 @@ import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 import { repoNameOf } from '../repos.js';
+import { answerHeldMend } from '../main-repair.js';
+import { knownRepositories } from '../work-area.js';
+import { writerRole } from './martin.js';
 import { commandUsage } from '../command-help.js';
 
-const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
+const VERBS = ['status', 'watch', 'nightly', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check', 'mend'];
 // `merge` and `nightly` stay in the list only so the old spellings can be
 // answered with where they went; neither is a verb here any more.
 const METER_VERBS = ['start', 'stop', 'status'];
@@ -69,6 +73,7 @@ export async function run(argv, deps = {}) {
   }
   if (opts.verb === 'rounds') return rounds(opts, { stdout });
   if (opts.verb === 'guard') return guard(opts, { stdout, stderr });
+  if (opts.verb === 'mend') return mend(opts, { stdout, stderr, env: deps.env || process.env, mend: deps.mend || {} });
   if (opts.verb === 'push-check') return pushCheck(opts, { stdout, stderr, stdin: deps.stdin || process.stdin, env: deps.env || process.env, git: deps.git, gh: deps.gh });
   if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null, now: deps.now || null });
 
@@ -92,6 +97,36 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   return 0;
+}
+
+/** The callers of the desk's authority: a person, the interactive Martin desk and the unattended decision role. */
+const MEND_ANSWERERS = ['person', 'martin', 'decision'];
+
+/**
+ * `mc repo mend <repo> <id> requeue|drop --reason "<text>"` — the answer to a main-red repair held on Martin.
+ * Judged on the caller as `mc martin item` reads it, an allow-list; the state change is `answerHeldMend`.
+ */
+function mend(opts, { stdout, stderr, env, mend: injected }) {
+  const role = writerRole(env);
+  if (!MEND_ANSWERERS.includes(role)) { stderr.write(`mc: role ${role} cannot answer a held main-red repair; the desk and a person can\n`); return 2; }
+  if (role === 'martin' && env.MC_HEADLESS === '1') { stderr.write('mc: the Martin role is interactive-only; an unattended session cannot answer a held main-red repair\n'); return 2; }
+  const known = () => (injected.known || (() => knownRepositories(env)))();
+  const answered = answerHeldMend({
+    repo: opts.repo, id: opts.id, verb: opts.answer, reason: opts.reason, role,
+    root: injected.root || workRoot(env),
+    repoPath: opts.answer === 'drop' ? known().find((path) => repoNameOf(path) === opts.repo) ?? null : null,
+    gh: injected.gh || ghIn,
+    ...Object.fromEntries(['now', 'read', 'write', 'lock', 'readQueue', 'writeQueue'].filter((key) => injected[key]).map((key) => [key, injected[key]])),
+  });
+  if (!answered.ok) { stderr.write(`mc: ${answered.error}\n`); return answered.code; }
+  stdout.write(`mc: ${answered.line}\n`);
+  return 0;
+}
+
+/** `gh <args>` in `cwd`, as `{ ok, stdout, stderr }`. */
+function ghIn(cwd, args) {
+  const r = spawnSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000 });
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
 
 /**
@@ -840,7 +875,7 @@ export function usage() {
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
     booleans: ['--json', '--offline', '--force', '--check'],
-    strictValues: ['--interval'],
+    strictValues: ['--interval', '--reason'],
   });
   const opts = {
     verb: 'status',
@@ -854,6 +889,9 @@ export function parseArgs(argv) {
     json: scanned.flags.json,
     offline: scanned.flags.offline,
     intervalMs: 60_000,
+    id: null,
+    answer: null,
+    reason: scanned.flags.reason,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
@@ -879,6 +917,17 @@ export function parseArgs(argv) {
     if (positional.length) return { ...opts, error: `mc repo guard takes one repository (${positional[0]})` };
     return opts;
   }
+  if (opts.verb === 'mend') {
+    opts.repo = positional.shift() || null;
+    opts.id = positional.shift() || null;
+    opts.answer = positional.shift() || null;
+    if (!opts.repo || !opts.id || !opts.answer) return { ...opts, error: 'mc repo mend <repo> <id> requeue|drop --reason "<text>"' };
+    if (!['requeue', 'drop'].includes(opts.answer)) return { ...opts, error: `mc repo mend ${opts.answer}? — requeue or drop` };
+    if (positional.length) return { ...opts, error: `mc repo mend takes <repo> <id> requeue|drop (${positional[0]})` };
+    if (opts.reason === null) return { ...opts, error: `${opts.answer} needs --reason "<text>"` };
+    return opts;
+  }
+  if (scanned.flags.reason !== null) return { ...opts, error: '--reason belongs to mc repo mend' };
   if (opts.verb === 'push-check') {
     // git's pre-push gives the remote's name and URL as arguments and the
     // refs on stdin; both are taken as they come.
