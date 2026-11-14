@@ -26,6 +26,8 @@ export const ROUTES = {
     const selectors = Number(flags.all) + Number(flags.programme !== null) + Number(flags.goal !== null);
     return selectors > 1 ? 'choose exactly one of --all, --programme or --goal' : null;
   } },
+  items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
+  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : null },
 };
 
 export async function run(argv, deps = {}) {
@@ -68,8 +70,9 @@ function items(argv, deps) {
   const env = deps.env || process.env;
   const role = writerRole(env);
   if (!['person','martin','desk-prepare','decision'].includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
-  const parsed = scanArgs(argv, { booleans: ['--json'], strictValues: ['--state'], check: ({ positional, flags }) => positional.length ? `unknown argument ${positional[0]}` : flags.state && !['new','prepared','for-martin','closed'].includes(flags.state) ? `unknown state ${flags.state}` : null });
+  const parsed = scanArgs(argv, ROUTES.items);
   if (parsed.error) { stderr.write(`mc: ${parsed.error}\n`); return 2; }
+  if (parsed.flags.state && !['new','prepared','for-martin','closed'].includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
   syncDeskItems({ env: deps.env || process.env, home: deps.home || programsHome(deps.env || process.env), ...(deps.syncDeps || {}) });
   const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
   const sourceItems = [...collectMartinQueue({ home: deps.home || programsHome(deps.env || process.env) }).items, ...readDecisionRows(env)];
