@@ -257,7 +257,7 @@ export function codexSessionDriver({
     forget({ directory, pid: session.pid }, options.env, io);
   }
 
-  async function join(options, session) {
+  async function attach(options, session) {
     const directory = join(rootOf(options.env), session.id);
     const clients = join(directory, 'clients');
     io.mkdirSync(clients, { recursive: true, mode: 0o700 });
@@ -272,5 +272,5 @@ export function codexSessionDriver({
     return result;
   }
 
-  return { list, start, join };
+  return { list, start, join: attach };
 }
