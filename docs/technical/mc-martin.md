@@ -73,7 +73,8 @@ judgement or reserved; reversible and due time are nullable. Closing records
 `{by, at, summary}` where by is decision, martin, default or source. Sync opens
 waiting goals and main-reds and flagged decided jev ledger rows once. A decided
 row is flagged when jev's chosen key differs from the session recommendation
-or its product reading is at least 0.70. Sync skips ledger rows older than the store's first sync, closes open goal/main-red items
+or its product reading is at least 0.70. Sync skips ledger rows older than the
+store's first sync, closes open goal/main-red items
 whose source no longer waits, and writes only beneath the item store. It never
 changes a source record. Missing, malformed or unreadable goal/main-red files
 are reported and preserve the item: absence from the live queue alone is not
