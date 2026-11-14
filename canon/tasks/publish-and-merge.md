@@ -61,10 +61,15 @@ as the one way past. A headless session cannot deploy; that is Martin's act.
   `--base`) on an open one.
 - Then it queues the pull request for the merger in the same call.
   `--no-merge` pushes and opens and queues nothing; so does `--json`.
+- A PR that carries a goal before stage `merge` (draft, build, review, finish, or a
+  stage mc cannot read) is never queued, with or without `--no-merge`: it prints
+  the goal, its stage and `mc goal stage merge`, which is what hands it over.
 - The body says what changed, why, impact, root cause, what did and did not run,
   known gaps and each changed test's `mc gate` timing (`test <file> › <name> —
   0.xyz s`). Never claim a run you did not make; "suite not run" is acceptable.
 ## `mc merge <repo> <pr>` — the one door to main
+`mc merge` refuses (exit 1, nothing queued or landed) a PR carried by a goal before
+stage `merge`, for every caller; `mc goal stage merge` hands the goal over.
 `mc goal stage merge` queues every registered PR for the ordinary measured round,
 reusing the session’s change-scope receipt (exact or delta), measuring the rest on the current base.
 No criteria or reviewed-head re-check; done after all land. Conflicts go to a session.

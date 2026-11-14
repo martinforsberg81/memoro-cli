@@ -43,6 +43,16 @@ gate. The docs form measures those tests on a candidate before landing, and
 is also used for a programme archive. Goal records themselves live outside
 the repositories; creating or changing a goal needs no docs pull request.
 Build sessions publish with `--no-merge`; their review owns the landing hand-off.
+mc enforces it: a pull request carried by a goal in draft, build, review or
+finish (registered in the goal's `prs`, or found by its head branch
+`goal/<g>`, also when that goal's GOAL.json cannot be read) is refused by
+`mc merge` with exit 1, before any round, landing or queue write — for several
+pull requests in one call none is queued, and explicit `--docs` and the
+documents-only route are refused the same way. `mc publish` queues nothing for
+such a goal either. `mc goal stage merge` is what hands it to the merger; it
+queues through `queueMerge`, not through this door. A pull request carried by
+two goals is queued only when every goal that is not done or dropped is in
+`merge`. `--admin`, `--check` and `mc merge watch` are not touched.
 
 ## The grammar, in one place
 

@@ -625,7 +625,8 @@ done, when it is blocked, or when its turns cost more than a fresh session
 reading the log would — a finished part that reads well is not a reason to
 stop. It runs each criterion's check and records the ones that hold with
 `mc goal criterion met <n>`. It runs `mc gate`, commits, and publishes with
-`mc publish --no-merge`. It ends with `mc goal log` and does one of two things:
+`mc publish --no-merge` (without the flag mc still queues nothing for a goal
+before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
 them, or, when it cannot go on, asks Martin directly. An acceptance obstacle it
 cannot repair within its scope goes to Martin with `mc goal martin` and its
@@ -700,7 +701,10 @@ memoro and memoro-cli — left the goal for a person to close by hand.
 - **The merger tells the goal whoever queued it.** A job's goal is its own
   (`job.goal`, the review's `mc goal stage merge`), else the goal whose `prs` name it
   (`goalOfJob`, merger.js, over `programsGoals`). So a pull request a person
-  queues with `mc merge`, or one `mc publish` queued, is the goal's too.
+  queues with `mc merge`, or one `mc publish` queued, is the goal's too — but
+  only in stage `merge`: before it, `mc publish` queues nothing and `mc merge`
+  refuses (*No merge before stage merge*, below), so a person queues a goal's
+  pull request with `mc merge` only after `mc goal stage merge`, never to skip it.
 - **Done when all have landed.** Landed, and the goal carries no other pull
   request: stage `done`. Landed while it carries others: an entry with no
   change (`… the goal carries memoro-cli#1238 too — done when every one has
@@ -786,6 +790,21 @@ page's goal rows, `mc goal show`, `mc goal list` and `mc --json`
   `--no-merge`; a review session publishes nothing. A review's `mc goal stage
   merge` executes its decision for all registered PRs; a finish session uses
   the same verb, and a mend session requeues a red merge with it.
+- **No merge before stage merge — mc refuses it.** A goal's pull request
+  reaches the merger only when the goal is in stage `merge`, and the code
+  holds it, not only the role text. `mc publish` for a publication that
+  carries a goal in draft, build, review or finish (or whose stage cannot be
+  read) queues nothing, with or without `--no-merge`, exits 0 and prints one
+  line naming the goal, its stage and `mc goal stage merge`; under `--json`
+  its `next` is `mc goal stage merge <programme>/<goal>`. `mc merge` refuses
+  with exit 1, before any round, landing or queue write, a request that names
+  a pull request carried by such a goal — registered in its `prs`, or found by
+  its head branch `goal/<g>` — whatever the caller, for several pull requests
+  (none is queued), `--docs` and a documents-only pull request alike.
+  `--admin`, `--check` and `mc merge watch` are not touched. `mc goal stage
+  merge` queues through `queueMerge`, not through `mc merge`, so the hand-off
+  works. A job already queued when its goal is moved back from `merge` still
+  lands (a known gap of the merger).
 - **No close-out document.** `mc goal archive` moves a finished goal aside
   and writes one row; nothing is written into a repository.
 
