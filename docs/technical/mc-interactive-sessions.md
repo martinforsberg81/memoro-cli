@@ -3,19 +3,24 @@
 ## Platform boundary
 
 On Linux, an interactive `mc plan <programme>`, `mc manager` (`mc brief`),
-`mc helper` or `mc martin` launched through SSH uses provider persistence:
-Claude Code background sessions and, for Codex only, the tmux transport.
-Eligibility requires Linux, `SSH_CONNECTION` or `SSH_TTY`, an interactive
-terminal and absence of `MC_HEADLESS=1`.
+`mc helper` or `mc martin` launched through SSH keeps its provider alive past
+the terminal: a Claude Code background session, or a Codex `app-server` of its
+own. Eligibility requires Linux, `SSH_CONNECTION` or `SSH_TTY`, an interactive
+terminal and absence of `MC_HEADLESS=1`. No tmux is used by either provider.
 
 Provider resolution precedes the transport decision. In particular,
 `--resume <id>` selects its conversation's provider even without a tool flag.
 macOS, Linux local terminals, pipes, noninteractive calls and headless calls
 keep the foreground path. Helper collection/intake and manager headless tasks
-keep their existing paths. No shell, SSH, daemon-service or personal tmux
-configuration is changed.
+keep their existing paths. No shell, SSH or daemon-service configuration is
+changed.
 
-## Claude: open and reconnect
+The entrance rules below (desk, join or new, naming, registration) are the
+same for both providers: `session-entrance.js` owns them and a provider driver
+supplies `list`, `start` and `join`. `work-open.js` chooses the driver by the
+resolved provider.
+
+## Open and reconnect
 
 Use the same entrance after reconnecting, for example:
 
@@ -24,15 +29,16 @@ ssh tc
 mc plan <programme> --claude
 ```
 
-A desk is the work root, area, normalized role and programme. Several Claude
-background sessions may coexist at one desk. A session exists until its
-provider process exits, including while idle or detached; the last turn and
-the number of attached terminals do not determine its lifetime.
+A desk is the work root, area, normalized role and programme. Several sessions
+may coexist at one desk. A session exists until its provider process exits,
+including while idle or detached; the last turn and the number of attached
+terminals do not determine its lifetime, except by the end rule of a Codex
+session below.
 
-With no session, the entrance starts one with `--bg` and attaches with
-`attach <id>`. Otherwise the existing numbered `select` prompt lists each
-session's name and started time, plus “start a new one”. Joining never sends
-a turn, replaces another session or kills a provider. `Ctrl+Z` detaches;
+With no session, the entrance starts one (Claude: `--bg`, then `attach <id>`;
+Codex: its own server, then a `--remote` client) and attaches. Otherwise the
+existing numbered `select` prompt lists each session's name and started time, plus “start a new one”. Joining never sends
+a turn, replaces another session or kills a provider. Claude: `Ctrl+Z` detaches;
 losing SSH or closing the attaching terminal leaves the provider in Claude's
 background daemon. After attach returns, mc reports whether the session is
 still running and names the entrance to rejoin.
@@ -60,7 +66,7 @@ programme. Additional sessions take the lowest unused suffix: ` 2`, ` 3`, …
 The name is passed through `--name`. Roles normalize as for session identity:
 `brief` is `manager`, and `plan-session` is `plan`.
 
-Claude must already trust the area. If `--bg` reports “Workspace not trusted”,
+For Claude, the area must already be trusted. If `--bg` reports “Workspace not trusted”,
 mc refuses visibly; open that directory once in Claude Code and accept its
 native trust prompt, then retry. mc does not edit Claude's trust settings or
 answer a trust prompt on the person's behalf.
@@ -69,13 +75,12 @@ answer a trust prompt on the person's behalf.
 
 `work-open.js` constructs one interactive launch plan: conversation selection,
 provenance, model, instructions, permissions, argv, identity, billing and role
-record. Foreground launches, the Codex tmux worker and the Claude background
-path all use it. `session-entrance.js` owns desk agreement, join/new selection,
-flag rules, names, registration and the post-client status line. Its provider
-driver supplies `list`, `start` and `join`; `claude-background.js` implements
-that driver with agents discovery, settings, background launch and attachment.
-It resolves the executable through the provider adapter, never a separate
-binary choice.
+record. Foreground launches and both persistent paths use it.
+`session-entrance.js` owns desk agreement, join/new selection, flag rules,
+names, registration and the post-client status line. `claude-background.js`
+implements the driver with agents discovery, settings, background launch and
+attachment; `codex-sessions.js` implements it for Codex. Each resolves the
+executable through the provider adapter, never a separate binary choice.
 
 Claude's daemon supplies the provider process environment, not the launching
 mc process. The background launch therefore merges the adapter's settings
@@ -83,8 +88,8 @@ and every `SESSION_IDENTITY_ENV` member into one settings document. Absent
 identity members are empty strings, overriding any old goal/headless identity
 in the daemon. Readers treat empty identity as absent. `MC_HOME` and
 `MC_WORK_ROOT` also name the current root, not the daemon's first caller.
-The process invoking `--bg` receives the same allowlisted, runtime-secret-free
-and provider-key-free environment as the terminal transport. It carries no
+The process invoking `--bg` receives an allowlisted, runtime-secret-free
+and provider-key-free environment (`terminalEnvironment`). It carries no
 caller identity. No launch changes `~/.claude` settings, daemon configuration
 or the person's shell.
 
@@ -125,48 +130,109 @@ The holder writes `work.open` provenance using the observed conversation id:
 Claude 2.1.325's background launcher assigns its own id despite `--session-id`.
 This keeps ordinary compatible conversation selection working after exit.
 
-## Codex: tmux transport
+## Codex: its own app-server
 
-There is one Codex terminal per work root, area, normalized role and programme,
-on a work-root-specific tmux socket. The existing worker runs the shared
-opener and owns foreground registration for as long as the provider runs.
-An existing terminal is joined, without an extra provider turn. Several
-clients may view it. `Ctrl-B`, then `D` detaches; lost SSH leaves it running.
-When the provider exits, the worker unregisters and the terminal ends.
+Each Codex entrance session is a detached `codex app-server --listen
+unix://<dir>/app.sock` that mc starts, in the desk's worktree. The person's
+terminal runs `codex --remote unix://<dir>/app.sock` as a client of it. The
+server holds the conversation, so a lost terminal leaves it alive. `codex
+app-server daemon bootstrap` and Codex's shared daemon are not used: the server
+belongs to one session.
 
-While it is live, `--new`, `--resume` and `--model` are refused. A matching
-explicit provider flag joins; a different or unconfirmed provider is refused.
-Atomic tmux creation arbitrates simultaneous openers. No entrance kills or
-respawns someone else's session. Missing tmux or failed creation/attachment
-is visible, with no fallback to a fragile SSH foreground launch.
+**Session directory.** `<work root>/runner/codex-sessions/session-XXXXXX/`,
+created 0700 and verified user-owned and not group- or world-accessible before
+any server starts in it; a loose directory is refused. It holds `app.sock`,
+`server.log` (0600; the server's output, whose tail is named when a start
+fails), `session.json` (name, server pid, worktree, socket, the conversation
+resumed at start, started time; written after the spawn, atomically) and
+`clients/` (one file per attached mc process, named by its pid). Nothing is
+written outside mc's work root. A long socket path is symlinked by Codex into
+`/tmp/codex-daemon-<uid>/`; mc follows the link when it speaks to the server.
 
-The single-use request in `runner/interactive-requests/` contains launch
-options, not environment or credentials (0600 file, 0700 directory). The
-worker consumes it. Launch environment is allowlisted; tmux supplies TERM.
-The private server uses `/dev/null` configuration; mouse scrolling, hidden
-status and history limit are session settings, never personal/global edits.
+**Launch.** `codexSessionDriver` splits the launch plan's argv (the same plan
+every provider path uses; there is no second Codex argv builder) into two:
 
-## Old owners and survival limits
+- Server argv: root-level `-c <key=value>` pairs, then `app-server --listen
+  unix://<socket>`. The server has no `--model`, `--sandbox` or `--add-dir`, so
+  `-m`, `--sandbox`, `--ask-for-approval` and `--add-dir` become `model`,
+  `sandbox_mode`, `approval_policy` and `sandbox_workspace_write.writable_roots`.
+  `developer_instructions`, `project_doc_max_bytes` and the other `-c` entries
+  go here too. Root-level `-c` is the configuration a thread started by the TUI
+  reads from its server; a client-side `-c` does not reach the thread. A flag
+  with no app-server equivalent refuses the launch, by name.
+- Client argv: `[resume <id>] --remote unix://<socket> [prompt]`, a prompt
+  starting with `-` behind `--`. No `-c`, `--model` or instructions: the role's
+  instructions are the server's.
 
-Existing foreground or tmux providers are not moved into Claude's daemon.
-The old-owner check still refuses a second provider for the same desk or the
-exact area cwd, naming the live pid. Background rows with matching registration
-are recognized rather than mistaken for old owners. Descendant goal worktrees
-are separate. Return to an old owner's terminal and exit it there; mc never
-kills it, removes provider locks or rewrites history to force entry.
+**Environment and billing.** The server runs the session's tools, so its
+environment is the launch plan's role identity (`MC_ROLE`, `MC_PROGRAMME`; no
+`MC_GOAL`, no `MC_HEADLESS`) with every provider API key and runtime secret
+removed. The terminal client gets the same allowlisted environment as the
+Claude path, with no role identity. On plan billing the server is the
+provider binary. On credits it is started through `gatewayLaunch`, so the
+[gateway wrapper](mc-run.md#billing) is the server's parent for the server's
+whole life and the grant never appears on argv. Unavailable billing refuses
+the start with its reason before anything is created.
 
-These paths protect against transport loss, not host reboot, power loss or
-explicit provider termination. The host must allow detached user processes.
-Claude's daemon runs on demand, not as an mc-installed service.
+**Registration.** A start waits for the server to answer on its socket
+(15 s; the log tail is named when it does not), then registers the *server's*
+pid in the foreground register with the plan's role record, as the Claude path
+does with its provider's pid. The register entry belongs to the server's
+lifetime, never to the attaching client's exit. `session-entrance.js` then
+requires matching register record, worktree and a live pid before it counts a
+row as a session of the desk.
+
+**Which conversation a session holds.** Never remembered, never read from
+Codex's global store: it is asked of the session's own server (`thread/loaded/list`
+then `thread/read` without turns). A server also holds short-lived helper
+threads (a title generator), so the session's thread is the loaded one that is
+not ephemeral, has no parent thread and has had a turn, newest `updatedAt`
+first. A thread that has had no turn is the session's, but joining is by plain
+`--remote`, not `resume`. A server that is running but does not answer within the
+bounded deadline (20 s overall, 1 MiB) refuses the entrance with what was measured and
+the `kill <pid>` that clears it; it is never treated as an empty desk. A session
+whose server pid is dead is removed with its register entry. A server whose
+worktree is another is not asked.
+
+**End rule.** The session ends only when its person left it, and mc only ever
+ends a server the client it ran was attached to. After the client exits, the
+server is stopped (`SIGTERM`, bounded wait 5 s) and its directory and register
+entry removed only if all hold: the client exited with status 0 (Codex's
+`/quit`), no signal ended it, no other mc process is attached (`clients/`),
+and no loaded thread is active. Otherwise the session is left running, with a
+stderr line naming what was measured: a hangup (SIGHUP), any other signal, a
+nonzero status, a client that did not start, a turn still running, another
+attached terminal, or a server that could not be asked. The next entrance
+offers join or new.
+
+## What survives what
+
+| Event | Claude background | Codex app-server |
+|---|---|---|
+| Terminal closed / SSH lost (SIGHUP) | survives | survives |
+| Clean quit, idle | survives (it is a daemon session) | stops, with directory and register entry |
+| Clean quit with a turn running, or other terminal attached | survives | survives |
+| Nonzero exit or other signal of the client | survives | survives |
+| `mc` itself exits | survives | survives |
+| Host reboot, power loss, explicit provider termination | ends | ends |
+
+The host must allow detached user processes. Claude's daemon runs on demand,
+not as an mc-installed service. A session or foreground provider that
+predates this transport is not adopted: mc does not kill it, remove its locks
+or rewrite history to force entry.
 
 ## Evidence boundary
 
 `tests/mc/claude-background.test.js` protects routing, entrance choice,
 conversation exclusion, identity, credentials, holder lifetime and registration
 with injected process, agents, register, filesystem, gateway and clock
-boundaries. Existing work-open, foreground, session-role and billing tests
-retain their protection. A bounded real-binary pty check separately measures
-Claude launch, SIGHUP survival, rejoin, suffix naming and tool environment.
-It does not certify a real Mac→TC SSH logout, host reboot, or future Claude CLI
-changes to `agents --json` and `--bg`. The programme's probe used Claude Code
-2.1.325.
+boundaries. `tests/mc/codex-sessions.test.js` protects the Codex server and
+client argv, environment, directory mode, billing, entrance rules with the
+Codex driver, the session-thread rule, the end rule and the rpc limits with
+injected spawn, rpc, filesystem, liveness and clock boundaries. Existing
+work-open, foreground, session-role and billing tests retain their protection.
+Bounded real-binary pty checks separately measure launch, SIGHUP survival,
+rejoin, suffix naming and tool environment for each provider. They do not
+certify a real Mac→TC SSH logout, host reboot, or future provider CLI changes.
+The probes used Claude Code 2.1.325 and the Codex `app-server` of the Codex
+CLI installed on TC.

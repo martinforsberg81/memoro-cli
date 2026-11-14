@@ -1,6 +1,6 @@
 # mc helper — the desk, and the eye on production
 
-Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
 Two things get noticed about memoro: what production says, and what Martin
 says. `mc helper` is the door for both, and **the only thing either of them
