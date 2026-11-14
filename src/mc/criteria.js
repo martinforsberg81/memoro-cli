@@ -5,8 +5,10 @@
  * paragraphs. One definition, so a criterion means the same in both.
  */
 
-/** The keys a criterion carries. */
+/** The keys a criterion carries in a version 1 goal (and in a plan). */
 export const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
+/** The keys a criterion carries in a version 2 goal: `evidence` is what the build logs for it. */
+export const CRITERION_KEYS_V2 = Object.freeze([...CRITERION_KEYS, 'evidence']);
 /** The keys a document carries. */
 export const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
 
@@ -37,9 +39,10 @@ export function prose(value, { min = 1 } = {}) {
 /**
  * The problems of a `success_criteria` list, pushed onto `problems`: at least
  * `min` criteria (1 by default — `what` names the thing that cannot be finished
- * without one), each `{ criterion, check, met }` and nothing else.
+ * without one), each `{ criterion, check, met }` and nothing else — or, where
+ * `keys` names more, those (a version 2 goal's `evidence`, a non-blank text).
  */
-export function validateCriteria(list, problems, { min = 1, what = 'a project' } = {}) {
+export function validateCriteria(list, problems, { min = 1, what = 'a project', keys = CRITERION_KEYS } = {}) {
   if (!Array.isArray(list) || list.length < min) {
     problems.push(min > 0
       ? `success_criteria: at least one criterion — ${what} with none cannot be finished`
@@ -49,12 +52,13 @@ export function validateCriteria(list, problems, { min = 1, what = 'a project' }
   list.forEach((item, index) => {
     const at = `success_criteria[${index}]`;
     if (!plain(item)) { problems.push(`${at}: must be an object`); return; }
-    for (const key of unknownKeys(item, CRITERION_KEYS)) problems.push(`${at}.${key}: unknown key`);
+    for (const key of unknownKeys(item, keys)) problems.push(`${at}.${key}: unknown key`);
     if (typeof item.met !== 'boolean') problems.push(`${at}.met: true or false`);
     if (!text(item.criterion)) problems.push(`${at}.criterion: what must be true`);
     // The check is the half a criterion is usually missing: "done" is not a
     // judgement the session makes about its own work.
     if (!text(item.check)) problems.push(`${at}.check: how it is checked — the assertion, the query, the measurement in the running app`);
+    if (keys.includes('evidence') && Object.hasOwn(item, 'evidence') && !text(item.evidence)) problems.push(`${at}.evidence: what the build logs for it, or leave it out`);
   });
 }
 

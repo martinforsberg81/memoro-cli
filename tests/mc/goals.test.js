@@ -4,7 +4,10 @@ import { test } from 'node:test';
 import { noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
 import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
-import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
+import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
+import { addPr, goalOfRecord } from '../../src/mc/goals.js';
+import { phaseGoals } from '../../src/mc/goal-convert.js';
+import { addItem, removeItem } from '../../src/mc/goal-parts.js';
 
 const GOAL_TEXT = goalJson({ repos: ['memoro-cli', 'memoro'] });
 
@@ -575,4 +578,170 @@ test('noProgressEntry is the runner\'s judged or unjudged build session, and no 
   assert.equal(noProgressEntry(sessionOf(`${NOT_COUNTED}: GOAL.json does not parse`)), true);
   assert.equal(noProgressEntry(sessionOf('session ended without a log entry (exit 1, 0 s)')), false, 'a silent session is not one');
   assert.equal(noProgressEntry(logEntry('claude', 'build', 'ready', NO_PROGRESS_SESSION)), false, 'a session\'s own words are not the runner\'s');
+});
+
+/* ------------------------------------------------------------- version 2: numbered parts */
+
+const V2_TEXT = goalJsonV2();
+const V2_FULL_TEXT = `# Make the goal plain
+
+AIM
+  Why the goal exists.
+
+OUTCOME
+  Two files and a worktree.
+
+  And nothing else.
+
+PROBLEM
+  B1 The brief is one prose field.
+      basis: measured
+
+PREMISES
+  P1 goals.js has GOAL_VERSION = 1.
+      source: src/mc/goals.js line 27 · basis: read · at: 4daf75f3
+
+DECISIONS
+  D1 Parts are numbered.
+      by: Martin · on: 2026-11-14
+
+CHANGE
+  C1 Accept version 2.
+      where: src/mc/goals.js
+
+LATITUDE
+  The build chooses the wording.
+
+PRESERVE
+  V1 Version 1 is as before.
+      upheld_by: criterion 1
+
+OBLIGATIONS
+  Documentation · touched — mc-goals.md says both versions.
+      standard: memoro-cli/docs/technical/mc-goals.md#GOAL.json
+  Operations · untouched — Nothing deploys.
+
+RISKS
+  R1 A writer drops the parts.
+      settled_by: criterion 1
+
+CRITERIA 0/1
+  1 ✗ it works
+      check: a test
+      evidence: the gate log
+
+PROTECTION
+  Version 1 is untouched.
+
+OUT OF SCOPE
+  X1 Converting version 1 goals.
+      owner: nobody
+
+DOCUMENTS
+  The design — memoro-cli/docs/technical/mc-goals.md
+`;
+const V2_MINIMAL_TEXT = `# Make the goal plain
+
+OUTCOME
+  Only the outcome.
+
+CHANGE
+  C1 Do it.
+      where: src
+
+OBLIGATIONS
+  none yet
+
+CRITERIA 0/1
+  1 ✗ it works
+      check: a test
+`;
+
+test('version 2: a full goal and one with only its required parts parse and render back as they were; version 1 stays version 1', () => {
+  for (const text of [V2_TEXT, goalMinimalV2()]) {
+    const goal = parseGoal(text);
+    assert.equal(goal.problems, undefined, String(goal.problems));
+    assert.equal(goal.version, 2);
+    assert.equal(renderGoal(goal), text);
+  }
+  const full = parseGoal(V2_TEXT);
+  assert.deepEqual(full.outcome, ['Two files and a worktree.', 'And nothing else.']);
+  assert.deepEqual(full.premises[0], { id: 'P1', claim: 'goals.js has GOAL_VERSION = 1.', source: 'src/mc/goals.js line 27', basis: 'read', at: '4daf75f3' });
+  assert.deepEqual(full.ids, { B: 1, P: 1, D: 1, C: 1, V: 1, R: 1, X: 1 });
+  assert.equal(full.goal, undefined, 'a version 2 goal has no goal or contract');
+  assert.equal(parseGoal(GOAL_TEXT).version, 1);
+  assert.equal(renderGoal(parseGoal(GOAL_TEXT)), GOAL_TEXT);
+});
+
+test('version 2 names each problem by its field: a v1 key, a bad id, a repeated id, an id above ids, an unknown key, a bad basis, a blank text, two obligations of one area', () => {
+  const problems = (fields) => validateGoal(JSON.parse(goalJsonV2(fields))).join('\n');
+  assert.match(problems({ goal: ['x'] }), /goal: unknown key/u);
+  assert.match(problems({ contract: [] }), /contract: unknown key/u);
+  assert.match(validateGoal({ ...JSON.parse(goalJsonV2()), version: 3 }).join(), /version: must be 1 or 2/u);
+  assert.match(problems({ problem: [{ id: 'D1', text: 'x', basis: 'measured' }] }), /problem\[0\]\.id/u);
+  assert.match(problems({ decisions: [{ id: 'D1', text: 'a', by: 'm', on: 'd' }, { id: 'D1', text: 'b', by: 'm', on: 'd' }] }), /decisions\[1\]\.id.*D1/u);
+  assert.match(problems({ decisions: [{ id: 'D2', text: 'a', by: 'm', on: 'd' }] }), /decisions\[0\]\.id.*ids/u);
+  assert.match(problems({ problem: [{ id: 'B1', text: 'a', basis: 'guessed' }] }), /problem\[0\]\.basis/u);
+  assert.match(problems({ problem: [{ id: 'B1', text: '  ', basis: 'measured' }] }), /problem\[0\]\.text/u);
+  assert.match(problems({ problem: [{ id: 'B1', text: 'a', basis: 'measured', why: 'x' }] }), /problem\[0\]\.why/u);
+  assert.match(problems({ obligations: [{ area: 'Docs', stand: 'touched', text: 'a' }, { area: 'Docs', stand: 'untouched', text: 'b' }] }), /obligations\[1\]\.area/u);
+  assert.match(problems({ obligations: [{ area: 'Docs', stand: 'maybe', text: 'a' }] }), /obligations\[0\]\.stand/u);
+  assert.match(problems({ success_criteria: [{ criterion: 'x', check: 'y', evidence: ' ', met: false }] }), /success_criteria\[0\]\.evidence/u);
+  assert.match(validateGoal(JSON.parse(goalJson({ success_criteria: [{ criterion: 'x', check: 'y', evidence: 'z', met: false }] }))).join(), /success_criteria\[0\]\.evidence/u, 'a version 1 criterion has no evidence');
+  const { ids: _ids, ...noIds } = JSON.parse(goalJsonV2());
+  assert.match(validateGoal(noIds).join(), /ids/u);
+});
+
+test('renderGoalText shows a full version 2 goal in its order, and one with only its required parts with none yet', () => {
+  assert.equal(renderGoalText(parseGoal(V2_TEXT)), V2_FULL_TEXT);
+  assert.equal(renderGoalText(parseGoal(goalMinimalV2())), V2_MINIMAL_TEXT);
+  assert.equal(renderGoalText(parseGoal(goalMinimalV2({ success_criteria: [] }))).includes('CRITERIA 0/0\n  none yet — mc goal criterion add'), true);
+});
+
+test('ids only rise: an id is the highest ever given plus one, and a removed id is not given again', () => {
+  const goal = parseGoal(V2_TEXT);
+  const second = addItem(goal, 'decision', { text: 'Another.', by: 'Martin', on: '2026-11-15' });
+  assert.equal(second.id, 'D2');
+  const removed = removeItem(second.goal, 'D2');
+  assert.deepEqual(removed.goal.decisions.map((item) => item.id), ['D1']);
+  assert.equal(removed.goal.ids.D, 2, 'ids keeps the highest number given');
+  assert.equal(addItem(removed.goal, 'decision', { text: 'Again.', by: 'Martin', on: '2026-11-15' }).id, 'D3');
+});
+
+/* One round-trip case per renderGoal caller (the inventory is in LOG.md): addPr, setGoalState, updateGoal, phaseGoals. */
+
+test('addPr, setGoalState and updateGoal write a version 2 goal back with every part', () => {
+  const dir = goalDirIn('/p', 'mc', 'plain');
+  const path = `${dir}/${GOAL_FILE}`;
+  const { store, read, write } = model({ [path]: V2_TEXT, [`${dir}/${LOG_FILE}`]: LOG_TEXT });
+  const entry = { at: '2026-11-02T08:00Z', tool: 'claude', model: 'claude-sonnet-5-5', stage: 'build', status: 'ready', done: 'x', comment: null, next: null };
+  assert.equal(addPr({ dir, repo: 'memoro-cli', pr: 7, entry, read, write }).added, true);
+  assert.equal(store[path], goalJsonV2({ prs: ['memoro-cli#7'] }), 'addPr');
+  setGoalState({ dir, status: 'blocked', entry, read, write });
+  assert.equal(store[path], goalJsonV2({ prs: ['memoro-cli#7'], status: 'blocked' }), 'setGoalState');
+  const met = updateGoal({ dir, change: (goal) => ({ ...goal, success_criteria: [{ ...goal.success_criteria[0], met: true }] }), read, write });
+  assert.equal(met.goal.version, 2);
+  assert.equal(store[path], goalJsonV2({ prs: ['memoro-cli#7'], status: 'blocked', success_criteria: [{ criterion: 'it works', check: 'a test', evidence: 'the gate log', met: true }] }), 'updateGoal');
+});
+
+test('phaseGoals writes a version 2 goal in the legacy stage plan as stage draft, with every part', () => {
+  const store = { '/h/mc/goals/g/GOAL.json': goalJsonV2({ stage: 'plan', status: 'ready' }) };
+  const list = (path) => ({ '/h': ['mc'], '/h/mc/goals': ['g'] }[path] ?? []);
+  const writes = [];
+  const answers = phaseGoals({ home: '/h', programme: 'mc', list, read: (path) => store[path] ?? null, write: (path, text) => { writes.push(path); store[path] = text; } });
+  assert.ok(writes.includes('/h/mc/goals/g/GOAL.json'), `a write happened: ${JSON.stringify(answers)}`);
+  assert.equal(store['/h/mc/goals/g/GOAL.json'], goalJsonV2({ stage: 'draft', status: 'ready' }));
+});
+
+test('programsGoals and goalOfRecord carry a version 2 goal\'s version and parts', () => {
+  const { list, read } = model({ '/p/mc/goals/two/GOAL.json': V2_TEXT, '/p/mc/goals/two/LOG.md': LOG_TEXT });
+  const [one] = programsGoals({ home: '/p', list, read });
+  assert.deepEqual(one.problems, []);
+  assert.equal(one.version, 2);
+  assert.equal(one.title, 'Make the goal plain');
+  assert.equal(one.premises[0].id, 'P1');
+  const record = goalOfRecord(one);
+  assert.equal(record.version, 2);
+  assert.deepEqual(record.decisions.map((item) => item.id), ['D1']);
+  assert.equal(renderGoalText(record), V2_FULL_TEXT, 'the record shows as the goal does');
 });
