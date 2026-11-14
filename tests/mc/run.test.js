@@ -2997,6 +2997,29 @@ test('one live runner rereads provider priority for fresh fast and large launche
   assert.deepEqual([f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['claude', 'opus']);
 });
 
+test('a medium build launches its first usable medium candidate and never falls back when that list is empty', async () => {
+  const f = goalFixture({ medium: {} });
+  f.files[`${GOALS}/medium/GOAL.json`] = withGoal(f.files[`${GOALS}/medium/GOAL.json`], { class: 'medium' });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG),
+    fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }],
+    medium: [{ tool: 'claude', model: 'sonnet', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }],
+    large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
+  });
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL, runRows(f.files).at(-1).effort],
+    ['claude', 'sonnet', 'high']);
+
+  const empty = goalFixture({ medium: {} });
+  empty.files[`${GOALS}/medium/GOAL.json`] = withGoal(empty.files[`${GOALS}/medium/GOAL.json`], { class: 'medium' });
+  empty.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG),
+    fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }], medium: [],
+    large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
+  });
+  assert.equal((await createRunner({ deps: empty.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(empty.calls.sessions.length, 0, 'an empty medium list waits, not launch on fast or large');
+});
+
 /** The `rate_limit_event` as it stood in `~/mc/runner/log/*.jsonl` on 2026-10-11. */
 const WINDOWS_EVENT = JSON.stringify({
   type: 'rate_limit_event',

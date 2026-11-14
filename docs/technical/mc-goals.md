@@ -149,7 +149,7 @@ written, and a write that would make one is refused with the field named.
   phase 1; `renderGoal` always writes it.
 - `repos` — repository names in order. The first is where a session starts,
   and the lane that serves it takes the goal.
-- `class` — `fast` or `large`, routed through the model catalog (ruling 59) for the goal's build sessions only; review, finish, mend and next-draft plan run on their own catalog lists, whatever the class (`docs/technical/mc-run.md`, *Work classes and capacity*).
+- `class` — `fast`, `medium` or `large`, routed through the model catalog (ruling 59) for the goal's build sessions only; review, finish, mend and next-draft plan run on their own catalog lists, whatever the class (`docs/technical/mc-run.md`, *Work classes and capacity*).
 - `created` — an ISO instant written by `mc goal new`, or null.
 - `prs` — the pull requests that carry the goal's work, as `<repo>#<n>`.
   `mc publish` writes the one it opens or updates (*Done when its work has
@@ -219,7 +219,7 @@ Next: what the next session should do
 Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 `drop` set one field each.
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
+- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build]`** — makes a
   goal, refused unless its flags are valid and its names are new. It is in
   stage `draft` (awaiting planning; see *Next draft planning*), or
   `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's

@@ -2,7 +2,7 @@
  * The model catalog (ruling 59): the ordered candidates each list may run on,
  * the first preferred.
  *
- * `fast` and `large` are the work classes: a goal's class routes its build
+ * `fast`, `medium` and `large` are the work classes: a goal's class routes its build
  * sessions and nothing else. The role lists — `review`, `finish`, `mend`, `plan`
  * and `manager` — each route their own unattended role, whatever the goal's
  * class (ruling 59 § 2 for review; the 2026-11-09 ruling for the others). None
@@ -43,13 +43,13 @@ export const MODELS_SCHEMA = 'mc-models';
 export const MODELS_VERSION = 1;
 export const MODELS_FILE = 'models.json';
 /** The work classes: a goal's class routes its build sessions, and nothing else. */
-export const CLASSES = Object.freeze(['fast', 'large']);
+export const CLASSES = Object.freeze(['fast', 'medium', 'large']);
 /** The role lists, each routing its own unattended role. `set` replaces one whole. */
 export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager']);
 /** Every list the catalog holds. `mc model add` and `remove` take any of them. */
 export const LISTS = Object.freeze([...CLASSES, ...ROLE_LISTS]);
 /** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
-const DEFAULTED_LISTS = Object.freeze(['finish', 'mend', 'plan', 'manager']);
+const DEFAULTED_LISTS = Object.freeze(['medium', 'finish', 'mend', 'plan', 'manager']);
 export const TOOLS = Object.freeze(['claude', 'codex']);
 const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, 'provider_priority']);
 export const PROVIDER_PRIORITIES = Object.freeze(['auto', 'codex', 'claude']);
@@ -69,6 +69,7 @@ const candidate = (tool, model, effort) => Object.freeze({ tool, model, effort }
 /** What an absent catalog reads as, and what a file lacking one of the defaulted lists reads for it. */
 export const DEFAULT_CATALOG = Object.freeze({
   fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
+  medium: Object.freeze([candidate('claude', 'sonnet', 'high'), candidate('codex', 'gpt-6.1-terra', 'high')]),
   large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'high')]),
   review: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
   finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),

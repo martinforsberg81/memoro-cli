@@ -139,6 +139,16 @@ test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repositor
   assert.match(f.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain/u);
 });
 
+test('mc goal new accepts medium and reads it back from GOAL.json', async () => {
+  const f = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'medium', '--title', 'Across chosen components'], f.deps), 0, f.err());
+  const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
+  assert.equal(goal.class, 'medium');
+  assert.match(f.out(), /mc: mc\/plain · draft · ready/u);
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  assert.match(f.out(), /draft · ready · phase 1 · memoro-cli · medium/u, 'show exposes medium in the goal status line');
+});
+
 test('mc goal new --stage build makes a goal ready to be built; no other stage is a new goal\'s', async () => {
   const f = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 0, f.err());
@@ -175,7 +185,7 @@ test('addGoalWorktree adds an existing goal/<goal> as it is, after a prune, and 
   assert.deepEqual(calls.slice(1), [['/b/memoro', 'worktree', 'add', '-q', '-b', 'goal/plain', `${DIR}/memoro`, 'origin/main']]);
 });
 
-test('mc goal new refuses a programme with no directory, a goal that exists, a repository mc does not know, and a class that is neither fast nor large', async () => {
+test('mc goal new refuses a programme with no directory, a goal that exists, a repository mc does not know, and an unknown class', async () => {
   const args = (programme, repo, cls) => ['new', programme, '--repo', repo, '--class', cls, '--title', 'T'];
 
   const nope = fixture();
@@ -193,7 +203,7 @@ test('mc goal new refuses a programme with no directory, a goal that exists, a r
 
   const badClass = fixture();
   assert.equal(await run(args('mc/plain', 'memoro', 'huge'), badClass.deps), 2);
-  assert.match(badClass.err(), /--class is fast or large, not huge/u);
+  assert.match(badClass.err(), /--class is fast or medium or large, not huge/u);
   assert.deepEqual(badClass.calls, []);
 });
 

@@ -90,7 +90,7 @@ with ✓/✗ and its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|large --title "…" [--stage draft|build]` makes one: GOAL.json and
+  fast|medium|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows

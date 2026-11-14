@@ -273,7 +273,7 @@ role or tool skips launch; a worktree failure is recorded in LOG.md. The
 prompt includes the rendered goal (goal, contract, boundaries, documents and criteria), and the
 role tells the session to read LOG.md first.
 
-- A build uses `build-session:goal` and the goal's `fast` or `large` class.
+- A build uses `build-session:goal` and the goal's `fast`, `medium` or `large` class.
   It gates, commits and publishes with `--no-merge`. It ends with `mc goal log`,
   moving to review only once every criterion has been checked and met.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
@@ -508,7 +508,7 @@ billing boundaries starts a cold cache context.
 
 ## Work classes and capacity (ruling 59)
 
-A goal names a work class, `fast` or `large`, not a model, and the class
+A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
 routes the goal's build sessions only. Every other unattended role runs on its
 own catalog list, whatever the goal's class: `review`, `finish`, `mend`, `plan`
 (the runner's next-draft planning) and `manager` (an unattended manager turn
@@ -535,14 +535,14 @@ candidates. The review waits when the selected API is off.
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
-- `mc model [list] [--json]` — the candidates of fast, large, review, finish,
+- `mc model [list] [--json]` — the candidates of fast, medium, large, review, finish,
   mend, plan and manager, each a numbered list in catalog order, and whether
   they come from the file or the defaults.
 - `mc model priority [auto|codex|claude]` — show or change the provider
   preference for unattended launches; an absent setting means `auto`.
-- `mc model add fast|large|review <tool>:<model>:<effort>` — appends a candidate;
+- `mc model add fast|medium|large|review <tool>:<model>:<effort>` — appends a candidate;
   `add` takes finish, mend, plan and manager as well.
-- `mc model remove fast|large|review <tool>:<model>` — removes the candidate
+- `mc model remove fast|medium|large|review <tool>:<model>` — removes the candidate
   with exactly that tool and model; a list keeps at least one. `remove` takes
   every list as `add` does.
 - `mc model set review <tool>:<model>:<effort>` — replaces the whole review
@@ -551,13 +551,15 @@ written whole or not at all:
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
-`codex:gpt-6.1-sol:high`; review, `claude:opus:medium` then
+`codex:gpt-6.1-sol:high`; `medium`, `claude:sonnet:high` then
+`codex:gpt-6.1-terra:high`; review, `claude:opus:medium` then
 `codex:gpt-6.1-sol:medium`; finish, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
 `codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
 `codex:gpt-6.1-sol:medium`. A file without finish, mend, plan or manager reads
-that list from the defaults and is written back with every list the first time
+that list from the defaults; a file without `medium` also reads its default.
+Missing defaulted lists are written back with every list the first time
 `mc model` changes it. A file whose
 `review` is one candidate object, as files were before review was a list, reads
 as a list of that candidate and is written back as a list the first time `mc

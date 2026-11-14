@@ -1904,7 +1904,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * gets a finish session (`finish-session`) and `afterFinish`; an unqueued
    * merge failure gets a mend session
    * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree.
-   * Only a build routes on the goal's class (fast, large); review, finish, mend
+   * Only a build routes on the goal's class (fast, medium, large); review, finish, mend
    * and plan each route on their own catalog list, whatever the class, and wait
    * when it has no candidate rather than borrow a class's.
    *

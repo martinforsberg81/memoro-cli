@@ -74,7 +74,8 @@ test('parseGoal names each problem by its field: not JSON, a stage, status or cl
     assert.equal(parseGoal(withGoal(GOAL_TEXT, { stage: undefined, status: old })).problems.join(), `stage: missing — goals have a stage now; mc goal convert gives this ${old} goal one`, old);
     if (old !== 'blocked') assert.match(parseGoal(withGoal(GOAL_TEXT, { status: old })).problems.join(), /^status: one of ready, blocked/u, `${old} beside a stage`);
   }
-  assert.match(parseGoal(withGoal(GOAL_TEXT, { class: 'huge' })).problems.join(), /class: fast or large, not huge/u);
+  assert.equal(parseGoal(withGoal(GOAL_TEXT, { class: 'medium' })).class, 'medium');
+  assert.match(parseGoal(withGoal(GOAL_TEXT, { class: 'huge' })).problems.join(), /class: fast or medium or large, not huge/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: [] })).problems.join(), /repos: at least one repository/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { repos: ['Memoro_CLI'] })).problems.join(), /repos: Memoro_CLI is not a repository name/u);
   assert.match(parseGoal(withGoal(GOAL_TEXT, { schema: 'mc-plan' })).problems.join(), /schema: must be "mc-goal"/u);
