@@ -71,13 +71,21 @@ States are `new` → `prepared` → `for-martin` → `closed`, with `prepared` a
 able to close directly. Sort is null or mechanical, technical, product,
 judgement or reserved; reversible and due time are nullable. Closing records
 `{by, at, summary}` where by is decision, martin, default or source. Sync opens
-waiting goals and main-reds and flagged decided jev ledger rows once, skips
-ledger rows older than the store's first sync, closes open goal/main-red items
+waiting goals and main-reds and flagged decided jev ledger rows once. A decided
+row is flagged when jev's chosen key differs from the session recommendation
+or its product reading is at least 0.70. Sync skips ledger rows older than the store's first sync, closes open goal/main-red items
 whose source no longer waits, and writes only beneath the item store. It never
-changes a source record. Chores syncs once each round.
+changes a source record. Missing, malformed or unreadable goal/main-red files
+are reported and preserve the item: absence from the live queue alone is not
+resolution. A goal closes only on a readable finished/non-Martin state or an
+established later question; a main-red closes only on readable state showing
+that its entry no longer waits. Chores syncs once each round.
 
 `mc martin items [--state <state>] [--json]` syncs then lists open items before
-closed ones, by oldest source time. `mc martin item <id>` shows the complete
+closed ones, by oldest source time. Each label is recovered using the item's
+source time and source history, including closed questions and runner reasons;
+it is never borrowed from a later question on the same goal. Unavailable
+history is shown explicitly. `mc martin item <id>` shows the complete
 record, available live source and prepared/brief text. Writers are the person
 and roles `martin`, `desk-prepare` and `decision`; desk-prepare may only prepare.
 `prepared --sort <sort>` requires `prepared.md` and moves new to prepared.

@@ -477,9 +477,11 @@ test('chores syncs a waiting goal item without adding a run row', async (t) => {
   writeFileSync(join(dir,'LOG.md'),`## ${at} · person · build · Martin\n\nComment: Martin is asked: Which option?\nOption a: A\nOption b: B\nRecommended: a\n`);
   f.deps.syncDeskItems=()=>syncDeskItems({env,home,now:()=>new Date(at)});
   const before=f.files[`${f.root}/runner/log/runs.tsv`] ?? null;
+  const callsBefore=f.calls.sessions.length;
   await createRunner({deps:f.deps}).chores();
   const [item]=listDeskItems({env}); assert.equal(item.reference,'alpha/waiting'); assert.equal(item.state,'new');
   assert.equal(f.files[`${f.root}/runner/log/runs.tsv`] ?? null,before);
+  assert.deepEqual(f.calls.sessions.slice(callsBefore),[], 'chores starts no session');
 });
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */

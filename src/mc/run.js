@@ -2421,7 +2421,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
-    try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env }); }
+    try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env, reportIssue: issue => say(`martin items: source issue ${issue.path}: ${issue.error}`) }); }
     catch (error) { say(`martin items: sync failed — ${error?.message || error}`); }
     askGithub();
     // `askGithub()` has just fetched every repository, mc's own checkout among

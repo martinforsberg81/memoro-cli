@@ -8,7 +8,7 @@ import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
-import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
+import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
 
@@ -27,7 +27,7 @@ export const ROUTES = {
     return selectors > 1 ? 'choose exactly one of --all, --programme or --goal' : null;
   } },
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : null },
+  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
 export async function run(argv, deps = {}) {
@@ -71,12 +71,13 @@ function items(argv, deps) {
   const role = writerRole(env);
   if (!['person','martin','desk-prepare','decision'].includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
   const parsed = scanArgs(argv, ROUTES.items);
-  if (parsed.error) { stderr.write(`mc: ${parsed.error}\n`); return 2; }
+  const error = parsed.error || ROUTES.items.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
   if (parsed.flags.state && !['new','prepared','for-martin','closed'].includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
-  syncDeskItems({ env: deps.env || process.env, home: deps.home || programsHome(deps.env || process.env), ...(deps.syncDeps || {}) });
+  const home = deps.home || programsHome(env);
+  syncDeskItems({ env, home, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) });
   const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
-  const sourceItems = [...collectMartinQueue({ home: deps.home || programsHome(deps.env || process.env) }).items, ...readDecisionRows(env)];
-  const shown = result.map((x) => ({ ...x, question: sourceLine(sourceItems.find((s) => s.reference === x.reference) || {}) }));
+  const shown = result.map((x) => ({ ...x, question: deskItemQuestion(x, { env, home }) }));
   if (parsed.flags.json) stdout.write(`${JSON.stringify(shown, null, 2)}\n`);
   else for (const x of shown) stdout.write(`${x.id} · ${x.kind} · ${x.reference} · ${x.state} · ${x.sort || 'unsorted'} · ${x.due_at || 'no due date'} · ${x.question}\n`);
   return 0;
@@ -96,8 +97,8 @@ function item(argv, deps) {
   }
   const role = writerRole(env);
   if (!['person','martin','desk-prepare','decision'].includes(role)) return refused(record, verb, stderr, `role ${role} cannot write desk items`);
-  const parsed = scanArgs(rest, { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null });
-  if (parsed.error) { stderr.write(`mc: ${parsed.error}\n`); return 2; }
+  const parsed = scanArgs(rest, ROUTES.item);
+  if (parsed.error || parsed.positional.length) return refused(record, verb, stderr, parsed.error || `unknown argument ${parsed.positional[0]}`);
   const f = parsed.flags, dir = itemDirectory(record, env), state = record.state;
   const refuse = (message) => refused(record, verb, stderr, message);
   if (role === 'desk-prepare' && verb !== 'prepared') return refuse('desk-prepare may only use prepared');
@@ -117,7 +118,6 @@ function item(argv, deps) {
 }
 function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' ? 'close' : 'no verb'} applies\n`); return 2; }
-function sourceLine(x) { return String(x.question?.question || x.question?.reason || x.reason || x.question || x.outcome?.summary || '').split(/\r?\n/u)[0]; }
 function maybeRead(path) { try { return readFileSync(path, 'utf8'); } catch { return null; } }
 function exists(path) { try { return readFileSync(path); } catch { return null; } }
 function readDecisionRows(env) { return String(maybeRead(ledgerPath(mcHome(env))) || '').split(/\n/u).filter(Boolean).flatMap(line=>{ try { const row=JSON.parse(line); return [{...row,reference:`decision:${row.at}`}]; } catch { return []; } }); }
