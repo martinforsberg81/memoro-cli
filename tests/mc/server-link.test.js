@@ -84,7 +84,8 @@ test('injection table: programme, resume id and model reach the server as exact 
   for (const value of ['two words', "a'b", 'a"b', 'x; touch /bad', '$(touch /bad)', 'a\nb', '']) {
     const args = ['mc', 'session', 'list', 'plan', value, '--resume', value, '--model', value];
     assert.deepEqual(shellWords(remoteCommand(args)), args);
-    const link = serverLink('tc', { env: {}, run: (bin, actual) => {
+    const link = serverLink('tc', { env: { SSH_AUTH_SOCK: '/person/agent.sock', OPENAI_API_KEY: 'must-not-cross', MC_ROLE: 'must-not-cross' }, run: (bin, actual, options) => {
+      assert.deepEqual(options.env, { SSH_AUTH_SOCK: '/person/agent.sock' });
       assert.equal(bin, 'ssh'); assert.equal(actual[0], 'tc');
       assert.deepEqual(shellWords(actual[1]), [...args, '--json', '--answers', '[]']);
       return { status: 0, stdout: JSON.stringify(descriptor('handshake')) };
@@ -112,7 +113,7 @@ function clientFixture({ outcome = 'clean', resume = null, version = 'codex 0.16
   let resolveConnection;
   const connection = { session: session({ resume, prompt }), closed: new Promise(resolve => { resolveConnection = resolve; }),
     finish: async clean => { ended = clean; return { status: 0 }; } };
-  const link = serverLink('tc', { env: { MC_WORK_ROOT: root }, io, now: () => clock,
+  const link = serverLink('tc', { env: { MC_WORK_ROOT: root, SSH_AUTH_SOCK: '/person/agent.sock' }, io, now: () => clock,
     sleep: async ms => { clock += ms; }, run: (bin, args) => { calls.push({ bin, args }); return { status: 0, stdout: version }; },
     spawnProcess: (bin, args, options) => {
       const child = processStub(); calls.push({ bin, args, options, child });
@@ -144,9 +145,11 @@ for (const resume of [null, 'thread-a']) for (const prompt of [null, 'opening wo
   const socket = '/mc/runner/s/c-abcdef/s';
   assert.deepEqual(forward.args, ['-N', '-o', 'ExitOnForwardFailure=yes', '-L', `${socket}:/server/socket`, 'tc']);
   assert.ok(Buffer.byteLength(socket) < 100);
+  assert.equal(forward.options.env.SSH_AUTH_SOCK, '/person/agent.sock');
   assert.deepEqual(f.modes, [['/mc/runner/s', 0o700], ['/mc/runner/s/c-abcdef', 0o700]]);
   const tui = f.calls.find(call => call.bin === 'codex' && call.args[0] !== '--version');
   assert.deepEqual(tui.args, [...(resume ? ['resume', resume] : ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request']), '--remote', `unix://${socket}`, ...(prompt ? (prompt.startsWith('-') ? ['--', prompt] : [prompt]) : [])]);
+  assert.equal('SSH_AUTH_SOCK' in tui.options.env, false, 'only SSH receives the existing agent socket');
   for (const forbidden of ['-c', '--model', '--add-dir', '--effort', 'instructions']) assert.equal(tui.args.includes(forbidden), false);
   assert.deepEqual(forward.child.killedWith, ['SIGTERM']);
   assert.deepEqual(f.removed, [['/mc/runner/s/c-abcdef', { recursive: true, force: true }]]);

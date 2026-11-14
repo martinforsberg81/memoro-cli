@@ -25,6 +25,9 @@ export function serverLink(destination, {
 } = {}) {
   sshDestination(destination);
   const options = { env: terminalEnvironment(env) };
+  // Let the person's OpenSSH use its existing agent, never the provider TUI.
+  const sshOptions = { env: { ...options.env,
+    ...(typeof env.SSH_AUTH_SOCK === 'string' ? { SSH_AUTH_SOCK: env.SSH_AUTH_SOCK } : {}) } };
   const prefix = message => `on ${destination}: ${message}`;
   const decode = text => {
     let value;
@@ -37,7 +40,7 @@ export function serverLink(destination, {
     ...(entrance ? [entrance] : []), ...args, '--json', '--answers', JSON.stringify(answers)];
   function request(operation, entrance = null, args = [], answers = []) {
     const result = run('ssh', [destination, remoteCommand(command(operation, entrance, args, answers))],
-      { ...options, encoding: 'utf8', timeout: 30_000, maxBuffer: 1 << 20 });
+      { ...sshOptions, encoding: 'utf8', timeout: 30_000, maxBuffer: 1 << 20 });
     // A server refusal is structured even when mc exits nonzero.
     if (result.stdout?.trim()) {
       const value = decode(result.stdout);
@@ -47,14 +50,14 @@ export function serverLink(destination, {
   }
   function passthrough(operation, entrance, args = [], answers = []) {
     const result = run('ssh', ['-t', destination, remoteCommand(['mc', 'session', operation, entrance, ...args,
-      '--answers', JSON.stringify(answers), '--host', destination])], { ...options, stdio: 'inherit' });
+      '--answers', JSON.stringify(answers), '--host', destination])], { ...sshOptions, stdio: 'inherit' });
     return { status: result.status ?? 1, signal: result.signal, error: result.error };
   }
 
   /** Keep a server-side mc client registration for precisely this connection's lifetime. */
   async function connect(operation, entrance, args = [], answers = []) {
     const child = spawnProcess('ssh', [destination, remoteCommand(command(operation, entrance, args, answers))],
-      { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
+      { ...sshOptions, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = ''; let errors = ''; let response; let problem; let exited = false;
     let resolveClosed;
     const closed = new Promise(resolve => { resolveClosed = resolve; });
@@ -129,7 +132,7 @@ export function serverLink(destination, {
       const socket = join(directory, 's');
       if (Buffer.byteLength(socket) >= 100) refusal(`local socket path is ${Buffer.byteLength(socket)} bytes (must be under 100); use a shorter MC_WORK_ROOT`);
       child = spawnProcess('ssh', ['-N', '-o', 'ExitOnForwardFailure=yes', '-L', `${socket}:${remote}`, destination],
-        { ...options, stdio: ['ignore', 'ignore', 'pipe'] });
+        { ...sshOptions, stdio: ['ignore', 'ignore', 'pipe'] });
       completion = new Promise(resolve => child.once('close', () => { closed = true; lost = true; resolve(); }));
       child.once('error', error => { reason = error.message; lost = true; });
       child.stderr.setEncoding('utf8');

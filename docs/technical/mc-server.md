@@ -31,7 +31,9 @@ routing precedes local programme/desk creation.
 
 Transport is the person's own `ssh`; mc installs no key, credential, agent,
 daemon or network configuration and writes nothing to `~/.ssh` or shell files.
-Its setting and temporary files are under the client's mc work root.
+Its setting and temporary files are under the client's mc work root. The local
+SSH process retains the caller's `SSH_AUTH_SOCK` to use an existing agent; the
+provider TUI does not receive it, and it is not a descriptor member.
 
 ## Both halves
 
