@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
-import { run, get, usage } from '../../../src/mc/commands/martin.js';
+import { run, get, usage, buildOpening, renderOpening } from '../../../src/mc/commands/martin.js';
 import { run as ask } from '../../../src/mc/commands/ask.js';
 import { deskRunsPath } from '../../../src/mc/desk-budget.js';
 import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
@@ -215,26 +215,149 @@ describe('Martin ask authority', () => {
 });
 
 describe('mc martin launch', () => {
-  it('advertises durable item commands in the routed help', () => { assert.match(usage(),/mc martin items/u); assert.match(usage(),/mc martin item <id>/u); });
-  it('opens a distinct role/path with fresh queue context and launcher conventions', async () => {
-    const { out, stdout, stderr } = io(); let opened;
+  it('advertises durable item commands and the opening brief in the routed help', () => { assert.match(usage(),/mc martin items/u); assert.match(usage(),/mc martin item <id>/u); assert.match(usage(),/mc martin brief \[--json\]/u); });
+  it('opens a distinct role/path with the opening as first prompt and launcher conventions', async () => {
+    const d = openingStore(); const { out, stdout, stderr } = io(); let opened;
     const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.1-sol'], {
-      stdout, stderr, env: { MC_WORK_ROOT: '/work', MC_HOME: '/home' }, interactive: () => true,
-      collect: () => ({ items: [{ reference: 'alpha/g', title: 'Current', log: [], goal_markdown: '# Current', worktrees: [], evidence_paths: [] }], programme_context: [], issues: [] }),
-      open: async (options) => { opened = options; return { ok: true, code: 0 }; }, mkdir: () => {},
-      role: () => ({ name: 'martin', model: 'opus', tools: ['claude','codex'], cache: '5m', overlay: 'Martin role instructions' }),
+      stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(NOW), role: ROLE,
+      open: async (options) => { opened = options; return { ok: true, code: 0 }; },
     });
     assert.equal(code, 0, out.stderr);
     assert.equal(opened.areaName, 'martin'); assert.equal(opened.verb, 'martin');
-    assert.equal(opened.areaRoot, '/work/martin'); assert.equal(opened.roleName, 'martin');
+    assert.equal(opened.areaRoot, join(d.env.MC_WORK_ROOT, 'martin')); assert.equal(opened.roleName, 'martin');
+    assert.equal(opened.overlay, 'Martin role instructions'); assert.equal(opened.defaultModel, 'opus');
     assert.equal(opened.pick, 'abc'); assert.equal(opened.tool, 'codex'); assert.equal(opened.model, 'gpt-6.1-sol');
-    assert.match(opened.prompt, /alpha\/g/u); assert.match(opened.resumePrompt, /Refresh from the live decision queue/u);
+    assert.match(opened.prompt, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\./u); assert.match(opened.prompt, /### 1\. alpha\/one/u);
+    assert.match(opened.resumePrompt, /Refresh from the desk now/u); assert.ok(opened.resumePrompt.endsWith(opened.prompt));
+  });
+  it('writes last-open only after a successful launch, and the next opening starts from that time', async () => {
+    const d = openingStore({ lastOpen: null }); const lastFile = join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json'); const captured = [];
+    const open = async (options) => { captured.push(options); return { ok: true, code: 0 }; };
+    const first = await launch(d, '2026-11-14T08:00:00.000Z', { open });
+    assert.equal(first.code, 0, first.out.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(lastFile, 'utf8')), { at: '2026-11-14T08:00:00.000Z' });
+    assert.match(captured[0].prompt, /Decision before the opening/u, 'the first opening covers everything since the store began, up to its own time');
+    assert.doesNotMatch(captured[0].prompt, /Decision at nine/u, 'a decision after the opening time is not in it');
+    const second = await launch(d, NOW, { open });
+    assert.equal(second.code, 0, second.out.stderr);
+    assert.match(captured[1].prompt, /covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z/u);
+    assert.match(captured[1].prompt, /Decision at nine/u); assert.doesNotMatch(captured[1].prompt, /Decision before the opening/u);
+    assert.deepEqual(JSON.parse(readFileSync(lastFile, 'utf8')), { at: NOW });
+  });
+  it('leaves last-open unchanged after a refused or failed launch, and refuses a corrupt file before opening', async () => {
+    const d = openingStore(); const lastFile = join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json'); const before = readFileSync(lastFile, 'utf8');
+    const failed = await launch(d, NOW, { open: async () => ({ ok: false, reason: 'provider refused the launch' }) });
+    assert.equal(failed.code, 1); assert.equal(readFileSync(lastFile, 'utf8'), before);
+    const snap = snapshot(d.root);
+    const headless = await launch(d, NOW, { env: { ...d.env, MC_HEADLESS: '1' }, open: () => { throw new Error('must not open'); } });
+    assert.equal(headless.code, 2); assert.match(headless.out.stderr, /interactive-only/u);
+    assert.equal(readFileSync(lastFile, 'utf8'), before); assert.deepEqual(snapshot(d.root), snap);
+    writeFileSync(lastFile, '{bad');
+    let opened = 0;
+    const corrupt = await launch(d, NOW, { open: () => { opened += 1; return { ok: true, code: 0 }; } });
+    assert.equal(corrupt.code, 1); assert.equal(opened, 0); assert.match(corrupt.out.stderr, /does not hold a valid "at" time/u);
   });
 
   it('refuses unattended launch before creating a desk or opening a child', async () => {
     let opened = 0, made = 0; const { out, stdout, stderr } = io();
     assert.equal(await run([], { stdout, stderr, env: { MC_HEADLESS: '1' }, interactive: () => true, mkdir: () => { made += 1; }, open: () => { opened += 1; } }), 2);
     assert.equal(opened, 0); assert.equal(made, 0); assert.match(out.stderr, /interactive-only/u);
+  });
+});
+
+const NOW = '2026-11-14T12:00:00.000Z';
+const LAST = '2026-11-14T08:00:00.000Z';
+const ROLE = () => ({ name: 'martin', model: 'opus', tools: ['claude', 'codex'], cache: '5m', overlay: 'Martin role instructions' });
+
+/** A desk whose store already holds every item, so a sync writes nothing: four for-martin, three decided, one default, two closed by source, two prepared. */
+function openingStore({ lastOpen = LAST } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'mc-martin-opening-')); roots.push(root);
+  const env = { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home'), MC_ROLE: 'person' };
+  const home = join(root, 'programs');
+  const store = join(env.MC_WORK_ROOT, 'martin', 'items');
+  mkdirSync(store, { recursive: true });
+  writeFileSync(join(store, '.store.json'), JSON.stringify({ schema: 'mc-desk-item-store', version: 1, first_sync_at: '2026-11-01T00:00:00.000Z' }));
+  if (lastOpen) writeFileSync(join(env.MC_WORK_ROOT, 'martin', 'last-open.json'), JSON.stringify({ at: lastOpen }));
+  const goal = (programme, name, { phase = 1, status = 'Martin', question = null } = {}) => {
+    const dir = join(home, programme, 'goals', name); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status, phase }));
+    writeFileSync(join(dir, 'LOG.md'), question ? log(question.at, 'Martin', `Martin is asked: ${question.text}\nOption a: keep it\nOption b: change it\nRecommended: a`) : '');
+  };
+  // alpha/one is the only phase-1 goal of alpha: it blocks alpha/two (phase 2, itself waiting) and alpha/three (phase 3).
+  goal('alpha', 'one', { question: { at: '2026-11-13T10:00Z', text: 'Which rule should stand?' } });
+  goal('alpha', 'two', { phase: 2, question: { at: '2026-11-10T09:00Z', text: 'Which timing?' } });
+  goal('alpha', 'three', { phase: 3, status: 'ready' });
+  goal('beta', 'irr', { question: { at: '2026-11-11T09:00Z', text: 'Which reserved act?' } });
+  goal('beta', 'judge', { question: { at: '2026-11-12T09:00Z', text: 'Which screen feels right?' } });
+  goal('delta', 'p1', { question: { at: '2026-11-09T08:00Z', text: 'Which ledger shape?' } });
+  goal('delta', 'p2', { question: { at: '2026-11-10T08:00Z', text: 'Which fixture?' } });
+  const put = (fields) => {
+    const { kind = 'goal', reference, source_at, state, brief = null, prepared = null, ...rest } = fields;
+    const record = { schema: 'mc-desk-item', version: 1, id: deskItemId(kind, reference, source_at), kind, reference, source_at, opened_at: source_at, state, sort: null, reversible: null, due_at: null, outcome: null, ...rest };
+    writeDeskItem(record, { env });
+    if (brief !== null) writeFileSync(join(itemDirectory(record, env), 'brief.md'), brief);
+    if (prepared !== null) writeFileSync(join(itemDirectory(record, env), 'prepared.md'), prepared);
+    return record;
+  };
+  put({ reference: 'alpha/one', source_at: '2026-11-13T10:00Z', state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-14T15:00:00.000Z', brief: 'Brief: the rule of alpha.' });
+  put({ reference: 'alpha/two', source_at: '2026-11-10T09:00Z', state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-16T09:00:00.000Z', brief: 'Brief: the timing.' });
+  put({ reference: 'beta/irr', source_at: '2026-11-11T09:00Z', state: 'for-martin', sort: 'reserved', reversible: false, brief: 'Brief: the reserved act.' });
+  put({ reference: 'beta/judge', source_at: '2026-11-12T09:00Z', state: 'for-martin', sort: 'judgement', reversible: true, due_at: '2026-11-20T00:00:00.000Z', brief: 'Brief: look at the screen.' });
+  put({ reference: 'gamma/d1', source_at: '2026-11-01T08:00Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T07:00:00.000Z', summary: 'Decision before the opening.' } });
+  put({ reference: 'gamma/d2', source_at: '2026-11-02T08:00Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T09:00:00.000Z', summary: 'Decision at nine.' } });
+  put({ reference: 'beta/d3', source_at: '2026-11-03T08:00Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T10:00:00.000Z', summary: 'Decision at ten.' } });
+  put({ reference: 'gamma/d4', source_at: '2026-11-04T08:00Z', state: 'closed', outcome: { by: 'default', at: '2026-11-14T11:00:00.000Z', summary: 'Default applied.' } });
+  put({ reference: 'gamma/s1', source_at: '2026-11-05T08:00Z', state: 'closed', outcome: { by: 'source', at: '2026-11-14T09:30:00.000Z', summary: 'Source closed it.' } });
+  put({ reference: 'beta/s2', source_at: '2026-11-06T08:00Z', state: 'closed', outcome: { by: 'source', at: '2026-11-14T10:30:00.000Z', summary: 'Source closed it too.' } });
+  put({ reference: 'delta/p1', source_at: '2026-11-09T08:00Z', state: 'prepared', sort: 'mechanical', prepared: 'Facts for p1.' });
+  put({ reference: 'delta/p2', source_at: '2026-11-10T08:00Z', state: 'prepared', sort: 'technical', prepared: 'Facts for p2.', decision_failures: [{ at: '2026-11-13T08:00:00.000Z', reason: 'session exited' }] });
+  return { root, env, home };
+}
+function launch(d, at, deps = {}) {
+  const { out, stdout, stderr } = io();
+  return run([], { stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(at), role: ROLE, open: async () => ({ ok: true, code: 0 }), ...deps }).then((code) => ({ code, out }));
+}
+
+describe('mc martin brief', () => {
+  it('prints the four parts in order, blocking work first, from the store', async () => {
+    const d = openingStore(); const text = io();
+    assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    const out = text.out.stdout;
+    const at = (part) => { const index = out.indexOf(part); assert.notEqual(index, -1, part); return index; };
+    const headings = ['## Yours (4)', '## Decided without you', '## Not ready', '## Cost'].map(at);
+    assert.deepEqual([...headings].sort((a, b) => a - b), headings);
+    assert.match(out, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\. Decided-without-you covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z\./u);
+    const yours = ['### 1. alpha/one · product · reversible', '### 2. alpha/two · product · reversible', '### 3. beta/irr · reserved · not reversible', '### 4. beta/judge · judgement · reversible'].map(at);
+    assert.deepEqual([...yours].sort((a, b) => a - b), yours, 'blocking first, then oldest source');
+    assert.ok(yours[0] > headings[0] && yours[3] < headings[1]);
+    assert.match(out, /blocks 2 later-phase goals of alpha/u);
+    assert.match(out, /Due 2026-11-14T15:00:00\.000Z: if nothing is said/u);
+    assert.doesNotMatch(out, /Due 2026-11-16/u);
+    assert.match(out, /Brief: the reserved act\./u);
+    assert.ok(out.includes('- 2026-11-14T09:00:00.000Z · Decision at nine. (gamma/d2, decision)'));
+    assert.ok(out.includes('- 2026-11-14T10:00:00.000Z · Decision at ten. (beta/d3, decision)'));
+    assert.ok(out.includes('- 2026-11-14T11:00:00.000Z · Default applied. (gamma/d4, default)'));
+    assert.doesNotMatch(out, /Decision before the opening/u, 'a decision before last-open is not in this interval');
+    assert.match(out, /Closed by source in the same interval: 2\./u);
+    assert.match(out, /2 items still new or prepared\. Oldest: delta\/p1 \(prepared\), waiting 124 hours since 2026-11-09T08:00Z\./u);
+    assert.match(out, /Failed: delta\/p2 \(preparation failed 0 times, decision 1 time\)\./u);
+    assert.match(out, /Today \(UTC 2026-11-14\): \$0\.0000\. Last seven days: \$0\.0000\. Ceiling: off\./u);
+  });
+  it('--json carries the same data as the text, and brief writes no file', async () => {
+    const d = openingStore(); const deps = { env: d.env, home: d.home, now: () => new Date(NOW) };
+    const before = snapshot(d.root);
+    const text = io(); assert.equal(await run(['brief'], { ...text, ...deps }), 0, text.out.stderr);
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, ...deps }), 0, json.out.stderr);
+    const data = JSON.parse(json.out.stdout);
+    assert.equal(renderOpening(data), text.out.stdout);
+    assert.deepEqual(data, buildOpening({ env: d.env, home: d.home, now: new Date(NOW), last: LAST }));
+    assert.deepEqual(snapshot(d.root), before, 'brief writes no file, and last-open.json is not touched');
+  });
+  it('a first opening with no last-open.json says so and writes none', async () => {
+    const d = openingStore({ lastOpen: null }); const out = io();
+    assert.equal(await run(['brief'], { ...out, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, out.out.stderr);
+    assert.match(out.out.stdout, /\(first opening\)/u);
+    assert.equal(existsSync(join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json')), false);
   });
 });
 

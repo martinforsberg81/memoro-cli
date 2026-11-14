@@ -1,4 +1,4 @@
-/** Martin's interactive decision desk and its read-only queue command. */
+/** Martin's interactive decision desk: the opening it starts from, its read-only queue and item commands. */
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commandUsage } from '../command-help.js';
@@ -8,11 +8,14 @@ import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
-import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
+import { deskItemQuestion, itemDirectory, itemStore, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
-import { deskBudget, setDeskCeiling } from '../desk-budget.js';
+import { deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
+import { FINISHED, programsGoals } from '../goals.js';
+import { readRunRows } from '../landed.js';
+import { writeJsonAtomic } from '../atomic-write.js';
 
 export function usage() { return commandUsage('martin'); }
 
@@ -23,6 +26,7 @@ export const ROUTES = {
     if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
     return null;
   } },
+  brief: { booleans: ['--json'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   get: { booleans: ['--all', '--json'], strictValues: ['--programme', '--goal'], check: ({ flags, positional }) => {
     if (positional.length) return `unknown argument ${positional[0]}`;
     const selectors = Number(flags.all) + Number(flags.programme !== null) + Number(flags.goal !== null);
@@ -35,6 +39,7 @@ export const ROUTES = {
 };
 
 export async function run(argv, deps = {}) {
+  if (argv[0] === 'brief') return brief(argv.slice(1), deps);
   if (argv[0] === 'prepare') return prepare(argv.slice(1), deps);
   if (argv[0] === 'ceiling') return ceiling(argv.slice(1), deps);
   if (argv[0] === 'items') return items(argv.slice(1), deps);
@@ -53,21 +58,26 @@ export async function run(argv, deps = {}) {
   }
   const role = (deps.role || (() => readCanonRole('martin')))();
   if (!role?.overlay) { stderr.write('mc: the martin role is missing from this install — expected canon/roles/martin.md with an overlay body\n'); return 1; }
+  const now = (deps.now || (() => new Date()))();
+  const home = deps.home || programsHome(env);
+  let last;
+  try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}; correct or remove it, then open the desk again\n`); return 1; }
   const root = (deps.desk || martinDir)(env);
   (deps.mkdir || mkdirSync)(root, { recursive: true });
-  const queue = (deps.collect || collectMartinQueue)({ home: deps.home || programsHome(env) });
-  const context = renderMartinQueue(queue);
-  const launch = { overlay: role.overlay, prompt: `Current decision queue (read from live records):\n\n${context}`, model: role.model || null };
+  const data = openingFor({ env, home, now, last, deps, stderr });
+  const opening = renderOpening(data);
+  const launch = { overlay: role.overlay, prompt: opening, model: role.model || null };
   const opened = await (deps.open || openInWorkArea)({
     env, areaRoot: root, conversationRoots: [root],
     worktree: { repo: null, path: root, is_git: false }, tool: flags.tool || role.tools?.[0] || 'claude',
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin',
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,
-    model: flags.model, overlay: launch.overlay, prompt: launch.prompt, resumePrompt: `Refresh from the live decision queue now; remembered goals are not current evidence.\n\n${context}`,
+    model: flags.model, overlay: launch.overlay, prompt: launch.prompt, resumePrompt: `Refresh from the desk now; what you remember of earlier openings is not current.\n\n${opening}`,
     defaultModel: role.model, defaultModelTool: role.tools?.[0] || null,
   });
   if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return 1; }
+  (deps.writeLastOpen || writeJsonAtomic)(lastOpenPath(env), { at: now.toISOString() });
   return opened.code ?? 0;
 }
 
@@ -75,7 +85,7 @@ function items(argv, deps) {
   const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const role = writerRole(env);
-  if (!['person','martin','desk-prepare','decision'].includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
+  if (!DESK_WRITERS.includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
   const parsed = scanArgs(argv, ROUTES.items);
   const error = parsed.error || ROUTES.items.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
@@ -122,6 +132,7 @@ function item(argv, deps) {
   }
   return refuse('transition not allowed');
 }
+const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
 function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' ? 'close' : 'no verb'} applies\n`); return 2; }
 function maybeRead(path) { try { return readFileSync(path, 'utf8'); } catch { return null; } }
@@ -143,6 +154,162 @@ export function get(argv, deps = {}) {
   const result = (deps.collect || collectMartinQueue)({ selector, home: deps.home || programsHome(deps.env || process.env) });
   if (result.error) { stderr.write(`mc: ${result.error}\n`); return 2; }
   stdout.write(renderMartinQueue(result, { json: flags.json }));
+  return 0;
+}
+
+// ---- The opening -----------------------------------------------------------
+// Built without a model from the item store, the briefs, runs.tsv and the
+// ceiling setting. The only write is the store's own idempotent sync, and the
+// launch's write of last-open.json after a successful launch.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const PASSES = ['desk-prepare', 'decision'];
+const BEGINNING = '1970-01-01T00:00:00.000Z';
+const LAST_OPEN = 'last-open.json';
+
+export function lastOpenPath(env = process.env) { return join(martinDir(env), LAST_OPEN); }
+
+/** The time of the last successful opening, or null before the first. An unreadable file is an error, never a reason to show the history again. */
+export function readLastOpen({ env = process.env, read = readDeskText } = {}) {
+  const text = read(lastOpenPath(env));
+  if (text == null) return null;
+  let value = null;
+  try { value = JSON.parse(text); } catch { /* refused below */ }
+  if (typeof value?.at !== 'string' || !Number.isFinite(Date.parse(value.at))) throw new Error(`${lastOpenPath(env)} does not hold a valid "at" time`);
+  return value.at;
+}
+
+const timeOf = (text) => Date.parse(text) || 0;
+const oneLine = (text) => String(text ?? '').replace(/\s+/gu, ' ').trim();
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function openingFor({ env, home, now, last, deps, stderr }) {
+  syncDeskItems({ env, home, now: () => now, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) });
+  return buildOpening({ env, home, now, last, read: deps.read || readDeskText });
+}
+
+function storeStart(env) {
+  try { return JSON.parse(readDeskText(join(itemStore(env), '.store.json')))?.first_sync_at ?? null; } catch { return null; }
+}
+
+/** Goals of the item's programme in a later phase that are not finished: each waits on this goal's phase. */
+function laterPhaseGoals(item, goals) {
+  if (item.kind !== 'goal') return 0;
+  const [programme, goal] = item.reference.split('/');
+  const own = goals.find((g) => g.programme === programme && g.goal === goal && !g.problems.length);
+  if (!own) return 0;
+  return goals.filter((g) => g.programme === programme && !g.problems.length && !FINISHED.includes(g.stage) && g.phase > own.phase).length;
+}
+
+function programmeOf(item) {
+  if (item.kind === 'goal') return item.reference.split('/')[0];
+  if (item.kind === 'main-red') return `main-red ${item.reference.slice('main-red:'.length).split('/')[0]}`;
+  return 'jev ledger';
+}
+
+function costOf(rows) {
+  return rows.reduce((sum, row) => { const cost = Number(row.cost); return sum + (Number.isFinite(cost) && cost >= 0 ? Math.round(cost * 10000) : 0); }, 0) / 10000;
+}
+
+function costReading({ env, now, read }) {
+  const day = now.toISOString().slice(0, 10), nowMs = now.getTime();
+  const out = { day, today: null, last_seven_days: null, unknown_cost_runs: 0, ceiling: null, error: null };
+  try {
+    const rows = readRunRows(read(deskRunsPath(env)) ?? '').filter((row) => PASSES.includes(row.kind));
+    const today = rows.filter((row) => String(row.ts).slice(0, 10) === day);
+    const week = rows.filter((row) => timeOf(row.ts) <= nowMs && nowMs - timeOf(row.ts) < 7 * DAY_MS);
+    out.today = costOf(today); out.last_seven_days = costOf(week);
+    out.unknown_cost_runs = rows.filter((row) => !(Number.isFinite(Number(row.cost)) && Number(row.cost) >= 0)).length;
+  } catch (error) { out.error = `runs.tsv unreadable: ${error.message}`; }
+  try { out.ceiling = deskBudget({ env, now, read }).ceiling; } catch (error) { out.error = `${out.error ? `${out.error}; ` : ''}ceiling setting unreadable: ${error.message}`; }
+  return out;
+}
+
+/** The opening as data. Reads only; `last` is the previous opening's time, or null. */
+export function buildOpening({ env = process.env, home = programsHome(env), now = new Date(), last = null, read = readDeskText } = {}) {
+  const nowMs = now.getTime();
+  const since = last ?? storeStart(env) ?? BEGINNING;
+  const sinceMs = timeOf(since);
+  const items = listDeskItems({ env });
+  const goals = programsGoals({ home });
+
+  const yours = items.filter((item) => item.state === 'for-martin').map((item) => ({
+    id: item.id, kind: item.kind, reference: item.reference, source_at: item.source_at, sort: item.sort, reversible: item.reversible,
+    blocks: laterPhaseGoals(item, goals), due: item.due_at && timeOf(item.due_at) - nowMs <= DAY_MS ? item.due_at : null,
+    brief: readDeskText(join(itemDirectory(item, env), 'brief.md')),
+  })).sort((a, b) => b.blocks - a.blocks || timeOf(a.source_at) - timeOf(b.source_at) || a.id.localeCompare(b.id));
+
+  const closed = items.filter((item) => item.state === 'closed' && item.outcome && timeOf(item.outcome.at) > sinceMs && timeOf(item.outcome.at) <= nowMs);
+  const decided = closed.filter((item) => ['decision', 'default'].includes(item.outcome.by)).map((item) => ({
+    id: item.id, reference: item.reference, programme: programmeOf(item), by: item.outcome.by, at: item.outcome.at, summary: oneLine(item.outcome.summary),
+  })).sort((a, b) => timeOf(a.at) - timeOf(b.at) || a.id.localeCompare(b.id));
+  const programmes = [...new Set(decided.map((item) => item.programme))].sort().map((programme) => ({ programme, items: decided.filter((item) => item.programme === programme) }));
+
+  const waiting = items.filter((item) => ['new', 'prepared'].includes(item.state));
+  const oldest = waiting.reduce((a, b) => (a === null || timeOf(b.source_at) < timeOf(a.source_at) ? b : a), null);
+  const failed = waiting.filter((item) => item.prepare_failures?.length || item.decision_failures?.length).map((item) => ({
+    id: item.id, reference: item.reference, state: item.state, prepare_failures: item.prepare_failures?.length ?? 0, decision_failures: item.decision_failures?.length ?? 0,
+  }));
+
+  return {
+    generated_at: now.toISOString(), last_opened: last, since,
+    yours,
+    decided: { since, programmes, closed_by_source: closed.filter((item) => item.outcome.by === 'source').length },
+    not_ready: {
+      count: waiting.length,
+      oldest: oldest ? { id: oldest.id, reference: oldest.reference, state: oldest.state, source_at: oldest.source_at, age_hours: Math.floor((nowMs - timeOf(oldest.source_at)) / 3600000) } : null,
+      failed,
+    },
+    cost: costReading({ env, now, read }),
+  };
+}
+
+/** The opening as the text the session starts from. */
+export function renderOpening(data) {
+  const out = [];
+  out.push(`Martin's desk, opened ${data.generated_at}. Decided-without-you covers ${data.since} to ${data.generated_at}${data.last_opened ? '' : ' (first opening)'}.`);
+  out.push('', `## Yours (${data.yours.length})`);
+  if (!data.yours.length) out.push('', 'Nothing waits for you.');
+  data.yours.forEach((item, index) => {
+    const blocks = item.blocks ? `, blocks ${plural(item.blocks, 'later-phase goal')} of ${item.reference.split('/')[0]}` : '';
+    out.push('', `### ${index + 1}. ${item.reference} · ${item.sort ?? 'unsorted'} · ${item.reversible ? 'reversible' : 'not reversible'}`);
+    out.push(`Item ${item.id}, waiting since ${item.source_at}${blocks}.`);
+    if (item.due) out.push(`Due ${item.due}: if nothing is said by then, the recommendation in the brief is carried out and the item is closed by default.`);
+    out.push('', item.brief ?? '(brief.md is missing)');
+  });
+  out.push('', '## Decided without you');
+  if (!data.decided.programmes.length) out.push('', 'Nothing was decided without you in this interval.');
+  for (const group of data.decided.programmes) {
+    out.push('', group.programme);
+    for (const item of group.items) out.push(`- ${item.at} · ${item.summary} (${item.reference}, ${item.by})`);
+  }
+  out.push('', `Closed by source in the same interval: ${data.decided.closed_by_source}.`);
+  out.push('', '## Not ready');
+  const nr = data.not_ready;
+  out.push('', nr.count ? `${plural(nr.count, 'item')} still new or prepared. Oldest: ${nr.oldest.reference} (${nr.oldest.state}), waiting ${nr.oldest.age_hours} hours since ${nr.oldest.source_at}.` : 'Nothing is waiting for preparation.');
+  if (nr.failed.length) out.push(`Failed: ${nr.failed.map((item) => `${item.reference} (preparation failed ${item.prepare_failures} time${item.prepare_failures === 1 ? '' : 's'}, decision ${item.decision_failures} time${item.decision_failures === 1 ? '' : 's'})`).join('; ')}.`);
+  out.push('', '## Cost');
+  const cost = data.cost;
+  out.push('', `Today (UTC ${cost.day}): ${cost.today === null ? 'unreadable' : `$${cost.today.toFixed(4)}`}. Last seven days: ${cost.last_seven_days === null ? 'unreadable' : `$${cost.last_seven_days.toFixed(4)}`}. Ceiling: ${cost.ceiling === null ? 'off' : `$${cost.ceiling}/day`}.`);
+  if (cost.unknown_cost_runs) out.push(`Runs with unknown cost, not counted: ${cost.unknown_cost_runs}.`);
+  if (cost.error) out.push(`Cost reading error: ${cost.error}.`);
+  return `${out.join('\n')}\n`;
+}
+
+function brief(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const role = writerRole(env);
+  if (!DESK_WRITERS.includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
+  const parsed = scanArgs(argv, ROUTES.brief);
+  const error = parsed.error || ROUTES.brief.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  const now = (deps.now || (() => new Date()))();
+  const home = deps.home || programsHome(env);
+  let last;
+  try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  const data = openingFor({ env, home, now, last, deps, stderr });
+  stdout.write(parsed.flags.json ? `${JSON.stringify(data, null, 2)}\n` : renderOpening(data));
   return 0;
 }
 

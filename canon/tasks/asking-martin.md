@@ -4,10 +4,8 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 ---
 # Asking Martin, and telling him
 
-Never a question without its options. When unclear, read standards and programme
-design first. Bring one proposal, not a menu, at design level: evidence,
-alternatives/tradeoffs, recommendation and proposed wording/file/section in
-`docs/technical/`; see [mc-jev](../../docs/technical/mc-jev.md).
+Never a question without its options. When unclear, read standards and programme design first. Bring one proposal, not a menu, as the brief the desk shows Martin:
+what he would notice; the options as their consequences; one recommendation and its reason; what waits; whether it can be changed afterwards; the material paths for judgement; and the exact act for a reserved one. See [mc-jev](../../docs/technical/mc-jev.md).
 
 Every question with options goes to jev first. `product` is a choice of direction
 the goal, programme page and standards do not answer, changing user promises,
@@ -48,7 +46,7 @@ session whose LOG.md entry took it does, until it hands over.
 
 ## How to ask and tell
 
-- Write to Martin in reasoned Swedish prose: system/programme impact, the rule, evidence, uncertainty, alternatives, recommendation and proposed wording. Hashes, test counts and session bookkeeping stay in the goal's LOG.md.
+- Write to Martin in reasoned Swedish prose, in the brief's parts. Hashes, test counts and session bookkeeping stay in the goal's LOG.md.
 - Headless, your role says where a question goes. Technical questions are decided
   by the session's recommendation; product choices and reserved acts reach
   Martin. Acceptance obstacles are repaired in-role; only merge failures wake mend.

@@ -1,4 +1,4 @@
-# `mc martin` — current decision queue
+# `mc martin` — the decision desk and its opening
 
 Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
@@ -6,8 +6,49 @@ Linux SSH interactive launches keep their provider alive past the terminal ([Cla
 `~/mc/martin/`. It has a distinct owner and conversation identity. `--new`,
 `--resume [id]`, `--codex`/`--claude` and `--model` follow `openInWorkArea`;
 there is no headless form and the runner never launches it. A resumed
-conversation receives fresh queue context as a reply, not stale remembered
-goals. Launch does not make per-goal checkouts.
+conversation receives a refresh of the same opening as a reply, not what it
+remembers of earlier openings. Launch does not make per-goal checkouts.
+
+## Opening
+
+Launch first syncs the durable desk items (below), then builds the opening from
+the item store, the item briefs, `runs.tsv` and the daily ceiling, with no
+model. The opening is the launch's first prompt; a resumed conversation gets
+it again as a refresh. `mc martin brief` prints the same opening and starts no
+session; `brief --json` gives the same data as the text. `brief` writes nothing
+except the sync's own store writes, and neither it nor a refused or failed
+launch changes `last-open.json`.
+
+The opening has four parts, in this order:
+
+1. **Yours (n)** — every for-martin item, blocking work first: a goal item that
+   blocks later-phase goals of its programme sorts before one that blocks none,
+   more blocking first; then oldest source time; then id. Each shows its
+   reference, sort, reversible or not, id, source time and, when it blocks,
+   how many later-phase goals of its programme wait on it. A due time within
+   24 hours is shown with the closure it will cause by default. The brief is
+   printed as written; a missing `brief.md` is named as missing.
+2. **Decided without you** — decisions and defaults closed in the interval,
+   grouped by programme and ordered by time, each with its summary and
+   reference, then the count of items the source closed in the same interval.
+3. **Not ready** — items still new or prepared: their count, the oldest with
+   its age in hours from its source time, and those with a preparation or
+   decision failure.
+4. **Cost** — the desk's spend on the UTC day and over the last seven days
+   (`desk-prepare` and `decision` rows of `runs.tsv`; runs of unknown cost are
+   counted, not summed), and the daily ceiling or `off`.
+
+The interval is `(since, now]`, where `since` is the time of the last
+successful opening, or the store's `first_sync_at` before the first opening.
+Each launch that succeeds writes `~/mc/martin/last-open.json` as
+`{ "at": <launch time> }`, after the session has started. A file that does not
+hold a valid time refuses the launch with exit 1 and is not replaced by a
+fresh history. An unattended launch is refused as before, with exit 2.
+
+Phase gating means every unfinished goal of a programme waits for the phase
+below it, so a phase-1 goal blocks each later-phase goal that is not finished
+and whose GOAL.json parses. Goals of one phase block the same set and are
+ordered by age.
 
 ## Read-only queue
 
@@ -45,9 +86,11 @@ call `get` rather than starting another desk.
 The role investigates each source question against relevant shared technical
 contracts and the programme README and design. Details answered there are
 resolved without escalation. A remaining choice for Martin, classified by the question contract in
-[mc-jev.md](mc-jev.md), is presented only after synthesis: scope and
-general rule, evidence, uncertainty, alternatives/tradeoffs, recommendation,
-proposed normative wording and exact `docs/technical/` destination. The
+[mc-jev.md](mc-jev.md), is presented only after synthesis, in the brief's parts
+(what he would notice; the options as their consequences; one recommendation
+and its reason; what waits; whether it can be changed afterwards; the material
+paths for judgement; the exact act for a reserved one). When a standard
+changes, the brief names its exact `docs/technical/` destination. The
 original queue question/options/jev reading remain source evidence, distinct
 from the synthesis. After Martin decides, record the canonical standard and
 reconcile programme/goal text before returning or handing off work.
@@ -95,8 +138,9 @@ and roles `martin`, `desk-prepare` and `decision`; desk-prepare may only prepare
 when reversible. `close --by decision|martin|default --summary <paragraph>`
 (or `--summary-file`) closes prepared/for-martin. Invalid transitions, roles,
 ids and missing required files are refused with exit 2 and no write. Item JSON
-is written atomically. The interactive `mc martin` launch and read-only
-`mc martin get` remain unchanged.
+is written atomically. `mc martin` launches the desk on the opening above;
+`mc martin brief [--json]` prints it; the read-only `mc martin get` remains
+unchanged.
 
 ## Unattended preparation
 

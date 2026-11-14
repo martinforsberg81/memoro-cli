@@ -12,17 +12,19 @@ in `src/mc/commands/ask.js`.
 
 ## Decisions presented to Martin
 
-Martin, 2026-11-08: every decision presented for his consideration is written
-at design level, ready for `docs/technical/`. Normal build questions are
-answered by the technical standards and programme design. Apply those answers
-without asking; investigate a detail-level question as a possible missing
-general rule before escalating it.
+Normal build questions are answered by the technical standards and programme
+design. Apply those answers without asking; investigate a detail-level question
+as a possible missing general rule before escalating it.
 
-A remaining decision includes evidence, design alternatives and tradeoffs,
-one recommendation, and proposed normative text with the destination technical
-document and section. Preserve concrete action identifiers and evidence when
-needed. After the answer, reconcile the standard, programme design and affected
-goal contracts; recording it only in a goal log is insufficient.
+A remaining decision reaches Martin as a brief in the parts that
+[canon/roles/decision.md](../../canon/roles/decision.md) sets: what he would
+notice; the options as their consequences; one recommendation and its reason;
+what waits if he does not answer; whether it can be changed afterwards; the
+material paths for judgement; and, for a reserved act, the exact act. The
+desk's opening shows each waiting item with its brief ([mc-martin](mc-martin.md)).
+Preserve concrete action identifiers and evidence when needed. After the
+answer, reconcile the standard, programme design and affected goal contracts;
+recording it only in a goal log is insufficient.
 
 ## Who asks jev
 
