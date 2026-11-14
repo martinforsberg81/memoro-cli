@@ -1,8 +1,9 @@
-/** Read-only view of goals currently waiting on Martin. */
+/** Read-only view of goals and goal-less main-red repairs waiting on Martin. */
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { GOAL_FILE, LOG_FILE, parseGoal, parseLog, renderGoalText, waitsOnPerson } from './goals.js';
+import { mainMendReading } from './main-repair.js';
 import { programsHome } from './paths.js';
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/u;
@@ -73,6 +74,22 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
     };
     items.push(record);
   }
+  if (selector.kind === 'all') {
+    const root = dirname(home);
+    let files = [];
+    try { files = readdirSync(join(root, 'runner', 'main-mend')).filter((file) => file.endsWith('.json')); } catch (error) {
+      if (error.code !== 'ENOENT') issues.push({ path: join(root, 'runner', 'main-mend'), error: error.message });
+    }
+    for (const file of files) {
+      const repo = file.slice(0, -5);
+      const reading = mainMendReading({ root, repo, read });
+      if (reading.error) issues.push({ path: join(root, 'runner', 'main-mend', file), error: reading.error });
+      for (const entry of reading.entries.filter((entry) => entry.state === 'Martin')) items.push({
+        kind: 'main-red', reference: `main-red:${repo}/${entry.id}`, repo, file: entry.file, status: entry.state,
+        reason: entry.reason, pr: entry.pr || null, session_log: entry.session_log, worktree: entry.worktree,
+      });
+    }
+  }
   // A pending structured question's timestamp is the ordering key. When a
   // runner blocked without one, retain its latest stage-entry time as evidence.
   items.sort((a, b) => {
@@ -108,9 +125,14 @@ export function renderMartinQueue(result, { json = false } = {}) {
   if (json) return `${JSON.stringify({ ok: !result.error, ...result }, null, 2)}\n`;
   if (result.error) return `mc: ${result.error}\n`;
   if (!result.items.length) return `mc: no goals waiting on Martin${result.issues.length ? ` (${result.issues.length} unreadable/malformed source${result.issues.length === 1 ? '' : 's'} reported below)` : ''}\n${renderIssues(result.issues)}`;
-  const lines = [`mc: ${result.items.length} goal${result.items.length === 1 ? '' : 's'} waiting on Martin`];
+  const noun = result.items.some((item) => item.kind === 'main-red') ? 'item' : 'goal';
+  const lines = [`mc: ${result.items.length} ${noun}${result.items.length === 1 ? '' : 's'} waiting on Martin`];
   const shownProgrammes = new Set();
   for (const item of result.items) {
+    if (item.kind === 'main-red') {
+      lines.push('', `${item.reference} · Martin`, `Repair main's red: ${item.file}${item.pr ? ` · #${item.pr}` : ''}`, item.reason || 'Recovery exhausted', `Session log: ${item.session_log || 'not recorded'}`, `Worktree: ${item.worktree || 'not recorded'}`);
+      continue;
+    }
     lines.push('', `${item.reference} · ${item.stage} · ${item.status} · phase ${item.phase}`, `# ${item.title}`);
     if (!shownProgrammes.has(item.programme)) {
       const context = result.programme_context.find((p) => p.programme === item.programme);

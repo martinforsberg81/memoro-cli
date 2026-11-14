@@ -44,6 +44,13 @@ export function renderRepoLines(report, {
     lines.push(...section(c, wide, 'main', mainRows(c, repo, now)));
     lines.push(...section(c, wide, 'full run', nightlyRows(c, repo, now)));
     lines.push(...section(c, wide, 'selection', missRows(c, repo, now)));
+    if (repo.main_mend?.error || repo.main_mend?.entries?.length) lines.push(...section(c, wide, 'main mend', [
+      ...(repo.main_mend.error ? [c(repo.main_mend.error, 'red')] : []),
+      ...(repo.main_mend.entries || []).flatMap((entry) => [
+        c(`${entry.file} · ${entry.state}${entry.pr ? ` · #${entry.pr}` : ''}`, entry.state === 'Martin' ? 'red' : 'yellow'),
+        ...(entry.state === 'Martin' ? [entry.reason, entry.session_log].filter(Boolean) : []),
+      ]),
+    ]));
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));

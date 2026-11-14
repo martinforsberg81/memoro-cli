@@ -5,7 +5,7 @@
  * directory the work lives in. The conversation is the tool's, kept in the
  * tool's own store, indexed by that directory — so mc looks it up rather than
  * remembering it. The tool inherits this terminal and mc waits. Linux SSH
- * entrances first move that same opener into a persistent tmux terminal.
+ * entrances use provider-owned persistence for Claude and tmux for Codex.
  *
  * Conversation selection (`pick`):
  *   (nothing)   the most recent conversation here, or a new one if there is none
@@ -40,7 +40,7 @@ import { interactiveAccessOptions } from './interactive-access.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 
-export async function openInWorkArea({
+export async function interactiveLaunchPlan({
   areaRoot,
   conversationRoots = [areaRoot],
   worktree,
@@ -70,45 +70,42 @@ export async function openInWorkArea({
   // The role's prompt-cache TTL (ruling 40); a launch without a role is an hour.
   cache = '1h',
   env = process.env,
-  spawn = spawnSync,
-  register = registerForeground,
   stderr = process.stderr,
-  platform = process.platform,
-  persistentTerminal = true,
-  terminal = null,
   onProvider = () => {},
+  resolved = async () => ({}),
+  conversations = listConversations,
+  identify = conversationIdentityReader(),
+  resolve = resolveLaunch,
+  billingRoute = billingRouteNow,
+  liveConversation = async () => null,
 } = {}) {
   // Every session belongs to a programme or a desk (session-owner.js); one mc
   // would start for nobody is refused before anything is looked up or spawned.
   if (!ownerOf({ verb, area: areaName, programme })) return { ok: false, reason: 'no owner', hint: OWNERLESS_HINT };
-  if (persistentTerminal && platform === 'linux') {
-    const { needsPersistentTerminal, openPersistentTerminal } = await import('./interactive-terminal.js');
-    if (needsPersistentTerminal({ env, platform, isInteractive, verb })) {
-      return (terminal || openPersistentTerminal)({
-        areaRoot, conversationRoots, worktree, tool, pick, resumeTool, model, overlay, prompt,
-        resumePrompt, defaultModel, defaultModelTool, verb, areaName, roleName, programme,
-        roleSource, cache, env, stderr,
-      });
-    }
-  }
-  const before = [...new Map(conversationRoots.flatMap(root => listConversations(root, env))
+  const before = [...new Map(conversationRoots.flatMap(root => conversations(root, env))
     .sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0))
     .map(item => [`${item.tool}:${item.id}`, item])).values()];
 
   // A named conversation decides its own tool: asking for one by id and being
   // given a different tool's conversation would be a worse answer than either.
   let chosen = null;
+  let liveIdentity = null;
   if (typeof pick === 'string' && pick !== 'new') {
     const matches = before.filter((item) => item.id.startsWith(pick));
     if (matches.length > 1) return { ok: false, reason: `ambiguous conversation prefix ${pick}; use a longer id` };
     chosen = matches[0] || null;
+    if (!chosen) {
+      const live = await liveConversation(pick);
+      if (live?.error) return { ok: false, reason: live.error };
+      chosen = live?.conversation || null;
+      liveIdentity = live?.identity || null;
+    }
     if (!chosen) return { ok: false, reason: `no conversation here starting with ${pick}` };
   }
 
   const requestedRole = normalizeSessionRole(roleName || (verb === 'plan' ? 'plan' : null));
   const requestedProgramme = programme || null;
   const guarded = Boolean(requestedRole || requestedProgramme);
-  const identify = conversationIdentityReader();
   const compatible = (identity) => identity && requestedRole
     && identity.role === requestedRole && identity.programme === requestedProgramme;
   const freshRoute = verb === 'plan' ? `mc plan ${programme} --new` : 'select new to start a fresh session';
@@ -140,7 +137,13 @@ export async function openInWorkArea({
     if (!chosen) return { ok: false, reason: 'the selected conversation is not available' };
   }
   if (chosen && guarded) {
-    const identity = identify(chosen);
+    let identity = liveIdentity || identify(chosen);
+    if (!compatible(identity)) {
+      // Joining a live provider uses its proven current launch identity, not
+      // possibly incomplete transcript evidence. A start still needs provenance.
+      const live = await liveConversation(chosen.id);
+      if (live?.conversation?.id === chosen.id && compatible(live.identity)) identity = live.identity;
+    }
     if (!compatible(identity)) {
       const explanation = decision(chosen, identity, 'refuse');
       return { ok: false, reason: `cannot resume ${chosen.id}: ${explanation}`, hint: freshRoute };
@@ -150,12 +153,17 @@ export async function openInWorkArea({
 
   // A tool flag still selects the provider; a named id still selects its own.
   const wanted = chosen?.tool || tool || before[0]?.tool || 'codex';
-  const launch = resolveLaunch(wanted);
+  const launch = resolve(wanted);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
   const toolId = launch.id;
   onProvider(launch.shortName);
+  // Resolve a named conversation before choosing its transport. The callback
+  // may join a live session, or exclude conversations already held by one.
+  const entrance = await resolved({ launch, before, chosen });
+  if (entrance.result) return entrance.result;
+  const held = entrance.held || new Set();
   if (!chosen && pick !== 'new') {
-    for (const item of before.filter((candidate) => candidate.tool === toolId)) {
+    for (const item of before.filter((candidate) => candidate.tool === toolId && !held.has(candidate.id))) {
       if (!guarded) { chosen = item; break; }
       const identity = identify(item);
       if (compatible(identity)) {
@@ -213,14 +221,25 @@ export async function openInWorkArea({
 
   const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
   const provider = launch.id === 'codex' ? 'codex' : 'claude';
-  const billing = billingRouteNow(provider, { env });
+  const billing = billingRoute(provider, { env });
   // An interactive session's grant names no model: `/model` inside it changes
   // the model, and a grant on the launch model answered every request after
   // that switch `403 model unavailable for session` (2026-10-29). The grant
   // still names the provider, expires and counts requests.
   const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin, args, billing: billing.billing });
 
-  log('work.open', {
+  const record = {
+    verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
+    // Record only the instructions actually handed to this launch.
+    role: roleRecord({
+      name: roleName,
+      source: roleSource,
+      overlay,
+      instructions,
+    }),
+  };
+  const identity = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName || requestedRole, programme });
+  const openEvent = {
     area: areaRoot,
     cwd: worktree.path,
     tool: toolId,
@@ -239,66 +258,65 @@ export async function openInWorkArea({
     prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
     instructions: handed.length > 0,
     known_here: before.length,
-  });
-
-  // Opened again: whatever a stop noted is over, and the next time
-  // this area's conversation disappears it is judged on its own (KP-09).
-  clearStopMark(areaRoot);
-  // The register exists exactly as long as the tool holds the terminal, and
-  // is removed however the call returns — the same pairing `mc run` uses for
-  // the runner's current file, for the same reason: a session that throws
-  // must not leave the page claiming it forever.
-  // The short name, not the adapter id: NOW puts this beside the runner's
-  // step, whose tool is 'claude' or 'codex', and one page should not call the
-  // same tool two things.
-  const release = register({
-    verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
-    // Record only the instructions actually handed to this launch.
-    role: roleRecord({
-      name: roleName,
-      source: roleSource,
-      overlay,
-      instructions,
-    }),
-  });
-  let result;
-  try {
-    const childEnv = sessionLaunchEnvironment({ env, cwd: worktree.path, role: roleName || requestedRole, programme });
-    result = spawn(toolLaunch.bin, toolLaunch.args, { cwd: worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(childEnv) });
-  } finally {
-    release();
-  }
-  if (result?.error) {
-    log('work.open-failed', { area: areaRoot, error: result.error.message });
-    return { ok: false, reason: result.error.message };
-  }
-
-  // Neither tool writes anything until the first turn, so opening one and
-  // quitting leaves no conversation at all. That is not a failure, but it is
-  // the difference between "it did not work" and "there was nothing to keep",
-  // and mc was silent about it — so it is asked and reported.
-  const after = listConversations(areaRoot, env);
-  const seen = new Set(before.map((item) => item.id));
-  const started = after.find((item) => !seen.has(item.id)) || null;
-
-  log('work.closed', {
-    area: areaRoot,
-    tool: toolId,
-    exit_code: result?.status ?? 0,
-    resumed: chosen?.id || null,
-    started: started?.id || null,
-    kept_nothing: !chosen && !started,
-  });
-
-  return {
-    ok: true,
-    tool: toolId,
-    conversation: chosen?.id || started?.id || null,
-    resumed: Boolean(chosen),
-    started: started?.id || null,
-    kept_nothing: !chosen && !started,
-    code: result?.status ?? 0,
   };
+  return { ok: true, launch, tool: toolId, chosen, before, args, model: chosenModel,
+    instructions, billing, identity, record, toolLaunch, openEvent };
+
+}
+
+/** One provider decision; every start uses interactiveLaunchPlan, including the tmux worker. */
+export async function openInWorkArea(options = {}) {
+  const { env = process.env, platform = process.platform, isInteractive = interactive,
+    persistentTerminal = true, terminal, background, spawn = spawnSync,
+    register = registerForeground, onProvider, ...rest } = options;
+  const transport = persistentTerminal && platform === 'linux' ? await import('./interactive-terminal.js') : null;
+  const eligible = Boolean(transport?.needsPersistentTerminal({ env, platform, isInteractive, verb: options.verb }));
+  let entrance;
+  try {
+    const plan = await interactiveLaunchPlan({ ...rest, env, isInteractive, onProvider,
+      liveConversation: rest.liveConversation || (async prefix => {
+        if (!eligible) return null;
+        const { findBackgroundConversation } = await import('./claude-background.js');
+        return findBackgroundConversation({ ...options, env }, prefix);
+      }),
+      resolved: async ({ launch, before, chosen }) => {
+        if (!eligible) return {};
+        if (launch.id === 'codex') return { result: await (terminal || transport.openPersistentTerminal)({ ...options, tool: launch.id, ...(chosen ? { pick: chosen.id } : {}) }) };
+        if (launch.id === 'claude-code') {
+          const { claudeBackgroundDriver } = await import('./claude-background.js');
+          const { prepareSessionEntrance } = await import('./session-entrance.js');
+          const settings = { ...options, env, launch, before, chosen };
+          entrance = background ? await background(settings)
+            : await prepareSessionEntrance(settings, claudeBackgroundDriver());
+          return entrance;
+        }
+        return {};
+      },
+    });
+    if (!plan.launch) return plan;
+    clearStopMark(options.areaRoot);
+    if (entrance) return await entrance.start(plan);
+    log('work.open', plan.openEvent);
+    const release = register(plan.record);
+    let result;
+    try {
+      result = spawn(plan.toolLaunch.bin, plan.toolLaunch.args, {
+        cwd: options.worktree.path, stdio: 'inherit', env: scrubProviderApiKeysFromEnv(plan.identity),
+      });
+    } finally { release(); }
+    if (result?.error) {
+      log('work.open-failed', { area: options.areaRoot, error: result.error.message });
+      return { ok: false, reason: result.error.message };
+    }
+    const after = listConversations(options.areaRoot, env);
+    const seen = new Set(plan.before.map(item => item.id));
+    const started = after.find(item => !seen.has(item.id)) || null;
+    log('work.closed', { area: options.areaRoot, tool: plan.tool, exit_code: result?.status ?? 0,
+      resumed: plan.chosen?.id || null, started: started?.id || null, kept_nothing: !plan.chosen && !started });
+    return { ok: true, tool: plan.tool, conversation: plan.chosen?.id || started?.id || null,
+      resumed: Boolean(plan.chosen), started: started?.id || null,
+      kept_nothing: !plan.chosen && !started, code: result?.status ?? 0 };
+  } finally { await entrance?.release?.(); }
 }
 
 /**

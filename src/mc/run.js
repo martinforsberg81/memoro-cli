@@ -30,8 +30,7 @@
  * reads the disk every minute (`diskTick`, disk-pressure.js), whatever the
  * chores and lanes are in, and a session starts only on a fresh admission.
  *
- * Things that are not goal sessions ride along, and none opens a worktree or
- * touches a branch. `runHelperDay` is the collect: once per calendar day, in
+ * Maintenance chores ride along without opening worktrees or touching branches. `runHelperDay` is the collect: once per calendar day, in
  * the first chore loop after 05:00Z, one digest per repository into
  * `~/mc/intake/`, no model. `runIntakeDrain` is the inbox: every chore loop, the
  * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
@@ -72,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -95,6 +94,7 @@ import { PR_LIST_ARGS } from './open-prs.js';
 import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
+import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, updateMainMends } from './main-repair.js';
 import { pickWork } from './lane-pick.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
@@ -1478,6 +1478,151 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return ran;
   }
 
+  const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
+
+  // An idle lane notices newly queued main reds on the existing control poll,
+  // not after its ten-minute idle sleep. Unstartable existing work does not spin.
+  function mainMendTicket() {
+    return repos.flatMap((repo) => {
+      try { return readMainMends(mendState(repo.name)).filter((entry) => entry.state === 'queued').map((entry) => entry.id); }
+      catch { return []; } // mainMendWork reports the unreadable state at the next pick.
+    }).sort().join(',');
+  }
+
+  function mainMendWork(names, passed) {
+    const held = new Set(stepsHeld().map((item) => item.name));
+    return names.flatMap((repo) => {
+      let entries;
+      try { entries = readMainMends(mendState(repo)); }
+      catch (error) { say(`${repo}: main-mend state unreadable — ${error.message}`); return []; }
+      // A dead runner's launch is an unsuccessful attempt, never a permanent running row.
+      if (entries.some((entry) => entry.state === 'running' && !claims.has(entry.owner) && !held.has(entry.owner))) {
+        updateMainMends(mendState(repo), (current) => {
+          for (const entry of current) if (entry.state === 'running' && !claims.has(entry.owner) && !held.has(entry.owner)) failMainMend(entry, 'runner ended during the main-red session');
+        });
+        entries = readMainMends(mendState(repo));
+      }
+      const groups = new Map();
+      for (const entry of entries.filter((entry) => entry.state === 'queued')) {
+        const key = entry.branch || entry.finder;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(entry);
+      }
+      return [...groups.values()].map((batch) => {
+        const branch = mainMendBranch(repo, batch);
+        return { name: `main-red:${branch}`, repo, kind: 'mend', variant: null, since: batch[0].created,
+          mainMend: batch, branch, priority: 0 };
+      }).filter((item) => !passed.has(item.name) && !claims.has(item.name) && !held.has(item.name));
+    });
+  }
+
+  async function mainMendPass(item, { lane }) {
+    const { name, repo: repoName } = item;
+    claims.add(name); claimRepos.set(name, repoName);
+    try {
+      const outcome = await runMainMend(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, step: null, goal: false } : { ran: 0 };
+    } finally { claims.delete(name); claimRepos.delete(name); }
+  }
+
+  async function runMainMend(item, { lane }) {
+    const { name, repo: repoName, branch } = item;
+    const repo = repos.find((repo) => repo.name === repoName);
+    const role = deps.role(MEND_ROLE);
+    if (!role?.overlay) return 'skipped:role-missing';
+    const route = routeClass('mend');
+    if (!route.ok) return 'skipped:no-capacity';
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) return 'skipped:tool-missing';
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
+    let admission;
+    const currentPath = paths.currentFor(repoName, lane);
+    let scratch; let marker; let out; let claimed = false; let result;
+    const ids = new Set(item.mainMend.map((entry) => entry.id));
+    const state = mendState(repoName);
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) return 'skipped:offline';
+      const worktree = item.mainMend[0].worktree || join(root, 'runner', 'work', branch.replace('/', '-'), repoName);
+      if (!deps.exists(worktree)) {
+        const fetched = deps.git(repo.path, ['fetch', '--quiet', 'origin']);
+        if (!fetched.ok) return 'skipped:fetch';
+        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: worktree, branch });
+        if (!added.ok) { say(`${name}: worktree not made — ${added.stderr || 'git failed'}`); return 'skipped:worktree'; }
+      }
+      await deps.attachDeps(worktree);
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      const ts = stamp().replace(/[-:]/gu, '');
+      const stem = `main-red-${repoName}-${branch.split('-').at(-1)}-${ts}-${randomUUID().slice(0, 8)}`;
+      out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'mend', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const entries = updateMainMends(state, (all) => {
+        const batch = all.filter((entry) => ids.has(entry.id));
+        if (batch.some((entry) => entry.state !== 'queued')) return [];
+        for (const entry of batch) Object.assign(entry, { state: 'running', branch, worktree, owner: name, session_log: `${out}.jsonl` });
+        return batch;
+      });
+      if (!entries.length) return 'skipped:claimed';
+      claimed = true;
+      const prompt = mainMendPrompt({ repo: repoName, entries, branch, worktree });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree, started: stamp(), tool: settings.tool, model: settings.model,
+        effort: settings.effort, class: 'fast', billing: picked.billing,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: MEND_ROLE, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${name}: main-red mend starting (${settings.tool} ${settings.model})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, logPath: `${out}.jsonl`,
+        onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
+        ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
+        env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+      admission.release?.();
+      result = await pending;
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout);
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(launch.id === 'codex' ? 'codex' : 'claude', read.quotaReset);
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      return 'ran';
+    } finally {
+      try {
+        // mc publish and the merger may already have advanced these rows. Never overwrite them.
+        if (claimed) updateMainMends(state, (entries) => {
+          for (const entry of entries) if (ids.has(entry.id) && entry.state === 'running' && entry.session_log === `${out}.jsonl`) failMainMend(entry, `session ended without a published PR (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
+        });
+      } finally {
+        remove(currentPath);
+        try {
+          if (scratch) {
+            writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null });
+            await reclaimSessionExports(scratch, name);
+          }
+        } finally { admission?.release?.(); dropSlot(); }
+      }
+      for (const path of new Set(readMainMends(state).filter((entry) => ids.has(entry.id) && entry.state === 'landed').map((entry) => entry.worktree))) {
+        if (path && deps.exists(path)) deps.git(repo.path, ['worktree', 'remove', path]);
+      }
+    }
+  }
+
   /** The reason each goal's review last waited on, so it is said once. */
   const reviewWaits = new Map();
   // When `settleLanded` last asked GitHub, epoch ms.
@@ -1524,6 +1669,35 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     for (const answer of answers) say(answer.problems ? `goal:${answer.name}: not converted — ${answer.problems.join('; ')}` : `goal:${answer.name}: phase ${answer.phase}, ${answer.stage} · ${answer.status}${answer.from ? ` (was ${answer.from})` : ''}`);
   }
 
+  /** Restore a published handoff after a crash; ordinary queueing is idempotent. */
+  function settleMainMends() {
+    const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+    const held = new Set(stepsHeld().map((item) => item.name));
+    for (const repo of repos) {
+      let entries;
+      try { entries = readMainMends(mendState(repo.name)); }
+      catch (error) { say(`${repo.name}: main-mend state unreadable — ${error.message}`); continue; }
+      for (const pr of new Set(entries.filter((entry) => entry.state === 'published').map((entry) => entry.pr))) {
+        const batch = entries.filter((entry) => entry.pr === pr && entry.state === 'published');
+        if (batch.some((entry) => claims.has(entry.owner) || held.has(entry.owner))) continue;
+        const job = pending.find((job) => job.repo === repo.name && Number(job.pr) === pr);
+        if (job && job.state !== 'red') continue;
+        const status = prState(deps.gh, repo.path, pr);
+        if (status === 'MERGED' || status === 'CLOSED') answerMainMend({ ...mendState(repo.name), pr, landed: status === 'MERGED', reason: 'pull request closed without merging' });
+        else if (status === 'OPEN') {
+          try { deps.queueMerge({ root, repo: repo.name, repoPath: repo.path, pr, branch: batch[0].branch, holder: { name: batch[0].owner }, now: deps.now() }); }
+          catch (error) { say(`${repo.name}#${pr}: main-red delivery could not be restored — ${error.message}`); }
+        }
+      }
+      for (const entry of readMainMends(mendState(repo.name)).filter((entry) => entry.state === 'landed')) {
+        if (entry.worktree && deps.exists(entry.worktree) && !claims.has(entry.owner) && !held.has(entry.owner)) {
+          const removed = deps.git(repo.path, ['worktree', 'remove', entry.worktree]);
+          if (!removed.ok) say(`${repo.name}: landed main-red worktree retained at ${entry.worktree} — ${removed.stderr || 'git refused cleanup'}`);
+        }
+      }
+    }
+  }
+
   /**
    * Goals whose every pull request (`prs`) has landed or been closed without
    * merging, with one landed, set `done` — however each landed: the merger,
@@ -1537,6 +1711,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const at = deps.now().getTime();
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
+    settleMainMends();
     /** GitHub's `state` of a goal's pull request — `OPEN`, `MERGED`, `CLOSED` — or null when it cannot say. */
     const readState = ({ repo: repoName, pr }) => {
       const repo = repos.find((item) => item.name === repoName);
@@ -2044,7 +2219,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * What a free lane takes next, on every repository (`pickWork`,
    * lane-pick.js): the goals `goalWork` says could start, each with its kind
    * and how long it has waited, against the repositories of the sessions
-   * already in flight. Goals are the only work there is (2026-11-03).
+   * already in flight. Goal sessions and goal-less main-red mends share this pick.
    *
    * What this adds to the rule is what only the running process knows: what
    * the lanes are holding, and what this pass has already been refused on —
@@ -2054,10 +2229,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = goalWork({ repos: names, passed });
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
+      if (item.mainMend) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -2160,9 +2336,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (offlineHeld()) return { ran: 0 };
       const pick = nextWork({ repo, passed, carry: last?.name });
       if (!pick) return { ran: 0 };
-      // A goal's build, review or finish, or merge-failure mend: the only work a lane takes.
+      // Goal sessions and goal-less main-red mends use the same lane admission.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
-      const ran = await goalPass(pick.goal, { lane, label });
+      const ran = pick.mainMend
+        ? await mainMendPass(pick, { lane })
+        : await goalPass(pick.goal, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;
       passed.add(pick.name);
     }
@@ -2406,7 +2584,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
@@ -2701,9 +2879,10 @@ export async function runLoop({
       // lane and the idle chore loop look once per `UPDATE_POLL_MS` with no
       // loop of their own. `until` ends the wait early for a lane that a
       // lowered total has retired.
-      const nap = async (ms, { until = () => false } = {}) => {
+      const nap = async (ms, { until = () => false, mainRed = false } = {}) => {
+        const ticket = mainRed ? runner.mainMendTicket() : null;
         for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
-          if (runner.stopRequested() || runner.updateRequested() || until()) return;
+          if (runner.stopRequested() || runner.updateRequested() || until() || (mainRed && runner.mainMendTicket() !== ticket)) return;
           reconcile();
           await deps.sleep(Math.min(left, UPDATE_POLL_MS));
         }
@@ -2773,7 +2952,7 @@ export async function runLoop({
             : `${tag}: nothing to run — sleeping`;
           if (line !== quietLine) { runner.say(line); quietLine = line; }
           if (runner.updateRequested()) continue;
-          await nap(r.waited === 'skipped:disk-busy' ? ADMISSION_RETRY_MS : idleSleepMs, { until: retired });
+          await nap(r.waited === 'skipped:disk-busy' ? ADMISSION_RETRY_MS : idleSleepMs, { until: retired, mainRed: true });
           if (runner.stopRequested()) { runner.say(`${tag}: STOP — this lane exits; ${runner.stillHeld()}`); return { stop: true }; }
         }
       };

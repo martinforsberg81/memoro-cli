@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { parseGoal } from '../../src/mc/goals.js';
 import { writeRedDetail } from '../../src/mc/merge-red.js';
-import { MAIN_HEALTH_PROGRAMME, requestMainRepair } from '../../src/mc/main-repair.js';
+import { mainMendPath, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
 import {
@@ -1554,108 +1554,94 @@ it('ordinary PR failure leaves a linked build goal in build, and another reposit
 });
 
 // Martin, 2026-11-10: a red the round found red at its base by the same names is
-// main's. The pull request lands; main gets a repair goal, and nobody a mend.
-describe('main\'s red found by the round asks for a repair goal', () => {
+// main's. The pull request lands; main gets a goal-less mend request.
+describe('main\'s red found by the round queues a main-red mend', () => {
   const found = { base: 'base1234567', files: ['tests/a.test.js'], tests: [{ file: 'tests/a.test.js', name: 'a › b', error: ['boom'] }] };
 
   it('a green round that went on past main\'s red lands and asks for main\'s repair once', async () => {
     const asked = [];
-    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: (request) => { asked.push(request); return { created: 'memoro-cli-a-1234abcd' }; } });
+    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: (request) => { asked.push(request); return { created: ['memoro-cli-a-1234abcd'] }; } });
     const [answer] = await landJob(JOB, m.deps);
     assert.equal(answer.landed, true);
     assert.deepEqual(asked, [{ repo: 'memoro-cli', pr: 671, ...found }]);
-    assert.ok(m.said.some((line) => /main is red in tests\/a\.test\.js at base123 — repair goal main-health\/memoro-cli-a-1234abcd written/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /main is red in tests\/a\.test\.js at base123 — main-red mend queued: memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
   });
 
   it('a round with no main red asks for nothing', async () => {
     const asked = [];
-    await landJob(JOB, machine([green], { repairMain: (request) => { asked.push(request); return { created: 'x' }; } }).deps);
-    await landJob(JOB, machine([red], { repairMain: (request) => { asked.push(request); return { created: 'x' }; } }).deps);
+    await landJob(JOB, machine([green], { repairMain: (request) => { asked.push(request); return { created: ['x'] }; } }).deps);
+    await landJob(JOB, machine([red], { repairMain: (request) => { asked.push(request); return { created: ['x'] }; } }).deps);
     assert.deepEqual(asked, []);
   });
 
   it('a repair under way is named, not written again', async () => {
     const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ open: ['memoro-cli-a-1234abcd'] }) });
     await landJob(JOB, m.deps);
-    assert.ok(m.said.some((line) => /its repair is under way in main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /its main-red mend is under way: memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
   });
 
   it('a newly written repair and a repair already under way are both named', async () => {
-    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ created: 'memoro-cli-b-5678abcd', open: ['memoro-cli-a-1234abcd'] }) });
+    const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ created: ['memoro-cli-b-5678abcd'], open: ['memoro-cli-a-1234abcd'] }) });
     await landJob(JOB, m.deps);
-    assert.ok(m.said.some((line) => /repair goal main-health\/memoro-cli-b-5678abcd written; already under way: main-health\/memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+    assert.ok(m.said.some((line) => /main-red mend queued: memoro-cli-b-5678abcd; already under way: memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
   });
 });
 
-describe('requestMainRepair — the repair goal', () => {
-  const home = () => { const dir = join(root, 'programs'); mkdirSync(join(dir, MAIN_HEALTH_PROGRAMME), { recursive: true }); return dir; };
+describe('requestMainRepair — the main-red request file', () => {
   const request = { repo: 'memoro', pr: 15129, base: '689b18daa6bad996eaee940e9d4429404e8d9d2c',
-    files: ['tests/assistant/chat-runtime/subject-context.test.js'],
-    tests: [{ file: 'tests/assistant/chat-runtime/subject-context.test.js', name: 'a laid piece › its refs', error: ['Expected values to be strictly deep-equal:'] }] };
-  const now = () => new Date('2026-11-10T06:00:00Z');
+    files: ['tests/a.test.js'],
+    tests: [{ file: 'tests/a.test.js', name: 'a laid piece › its refs', error: ['Expected values to be strictly deep-equal:'] }] };
+  const now = () => new Date('2026-11-13T06:00:00Z');
 
-  it('writes a valid build-ready goal with criteria, once per red file until it is finished', () => {
-    const programs = home();
-    const first = requestMainRepair({ ...request, home: programs, now });
-    assert.ok(first.created, JSON.stringify(first));
-    const dir = join(programs, MAIN_HEALTH_PROGRAMME, 'goals', first.created);
-    const goal = parseGoal(readFileSync(join(dir, 'GOAL.json'), 'utf8'));
-    assert.equal(goal.problems, undefined);
-    assert.equal(goal.stage, 'build');
-    assert.equal(goal.status, 'ready');
-    assert.deepEqual(goal.repos, ['memoro']);
-    assert.equal(goal.success_criteria.length, 2);
-    assert.ok(goal.contract.join('\n').includes(request.files[0]));
-    assert.ok(goal.contract.join('\n').includes('memoro#15129'));
-    assert.match(readFileSync(join(dir, 'LOG.md'), 'utf8'), /created by the merger: main red at 689b18daa6ba, found by the round of memoro#15129/u);
-    assert.deepEqual(requestMainRepair({ ...request, pr: 15178, home: programs, now }), { open: [first.created] });
-    const other = requestMainRepair({ ...request, files: ['tests/other.test.js'], tests: [], home: programs, now });
-    assert.ok(other.created && other.created !== first.created);
+  it('writes one queued entry per red file, preserving errors and finder, and never a goal', async () => {
+    const files = [...request.files, 'tests/b.test.js', ...request.files];
+    await landJob({ ...JOB, repo: request.repo, pr: request.pr }, machine([{ ...green, gate: { main_repair: { ...request, files } } }]).deps);
+    const entries = readMainMends({ root, repo: request.repo });
+    assert.deepEqual(entries.map((entry) => entry.file), ['tests/a.test.js', 'tests/b.test.js']);
+    assert.equal(new Set(entries.map((entry) => entry.id)).size, 2);
+    assert.deepEqual(entries.map((entry) => entry.state), ['queued', 'queued']);
+    assert.deepEqual(entries[0].tests, request.tests);
+    assert.deepEqual(entries[1].tests, []);
+    assert.equal(entries[0].base, request.base);
+    assert.equal(entries[0].finder, 'round of memoro#15129');
+    assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
   });
 
-  it('writes a repair for uncovered files while naming the open repair', () => {
-    const programs = home();
-    const fileA = 'tests/assistant/avatar-motion-qa.test.js';
-    const fileB = 'tests/assistant/avatar-account-repository.test.js';
-    const first = requestMainRepair({ ...request, files: [fileA], tests: [{ file: fileA, name: 'existing repair › fails', error: ['old error'] }], home: programs, now });
-    assert.ok(first.created, JSON.stringify(first));
-
-    const mixed = requestMainRepair({
-      ...request, files: [fileA, fileB],
-      tests: [
-        { file: fileA, name: 'existing repair › fails', error: ['old error'] },
-        { file: fileB, name: 'uncovered repair › fails', error: ['new error'] },
-      ],
-      home: programs, now,
-    });
-
-    assert.deepEqual(mixed.open, [first.created]);
-    assert.ok(mixed.created, JSON.stringify(mixed));
-    const dir = join(programs, MAIN_HEALTH_PROGRAMME, 'goals', mixed.created);
-    const goal = parseGoal(readFileSync(join(dir, 'GOAL.json'), 'utf8'));
-    const contract = goal.contract.join('\n');
-    const criteria = goal.success_criteria.map(({ criterion, check }) => `${criterion}\n${check}`).join('\n');
-    assert.ok(contract.includes(fileB), contract);
-    assert.ok(criteria.includes(fileB), criteria);
-    assert.ok(!contract.includes(fileA), contract);
-    assert.ok(!criteria.includes(fileA), criteria);
-    assert.match(contract, /First classify the red from its error/u);
+  it('queued, running, published and Martin files ask for nothing new; uncovered files still queue', () => {
+    const first = requestMainRepair({ ...request, root, now });
+    for (const state of ['queued', 'running', 'published', 'Martin']) {
+      updateMainMends({ root, repo: request.repo }, (entries) => { entries[0].state = state; });
+      assert.deepEqual(requestMainRepair({ ...request, root, now, pr: 15178 }), { created: [], open: first.created });
+    }
+    const mixed = requestMainRepair({ ...request, root, now, files: ['tests/a.test.js', 'tests/b.test.js'] });
+    assert.deepEqual(mixed.open, first.created);
+    assert.equal(mixed.created.length, 1);
+    assert.deepEqual(readMainMends({ root, repo: request.repo }).map((entry) => entry.file), ['tests/a.test.js', 'tests/b.test.js']);
+    assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
   });
 
-  it('a red that returns after its repair finished gets a new, dated goal', () => {
-    const programs = home();
-    const first = requestMainRepair({ ...request, home: programs, now });
-    const file = join(programs, MAIN_HEALTH_PROGRAMME, 'goals', first.created, 'GOAL.json');
-    writeFileSync(file, readFileSync(file, 'utf8').replace('"stage": "build"', '"stage": "done"'));
-    const again = requestMainRepair({ ...request, home: programs, now });
-    assert.equal(again.created, `${first.created}-202611100600`);
+  it('a red after landed gets a fresh entry, including when found by the daily full run', async () => {
+    const first = requestMainRepair({ ...request, root, now });
+    updateMainMends({ root, repo: request.repo }, (entries) => { entries[0].state = 'running'; entries[0].branch = 'mend/main-memoro-fixture'; });
+    publishMainMend({ root, repo: request.repo, branch: 'mend/main-memoro-fixture', pr: 15203 });
+    await landJob({ ...JOB, repo: request.repo, pr: 15203 }, machine([green]).deps);
+    assert.equal(readMainMends({ root, repo: request.repo })[0].state, 'landed', 'the merger, not a goal, records landing');
+    const again = requestMainRepair({ ...request, root, now, pr: null });
+    const entries = readMainMends({ root, repo: request.repo });
+    assert.notEqual(again.created[0], first.created[0]);
+    assert.deepEqual(entries.map((entry) => [entry.file, entry.state]), [['tests/a.test.js', 'landed'], ['tests/a.test.js', 'queued']]);
+    assert.equal(entries[0].pr, 15203);
+    assert.equal(entries[1].finder, 'the full run');
+    assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
   });
 
-  it('without the main-health programme or a red file nothing is written', () => {
-    const programs = join(root, 'empty');
-    mkdirSync(programs, { recursive: true });
-    assert.match(requestMainRepair({ ...request, home: programs, now }).skipped, /no programme main-health/u);
-    assert.equal(requestMainRepair({ ...request, files: [], home: home(), now }).skipped, 'nothing to repair');
+  it('without a red file nothing is written, and malformed state is not overwritten', () => {
+    assert.equal(requestMainRepair({ ...request, files: [], root, now }).skipped, 'nothing to repair');
+    assert.equal(existsSync(mainMendPath(root, request.repo)), false);
+    mkdirSync(join(root, 'runner', 'main-mend'), { recursive: true });
+    writeFileSync(mainMendPath(root, request.repo), 'broken');
+    assert.ok(requestMainRepair({ ...request, root, now }).skipped);
+    assert.equal(readFileSync(mainMendPath(root, request.repo), 'utf8'), 'broken');
   });
 });
 

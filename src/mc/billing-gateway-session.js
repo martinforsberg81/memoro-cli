@@ -45,31 +45,52 @@ export function gatewayToolConfig({ provider, base, grant, args, env = process.e
   throw new Error('unsupported billing provider');
 }
 
-/** Runs until the coding tool exits; never returns the provider key. */
-export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1) } = {}) {
-  if (!['claude', 'codex'].includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
+/** The trusted key-opening boundary shared by foreground wrappers and detached holders. */
+export async function openGatewayGrant({ provider, model = '*', readKey = readBillingApiKey,
+  readApi = () => readBillingApi(), createGateway = createBillingGateway,
+  listen = listenBillingGateway, now = Date.now, token = () => randomBytes(32).toString('hex'),
+} = {}) {
   // The switch is read again here, where the key is opened: a launch decided
   // before `mc run --billing <provider> off` still never reaches the API.
   if (readApi()?.[provider] === false) {
     process.stderr.write(`mc: ${provider} API is off (mc run --billing ${provider} on)\n`);
-    return 1;
+    return { ok: false };
   }
   const opened = await readKey(provider);
   if (!opened?.ok || !opened.key) {
     process.stderr.write(`mc: ${provider} API reserve unavailable (${opened?.reason || 'key-unreadable'})\n`);
-    return 1;
+    return { ok: false };
   }
-  const grant = randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + GATEWAY_SESSION_MS).toISOString();
+  const grant = token();
+  const expiresAt = new Date(now() + GATEWAY_SESSION_MS).toISOString();
   const keys = { [provider]: opened.key };
   const gateway = createGateway({
     keys,
     grants: [{ provider, token: grant, models: [model], maxRequests: GATEWAY_SESSION_REQUEST_LIMIT, expiresAt }],
   });
+  try {
+    const base = await listen(gateway);
+    return { ok: true, base, grant, expiresAt,
+      close: async () => {
+        await new Promise(resolve => gateway.close(resolve));
+        keys[provider] = null;
+      },
+    };
+  } catch (error) {
+    keys[provider] = null;
+    gateway.close();
+    throw error;
+  }
+}
+
+/** Runs until the coding tool exits; never returns the provider key. */
+export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1) } = {}) {
+  if (!['claude', 'codex'].includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
+  const session = await openGatewayGrant({ provider, model, readKey, readApi, createGateway });
+  if (!session.ok) return 1;
   let child;
   try {
-    const base = await listenBillingGateway(gateway);
-    const tool = gatewayToolConfig({ provider, base, grant, args, env });
+    const tool = gatewayToolConfig({ provider, base: session.base, grant: session.grant, args, env });
     return await new Promise((resolve) => {
       // A terminal is handed over whole. Otherwise (the runner's pipes) the tool
       // gets pipes of its own: codex sharing this process's stdout panicked
@@ -84,8 +105,7 @@ export async function runGatewaySession({ provider, model, bin, args, env = proc
   } finally {
     if (child?.pid) { try { child.kill('SIGTERM'); } catch {} }
     if (activeChild === child) activeChild = null;
-    await new Promise((resolve) => gateway.close(resolve));
-    keys[provider] = null;
+    await session.close();
   }
 }
 

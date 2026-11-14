@@ -7,7 +7,7 @@
  * moved since the last measurement (Martin, 2026-11-13), one at a time per
  * repository, and a run starts nothing after it; a merge round's lock does not
  * hold it back; a round that could not measure is never mistaken for one that
- * found nothing; its reds reach a repair only through a `repair` it is given;
+ * found nothing; its reds go to the main-red mend (`requestMainRepair`);
  * and a STOP starts no further run.
  *
  * And where it is reached from: `mc test nightly status`, the verb whose round
@@ -66,7 +66,7 @@ async function pass(root, extra = {}) {
   const repaired = [];
   const outcome = await fullRunTick({
     root, repos: REPOS, head: () => null, say: (message) => said.push(message),
-    repair: (request) => { repaired.push(request); return { created: 'repair-goal' }; },
+    repair: (request) => { repaired.push(request); return { created: ['mend-1'], open: [] }; },
     round: ({ repoPath }) => { asked.push(repoPath); return report(); },
     ...extra,
   });
@@ -139,7 +139,7 @@ describe('a full run', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('the reds it finds on main are handed to a repair it is given, and to none by default', async () => {
+  it('the reds it finds on main are handed to the main-red mend', async () => {
     const root = home();
     try {
       const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
@@ -149,16 +149,8 @@ describe('a full run', () => {
         repo: 'memoro-cli', base: SHA, files: ['tests/mc/names.test.js'],
         tests: [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }],
       }]);
-      assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — repair repair-goal requested/u);
+      assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — main-red mend queued: mend-1/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
-    // Without one (the runner's default, Martin 2026-11-13: a red test never becomes a goal), nothing is asked.
-    const bare = home();
-    try {
-      const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
-      red.candidate.red_tests = [{ file: 'tests/mc/names.test.js', name: 'names', error: [] }];
-      const { said } = await pass(bare, { repos: [REPOS[1]], round: () => red, repair: null });
-      assert.doesNotMatch(said.join('\n'), /repair/u);
-    } finally { rmSync(bare, { recursive: true, force: true }); }
     // A green run asks for nothing.
     const other = home();
     try {

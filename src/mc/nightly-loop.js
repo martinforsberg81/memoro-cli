@@ -43,13 +43,13 @@
  * runs its tests at `fullRunLanes` (2, or `MC_FULL_RUN_LANES`), which is what
  * lets it share the machine; `repo-gate.js` says why two.
  *
- * ## Reds are evidence
+ * ## Reds go to a main-red mend
  *
  * The reds a measured run finds on main are main's, by construction: there is
  * no change in the tree. They are recorded as exact-commit evidence
- * (`recordMainRed`, written by the round). A red test never becomes a goal
- * (Martin, 2026-11-13); `repair` is the seam for the mend session that will
- * take them (`main-health/main-red-direct-mend`), unset until then.
+ * (`recordMainRed`, written by the round) and handed to `requestMainRepair`,
+ * the door a merge round's main red goes through: it queues a main-red mend
+ * session. A red test never becomes a goal (Martin, 2026-11-13).
  *
  * ## What it leaves behind
  *
@@ -64,6 +64,7 @@
 import { tryGit } from './git.js';
 import { mcHome } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
+import { requestMainRepair } from './main-repair.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { fullRunLanes, runGate } from './repo-gate.js';
@@ -189,7 +190,7 @@ export function fullRunDue(repo, { root = mcHome(), head = remoteHead, clock = (
  */
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
-  clock = () => Date.now(), signal = null, repair = null,
+  clock = () => Date.now(), signal = null, repair = requestMainRepair,
 } = {}) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
@@ -252,9 +253,11 @@ export async function fullRun(repo, {
     const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
     const asked = repair({ repo: repo.name, base: run.commit, files, tests });
     const where = files.join(', ');
-    if (asked?.created) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — repair ${asked.created} requested${asked.open ? `; already under way: ${asked.open.join(', ')}` : ''}`);
-    else if (asked?.open) say(`${repo.name}: main is red in ${where} — its repair is under way: ${asked.open.join(', ')}`);
-    else say(`${repo.name}: main is red in ${where} — no repair requested: ${asked?.skipped || 'no answer'}`);
+    const created = [].concat(asked?.created || []);
+    const open = [].concat(asked?.open || []);
+    if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
+    else if (open.length) say(`${repo.name}: main is red in ${where} — its main-red mend is under way: ${open.join(', ')}`);
+    else say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
   return run;
 }
@@ -272,7 +275,7 @@ export async function fullRun(repo, {
 export async function fullRunTick({
   root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
-  shouldStop = () => false, running = new Map(), signal = null, repair = null,
+  shouldStop = () => false, running = new Map(), signal = null, repair = requestMainRepair,
   retryMs = FULL_RUN_RETRY_MS,
 } = {}) {
   const at = new Date(clock()).toISOString();
