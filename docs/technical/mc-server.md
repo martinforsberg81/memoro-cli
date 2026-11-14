@@ -146,8 +146,8 @@ server attaches over `ssh -t`, as the terminal entrance does. Every Claude
 session the server starts carries Remote Control (`--remote-control <name>`).
 A `--bg` on a Codex desk is refused by the client before any start, naming the
 host: `mc: on <host>: --bg is for Claude sessions: a Codex session has no client
-but the terminal`. A flagged session is ended with `/exit` in the app, or with
-`claude stop <id>` on the server. Refusals on the server also carry the forwarded
+but the terminal`. A session is ended with `/exit` in the app or the terminal,
+or with `claude stop <id>` on the server. Refusals on the server also carry the forwarded
 host name. Claude versions are reported by the server, not compared with a
 nonexistent local Claude client. Claude's background persistence is unchanged by
 attachment or disconnection. `server-link.js` and `server-protocol.js` are

@@ -67,8 +67,8 @@ sessions, helper intake and collect, and Codex get no flag.
   - on a Codex launch: `--bg is for Claude sessions: a Codex session has no client but the terminal`;
   - off the persistent path: `--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal`.
 
-A session started with `--bg` is ended with `/exit` in the app, or on its host
-with `claude stop <id>`. A session started before this change carries no Remote
+A session is ended with `/exit` in the app or the terminal, or on its host with
+`claude stop <id>`. A session started before this change carries no Remote
 Control. mc does not check for the flag when it lists or joins a session, so such a
 session is joined as today; a join with `--bg` prints the two lines for it, though the
 Claude app cannot reach it. Stop it with `claude stop <id>`. mc does not add the flag
