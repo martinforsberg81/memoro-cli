@@ -136,13 +136,14 @@ export async function runGate({
   // nightly`, which calls this function with this flag rather than copying
   // what it does.
   full = false,
-  // The scheduled full run of the default branch, beside the merge lane rather
+  // The full run of the default branch — the daily one, a deploy's, a hand-typed
+  // `mc test <repo> --full` — beside the merge lane rather
   // than in it (Martin, 2026-11-13): no round lock, no phase notes in the lane's
   // lock file, and its own measurement checkout (`<slug>/full`) instead of the
   // merger's (`<slug>/candidate`), so merges, sessions and full runs proceed at
   // once. Only with `full` and no pull request; the caller takes no lease for it
-  // (`holdLease: false`), since it merges nothing. A person's `--full` stays in
-  // the lane.
+  // (`holdLease: false`), since it merges nothing. A `--full` asked about a pull
+  // request stays in the lane.
   isolated = false,
   // The test lanes, when the caller declares them (the full run's
   // `fullRunLanes`); null asks `testLanes` for the round's mode.

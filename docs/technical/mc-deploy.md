@@ -249,11 +249,66 @@ passed over. What is left says:
 | state | what the gate does |
 |---|---|
 | `green` | says so, with the run's time, duration and counts, and goes on |
-| none | starts `fullRun` — the daily run's own round, so the same history and the same main-red mends — and follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
+| none | the preparation starts `fullRun` — the daily run's own round, so the same history and the same main-red mends — and the terminal follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
 | `red` | refuses, naming the commit measured, the red files and commands, and the main-red mend that holds them. When no mend holds it, says so; the history keeps red test names, not files, so the gate cannot queue one itself |
 | `stalled` | a run that began and never finished its suite: refuses like a red |
 | `unmeasured` | the run stopped for a reason that is not the machine's and measured nothing: refuses, never green, and `--accept-red` does not take it. A deploy starts a run only when there is none, so every later deploy of that sha reads the same run; the refusal names the way out — `mc test memoro --full`, which writes the history the gate reads |
 | `moved` | the run measured another commit than the one it was started for: refuses |
+
+**The preparation, in a process of its own (2026-11-14).** The full run is
+tens of minutes, and a deploy started from the page over SSH ran it in the
+page's own process: the connection closed, the process died, and the round had
+a start and no end. Everything the verb does before its one question — the
+measuring above and the suites below — is therefore a *preparation*, run by a
+detached process ([`src/mc/deploy-prepare-run.js`](../../src/mc/deploy-prepare-run.js),
+[`src/mc/deploy-prepare.js`](../../src/mc/deploy-prepare.js), started with
+`startDetached` like the deployer) and recorded in
+`~/mc/runner/deploy-prepare.json` (`{ sha, pid, started, stage, log,
+accept_red, ended, result, error }`; the log is
+`~/mc/runner/log/deploy-prepare.log`). `stage` is `starting`, `full-run`,
+`suites` or `done`. The terminal, and the page's deploy panel, only watch it
+(`followLog`): ^C, a closed SSH session or a restarted page stops the
+watching, never the work, and the record is found again from disk.
+
+A preparation is **joined by exact sha**, decided under the register's lock so
+two terminals cannot both start one (`prepareStage`):
+
+| the record says | `mc deploy` |
+|---|---|
+| running, same sha | follows it — *"already being prepared … following it, not starting a second"* — and reaches the question when it is green |
+| done, same sha, green | goes straight to the question; nothing is measured again |
+| done, same sha, red | the refusal as if it had run here; `--accept-red` reads the same result |
+| another sha (main moved) | a new preparation, said in one line: *"the last preparation was of `<x>`, main is `<y>` now — starting a new one"* |
+| its process gone before it ended | *"interrupted at `<stage>`"*, and a new one |
+| done without suites and `--accept-red` given | prepares again: the suites are what a red needs |
+
+A deploy's full run is never lost to a lease: it runs isolated and holds no
+repository lease (`holdLease: false`), like the daily run. `--dry-run` starts
+nothing and says a preparation is in flight; `--follow` follows a preparation as
+it follows a deploy.
+
+**One full run of a sha at a time, whoever starts it.** Three doors start a full
+run: this preparation, `mc test <repo> --full`, and the runner's daily run.
+Each claims the run first in `<mc home>/full-runs.json`
+([`src/mc/full-run-claim.js`](../../src/mc/full-run-claim.js)): `{ repo, sha,
+pid, started, verb }`, decided under a lock of the history's own root. A claim
+overlaps another of the same repository when the shas are equal or either is
+unknown (`mc test --full` does not know what the fetch will find). A starter
+that finds a live overlapping claim does not start a round: it follows the run
+(`awaitClaim`) and reads its answer from the nightly history; a run that died
+without writing one is no answer, and the follower starts its own. A claim
+whose pid is gone is no claim. A known, different sha is another tree and is
+measured on its own. `mc test <repo> --full` with no pull request is the same
+kind of run as the daily one — beside the merge lane, in its own checkout, no
+lease, written to the history (2026-11-14: it stopped twice at `lease` because
+the merger held memoro.git).
+
+**An interrupted round.** A gate round whose process is gone without an end
+record is settled by whoever reads it next (`settleInterruptedRounds`,
+[`src/mc/repo-round-log.js`](../../src/mc/repo-round-log.js)): an end line,
+`stopped_at: 'interrupted'`, *"process N ended without an end record"*, is
+appended under the round's own run id, and the page shows it for a day beside
+the deploy panel — never a round that is "running" forever.
 
 **The app, used.** `exerciseApp` reads the suites declared in memoro's
 `.mc/test.json` and runs them against a local server built from that sha,
