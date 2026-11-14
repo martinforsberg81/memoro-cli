@@ -916,6 +916,29 @@ export function readTextOrNull(path) {
   }
 }
 
+/** The hold file `mc goal hold` writes in a goal's directory and `mc goal release` removes (`docs/technical/mc-goals.md`). */
+export const HOLD_FILE = '.hold.json';
+
+/**
+ * The hold on the goal in `dir`, or null when it has none. A hold file that
+ * parses reads as `{ by, tool, at, reason }`; one that is there but does not
+ * parse still holds the goal, as `{ by: null, tool: null, at: null, reason:
+ * 'unreadable .hold.json' }`. A missing file is no hold: `read` returns null or
+ * throws for it.
+ */
+export function readHold(dir, read = readTextOrNull) {
+  let text;
+  try { text = read(join(dir, HOLD_FILE)); } catch { return null; }
+  if (text === null || text === undefined) return null;
+  try {
+    const hold = JSON.parse(text);
+    if (!hold || typeof hold !== 'object') throw new Error('not an object');
+    return { by: hold.by ?? null, tool: hold.tool ?? null, at: hold.at ?? null, reason: hold.reason ?? null };
+  } catch {
+    return { by: null, tool: null, at: null, reason: 'unreadable .hold.json' };
+  }
+}
+
 /** The names of the directories in `path`, sorted, dot-directories left out; none when it cannot be read. */
 export function listDirsOf(path) {
   try {

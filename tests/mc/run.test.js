@@ -4647,6 +4647,71 @@ test('legacy blocked build reconciles once and does not consume a session lane',
   assert.equal(f.calls.sessions.length, 0);
 });
 
+/** The hold `mc goal hold` writes, as the runner reads it. */
+const HOLD = (at = '2026-11-01T19:00Z') => JSON.stringify({ by: 'plan', tool: 'claude', at, reason: 'the fix is taken over here' });
+
+test('a held goal gets no planning, build or finish session, and the runner says so once', async () => {
+  for (const stage of ['draft', 'build', 'finish']) {
+    const held = goalFixture({ held: { stage } });
+    held.files[`${GOALS}/held/.hold.json`] = HOLD();
+    // One runner across both passes, as a runner process is: the say is once for the hold, not once a pass.
+    const runner = createRunner({ deps: held.deps });
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `${stage}: nothing starts`);
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `${stage}: nothing starts on the next pass`);
+    assert.equal(held.calls.sessions.length, 0, `${stage}: no session`);
+    assert.equal(where(held, 'held'), `${stage} · ready`, `${stage}: stage and status stay`);
+    assert.equal(held.log.filter((line) => line.includes('prog/held: held by plan since 2026-11-01T19:00Z')).length, 1, `${stage}: said once`);
+
+    // The same goal unheld gets its session, so the hold is what kept it back.
+    const free = goalFixture({ free: { stage } });
+    assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1, `${stage}: unheld, it gets a session`);
+  }
+});
+
+test('a held goal in review gets no review session; released, its review starts', async () => {
+  const f = reviewFixture();
+  f.files[`${GOALS}/judged/.hold.json`] = HOLD();
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held: nothing starts');
+  assert.equal(f.calls.sessions.length, 0, 'no review session');
+  assert.equal(where(f, 'judged'), 'review · ready', 'stage and status stay');
+  delete f.files[`${GOALS}/judged/.hold.json`];
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'released: the review starts');
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'review-session:goal');
+});
+
+test('a release starts the held goal again, and each new hold is said again', async () => {
+  const f = goalFixture({ held: { stage: 'build' } });
+  f.files[`${GOALS}/held/.hold.json`] = HOLD('2026-11-01T19:00Z');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  delete f.files[`${GOALS}/held/.hold.json`];
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'released: a session starts');
+  const started = f.calls.sessions.length;
+  f.files[`${GOALS}/held/.hold.json`] = HOLD('2026-11-01T22:00Z');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held again: none starts');
+  assert.equal(f.calls.sessions.length, started, 'no session after the new hold');
+  assert.equal(f.log.filter((line) => line.includes('prog/held: held by plan since')).length, 2, 'said once for each hold');
+});
+
+test('a held blocked goal still reconciles to Martin outside merge, and no session starts', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked' } });
+  f.files[`${GOALS}/stuck/.hold.json`] = HOLD();
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(where(f, 'stuck'), 'build · Martin');
+  assert.equal(f.calls.sessions.length, 0);
+});
+
+test('a held goal\'s decision waits too: no decision session starts on it', async () => {
+  const f = goalFixture({ held: { stage: 'build' } });
+  f.files[`${GOALS}/held/.hold.json`] = HOLD();
+  const at = '2026-11-01T18:00:00Z';
+  const item = { id: deskItemId('goal', 'prog/held', at), kind: 'goal', reference: 'prog/held', source_at: at, state: 'prepared' };
+  f.deps.deskItems = { list: () => [item] };
+  assert.deepEqual(await createRunner({ deps: f.deps }).decisionOne(item.id), { ran: 0, reason: 'item is not eligible or is already held' });
+  assert.equal(f.calls.sessions.length, 0);
+});
+
 test('multiple legacy blocked goals reconcile without duplicate diagnostic launches across lanes', async () => {
   const f = goalFixture({ a: { status: 'blocked' }, b: { status: 'blocked' } });
   f.deps.laneCount = () => ({ lanes: 2 });

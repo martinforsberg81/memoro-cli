@@ -31,6 +31,8 @@
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
+ *   mc goal hold [<programme>/<goal>] --reason "…"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay
+ *   mc goal release [<programme>/<goal>] [--reason "…"]   the hold removed; one log entry with each worktree's state
  *   mc goal martin [<programme>/<goal>] --kind technical|product --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
  *                  [--document <repo>/<path>]… [--reserved <act>]   one jev consultation (`askMartin`)
  *   mc goal defect [<programme>/<goal>] --part "…" --found "…" [--evidence "…"|--evidence-file <path|->] [--next "…"|--next-file <path|->]
@@ -74,7 +76,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
@@ -119,6 +121,8 @@ const VERB_FLAGS = {
   log: ['--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--stage', '--status'],
   stage: ['--reason'],
   status: ['--reason'],
+  hold: ['--reason'],
+  release: ['--reason'],
   martin: ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'],
   defect: ['--part', '--found', '--evidence', '--evidence-file', '--next', '--next-file'],
   pr: [],
@@ -247,6 +251,8 @@ export async function run(argv, deps = {}) {
   if (verb === 'archive') return archiveGoals(rest, ctx);
   if (verb === 'show') return showGoal(rest, ctx);
   if (verb === 'areas') return areasVerb(rest, flags, ctx);
+  if (verb === 'hold') return holdVerb(rest, flags, ctx);
+  if (verb === 'release') return releaseVerb(rest, flags, ctx);
   return listGoals(rest, ctx);
 }
 
@@ -1231,13 +1237,119 @@ function fromProject(args, ctx) {
 }
 
 /**
+ * Why a hold is not for this caller, or null: a headless caller, which is never a holder, or a session of another goal
+ * (the refusal `logEntry` gives). Both hold verbs use it.
+ */
+function holdCallerRefusal(target, env) {
+  if (env.MC_HEADLESS === '1') return 'a hold is set by a person or an interactive session — a headless session that cannot continue asks with mc ask or reports with mc goal defect';
+  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) return `goal session ${env.MC_GOAL} cannot change ${target.name}`;
+  return null;
+}
+
+/**
+ * `mc goal hold [<programme>/<goal>] --reason "…"` — the goal is held: the runner starts no session on it until
+ * `mc goal release`. Stage and status stay, so nothing is asked of Martin and no desk item opens. Writes
+ * `.hold.json` (by, tool, at, reason) and one log entry, `held: <reason>`. Refused, with nothing written, for a
+ * headless caller, a session of another goal, no reason, a goal in done or dropped, and a goal already held.
+ */
+function holdVerb(args, flags, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const refusal = holdCallerRefusal(target, env);
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
+  const reason = typeof flags.reason === 'string' ? flags.reason.trim() : '';
+  if (!reason) { stderr.write('mc: hold needs --reason "…" — why the goal is held\n'); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  if (FINISHED.includes(goal.stage)) { stderr.write(`mc: ${target.name} is ${goal.stage} — a finished goal is not held\n`); return 2; }
+  const held = readHold(target.dir, read);
+  if (held) {
+    stderr.write(`mc: ${target.name} is already held by ${held.by ?? '—'} since ${held.at ?? '—'} — mc goal release ${target.name} hands it back\n`);
+    return 2;
+  }
+  const running = ctx.active(target);
+  const hold = { by: writerRole(env) || 'person', tool: env.MC_TOOL || 'person', at: logStamp(ctx.now), reason };
+  write(join(target.dir, HOLD_FILE), `${JSON.stringify(hold, null, 2)}\n`);
+  const comment = `held: ${reason}${running ? ' — a session is running on it now; the hold does not stop it' : ''}`;
+  appendEntry({ dir: target.dir, entry: { at: hold.at, tool: hold.tool, model: env.MC_MODEL || null, role: writerRole(env), stage: goal.stage, status: goal.status, done: null, comment, next: null }, read, write });
+  stdout.write(`mc: ${target.name} held — the runner starts no session on it until mc goal release ${target.name}\n`);
+  if (running) stdout.write(`mc: a session is running on ${target.name} now; the hold does not stop it\n`);
+  return 0;
+}
+
+/**
+ * `mc goal release [<programme>/<goal>] [--reason "…"]` — hands a held goal back: one log entry at its stage and
+ * status, whose comment says who held it and since when and then each worktree's state (`worktreeStates`), and
+ * the hold file removed. Refused, with nothing written, for a headless caller, a session of another goal, and a
+ * goal that is not held.
+ */
+function releaseVerb(args, flags, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const target = goalNamed(args[0], ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const refusal = holdCallerRefusal(target, env);
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  const held = readHold(target.dir, read);
+  if (!held) { stderr.write(`mc: ${target.name} is not held\n`); return 2; }
+  const note = typeof flags.reason === 'string' && flags.reason.trim() ? ` — ${flags.reason.trim()}` : '';
+  const lines = worktreeStates(goal, target.dir, ctx).map(worktreeWords);
+  const comment = [`released: held by ${held.by ?? '—'} since ${held.at ?? '—'} (${held.reason ?? '—'})${note}`, ...lines].join('\n');
+  appendEntry({ dir: target.dir, entry: { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), stage: goal.stage, status: goal.status, done: null, comment, next: null }, read, write });
+  ctx.remove(join(target.dir, HOLD_FILE));
+  stdout.write(`mc: ${target.name} released\n`);
+  for (const line of lines) stdout.write(`${line}\n`);
+  return 0;
+}
+
+/**
+ * Each repository of a goal's worktree in `dir`: its changed files, its commits past origin/main and its last commit's
+ * date, or `worktree: false` when it has none. `mc goal show` and a release both read it.
+ */
+function worktreeStates(goal, dir, ctx) {
+  return goal.repos.map((repo) => {
+    const path = join(dir, repo);
+    const status = ctx.git(path, ['status', '--short']);
+    if (!status.ok) return { repo, path, worktree: false };
+    const changed = status.stdout.split('\n').filter((line) => line.trim() !== '').length;
+    const ahead = ctx.git(path, ['rev-list', '--count', 'origin/main..HEAD']);
+    const last = ctx.git(path, ['log', '-1', '--format=%cI']);
+    return {
+      repo, path, worktree: true, changed,
+      ahead: ahead.ok ? ahead.stdout.trim() : '?',
+      last: last.ok && last.stdout.trim() ? last.stdout.trim() : 'none',
+    };
+  });
+}
+
+/** One repository's state as a release logs it: `<repo>: 3 changed · 2 commits past origin/main · last commit <date>`, or `<repo>: no worktree`. */
+function worktreeWords(state) {
+  if (!state.worktree) return `${state.repo}: no worktree`;
+  return `${state.repo}: ${state.changed} changed · ${state.ahead} commits past origin/main · last commit ${state.last}`;
+}
+
+/**
  * `mc goal show <programme>/<goal>` — its status line, the goal as text
  * (`renderGoalText`: goal, contract, out of scope, documents, each criterion
  * with ✓/✗ and its check), the last three log entries, and for each repository's worktree its changed
  * files, its commits past origin/main and its last commit's date.
  */
 function showGoal(args, ctx) {
-  const { stdout, stderr, read, git } = ctx;
+  const { stdout, stderr, read } = ctx;
   if (args.length !== 1) { stderr.write(usage()); return 2; }
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
@@ -1250,6 +1362,8 @@ function showGoal(args, ctx) {
     return 1;
   }
   stdout.write(`${target.name} · ${stageWords(goal)} · phase ${goal.phase} · ${goal.repos.join(', ')} · ${goal.class} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
+  const hold = readHold(target.dir, read);
+  if (hold) stdout.write(`held by ${hold.by ?? '—'} since ${hold.at ?? '—'}: ${hold.reason ?? '—'}\n`);
   stdout.write(`\n${renderGoalText(goal)}`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
@@ -1258,15 +1372,9 @@ function showGoal(args, ctx) {
   for (const entry of log.slice(-3)) stdout.write(renderEntry(entry));
 
   stdout.write('\nWORKTREES\n');
-  for (const repo of goal.repos) {
-    const path = join(target.dir, repo);
-    const status = git(path, ['status', '--short']);
-    if (!status.ok) { stdout.write(`  ${repo}  ${path} — no worktree\n`); continue; }
-    const changed = status.stdout.split('\n').filter((line) => line.trim() !== '').length;
-    const ahead = git(path, ['rev-list', '--count', 'origin/main..HEAD']);
-    const last = git(path, ['log', '-1', '--format=%cI']);
-    const lastDate = last.ok && last.stdout.trim() ? last.stdout.trim() : 'none';
-    stdout.write(`  ${repo}  ${path}  ${changed} changed · ${ahead.ok ? ahead.stdout.trim() : '?'} commits past origin/main · last commit ${lastDate}\n`);
+  for (const state of worktreeStates(goal, target.dir, ctx)) {
+    if (!state.worktree) { stdout.write(`  ${state.repo}  ${state.path} — no worktree\n`); continue; }
+    stdout.write(`  ${state.repo}  ${state.path}  ${state.changed} changed · ${state.ahead} commits past origin/main · last commit ${state.last}\n`);
   }
   return 0;
 }
@@ -1377,7 +1485,7 @@ function listGoals(args, ctx) {
     for (const phase of phases) {
       const state = current === null || phase < current ? 'done' : phase === current ? 'in progress' : `after phase ${phase - 1}`;
       stdout.write(`${one} · phase ${phase} · ${state}\n`);
-      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal)}\n`);
+      for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal, read)}\n`);
     }
     for (const goal of own.filter((item) => item.problems.length)) stdout.write(`  ${goal.programme}/${goal.goal} · does not parse — ${goal.problems.join('; ')}\n`);
   }
@@ -1385,14 +1493,16 @@ function listGoals(args, ctx) {
 }
 
 /** One goal's line in `mc goal list`. */
-function goalLine(goal) {
+function goalLine(goal, read) {
   const name = `${goal.programme}/${goal.goal}`;
   // A finished goal has no next action, whatever its last entry said.
   const next = FINISHED.includes(goal.stage) ? '—' : (goal.log.at(-1)?.next ?? '—').replace(/\s*\n\s*/gu, ' ');
   const status = waitsOnPerson(goal) ? `${stageWords(goal)}, waits on a person`
     : goal.stage === 'build' && noCriteria(goal) ? `${stageWords(goal)}, no criteria — not started`
     : stageWords(goal);
-  return `${name} · ${goal.repos.join(',')} · ${status} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
+  const hold = readHold(goal.dir, read);
+  const held = hold ? `, held by ${hold.by ?? '—'}` : '';
+  return `${name} · ${goal.repos.join(',')} · ${status}${held} · ${criteriaWords(goal)} · ${sessions(goal.log)} sessions · ${next}`;
 }
 
 /**
