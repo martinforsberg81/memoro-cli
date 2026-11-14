@@ -96,6 +96,8 @@ import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, updateMainMends } from './main-repair.js';
 import { pickWork } from './lane-pick.js';
+import { drainDeskPreparation } from './desk-prepare.js';
+import { deskBudget } from './desk-budget.js';
 import { syncDeskItems } from './desk-items.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
@@ -1243,6 +1245,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     });
     if (out.left) say(`intake: ${out.left} file(s) still waiting`);
     return out;
+  }
+
+  /** New desk items follow sync, serially, beside the inbox drain. */
+  async function runDeskPreparation() {
+    if (offlineHeld() || stopRequested() || updateRequested()) return;
+    try { return await drainDeskPreparation({ env: deps.env, now: deps.now, deps: {
+      ...(deps.deskPrepare || {}), route: routeClass, logRun, say, quotaPause,
+      budget: options => deskBudget({ ...options, read: deps.read }),
+      stop: () => stopRequested() || updateRequested(),
+    } }); } catch (error) { say(`desk-prepare: waiting — ${error?.message || error}`); }
   }
 
   /**
@@ -2423,6 +2435,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await runIntakeDrain();
     try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env, reportIssue: issue => say(`martin items: source issue ${issue.path}: ${issue.error}`) }); }
     catch (error) { say(`martin items: sync failed — ${error?.message || error}`); }
+    await runDeskPreparation();
     askGithub();
     // `askGithub()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.
@@ -2587,7 +2600,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }

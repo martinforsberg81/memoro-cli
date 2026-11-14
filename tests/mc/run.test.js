@@ -20,7 +20,10 @@ import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
-import { listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
+import { run as martinCommand } from '../../src/mc/commands/martin.js';
+import { deskBudget, deskSettingsPath } from '../../src/mc/desk-budget.js';
+import { readCanonRole } from '../../src/mc/roles.js';
+import { deskItemId, itemDirectory, writeDeskItem, listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -59,8 +62,7 @@ function capacityWith({ claude = null, codex = null, refuse = {} } = {}) {
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, started: [], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }), capacity = null } = {}) {
-  const root = '/w';
+function fixture({ root = '/w', plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, started: [], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }), capacity = null } = {}) {
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
   const dirs = new Set([root]);
@@ -482,6 +484,88 @@ test('chores syncs a waiting goal item without adding a run row', async (t) => {
   const [item]=listDeskItems({env}); assert.equal(item.reference,'alpha/waiting'); assert.equal(item.state,'new');
   assert.equal(f.files[`${f.root}/runner/log/runs.tsv`] ?? null,before);
   assert.deepEqual(f.calls.sessions.slice(callsBefore),[], 'chores starts no session');
+});
+
+test('chores prepares the three oldest items on medium, bounds a round, and waits without a candidate', async (t) => {
+  for (const mode of ['three', 'four', 'unavailable']) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-prepare-round-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const f = fixture({ root });
+    f.deps.env.MC_HOME = join(root, 'mc-home');
+    Object.assign(f.deps.env, { MC_GOAL: 'example/parent', MC_PROGRAMME: 'example', MC_ROLE: 'build-session:goal', MC_HEADLESS: '1' });
+    const count = mode === 'three' ? 3 : 4;
+    const items = Array.from({ length: count }, (_, n) => {
+      const at = `2026-08-29T0${n}:00:00Z`;
+      return { id: deskItemId('goal', `example/item-${n}`, at), kind: 'goal', reference: `example/item-${n}`, source_at: at, state: 'new' };
+    });
+    // Sync really precedes preparation; do not seed the store before chores.
+    f.deps.syncDeskItems = () => items.toReversed().forEach(item => writeDeskItem(item, { env: f.deps.env }));
+    f.deps.catalog = () => ({ ...DEFAULT_CATALOG, medium: [{ tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' }, { tool: 'claude', model: 'sonnet', effort: 'high' }], large: [{ tool: 'claude', model: 'opus', effort: 'medium' }] });
+    if (mode === 'unavailable') {
+      f.deps.capacity.write(capacityWith({ claude: 1 }));
+      f.deps.billing = { readApi: () => ({ claude: false, codex: false }) };
+    }
+    const calls = [];
+    f.deps.deskPrepare = {
+      billingRoute: () => ({ billing: 'plan' }),
+      session: async call => {
+        calls.push(call);
+        const item = items.find(item => itemDirectory(item, f.deps.env) === call.cwd);
+        assert.ok(item);
+        assert.equal(call.env.MC_ROLE, 'desk-prepare'); assert.equal(call.env.MC_HEADLESS, '1');
+        for (const name of ['MC_GOAL', 'MC_PROGRAMME', 'MC_STEP']) assert.equal(call.env[name], undefined);
+        assert.equal(call.env.MC_TOOL, 'claude'); assert.equal(call.env.MC_MODEL, 'sonnet');
+        assert.equal(call.timeoutMs, 15 * 60_000);
+        assert.equal(call.args[call.args.indexOf('--model') + 1], 'sonnet');
+        assert.equal(call.args[call.args.indexOf('--effort') + 1], 'high');
+        const instructions = call.args[call.args.indexOf('--append-system-prompt') + 1];
+        assert.ok(instructions.includes(readCanonRole('desk-prepare').overlay));
+        assert.equal(call.args.includes('--resume'), false);
+        writeFileSync(join(call.cwd, 'prepared.md'), 'Facts with sources.');
+        assert.equal(await martinCommand(['item', item.id, 'prepared', '--sort', 'technical'], { env: call.env }), 0);
+        return { status: 0, stdout: JSON.stringify({ type: 'result', total_cost_usd: 0.25 }), stderr: '' };
+      },
+    };
+    const runner = createRunner({ deps: f.deps });
+    await runner.chores();
+    const expected = mode === 'unavailable' ? [] : items.slice(0, 3).map(item => item.id);
+    assert.deepEqual(calls.map(call => call.cwd.split('/').at(-1)), expected);
+    assert.deepEqual(calls.map(call => [call.env.MC_TOOL, call.env.MC_MODEL]), expected.map(() => ['claude', 'sonnet']), 'first usable medium candidate, never large');
+    const rows = String(f.files[runner.paths.runs]).split('\n').map(line => line.split('\t')).filter(row => row[2] === 'desk-prepare');
+    assert.deepEqual(rows.map(row => row[1]), expected);
+    assert.deepEqual(rows.map(row => row.slice(14, 20)), expected.map(() => ['sonnet', 'medium', 'claude', 'high', 'plan', '0.2500']));
+    assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'prepared' }).map(item => item.id), expected);
+    assert.deepEqual(listDeskItems({ env: f.deps.env, state: 'new' }).map(item => item.id), items.slice(expected.length).map(item => item.id));
+    if (mode === 'four') {
+      await runner.runDeskPreparation();
+      assert.deepEqual(calls.map(call => call.cwd.split('/').at(-1)), items.map(item => item.id));
+    }
+  }
+});
+
+test('desk ceiling holds a chores round once, ignores other days and kinds, and off restores turns', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-prepare-ceiling-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const f = fixture({ root }); f.deps.env.MC_HOME = join(root, 'mc-home');
+  const ids = ['a'.repeat(24), 'b'.repeat(24), 'c'.repeat(24)];
+  f.deps.syncDeskItems = () => ids.forEach((id, n) => writeDeskItem({ id, state: 'new', source_at: `2026-08-29T0${n}:00:00Z` }, { env: f.deps.env }));
+  let calls = 0;
+  f.deps.deskPrepare = { billingRoute: () => ({ billing: 'plan' }), session: async call => {
+    calls++;
+    writeFileSync(join(call.cwd, 'prepared.md'), 'Prepared');
+    await martinCommand(['item', call.cwd.split('/').at(-1), 'prepared', '--sort', 'mechanical'], { env: call.env });
+    return { status: 0, stdout: '{}', stderr: '' };
+  } };
+  const runner = createRunner({ deps: f.deps });
+  f.files[runner.paths.runs] = 'ts\tkind\tcost\n2026-08-29T01:00:00Z\tdesk-prepare\t2\n2026-08-29T02:00:00Z\tdecision\t3\n2026-08-28T23:59:00Z\tdecision\t100\n2026-08-29T01:00:00Z\tgoal\t100\n';
+  f.files[deskSettingsPath(f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: 5 });
+  await runner.chores();
+  assert.equal(calls, 0);
+  assert.equal(f.log.filter(line => line.includes('desk ceiling holds turns')).length, 1);
+  assert.deepEqual(deskBudget({ env: f.deps.env, now: f.deps.now(), read: f.deps.read }), { ceiling: 5, spent: 5, day: '2026-08-29', held: true });
+  f.files[deskSettingsPath(f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: null });
+  await runner.runDeskPreparation();
+  assert.equal(calls, 3);
 });
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */

@@ -9,6 +9,8 @@ import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
+import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
+import { deskBudget, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
 
@@ -26,11 +28,15 @@ export const ROUTES = {
     const selectors = Number(flags.all) + Number(flags.programme !== null) + Number(flags.goal !== null);
     return selectors > 1 ? 'choose exactly one of --all, --programme or --goal' : null;
   } },
+  prepare: { check: ({ positional }) => positional.length > 1 ? 'prepare takes at most one item id' : null },
+  ceiling: { check: ({ positional }) => positional.length > 1 ? 'ceiling takes one USD amount or off' : null },
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
 export async function run(argv, deps = {}) {
+  if (argv[0] === 'prepare') return prepare(argv.slice(1), deps);
+  if (argv[0] === 'ceiling') return ceiling(argv.slice(1), deps);
   if (argv[0] === 'items') return items(argv.slice(1), deps);
   if (argv[0] === 'item') return item(argv.slice(1), deps);
   if (argv[0] === 'get') return get(argv.slice(1), deps);
@@ -138,4 +144,34 @@ export function get(argv, deps = {}) {
   if (result.error) { stderr.write(`mc: ${result.error}\n`); return 2; }
   stdout.write(renderMartinQueue(result, { json: flags.json }));
   return 0;
+}
+
+async function prepare(argv, deps) {
+  const env = deps.env || process.env, stderr = deps.stderr || process.stderr, stdout = deps.stdout || process.stdout;
+  if (writerRole(env) !== 'person') { stderr.write('mc: martin prepare is for a person\n'); return 2; }
+  const parsed = scanArgs(argv, ROUTES.prepare);
+  const error = parsed.error || ROUTES.prepare.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  const options = { env, now: deps.now || (() => new Date()), deps: { ...deps.prepareDeps, say: line => stdout.write(`${line}\n`) } };
+  if (!parsed.positional[0]) { await drainDeskPreparation(options); return 0; }
+  const turn = await prepareDeskItem({ ...options, id: parsed.positional[0] });
+  stdout.write(`mc: desk-prepare: ${turn.reason || 'prepared'}\n`);
+  return turn.started && turn.ok ? 0 : 1;
+}
+function ceiling(argv, deps) {
+  const env = deps.env || process.env, stderr = deps.stderr || process.stderr, stdout = deps.stdout || process.stdout;
+  const parsed = scanArgs(argv, ROUTES.ceiling);
+  const error = parsed.error || ROUTES.ceiling.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  try {
+    const value = parsed.positional[0];
+    if (value !== undefined) {
+      if (writerRole(env) !== 'person') { stderr.write('mc: only a person sets the desk ceiling\n'); return 2; }
+      if (value !== 'off' && (!/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(value) || !Number.isFinite(Number(value)))) throw new Error('ceiling must be a non-negative USD amount or off');
+      setDeskCeiling(value === 'off' ? null : Number(value), { env });
+    }
+    const budget = deskBudget({ env, now: (deps.now || (() => new Date()))() });
+    stdout.write(`mc: desk ceiling: ${budget.ceiling === null ? 'off' : `$${budget.ceiling}/day`}; today (${budget.day} UTC): $${budget.spent.toFixed(4)}\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: ${error.message}\n`); return 2; }
 }

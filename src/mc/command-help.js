@@ -571,6 +571,8 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc martin get [--all] [--json]\n",
     "        mc martin get --programme <programme> [--json]\n",
     "        mc martin get --goal <programme>/<goal> [--json]\n",
+    "        mc martin prepare [<id>]\n",
+    "        mc martin ceiling [<usd>|off]\n",
     "        mc martin items [--state <state>] [--json]\n",
     "        mc martin item <id> prepared --sort <sort>\n",
     "        mc martin item <id> brief --sort <sort> --reversible yes|no\n",

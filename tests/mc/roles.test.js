@@ -351,7 +351,7 @@ describe('the role catalogue', () => {
   // when plan became interactive only (Martin, 2026-11-07).
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'build-session.md', 'finish-session.md', 'helper.md', 'intake.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'build-session.md', 'desk-prepare.md', 'finish-session.md', 'helper.md', 'intake.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });

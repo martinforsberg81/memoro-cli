@@ -647,6 +647,17 @@ The helper collect runs once per UTC day, on the first chore pass after 05:00Z;
 the inbox drain takes up to three files per pass on its own cadence. Daily
 dependency readings and tidy use their own recorded rows too.
 
+After intake and the model-free desk item sync, `runDeskPreparation` takes up
+to three new items, oldest first, serially. Each gets a fresh fifteen-minute
+headless turn in its item directory, with `MC_ROLE=desk-prepare`, no goal
+identity and the tool/model/effort from `routeClass('medium')` only. No usable
+candidate means wait. A per-item claim excludes concurrent manual preparation.
+Quota endings pause as intake does. Each started turn writes `kind: desk-prepare`
+in `runs.tsv`, with the item id as `name`, routing/usage and list-price `cost`.
+The off-by-default shared daily desk ceiling is checked before every turn; a
+hold is said once per round. Failed-attempt fallback, manual preparation, role
+authority and the setting are defined in [mc-martin.md](mc-martin.md).
+
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
 **full runs** (Martin, 2026-11-13): once a day (`nightlyDue`), `runNightly`
