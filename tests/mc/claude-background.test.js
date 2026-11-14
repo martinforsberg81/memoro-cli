@@ -352,6 +352,62 @@ test('attach only attaches and reports whether the provider still lives with the
   assert.deepEqual(lines, ['mc: mc manager is still running; rejoin with mc manager.\n']);
 });
 
+test('a session mc started with Remote Control is joined by its app lines and never attached', async () => {
+  const lines = [];
+  const calls = [];
+  const driver = claudeBackgroundDriver({ run: (bin, args) => { calls.push({ bin, args }); return { status: 0 }; }, agents: () => [row] });
+  const records = () => [{ ...record, remoteControl: true }];
+  const stdout = { write: text => lines.push(text) };
+  const result = await joinSession({ ...base, launch }, row, driver, { alive: () => true, records, stdout });
+  assert.equal(result.ok, true);
+  assert.equal(result.running, true);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(lines, [
+    'mc: mc manager is running. Open it in the Claude app or at claude.ai/code: session "mc manager".\n',
+    'mc: terminal view: claude attach bg-1\n',
+  ]);
+  lines.length = 0;
+  await joinSession({ ...base, launch, host: 'desk.example' }, row, driver, { alive: () => true, records, stdout });
+  assert.equal(lines[1], 'mc: terminal view: ssh -t desk.example claude attach bg-1\n');
+  assert.deepEqual(calls, []);
+});
+
+test('a plan session started with Remote Control prints the app lines and never attaches', async () => {
+  const f = entrance({ pick: 'new' });
+  const lines = [];
+  const attached = [];
+  const started = { ...row, id: 'bg-2', pid: 702 };
+  const prepared = await prepareClaudeBackground({ ...f.options, stdout: { write: text => lines.push(text) } }, {
+    ...f.deps, agents: () => [], alive: () => true,
+    records: () => [{ ...record, pid: started.pid, remoteControl: true }],
+    start: async () => ({ ok: true, session: started }),
+    attach: (_options, session) => { attached.push(session.id); return { status: 0 }; },
+  });
+  const result = await prepared.start({ billing: { billing: 'plan' } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(attached, []);
+  assert.deepEqual(lines, [
+    'mc: mc manager is running. Open it in the Claude app or at claude.ai/code: session "mc manager".\n',
+    'mc: terminal view: claude attach bg-2\n',
+  ]);
+});
+
+test('a session whose register record names no Remote Control is attached once after a start, with today\'s status line', async () => {
+  const f = entrance({ pick: 'new' });
+  const lines = [];
+  const attached = [];
+  const started = { ...row, id: 'bg-2', pid: 702 };
+  const prepared = await prepareClaudeBackground({ ...f.options, stdout: { write: text => lines.push(text) } }, {
+    ...f.deps, agents: () => [started], alive: () => true, records: () => [],
+    start: async () => ({ ok: true, session: started }),
+    attach: (_options, session) => { attached.push(session.id); return { status: 0 }; },
+  });
+  const result = await prepared.start({ billing: { billing: 'plan' } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(attached, ['bg-2']);
+  assert.deepEqual(lines, ['mc: mc manager is still running; rejoin with mc manager.\n']);
+});
+
 test('a held conversation with no transcript can join by id using matching live registration as identity evidence', async () => {
   const { findBackgroundConversation } = await import('../../src/mc/claude-background.js');
   const f = entrance();
@@ -380,10 +436,40 @@ test('background argv preserves the single launch plan including role, model, ef
     model: 'haiku', overlay: 'Keep this launch instruction.', prompt: 'Opening words.' });
   const document = backgroundSettings(plan.args, plan.identity, env);
   const f = holderFixture();
+  f.request.record = { ...record, remoteControl: true };
   await holdClaudeBackground({ ...f.request, ...document }, f.deps);
   const expected = [...plan.args];
   expected[expected.indexOf('--settings') + 1] = join(f.request.directory, 'settings.json');
-  assert.deepEqual(f.calls.find(call => call.args).args, ['--bg', '--name', row.name, ...expected]);
+  assert.deepEqual(f.calls.find(call => call.args).args, ['--bg', '--name', row.name, '--remote-control', row.name, ...expected]);
+  assert.equal(f.calls.find(call => call.args).args.at(-1), 'Opening words.');
+});
+
+test('a Claude holder names Remote Control after the session, ahead of the settings, on plan and credits alike', async () => {
+  for (const billing of ['plan', 'credits']) {
+    const f = holderFixture(billing);
+    f.request.record = { ...record, remoteControl: true };
+    await holdClaudeBackground(f.request, f.deps);
+    const args = f.calls.find(call => call.args).args;
+    assert.deepEqual(args.slice(0, 4), ['--bg', '--name', row.name, '--remote-control']);
+    assert.equal(args[4], row.name);
+    assert.equal(args.indexOf('--settings'), 5);
+    assert.equal(f.calls.find(call => call.record).record.remoteControl, true);
+  }
+});
+
+test('a background resume names Remote Control after the session and keeps the conversation argv', async () => {
+  const f = holderFixture();
+  f.request.record = { ...record, remoteControl: true };
+  f.request.args = ['--resume', 'held-1', '--model', 'haiku', 'Resume words.'];
+  await holdClaudeBackground(f.request, f.deps);
+  assert.deepEqual(f.calls.find(call => call.args).args, ['--bg', '--name', row.name, '--remote-control', row.name,
+    '--settings', join(f.request.directory, 'settings.json'), '--resume', 'held-1', '--model', 'haiku', 'Resume words.']);
+});
+
+test('a holder whose record names no Remote Control starts with no such flag', async () => {
+  const f = holderFixture();
+  await holdClaudeBackground(f.request, f.deps);
+  assert.equal(f.calls.find(call => call.args).args.includes('--remote-control'), false);
 });
 
 test('the detached holder inherits the desk lock pipe so client death cannot admit a duplicate during startup', async () => {

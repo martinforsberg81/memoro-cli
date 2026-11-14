@@ -286,6 +286,9 @@ describe('the launch', () => {
     });
     assert.equal(result.ok, true);
     const [call] = calls;
+    // Remote Control, named after the session, leads the argv of every interactive Claude launch.
+    assert.deepEqual(call.args.slice(0, 2), ['--remote-control', 'mc plan x']);
+    call.args = call.args.slice(2);
     assert.deepEqual(call.args.slice(0, 2), ['--model', 'opus']);
     assert.equal(call.args[2], '--append-system-prompt');
     // The shared text, then the role's own body — the same

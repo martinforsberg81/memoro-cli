@@ -68,6 +68,15 @@ export function sessionName(options, sessions) {
   return `${base} ${suffix}`;
 }
 
+/**
+ * Claude's Remote Control flag, with its name as the value. A bare `--remote-control`
+ * takes the next positional as its optional name, which would be the opening prompt.
+ * The flag leads the argv, so the opening prompt stays the last member.
+ */
+export function withRemoteControl(args, name) {
+  return ['--remote-control', name, ...args];
+}
+
 /** Serialise selection through registration, not attachment: two entrances must not resume one transcript. */
 export async function lockDesk(options, { io = fs, spawnProcess = spawn } = {}) {
   const root = join(workRoot(options.env), 'runner', 'session-entrance');
@@ -119,8 +128,23 @@ export function registerSession(record, session, { env = process.env, register =
   return register({ ...record, pid: session.pid, env, onExit: () => {} });
 }
 
+/** A session mc started with Remote Control is found by its register record, which holds the flag. */
+export function remoteControlled(options, session, records) {
+  return records.some(item => item.pid === session.pid && item.remoteControl === true && recordMatchesDesk(options, item));
+}
+
 export async function joinSession(options, session, driver, {
-  alive = pidAlive, stdout = options.stdout || process.stdout } = {}) {
+  alive = pidAlive, stdout = options.stdout || process.stdout, records = readRegister } = {}) {
+  // The app is the session's interface: the terminal is only told where it is, never attached.
+  if (remoteControlled(options, session, records(options.env))) {
+    const on = options.host ? ` on ${options.host}` : '';
+    const ssh = options.host ? `ssh -t ${options.host} ` : '';
+    stdout.write(`mc: ${session.name} is running${on}. Open it in the Claude app or at claude.ai/code: session "${session.name}".\n`);
+    stdout.write(`mc: terminal view: ${ssh}claude attach ${session.id}\n`);
+    return { ok: true, code: 0, background: session.id, conversation: session.sessionId, running: alive(session.pid),
+      resumed: Boolean(options.joining || options.chosen),
+      started: options.starting && !options.chosen ? session.sessionId : null, kept_nothing: false };
+  }
   const result = await driver.join(options, session);
   let running;
   try { running = (await driver.list(options)).some(row => row.id === session.id && row.pid === session.pid && alive(row.pid)); }
@@ -166,17 +190,18 @@ export async function prepareSessionEntrance(options, driver, {
         return { result: failure('joining an existing session cannot apply --model or a different --tool; start a new one to apply them'), release };
       }
       await release();
-      return { result: await joinSession({ ...options, joining: true }, selected, driver, { alive }), release };
+      return { result: await joinSession({ ...options, joining: true }, selected, driver, { alive, records }), release };
     }
     if (options.chosen && held.has(options.chosen.id)) return { result: failure('this conversation is held by a provider process without matching desk registration; no second provider was started'), release };
     return { held, release, start: async plan => {
-      const launched = await driver.start({ ...options, lockPipe: release.pipe }, plan, sessionName(options, sessions));
+      const name = sessionName(options, sessions);
+      const launched = await driver.start({ ...options, lockPipe: release.pipe }, plan, name);
       await release();
       if (!launched.ok) {
         log('work.open-failed', { area: options.areaRoot, error: launched.reason });
         return launched;
       }
-      return await joinSession({ ...options, chosen: plan.chosen, starting: true }, launched.session, driver, { alive });
+      return await joinSession({ ...options, chosen: plan.chosen, starting: true }, launched.session, driver, { alive, records });
     } };
   } catch (error) {
     await release?.();

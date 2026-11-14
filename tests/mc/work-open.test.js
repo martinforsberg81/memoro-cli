@@ -34,6 +34,8 @@ const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 // Every claude launch carries these: no CLAUDE.md, no auto-memory, and the
 // role's prompt-cache TTL — an hour unless the caller says otherwise.
 const SETTINGS = [...toolArgs(), ...sessionArgs()];
+// A claude launch from the desk `manager` is Remote Control named after its session, leading the argv.
+const REMOTE = ['--remote-control', 'mc manager'];
 const QUOTED_IDENTITY = ['env', ...SESSION_IDENTITY_ENV.flatMap((key) => ['-u', key]), 'MC_ROLE=work'].map((arg) => `'${arg}'`).join(' ');
 const QUOTED_SETTINGS = SETTINGS.map((arg) => `'${arg}'`).join(' ');
 
@@ -120,7 +122,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, model: 'opus', ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, ['--model', 'opus', ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--model', 'opus', ...SETTINGS]);
   });
 
   it('without the flag a new conversation launches with nothing', async () => {
@@ -128,7 +130,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
-    assert.deepEqual(calls[0].args, SETTINGS);
+    assert.deepEqual(calls[0].args, [...REMOTE, ...SETTINGS]);
   });
 
   it('resuming puts the conversation back on the model its transcript records', async () => {
@@ -142,7 +144,7 @@ describe('openInWorkArea and --model', () => {
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
   });
 
   it('an explicit --model on resume outranks the transcript', async () => {
@@ -155,7 +157,7 @@ describe('openInWorkArea and --model', () => {
     await openInWorkArea({
       areaRoot, worktree, env, pick: CONVERSATION_ID.slice(0, 8), model: 'opus', ...options,
     });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'opus', ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, '--model', 'opus', ...SETTINGS]);
   });
 
   it('a transcript that names no model resumes exactly as before', async () => {
@@ -167,7 +169,7 @@ describe('openInWorkArea and --model', () => {
     const { calls, options } = opening();
     const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, ...SETTINGS]);
   });
 
   // `prompt` is opening words and a resume is not an opening; `resumePrompt`
@@ -178,7 +180,7 @@ describe('openInWorkArea and --model', () => {
     });
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, ...options, prompt: 'INTRO', resumePrompt: 'TODAY' });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS, 'TODAY']);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, ...SETTINGS, 'TODAY']);
   });
 });
 
@@ -209,7 +211,8 @@ describe('openInWorkArea and the launch switches', () => {
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, resumePrompt: 'TODAY', ...options });
     const { args } = calls[0];
-    assert.equal(args[0], '--resume');
+    assert.deepEqual(args.slice(0, REMOTE.length), REMOTE);
+    assert.equal(args[REMOTE.length], '--resume');
     const parsed = settingsEnv(args);
     assert.equal(parsed.CLAUDE_CODE_DISABLE_CLAUDE_MDS, '1');
     assert.equal(parsed.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
@@ -247,7 +250,7 @@ describe('openInWorkArea in a role area', () => {
     });
     assert.equal(result.ok, true);
     assert.deepEqual(calls[0].args, [
-      '--model', 'fable', '--append-system-prompt', `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nOVERLAY`, ...SETTINGS,
+      ...REMOTE, '--model', 'fable', '--append-system-prompt', `${expandRoleIncludes(sharedRoleText())}\n\n---\n\nOVERLAY`, ...SETTINGS,
     ]);
   });
 
@@ -257,7 +260,7 @@ describe('openInWorkArea in a role area', () => {
     await openInWorkArea({
       areaRoot, worktree, env, model: 'opus', overlay: 'OVERLAY', defaultModel: 'fable', ...options,
     });
-    assert.equal(calls[0].args[1], 'opus');
+    assert.equal(calls[0].args[calls[0].args.indexOf('--model') + 1], 'opus');
   });
 
   it('on resume the transcript model outranks the role default', async () => {
@@ -271,7 +274,7 @@ describe('openInWorkArea in a role area', () => {
       areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'opus', ...options,
     });
     assert.equal(result.resumed, true);
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, '--model', 'claude-fable-5', ...SETTINGS]);
   });
 
   it('the role default never rides into a resume', async () => {
@@ -285,7 +288,7 @@ describe('openInWorkArea in a role area', () => {
     });
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, defaultModel: 'fable', ...options });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, ...SETTINGS]);
+    assert.deepEqual(calls[0].args, [...REMOTE, '--resume', CONVERSATION_ID, ...SETTINGS]);
   });
 
   it('the role default follows the role tool, not every tool in the area', async () => {
@@ -296,7 +299,42 @@ describe('openInWorkArea in a role area', () => {
     await openInWorkArea({
       areaRoot, worktree, env, defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex', ...options,
     });
-    assert.deepEqual(calls[0].args, SETTINGS);
+    assert.deepEqual(calls[0].args, [...REMOTE, ...SETTINGS]);
+  });
+});
+
+// Every interactive Claude launch is Remote Control, whatever its billing; Codex has no such flag.
+describe('openInWorkArea and Remote Control', () => {
+  it('a claude launch on the API reserve carries the flag too, through the gateway, and registers it', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    env.MC_WORK_ROOT = mkdtempSync(join(tmpdir(), 'mc-work-root-'));
+    writeCapacity(applyRefusal({}, 'claude', new Date(Date.now() + 3_600_000).toISOString()), { root: runnerDir(env) });
+    const registered = [];
+    const { calls, options } = opening();
+    const result = await openInWorkArea({ areaRoot, worktree, env, register: item => { registered.push(item); return () => {}; }, ...options });
+    assert.equal(result.ok, true);
+    assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
+    const at = calls[0].args.indexOf('--remote-control');
+    assert.ok(at > 0);
+    assert.equal(calls[0].args[at + 1], 'mc manager');
+    assert.equal(registered[0].remoteControl, true);
+  });
+
+  it('a new claude launch with an opening prompt keeps the prompt as the last argv member', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, ...options, prompt: 'GO' });
+    assert.deepEqual(calls[0].args.slice(0, 2), ['--remote-control', 'mc manager']);
+    assert.equal(calls[0].args.at(-1), 'GO');
+  });
+
+  it('a codex launch carries no Remote Control flag', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening({ tool: 'codex' });
+    const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].args.includes('--remote-control'), false);
   });
 });
 
@@ -323,7 +361,7 @@ describe('openInWorkArea and the foreground register', () => {
       areaRoot, worktree, env, areaName: 'plan/mc', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null },
+      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null, remoteControl: true },
       { event: 'release' },
     ]);
   });

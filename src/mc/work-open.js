@@ -42,7 +42,7 @@ import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { entersPersistentSession, prepareSessionEntrance } from './session-entrance.js';
+import { entersPersistentSession, prepareSessionEntrance, sessionName, withRemoteControl } from './session-entrance.js';
 
 /** Provider mechanics of a persistent entrance, by launch id; loaded only when one is used. */
 const PERSISTENT_DRIVERS = {
@@ -236,10 +236,16 @@ export async function interactiveLaunchPlan({
   // the model, and a grant on the launch model answered every request after
   // that switch `403 model unavailable for session` (2026-10-29). The grant
   // still names the provider, expires and counts requests.
-  const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin, args, billing: billing.billing });
+  // Every interactive Claude launch is in the Claude app through Remote Control, named after its session:
+  // the name the desk gets with no other session (the background holder names its own, request.name).
+  const remoteControl = toolId === 'claude-code';
+  const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin,
+    args: remoteControl ? withRemoteControl(args, sessionName({ roleName, verb, programme }, [])) : args,
+    billing: billing.billing });
 
   const record = {
     verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
+    ...(remoteControl ? { remoteControl: true } : {}),
     // Record only the instructions actually handed to this launch.
     role: roleRecord({
       name: roleName,

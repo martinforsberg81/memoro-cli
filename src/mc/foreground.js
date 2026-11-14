@@ -59,6 +59,9 @@ export function registerForeground({
   programme = null,
   tool = null,
   model = null,
+  // Claude Remote Control was requested for this session. Written only when true, so a
+  // terminal-only session's record is unchanged; the session entrance reads it to choose the app's view.
+  remoteControl = false,
   // What this session was told it is, and a digest of what it was told —
   // `roleRecord` in roles.js, or null for a session with no role at all. The
   // launcher exits and takes its argv with it; this is the only place the
@@ -85,6 +88,7 @@ export function registerForeground({
       verb, area, programme, tool, model, pid,
       started: now().toISOString().replace(/\.\d{3}Z$/u, 'Z'),
       role,
+      ...(remoteControl ? { remoteControl: true } : {}),
     });
   } catch {
     return noop;
