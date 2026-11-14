@@ -1028,10 +1028,10 @@ const HOLD_REASON = 'the fix is taken over here';
 /** The hold file `mc goal hold` writes, as an earlier takeover left it. */
 const HELD = JSON.stringify({ by: 'plan', tool: 'claude', at: '2026-11-01T19:00Z', reason: HOLD_REASON });
 const heldGoal = (extra = {}) => seededGoal({ [`${DIR}/.hold.json`]: HELD, ...extra });
-/** Two repositories: one with changes and two commits past origin/main, one without a worktree. */
+/** Two repositories: one with three changes and two commits past origin/main, one without a worktree. */
 const gitState = (cwd, args) => {
   if (cwd === `${DIR}/memoro` && args[0] === 'status') return failed('not a worktree');
-  if (args[0] === 'status') return ok(' M src/a.js\n?? notes.md\n');
+  if (args[0] === 'status') return ok(' M src/a.js\n M src/b.js\n?? notes.md\n');
   if (args[0] === 'rev-list') return ok('2\n');
   if (args[0] === 'log') return ok('2026-11-01T21:00:00+01:00\n');
   return allOk();
@@ -1070,17 +1070,20 @@ test('mc goal hold refuses a headless caller, another goal\'s session, no reason
 test('mc goal release removes the hold, and logs who held it, since when, and each worktree\'s state', async () => {
   const f = fixture({ files: heldGoal({ [`${DIR}/GOAL.json`]: RELEASE_REPOS }), env: PLAN, git: gitState });
   f.deps.remove = (path) => { delete f.store[path]; };
+  const before = parseLog(f.store[`${DIR}/LOG.md`]).length;
   assert.equal(await run(['release', 'mc/plain'], f.deps), 0, f.err());
   assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'the hold file is gone');
   assert.equal(stateOf(f), 'build · ready');
-  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+  const entries = parseLog(f.store[`${DIR}/LOG.md`]);
+  assert.equal(entries.length, before + 1, 'exactly one entry added');
+  const last = entries.at(-1);
   assert.equal(last.role, 'plan');
   assert.equal(last.comment, [
     `released: held by plan since 2026-11-01T19:00Z (${HOLD_REASON})`,
-    'memoro-cli: 2 changed · 2 commits past origin/main · last commit 2026-11-01T21:00:00+01:00',
+    'memoro-cli: 3 changed · 2 commits past origin/main · last commit 2026-11-01T21:00:00+01:00',
     'memoro: no worktree',
   ].join('\n'));
-  assert.match(f.out(), /^mc: mc\/plain released\nmemoro-cli: 2 changed · 2 commits past origin\/main · last commit 2026-11-01T21:00:00\+01:00\nmemoro: no worktree\n$/u);
+  assert.match(f.out(), /^mc: mc\/plain released\nmemoro-cli: 3 changed · 2 commits past origin\/main · last commit 2026-11-01T21:00:00\+01:00\nmemoro: no worktree\n$/u);
 });
 
 test('mc goal release refuses a goal that is not held, and a headless caller, and removes nothing', async () => {
@@ -1106,6 +1109,9 @@ test('a held goal shows its hold on the list line and in show, and a hold on a g
   });
   assert.equal(await run(['hold', 'mc/plain', '--reason', HOLD_REASON], running.deps), 0, running.err());
   assert.match(running.out(), /a session is running on mc\/plain now; the hold does not stop it\n$/u);
+  const entries = parseLog(running.store[`${DIR}/LOG.md`]);
+  assert.equal(entries.length, 5, 'one entry added to the four the goal had');
+  assert.equal(entries.at(-1).comment, `held: ${HOLD_REASON} — a session is running on it now; the hold does not stop it`);
 
   const held = fixture({ files: heldGoal() });
   assert.equal(await run(['list'], held.deps), 0, held.err());
@@ -1113,6 +1119,13 @@ test('a held goal shows its hold on the list line and in show, and a hold on a g
 
   assert.equal(await run(['show', 'mc/plain'], held.deps), 0, held.err());
   assert.match(held.out(), /\nheld by plan since 2026-11-01T19:00Z: the fix is taken over here\n/u);
+
+  const unheld = fixture({ files: inStage('build') });
+  assert.equal(await run(['list'], unheld.deps), 0, unheld.err());
+  assert.match(unheld.out(), /^  mc\/plain · memoro-cli · build · ready · /mu);
+  assert.doesNotMatch(unheld.out(), /held by/u, 'list: an unheld goal says nothing of a hold');
+  assert.equal(await run(['show', 'mc/plain'], unheld.deps), 0, unheld.err());
+  assert.doesNotMatch(unheld.out(), /held by/u, 'show: an unheld goal says nothing of a hold');
 });
 
 test('mc goal list shows each goal\'s stage · status, and a blocked one as waiting on a person', async () => {

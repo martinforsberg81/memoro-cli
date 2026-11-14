@@ -185,7 +185,8 @@ order without a model call:
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
-   delivery session. A focused plan session may complete the next draft under the programme rule below.3. Hold any goal whose programme has an unfinished goal in a lower phase.
+   delivery session. A focused plan session may complete the next draft under the programme rule below.
+3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
 4. Exclude goals already claimed or named by a live current file, held goals
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
