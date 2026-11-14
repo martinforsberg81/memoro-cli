@@ -13,8 +13,12 @@ sessions before you did and what the last one said comes next. Read it first.
 
 Your worktree is `<goal dir>/<repo>`, on branch `goal/<goal>`. Work towards the
 goal's criteria from where the last session left it. There is no step and no
-`done_when`: the goal is the whole brief. When you have run a criterion's check
-and it holds, record it: `mc goal criterion met <n>` (`unmet` takes it back).
+`done_when`: the goal is the whole brief. A criterion is met only when you have
+run everything its check names — every command, case and file — on this branch
+as it stands, and all of it holds; then record it: `mc goal criterion met <n>`.
+A case you have not run, or that your log entry lists as not done, leaves the
+criterion unmet, and `mc goal criterion unmet <n>` takes back a mark that no
+longer holds.
 
 Before you finish: `mc gate` on what you changed, fix the red, commit, then
 `mc publish --no-merge --title "…" --body-file <file>` (file in
@@ -58,7 +62,9 @@ moves forward. You do one of two things to it, nothing else:
   command and output>"`. mc writes one entry, sets the goal `Martin`, and the
   runner starts no further session on it; the desk amends the goal and sets it
   ready. Do not work around a wrong premise, and do not ask with options for
-  it: there is no choice to make, the text is wrong. Do not edit the goal.
+  it: there is no choice to make, the text is wrong. A word in a criterion or
+  its check that does not fit the code is such a defect: do not read it as
+  something the code can satisfy. Do not edit the goal.
 - **Unresolved choice:** read relevant technical standards and programme design;
   ordinary details are settled there. Call `mc ask` with `--kind technical` or
   `--kind product`; if jev does not settle a technical question, record your
