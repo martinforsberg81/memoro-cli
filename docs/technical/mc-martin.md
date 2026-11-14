@@ -19,7 +19,7 @@ session; `brief --json` gives the same data as the text. `brief` writes nothing
 except the sync's own store writes, and neither it nor a refused or failed
 launch changes `last-open.json`.
 
-The opening has four parts, in this order:
+The opening has five parts, in this order:
 
 1. **Yours (n)** — every for-martin item, blocking work first: a goal item that
    blocks later-phase goals of its programme sorts before one that blocks none,
@@ -35,8 +35,10 @@ The opening has four parts, in this order:
    its age in hours from its source time, and those with a preparation or
    decision failure.
 4. **Cost** — the desk's spend on the UTC day and over the last seven days
-   (`desk-prepare` and `decision` rows of `runs.tsv`; runs of unknown cost are
-   counted, not summed), and the daily ceiling or `off`.
+   (`desk-prepare`, `decision` and `learning` rows of `runs.tsv`; runs of unknown
+   cost are counted, not summed), and the daily ceiling or `off`.
+5. **What the system changed** — from the lessons and the item store only (see
+   *Lessons and the learning pass*). It never lists lessons or prints their text.
 
 The interval is `(since, now]`, where `since` is the time of the last
 successful opening, or the store's `first_sync_at` before the first opening.
@@ -105,7 +107,8 @@ lifecycle remain unchanged.
 preparation, decisions and the interactive desk. Its schema is
 `mc-desk-item` version 1; `id` is a stable digest of kind, reference and
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
-(`main-red:<repo>/<id>`) and `decision` (`decision:<at>`). A goal's source time
+(`main-red:<repo>/<id>`), `decision` (`decision:<at>`) and `lesson`
+(`lesson:<name>`, written only by `mc martin lesson brief`, never by sync). A goal's source time
 is its current question/log entry time; a later question is a distinct item.
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`.
@@ -135,7 +138,11 @@ and roles `martin`, `desk-prepare` and `decision`; desk-prepare may only prepare
 `prepared --sort <sort>` requires `prepared.md` and moves new to prepared.
 `brief --sort product|judgement|reserved --reversible yes|no` requires
 `brief.md`, moves prepared to for-martin and records a 48-hour due time only
-when reversible. `close --by decision|martin|default --summary <paragraph>`
+when reversible; `--recommend <key>` also records the recommended option's key
+as `recommend`, which must be an option of `brief.md` (a line `- <key>: its
+consequence`). Closing `--by martin` an item that has a `recommend` requires
+`--chose <key>`, an option of the brief, recorded as `chose`; `--chose` is
+refused with any other `--by`. `close --by decision|martin|default --summary <paragraph>`
 (or `--summary-file`) closes prepared/for-martin. Invalid transitions, roles,
 ids and missing required files are refused with exit 2 and no write. Item JSON
 is written atomically. `mc martin` launches the desk on the opening above;
@@ -185,8 +192,8 @@ file is also off. `mc martin ceiling` prints the setting and today's desk sum;
 There is no implicit ceiling or held work while it is off.
 
 `desk-budget.js` is the shared admission reading for both unattended desk
-passes: preparation and the decision pass. It sums today's UTC `runs.tsv`
-`cost` values for `desk-prepare` and `decision` only; other days/kinds and unknown
+passes: preparation, the decision pass and the learning pass. It sums today's UTC
+`runs.tsv` `cost` values for `desk-prepare`, `decision` and `learning` only; other days/kinds and unknown
 costs (`-`) do not contribute. Before each turn it rereads the setting and sum.
 When the setting is non-null and the sum is at least it, no desk turn starts;
 the chores pass explains the hold once in that round. Already running turns
@@ -258,3 +265,95 @@ sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`, and
 keeps the goal waiting on Martin. Admission refusals spend no attempt. The
 runner's existing mechanical `Martin` settings are unchanged; the pass handles
 what they leave rather than moving their ownership into the runner.
+
+## Lessons and the learning pass
+
+Learning has happened only when one of three things has changed on main: the
+code of how mc works (`src/mc/`), the prompts of the sessions (`canon/`), or a
+technical standard (`docs/technical/` of memoro-cli or memoro) (Martin,
+2026-11-14). A lesson is the input to that, never the result: it is general form
+of what a missing or wrong rule looked like, and it leaves the list only by
+landing a change or by a dismissal with a reason. mc never deletes a lesson.
+
+**Store.** A lesson is `~/mc/martin/lessons/<date>-<slug>.md` (`desk-lessons.js`):
+a header, then exactly three parts, `## What happened`, `## The rule` and
+`## Where the change belongs`. Header fields: `kind` (`not-martins`,
+`wrong-question`, `answer-differs`, `overturned`, `review-finding`, `unsettled`,
+`repeat`), `item` (a desk item id or `<programme>/<goal>`), `programme`, `state`
+(`open`, `in-goal`, `landed`, `dismissed`), `goal` (the goal that carries it, or
+null), `pr` (the pull request that landed it, as `repo#n`, or null), `place`
+(the file the change belongs in; its place is `code` under `src/`, `prompt`
+under `canon/`, `standard` under `docs/technical/`), `at`, `by`, `carried_at`,
+`landed_at`, `dismissed_at`, `reason` and `repeat_of` (the pull request of an
+earlier landed lesson of the same kind and place, computed on `add`; the
+lesson's first part then says that change did not work).
+
+**Verbs.** `mc martin lesson add --kind <kind> [--item] [--programme] [--place]
+--file <path|->` writes an open lesson; `lessons [--state] [--json]` lists them
+(`<name> · <kind> · <state> · <goal or "no goal"> [· <pr>] · <n> days`); `lesson carry <name>
+--goal <programme>/<goal>` moves an open lesson to `in-goal` and needs a live
+goal; `lesson dismiss <name> --reason "…"` moves an open lesson to `dismissed`
+and needs a reason from every role; `lesson brief <name> --file <path|->` is for
+a lesson that contradicts a dated decision of Martin's: it writes an item of
+kind `lesson`, sort `product`, not reversible (so it waits without limit and no
+default carries it out), with that Swedish brief, and dismisses the lesson with
+the item as its reason. Writers: a person and the roles `martin`, `decision` and
+`learning` for every verb; `review-session:goal` for `add` only. Any other role
+is refused with exit 2 and nothing is written. **No verb sets `landed`.**
+`reconcileLessons` is the only way: each chores round the runner reads every
+goal (the archive included); an `in-goal` lesson whose goal is `done` becomes
+`landed` with the goal's last registered pull request and the time, and one
+whose goal was `dropped` becomes `open` again with no goal. A goal that cannot
+be found leaves its lessons where they are.
+
+**Where they arise.** (1) `not-martins` and `wrong-question`: the interactive
+desk records them when Martin says so; the decision pass records the same for an
+item it finds should never have reached him. (2) `answer-differs`: written by
+`close --by martin --chose <key>` when `recommend` and `chose` differ, before
+the item closes, naming the item and both options' text from `brief.md`; a close
+that matches leaves none, and a lesson that cannot be written leaves the item
+open. (3) `overturned`: the interactive desk, when Martin overturns something
+decided without him or a rule the learning pass landed. (4) `review-finding`:
+the review session, for a session's technical decision it finds wrong.
+(5) `unsettled`: the runner, when the decision pass has failed on an item twice
+and gives it to Martin (`decision_failures`); one per item. (6) `repeat`: the
+learning pass, for three or more items within thirty days whose preparation names
+the same rule.
+
+**The pass.** Each chores round, after preparation, `runLearningPass`
+(`desk-learning.js`) starts one session when it is due: five or more lessons are
+`open`, or the oldest open lesson is seven days old. It starts none when it
+already started one on the UTC day (`~/mc/runner/learning.json`, written when a
+session starts, so a crashed one counts), none while the desk ceiling is set and
+reached, and none without a usable first `decision` candidate (`routeClass`,
+never another list). The session has `MC_ROLE=learning`, `MC_HEADLESS=1`, the
+canon role `canon/roles/learning.md`, stands in `~/mc/martin/lessons/`, has a
+sixty-minute limit and writes a `runs.tsv` row of kind `learning` named
+`learning` (class `decision`). Quota endings pause the runner as the other desk
+passes do.
+
+**Authority.** The learning role may read, create goals (`mc goal new`), write
+the ones it created in this session (`set`, `document add`, `criterion add`) and
+move such a goal from `draft` to `build` (`stage <programme>/<goal> build`). A
+goal was created in this session when its first LOG.md entry is by role
+`learning` from a session tool and is stamped no earlier than the minute
+`MC_SESSION_STARTED` names. Every other verb, and every verb on another goal,
+is refused with exit 2 and changes nothing; the role writes no programme README
+and no file in a repository. The role never starts another session and runs no
+reserved act. It may dismiss at most one lesson in five of those it was given
+(the open ones plus those it carried or dismissed since its session started).
+
+**Figures.** Computed by `buildChanges` from the item store and the lessons,
+without a model. The part shows: each change landed since the last opening, as
+one line (the goal's title, where — code, prompt or standard — and its pull
+request; lessons landed by one goal and pull request are one line); then counts
+only: lessons `open` and `in-goal`, with the age in days of the oldest of each;
+a lesson `open` or `in-goal` for more than fourteen days, named as late; the
+lessons dismissed since the last opening, with their reasons. Then four
+weeks, oldest first, each week `(now − 7(w+1) days, now − 7w days]` and each
+with five numbers: items opened (`opened_at` in the week); the share of them
+that reached Martin (state `for-martin`, or closed by `martin` or `default`); of
+those, the share with a `not-martins` or `wrong-question` lesson naming the item;
+the `overturned` lessons recorded in the week; and the lessons recorded in the
+week that repeat a lesson of the same kind and place that had already landed
+(the change did not work). A share with no denominator is `-`.

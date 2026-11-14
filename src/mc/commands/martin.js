@@ -16,6 +16,7 @@ import { ledgerPath } from '../jev.js';
 import { FINISHED, programsGoals } from '../goals.js';
 import { readRunRows } from '../landed.js';
 import { writeJsonAtomic } from '../atomic-write.js';
+import { addLesson, briefLesson, briefOptions, buildChanges, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
 
 export function usage() { return commandUsage('martin'); }
 
@@ -35,7 +36,9 @@ export const ROUTES = {
   prepare: { check: ({ positional }) => positional.length > 1 ? 'prepare takes at most one item id' : null },
   ceiling: { check: ({ positional }) => positional.length > 1 ? 'ceiling takes one USD amount or off' : null },
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  lessons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
+  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
 export async function run(argv, deps = {}) {
@@ -44,6 +47,8 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'ceiling') return ceiling(argv.slice(1), deps);
   if (argv[0] === 'items') return items(argv.slice(1), deps);
   if (argv[0] === 'item') return item(argv.slice(1), deps);
+  if (argv[0] === 'lesson') return lesson(argv.slice(1), deps);
+  if (argv[0] === 'lessons') return lessons(argv.slice(1), deps);
   if (argv[0] === 'get') return get(argv.slice(1), deps);
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -122,16 +127,93 @@ function item(argv, deps) {
     record.state = 'prepared'; record.sort = f.sort; writeDeskItem(record, { env }); return 0;
   }
   if (verb === 'brief' && state === 'prepared' && ['product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
+    if (f.recommend !== null && !briefOptions(maybeRead(join(dir, 'brief.md'))).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
+    if (f.recommend !== null) record.recommend = f.recommend;
     record.state = 'for-martin'; record.sort = f.sort; record.reversible = f.reversible === 'yes'; record.due_at = record.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; writeDeskItem(record, { env }); return 0;
   }
   if (verb === 'close' && ['prepared','for-martin'].includes(state) && ['decision','martin','default'].includes(f.by)) {
     let summary = f.summary;
     if (f['summary-file']) { try { summary = (deps.readFile || readFileSync)(f['summary-file'], 'utf8').trim(); } catch { return refuse('summary file is missing'); } }
     if (!summary?.trim() || summary.trim().split(/\n\s*\n/u).length > 1) return refuse('close requires one paragraph with --summary or --summary-file');
-    record.state = 'closed'; record.outcome = { by: f.by, at: (deps.now || (() => new Date()))().toISOString(), summary: summary.trim() }; writeDeskItem(record, { env }); return 0;
+    if (f.chose !== null && f.by !== 'martin') return refuse('--chose is what Martin chose: only with --by martin');
+    const briefText = maybeRead(join(dir, 'brief.md'));
+    if (f.chose !== null && !briefOptions(briefText).has(f.chose)) return refuse(`brief.md names no option "${f.chose}"`);
+    if (f.by === 'martin' && record.recommend && f.chose === null) return refuse(`the brief recommended "${record.recommend}": close --by martin needs --chose <key> of the option he chose`);
+    const closedAt = (deps.now || (() => new Date()))();
+    if (f.chose !== null) record.chose = f.chose;
+    if (record.recommend && f.chose !== null && f.chose !== record.recommend) {
+      const written = recordAnswerDiffers({ env, item: record, brief: briefText, now: closedAt, by: role });
+      if (written.error) return refuse(written.error);
+    }
+    record.state = 'closed'; record.outcome = { by: f.by, at: closedAt.toISOString(), summary: summary.trim() }; writeDeskItem(record, { env }); return 0;
   }
   return refuse('transition not allowed');
 }
+// ---- Lessons ------------------------------------------------------------------------
+
+function lesson(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const [verb, ...rest] = argv;
+  if (!['add', 'carry', 'dismiss', 'brief'].includes(verb)) { stderr.write('mc: usage: mc martin lesson add --kind <kind> [--item <id>] [--programme <p>] [--place <path>] --file <path|->\n  | carry <name> --goal <programme>/<goal> [--place <path>] | dismiss <name> --reason "…" | brief <name> --file <path|->\n'); return 2; }
+  const role = writerRole(env);
+  const refusal = lessonRefusal(verb, role);
+  if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
+  const parsed = scanArgs(argv, ROUTES.lesson); // the sub-verb is the first positional, the lesson's name the second
+  const error = parsed.error || ROUTES.lesson.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  const f = parsed.flags, name = parsed.positional[1] ?? null;
+  const now = (deps.now || (() => new Date()))();
+  const fail = (message) => { stderr.write(`mc: ${message}\n`); return 2; };
+  if (verb === 'add') {
+    if (name) return fail(`unknown argument ${name}`);
+    if (!f.kind || !f.file) return fail('lesson add needs --kind and --file <path|->');
+    let text;
+    try { text = f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8'); } catch { return fail(`cannot read ${f.file}`); }
+    const input = parseLessonInput(text);
+    if (input.error) return fail(input.error);
+    const written = addLesson({ env, kind: f.kind, item: f.item, programme: f.programme, place: f.place, parts: input.parts, by: role, now });
+    if (written.error) return fail(written.error);
+    stdout.write(`${written.lesson.name}\n`);
+    return 0;
+  }
+  if (!name) return fail(`lesson ${verb} expects <name>`);
+  if (verb === 'brief') {
+    if (!f.file) return fail('lesson brief needs --file <path|-> with the brief for Martin');
+    let text;
+    try { text = f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8'); } catch { return fail(`cannot read ${f.file}`); }
+    const done = briefLesson({ env, name, brief: text, now });
+    if (done.error) return fail(done.error);
+    stdout.write(`${name} · dismissed · item ${done.item.id}\n`);
+    return 0;
+  }
+  if (verb === 'carry') {
+    if (!f.goal) return fail('lesson carry needs --goal <programme>/<goal>');
+    const done = carryLesson({ env, name, goal: f.goal, place: f.place, now, home: deps.home || programsHome(env) });
+    if (done.error) return fail(done.error);
+    stdout.write(`${name} · in-goal · ${f.goal}\n`);
+    return 0;
+  }
+  const done = dismissLesson({ env, name, reason: f.reason, role, since: env.MC_SESSION_STARTED || null, now });
+  if (done.error) return fail(done.error);
+  stdout.write(`${name} · dismissed\n`);
+  return 0;
+}
+
+function lessons(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const parsed = scanArgs(argv, ROUTES.lessons);
+  const error = parsed.error || ROUTES.lessons.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  if (parsed.flags.state && !LESSON_STATES.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
+  const found = listLessons({ env, state: parsed.flags.state });
+  if (parsed.flags.json) { stdout.write(`${JSON.stringify(found, null, 2)}\n`); return 0; }
+  const now = (deps.now || (() => new Date()))().getTime();
+  for (const x of found) stdout.write(`${x.name} · ${x.kind} · ${x.state} · ${x.goal ?? 'no goal'}${x.pr ? ` · ${x.pr}` : ''} · ${Math.max(0, Math.floor((now - Date.parse(x.at)) / DAY_MS))} days\n`);
+  return 0;
+}
+
 const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
 function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' ? 'close' : 'no verb'} applies\n`); return 2; }
@@ -163,7 +245,7 @@ export function get(argv, deps = {}) {
 // launch's write of last-open.json after a successful launch.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const PASSES = ['desk-prepare', 'decision'];
+const PASSES = ['desk-prepare', 'decision', 'learning'];
 const BEGINNING = '1970-01-01T00:00:00.000Z';
 const LAST_OPEN = 'last-open.json';
 
@@ -204,6 +286,7 @@ function laterPhaseGoals(item, goals) {
 function programmeOf(item) {
   if (item.kind === 'goal') return item.reference.split('/')[0];
   if (item.kind === 'main-red') return `main-red ${item.reference.slice('main-red:'.length).split('/')[0]}`;
+  if (item.kind === 'lesson') return 'lessons';
   return 'jev ledger';
 }
 
@@ -261,6 +344,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
       failed,
     },
     cost: costReading({ env, now, read }),
+    changes: buildChanges({ lessons: listLessons({ env }), items, goals, since, now }),
   };
 }
 
@@ -293,6 +377,7 @@ export function renderOpening(data) {
   out.push('', `Today (UTC ${cost.day}): ${cost.today === null ? 'unreadable' : `$${cost.today.toFixed(4)}`}. Last seven days: ${cost.last_seven_days === null ? 'unreadable' : `$${cost.last_seven_days.toFixed(4)}`}. Ceiling: ${cost.ceiling === null ? 'off' : `$${cost.ceiling}/day`}.`);
   if (cost.unknown_cost_runs) out.push(`Runs with unknown cost, not counted: ${cost.unknown_cost_runs}.`);
   if (cost.error) out.push(`Cost reading error: ${cost.error}.`);
+  out.push('', ...renderChanges(data.changes));
   return `${out.join('\n')}\n`;
 }
 

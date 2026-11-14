@@ -11,6 +11,7 @@ import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-items.js';
+import { lessonsDir, renderLesson } from '../../../src/mc/desk-lessons.js';
 import { goalJson } from '../_helpers/goal-file.js';
 
 const roots = [];
@@ -319,12 +320,12 @@ function launch(d, at, deps = {}) {
 }
 
 describe('mc martin brief', () => {
-  it('prints the four parts in order, blocking work first, from the store', async () => {
+  it('prints the five parts in order, blocking work first, from the store', async () => {
     const d = openingStore(); const text = io();
     assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
     const out = text.out.stdout;
     const at = (part) => { const index = out.indexOf(part); assert.notEqual(index, -1, part); return index; };
-    const headings = ['## Yours (4)', '## Decided without you', '## Not ready', '## Cost'].map(at);
+    const headings = ['## Yours (4)', '## Decided without you', '## Not ready', '## Cost', '## What the system changed'].map(at);
     assert.deepEqual([...headings].sort((a, b) => a - b), headings);
     assert.match(out, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\. Decided-without-you covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z\./u);
     const yours = ['### 1. alpha/one · product · reversible', '### 2. alpha/two · product · reversible', '### 3. beta/irr · reserved · not reversible', '### 4. beta/judge · judgement · reversible'].map(at);
@@ -352,6 +353,56 @@ describe('mc martin brief', () => {
     assert.equal(renderOpening(data), text.out.stdout);
     assert.deepEqual(data, buildOpening({ env: d.env, home: d.home, now: new Date(NOW), last: LAST }));
     assert.deepEqual(snapshot(d.root), before, 'brief writes no file, and last-open.json is not touched');
+  });
+  it('prints what the system changed as its fifth part, from the lessons and items alone: landed changes, counts, the late one, the dismissal, five weekly figures', async () => {
+    const d = openingStore(); const dir = lessonsDir(d.env); mkdirSync(dir, { recursive: true });
+    const id = (reference, at) => deskItemId('goal', reference, at);
+    const lesson = (name, fields) => writeFileSync(join(dir, `${name}.md`), renderLesson({
+      name, kind: 'wrong-question', item: null, programme: null, state: 'open', goal: null, pr: null, place: null, by: 'decision',
+      carried_at: null, landed_at: null, dismissed_at: null, reason: null, repeat_of: null, ...fields,
+      parts: { happened: 'SECRET-LESSON-TEXT what happened', rule: 'SECRET-LESSON-TEXT the rule', where: 'SECRET-LESSON-TEXT where' },
+    }));
+    // Landed since the opening at 08:00: one changes src/mc, one a canon page.
+    lesson('2026-11-04-code', { at: '2026-11-04T10:00:00Z', item: id('beta/irr', '2026-11-11T09:00Z'), state: 'landed', goal: 'alpha/one', pr: 'memoro-cli#1501', place: 'src/mc/desk-decision.js', carried_at: '2026-11-10T10:00:00Z', landed_at: '2026-11-14T09:00:00Z' });
+    lesson('2026-11-06-prompt', { at: '2026-11-06T10:00:00Z', kind: 'not-martins', item: id('gamma/d4', '2026-11-04T08:00Z'), state: 'landed', goal: 'alpha/three', pr: 'memoro-cli#1502', place: 'canon/roles/martin.md', carried_at: '2026-11-10T10:00:00Z', landed_at: '2026-11-14T10:00:00Z' });
+    // Landed before the opening: not listed, but the earlier change the repeat below says did not work.
+    lesson('2026-11-02-earlier', { at: '2026-11-02T10:00:00Z', state: 'landed', goal: 'alpha/one', pr: 'memoro-cli#1490', place: 'canon/roles/decision.md', landed_at: '2026-11-10T10:00:00Z' });
+    lesson('2026-11-12-overturned', { at: '2026-11-12T10:00:00Z', kind: 'overturned', state: 'landed', goal: 'alpha/one', pr: 'memoro-cli#1495', place: 'docs/technical/mc-roles.md', landed_at: '2026-11-13T10:00:00Z' });
+    // Open: the repeat (a day), one of four days, and one 16 days old.
+    lesson('2026-11-13-repeat', { at: '2026-11-13T09:00:00Z', place: 'canon/roles/decision.md', repeat_of: 'memoro-cli#1490' });
+    lesson('2026-11-10-open', { at: '2026-11-10T12:00:00Z', kind: 'unsettled' });
+    lesson('2026-10-29-late', { at: '2026-10-29T12:00:00Z', kind: 'unsettled' });
+    lesson('2026-11-08-carried', { at: '2026-11-08T12:00:00Z', kind: 'answer-differs', state: 'in-goal', goal: 'beta/judge', carried_at: '2026-11-09T12:00:00Z' });
+    lesson('2026-11-12-dismissed', { at: '2026-11-12T12:00:00Z', state: 'dismissed', dismissed_at: '2026-11-14T10:30:00Z', reason: 'One accident: the disk was full.' });
+    const before = snapshot(d.root);
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    const part = text.out.stdout.slice(text.out.stdout.indexOf('## What the system changed'));
+    assert.deepEqual(part.split('\n').slice(0, 9), [
+      '## What the system changed', '',
+      '- Make the goal plain — code (src/mc/desk-decision.js) — memoro-cli#1501',
+      '- Make the goal plain — prompt (canon/roles/martin.md) — memoro-cli#1502',
+      '', 'Lessons still open: 3, oldest 16 days. In a goal that has not landed: 1, oldest 6 days.',
+      'Late (older than 14 days, neither landed nor dismissed): 2026-10-29-late (open, 16 days).',
+      'Dismissed since the last opening: 1. 2026-11-12-dismissed: One accident: the disk was full.', '',
+    ]);
+    // Weeks, oldest first. Items opened / share that reached Martin / share of those not his / overturned / repeats of a landed change — counted by hand from the store above.
+    assert.deepEqual(part.split('\n').slice(-5), [
+      '- 2026-10-17 to 2026-10-24: 0; - (0); - (0); 0; 0',
+      '- 2026-10-24 to 2026-10-31: 0; - (0); - (0); 0; 0',
+      '- 2026-10-31 to 2026-11-07: 6; 16.7% (1); 100% (1); 0; 0',
+      '- 2026-11-07 to 2026-11-14: 6; 66.7% (4); 25% (1); 1; 1',
+      '',
+    ].slice(0, 5));
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    const data = JSON.parse(json.out.stdout);
+    assert.deepEqual(data.changes.weeks.map((w) => [w.items_opened, w.reached_martin, w.reached_share, w.not_his, w.not_his_share, w.overturned, w.repeats]),
+      [[0, 0, null, 0, null, 0, 0], [0, 0, null, 0, null, 0, 0], [6, 1, 16.7, 1, 100, 0, 0], [6, 4, 66.7, 1, 25, 1, 1]]);
+    assert.deepEqual(data.changes.landed.map((x) => [x.pr, x.where]), [['memoro-cli#1501', 'code'], ['memoro-cli#1502', 'prompt']]);
+    assert.deepEqual([data.changes.open, data.changes.in_goal, data.changes.late.map((x) => x.name), data.changes.dismissed.map((x) => x.reason)],
+      [{ count: 3, oldest_days: 16 }, { count: 1, oldest_days: 6 }, ['2026-10-29-late'], ['One accident: the disk was full.']]);
+    assert.equal(renderOpening(data), text.out.stdout);
+    for (const out of [text.out.stdout, json.out.stdout]) assert.doesNotMatch(out, /SECRET-LESSON-TEXT/u, 'no lesson text appears');
+    assert.deepEqual(snapshot(d.root), before, 'brief writes nothing');
   });
   it('a first opening with no last-open.json says so and writes none', async () => {
     const d = openingStore({ lastOpen: null }); const out = io();

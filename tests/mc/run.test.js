@@ -2,7 +2,7 @@ import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +24,7 @@ import { run as martinCommand } from '../../src/mc/commands/martin.js';
 import { deskBudget, deskSettingsPath } from '../../src/mc/desk-budget.js';
 import { readCanonRole } from '../../src/mc/roles.js';
 import { deskItemId, itemDirectory, writeDeskItem, listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
+import { addLesson, lessonsDir, listLessons, renderLesson } from '../../src/mc/desk-lessons.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -566,6 +567,98 @@ test('desk ceiling holds a chores round once, ignores other days and kinds, and 
   f.files[deskSettingsPath(f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: null });
   await runner.runDeskPreparation();
   assert.equal(calls, 3);
+});
+
+/** A learning pass fixture: a real lessons store under a physical root, a fake session, the runner's own clock (2026-08-29T10:00Z). */
+function learningFixture(t, { ages = [] } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'mc-learning-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const f = fixture({ root }); f.deps.env.MC_HOME = join(root, 'mc-home');
+  const calls = [];
+  f.deps.deskLearning = {
+    launch: () => ({ ok: true, id: 'claude-code', spec: { bin: '/fake/claude' }, adapter: claudeAdapter }),
+    billingRoute: () => ({ billing: 'plan' }),
+    session: async call => { calls.push(call); return { status: 0, stdout: JSON.stringify({ type: 'result', num_turns: 1, total_cost_usd: 0.5 }), stderr: '' }; },
+  };
+  const parts = { happened: 'An item reached Martin that was not his.', rule: 'A rule that would have stopped it.', where: 'canon/roles/decision.md' };
+  const add = (daysOld, n) => addLesson({ env: f.deps.env, kind: 'wrong-question', parts, by: 'decision', slug: `l${n}`, now: new Date(f.deps.now().getTime() - daysOld * 86_400_000) });
+  ages.forEach((age, n) => assert.ok(add(age, n).lesson));
+  const rows = runner => String(f.files[runner.paths.runs] ?? '').split('\n').map(line => line.split('\t')).filter(row => row[2] === 'learning');
+  return { f, calls, add, rows, root };
+}
+
+test('chores starts no learning session with four open lessons, the youngest a day old', async (t) => {
+  const l = learningFixture(t, { ages: [1, 2, 3, 4] });
+  const runner = createRunner({ deps: l.f.deps });
+  await runner.chores();
+  assert.deepEqual(l.calls, []);
+  assert.deepEqual(l.rows(runner), []);
+});
+
+test('chores starts one learning session with five open lessons: its role, headless, the first decision candidate, the lessons directory, a runs row', async (t) => {
+  const l = learningFixture(t, { ages: [1, 1, 1, 1, 1] });
+  const runner = createRunner({ deps: l.f.deps });
+  await runner.chores();
+  assert.equal(l.calls.length, 1);
+  const [call] = l.calls;
+  assert.equal(call.env.MC_ROLE, 'learning'); assert.equal(call.env.MC_HEADLESS, '1');
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], [DEFAULT_CATALOG.decision[0].tool, DEFAULT_CATALOG.decision[0].model], 'the first usable decision candidate');
+  for (const name of ['MC_GOAL', 'MC_PROGRAMME']) assert.equal(call.env[name], undefined);
+  assert.equal(call.cwd, join(l.root, 'martin', 'lessons'));
+  assert.ok(call.args[call.args.indexOf('--append-system-prompt') + 1].includes(readCanonRole('learning').overlay), "the role's words");
+  assert.deepEqual(l.rows(runner).map(row => [row[1], row[2], row[3]]), [['learning', 'learning', '0']]);
+});
+
+test('chores starts one learning session when one lesson is seven days old, and none at six days', async (t) => {
+  const young = learningFixture(t, { ages: [6] }), old = learningFixture(t, { ages: [7] });
+  await createRunner({ deps: young.f.deps }).chores();
+  await createRunner({ deps: old.f.deps }).chores();
+  assert.deepEqual([young.calls.length, old.calls.length], [0, 1]);
+});
+
+test('a second chores round the same UTC day starts no second learning session, and the next day does', async (t) => {
+  const l = learningFixture(t, { ages: [1, 1, 1, 1, 1] });
+  const runner = createRunner({ deps: l.f.deps });
+  await runner.chores(); await runner.chores();
+  assert.equal(l.calls.length, 1);
+  const next = createRunner({ deps: { ...l.f.deps, now: () => new Date('2026-08-30T00:05:00Z') } });
+  await next.chores();
+  assert.equal(l.calls.length, 2);
+});
+
+test('a reached desk ceiling starts no learning session, and a reached ceiling is lifted by off', async (t) => {
+  const l = learningFixture(t, { ages: [1, 1, 1, 1, 1] });
+  const runner = createRunner({ deps: l.f.deps });
+  l.f.files[runner.paths.runs] = 'ts\tkind\tcost\n2026-08-29T01:00:00Z\tdecision\t2\n';
+  l.f.files[deskSettingsPath(l.f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: 2 });
+  await runner.chores();
+  assert.deepEqual(l.calls, []);
+  l.f.files[deskSettingsPath(l.f.deps.env)] = JSON.stringify({ ceiling_usd_per_day: null });
+  await runner.chores();
+  assert.equal(l.calls.length, 1);
+});
+
+test('chores marks a carried lesson landed with the goal\'s pull request once its goal is done, and opens it again when the goal is dropped', async (t) => {
+  const l = learningFixture(t, { ages: [1, 1] });
+  const home = join(l.root, 'programs');
+  const goalDir = name => { const dir = join(home, 'mc', 'goals', name); mkdirSync(dir, { recursive: true }); return dir; };
+  for (const [name, stage] of [['made', 'done'], ['gone', 'dropped']]) {
+    writeFileSync(join(goalDir(name), 'GOAL.json'), withGoal(goalJson({ stage, status: 'ready' }), { prs: ['memoro-cli#1501', 'memoro-cli#1507'] }));
+    writeFileSync(join(goalDir(name), 'LOG.md'), '');
+  }
+  const [first, second] = listLessons({ env: l.f.deps.env });
+  Object.assign(first, { state: 'in-goal', goal: 'mc/made', carried_at: '2026-08-28T10:00:00Z' });
+  Object.assign(second, { state: 'in-goal', goal: 'mc/gone', carried_at: '2026-08-28T10:00:00Z' });
+  const dir = lessonsDir(l.f.deps.env);
+  for (const lesson of [first, second]) writeFileSync(join(dir, `${lesson.name}.md`), renderLesson(lesson));
+  l.f.deps.list = path => { try { return readdirSync(path); } catch { return []; } };
+  l.f.deps.read = path => { try { return readFileSync(path, 'utf8'); } catch { return l.f.files[path] ?? null; } };
+  await createRunner({ deps: l.f.deps }).chores();
+  const after = Object.fromEntries(listLessons({ env: l.f.deps.env }).map(x => [x.goal ?? x.name, x]));
+  assert.equal(after['mc/made'].state, 'landed');
+  assert.deepEqual([after['mc/made'].landed_at, after['mc/made'].pr], ['2026-08-29T10:00:00.000Z', 'memoro-cli#1507'], "the goal's last registered pull request");
+  const reopened = listLessons({ env: l.f.deps.env }).find(x => x.name === second.name);
+  assert.deepEqual([reopened.state, reopened.goal], ['open', null]);
 });
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */
