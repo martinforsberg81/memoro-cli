@@ -290,7 +290,7 @@ lesson's first part then says that change did not work).
 
 **Verbs.** `mc martin lesson add --kind <kind> [--item] [--programme] [--place]
 --file <path|->` writes an open lesson; `lessons [--state] [--json]` lists them
-(`<name> · <kind> · <state> · <goal> · <pr> · <days>`); `lesson carry <name>
+(`<name> · <kind> · <state> · <goal or "no goal"> [· <pr>] · <n> days`); `lesson carry <name>
 --goal <programme>/<goal>` moves an open lesson to `in-goal` and needs a live
 goal; `lesson dismiss <name> --reason "…"` moves an open lesson to `dismissed`
 and needs a reason from every role; `lesson brief <name> --file <path|->` is for
