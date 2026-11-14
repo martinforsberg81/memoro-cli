@@ -49,10 +49,8 @@ renumbered; a `draft` goal holds later phases back too. The cut into goals and p
 - **Test protection:** name protected behaviours, failure consequences, the cheapest credible test
   level and existing tests to reuse. State the evidence the build must produce, or why no new
   automated test is warranted. Follow [writing-tests.md](writing-tests.md); not every fix needs one.
-- **Class:** `fast` when the goal says exactly what changes, where and in what order; `medium`
-  when the solution is chosen and the brief names the components it touches, and the build works
-  out the change across them; `large` only for work that must choose between designs the brief
-  could not choose for. Never a concrete model.
+- **Class:** `fast` when the goal says exactly what changes, where and in what order; `medium` when the solution is chosen, the brief names the components, and the build works out their change;
+  `large` only for work that must choose between designs the brief could not choose for. Never a concrete model.
 - **Before writing:** investigate yourself — read the code, measure, try it. Name the file behind
   every claim, and only files you opened. A brief that says a state is set wrongly names the caller
   that sets it today and the stage it runs in; its fixture uses that stage. Leave out the case for
