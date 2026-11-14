@@ -71,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, PLAN_ROLE, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -2049,16 +2049,77 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * and status unchanged. Three of them in a row in `build` move the goal to
    * `finish · ready`, for a finish session — the guard against a session that
    * fails the same way for ever (the loop that ran 2 803 times); there is no
-   * attempt counter, only the log.
+   * attempt counter, only the log. The runner's no-progress entries
+   * (`afterBuild`) are not sessions that ended without a word: they are
+   * skipped, so each count reads only what it counts.
    */
   function goalWithoutWord(goal, name, comment) {
     const { dir } = goal;
     const now = stateNow(goal);
     appendEntry({ dir, entry: { at: logStamp(deps.now()), tool: 'runner', model: null, ...now, done: null, comment, next: null }, read: deps.read, write: deps.write });
     say(`${name}: ${comment}`);
-    const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').slice(-3);
+    const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').filter((item) => !noProgressEntry(item)).slice(-3);
     if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
     goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a finish session takes it' });
+  }
+
+  /**
+   * What a build session is judged on: the number of met criteria and each
+   * goal worktree's `HEAD`. A reading that cannot be had is named in `unread`
+   * and the session is then not counted either way.
+   */
+  function progressReading(goal) {
+    const parsed = parseGoal(deps.read(join(goal.dir, GOAL_FILE)) ?? '');
+    const unread = [];
+    let met = null;
+    let total = null;
+    if (parsed.problems) unread.push('GOAL.json does not parse');
+    else { total = parsed.success_criteria.length; met = parsed.success_criteria.filter((item) => item.met).length; }
+    const heads = goal.repos.map((repo) => {
+      const read = deps.git(join(goal.dir, repo), ['rev-parse', 'HEAD']);
+      const head = read.ok ? String(read.stdout ?? '').trim() : '';
+      if (!head) unread.push(`HEAD of ${repo} cannot be read (${String(read.stderr ?? '').trim().split('\n').at(-1) || 'no output'})`);
+      return { repo, head: head || null };
+    });
+    return { met, total, heads, unread };
+  }
+
+  /**
+   * After a build session that wrote a log entry of its own (a quota, login or
+   * offline ending is not asked about). Progress is a higher met count or any
+   * `HEAD` that moved (V4: it starts the count again). A session with none gets
+   * one runner entry; the third in a row (`noProgressStreak`, from LOG.md) gets
+   * instead one entry with status `Martin`, which the runner starts nothing on and the
+   * desk takes up. A reading that cannot be had is said in a runner entry that
+   * counts neither way. A goal the session left out of `build · ready` is not
+   * the runner's to judge.
+   */
+  function afterBuild(goal, name, before) {
+    const now = stateNow(goal);
+    if (now.stage !== 'build' || now.status !== 'ready') return;
+    const after = progressReading(goal);
+    const log = parseLog(deps.read(join(goal.dir, LOG_FILE)) ?? '');
+    const streak = noProgressStreak(log);
+    const unread = [...before.unread, ...after.unread];
+    if (unread.length) { goalState(goal, name, {}, { comment: `${NOT_COUNTED}: ${[...new Set(unread)].join('; ')}` }); return; }
+    const headsText = after.heads.map(({ repo, head }) => `${repo} ${head}`).join(', ');
+    const progress = after.met > before.met || after.heads.some(({ head }, index) => head !== before.heads[index]?.head);
+    if (progress) {
+      if (streak > 0) goalState(goal, name, {}, { comment: `${PROGRESS_AGAIN}: met ${after.met} of ${after.total} criteria (${before.met} before), heads ${headsText} — the count of sessions without progress starts again` });
+      return;
+    }
+    const count = `met ${after.met} of ${after.total} criteria`;
+    if (streak + 1 < NO_PROGRESS_LIMIT) {
+      goalState(goal, name, {}, { comment: `${NO_PROGRESS_SESSION} (${streak + 1} of ${NO_PROGRESS_LIMIT}): ${count}, heads ${headsText} unchanged` });
+      return;
+    }
+    const next = [...log].reverse().find((entry) => entry.tool !== 'runner' && entry.next)?.next ?? null;
+    goalState(goal, name, { status: 'Martin' }, { comment: [
+      NO_PROGRESS_STOP,
+      `Heads: ${headsText}`,
+      `Criteria: ${count}`,
+      `Last Next: ${next ?? 'none recorded'}`,
+    ].join('\n') });
   }
 
   /**
@@ -2175,6 +2236,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // Before anything a launch leaves behind (the in-flight file, the scratch directory, a log entry).
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
+      // What a build session is judged on, read before it starts (`afterBuild`).
+      const progressBefore = kind === 'build' ? progressReading(goal) : null;
       say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${kind === 'build' ? `class ${goal.class}` : `${routeList} list`}: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       // There exactly as long as the session is, so in flight and slot are one
@@ -2283,6 +2346,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);
+      else if (spoke && progressBefore && !read.quota && !read.interrupted) afterBuild(goal, name, progressBefore);
       else if (!spoke && read.interrupted !== 'offline') goalWithoutWord(goal, name, `session ended without a log entry (exit ${result.status}, ${seconds} s)`);
       const note = spoke ? read.note : `${read.note},no-log`;
       logRun({ ts: stamp(), name, kind: runsKind({ kind, variant: goalVariant(kind) }), exit: result.status, seconds, pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds: null, model: settings.model, cls: goal.class, tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });

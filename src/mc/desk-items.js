@@ -118,7 +118,8 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
   if (item.kind === 'goal') {
     const [programme, goal] = item.reference.split('/');
     const log = parseLog(read(join(home, programme, 'goals', goal, LOG_FILE)) || '');
-    const index = log.findIndex(entry => entry.at === item.source_at);
+    // The entry with status Martin at that minute: another entry may share it (stamps have minute resolution).
+    const index = log.findIndex(entry => entry.at === item.source_at && entry.status === 'Martin');
     if (index < 0) return 'Source question unavailable.';
     const question = currentQuestion(log.slice(0, index + 1), 'Martin');
     return firstLine(question?.question || question?.reason || 'Source question unavailable.');

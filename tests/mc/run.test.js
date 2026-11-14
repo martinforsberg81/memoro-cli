@@ -24,6 +24,7 @@ import { run as martinCommand } from '../../src/mc/commands/martin.js';
 import { deskBudget, deskSettingsPath } from '../../src/mc/desk-budget.js';
 import { readCanonRole } from '../../src/mc/roles.js';
 import { deskItemId, itemDirectory, writeDeskItem, listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
+import { deskItemQuestion } from '../../src/mc/desk-items.js';
 import { addLesson, lessonsDir, listLessons, renderLesson } from '../../src/mc/desk-lessons.js';
 
 /**
@@ -369,6 +370,10 @@ function fixture({ root = '/w', plans = {}, queue = '', session, gh = {}, dirty 
           const ref = String(args.at(-1)).replace(/^refs\/heads\//u, '');
           return { ok: (refs[areaOf(cwd)] || [areaOf(cwd)]).includes(ref), stdout: 'deadbee' };
         }
+        // `rev-parse HEAD` of a goal worktree (the progress reading of a build session): by default
+        // every reading is a new commit, so a session in an ordinary test is one that made progress.
+        // A test of the stop on no progress answers it itself (`noProgressFixture`).
+        if (args.join(' ') === 'rev-parse HEAD') return { ok: true, stdout: `moved-${calls.git.length}\n` };
         // `rev-parse <branch>`: the tip `freshBranch` compares to the merged head.
         if (args.length === 2) return { ok: true, stdout: tips[args[1]] || `tip-${args[1]}` };
         return { ok: false, stdout: '' };
@@ -3508,6 +3513,131 @@ test('a build session that writes no log entry gets a runner entry, and three in
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
   assert.equal(f.calls.sessions.length, 4);
   assert.equal(runRows(f.files).length, 4);
+});
+
+/* ------------------------------------------------ build sessions without progress (the runner's stop) */
+
+/**
+ * A goal `stuck` in build whose worktree HEAD the test moves: `f.heads.stuck` is what `rev-parse HEAD` answers there,
+ * `f.headsUnreadable` makes it fail. A build session is `builds(f, { commit, meet })`: it says its piece with a Next,
+ * and commits (moves HEAD) or meets the criterion when told to.
+ */
+function noProgressFixture() {
+  const f = goalFixture({ stuck: { log: goalLog('2026-08-20T10:00Z') } });
+  f.heads = { stuck: 0 };
+  f.headsUnreadable = false;
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => {
+    if (cwd === `${GOALS}/stuck/memoro` && args.join(' ') === 'rev-parse HEAD') {
+      return f.headsUnreadable ? { ok: false, stdout: '', stderr: 'fatal: not a git repository' } : { ok: true, stdout: `head-${f.heads.stuck}\n` };
+    }
+    return git(cwd, args);
+  };
+  return f;
+}
+const builds = (f, { commit = false, meet = false, inner = okSession() } = {}) => (call) => {
+  if (commit) f.heads.stuck += 1;
+  if (meet) f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { success_criteria: [{ criterion: 'it works', check: 'a test', met: true }] });
+  f.files[`${GOALS}/stuck/LOG.md`] = `${f.files[`${GOALS}/stuck/LOG.md`]}\n## 2026-08-29T10:00Z · claude opus · build · ready\n\nDone: arbete\nNext: next ${f.calls.sessions.length}\n`;
+  return inner(call);
+};
+const silentSession = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
+const stuckEntries = (f) => parseLog(f.files[`${GOALS}/stuck/LOG.md`]);
+const stuckWhere = (f) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/stuck/GOAL.json`], key)).join(' · ');
+const stuckPass = async (f, answer) => { f.answer = answer; return createRunner({ deps: f.deps }).pass({ repo: 'memoro' }); };
+const noProgressEntries = (f) => stuckEntries(f).filter((entry) => entry.tool === 'runner' && /^no progress this session/u.test(entry.comment));
+
+test('three build sessions that meet nothing and commit nothing stop the goal with one entry the desk reads, and no fourth starts', async () => {
+  const f = noProgressFixture();
+  for (const n of [1, 2]) {
+    await stuckPass(f, builds(f));
+    assert.equal(stuckWhere(f), 'build · ready');
+    assert.equal(noProgressEntries(f).length, n);
+  }
+  assert.match(noProgressEntries(f)[1].comment, /^no progress this session \(2 of 3\): met 0 of 1 criteria, heads memoro head-0 unchanged$/u);
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · Martin');
+  const stop = stuckEntries(f).at(-1);
+  assert.deepEqual([stop.tool, stop.stage, stop.status], ['runner', 'build', 'Martin']);
+  assert.equal(noProgressEntries(f).length, 2, 'the third is the stop, not another no-progress entry');
+  assert.deepEqual(stop.comment.split('\n'), [
+    'no progress: three build sessions in a row met no criterion and committed nothing',
+    'Heads: memoro head-0',
+    'Criteria: met 0 of 1 criteria',
+    'Last Next: next 3',
+  ]);
+  const before = f.calls.sessions.length;
+  assert.equal((await stuckPass(f, builds(f))).ran, 0, 'a goal that reads Martin is not picked');
+  assert.equal(f.calls.sessions.length, before, 'no fourth session');
+  // Every entry of this log shares one minute with the stop: the desk still reads the stop's line.
+  assert.equal(stuckEntries(f).filter((entry) => entry.at === stop.at).length > 1, true, 'the stop shares its minute with another entry');
+  const item = { kind: 'goal', reference: 'prog/stuck', source_at: stop.at };
+  assert.equal(deskItemQuestion(item, { home: '/w/programs', read: (path) => f.files[path] ?? null }), 'no progress: three build sessions in a row met no criterion and committed nothing');
+});
+
+test('a session that commits or meets a criterion, and any change of stage or status, starts the no-progress count again', async () => {
+  const f = noProgressFixture();
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f, { commit: true }));
+  assert.equal(stuckEntries(f).at(-1).tool, 'runner');
+  assert.match(stuckEntries(f).at(-1).comment, /^progress again: met 0 of 1 criteria \(0 before\), heads memoro head-1 /u);
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f, { meet: true }));
+  assert.match(stuckEntries(f).at(-1).comment, /^progress again: met 1 of 1 criteria \(0 before\)/u);
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · ready', 'two since the last progress are not three');
+  // A change of status between them starts it again: Martin, then ready, by a person.
+  f.files[`${GOALS}/stuck/LOG.md`] += '\n## 2026-08-29T10:00Z · person · build · Martin\n\nComment: looked at it\n\n## 2026-08-29T10:00Z · person · build · ready\n\nComment: amended\n';
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · ready');
+  assert.equal(noProgressEntries(f).length, 7);
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · Martin', 'the third since the last change stops it');
+});
+
+test('sessions without a log entry are skipped by the no-progress count, and the no-progress entries are skipped by the three-silent rule', async () => {
+  const f = noProgressFixture();
+  await stuckPass(f, builds(f));
+  await stuckPass(f, silentSession);
+  await stuckPass(f, builds(f));
+  await stuckPass(f, silentSession);
+  assert.equal(stuckWhere(f), 'build · ready', 'two no-progress sessions with a silent one between are not three');
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · Martin', 'no-progress, silent, no-progress, silent, no-progress stops it');
+
+  const g = noProgressFixture();
+  await stuckPass(g, builds(g));
+  await stuckPass(g, silentSession);
+  await stuckPass(g, silentSession);
+  assert.equal(stuckWhere(g), 'build · ready', 'a no-progress session followed by two silent ones does not go to finish');
+  await stuckPass(g, silentSession);
+  assert.equal(stuckWhere(g), 'finish · ready', 'three silent sessions with nothing between still do');
+});
+
+test('a quota or offline ending and a HEAD that cannot be read are not counted, and do not start the count again', async () => {
+  const f = noProgressFixture();
+  let clock = Date.parse('2026-11-07T12:00:00Z');
+  f.deps.now = () => new Date(clock);
+  const pass = async (answer) => { clock += 3_600_000; f.deps.capacity.write(capacityWith({ claude: 0.1 })); return stuckPass(f, answer); };
+  await pass(builds(f));
+  await pass(builds(f));
+  const runnerEntries = () => stuckEntries(f).filter((entry) => entry.tool === 'runner').length;
+  const had = runnerEntries();
+  await pass(builds(f, { inner: REFUSED_429 }));
+  assert.equal(runnerEntries(), had, 'a quota ending writes no runner entry');
+  await pass(builds(f, { inner: UNREACHABLE }));
+  assert.equal(runnerEntries(), had, 'an offline ending writes no runner entry');
+  f.headsUnreadable = true;
+  await pass(builds(f));
+  assert.equal(stuckWhere(f), 'build · ready');
+  assert.match(stuckEntries(f).at(-1).comment, /^session not counted for progress: HEAD of memoro cannot be read \(fatal: not a git repository\)$/u);
+  assert.equal(noProgressEntries(f).length, 2);
+  f.headsUnreadable = false;
+  await pass(builds(f));
+  assert.equal(stuckWhere(f), 'build · Martin', 'the third counted session stops it: none of those between was counted or started the count');
 });
 
 /** The result of an API the runner cannot reach (2026-11-06): ten retries, then this, with no tokens. */

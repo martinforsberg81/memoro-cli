@@ -475,6 +475,41 @@ export function reviewDiedBefore(log) {
 }
 
 /**
+ * The runner's no-progress stop for a build (`afterBuild` in run.js). Its entries are the runner's own, told by
+ * the first words of their comment: a session with no progress, one not counted because a reading could not be had,
+ * one that starts the count again after a run without progress, and the stop itself (status `Martin`).
+ */
+export const NO_PROGRESS_LIMIT = 3;
+export const NO_PROGRESS_SESSION = 'no progress this session';
+export const NOT_COUNTED = 'session not counted for progress';
+export const PROGRESS_AGAIN = 'progress again';
+export const NO_PROGRESS_STOP = `no progress: three build sessions in a row met no criterion and committed nothing`;
+
+/** Whether the entry is a runner entry of a session judged (`NO_PROGRESS_SESSION`) or left unjudged (`NOT_COUNTED`): not a session that ended without a word. */
+export function noProgressEntry(entry) {
+  const comment = String(entry.comment ?? '');
+  return entry.tool === 'runner' && (comment.startsWith(NO_PROGRESS_SESSION) || comment.startsWith(NOT_COUNTED));
+}
+
+/**
+ * How many build sessions in a row ended without progress, from LOG.md: the runner's `NO_PROGRESS_SESSION`
+ * entries since the last entry that is not `build · ready` or the last `PROGRESS_AGAIN` entry. Sessions' own
+ * entries, silent sessions' entries and `NOT_COUNTED` ones are neither counted nor a new start.
+ */
+export function noProgressStreak(log) {
+  let count = 0;
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const entry = log[i];
+    if (entry.stage !== 'build' || entry.status !== 'ready') break;
+    if (entry.tool !== 'runner') continue;
+    const comment = String(entry.comment ?? '');
+    if (comment.startsWith(PROGRESS_AGAIN)) break;
+    if (comment.startsWith(NO_PROGRESS_SESSION)) count += 1;
+  }
+  return count;
+}
+
+/**
  * When a goal came to its current stage, as the `at` of the first of the
  * entries at the end of the log in that stage (an entry written before
  * stages counts by its old status, for `done` and `dropped`). Null when the

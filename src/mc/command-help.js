@@ -88,6 +88,8 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal blocked|ready [<programme>/<goal>] [--reason \"…\"]   set the goal's status; its stage stays\n",
     "        mc goal martin [<programme>/<goal>] --kind technical|product --reason \"<the question>\" --option \"<key>: <text>\" --option \"<key>: <text>\" --recommend <key>   jev once; session callers require a kind, a person may omit it\n",
     "                [--evidence \"…\" | --evidence-file <path|->] [--document <repo>/<path>] [--reserved deploy|production-data|credentials|admin]\n",
+    "        mc goal defect [<programme>/<goal>] --part \"<the part or criterion that is wrong>\" --found \"<what is wrong, with the file and line or the command and output>\"   the goal itself is wrong: one entry, status Martin, no options; the session's last act\n",
+    "                [--evidence \"…\" | --evidence-file <path|->] [--next \"…\" | --next-file <path|->]\n",
     "        mc goal done [<programme>/<goal>] [--reason \"…\"]   stage done, by hand; the merger sets it when the pull request lands\n",
     "        mc goal drop [<programme>/<goal>] --reason \"…\"   abandon delivery: persist dropped, close exclusive PRs, cancel merge rows and archive immediately when safe; only plan, interactive Martin or a person may drop\n",
     "        mc goal pr <programme>/<goal> <repo>#<n>...   the pull requests that carry the goal; done when every one has landed or closed\n",

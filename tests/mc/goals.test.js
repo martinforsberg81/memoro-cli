@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
 import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
@@ -549,4 +550,29 @@ test('nextDraft requires unfinished planning only and orders by phase, creation 
   const absent = dated('a', undefined);
   assert.equal(nextDraft([equalA, missing], 'p'), missing, 'missing creation dates retain their oldest-first treatment');
   assert.equal(nextDraft([missing, absent], 'p'), absent, 'missing dates tie by goal name');
+});
+
+/* ------------------------------------------------ the count of build sessions without progress */
+
+const logEntry = (tool, stage, status, comment = '') => ({ at: '2026-11-14T10:00Z', tool, role: null, stage, status, done: null, comment, next: null });
+const sessionOf = (comment) => logEntry('runner', 'build', 'ready', comment);
+
+test('noProgressStreak counts the runner\'s no-progress entries since a start, and skips sessions\' own and silent entries', () => {
+  const own = logEntry('claude', 'build', 'ready');
+  const silent = sessionOf('session ended without a log entry (exit 1, 0 s)');
+  const none = sessionOf(`${NO_PROGRESS_SESSION} (1 of 3): met 0 of 1 criteria, heads memoro a unchanged`);
+  assert.equal(noProgressStreak([]), 0);
+  assert.equal(noProgressStreak([own, none, own, none]), 2);
+  assert.equal(noProgressStreak([own, none, silent, own, none, silent]), 2, 'a silent session between is skipped, not a start');
+  assert.equal(noProgressStreak([own, none, sessionOf(`${NOT_COUNTED}: HEAD of memoro cannot be read`), none]), 2, 'an unjudged session is skipped');
+  assert.equal(noProgressStreak([none, none, sessionOf(`${PROGRESS_AGAIN}: met 1 of 1 criteria`), none]), 1, 'progress starts the count again');
+  assert.equal(noProgressStreak([none, none, logEntry('person', 'build', 'Martin'), logEntry('person', 'build', 'ready'), none]), 1, 'a change of status starts it again');
+  assert.equal(noProgressStreak([none, none, logEntry('claude', 'review', 'ready'), none]), 1, 'a change of stage starts it again');
+});
+
+test('noProgressEntry is the runner\'s judged or unjudged build session, and no other entry', () => {
+  assert.equal(noProgressEntry(sessionOf(`${NO_PROGRESS_SESSION} (2 of 3): met 0 of 1 criteria`)), true);
+  assert.equal(noProgressEntry(sessionOf(`${NOT_COUNTED}: GOAL.json does not parse`)), true);
+  assert.equal(noProgressEntry(sessionOf('session ended without a log entry (exit 1, 0 s)')), false, 'a silent session is not one');
+  assert.equal(noProgressEntry(logEntry('claude', 'build', 'ready', NO_PROGRESS_SESSION)), false, 'a session\'s own words are not the runner\'s');
 });
