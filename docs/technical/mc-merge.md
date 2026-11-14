@@ -959,7 +959,7 @@ and turns a yes/no into a judgement call.
 
 ```
 mc: memoro #11185 (css-fix) → main — GREEN — the test gate passes
-mc: ran 17 test files (1876 tests) and 0 command gates on a1b2c3d (the head with main merged in)
+mc: ran 17 test files (1876 tests) and 2 command gates on a1b2c3d (the head with main merged in)
 mc: 54s — --json for timings, gate output and the file list
 ```
 
