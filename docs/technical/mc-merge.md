@@ -574,7 +574,7 @@ The shipped declarations' `select` commands serve the change scope;
 `select_whole` serves the optional wide diff scope and `select_full` the daily
 full plan. All print JSON with `files` and optional `commands`. The full plan
 keeps command-suite membership beside the commands; it never filters the
-seven `main_only` ratchets in `repo-gate-table.js`. Wide selection retains its
+six live `main_only` ratchets in `repo-gate-table.js`. Wide selection retains its
 legacy main-only filtering; changed tests and direct importers are not filtered
 out of the change scope. Repositories without full-plan declarations retain
 their declared `suite` fallback.
@@ -1470,7 +1470,7 @@ nothing ever looked at the whole.
 The landing chain supplies PR rounds' evidence; the full run remains the
 whole-suite meter and writes `from: full` with every file it ran and no
 inheritance when it completes. Its complete `select_full` plan includes every
-test (deferred tests and seven main-only ratchets included), every CI binding
+test (deferred tests and six live main-only ratchets included), every CI binding
 command and all three contract suites, including `test:browser-contracts`.
 No command gate removed from merge protection is left unrun. The full run
 finished on 2026-11-14: memoro 1,444 s, memoro-cli 111 s; earlier reports that

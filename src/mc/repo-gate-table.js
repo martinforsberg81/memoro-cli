@@ -269,7 +269,6 @@ export const SHIPPED = Object.freeze({
     // main, in a pull request that edits the test itself, and when nothing else
     // was selected.
     main_only: Object.freeze([
-      'tests/architecture/class-coverage.test.js',
       'tests/architecture/core-bundle-size.test.js',
       'tests/architecture/css-dead-rules.test.js',
       'tests/architecture/outside-ui-reach.test.js',

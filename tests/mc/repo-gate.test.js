@@ -2689,6 +2689,25 @@ describe('a repository that selects by diff', () => {
       } finally { fx.cleanup(); }
     });
 
+    it('a previous wide red outside the change scope is not run again', async () => {
+      const fx = selecting({ files: [own], gitAlso: args => {
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          const path = join(args.at(-2), scanner);
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, '');
+        }
+        return undefined;
+      } });
+      const { ran, tests } = recording([scanner]);
+      try {
+        lastRound(fx, { prs: [7], ok: false, stopped_at: 'red', red_files: [scanner] });
+        const report = await fx.report({ tests });
+        assert.equal(report.ok, true, report.reason);
+        assert.deepEqual(ran, [[own]]);
+        assert.equal(report.previous_red, undefined);
+      } finally { fx.cleanup(); }
+    });
+
     it('a previous red file now green: the selection runs as it always did', async () => {
       const fx = selecting({ files: [own, scanner] });
       const { ran, tests } = recording();
