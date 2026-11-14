@@ -188,8 +188,9 @@ order without a model call:
    delivery session. A focused plan session may complete the next draft under the programme rule below.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
-4. Exclude goals already claimed or named by a live current file, and goals
-   whose first repository is not served by the lane. A review without an
+4. Exclude goals already claimed or named by a live current file, held goals
+   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
+   repository is not served by the lane. A review without an
    available route does not stand in front of other work.
 5. Take merge-failure mend and goal-less main-red mend first, then decision, finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work

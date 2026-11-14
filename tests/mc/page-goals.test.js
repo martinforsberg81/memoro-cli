@@ -100,6 +100,22 @@ describe('goal rows on the page', () => {
     assert.deepEqual(dead.queued.items.map((item) => item.pr), [31, 32, 33]);
   });
 
+  it('a held goal row says who holds it, since when and why; an unheld row says nothing', () => {
+    const hold = { by: 'plan', tool: 'claude', at: '2026-11-14T10:00Z', reason: 'taking it over' };
+    const held = goalRow({ ...GOALS[0], name: 'rollout', hold });
+    for (const columns of [80, 120]) {
+      const data = pageData({ programmes: programmesSection({ goalRows: [held, GOALS[1]], programmes: PROGRAMMES }) });
+      const lines = programmesOf(renderPageLines(data, { columns, now: NOW }));
+      const at = lines.findIndex((line) => /^ +\d+ rollout(?: |$)/u.test(plain(line)));
+      assert.ok(at >= 0, 'the held goal row is drawn');
+      const holdLine = lines.slice(at, at + 4).map(plain).find((line) => line.includes('held by plan'));
+      assert.ok(holdLine, 'the hold row is drawn under the goal row');
+      assert.match(holdLine, /held by plan since 2026-11-14T10:00Z — taking it over/u);
+      const cleanupAt = lines.findIndex((line) => /^ +\d+ cleanup$/u.test(plain(line)));
+      assert.ok(!lines.slice(cleanupAt, cleanupAt + 4).some((line) => plain(line).includes('held by')), 'an unheld row says nothing about a hold');
+    }
+  });
+
   it('goal rows are drawn under their programme and phase, with menu numbers', () => {
     const data = pageData({ programmes: programmesSection({ goalRows: GOALS, programmes: PROGRAMMES }) });
     const lines = programmesOf(renderPageLines(data, { columns: 120, now: NOW }));

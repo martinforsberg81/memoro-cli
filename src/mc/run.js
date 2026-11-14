@@ -71,7 +71,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1461,11 +1461,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     all = goals();
     const drafts = [...new Set(all.map(goal => goal.programme))]
       .map(programme => nextDraft(all, programme)).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json')) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)))
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json')) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)) && !heldBy(goal))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all) && !heldBy(goal) && may(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
@@ -1526,6 +1526,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     return (deps.deskItems?.list() || []).filter(item => decisionEligible(item, deps.now())).flatMap(item => {
       const goal = item.kind === 'goal' ? all.find(g => `${g.programme}/${g.goal}` === item.reference && !g.problems.length) : null;
       if (item.kind === 'goal' && !goal) return [];
+      if (goal && heldBy(goal)) return [];
       const repo = goal?.repos[0] || names[0];
       const name = item.id;
       const claimName = goal ? goalName(goal) : name;
@@ -1792,6 +1793,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /** The reason each goal's review last waited on, so it is said once. */
   const reviewWaits = new Map();
+  /** The hold each goal was last said to be held by (`by|at`), so a hold is said once. */
+  const holdsSaid = new Map();
+  /**
+   * Whether `goal` is held (`mc goal hold`, read now). A held goal gets no planning, delivery or decision session;
+   * the first pass that would have started one says so, once for each hold.
+   */
+  function heldBy(goal) {
+    const name = goalName(goal);
+    const hold = readHold(goal.dir, deps.read);
+    if (!hold) { holdsSaid.delete(name); return false; }
+    const key = `${hold.by}|${hold.at}`;
+    if (holdsSaid.get(name) !== key) {
+      say(`${name}: held by ${hold.by ?? '—'} since ${hold.at ?? '—'} — no session is started (${hold.reason ?? '—'})`);
+      holdsSaid.set(name, key);
+    }
+    return true;
+  }
   // When `settleLanded` last asked GitHub, epoch ms.
   let lastSettle = -Infinity;
 

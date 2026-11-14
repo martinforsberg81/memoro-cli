@@ -4647,6 +4647,108 @@ test('legacy blocked build reconciles once and does not consume a session lane',
   assert.equal(f.calls.sessions.length, 0);
 });
 
+/** The hold `mc goal hold` writes, as the runner reads it. */
+const HOLD = (at = '2026-11-01T19:00Z') => JSON.stringify({ by: 'plan', tool: 'claude', at, reason: 'the fix is taken over here' });
+
+test('a held goal gets no planning, build or finish session, and the runner says so once', async () => {
+  for (const stage of ['draft', 'build', 'finish']) {
+    const held = goalFixture({ held: { stage } });
+    held.files[`${GOALS}/held/.hold.json`] = HOLD();
+    // One runner across both passes, as a runner process is: the say is once for the hold, not once a pass.
+    const runner = createRunner({ deps: held.deps });
+    const logBefore = held.files[`${GOALS}/held/LOG.md`];
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `${stage}: nothing starts`);
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `${stage}: nothing starts on the next pass`);
+    assert.equal(held.calls.sessions.length, 0, `${stage}: no session`);
+    assert.equal(where(held, 'held'), `${stage} · ready`, `${stage}: stage and status stay`);
+    assert.equal(held.files[`${GOALS}/held/LOG.md`], logBefore, `${stage}: no new log entry`);
+    assert.equal(held.log.filter((line) => line.includes('prog/held: held by plan since 2026-11-01T19:00Z')).length, 1, `${stage}: said once`);
+
+    // The same goal unheld gets its session, so the hold is what kept it back.
+    const free = goalFixture({ free: { stage } });
+    assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1, `${stage}: unheld, it gets a session`);
+  }
+});
+
+test('a held goal in review gets no review session; released, its review starts', async () => {
+  const f = reviewFixture();
+  f.files[`${GOALS}/judged/.hold.json`] = HOLD();
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held: nothing starts');
+  assert.equal(f.calls.sessions.length, 0, 'no review session');
+  assert.equal(where(f, 'judged'), 'review · ready', 'stage and status stay');
+  delete f.files[`${GOALS}/judged/.hold.json`];
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'released: the review starts');
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'review-session:goal');
+});
+
+test('a release starts the held goal again, and each new hold is said again', async () => {
+  const f = goalFixture({ held: { stage: 'build' } });
+  f.files[`${GOALS}/held/.hold.json`] = HOLD('2026-11-01T19:00Z');
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  delete f.files[`${GOALS}/held/.hold.json`];
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'released: a session starts');
+  const started = f.calls.sessions.length;
+  f.files[`${GOALS}/held/.hold.json`] = HOLD('2026-11-01T22:00Z');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held again: none starts');
+  assert.equal(f.calls.sessions.length, started, 'no session after the new hold');
+  assert.equal(f.log.filter((line) => line.includes('prog/held: held by plan since')).length, 2, 'said once for each hold');
+});
+
+test('a held blocked goal still reconciles to Martin outside merge, with the comment an unheld one gets, and no session starts', async () => {
+  const f = goalFixture({ stuck: { status: 'blocked' } });
+  f.files[`${GOALS}/stuck/.hold.json`] = HOLD();
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(where(f, 'stuck'), 'build · Martin');
+  assert.equal(f.calls.sessions.length, 0);
+
+  const unheld = goalFixture({ stuck: { status: 'blocked' } });
+  assert.equal((await createRunner({ deps: unheld.deps }).pass({ repo: 'memoro' })).ran, 0);
+  const entry = (fixture) => { const { at: _at, ...rest } = goalEntries(fixture, 'stuck').at(-1); return rest; };
+  assert.deepEqual(entry(f), entry(unheld), 'the same reconcile entry, held or not');
+  assert.match(entry(f).comment, /legacy .* reconciled to Martin/u);
+});
+
+test('a held merge · blocked goal gets no mend session; unheld, it does', async () => {
+  const mergeBlocked = () => {
+    const f = goalFixture({ stuck: { stage: 'merge', status: 'blocked' } });
+    f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { prs: ['memoro#31'] });
+    f.deps.pendingMerges = () => [];
+    return f;
+  };
+  const held = mergeBlocked();
+  held.files[`${GOALS}/stuck/.hold.json`] = HOLD();
+  assert.equal((await createRunner({ deps: held.deps }).pass({ repo: 'memoro' })).ran, 0, 'held: nothing starts');
+  assert.equal(held.calls.sessions.length, 0, 'no mend session');
+  assert.equal(where(held, 'stuck'), 'merge · blocked', 'stage and status stay');
+
+  const free = mergeBlocked();
+  assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1, 'unheld: a session starts');
+  assert.equal(free.calls.sessions[0].env.MC_ROLE, 'mend-session');
+});
+
+test('a held Martin goal with a prepared desk item gets no decision session; unheld, it does', async () => {
+  const decisionFixture = () => {
+    const f = goalFixture({ held: { stage: 'build', status: 'Martin' } });
+    const at = '2026-08-29T09:00:00Z';
+    const item = { id: deskItemId('goal', 'prog/held', at), kind: 'goal', reference: 'prog/held', source_at: at, state: 'prepared' };
+    f.deps.deskItems = { list: () => [item], read: (id) => (id === item.id ? item : null) };
+    return f;
+  };
+  const held = decisionFixture();
+  held.files[`${GOALS}/held/.hold.json`] = HOLD();
+  const runner = createRunner({ deps: held.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held: nothing starts');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'held: nothing starts on the next pass');
+  assert.equal(held.calls.sessions.length, 0, 'no decision session');
+  assert.equal(where(held, 'held'), 'build · Martin', 'stage and status stay');
+
+  const free = decisionFixture();
+  assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1, 'unheld: the decision starts');
+  assert.equal(free.calls.sessions[0].env.MC_ROLE, 'decision');
+});
+
 test('multiple legacy blocked goals reconcile without duplicate diagnostic launches across lanes', async () => {
   const f = goalFixture({ a: { status: 'blocked' }, b: { status: 'blocked' } });
   f.deps.laneCount = () => ({ lanes: 2 });
