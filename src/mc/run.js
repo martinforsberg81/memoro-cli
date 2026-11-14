@@ -1633,7 +1633,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       if (unfinished) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
-        const failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item, deps.now()) });
+        // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
+        let failed = { item: null, lessonError: null };
+        try { failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item, deps.now()) }); }
+        catch (error) { say(`${name}: the failure was not counted — ${error.message || String(error)}`); }
         if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
         if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
       }

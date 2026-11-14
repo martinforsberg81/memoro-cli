@@ -216,6 +216,7 @@ describe('a failed decision pass and a lesson brief are written under the lock, 
     assert.equal(twice.error, `lesson ${name} has been brought to Martin already`);
     assert.equal(readFileSync(join(itemDirectory(made.item, h.env), 'brief.md'), 'utf8'), `${BRIEF.trim()}\n`, 'the brief of the first stands');
     assert.deepEqual(readDeskItem(made.item.id, { env: h.env }), made.item);
+    assert.deepEqual(readdirSync(join(h.env.MC_WORK_ROOT, 'martin', 'items')).filter(n => !n.startsWith('.')), [made.item.id], 'one item');
     assert.equal(listLessons({ env: h.env })[0].state, 'dismissed');
   });
   it('briefs a lesson under the strict lock, writes nothing when it cannot be taken, and leaves the lesson open', async () => {

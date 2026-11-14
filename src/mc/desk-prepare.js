@@ -85,9 +85,10 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
     let prepared = false;
-    const reason = result.timedOut ? 'preparation exceeded fifteen minutes' : `turn exited ${result.status ?? 1} without preparing the item (${summary.note})${result.stderr ? `: ${String(result.stderr).slice(0, 1000)}` : ''}`;
+    let reason = result.timedOut ? 'preparation exceeded fifteen minutes' : `turn exited ${result.status ?? 1} without preparing the item (${summary.note})${result.stderr ? `: ${String(result.stderr).slice(0, 1000)}` : ''}`;
     // The failure is counted on the record read under the lock, and only while it is still new.
-    updateDeskItem(id, current => {
+    // The turn ran and was paid for: its run row below is written even when the lock cannot be had.
+    try { updateDeskItem(id, current => {
       prepared = current?.state === 'prepared';
       if (current?.state !== 'new') return null;
       current.prepare_failures = [...(current.prepare_failures || []), { at: now().toISOString(), reason }];
@@ -96,7 +97,8 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
         current.state = 'prepared'; current.sort = 'mechanical';
       }
       return current;
-    }, { env, ...(deps.lock ? { lock: deps.lock } : {}) });
+    }, { env, ...(deps.lock ? { lock: deps.lock } : {}) }); }
+    catch (error) { reason = `${reason}; the failure was not counted: ${error.message || String(error)}`; }
     const row = { ...summary, ts: now().toISOString(), name: id, kind: 'desk-prepare', exit: result.status ?? 1,
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: prepared ? 'prepared' : reason,
       model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };

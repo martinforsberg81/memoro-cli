@@ -567,9 +567,8 @@ describe('mc martin item transitions', () => {
     writeFileSync(join(home, 'alpha', 'goals', 'one', 'GOAL.json'), goalJson({ status: 'ready' }));
     assert.equal(await run(['items'], { ...io(), env: f.env, home, syncDeps: { now: () => new Date('2026-11-14T10:30:00Z') } }), 0);
     mkdirSync(join(f.env.MC_WORK_ROOT, 'martin'), { recursive: true }); writeFileSync(join(f.env.MC_WORK_ROOT, 'martin', 'last-open.json'), JSON.stringify({ at: '2026-11-14T09:00:00Z' }));
-    const opening = () => run(['brief', '--json'], { ...io(), env: f.env, home, now: () => new Date(NOW) });
     const count = async () => { const out = io(); await run(['brief', '--json'], { ...out, env: f.env, home, now: () => new Date(NOW) }); return JSON.parse(out.out.stdout).decided; };
-    assert.ok(opening); assert.equal((await count()).closed_by_source, 1);
+    assert.equal((await count()).closed_by_source, 1);
     assert.equal(await run(['item', f.record.id, 'close', '--by', 'martin', '--summary', 'Martin chose.'], { ...io(), env: { ...f.env, MC_ROLE: 'martin' }, home, now: () => new Date('2026-11-14T11:00:00Z') }), 0);
     const decided = await count(); assert.equal(decided.closed_by_source, 0); assert.deepEqual(decided.programmes, [], 'his own close is not listed as decided without him');
   });
@@ -589,10 +588,16 @@ describe('mc martin item transitions', () => {
     assert.equal(await run(closeArgs(f, 'decision'), { ...result, env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date('2026-11-14T11:00:00Z'), lock: first(sourceClosure) }), 0, result.out.stderr);
     assert.deepEqual(holds, [[f.env.MC_WORK_ROOT, { strict: true, name: 'desk-item' }]]);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).outcome, { by: 'decision', at: '2026-11-14T11:00:00.000Z', summary: 'Settled.', replaced: sourceClosure });
-    const other = { by: 'martin', at: '2026-11-14T10:30:00.000Z', summary: 'Martin chose.' }; const refused = io();
-    writeJsonAtomic(path, prepared);
-    assert.equal(await run(closeArgs(f, 'decision'), { ...refused, env: { ...f.env, MC_ROLE: 'decision' }, lock: first(other) }), 2);
-    assert.match(refused.out.stderr, /is closed;/u); assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).outcome, other);
+    // Martin's close through the real verb lands first: the decision close is refused and the file's bytes are Martin's.
+    writeJsonAtomic(path, prepared); const refused = io(); let competitor = null;
+    const martinFirst = (root, fn) => {
+      run(['item', f.record.id, 'close', '--by', 'martin', '--summary', 'Martin chose.'], { ...io(), env: { ...f.env, MC_ROLE: 'martin' }, now: () => new Date('2026-11-14T10:30:00Z') });
+      competitor = readFileSync(path, 'utf8'); return fn();
+    };
+    assert.equal(await run(closeArgs(f, 'decision'), { ...refused, env: { ...f.env, MC_ROLE: 'decision' }, lock: martinFirst }), 2);
+    assert.match(refused.out.stderr, /is closed;/u);
+    assert.deepEqual(JSON.parse(competitor).outcome, { by: 'martin', at: '2026-11-14T10:30:00.000Z', summary: 'Martin chose.' }, 'the competitor closed it --by martin');
+    assert.equal(readFileSync(path, 'utf8'), competitor, "the file's bytes are the competitor's");
     const advance = io(); writeJsonAtomic(path, { ...f.record, state: 'new' }); // the item moved on before the hold: new is not prepared
     assert.equal(await run(['item', f.record.id, 'brief', '--sort', 'product', '--reversible', 'yes'], { ...advance, env: { ...f.env, MC_ROLE: 'decision' }, lock: (root, fn) => { writeJsonAtomic(path, { ...f.record, state: 'new' }); return fn(); } }), 2);
   });

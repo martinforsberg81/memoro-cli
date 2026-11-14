@@ -232,6 +232,8 @@ test('the sync runs in one strict hold of the runner lock and never overwrites a
   assert.deepEqual(holds, [{ root: f.env.MC_WORK_ROOT, options: { strict: true, name: 'desk-items-sync' } }], 'one hold for the whole sync');
   const after = readDeskItem(item.id, { env: f.env });
   assert.deepEqual([after.state, after.outcome.by, after.outcome.summary], ['closed', 'decision', 'Carried out.'], 'the decision close made before the hold stands');
+  assert.deepEqual([after.id, after.sort, after.outcome.replaced], [item.id, 'technical', undefined], 'the same item, its sort kept, no source closure written over it');
+  assert.deepEqual(readdirSync(join(f.env.MC_WORK_ROOT, 'martin', 'items')).filter(n => !n.startsWith('.')), [item.id]);
 });
 
 test('the sync still closes by source when nobody settled the item first', () => {
