@@ -272,7 +272,7 @@ export function productionSection({
     progress,
     preparation: preparationOf(preparation, { alive, now }),
     interrupted: interrupted.slice(0, 3).map((round) => ({
-      repo: round.repo, mode: round.mode, pid: round.pid, age_seconds: age(round.ended), reason: round.reason,
+      repo: round.repo, mode: round.mode, pid: round.pid, age_seconds: age(round.started), reason: round.reason,
     })),
     failed: since?.outcome === 'failed' ? attemptState(since) : null,
     attempt: attempt ? { ...attemptState(attempt), outcome: attempt.outcome } : null,

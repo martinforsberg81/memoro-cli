@@ -224,7 +224,7 @@ export function deployLines(lines, c, wide, production, expand) {
   }
   for (const round of p.interrupted || []) {
     detail(lines, c, wide, 4,
-      `interrupted gate round · ${round.repo || 'unknown'} ${round.mode || ''} · pid ${round.pid ?? '?'} ended without an end record · ${age(round.age_seconds)}`.replace(/ {2,}/gu, ' '),
+      `interrupted gate round · ${round.repo || 'unknown'} ${round.mode || ''} · pid ${round.pid ?? '?'} ended without an end record · started ${age(round.age_seconds)}`.replace(/ {2,}/gu, ' '),
       ['yellow']);
   }
   if (!attempt && !(prep && prep.state === 'running')) operation(lines, c, wide, 'idle', 'no deploy running');

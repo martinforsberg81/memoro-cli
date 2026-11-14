@@ -576,7 +576,7 @@ describe('DEPLOY', () => {
     const interrupted = [{ repo: 'memoro', mode: 'check', pid: 2836246, prs: [], started: '2026-08-29T10:00:00Z', ended: '2026-08-29T11:50:00Z', reason: 'process 2836246 ended without an end record' }];
     const p = section({ interrupted });
     assert.equal(p.interrupted[0].pid, 2836246);
-    assert.match(strip(line({ interrupted })), /interrupted gate round · memoro check · pid 2836246 ended without an end record · 10 min ago/u);
+    assert.match(strip(line({ interrupted })), /interrupted gate round · memoro check · pid 2836246 ended without an end record · started 2 h ago/u);
     assert.deepEqual(section({ interrupted: [] }).interrupted, []);
   });
 
