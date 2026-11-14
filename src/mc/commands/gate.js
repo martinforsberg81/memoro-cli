@@ -8,7 +8,7 @@
  *   mc gate --base <ref>      … against another base
  *   mc gate --whole-selection run the optional wide selection with command gates
  *   mc gate --fresh           run the whole request again, reusing nothing from earlier attempts
- *   mc gate --command <id>    one command gate of this change's selection, alone, reusing nothing
+ *   mc gate --command <id>    one declared command gate, alone, reusing nothing
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
  *   mc gate --wait            wait for the gate running here and print its verdict
@@ -153,7 +153,7 @@ export async function run(argv, deps = {}) {
   const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
   if (!files.length) {
     if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${baseRef} — name the test files: mc gate <files…>\n`); return 2; }
-    if (!changed.length) {
+    if (!changed.length && commandId == null) {
       stdout.write(`NOTHING CHANGED — no changes against ${baseRef}\n`);
       return 0;
     }
@@ -173,7 +173,12 @@ export async function run(argv, deps = {}) {
       return 2;
     }
     const wide = scanned.flags['whole-selection'] || commandId != null;
-    select = selectorCommand(wide ? (declaration.select_whole || declaration.select) : declaration.select, { base, changed });
+    // An explicit command can repair a daily-only red, including a full-only
+    // counterpart. It needs the complete command inventory, not a diff that
+    // may not select the failing command on an otherwise clean main.
+    const selector = commandId != null && declaration.select_full
+      ? declaration.select_full : wide ? (declaration.select_whole || declaration.select) : declaration.select;
+    select = selectorCommand(selector, { base, changed });
     addedTests = changed.filter((file) => TEST_FILE.test(file) && io.exists(join(root, file)));
   }
   const missing = files.find((file) => !io.exists(join(root, file)));

@@ -144,6 +144,19 @@ describe('mc gate <test files…>', () => {
     assert.match(request.select, /--changed-path 'implementation\.js'/u);
   });
 
+  it('an explicit command can repair a full-only red on unchanged main without running the full suite', async () => {
+    const h = harness({ changed: [], finishAfter: 1, output: GREEN });
+    h.deps.declaration = () => ({ ok: true, declaration: {
+      select: 'node change.js', select_whole: 'node wide.js', select_full: 'node full.js',
+    } });
+    assert.equal(await run(['--command', 'css-tokens-all'], h.deps), 0);
+    const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+    assert.match(request.select, /^node full\.js/u);
+    assert.deepEqual(request.commands, ['css-tokens-all']);
+    assert.equal(request.files, null);
+    assert.equal(request.defer, false);
+  });
+
   it('--whole-selection refuses named files, patterns and wait observers before starting', async () => {
     for (const [args, explanation] of [
       [['--whole-selection', 'a.test.js'], /takes no named files/u],

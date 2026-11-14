@@ -298,7 +298,7 @@ async function executeSessionGate(request, {
     : knownCommands;
   if (request.commands && !selectedCommandsForRequest.length) {
     const named = knownCommands.map((command) => command.id ?? command.packageScript);
-    const message = `Error: no command gate ${requestedCommand} in this change's selection — the selector named: ${named.length ? named.join(', ') : 'none'}`;
+    const message = `Error: no command gate ${requestedCommand} in the requested selection — the selector named: ${named.length ? named.join(', ') : 'none'}`;
     write(`${message}\n`);
     return { ok: false, code: 2, stopped_at: 'no-command', deferred: [], coverage: {
       kind: 'named', files: [], commands: [], flags: [...plan.flags], execution: identity,

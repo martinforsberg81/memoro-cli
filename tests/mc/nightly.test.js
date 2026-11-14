@@ -76,6 +76,25 @@ async function pass(root, extra = {}) {
 }
 
 describe('a full run', () => {
+  it('a command-only full-run red stays red in history and queues main repair with retained diagnostics', async () => {
+    const root = home();
+    const failure = { kind: 'output', tail: ['unbound token'] };
+    try {
+      const { runs, repaired } = await pass(root, { repos: [REPOS[0]], round: () => ({
+        ...report({ verdict: 'red' }), stopped_at: 'selected-gate', reason: 'css:tokens:all failed',
+        extra_gates: [{ name: 'css:tokens:all', id: 'css-tokens-all', command: 'npm run css:tokens:all',
+          ok: false, exit_code: 1, failure, output_path: '/retained/full/css.log' }],
+      }) });
+      assert.deepEqual(runs[0].red, ['command:css:tokens:all']);
+      assert.equal(repaired.length, 1);
+      assert.equal(repaired[0].base, SHA);
+      assert.deepEqual(repaired[0].files, []);
+      assert.deepEqual(repaired[0].commands, [{ id: 'css-tokens-all', packageScript: 'css:tokens:all',
+        command: 'npm run css:tokens:all', exit_code: 1, failure, output_path: '/retained/full/css.log' }]);
+      assert.deepEqual(readNightlyHistory('/repos/memoro', { root }).runs.at(-1).red, ['command:css:tokens:all']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('measures every repository mc knows and writes down what it found', async () => {
     const root = home();
     try {
@@ -104,6 +123,21 @@ describe('a full run', () => {
       assert.equal(memoro.commit, SHA);
       assert.deepEqual(memoro.red, ['data-bus event names']);
       assert.equal(runs.find((run) => run.repo === 'memoro-cli').verdict, 'green');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('full commands passed on their declared retry, passed alone or unavailable are not main reds', async () => {
+    const root = home();
+    try {
+      const { runs, repaired } = await pass(root, { repos: [REPOS[0]], round: () => ({
+        ...report(), extra_gates: [
+          { name: 'retry', ok: false, retry: { ok: true } },
+          { name: 'alone', ok: false },
+          { name: 'unavailable', ok: false, unavailable: true },
+        ], alone: { gates: [{ name: 'alone', outcome: 'passed' }] },
+      }) });
+      assert.deepEqual(runs[0].red, []);
+      assert.deepEqual(repaired, []);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

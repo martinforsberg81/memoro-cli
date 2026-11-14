@@ -4461,7 +4461,8 @@ test('a queued main-red request precedes build, review and finish, launches goal
     assert.match(call.prompt, /You are a main-red mend session/u);
     assert.match(call.prompt, /missing browser/u);
     assert.match(call.prompt, /mc gate --fresh/u);
-    assert.match(call.prompt, /mc gate --whole-selection/u);
+    assert.match(call.prompt, /then bare mc gate/u);
+    assert.doesNotMatch(call.prompt, /mc gate --whole-selection/u);
     assert.ok(f.mainEntries().every((entry) => entry.state === 'running'));
     assert.equal(runner.nextWork()?.name === pick.name, false, 'a second lane cannot take the same batch');
     publishMainMend({ ...f.mainState, branch: pick.branch, pr: 42 });

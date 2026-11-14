@@ -30,17 +30,21 @@ export function updateMainMends({ root = workRoot(), repo, read = readTextOrNull
 }
 
 /** Shared by merge rounds and the daily full run; finder is stable across repeats. */
-export function requestMainRepair({ repo, base, files, tests = [], pr = null, now = () => new Date(), ...state }) {
+export function requestMainRepair({ repo, base, files, tests = [], commands = [], pr = null, now = () => new Date(), ...state }) {
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();
-    if (!repo || !base || !red.length) return { skipped: 'nothing to repair' };
+    const members = [...red.map(file => ({ file })), ...commands.map(command => ({
+      file: `command:${command.packageScript}`, command,
+    }))];
+    if (!repo || !base || !members.length) return { skipped: 'nothing to repair' };
     return updateMainMends({ ...state, repo }, (entries) => {
       const created = []; const open = [];
-      for (const file of red) {
+      for (const { file, command } of members) {
         const pending = entries.find((entry) => entry.file === file && entry.state !== 'landed');
         if (pending) { open.push(pending.id); continue; }
         const id = randomUUID();
         entries.push({ id, file, tests: tests.filter((test) => test.file === file), base,
+          ...(command ? { command } : {}),
           finder: pr ? `round of ${repo}#${pr}` : 'the full run',
           state: 'queued', failures: 0, created: now().toISOString() });
         created.push(id);
@@ -85,11 +89,16 @@ export function answerMainMend({ repo, pr, landed, reason, ...state }) {
 }
 
 export function mainMendPrompt({ repo, entries, branch, worktree }) {
+  const files = entries.filter(entry => !entry.command).map(entry => entry.file);
+  const checks = [
+    ...(files.length ? [`mc gate --fresh ${files.join(' ')}`] : []),
+    ...entries.filter(entry => entry.command).map(entry => `mc gate --fresh --command ${entry.command.id || entry.command.packageScript}`),
+  ];
   return `You are a main-red mend session, headless, with no goal. Work in ${worktree} on ${branch}.\n` +
     `Repair main's red in ${repo}, found by ${entries[0].finder}. Read the main-red section of your mend role; write no GOAL.json, LOG.md or proposal.\n` +
-    entries.map((entry) => `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.tests, null, 2)}`).join('\n') +
+    entries.map((entry) => `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command || entry.tests, null, 2)}`).join('\n') +
     `\nPrevious outcome: ${entries[0].reason || 'first attempt'}; session log: ${entries[0].session_log || 'none'}.\n` +
-    `Prove mc gate --fresh ${entries.map((entry) => entry.file).join(' ')} GREEN (none of these files SETTLED), then mc gate --whole-selection. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red file is not yours.`;
+    `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate. No wide selection is required for landing. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;
 }
 
 /** Status readers retain unreadable-state evidence instead of calling it an empty queue. */

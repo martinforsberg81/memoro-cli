@@ -111,8 +111,12 @@ green, because its round had a failure. A command still red alone is red after
 its second run, and the verdict names it `command <id>: fail`. A command cut by
 its timeout, killed by a signal, unavailable at its declared exit, whose shell
 threw, or whose gate was aborted is not run again, and stays red as it was. No
-command runs at the base. `mc gate --command <id>` runs one command gate of this
-change's selection alone, reusing nothing, and a red there is counted at once.
+command runs at the base. `mc gate --command <id>` runs one command from the
+repository's declared command inventory alone, reusing nothing, and a red
+there is counted at once. In the two shipped repositories, `--command` asks
+`select_full` for that inventory, including full-only counterparts, then runs
+only the requested command and no test files. It can repair a daily command
+red even on otherwise unchanged main; it does not execute a full suite.
 
 A session's gate shares the machine with the runner's sessions and the merger,
 and a test red on main is red in every branch's gate. A red whose only cause is

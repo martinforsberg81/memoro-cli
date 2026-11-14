@@ -1476,7 +1476,12 @@ whole-suite meter and writes `from: full` with every file it ran and no
 inheritance when it completes. Its complete `select_full` plan includes every
 test (deferred tests and six live main-only ratchets included), every CI binding
 command and all three contract suites, including `test:browser-contracts`.
-No command gate removed from merge protection is left unrun. The full run
+No command gate removed from merge protection is left unrun. A command-only
+red is retained as `command:<packageScript>` in full-run history and queued
+through the same main-red mend door, with its command identity, diagnostic and
+retained output path. Queue membership is stable per command, just as for a
+red test file. The mend checks that member with `mc gate --fresh --command
+<id>` and completes bare gate acceptance; no wide run is a landing condition. The full run
 finished on 2026-11-14: memoro 1,444 s, memoro-cli 111 s; earlier reports that
 nightly never finishes are no longer current.
 

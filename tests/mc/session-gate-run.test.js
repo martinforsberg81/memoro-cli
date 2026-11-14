@@ -995,7 +995,7 @@ it('--command runs one command gate of the selection, no files, and an unknown i
   assert.equal(none.code, 2);
   assert.equal(none.stopped_at, 'no-command');
   assert.deepEqual(calls, []);
-  assert.match(refused.join(''), /^Error: no command gate nope in this change's selection — the selector named: lint, typecheck$/mu);
+  assert.match(refused.join(''), /^Error: no command gate nope in the requested selection — the selector named: lint, typecheck$/mu);
 });
 
 // The selector output a session gate reads through the real `selectFiles`, from a

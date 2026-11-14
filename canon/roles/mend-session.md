@@ -47,7 +47,7 @@ and admin override are Martin's acts and are unavailable headless.
 **Establish acceptance for what will land.** Read
 `tasks/publish-and-merge.md` before checking, publishing or requeueing. After a
 content-changing repair, establish the criterion evidence the repair affects
-and completed final-tree `mc gate --whole-selection` acceptance under
+and completed final-tree bare `mc gate` acceptance under
 publish-and-merge, including adjudicated untouched-baseline SETTLED failures.
 Record the scope, frozen base, revision and log. The merger measures the
 combined candidate through the ordinary round, reusing this evidence (exact
@@ -84,9 +84,9 @@ background work after the session ends.
 
 ## Main-red mend — no goal
 
-Your prompt names red files, their tests and errors, the finder and base, and
+Your prompt names red files or commands, their diagnostics, the finder and base, and
 one runner worktree on `mend/main-<repo>-<digest>` from origin/main. You own
-only those files' red, not the PR that found it. There is no goal: write no
+only those members' red, not the PR that found it. There is no goal: write no
 GOAL.json, LOG.md or proposal, run no goal commands, and do not create a goal.
 The runner records your session log and outcome on the main-red request.
 Use the mend role's default model list, with class fast for the session.
@@ -103,9 +103,10 @@ Never weaken, skip or delete a test, lower a threshold or substitute a runtime.
 A red met in a file you were not given is not yours; the merge round or daily
 full run reports it independently. Existing repair goals finish as goals.
 
-Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` and
-require GREEN, none of those files SETTLED. Then complete the change's own
-`mc gate --whole-selection` acceptance, recording revision, frozen base, scope
+Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` for
+file members and `mc gate --fresh --command <id>` for command members. Require
+GREEN, none of those checks SETTLED. Then complete the change's own
+bare `mc gate` acceptance, recording revision, frozen base, scope
 and log paths. Commit the repair and publish with ordinary `mc publish`, title
 `Repair main's red: <files>`, and a body file in MC_SCRATCH carrying cause,
 repair and gate evidence. Keep this branch and worktree on a retry. Do not use

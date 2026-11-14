@@ -252,7 +252,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc gate --base <ref>          … against another base\n",
     "        mc gate --whole-selection    optional wide diff selection, including command gates\n",
     "        mc gate --fresh               run the whole request again, reusing nothing from earlier attempts\n",
-    "        mc gate --command <id>        one command gate of this change's selection, alone, reusing nothing\n",
+    "        mc gate --command <id>        one declared command gate, alone, reusing nothing\n",
     "        mc gate --json                the summary as one object\n",
     "        mc gate --budget <s>          answer after at most s seconds, default 540; the tests keep running\n",
     "        mc gate --wait                wait for the gate running here and print its verdict\n",
