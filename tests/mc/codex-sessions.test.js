@@ -11,8 +11,9 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 
 import { CodexServerError, readThreads, withCodexServer } from '../../src/mc/codex-rpc.js';
-import { clientArgs, codexSessionDriver, serverArgs, sessionThread, splitLaunchArgs, turnRunning } from '../../src/mc/codex-sessions.js';
+import { clientArgs, codexSessionDriver, finishCodexGatewaySession, serverArgs, sessionThread, splitLaunchArgs, turnRunning } from '../../src/mc/codex-sessions.js';
 import { foregroundDir } from '../../src/mc/foreground.js';
+import { runGatewaySession } from '../../src/mc/billing-gateway-session.js';
 import { rememberRuntimeSecretNames } from '../../src/mc/runtime-secrets.js';
 import { prepareSessionEntrance } from '../../src/mc/session-entrance.js';
 import { interactiveLaunchPlan } from '../../src/mc/work-open.js';
@@ -82,7 +83,8 @@ test('server argv: root-level configuration, app-server listening on the session
     assert.ok(args.slice(0, at).every((arg, index) => index % 2 === 1 || arg === '-c'), 'configuration pairs only');
     const config = configOf(args);
     assert.ok(config.some(entry => entry.startsWith('developer_instructions=') && entry.includes('ROLE TEXT')));
-    for (const entry of ['model="gpt-6.1-sol"', 'project_doc_max_bytes=0', 'features.multi_agent=true']) assert.ok(config.includes(entry), entry);
+    for (const entry of ['model="gpt-6.1-sol"', 'sandbox_mode="danger-full-access"', 'model_reasoning_effort=medium',
+      'project_doc_max_bytes=0', 'features.multi_agent=true']) assert.ok(config.includes(entry), entry);
     assert.equal(args.includes('hello'), false, 'the first words are the client\'s');
     assert.equal(opts.cwd, w.worktree);
     assert.equal(opts.detached, true);
@@ -122,10 +124,10 @@ test('plan billing starts the server directly; credits start it behind the gatew
   try {
     await plain.driver.start(plain.options, plain.plan, 'mc plan example');
     assert.equal(plain.spawn.calls[0].bin, plain.plan.launch.spec.bin);
-    await credits.driver.start(credits.options, credits.plan, 'mc plan example');
+    const { session } = await credits.driver.start(credits.options, credits.plan, 'mc plan example');
     const call = credits.spawn.calls[0];
     assert.equal(call.bin, process.execPath);
-    assert.deepEqual(call.args.slice(1, 4), ['codex', '*', credits.plan.launch.spec.bin]);
+    assert.deepEqual(call.args.slice(1, 6), ['--session-directory', dirname(session.socket), 'codex', '*', credits.plan.launch.spec.bin]);
     assert.ok(existsSync(call.args[0]), 'the wrapper is a script that exists');
     assert.ok(call.args.slice(4).includes('app-server'));
     assert.doesNotMatch(JSON.stringify(call), /sk-test-key|runtime-secret/u);
@@ -142,19 +144,19 @@ test('unavailable billing is refused with its reason before anything is created 
   } finally { w.cleanup(); }
 });
 
-test('the client argv names the server, the conversation and the first words, and carries no configuration', async () => {
+test('client access: new threads carry exactly plan access and remote; resume carries only its id and remote, never role configuration', async () => {
   const w = await world({ settings: { prompt: 'hello' } });
   const resumed = await world({ settings: { conversations: () => [{ id: 'conv-1', tool: 'codex', updated_ms: 1 }] } });
   try {
     const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
     await w.driver.join(w.options, session);
-    assert.deepEqual(w.run.calls[0].args, ['--remote', `unix://${session.socket}`, 'hello']);
+    assert.deepEqual(w.run.calls[0].args, ['--sandbox', 'danger-full-access', '--remote', `unix://${session.socket}`, 'hello']);
     const second = await resumed.driver.start(resumed.options, resumed.plan, 'mc plan example');
     await resumed.driver.join(resumed.options, second.session);
     const argv = resumed.run.calls[0].args;
     assert.deepEqual(argv, ['resume', 'conv-1', '--remote', `unix://${second.session.socket}`]);
     for (const [world_, call] of [[w, w.run.calls[0]], [resumed, resumed.run.calls[0]]]) {
-      assert.equal(call.args.some(arg => /^(-c|-m|--model|--sandbox|--add-dir)$|developer_instructions/u.test(arg)), false);
+      assert.equal(call.args.some(arg => /^(-c|-m|--model|--add-dir)$|developer_instructions|model_reasoning_effort/u.test(arg)), false);
       assert.equal(call.opts.cwd, world_.worktree);
       assert.equal('MC_ROLE' in call.opts.env, false, 'the terminal client is not the role\'s session');
       assert.equal('OPENAI_API_KEY' in call.opts.env, false);
@@ -167,13 +169,16 @@ test('the TUI flags a server has no flag for become configuration; an unknown fl
     '-m', 'gpt', '-c', 'k=v', 'first words']), {
     config: ['sandbox_mode="workspace-write"', 'approval_policy="never"', 'model="gpt"', 'k=v',
       'sandbox_workspace_write.writable_roots=["/a","/b"]'],
-    resume: null, prompt: 'first words' });
-  assert.deepEqual(splitLaunchArgs(['resume', '-m', 'gpt', 'conv-1']), { config: ['model="gpt"'], resume: 'conv-1', prompt: null });
+    access: ['--sandbox', 'workspace-write', '--ask-for-approval', 'never'], resume: null, prompt: 'first words' });
+  assert.deepEqual(splitLaunchArgs(['resume', '-m', 'gpt', 'conv-1']), { config: ['model="gpt"'], access: [], resume: 'conv-1', prompt: null });
   assert.deepEqual(splitLaunchArgs(['resume', 'conv-1', 'reply']).prompt, 'reply');
   assert.throws(() => splitLaunchArgs(['--full-auto']), /--full-auto has no app-server equivalent/u);
   assert.throws(() => splitLaunchArgs(['-m']), /-m has no value/u);
   assert.throws(() => splitLaunchArgs(['resume']), /names no conversation/u);
   assert.deepEqual(clientArgs('/s', { prompt: '-x' }), ['--remote', 'unix:///s', '--', '-x']);
+  const access = splitLaunchArgs(['--sandbox', 'workspace-write', '--ask-for-approval', 'never', '--add-dir', '/a']);
+  assert.deepEqual(clientArgs('/s', access), ['--sandbox', 'workspace-write', '--ask-for-approval', 'never', '--remote', 'unix:///s']);
+  assert.deepEqual(clientArgs('/s', { ...access, resume: 'conv-1' }), ['resume', 'conv-1', '--remote', 'unix:///s']);
   assert.deepEqual(serverArgs('/s', ['k=v']), ['-c', 'k=v', 'app-server', '--listen', 'unix:///s']);
 });
 
@@ -318,7 +323,7 @@ test('a session whose conversation has had no turn is joined plainly, not resume
     const [row] = await w.driver.list(w.options);
     assert.deepEqual([row.sessionId, row.resume], ['conv-1', null]);
     await w.driver.join(w.options, row);
-    assert.deepEqual(w.run.calls[0].args, ['--remote', `unix://${session.socket}`]);
+    assert.deepEqual(w.run.calls[0].args, ['--sandbox', 'danger-full-access', '--remote', `unix://${session.socket}`]);
   } finally { w.cleanup(); }
 });
 
@@ -341,11 +346,110 @@ test('a thread belongs to the server that reported it: another server\'s thread 
 });
 
 test('a running server that does not answer refuses the entrance with what was measured', async () => {
+  let silent = false;
+  const w = await world({ deps: { threads: async () => {
+    if (silent) throw new CodexServerError('silent', 'server not answering on its socket /s within 20000 ms');
+    return [];
+  } } });
+  try {
+    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    silent = true;
+    await assert.rejects(w.driver.list(w.options), new RegExp(`pid ${SERVER_PID}\\) is running but server not answering on its socket .*within 20000 ms.*kill ${SERVER_PID}`, 'u'));
+    assert.equal(existsSync(dirname(session.socket)), true);
+  } finally { w.cleanup(); }
+});
+
+test('an unreachable socket with a live reused pid is forgotten as server gone, never offered or signalled', async () => {
   const w = await world();
   try {
     const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
     w.down.add(session.socket);
-    await assert.rejects(w.driver.list(w.options), new RegExp(`pid ${SERVER_PID}\\) is running but server not answering on its socket .*ECONNREFUSED.*kill ${SERVER_PID}`, 'u'));
+    const registerFile = join(foregroundDir(w.env), `${SERVER_PID}.json`);
+    mkdirSync(dirname(registerFile), { recursive: true });
+    writeFileSync(registerFile, '{}');
+    assert.deepEqual(await w.driver.list(w.options), []);
+    assert.equal(existsSync(dirname(session.socket)), false);
+    assert.equal(existsSync(registerFile), false);
+    assert.equal(w.live.has(SERVER_PID), true);
+    assert.deepEqual(w.killed, []);
+    assert.match(w.lines.join(''), /server gone .*ECONNREFUSED.*registration removed/u);
+    assert.doesNotMatch(w.lines.join(''), /kill/u);
+  } finally { w.cleanup(); }
+});
+
+test('credits expiry: at expiresAt the wrapper stops the server, clears directory and register, and the next entrance names expiry instead of offering join', async () => {
+  const w = await world({ billing: 'credits' });
+  try {
+    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    const registerFile = join(foregroundDir(w.env), `${session.pid}.json`);
+    mkdirSync(dirname(registerFile), { recursive: true });
+    writeFileSync(registerFile, '{}');
+    let clock = 1000;
+    let timer;
+    let closed = false;
+    const signals = [];
+    const child = new EventEmitter();
+    child.pid = 9000;
+    child.kill = signal => { signals.push(signal); w.live.delete(session.pid); child.emit('close', null, signal); };
+    const running = runGatewaySession({ provider: 'codex', model: '*', bin: w.plan.launch.spec.bin, args: [], env: w.env,
+      sessionDirectory: dirname(session.socket), now: () => clock,
+      openGrant: async () => ({ ok: true, base: 'http://gateway', grant: 'bounded-grant', expiresAt: new Date(2000).toISOString(),
+        close: async () => { closed = true; } }),
+      spawnTool: () => child,
+      setTimer: (fire, ms) => { timer = { fire, ms }; return timer; }, clearTimer: handle => assert.equal(handle, timer),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(timer.ms, 1000);
+    assert.deepEqual(signals, []);
+    assert.equal(existsSync(dirname(session.socket)), true);
+    clock = 2000;
+    timer.fire();
+    assert.deepEqual(signals, ['SIGTERM']);
+    assert.equal(await running, 143);
+    assert.equal(closed, true);
+    assert.equal(existsSync(dirname(session.socket)), false);
+    assert.equal(existsSync(registerFile), false);
+    const prepared = await w.entrance({}, { choose: () => assert.fail('expired session must not be offered') });
+    assert.equal(typeof prepared.start, 'function');
+    assert.match(w.lines.join(''), /session ended because its gateway grant expired.*--resume <id>/u);
+    // A terminal which returns after expiry cannot signal a reused wrapper pid.
+    w.live.add(session.pid);
+    w.run.result = { status: 0, signal: null };
+    assert.deepEqual(await w.driver.join(w.options, session), { status: 1, signal: null });
+    assert.equal(w.run.calls.length, 0);
+    assert.equal(existsSync(dirname(session.socket)), false);
+    assert.deepEqual(w.killed, []);
+    assert.deepEqual(await w.driver.list(w.options), []);
+  } finally { w.cleanup(); }
+});
+
+test('expiry while attached: a client returning after wrapper cleanup never signals the former owner pid', async () => {
+  let directory;
+  const w = await world({ deps: { run: () => {
+    finishCodexGatewaySession(directory, { env: w.env, expired: true });
+    return { status: 0, signal: null };
+  } } });
+  try {
+    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    directory = dirname(session.socket);
+    await w.driver.join(w.options, session);
+    assert.deepEqual(w.killed, []);
+    assert.equal(existsSync(dirname(session.socket)), false);
+    assert.deepEqual(await w.driver.list(w.options), []);
+    assert.match(w.lines.join(''), /gateway grant expired/u);
+  } finally { w.cleanup(); }
+});
+
+test('plan billing has no grant clock: arbitrary elapsed time never ends the session', async () => {
+  const w = await world();
+  try {
+    const { session } = await w.driver.start(w.options, w.plan, 'mc plan example');
+    assert.equal(w.spawn.calls[0].args.includes('--session-directory'), false);
+    // The injected driver clock advances far beyond a grant lifetime, without a real wait.
+    const later = codexSessionDriver({ now: () => 100 * 86400_000, alive: pid => w.live.has(pid), threads: async () => [thread('conv-1')] });
+    assert.deepEqual((await later.list(w.options)).map(row => row.pid), [session.pid]);
+    assert.equal(existsSync(dirname(session.socket)), true);
+    assert.deepEqual(w.killed, []);
   } finally { w.cleanup(); }
 });
 

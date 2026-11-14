@@ -16,7 +16,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { writeJsonAtomic } from './atomic-write.js';
@@ -45,12 +45,13 @@ const CONFIG_FLAGS = {
 
 /**
  * The launch plan's argv is the TUI's. A session splits it in two: what is
- * configuration goes to the server (`-c`, where a TUI-started thread reads it;
- * a client-side `-c` does not reach the thread), what names the conversation or
- * its first words stays with the client.
+ * configuration goes to the server. Codex 0.168.0 takes a new thread's access
+ * from the client, so access flags also stay with a client starting a thread.
+ * A remote resume rejects them. Role, model, effort and roots stay server-only.
  */
 export function splitLaunchArgs(args) {
   const config = [];
+  const access = [];
   const roots = [];
   const positional = [];
   const rest = [...args];
@@ -64,7 +65,11 @@ export function splitLaunchArgs(args) {
     const arg = rest[i];
     if (arg === '-c') config.push(value(arg, ++i));
     else if (arg === '--add-dir') roots.push(value(arg, ++i));
-    else if (CONFIG_FLAGS[arg]) config.push(CONFIG_FLAGS[arg](value(arg, ++i)));
+    else if (CONFIG_FLAGS[arg]) {
+      const setting = value(arg, ++i);
+      config.push(CONFIG_FLAGS[arg](setting));
+      if (arg === '--sandbox' || arg === '--ask-for-approval') access.push(arg, setting);
+    }
     else if (arg.startsWith('-')) throw new Error(`codex launch flag ${arg} has no app-server equivalent`);
     else positional.push(arg);
   }
@@ -72,17 +77,17 @@ export function splitLaunchArgs(args) {
   if (resuming && !positional.length) throw new Error('codex resume launch names no conversation');
   if (positional.length > (resuming ? 2 : 1)) throw new Error('codex launch has more positional arguments than a conversation and a prompt');
   const [resume, prompt] = resuming ? positional : [null, positional[0]];
-  return { config, resume, prompt: prompt ?? null };
+  return { config, access, resume, prompt: prompt ?? null };
 }
 
-/** The server's argv: configuration before the subcommand is the root-level `-c` Codex applies to its threads. */
+/** Server configuration is root-level `-c`; new-thread access also needs the client flags below. */
 export function serverArgs(socket, config) {
   return [...config.flatMap(entry => ['-c', entry]), 'app-server', '--listen', `unix://${socket}`];
 }
 
-/** The client's argv: where the server is and which conversation to open; no configuration. */
-export function clientArgs(socket, { resume = null, prompt = null } = {}) {
-  return [...(resume ? ['resume', resume] : []), '--remote', `unix://${socket}`,
+/** Only a new thread carries access; all other configuration comes from its server. */
+export function clientArgs(socket, { resume = null, prompt = null, access = [] } = {}) {
+  return [...(resume ? ['resume', resume] : access), '--remote', `unix://${socket}`,
     ...(prompt ? (prompt.startsWith('-') ? ['--', prompt] : [prompt]) : [])];
 }
 
@@ -134,6 +139,16 @@ function forget(session, env, io) {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
+const expiryNotice = directory => join(dirname(directory), `expired-${basename(directory)}.json`);
+
+/** Called by the trusted wrapper only after its server exits. Keep a one-shot expiry notice for the desk. */
+export function finishCodexGatewaySession(directory, { expired = false, env = process.env, io = fs, write = writeJsonAtomic } = {}) {
+  const session = readSession(directory, io);
+  if (!session) return;
+  if (expired) write(expiryNotice(directory), { name: session.name, cwd: session.cwd });
+  forget({ directory, pid: session.pid }, env, io);
+}
+
 function logTail(directory, io) {
   try { return io.readFileSync(join(directory, 'server.log'), 'utf8').slice(-LOG_TAIL_BYTES).trim(); }
   catch { return ''; }
@@ -143,7 +158,7 @@ function logTail(directory, io) {
 export function codexSessionDriver({
   io = fs, spawnProcess = spawn, run = spawnSync, threads = readThreads, alive = pidAlive,
   register = registerForeground, kill = (pid, signal) => process.kill(pid, signal),
-  now = Date.now, sleep = delay, mcPid = process.pid,
+  now = Date.now, sleep = delay, mcPid = process.pid, write = writeJsonAtomic,
 } = {}) {
   const waitFor = async (done, ms) => {
     const deadline = now() + ms;
@@ -169,7 +184,7 @@ export function codexSessionDriver({
     };
     // Codex's own provider id: the gateway wrapper is named by the provider it fronts.
     const launch = gatewayLaunch({ provider: 'codex', model: null, bin: options.launch.spec.bin,
-      args: serverArgs(socket, split.config), billing: plan.billing.billing });
+      args: serverArgs(socket, split.config), billing: plan.billing.billing, sessionDirectory: directory });
     const output = io.openSync(join(directory, 'server.log'), 'a', 0o600);
     let spawnError = null;
     let child;
@@ -181,9 +196,9 @@ export function codexSessionDriver({
     } finally { io.closeSync(output); }
     const pid = child?.pid;
     if (!Number.isInteger(pid)) return abandon(`could not start the Codex server: ${spawnError?.message || 'no process id'}`);
-    const session = { name, pid, cwd, socket, resume: split.resume,
+    const session = { name, pid, cwd, socket, resume: split.resume, access: split.access,
       started: new Date(now()).toISOString() };
-    writeJsonAtomic(sessionFile(directory), session);
+    write(sessionFile(directory), session);
 
     let answered = false;
     for (const deadline = now() + READY_MS; !answered;) {
@@ -199,7 +214,7 @@ export function codexSessionDriver({
     log('work.open', plan.openEvent);
     registerSession(plan.record, { pid }, { env: options.env, register });
     return { ok: true, session: { id: directory.slice(rootOf(options.env).length + 1), name, pid, cwd, socket,
-      sessionId: split.resume, resume: split.resume, prompt: split.prompt, started: session.started } };
+      sessionId: split.resume, resume: split.resume, prompt: split.prompt, access: split.access, started: session.started } };
   }
 
   /** The sessions of this desk's worktree, each read from its own server; dead ones are cleared away. */
@@ -210,6 +225,15 @@ export function codexSessionDriver({
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
     const cwd = resolve(options.worktree.path);
     const rows = [];
+    for (const name of names.filter(name => name.startsWith('expired-') && name.endsWith('.json'))) {
+      const path = join(root, name);
+      let notice;
+      try { notice = JSON.parse(io.readFileSync(path, 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (notice.cwd !== cwd) continue;
+      (options.stderr || process.stderr).write(`mc: ${notice.name}: session ended because its gateway grant expired; resume the conversation with --resume <id> in a new session\n`);
+      io.rmSync(path, { force: true });
+    }
     for (const id of names.filter(name => name.startsWith('session-'))) {
       const directory = join(root, id);
       const session = readSession(directory, io);
@@ -220,12 +244,17 @@ export function codexSessionDriver({
       try { held = await threads(session.socket); }
       catch (error) {
         if (!(error instanceof CodexServerError)) throw error;
+        if (error.kind === 'unreachable') {
+          (options.stderr || process.stderr).write(`mc: ${session.name}: server gone (${error.message}); session registration removed\n`);
+          forget({ directory, pid: session.pid }, options.env, io);
+          continue;
+        }
         throw new Error(`Codex session ${session.name} (pid ${session.pid}) is running but ${error.message}; stop it with kill ${session.pid} to clear it`);
       }
       const thread = sessionThread(held);
       rows.push({ id, name: session.name, pid: session.pid, cwd: session.cwd, socket: session.socket,
         sessionId: thread?.id ?? session.resume ?? null,
-        resume: thread ? (thread.preview ? thread.id : null) : session.resume ?? null });
+        resume: thread ? (thread.preview ? thread.id : null) : session.resume ?? null, access: session.access ?? [] });
     }
     return rows;
   }
@@ -244,6 +273,9 @@ export function codexSessionDriver({
    */
   async function conclude(options, session, result, directory) {
     const say = line => (options.stderr || process.stderr).write(`mc: ${session.name}: ${line}\n`);
+    // The wrapper owns credit expiry and may have removed this session while
+    // its terminal was attached. Never signal a pid after that ownership ends.
+    if (!readSession(directory, io)) return;
     if (result.error) return say(`the client did not start (${result.error.message}); the session was left running`);
     if (result.signal) return say(`the client ended on ${result.signal}; the session was left running`);
     if (result.status !== 0) return say(`the client exited with status ${result.status}; the session was left running`);
@@ -259,6 +291,7 @@ export function codexSessionDriver({
 
   async function attach(options, session) {
     const directory = join(rootOf(options.env), session.id);
+    if (!readSession(directory, io)) return { status: 1, signal: null };
     const clients = join(directory, 'clients');
     io.mkdirSync(clients, { recursive: true, mode: 0o700 });
     io.writeFileSync(join(clients, String(mcPid)), '', { mode: 0o600 });

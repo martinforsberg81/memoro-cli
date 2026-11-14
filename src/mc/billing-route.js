@@ -51,8 +51,8 @@ export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
 }
 
 /** Replace a tool launch only when its provider's plan is spent. */
-export function gatewayLaunch({ provider, model, bin, args, billing } = {}) {
+export function gatewayLaunch({ provider, model, bin, args, billing, sessionDirectory = null } = {}) {
   if (billing !== 'credits') return { bin, args };
   if (!provider || !bin || !Array.isArray(args)) throw new Error('API launch needs provider and tool');
-  return { bin: process.execPath, args: [WRAPPER, provider, model || '*', bin, ...args] };
+  return { bin: process.execPath, args: [WRAPPER, ...(sessionDirectory ? ['--session-directory', sessionDirectory] : []), provider, model || '*', bin, ...args] };
 }

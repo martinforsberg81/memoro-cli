@@ -8,3 +8,6 @@ section: Changed
   offers join or new. A clean idle quit stops the server; a hangup, a signal,
   a nonzero exit, a running turn or another attached terminal leaves it. The
   tmux transport, with its worker and request directory, is removed.
+  New Codex threads receive the launch plan's access flags on the remote client;
+  resumes keep access server-side. Credit sessions end when their bounded gateway
+  grant expires, and the next entrance explains that expiry.

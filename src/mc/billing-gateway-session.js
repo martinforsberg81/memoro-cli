@@ -84,11 +84,16 @@ export async function openGatewayGrant({ provider, model = '*', readKey = readBi
 }
 
 /** Runs until the coding tool exits; never returns the provider key. */
-export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1) } = {}) {
+export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1),
+  sessionDirectory = null, openGrant = openGatewayGrant, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
+} = {}) {
   if (!['claude', 'codex'].includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
-  const session = await openGatewayGrant({ provider, model, readKey, readApi, createGateway });
+  const session = await openGrant({ provider, model, readKey, readApi, createGateway, now });
   if (!session.ok) return 1;
   let child;
+  let childExited = false;
+  let expiryTimer;
+  let expired = false;
   try {
     const tool = gatewayToolConfig({ provider, base: session.base, grant: session.grant, args, env });
     return await new Promise((resolve) => {
@@ -100,22 +105,36 @@ export async function runGatewaySession({ provider, model, bin, args, env = proc
       child.stdout?.pipe(process.stdout);
       child.stderr?.pipe(process.stderr);
       child.once('error', () => resolve(1));
-      child.once('close', (code, signal) => resolve(signal ? 128 + (signal === 'SIGTERM' ? 15 : 2) : code ?? 1));
+      child.once('close', (code, signal) => {
+        childExited = true;
+        resolve(signal ? 128 + (signal === 'SIGTERM' ? 15 : 2) : code ?? 1);
+      });
+      if (sessionDirectory) expiryTimer = setTimer(() => {
+        expired = true;
+        child.kill('SIGTERM');
+      }, Math.max(0, Date.parse(session.expiresAt) - now()));
     });
   } finally {
-    if (child?.pid) { try { child.kill('SIGTERM'); } catch {} }
+    if (expiryTimer !== undefined) clearTimer(expiryTimer);
+    if (child?.pid && !childExited) { try { child.kill('SIGTERM'); } catch {} }
     if (activeChild === child) activeChild = null;
     await session.close();
+    if (sessionDirectory) {
+      const { finishCodexGatewaySession } = await import('./codex-sessions.js');
+      finishCodexGatewaySession(sessionDirectory, { expired, env });
+    }
   }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const [provider, model, bin, ...args] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const sessionDirectory = argv[0] === '--session-directory' ? (argv.shift(), argv.shift()) : null;
+  const [provider, model, bin, ...args] = argv;
   for (const signal of ['SIGTERM', 'SIGINT']) {
     process.on(signal, () => {
       if (activeChild?.pid) activeChild.kill(signal);
       else process.exitCode = signal === 'SIGTERM' ? 143 : 130;
     });
   }
-  process.exitCode = await runGatewaySession({ provider, model, bin, args });
+  process.exitCode = await runGatewaySession({ provider, model, bin, args, sessionDirectory });
 }

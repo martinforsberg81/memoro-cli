@@ -157,12 +157,19 @@ every provider path uses; there is no second Codex argv builder) into two:
   `-m`, `--sandbox`, `--ask-for-approval` and `--add-dir` become `model`,
   `sandbox_mode`, `approval_policy` and `sandbox_workspace_write.writable_roots`.
   `developer_instructions`, `project_doc_max_bytes` and the other `-c` entries
-  go here too. Root-level `-c` is the configuration a thread started by the TUI
-  reads from its server; a client-side `-c` does not reach the thread. A flag
+   go here too. Model, effort and role instructions reach a TUI-started thread
+   from the server. Access is different in Codex 0.168.0: a new thread takes
+   sandbox and approval from the client, not these server settings. A flag
   with no app-server equivalent refuses the launch, by name.
-- Client argv: `[resume <id>] --remote unix://<socket> [prompt]`, a prompt
-  starting with `-` behind `--`. No `-c`, `--model` or instructions: the role's
-  instructions are the server's.
+- New-thread client argv: the launch plan's `--sandbox <mode>` and, when
+  present, `--ask-for-approval <policy>`, then `--remote unix://<socket> [prompt]`.
+  Access remains on the server as `-c` too (Martin, 2026-11-14, client_access).
+- Resume/join argv: `resume <id> --remote unix://<socket> [prompt]`, with no
+  access flags: Codex rejects permission overrides on a remote resume, and a
+  loaded thread keeps its existing policy. A thread without a turn has no
+  resumable rollout, so joining it starts a thread with the stored plan access.
+  Prompts starting with `-` go behind `--`. Neither client carries `-c`, model,
+  effort, role instructions or roots; those belong only to the server.
 
 **Environment and billing.** The server runs the session's tools, so its
 environment is the launch plan's role identity (`MC_ROLE`, `MC_PROGRAMME`; no
@@ -171,8 +178,17 @@ removed. The terminal client gets the same allowlisted environment as the
 Claude path, with no role identity. On plan billing the server is the
 provider binary. On credits it is started through `gatewayLaunch`, so the
 [gateway wrapper](mc-run.md#billing) is the server's parent for the server's
-whole life and the grant never appears on argv. Unavailable billing refuses
-the start with its reason before anything is created.
+whole life and the grant never appears on argv. The wrapper's one optional
+`--session-directory` parameter opts this long-lived server into expiry cleanup.
+At the grant's `expiresAt` it stops the server with SIGTERM, closes the gateway,
+and removes the session directory and register entry. An attached TUI ends when
+its server disconnects. A private one-shot `expired-session-*.json` notice beside
+the removed directory lets the next entrance say the session ended because its
+gateway grant expired, instead of offering it for join. The conversation stays
+resumable with `--resume <id>` in a new session. This is the same bounded grant
+lifetime as Claude's holder; there is no automatic renewal. Plan billing has no
+grant or expiry clock. Unavailable billing refuses the start with its reason
+before anything is created.
 
 **Registration.** A start waits for the server to answer on its socket
 (15 s; the log tail is named when it does not), then registers the *server's*
@@ -190,8 +206,11 @@ not ephemeral, has no parent thread and has had a turn, newest `updatedAt`
 first. A thread that has had no turn is the session's, but joining is by plain
 `--remote`, not `resume`. A server that is running but does not answer within the
 bounded deadline (20 s overall, 1 MiB) refuses the entrance with what was measured and
-the `kill <pid>` that clears it; it is never treated as an empty desk. A session
-whose server pid is dead is removed with its register entry. A server whose
+the `kill <pid>` that clears it; it is never treated as an empty desk. An
+unreachable socket (ENOENT/ECONNREFUSED) instead means the server is gone even
+if its pid is alive (it may have been reused): mc forgets that session and its
+register entry, reports what it measured, and never signals that pid. A session
+whose server pid is dead is also removed with its register entry. A server whose
 worktree is another is not asked.
 
 **End rule.** The session ends only when its person left it, and mc only ever
