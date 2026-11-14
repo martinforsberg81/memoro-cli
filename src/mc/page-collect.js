@@ -61,6 +61,7 @@ import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoal
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
+import { mainMendReading } from './main-repair.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
 import { HELPER_REPOS, digestDirs, findDigest, intakeDir, proposalsDir } from './helper-collect.js';
@@ -1590,14 +1591,14 @@ export async function collectPage({
     }),
     merges: mergesNow,
     prs: pulls,
-    checks: checksSection({
+    checks: { ...checksSection({
       repos: present.map((repo) => {
         let nightly = null;
         try { nightly = nightlyReading(repo.path, { root: home }); } catch { notes.push(`${repo.name}: nightly history unreadable`); }
         return { name: repo.name, nightly, deps: loadSaved(repo.name, home) };
       }),
       now,
-    }),
+    }), main_mend: repos.map((repo) => ({ repo: repo.name, ...mainMendReading({ root, repo: repo.name }) })) },
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     // What landed in the last 24 hours and what each goal took (landed.js).

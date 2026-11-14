@@ -1,9 +1,9 @@
 /**
  * What a free lane takes next from the candidates the runner supplies.
  *
- * `run.js`'s `nextWork` supplies only startable goal sessions today:
+ * `run.js`'s `nextWork` supplies startable goal sessions and goal-less main-red mends:
  *
- * - `mend` only for an unqueued merge failure;
+ * - `mend` for an unqueued merge failure or queued main-red request;
  * - `finish` for a goal in finish;
  * - `review` for a goal in review;
  * - `build` for a goal in build;
@@ -17,7 +17,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * A merge-failure mend goes first, then finish, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
+ * Merge-failure and main-red mend go first, then finish, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -30,8 +30,8 @@
  * then finish, reviews, then builds. Eligibility is the caller's.
  */
 function rankOf(item) {
-  if (item.goal?.status === 'blocked') return 0;
-  if (item.kind === 'finish' || item.kind === 'mend') return 1;
+  if (item.kind === 'mend' || item.goal?.status === 'blocked') return 0;
+  if (item.kind === 'finish') return 1;
   if (item.kind === 'review') return 2;
   if (item.kind === 'plan') return 5;
   return item.variant === 'goal' ? 4 : 3;
@@ -46,7 +46,7 @@ const priorityOf = (item) => Number.isSafeInteger(item.priority) && item.priorit
  * `items`: `{ name, repo, kind: 'review'|'finish'|'mend'|'build'|'plan', variant: 'project'|'goal'|null,
  * since, resumed, priority }` — caller-approved candidates. `variant: 'project'` and
  * project build/review kinds are retained for compatibility, although
- * `run.js` currently supplies goal sessions only. `held`: one repository per
+ * `run.js` also supplies goal-less main-red mends. `held`: one repository per
  * in-flight session known to the caller. `carry`: the name this lane ran a
  * moment ago, or null.
  */

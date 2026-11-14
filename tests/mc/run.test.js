@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { answerMainMend, publishMainMend, readMainMends, requestMainRepair } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
@@ -4423,4 +4424,76 @@ test('a quota refusal during planning preserves draft readiness and records prov
   assert.equal(where(f, 'a'), 'draft · ready');
   assert.ok(f.deps.capacity.read().providers.claude.refusal_until);
   assert.doesNotMatch(f.files[`${GOALS}/a/LOG.md`], /without completing the draft/u);
+});
+
+/** Main-red requests use the same real state transitions with the runner fixture's IO. */
+function mainRedFixture(goals = {}) {
+  const f = goalFixture(goals);
+  f.mainState = { root: '/w', repo: 'memoro', read: f.deps.read, write: f.deps.writeJson, lock: f.deps.lock };
+  requestMainRepair({ ...f.mainState, base: 'main-head', files: ['tests/red.test.js', 'tests/other-red.test.js'], tests: [{ file: 'tests/red.test.js', name: 'red assertion', error: ['missing browser'] }], now: f.deps.now });
+  const git = f.deps.git;
+  const branches = new Set();
+  f.deps.git = (cwd, args) => {
+    if (args[0] === 'show-ref') return { ok: branches.has(args.at(-1)), stdout: '' };
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      const path = args.at(-2);
+      f.dirs.add(path);
+      if (args.includes('-b')) branches.add(`refs/heads/${args[4]}`);
+    }
+    return git(cwd, args);
+  };
+  f.mainEntries = () => readMainMends(f.mainState);
+  return f;
+}
+
+test('a queued main-red request precedes build, review and finish, launches goal-less mend from origin/main and records publication', async () => {
+  const f = mainRedFixture({ build: {}, review: { stage: 'review' }, finish: { stage: 'finish' } });
+  const runner = createRunner({ deps: f.deps });
+  const pick = runner.nextWork();
+  assert.equal(pick.kind, 'mend');
+  assert.deepEqual(pick.mainMend.map((entry) => entry.file), ['tests/other-red.test.js', 'tests/red.test.js']);
+  f.answer = (call) => {
+    assert.equal(call.env.MC_ROLE, 'mend-session');
+    assert.equal(call.env.MC_GOAL, undefined);
+    assert.equal(call.env.MC_PROGRAMME, undefined);
+    assert.equal(call.env.MC_MODEL, 'sonnet', 'the mend list default, not a build class model');
+    assert.ok(call.unsetEnv.includes('MC_GOAL'));
+    assert.match(call.prompt, /You are a main-red mend session/u);
+    assert.match(call.prompt, /missing browser/u);
+    assert.match(call.prompt, /mc gate --fresh/u);
+    assert.match(call.prompt, /mc gate --whole-selection/u);
+    assert.ok(f.mainEntries().every((entry) => entry.state === 'running'));
+    assert.equal(runner.nextWork()?.name === pick.name, false, 'a second lane cannot take the same batch');
+    publishMainMend({ ...f.mainState, branch: pick.branch, pr: 42 });
+    return okSession()(call);
+  };
+  const pass = await runner.pass();
+  assert.equal(pass.ran, 1);
+  assert.match(pick.branch, /^mend\/main-memoro-[a-f0-9]+$/u);
+  const added = f.calls.git.find((call) => call[1] === 'worktree' && call[2] === 'add');
+  assert.deepEqual(added, ['/home/memoro', 'worktree', 'add', '-q', '-b', pick.branch, f.calls.sessions[0].cwd, 'origin/main']);
+  assert.deepEqual(f.mainEntries().map((entry) => [entry.state, entry.pr]), [['published', 42], ['published', 42]]);
+  assert.equal(f.files['/w/programs/main-health/goals'], undefined);
+  assert.equal(Object.keys(f.files).some((path) => path.startsWith('/w/programs/main-health/')), false);
+});
+
+test('the third main-red attempt waits on Martin with its session log and keeps the same branch', async () => {
+  const f = mainRedFixture();
+  const runner = createRunner({ deps: f.deps });
+  const branch = runner.nextWork().branch;
+  // First attempt publishes, but its ordinary merge fails. It rejoins the mend rank.
+  f.answer = (call) => { publishMainMend({ ...f.mainState, branch, pr: 42 }); return okSession()(call); };
+  await runner.pass();
+  answerMainMend({ ...f.mainState, pr: 42, landed: false, reason: 'candidate red' });
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'queued' && entry.failures === 1));
+  f.answer = okSession(); // The one recovery ends without publication.
+  await runner.pass();
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'Martin' && entry.failures === 2));
+  assert.equal((await runner.pass()).ran, 0, 'the third attempt waits on Martin');
+  assert.deepEqual(f.mainEntries().map((entry) => entry.branch), [branch, branch]);
+  assert.ok(f.mainEntries().every((entry) => entry.session_log === f.calls.sessions.at(-1).logPath));
+  assert.equal(new Set(f.calls.sessions.map((call) => call.cwd)).size, 1);
+  assert.equal(f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add').length, 1);
+  assert.equal(runner.nextWork(), null, 'Martin starts no third session');
+  assert.equal(f.calls.sessions.length, 2);
 });

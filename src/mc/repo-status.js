@@ -22,7 +22,8 @@ import { promisify } from 'node:util';
 import { run as runGit, runAsync as runGitAsync } from './git.js';
 import { nightlyReading } from './nightly-history.js';
 import { selectorMissReading } from './selector-miss.js';
-import { mcHome } from './paths.js';
+import { mainMendReading } from './main-repair.js';
+import { mcHome, workRoot } from './paths.js';
 import { readLease } from './repo-lease.js';
 import { repoNameOf, repositoryDir } from './repos.js';
 import { livenessForLeases } from './lease-liveness.js';
@@ -126,7 +127,7 @@ export async function repoStatus({
     offline,
     // The one-shot answer. `mc repo watch` gives this field a second value.
     mode: 'computed',
-    repos: repos.sort((a, b) => a.name.localeCompare(b.name)),
+    repos: repos.map((repo) => ({ ...repo, main_mend: mainMendReading({ root: workRoot(env), repo: repo.name }) })).sort((a, b) => a.name.localeCompare(b.name)),
     unknown,
   };
 }
@@ -181,6 +182,7 @@ export async function repoView({
         ...repo,
         lease: readLease(repo.path, { root, now }),
         nightly: nightlyReading(repo.path, { root }),
+        main_mend: mainMendReading({ root: workRoot(env), repo: repo.name }),
         selector_misses: selectorMissReading(repo.path, { root, now }),
       })),
       unknown: fromSnapshot.unknown,

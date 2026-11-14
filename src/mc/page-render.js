@@ -922,6 +922,17 @@ export function renderPageLines(data, {
   } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);
   programmesLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
   lines.push('');
+  const mendMartin = (data.checks?.main_mend || []).flatMap((repo) => repo.entries.filter((entry) => entry.state === 'Martin').map((entry) => ({ ...entry, repo: repo.repo })));
+  if (mendMartin.length) {
+    panelHeading(lines, c, wide, 'MARTIN QUEUE', `${mendMartin.length} main-red files waiting`, 'mc martin get');
+    for (const entry of mendMartin) {
+      detail(lines, c, wide, 4, `${entry.repo} · ${entry.file}${entry.pr ? ` · #${entry.pr}` : ''}`, ['red', 'bold']);
+      detail(lines, c, wide, 6, entry.reason, ['red']);
+      detail(lines, c, wide, 6, entry.session_log);
+    }
+    panelEnd(lines, c, wide);
+  }
+  for (const repo of data.checks?.main_mend || []) if (repo.error) detail(lines, c, wide, 2, `${repo.repo}: ${repo.error}`, ['red']);
   mergesLines(lines, c, wide, data.merges, expand);
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
   lines.push('');

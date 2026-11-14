@@ -32,13 +32,13 @@
  * that queue goes on after it. Another repository's lane does not wait for it.
  */
 import { spawn as realSpawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { runTool } from './child-async.js';
-import { runAsync as runGitAsync } from './git.js';
+import { run as runGit, runAsync as runGitAsync } from './git.js';
 import { appendEntry, goalOfPr, logStamp, mergeFailures, prRef, redMergeText, setGoalState } from './goals.js';
 import { dropPr } from './page-cache.js';
 import { runningDeploy } from './deploys.js';
@@ -47,7 +47,7 @@ import {
   dequeue, enqueue, heldBy, inLine, markLanding, markOffline, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor,
 } from './merge-queue.js';
-import { MAIN_HEALTH_PROGRAMME, requestMainRepair } from './main-repair.js';
+import { answerMainMend, mainMendPath, requestMainRepair } from './main-repair.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
@@ -440,8 +440,8 @@ export async function landJob(batch, {
   goalsOf = null,
   // A goal entry with no status change (goals.js `appendEntry`).
   noteGoal = appendEntry,
-  // Main's red the round found at its base is asked a repair goal here (`main-repair.js`).
-  repairMain = requestMainRepair,
+  // Main's red becomes goal-less mend lane work (`main-repair.js`).
+  repairMain = (request) => requestMainRepair({ ...request, root, read, write, lock, now }),
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
   // immediately before the irreversible GitHub merge call.
@@ -794,16 +794,26 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     if (goal) tellGoal(job, goal, landed, report, { say, now, setGoal, noteGoal, moved, requeued, offline });
   }, { name: 'merges' });
 
-  // Main's red the round found at its base (Martin, 2026-11-10): the pull
-  // request was judged against main and is not blamed; main gets a repair goal
-  // of its own (`main-repair.js`), never a mend of this pull request.
+  // Ownership is recorded by mc publish before queueing, even if its session is still ending.
+  if (read(mainMendPath(root, job.repo)) != null && (landed || (!back && !requeued && !offline))) {
+    const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, read, write, lock });
+    if (landed) for (const path of new Set(repaired.map((entry) => entry.worktree).filter(Boolean))) {
+      // No force: a session still exiting or uncommitted work keeps its tree for cleanup later.
+      let active = false;
+      try { active = readdirSync(join(root, 'runner')).filter((file) => /^current-.+\.json$/u.test(file)).some((file) => {
+        try { return JSON.parse(read(join(root, 'runner', file)))?.worktree === path; } catch { return false; }
+      }); } catch { /* no current files */ }
+      if (active) continue;
+      const removed = runGit(job.repo_path, ['worktree', 'remove', path]);
+      if (removed.status !== 0) say(`${label}: landed main-red repair; worktree retained at ${path}`);
+    }
+  }
   for (const found of mainRepairsOf(report)) {
     const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files, tests: found.tests });
     const where = found.files.join(', ');
-    if (asked.created && asked.open) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written; already under way: ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
-    else if (asked.created) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written`);
-    else if (asked.open) say(`${label}: main is red in ${where} — its repair is under way in ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
-    else say(`${label}: main is red in ${where} — no repair goal written: ${asked.skipped}`);
+    if (asked.created?.length) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — main-red mend queued: ${[].concat(asked.created).join(', ')}${asked.open?.length ? `; already under way: ${asked.open.join(', ')}` : ''}`);
+    else if (asked.open?.length) say(`${label}: main is red in ${where} — its main-red mend is under way: ${asked.open.join(', ')}`);
+    else say(`${label}: main is red in ${where} — no main-red mend requested: ${asked.skipped || 'nothing new'}`);
   }
 
   if (appendRun) {

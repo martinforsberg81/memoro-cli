@@ -661,15 +661,44 @@ by name, the file is main's red: the round goes on past it exactly as past a
 standing `covered_red` (`main_red_files`), lands on green, and carries the
 failure into the landed commit's evidence. Main's red is a side matter for
 the merge — it neither stops it nor counts as one of the pull request's
-failed merges, and it never starts a mend. Instead the round reports
-`main_repair: { base, files, tests }` and the merger writes a repair goal
-(`requestMainRepair` in [`src/mc/main-repair.js`](../../src/mc/main-repair.js)):
-an ordinary goal in the `main-health` programme, `build · ready` with its
-criteria, which the runner takes in a lane like any other goal — its own
-worktree from origin/main, build, review and the measured round. A file an
-unfinished repair already names is not written again; the round's other red
-files get a repair of their own. A red that returns after its repair finished
-gets a new, dated goal. A red test green at the base, absent there, or a base run that
+failed merges, and it never starts a mend of that pull request. Instead the
+round reports `main_repair: { base, files, tests }` and the merger queues a
+main-red mend (`requestMainRepair` in
+[`src/mc/main-repair.js`](../../src/mc/main-repair.js); Martin, 2026-11-13).
+The daily full run uses the same entry point and keeps its once-daily cadence.
+No red test becomes a goal; repair goals already in flight finish as goals.
+
+The atomic runner state `~/mc/runner/main-mend/<repo>.json` has version 1 and
+one entry per red file, preserving test names/errors, base, finder (round of
+`<repo>#<pr>`, or the full run) and state: queued, running, published (with PR),
+landed, or Martin. A queued, running or published file asks for nothing new;
+Martin also holds duplicates until resolved. A red after landed gets a fresh
+entry. All read-patch-write transitions use the shared strict runner lock.
+Queued files of one repository and finder run together, at merge-failure mend
+priority within the existing lane total. A retry retains its original batch,
+branch `mend/main-<repo>-<digest>` and worktree under `runner/work/`; new files
+never join a used branch. The initial branch starts from fetched origin/main.
+The session uses the mend role's default catalog list and class fast, without
+GOAL.json, LOG.md or proposals. It classifies the error, repairs a regression
+in the owning code/fixture or declares and provisions a host prerequisite in
+`docs/technical/testing.md` with the provider installer (non-interactive sudo
+when available). It never weakens, skips or deletes tests, lowers thresholds
+or substitutes a runtime, and leaves other red files to their own requests.
+It proves the named files GREEN with `mc gate --fresh`, none SETTLED, completes
+`mc gate --whole-selection`, commits and publishes through ordinary `mc publish`
+with title `Repair main's red: <files>` and cause/gate evidence in the body.
+Publication records ownership before queueing so a fast merge cannot lose the
+outcome. The merger marks landed and removes the clean worktree after its
+session releases it; no force-removal of edits. A session without a published
+PR, a dead runner's running request, or a failed merge is an unsuccessful
+outcome. One more mend attempt follows the initial attempt on the same branch;
+a third waits on Martin with the latest session log, visible in
+`mc repo status`, the page's Martin queue and `mc martin get`, without a goal.
+Transient merge requeues do not consume an attempt. The runner settlement pass
+restores missing published queue handoffs and reconciles merged/closed PRs,
+using ordinary idempotent queueing, and retries safe landed-worktree cleanup.
+
+A red test green at the base, absent there, or a base run that
 could not be made or did not finish is the change's red, as before. Touched
 files are never run at the base. Measured: on 2026-11-09/10 memoro#15168 landed
 through the old direct goal landing (closed by #1449) and broke
@@ -1353,7 +1382,7 @@ The block after the round writes only what `onAnswer` did not: a round that
 threw.
 
 **Where a red goes.** Main's red found by the round is not a red answer: the
-round went on past it and the merger wrote a `main-health` repair goal
+round went on past it and the merger queued a goal-less main-red mend
 (*The merge judges the pull request against main*). A red answer is red at once, whatever stopped the
 round. On a goal's pull request the goal stays in `merge` with the runner's `merger
 answered red on #<pr>` entry (`tellGoal`). Failure one or two sets
