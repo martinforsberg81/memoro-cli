@@ -279,7 +279,8 @@ whoever decides. `unmeasured` and `moved` are not red: they are not accepted.
 suite. A headless session is told the deploy is Martin's act. `--dry-run` and
 `--follow` stay allowed — they change nothing. The Claude hook rule
 `headless-deploy` ([`src/mc/hooks.js`](../../src/mc/hooks.js)) is kept as the
-first line; the verb is the second, and the one the Codex hook relies on.
+first line; the verb's own refusal is the second, and the only one under Codex,
+whose hook has no such rule.
 
 **What it never does.** It never refuses or delays a merge — it runs in this
 verb and in the daily run only — and it reimplements nothing of `deploy.mjs` and
