@@ -43,6 +43,7 @@
  *                                  does the same 24 hours after a goal is done or dropped
  *   mc goal show <programme>/<goal>      the goal as text (`renderGoalText`), the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each, under its programme's phases
+ *   mc goal areas <repo>|<programme>/<goal> [--at <rev>]   a repository's rule areas (`.mc/areas.json` at origin/main), or a goal's: each area with its stand or `no stand`
  *
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's. GOAL.json is written by these verbs only, each write
@@ -66,6 +67,7 @@ import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, un
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
+import { readAreas } from '../areas.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
@@ -123,6 +125,7 @@ const VERB_FLAGS = {
   archive: [],
   show: [],
   list: [],
+  areas: ['--at'],
 };
 /** The verbs that set one field: `blocked` and `ready` the status, `done` and `drop` the final stage. */
 const STATUS_VERBS = ['blocked', 'martin', 'ready', 'done', 'drop'];
@@ -145,7 +148,7 @@ export async function run(argv, deps = {}) {
   const env = deps.env || process.env;
   const rawStderr = deps.stderr || process.stderr;
   // Preparation has no goal mutation authority, including goal-less calls.
-  if (env.MC_ROLE === 'desk-prepare' && !['show', 'list'].includes(argv[0])) {
+  if (env.MC_ROLE === 'desk-prepare' && !['show', 'list', 'areas'].includes(argv[0])) {
     rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
   }
   let refusalSecrets = [];
@@ -243,6 +246,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'pr') return carryPrs(rest, ctx);
   if (verb === 'archive') return archiveGoals(rest, ctx);
   if (verb === 'show') return showGoal(rest, ctx);
+  if (verb === 'areas') return areasVerb(rest, flags, ctx);
   return listGoals(rest, ctx);
 }
 
@@ -1038,15 +1042,58 @@ function setObligationVerb(args, flags, ctx) {
   const [named, area] = [args[0], args[1].trim()];
   if (!area) { stderr.write('mc: obligation set needs the area, in words\n'); return 2; }
   let replaced = null;
+  let after = null;
   const given = { stand: flags.stand.trim(), text: flags.text.trim(), standard: flags.standard === null ? null : flags.standard.trim() };
-  return changeGoal(named, ctx, (goal) => {
+  const code = changeGoal(named, ctx, (goal) => {
     if (goal.version !== 2) return v1Refusal('obligation set');
+    const read = goalDeclarations(goal, null, ctx);
+    if (read.error) return { problems: [read.error], code: 1 };
+    const refusal = areaRefusal(area, read.declared);
+    if (refusal) return { problems: [refusal], code: 2 };
     const set = setObligation(goal, area, given);
     replaced = set.was;
+    after = read.declared.some((one) => one.areas.length) ? stillWithoutStand(read.declared, set.goal.obligations) : null;
     return set.goal;
   }, () => `obligation "${area}" ${replaced ? 'replaced' : 'set'}`, (goal, target) => {
     if (replaced) logChange(ctx, goal, target, `obligation "${area}" replaced — it was ${itemWords(replaced)}`);
   });
+  if (code === 0 && after) ctx.stdout.write(`${after}\n`);
+  return code;
+}
+
+/**
+ * The declarations of the goal's repositories at `at` (`origin/main` unless given): `{ declared: [{ repo, path, areas }] }`
+ * in the goal's order, or `{ error }` naming a repository mc does not know or the reader's reason. A git failure is never
+ * no declaration (`readAreas`).
+ */
+function goalDeclarations(goal, at, ctx) {
+  const declared = [];
+  for (const repo of goal.repos) {
+    const path = ctx.known().find((known) => repoNameOf(known) === repo);
+    if (!path) return { error: `${repo} is not a repository mc knows — ${ctx.known().map(repoNameOf).join(', ')}` };
+    const read = readAreas(path, { git: ctx.git, at: at ?? 'origin/main', repo });
+    if (!read.ok) return { error: read.reason };
+    declared.push({ repo, path, areas: read.areas });
+  }
+  return { declared };
+}
+
+/** Why `area` is not one the goal may take a stand on (D7: any word where nothing is declared), or null. */
+function areaRefusal(area, declared) {
+  if (!declared.some((one) => one.areas.length)) return null;
+  const slash = area.indexOf('/');
+  const own = slash > 0 ? declared.find((one) => one.repo === area.slice(0, slash)) : null;
+  if (own && !own.areas.length && slash < area.length - 1) return null;
+  if (own?.areas.some((one) => `${own.repo}/${one.id}` === area)) return null;
+  const listed = declared.map((one) => (one.areas.length ? `${one.repo}: ${one.areas.map((a) => `${one.repo}/${a.id}`).join(', ')}` : `${one.repo}: declares none, any <${one.repo}/…> is taken`));
+  return `"${area}" is not a rule area of the goal's repositories — an area is <repo>/<id>\n  ${listed.join('\n  ')}`;
+}
+
+/** The line `obligation set` ends with: the declared areas with no obligation, or that none lacks one. */
+function stillWithoutStand(declared, obligations) {
+  const taken = new Set((obligations ?? []).map((one) => one.area));
+  const lacking = declared.flatMap((one) => one.areas.map((a) => `${one.repo}/${a.id}`)).filter((id) => !taken.has(id));
+  return lacking.length ? `  no stand yet: ${lacking.join(', ')}` : '  every declared area has a stand';
 }
 
 /** `mc goal obligation remove <programme>/<goal> <area> --reason "…"` — the obligation taken out, logged with the reason. */
@@ -1221,6 +1268,84 @@ function showGoal(args, ctx) {
     const lastDate = last.ok && last.stdout.trim() ? last.stdout.trim() : 'none';
     stdout.write(`  ${repo}  ${path}  ${changed} changed · ${ahead.ok ? ahead.stdout.trim() : '?'} commits past origin/main · last commit ${lastDate}\n`);
   }
+  return 0;
+}
+
+/**
+ * `mc goal areas <repo>|<programme>/<goal> [--at <rev>]` — a repository's rule areas, or a goal's: each area of each of
+ * its repositories with the goal's stand or `no stand`, the obligations no repository declares, and a count. Reads
+ * `.mc/areas.json` at `--at` (`origin/main` unless given) and writes nothing, for any role.
+ */
+function areasVerb(args, flags, ctx) {
+  const { stderr } = ctx;
+  if (args.length > 1) { stderr.write(usage()); return 2; }
+  const given = args[0] ?? ctx.env.MC_GOAL;
+  if (!given) { stderr.write(usage()); return 2; }
+  const at = flags.at === null ? 'origin/main' : flags.at.trim();
+  if (!at) { stderr.write('mc: --at needs a revision\n'); return 2; }
+  return given.includes('/') ? goalAreas(given, at, ctx) : repoAreas(given, at, ctx);
+}
+
+/** One area as text: `<repo>/<id> — <name>`, what it covers, its standards and paths (`(missing)` when not in `at`), its questions. */
+function areaBlock(repo, path, area, at, ctx, stand = undefined) {
+  const exists = (file) => ctx.git(path, ['cat-file', '-e', `${at}:${file}`]).ok;
+  const marked = (files) => files.map((file) => `${file}${exists(file) ? '' : ' (missing)'}`).join(', ');
+  const lines = [`${repo}/${area.id} — ${area.name}`];
+  if (stand !== undefined) lines.push(stand ? `  stand: ${stand.stand} — ${oneLine(stand.text)}${stand.standard ? ` [${stand.standard}]` : ''}` : '  no stand');
+  lines.push(`  covers: ${area.covers}`, `  standards: ${marked(area.standards)}`, `  paths: ${area.paths.length ? marked(area.paths) : 'none'}`, '  questions:');
+  for (const question of area.questions) lines.push(`    when ${question.when}`, `      ask ${question.ask}`);
+  return `${lines.join('\n')}\n`;
+}
+
+/** `mc goal areas <repo>`. */
+function repoAreas(repo, at, ctx) {
+  const { stdout, stderr } = ctx;
+  const path = ctx.known().find((known) => repoNameOf(known) === repo);
+  if (!path) { stderr.write(`mc: ${repo} is not a repository mc knows — ${ctx.known().map(repoNameOf).join(', ')} (a goal is <programme>/<goal>)\n`); return 2; }
+  const read = readAreas(path, { git: ctx.git, at, repo });
+  if (!read.ok) { stderr.write(`mc: ${read.reason}\n`); return 1; }
+  if (!read.declared) { stdout.write(`${repo} declares no rule areas (no .mc/areas.json at ${at})\n`); return 0; }
+  stdout.write(read.areas.map((area) => areaBlock(repo, path, area, at, ctx)).join('\n'));
+  return 0;
+}
+
+/** `mc goal areas <programme>/<goal>`. */
+function goalAreas(named, at, ctx) {
+  const { stdout, stderr, read } = ctx;
+  const target = goalNamed(named, ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    stderr.write(`mc: ${target.name} does not parse:\n`);
+    for (const problem of goal.problems) stderr.write(`  ${problem}\n`);
+    return 1;
+  }
+  if (goal.version !== 2) { stderr.write(`mc: ${target.name} is a version 1 goal — it has no obligations to hold against areas (mc goal areas <repo> shows a repository's)\n`); return 2; }
+  const declarations = goalDeclarations(goal, at, ctx);
+  if (declarations.error) { stderr.write(`mc: ${declarations.error}\n`); return 1; }
+  const obligations = goal.obligations ?? [];
+  const known = new Set();
+  let total = 0;
+  let stood = 0;
+  const sections = declarations.declared.map(({ repo, path, areas }) => {
+    if (!areas.length) return `${repo} declares no rule areas (no .mc/areas.json at ${at})\n`;
+    return areas.map((area) => {
+      const stand = obligations.find((one) => one.area === `${repo}/${area.id}`) ?? null;
+      known.add(`${repo}/${area.id}`);
+      total += 1;
+      if (stand) stood += 1;
+      return areaBlock(repo, path, area, at, ctx, stand);
+    }).join('\n');
+  });
+  stdout.write(sections.join('\n'));
+  const loose = obligations.filter((one) => !known.has(one.area));
+  if (loose.length) {
+    stdout.write('\nObligations whose area no repository declares:\n');
+    for (const one of loose) stdout.write(`  ${one.area} — ${one.stand} — ${oneLine(one.text)}\n`);
+  }
+  stdout.write(`\n${stood} of ${total} areas have a stand\n`);
   return 0;
 }
 
@@ -1429,7 +1554,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
 
 /** The learning pass's role (`desk-learning.js`): it creates goals and writes the ones it created, nothing else. */
 const LEARNING_ROLE = 'learning';
-const LEARNING_VERBS = ['show', 'list', 'new', 'set', 'document add', 'criterion add', 'stage'];
+const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'stage'];
 
 /**
  * Whether the goal was created by the running learning session: its first LOG.md entry is a learning
@@ -1450,7 +1575,7 @@ function createdInThisSession(target, ctx) {
 function learningRefusal(verb, rest, ctx, flags = {}) {
   if (!LEARNING_VERBS.includes(verb)) return `the learning role cannot use ${verb} — it creates and writes new goals, nothing else`;
   if (verb === 'new' && flags.structure === '2') return 'the learning role makes version 1 goals — --structure 2 is not for it';
-  if (['show', 'list', 'new'].includes(verb)) return null;
+  if (['show', 'list', 'areas', 'new'].includes(verb)) return null;
   if (verb === 'stage' && rest.length !== 2) return 'the learning role moves a goal it created with mc goal stage <programme>/<goal> build';
   const target = goalNamed(rest[0], ctx);
   if (target.error) return target.error;

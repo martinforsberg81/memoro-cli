@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "areas": [
+    {
+      "id": "reserved-acts",
+      "name": "Limits on destructive and reserved acts",
+      "covers": "What a session may never do unattended (deploy, production data, credentials, admin) and what mc may delete or overwrite.",
+      "standards": ["docs/technical/mc-hooks.md", "docs/technical/mc-tidy.md", "docs/technical/mc-deploy.md", "docs/technical/mc-keys.md", "docs/technical/mc-martin.md"],
+      "paths": ["src/mc/hooks.js", "src/mc/push-guard.js", "src/mc/tidy.js", "src/mc/commands/tidy.js", "src/mc/commands/deploy.js", "src/mc/keys-run.js"],
+      "questions": [
+        {
+          "when": "The change lets a session do something it could not do before, or removes or narrows a refusal.",
+          "ask": "Which roles can now do it headless, and do the deploy, production-data, credential and admin refusals still hold for every one of them?"
+        },
+        {
+          "when": "The change deletes, overwrites or moves files, branches, worktrees or records it did not itself create.",
+          "ask": "What proves ownership and that nothing live, dirty or unpushed is lost, and what does it do when that proof is missing?"
+        }
+      ]
+    },
+    {
+      "id": "session-roles",
+      "name": "The session roles and their instructions",
+      "covers": "The canon: roles, verbs and task pages, and the code that installs and guards them.",
+      "standards": ["docs/technical/mc-roles.md", "docs/technical/mc-skills.md"],
+      "paths": ["canon/", "src/mc/roles.js", "src/mc/session-role.js", "src/mc/skills.js"],
+      "questions": [
+        {
+          "when": "The change alters what a role may or must do.",
+          "ask": "Do the role's page, the verb's page, the guard in the code and docs/technical say the same thing, and does a session working from the old words get a refusal that names the new way?"
+        },
+        {
+          "when": "The change adds a sentence to canon/.",
+          "ask": "Is the rule already stated in another canon file (one home per rule), and does the page stay within its length?"
+        }
+      ]
+    },
+    {
+      "id": "command-contract",
+      "name": "The command's contract",
+      "covers": "Verbs, flags, exit codes, help, and the file formats mc reads and writes.",
+      "standards": ["docs/technical/mc-help.md", "docs/technical/mc-codebase.md"],
+      "paths": ["src/mc/commands/", "src/mc/command-help.js", "docs/mc-command-matrix.md"],
+      "questions": [
+        {
+          "when": "The change adds or alters a verb, a flag or an exit code.",
+          "ask": "Does --help say it, does a refused call exit 2 having written nothing and name the call that works, and is the route walked by the help-routes test?"
+        },
+        {
+          "when": "The change alters a file format mc reads or writes.",
+          "ask": "What does an mc of the version before do with the new file, and what does this version do with every file of the old form on disk?"
+        }
+      ]
+    },
+    {
+      "id": "tests-gate",
+      "name": "Tests and gate",
+      "covers": "Test protection, and what gate, the merger and the daily run select, measure and reuse.",
+      "standards": ["canon/tasks/writing-tests.md", "canon/tasks/references/test-strategy.md", "docs/technical/mc-gate-evidence.md", "docs/technical/mc-merge.md"],
+      "paths": ["tests/", "src/mc/repo-gate-table.js", "src/mc/commands/gate.js"],
+      "questions": [
+        {
+          "when": "The change adds, alters or retires a test.",
+          "ask": "Which behaviour does it protect and what fails for a user when that breaks, is its level the cheapest credible one, and was the protection commissioned?"
+        },
+        {
+          "when": "The change alters what gate, the merger or the daily run selects or reuses.",
+          "ask": "Which red can now pass unmeasured, and where is it still measured?"
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "name": "Operations",
+      "covers": "The runner, the merger and the installed mc: long-lived processes, state on disk, loops and restarts.",
+      "standards": ["docs/technical/mc-run.md", "docs/technical/mc-merge.md", "docs/technical/mc-server.md", "docs/technical/mc-layout.md"],
+      "paths": ["src/mc/run.js", "src/mc/merger.js", "src/mc/linux-runner-service.js"],
+      "questions": [
+        {
+          "when": "The change alters the runner, the merger or data they read.",
+          "ask": "A process started before the update keeps its code: what does it do with the new data until it is restarted, and what does the new code do with the state the old one left?"
+        },
+        {
+          "when": "The change adds a loop, a relaunch or a retry.",
+          "ask": "What stops it when nothing changes between attempts, and where is the stop reported?"
+        }
+      ]
+    },
+    {
+      "id": "documentation",
+      "name": "Documentation",
+      "covers": "The docs/technical pages that must describe what landed, and the changelog.",
+      "standards": ["docs/technical/mc-codebase.md"],
+      "paths": ["docs/technical/", "changelog.d/"],
+      "questions": [
+        {
+          "when": "The change alters behaviour a docs/technical page describes, or adds behaviour none describes.",
+          "ask": "Which pages and sections must say what landed, and is a changelog.d entry due?"
+        }
+      ]
+    }
+  ]
+}

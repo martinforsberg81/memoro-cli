@@ -2028,3 +2028,192 @@ test('jevContext gives jev a version 2 goal\'s outcome, decisions, preserve, cri
   const one = jevContext(target, parseGoal(GOAL_TEXT), [], jevCtx(f));
   assert.deepEqual(Object.keys(one.goal), ['title', 'goal', 'contract', 'out_of_scope', 'criteria', 'stage', 'status']);
 });
+
+// ---- Rule areas: `mc goal areas` and what `obligation set` takes (`.mc/areas.json` read from the repository's origin/main) ----
+
+const AREA = (id, extra = {}) => ({ id, name: `The ${id}`, covers: `What ${id} covers.`, standards: [`docs/technical/${id}.md`], paths: [`src/${id}/`, `src/${id}.js`], questions: [{ when: `${id} changes`, ask: `Is ${id} still true?` }], ...extra });
+const DECLARATION = (...ids) => JSON.stringify({ schema_version: 1, areas: ids.map((id) => AREA(id)) });
+const CLI_PATH = '/home/m/memoro-cli.git';
+const APP_PATH = '/home/m/memoro';
+const NOT_THERE = "fatal: path '.mc/areas.json' does not exist in 'origin/main'";
+/** A git that shows `declarations[cwd]` for `show <rev>:.mc/areas.json` (failing as git does when there is none), and `cat-file -e` for every path but `missing`. */
+const areasGit = (declarations, { missing = [], broken = {} } = {}) => (cwd, args = []) => {
+  if (args[0] === 'show' && args[1].endsWith(':.mc/areas.json')) {
+    if (broken[cwd]) return failed(broken[cwd]);
+    return declarations[cwd] === undefined ? failed(NOT_THERE) : ok(declarations[cwd]);
+  }
+  if (args[0] === 'cat-file') return missing.some((path) => args[2].endsWith(`:${path}`)) ? failed('fatal: not a valid object name') : ok();
+  return allOk(cwd, args);
+};
+const TWO_REPOS = (obligations) => V2_FILES(goalJsonV2({ repos: ['memoro-cli', 'memoro'], obligations }));
+const BOTH = { [CLI_PATH]: DECLARATION('documentation', 'operations'), [APP_PATH]: DECLARATION('security', 'documentation') };
+const STANDS_OF = [{ area: 'memoro-cli/documentation', stand: 'touched', text: 'The page says it.', standard: 'memoro-cli/docs/technical/mc-goals.md#Rule areas' }, { area: 'memoro/security', stand: 'untouched', text: 'No code.' }, { area: 'Whatever', stand: 'untouched', text: 'An old word.' }];
+const showCalls = (f) => f.calls.filter((call) => call.args[0] === 'show');
+
+test('mc goal areas <repo> reads origin/main of the repository mc knows and prints each area with its questions, marking a standard or path not in the revision', async () => {
+  const f = fixture({ git: areasGit(BOTH, { missing: ['docs/technical/documentation.md', 'src/documentation.js'] }) });
+  assert.equal(await run(['areas', 'memoro-cli'], f.deps), 0, f.err());
+  assert.deepEqual(showCalls(f), [{ cwd: CLI_PATH, args: ['show', 'origin/main:.mc/areas.json'] }], 'the arguments and the directory the git received');
+  assert.match(f.out(), /^memoro-cli\/documentation — The documentation\n  covers: What documentation covers\.\n  standards: docs\/technical\/documentation\.md \(missing\)\n  paths: src\/documentation\/, src\/documentation\.js \(missing\)\n  questions:\n    when documentation changes\n      ask Is documentation still true\?\n\nmemoro-cli\/operations — /u);
+  assert.doesNotMatch(f.out().split('memoro-cli/operations')[1], /missing/u, 'only the entries git does not find');
+  assert.deepEqual(f.calls.filter((call) => call.args[0] === 'cat-file').map((call) => call.args.slice(1).join(' ')).slice(0, 2), ['-e origin/main:docs/technical/documentation.md', '-e origin/main:src/documentation/']);
+
+  const at = fixture({ git: areasGit(BOTH) });
+  assert.equal(await run(['areas', 'memoro', '--at', 'goal/rule-areas'], at.deps), 0, at.err());
+  assert.deepEqual(showCalls(at), [{ cwd: APP_PATH, args: ['show', 'goal/rule-areas:.mc/areas.json'] }], '--at is the revision read');
+  assert.match(at.out(), /^memoro\/security — /u);
+  assert.ok(at.calls.filter((call) => call.args[0] === 'cat-file').every((call) => call.args[2].startsWith('goal/rule-areas:')), 'the paths are looked up at the same revision');
+});
+
+test('mc goal areas <repo> says a repository declares none when git has no file at the revision or shows it empty, and a name that is not a repository is refused with exit 2', async () => {
+  for (const git of [areasGit({}), areasGit({ [CLI_PATH]: '' }), areasGit({ [CLI_PATH]: '  \n' }), areasGit({}, { broken: { [CLI_PATH]: "fatal: path '.mc/areas.json' exists on disk, but not in 'origin/main'" } })]) {
+    const f = fixture({ git });
+    assert.equal(await run(['areas', 'memoro-cli'], f.deps), 0, f.err());
+    assert.equal(f.out(), 'memoro-cli declares no rule areas (no .mc/areas.json at origin/main)\n');
+  }
+  const f = fixture({ git: areasGit(BOTH) });
+  assert.equal(await run(['areas', 'nonesuch'], f.deps), 2);
+  assert.match(f.err(), /nonesuch is not a repository mc knows — memoro-cli, memoro/u);
+  assert.equal(await run(['areas'], f.deps), 2, 'no argument and no MC_GOAL');
+  assert.equal(await run(['areas', 'memoro', 'memoro-cli'], f.deps), 2);
+  assert.deepEqual(f.calls, [], 'nothing was asked of git');
+});
+
+test('mc goal areas never reads a git failure as no declaration, nor a declaration that does not validate: exit 1 with the reason, for a repository and for a goal', async () => {
+  for (const [git, reason] of [
+    [areasGit({}, { broken: { [CLI_PATH]: "fatal: invalid object name 'origin/main'." } }), /could not read memoro-cli's \.mc\/areas\.json at origin\/main in \/home\/m\/memoro-cli\.git — fatal: invalid object name/u],
+    [areasGit({}, { broken: { [CLI_PATH]: 'fatal: not a git repository' } }), /not a git repository/u],
+    [areasGit({ [CLI_PATH]: '{ not json' }), /memoro-cli's \.mc\/areas\.json at origin\/main is not JSON/u],
+    [areasGit({ [CLI_PATH]: JSON.stringify({ schema_version: 1, areas: [] }) }), /areas must be a non-empty array/u],
+  ]) {
+    const f = fixture({ git, files: V2_FILES(), env: V2_PERSON });
+    assert.equal(await run(['areas', 'memoro-cli'], f.deps), 1);
+    assert.match(f.err(), reason);
+    assert.equal(f.out(), '');
+    const g = fixture({ git, files: V2_FILES(), env: V2_PERSON });
+    assert.equal(await run(['areas', 'mc/plain'], g.deps), 1);
+    assert.match(g.err(), reason);
+    assert.equal(g.out(), '');
+  }
+});
+
+test('mc goal areas <programme>/<goal> prints each area of the goal\'s repositories with its stand or no stand, the obligations no repository declares, and the count', async () => {
+  const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS(STANDS_OF) });
+  assert.equal(await run(['areas', 'mc/plain'], f.deps), 0, f.err());
+  assert.deepEqual(showCalls(f), [{ cwd: CLI_PATH, args: ['show', 'origin/main:.mc/areas.json'] }, { cwd: APP_PATH, args: ['show', 'origin/main:.mc/areas.json'] }], 'one read per repository, in the goal\'s order');
+  const out = f.out();
+  const order = ['memoro-cli/documentation', 'memoro-cli/operations', 'memoro/security', 'memoro/documentation'].map((id) => out.indexOf(`${id} — `));
+  assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), `every area once, repositories in order: ${order}`);
+  assert.match(out, /memoro-cli\/documentation — The documentation\n  stand: touched — The page says it\. \[memoro-cli\/docs\/technical\/mc-goals\.md#Rule areas\]\n  covers:/u);
+  assert.match(out, /memoro-cli\/operations — The operations\n  no stand\n/u);
+  assert.match(out, /memoro\/security — The security\n  stand: untouched — No code\.\n/u);
+  assert.match(out, /Obligations whose area no repository declares:\n  Whatever — untouched — An old word\.\n/u);
+  assert.match(out, /\n2 of 4 areas have a stand\n$/u);
+
+  const all = fixture({ git: areasGit(BOTH), files: TWO_REPOS([...STANDS_OF.slice(0, 2), { area: 'memoro-cli/operations', stand: 'untouched', text: 'x' }, { area: 'memoro/documentation', stand: 'untouched', text: 'y' }]) });
+  assert.equal(await run(['areas', 'mc/plain'], all.deps), 0);
+  assert.doesNotMatch(all.out(), /no stand|no repository declares/u);
+  assert.match(all.out(), /\n4 of 4 areas have a stand\n$/u);
+
+  const some = fixture({ git: areasGit({ [CLI_PATH]: DECLARATION('documentation') }), files: TWO_REPOS(STANDS_OF.slice(0, 1)) });
+  assert.equal(await run(['areas', 'mc/plain', '--at', 'goal/x'], some.deps), 0);
+  assert.match(some.out(), /memoro declares no rule areas \(no \.mc\/areas\.json at goal\/x\)\n/u, 'a repository that declares none is one line');
+  assert.match(some.out(), /\n1 of 1 areas have a stand\n$/u);
+  assert.ok(showCalls(some).every((call) => call.args[1] === 'goal/x:.mc/areas.json'));
+});
+
+test('mc goal areas refuses a version 1 goal and a name that is no repository with exit 2, and exits 1 for a goal that is missing or does not parse and for a repository of the goal mc does not know', async () => {
+  const v1 = fixture({ git: areasGit(BOTH), files: seededGoal() });
+  assert.equal(await run(['areas', 'mc/plain'], v1.deps), 2);
+  assert.match(v1.err(), /version 1 goal/u);
+  assert.equal(await run(['areas', 'mc/none'], v1.deps), 1);
+  assert.match(v1.err(), /no goal mc\/none/u);
+  const broken = fixture({ git: areasGit(BOTH), files: seededGoal({ [`${DIR}/GOAL.json`]: '{' }) });
+  assert.equal(await run(['areas', 'mc/plain'], broken.deps), 1);
+  assert.match(broken.err(), /does not parse/u);
+  const alien = fixture({ git: areasGit(BOTH), files: V2_FILES(goalJsonV2({ repos: ['memoro-cli', 'elsewhere'] })) });
+  assert.equal(await run(['areas', 'mc/plain'], alien.deps), 1);
+  assert.match(alien.err(), /elsewhere is not a repository mc knows/u);
+  assert.equal(alien.out(), '', 'nothing printed before the refusal');
+  const env = fixture({ git: areasGit(BOTH), files: V2_FILES(), env: { MC_GOAL: 'mc/plain' } });
+  assert.equal(await run(['areas'], env.deps), 0, env.err());
+  assert.match(env.out(), /areas have a stand\n$/u, 'MC_GOAL is the goal when none is named');
+  for (const f of [v1, broken, alien, env]) assert.deepEqual(f.calls.filter((call) => !['show', 'cat-file'].includes(call.args[0])), [], 'only reads');
+});
+
+test('mc goal areas is let through for desk-prepare and the learning role, for a repository and for a goal, and writes nothing', async () => {
+  for (const env of [{ MC_ROLE: 'desk-prepare', MC_TOOL: 'person' }, LEARNING, { ...SESSION, MC_ROLE: BUILD_ROLES.goal }]) {
+    for (const argv of [['areas', 'memoro-cli'], ['areas', 'mc/plain']]) {
+      const f = fixture({ git: areasGit(BOTH), files: V2_FILES(), env });
+      const before = snapshot(f);
+      assert.equal(await run(argv, f.deps), 0, `${env.MC_ROLE} ${argv.join(' ')}: ${f.err()}`);
+      assert.equal(snapshot(f), before);
+    }
+  }
+});
+
+test('mc goal obligation set takes a declared <repo>/<id> and says which declared areas still have no stand, then that every one has', async () => {
+  const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS([]), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'touched', '--text', 'The page.'], f.deps), 0, f.err());
+  assert.deepEqual(showCalls(f), [{ cwd: CLI_PATH, args: ['show', 'origin/main:.mc/areas.json'] }, { cwd: APP_PATH, args: ['show', 'origin/main:.mc/areas.json'] }]);
+  assert.deepEqual(v2At(f).obligations.map((one) => one.area), ['memoro-cli/documentation']);
+  assert.match(f.out(), /^mc: mc\/plain · obligation "memoro-cli\/documentation" set\n  no stand yet: memoro-cli\/operations, memoro\/security, memoro\/documentation\n$/u);
+  for (const area of ['memoro-cli/operations', 'memoro/security']) assert.equal(await run(['obligation', 'set', 'mc/plain', area, '--stand', 'untouched', '--text', 'Nothing.'], f.deps), 0, f.err());
+  const last = fixture({ git: areasGit(BOTH), files: TWO_REPOS(STANDS_OF.slice(0, 2).concat([{ area: 'memoro-cli/operations', stand: 'untouched', text: 'x' }])), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro/documentation', '--stand', 'untouched', '--text', 'Nothing.'], last.deps), 0, last.err());
+  assert.match(last.out(), /\n  every declared area has a stand\n$/u);
+  const again = fixture({ git: areasGit(BOTH), files: TWO_REPOS(STANDS_OF.slice(0, 2)), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro/security', '--stand', 'touched', '--text', 'Replaced.'], again.deps), 0, again.err());
+  assert.match(again.out(), /obligation "memoro\/security" replaced\n  no stand yet: memoro-cli\/operations, memoro\/documentation\n$/u);
+});
+
+test('mc goal obligation set refuses an area no repository of the goal declares with exit 2, writes nothing and lists the declared areas', async () => {
+  for (const area of ['Security', 'security', 'memoro/nonesuch', 'memoro-cli/security', 'elsewhere/documentation', 'memoro/', '/documentation']) {
+    const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS(STANDS_OF), env: V2_PERSON });
+    const before = snapshot(f);
+    assert.equal(await run(['obligation', 'set', 'mc/plain', area, '--stand', 'touched', '--text', 'x'], f.deps), 2, area);
+    assert.match(f.err(), new RegExp(`"${area.replace('/', '\\/')}" is not a rule area of the goal's repositories — an area is <repo>/<id>\\n  memoro-cli: memoro-cli/documentation, memoro-cli/operations\\n  memoro: memoro/security, memoro/documentation`, 'u'), area);
+    assert.equal(snapshot(f), before, `${area}: nothing written`);
+    assert.equal(f.out(), '');
+  }
+});
+
+test('mc goal obligation set takes any word where no repository of the goal declares areas, and <repo>/… for a repository of the goal that declares none', async () => {
+  const none = fixture({ git: areasGit({}), files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Security', '--stand', 'untouched', '--text', 'No data.'], none.deps), 0, none.err());
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/security', '--stand', 'untouched', '--text', 'No data.'], none.deps), 0, none.err());
+  assert.doesNotMatch(none.out(), /no stand yet|every declared/u, 'nothing is said where nothing is declared');
+  const half = fixture({ git: areasGit({ [CLI_PATH]: DECLARATION('documentation') }), files: TWO_REPOS([]), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro/anything', '--stand', 'untouched', '--text', 'x'], half.deps), 0, half.err());
+  assert.match(half.out(), /\n  no stand yet: memoro-cli\/documentation\n$/u);
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Anything', '--stand', 'untouched', '--text', 'x'], half.deps), 2, 'a bare word is refused once any repository declares areas');
+  assert.match(half.err(), /memoro: declares none, any <memoro\/…> is taken/u);
+});
+
+test('mc goal obligation set exits 1 and writes nothing on a git failure, on a declaration that does not validate and on a repository of the goal that mc does not know', async () => {
+  for (const [git, files, reason] of [
+    [areasGit({}, { broken: { [APP_PATH]: "fatal: invalid object name 'origin/main'." } }), TWO_REPOS([]), /could not read memoro's \.mc\/areas\.json at origin\/main.*invalid object name/u],
+    [areasGit({ [CLI_PATH]: JSON.stringify({ schema_version: 1, areas: [{ ...AREA('x'), extra: 1 }] }) }), TWO_REPOS([]), /memoro-cli's \.mc\/areas\.json at origin\/main: areas\[0\]\.extra is an unknown key/u],
+    [areasGit(BOTH), V2_FILES(goalJsonV2({ repos: ['memoro-cli', 'elsewhere'] })), /elsewhere is not a repository mc knows/u],
+  ]) {
+    const f = fixture({ git, files, env: V2_PERSON });
+    const before = snapshot(f);
+    assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'touched', '--text', 'x'], f.deps), 1);
+    assert.match(f.err(), reason);
+    assert.equal(snapshot(f), before, 'nothing written');
+  }
+});
+
+test('obligation set stays refused for a build, review, finish and mend session and for the learning role, before any declaration is read; obligation remove is unchanged', async () => {
+  for (const env of [{ ...SESSION, MC_ROLE: BUILD_ROLES.goal }, { ...SESSION, MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: 'abc1234def' }, { ...SESSION, MC_ROLE: FINISH_ROLE }, { ...SESSION, MC_ROLE: MEND_ROLE }, LEARNING]) {
+    const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS([]), env });
+    const before = snapshot(f);
+    assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro/security', '--stand', 'touched', '--text', 'x'], f.deps), 2, env.MC_ROLE);
+    assert.equal(snapshot(f), before);
+    assert.deepEqual(showCalls(f), [], 'no declaration read');
+  }
+  const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS(STANDS_OF), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'remove', 'mc/plain', 'Whatever', '--reason', 'old'], f.deps), 0, f.err());
+  assert.deepEqual(showCalls(f), [], 'remove reads no declaration');
+  assert.equal(f.out(), 'mc: mc/plain · obligation "Whatever" removed\n');
+});
