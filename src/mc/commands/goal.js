@@ -5,7 +5,7 @@
  *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
  *                                  repository's worktree on goal/<goal> at the goal's first session;
  *                                  in phase <n> (1 by default), at most one past the last;
- *                                  in stage draft (by default) or build; structure 1 (by default) is the brief as prose, 2 as numbered parts (`goal-parts.js`)
+ *                                  in stage draft (by default) or build; structure 2 (by default) is the brief as numbered parts (`goal-parts.js`), 1 the older form, as goal and contract prose
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field of a version 1 goal replaced; a blank line parts paragraphs
  *   mc goal set <programme>/<goal> title|aim|outcome|latitude|protection --text "…"   the part of a version 2 goal replaced
  *   mc goal item add <programme>/<goal> problem|premise|decision|change|preserve|risk|out-of-scope --text "…" <the part's flags>   a version 2 item; its id printed
@@ -287,7 +287,7 @@ function newGoal(args, flags, ctx) {
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
   if (flags.structure !== null && !['1', '2'].includes(flags.structure)) { stderr.write(`mc: --structure is 1 or 2, not ${flags.structure}\n`); return 2; }
-  const structure = flags.structure === '2' ? 2 : 1;
+  const structure = flags.structure === '1' ? 1 : 2;
   const stage = flags.stage ?? 'draft';
   if (stage !== 'draft' && stage !== 'build') { stderr.write(`mc: --stage is draft or build for a new goal, not ${stage}\n`); return 2; }
   const phase = flags.phase === null ? 1 : Number(flags.phase);
@@ -806,7 +806,7 @@ function setField(args, flags, ctx) {
       if (!PROSE_PARTS.includes(field)) return { problems: [`it is a version 2 goal — set ${field} is for version 1; version 2 has set ${PROSE_PARTS.join('|')} and the verbs item and obligation`], code: 2 };
       return { ...goal, [field]: paragraphs };
     }
-    if (PROSE_PARTS.includes(field)) return { problems: [`it is a version 1 goal — set ${field} is for version 2 (mc goal new --structure 2); version 1 has set ${Object.keys(PROSE_FIELDS).join('|')}`], code: 2 };
+    if (PROSE_PARTS.includes(field)) return { problems: [`it is a version 1 goal — set ${field} is for version 2 (mc goal new); version 1 has set ${Object.keys(PROSE_FIELDS).join('|')}`], code: 2 };
     return { ...goal, [PROSE_FIELDS[field]]: paragraphs };
   }, () => `${field} set`);
 }
@@ -937,7 +937,7 @@ function removeCriterion(args, flags, ctx) {
  * naming the goal's version and the verbs that apply to it.
  */
 function v1Refusal(what) {
-  return { problems: [`it is a version 1 goal — ${what} is for version 2 goals (mc goal new --structure 2); version 1 has mc goal set goal|contract|out-of-scope, document add and criterion add|set|remove|met|unmet`], code: 2 };
+  return { problems: [`it is a version 1 goal — ${what} is for version 2 goals (mc goal new); version 1 has mc goal set goal|contract|out-of-scope, document add and criterion add|set|remove|met|unmet`], code: 2 };
 }
 
 /** Why the caller may not write the brief's parts, or null: only plan, interactive Martin or a person writes them. */
@@ -1007,7 +1007,7 @@ function setItemVerb(args, flags, ctx) {
     if (goal.version !== 2) return v1Refusal('item set');
     const set = setItem(goal, id, read.fields);
     if (!set) return { problems: [`it has no item ${id}`], code: 2 };
-    changed = Object.keys(read.fields).map((field) => `${field} was "${oneLine(set.was[field])}", now "${oneLine(set.item[field])}"`);
+    changed = Object.keys(read.fields).map((field) => `${flagOf(field)} was "${oneLine(set.was[field])}", now "${oneLine(set.item[field])}"`);
     return set.goal;
   }, () => `${id} rewritten`, (goal, target) => {
     logChange(ctx, goal, target, `${id} rewritten — ${changed.join('; ')}`);
@@ -1669,7 +1669,7 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
 
 /** The learning pass's role (`desk-learning.js`): it creates goals and writes the ones it created, nothing else. */
 const LEARNING_ROLE = 'learning';
-const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'stage'];
+const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'item add', 'item set', 'item remove', 'obligation set', 'obligation remove', 'stage'];
 
 /**
  * Whether the goal was created by the running learning session: its first LOG.md entry is a learning
@@ -1689,7 +1689,6 @@ function createdInThisSession(target, ctx) {
  */
 function learningRefusal(verb, rest, ctx, flags = {}) {
   if (!LEARNING_VERBS.includes(verb)) return `the learning role cannot use ${verb} — it creates and writes new goals, nothing else`;
-  if (verb === 'new' && flags.structure === '2') return 'the learning role makes version 1 goals — --structure 2 is not for it';
   if (['show', 'list', 'areas', 'new'].includes(verb)) return null;
   if (verb === 'stage' && rest.length !== 2) return 'the learning role moves a goal it created with mc goal stage <programme>/<goal> build';
   const target = goalNamed(rest[0], ctx);

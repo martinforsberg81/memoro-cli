@@ -115,7 +115,7 @@ function seededGoal(extra = {}) {
 
 test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repository, and makes no worktree', async () => {
   const f = fixture();
-  const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain'], f.deps);
+  const code = await run(['new', 'mc/plain', '--repo', 'memoro-cli,memoro', '--class', 'large', '--title', 'Make the goal plain', '--structure', '1'], f.deps);
   assert.equal(code, 0, f.err());
 
   const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
@@ -1866,7 +1866,7 @@ const snapshot = (f) => JSON.stringify(f.store);
 
 test('the learning role creates a goal and writes it: set, criterion add and draft → build succeed on a goal it created in this session', async () => {
   const f = fixture({ env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '1'], f.deps), 0, f.err());
   for (const argv of [
     ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
     ['criterion', 'add', 'mc/plain', '--criterion', 'It holds', '--check', 'mc gate x'],
@@ -1915,7 +1915,7 @@ const v2At = (f) => parseGoal(f.store[`${DIR}/GOAL.json`]);
 const lastLog = (f) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
 const jevCtx = (f) => ({ read: f.deps.read, env: f.deps.env, home: HOME, stderr: f.deps.stderr, realpath: (path) => path });
 
-test('mc goal new --structure 2 writes a version 2 goal with empty parts and no id given, and its hint names version 2\'s verbs; version 1 and --structure 1 are as before', async () => {
+test('mc goal new writes a version 2 goal by default, with empty parts and no id given, and its hint names version 2\'s verbs; --structure 1 writes version 1 and its hint; --structure 3 is refused', async () => {
   const f = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '2'], f.deps), 0, f.err());
   const goal = parseGoal(f.store[`${DIR}/GOAL.json`]);
@@ -1929,11 +1929,14 @@ test('mc goal new --structure 2 writes a version 2 goal with empty parts and no 
 
   const one = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '1'], one.deps), 0, one.err());
+  assert.equal(parseGoal(one.store[`${DIR}/GOAL.json`]).version, 1, '--structure 1 writes version 1');
+  assert.match(one.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain goal\|contract\|out-of-scope --text "…"/u);
+  assert.doesNotMatch(one.out(), /version 2/u);
   const plain = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain'], plain.deps), 0);
-  assert.equal(one.store[`${DIR}/GOAL.json`], plain.store[`${DIR}/GOAL.json`], '--structure 1 is the default');
-  assert.equal(parseGoal(plain.store[`${DIR}/GOAL.json`]).version, 1);
-  assert.match(plain.out(), /GOAL\.json is to be filled in by verbs: mc goal set mc\/plain goal\|contract\|out-of-scope --text "…"/u);
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain'], plain.deps), 0, plain.err());
+  assert.equal(plain.store[`${DIR}/GOAL.json`], f.store[`${DIR}/GOAL.json`], '--structure 2 is the default');
+  assert.equal(parseGoal(plain.store[`${DIR}/GOAL.json`]).version, 2);
+  assert.equal(plain.out(), f.out(), 'and its hint is the version 2 hint');
 
   const bad = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'large', '--title', 'Plain', '--structure', '3'], bad.deps), 2);
@@ -1982,6 +1985,9 @@ test('mc goal item set logs what each field was and is now and keeps the rest; i
   assert.match(lastLog(f).comment, /^D1 rewritten — text was "Parts are numbered\.", now "Parts are numbered and stable\."$/u);
   assert.equal(await run(['item', 'set', 'mc/plain', 'P1', '--basis', 'measured', '--at', 'def'], f.deps), 0, f.err());
   assert.match(lastLog(f).comment, /^P1 rewritten — basis was "read", now "measured"; at was "4daf75f3", now "def"$/u);
+  assert.equal(await run(['item', 'set', 'mc/plain', 'V1', '--upheld-by', 'criterion 2'], f.deps), 0, f.err());
+  assert.match(lastLog(f).comment, /^V1 rewritten — upheld-by was "criterion 1", now "criterion 2"$/u);
+  assert.doesNotMatch(lastLog(f).comment, /upheld_by/u);
   assert.equal(await run(['item', 'remove', 'mc/plain', 'R1', '--reason', 'no longer a risk'], f.deps), 0, f.err());
   assert.deepEqual(v2At(f).risks, []);
   assert.match(lastLog(f).comment, /^R1 removed — .*A writer drops the parts\..*; reason: no longer a risk$/u);
@@ -2096,19 +2102,42 @@ test('every new writing verb is refused a build, review, finish and mend session
   }
 });
 
-test('the learning role is refused new --structure 2 and the item and obligation verbs, and nothing changes', async () => {
-  const f = fixture({ env: LEARNING });
-  const before = snapshot(f);
-  assert.notEqual(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '2'], f.deps), 0);
-  assert.match(f.err(), /learning/u);
-  assert.equal(snapshot(f), before);
-  const made = fixture({ env: LEARNING });
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], made.deps), 0, made.err());
-  const kept = snapshot(made);
-  for (const argv of [['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'], ['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x']]) {
-    assert.notEqual(await run(argv, made.deps), 0, argv.join(' '));
+test('the learning role makes a version 2 goal and adds, sets and removes an item and sets and removes an obligation on it; each of the five is refused on a goal it did not create, with nothing written', async () => {
+  const git = areasGit({ [CLI_PATH]: DECLARATION('documentation') });
+  const f = fixture({ env: LEARNING, git });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
+  assert.equal(v2At(f).version, 2, 'made in version 2 without a flag');
+  for (const argv of [
+    ['item', 'add', 'mc/plain', 'problem', '--text', 'A lesson.', '--basis', 'measured'],
+    ['item', 'set', 'mc/plain', 'B1', '--text', 'A lesson, reworded.'],
+    ['item', 'add', 'mc/plain', 'change', '--text', 'Fix it.', '--where', 'src/mc'],
+    ['item', 'remove', 'mc/plain', 'C1', '--reason', 'not needed'],
+    ['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'untouched', '--text', 'No page changes.'],
+    ['obligation', 'remove', 'mc/plain', 'memoro-cli/documentation', '--reason', 'not an area'],
+  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
+  assert.deepEqual(v2At(f).problem, [{ id: 'B1', text: 'A lesson, reworded.', basis: 'measured' }]);
+  assert.deepEqual([v2At(f).change, v2At(f).obligations], [[], []]);
+
+  // The same five on a goal a person made, and on one an earlier learning session made: refused, nothing written, no git.
+  const others = [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })];
+  for (const files of others) {
+    for (const argv of [
+      ['item', 'add', 'mc/plain', 'decision', '--text', 'x', '--by', 'm', '--on', 'd'], ['item', 'set', 'mc/plain', 'D1', '--text', 'y'], ['item', 'remove', 'mc/plain', 'D1', '--reason', 'x'],
+      ['obligation', 'set', 'mc/plain', 'Docs', '--stand', 'touched', '--text', 'x'], ['obligation', 'remove', 'mc/plain', 'Documentation', '--reason', 'x'],
+    ]) {
+      const g = fixture({ files: { ...files, [`${DIR}/GOAL.json`]: goalJsonV2() }, env: LEARNING, git });
+      const before = snapshot(g);
+      assert.equal(await run(argv, g.deps), 2, argv.join(' '));
+      assert.match(g.err(), /learning role writes only goals it created in this session/u, argv.join(' '));
+      assert.equal(snapshot(g), before, `${argv.join(' ')}: nothing written`);
+      assert.deepEqual(showCalls(g), [], `${argv.join(' ')}: no declaration read`);
+    }
   }
-  assert.equal(snapshot(made), kept);
+  // It gains no other verb.
+  for (const argv of [['item', 'frobnicate', 'mc/plain'], ['drop', 'mc/plain', '--reason', 'x'], ['convert', 'mc'], ['phase', 'mc/plain', '2']]) {
+    const g = fixture({ env: LEARNING });
+    assert.notEqual(await run(argv, g.deps), 0, argv.join(' '));
+  }
 });
 
 test('mc goal convert writes a version 2 goal in the legacy stage plan with every part', async () => {

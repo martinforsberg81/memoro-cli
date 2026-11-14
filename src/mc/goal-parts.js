@@ -226,7 +226,7 @@ export function removeObligation(goal, area) {
 
 /** An item or obligation on one line, as the log says what it was: its fields named. */
 export function itemWords(item) {
-  return Object.entries(item).map(([key, value]) => `${key} "${String(value).replace(/\s*\n\s*/gu, ' ')}"`).join(', ');
+  return Object.entries(item).map(([key, value]) => `${flagOf(key)} "${String(value).replace(/\s*\n\s*/gu, ' ')}"`).join(', ');
 }
 
 /* ------------------------------------------------------------------ the text */
@@ -250,7 +250,7 @@ export function renderGoalTextV2(goal) {
     const spec = ITEM_PARTS[word];
     return (goal[spec.key] ?? []).flatMap((item) => {
       const [first, ...more] = String(item[spec.textKey]).split('\n');
-      const rest = spec.fields.map((field) => `${field}: ${item[field]}`).join(' · ');
+      const rest = spec.fields.map((field) => `${flagOf(field)}: ${item[field]}`).join(' · ');
       return [`  ${item.id} ${first}`, ...more.map((line) => `      ${line}`), ...(rest ? [`      ${rest}`] : [])];
     });
   };

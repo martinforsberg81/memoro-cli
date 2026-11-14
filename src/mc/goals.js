@@ -25,7 +25,7 @@ import { GOAL_KEYS_V2, partsOf, partsToWrite, renderGoalTextV2, validateParts } 
 
 export const GOAL_FILE = 'GOAL.json';
 export const GOAL_SCHEMA = 'mc-goal';
-/** The version `mc goal new` writes by default, and the one every goal written before the parts has. */
+/** The version a goal without one has, and the one the converters write; `mc goal new` writes 2 unless it is given `--structure 1`. */
 export const GOAL_VERSION = 1;
 /** The versions of GOAL.json mc reads: 1 has `goal` and `contract` as prose, 2 has numbered parts (`goal-parts.js`). */
 export const GOAL_VERSIONS = Object.freeze([1, 2]);

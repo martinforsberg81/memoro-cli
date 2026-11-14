@@ -7,7 +7,7 @@ import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
 import { addPr, goalOfRecord } from '../../src/mc/goals.js';
 import { phaseGoals } from '../../src/mc/goal-convert.js';
-import { addItem, removeItem } from '../../src/mc/goal-parts.js';
+import { addItem, itemWords, removeItem } from '../../src/mc/goal-parts.js';
 
 const GOAL_TEXT = goalJson({ repos: ['memoro-cli', 'memoro'] });
 
@@ -614,7 +614,7 @@ LATITUDE
 
 PRESERVE
   V1 Version 1 is as before.
-      upheld_by: criterion 1
+      upheld-by: criterion 1
 
 OBLIGATIONS
   Documentation · touched — mc-goals.md says both versions.
@@ -623,7 +623,7 @@ OBLIGATIONS
 
 RISKS
   R1 A writer drops the parts.
-      settled_by: criterion 1
+      settled-by: criterion 1
 
 CRITERIA 0/1
   1 ✗ it works
@@ -690,6 +690,12 @@ test('version 2 names each problem by its field: a v1 key, a bad id, a repeated 
   assert.match(validateGoal(JSON.parse(goalJson({ success_criteria: [{ criterion: 'x', check: 'y', evidence: 'z', met: false }] }))).join(), /success_criteria\[0\]\.evidence/u, 'a version 1 criterion has no evidence');
   const { ids: _ids, ...noIds } = JSON.parse(goalJsonV2());
   assert.match(validateGoal(noIds).join(), /ids/u);
+});
+
+test('itemWords names a field as its flag is spelled, and an item or obligation with no underscored field is unchanged', () => {
+  assert.equal(itemWords({ id: 'V1', text: 'x', upheld_by: 'criterion 1' }), 'id "V1", text "x", upheld-by "criterion 1"');
+  assert.equal(itemWords({ id: 'R1', text: 'y', settled_by: 'accepted' }), 'id "R1", text "y", settled-by "accepted"');
+  assert.equal(itemWords({ area: 'Docs', stand: 'touched', text: 't', standard: 'a/b#c' }), 'area "Docs", stand "touched", text "t", standard "a/b#c"');
 });
 
 test('renderGoalText shows a full version 2 goal in its order, and one with only its required parts with none yet', () => {
