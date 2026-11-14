@@ -17,7 +17,7 @@
  * with the message that would break it.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -97,11 +97,18 @@ describe('an invocation is recorded as shape, never as content', () => {
 
 describe('the logger never fails its caller', () => {
   it('an unwritable path is swallowed, not thrown', () => {
-    setLogPath('/proc/definitely/not/writable/mc.log');
+    // A directory under a regular file: unwritable everywhere, refused at once
+    // (ENOTDIR). It was `/proc/definitely/not/writable`, where a recursive
+    // mkdir never returns on Linux (node 24, mc-server, 2026-11-13): this file
+    // never ended, and every whole-suite run of memoro-cli stalled behind it.
+    const file = scratch();
+    writeFileSync(file, '');
+    setLogPath(join(file, 'not', 'writable', 'mc.log'));
     try {
       assert.doesNotThrow(() => log('event', { a: 1 }));
     } finally {
       setLogPath(null);
+      rmSync(file, { force: true });
     }
   });
 

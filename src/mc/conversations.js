@@ -268,8 +268,15 @@ export function conversationIdentityReader() {
         ...readTailEntries(`${logPath()}.1`, WIDE_TAIL_BYTES),
         ...readTailEntries(logPath(), WIDE_TAIL_BYTES),
       ];
+      // A launch also owns the conversation its own process left behind: a
+      // resume or `/clear` gives Claude a new id that only work.closed names.
+      // Its launch is the work.open of the same run and process.
+      const runs = new Set(launches.filter((entry) => entry?.event === 'work.closed'
+        && entry.started === item.id && entry.tool === item.tool && entry.run)
+        .map((entry) => `${entry.run}:${entry.pid}`));
       const records = launches.filter((entry) => entry?.event === 'work.open'
-        && entry.launched_id === item.id && entry.tool === item.tool
+        && (entry.launched_id === item.id || (entry.run && runs.has(`${entry.run}:${entry.pid}`)))
+        && entry.tool === item.tool
         && entry.cwd === item.cwd && entry.instructions === true
         && entry.instruction_channel === 'append-system-prompt');
       const identities = records.map((entry) => provenIdentity({ role: entry.role, programme: entry.programme }, 'launch-log'));

@@ -84,7 +84,11 @@ can push the first developer message beyond the 64 KiB used for labels:
 - **Claude:** native transcripts do not prove the appended system prompt.
   A fresh role-aware launch supplies a UUID through `--session-id` and records
   it, cwd, role, programme and instruction channel in the existing `work.open`
-  log. Selection reads at most the last 4 MiB of the current mc log and its
+  log. A launch's process can leave a conversation under a new id that no
+  `--session-id` named — a resume, or `/clear` inside the session. The
+  foreground launch's `work.closed` names it as `started`; the `work.open` of
+  the same `run` and `pid` is then that conversation's evidence, under the same
+  cwd and channel conditions. Selection reads at most the last 4 MiB of the current mc log and its
   single rotated predecessor, once per selection, for a matching instructed
   launch. Missing, incomplete, conflicting or rotated-away evidence is
   unknown. This is not a new conversation registry: discovery and ids still

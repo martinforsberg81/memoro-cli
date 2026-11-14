@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { answerMainMend, publishMainMend, readMainMends, requestMainRepair } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
@@ -57,7 +58,7 @@ function capacityWith({ claude = null, codex = null, refuse = {} } = {}) {
  * answered from tables, and a "session" that returns what the test says.
  * Nothing starts, nothing is written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, runs: [], skipped: null, stopped: false }), capacity = null } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerged = [], live = [], areas = {}, conflicts = {}, mergeRefused = [], headFiles = {}, mergeLeft = [], roles = true, livePids = [], now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, inbox = [], projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, fetchFails = [], rounds = {}, rebaseFails = [], prFiles = {}, block = {}, commitFails = [], conflicted = [], merged = {}, tips = {}, mergeRows = {}, stopResults = {}, revList = {}, notInMain = [], gateBusy = [], attach = { ok: true, state: 'attached', why: 'reused' }, nightly = async () => ({ at: null, started: [], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }), capacity = null } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -226,7 +227,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
     attachDeps: async (worktree) => { calls.attached.push({ worktree, sessionsBefore: calls.sessions.length }); return attach; },
     collect: async (options) => { calls.collects.push(options); return collect(options); },
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
-    // The nightly's tick, faked: what proves it ran is `calls.ticks` and its row.
+    // The full runs' pass, faked: what proves it ran is `calls.ticks` and its row.
     nightlyTick: async (options) => { calls.ticks.push(options); return nightly(options); },
     // The one door, faked (ruling 30): the merger's queue. What the real
     // `queueMerge` writes first — the step `landing` with its pull request —
@@ -2326,45 +2327,51 @@ test('a repository whose deps cannot be read is named in the row, and the others
   assert.match(f.files['/w/runner/log/runner.log'], /deps: memoro not read — npm audit printed no JSON/u);
 });
 
-/* ------------------------------------------------------ the nightly's tick */
+/* ------------------------------------------------------- the full runs */
 
 /**
- * The tick is the third and last thing a chore pass does. Like the helper, a
- * row in runs.tsv is its whole state — but the cadence is a day since the last
- * row, not an hour of the clock, and STOP is asked before it and between the
- * repositories it measures.
+ * The full runs are the last thing a chore pass does, once a day (Martin,
+ * 2026-11-13): a day after the last pass that started one, the pass
+ * (`fullRunTick`) starts the repositories whose main moved, with the map that
+ * keeps one run per repository across passes, and does not wait for the runs. A
+ * row goes in runs.tsv only for a pass that started one; STOP is asked before
+ * it, and the runs in flight are ended before the runner leaves.
  */
 const NIGHTLY_HEADER = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
-const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t900\t-\t-\t-\t-\t-\t-\t-\tsuccess,2-measured,0-unchanged\n`;
+const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t1\t-\t-\t-\t-\t-\t-\t-\tstarted,memoro\n`;
 
-test('the nightly tick is performed when a day has passed since the last, and its row says so', async () => {
-  const f = fixture({
+test('the full runs are asked for once a day: not a minute after a pass that started one, again a day later', async () => {
+  const soon = fixture({
     now: '2026-08-29T10:00:00Z',
-    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-28T09:00:00Z'),
-    nightly: async () => ({ runs: [{ stopped_at: null }, { stopped_at: 'unchanged' }], skipped: null, stopped: false }),
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
   });
+  await createRunner({ deps: soon.deps }).chores();
+  assert.equal(soon.calls.ticks.length, 0, 'the day gate holds');
+
+  const f = fixture({
+    now: '2026-08-30T10:00:00Z',
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
+    nightly: async () => ({ started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(f.calls.ticks.length, 1, 'the row the first pass wrote gates the second');
+  assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
+  assert.ok(f.calls.ticks[0].running instanceof Map);
+  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
+  assert.deepEqual(rows.slice(1).map((row) => ({ name: row.name, exit: row.exit, pr: row.pr, note: row.note })),
+    [{ name: 'nightly', exit: '0', pr: '-', note: 'started,memoro' }]);
+});
+
+test('a pass that started nothing writes no row', async () => {
+  const f = fixture({ nightly: async () => ({ started: [], running: ['memoro'], waiting: [], stopped: false, done: Promise.resolve([]) }) });
   await createRunner({ deps: f.deps }).chores();
   assert.equal(f.calls.ticks.length, 1);
-  assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
-  const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(rows.length, 2, 'the old row and the new one');
-  assert.deepEqual({ name: rows[1].name, exit: rows[1].exit, pr: rows[1].pr, note: rows[1].note },
-    { name: 'nightly', exit: '0', pr: '-', note: 'success,1-measured,1-unchanged' });
-  assert.match(f.files['/w/runner/log/runner.log'], /nightly: a full run of every repository — the last tick was 25 h ago/u);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
 });
 
-test('the very first tick is due at once, and a tick 2 h old is not due', async () => {
-  const first = fixture({});
-  await createRunner({ deps: first.deps }).chores();
-  assert.equal(first.calls.ticks.length, 1);
-
-  const recent = fixture({ now: '2026-08-29T10:00:00Z', runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T08:00:00Z') });
-  await createRunner({ deps: recent.deps }).chores();
-  assert.equal(recent.calls.ticks.length, 0);
-  assert.equal(runRows(recent.files).filter((r) => r.kind === 'nightly').length, 1, 'no second row');
-});
-
-test('a STOP file means no tick: the suite is never started', async () => {
+test('a STOP file means no full run: the suite is never started', async () => {
   const f = fixture({});
   f.files['/w/runner/STOP'] = '';
   await round(createRunner({ deps: f.deps }));
@@ -2372,39 +2379,33 @@ test('a STOP file means no tick: the suite is never started', async () => {
   assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
 });
 
-test('a STOP file that appears mid-tick is what the tick sees before its next repository', async () => {
-  const f = fixture({
-    nightly: async ({ shouldStop }) => {
-      const before = shouldStop();
-      f.files['/w/runner/STOP'] = '';
-      return { runs: [{ stopped_at: null }], skipped: null, stopped: !before && shouldStop() };
-    },
-  });
-  await createRunner({ deps: f.deps }).chores();
-  const [row] = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(row.exit, '0');
-  assert.match(row.note, /^success,1-measured,0-unchanged,stopped$/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /nightly: stopped — 1 repository read/u);
-});
-
-test('a tick that throws is a failed row and is not retried in the same day', async () => {
+test('a pass that throws is a failed row', async () => {
   const f = fixture({ nightly: async () => { throw new Error('disk full'); } });
   const runner = createRunner({ deps: f.deps });
   await runner.chores();
-  await runner.chores();
   const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
-  assert.equal(rows.length, 1, 'the second pass finds the row and waits');
+  assert.equal(rows.length, 1);
   assert.equal(rows[0].exit, '1');
   assert.equal(rows[0].note, 'tick-failed,disk full');
-  assert.equal(f.calls.ticks.length, 1);
 });
 
-test('a UPDATE file ends the tick the way STOP does', async () => {
+test('the runs in flight are ended through their signal before the runner leaves', async () => {
+  let release = null;
   const f = fixture({
-    nightly: async ({ shouldStop }) => { f.files['/w/runner/UPDATE'] = ''; return { runs: [], skipped: null, stopped: shouldStop() }; },
+    nightly: async ({ running, signal }) => {
+      const run = new Promise((resolve) => { release = resolve; signal.addEventListener('abort', () => resolve([]), { once: true }); });
+      running.set('/home/memoro', run);
+      return { started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: run };
+    },
   });
-  await createRunner({ deps: f.deps }).chores();
-  assert.match(runRows(f.files).find((r) => r.kind === 'nightly').note, /,stopped$/u);
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  const [{ signal, running }] = f.calls.ticks;
+  assert.equal(signal.aborted, false, 'the chore pass did not wait for the run');
+  await runner.settleFullRuns();
+  assert.equal(signal.aborted, true);
+  assert.equal(typeof release, 'function');
+  assert.equal(running.size, 1, 'the map is the pass\'s to empty, not the runner\'s');
 });
 
 /* -------------------------------------------------------------- the drain */
@@ -4423,4 +4424,76 @@ test('a quota refusal during planning preserves draft readiness and records prov
   assert.equal(where(f, 'a'), 'draft · ready');
   assert.ok(f.deps.capacity.read().providers.claude.refusal_until);
   assert.doesNotMatch(f.files[`${GOALS}/a/LOG.md`], /without completing the draft/u);
+});
+
+/** Main-red requests use the same real state transitions with the runner fixture's IO. */
+function mainRedFixture(goals = {}) {
+  const f = goalFixture(goals);
+  f.mainState = { root: '/w', repo: 'memoro', read: f.deps.read, write: f.deps.writeJson, lock: f.deps.lock };
+  requestMainRepair({ ...f.mainState, base: 'main-head', files: ['tests/red.test.js', 'tests/other-red.test.js'], tests: [{ file: 'tests/red.test.js', name: 'red assertion', error: ['missing browser'] }], now: f.deps.now });
+  const git = f.deps.git;
+  const branches = new Set();
+  f.deps.git = (cwd, args) => {
+    if (args[0] === 'show-ref') return { ok: branches.has(args.at(-1)), stdout: '' };
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      const path = args.at(-2);
+      f.dirs.add(path);
+      if (args.includes('-b')) branches.add(`refs/heads/${args[4]}`);
+    }
+    return git(cwd, args);
+  };
+  f.mainEntries = () => readMainMends(f.mainState);
+  return f;
+}
+
+test('a queued main-red request precedes build, review and finish, launches goal-less mend from origin/main and records publication', async () => {
+  const f = mainRedFixture({ build: {}, review: { stage: 'review' }, finish: { stage: 'finish' } });
+  const runner = createRunner({ deps: f.deps });
+  const pick = runner.nextWork();
+  assert.equal(pick.kind, 'mend');
+  assert.deepEqual(pick.mainMend.map((entry) => entry.file), ['tests/other-red.test.js', 'tests/red.test.js']);
+  f.answer = (call) => {
+    assert.equal(call.env.MC_ROLE, 'mend-session');
+    assert.equal(call.env.MC_GOAL, undefined);
+    assert.equal(call.env.MC_PROGRAMME, undefined);
+    assert.equal(call.env.MC_MODEL, 'sonnet', 'the mend list default, not a build class model');
+    assert.ok(call.unsetEnv.includes('MC_GOAL'));
+    assert.match(call.prompt, /You are a main-red mend session/u);
+    assert.match(call.prompt, /missing browser/u);
+    assert.match(call.prompt, /mc gate --fresh/u);
+    assert.match(call.prompt, /mc gate --whole-selection/u);
+    assert.ok(f.mainEntries().every((entry) => entry.state === 'running'));
+    assert.equal(runner.nextWork()?.name === pick.name, false, 'a second lane cannot take the same batch');
+    publishMainMend({ ...f.mainState, branch: pick.branch, pr: 42 });
+    return okSession()(call);
+  };
+  const pass = await runner.pass();
+  assert.equal(pass.ran, 1);
+  assert.match(pick.branch, /^mend\/main-memoro-[a-f0-9]+$/u);
+  const added = f.calls.git.find((call) => call[1] === 'worktree' && call[2] === 'add');
+  assert.deepEqual(added, ['/home/memoro', 'worktree', 'add', '-q', '-b', pick.branch, f.calls.sessions[0].cwd, 'origin/main']);
+  assert.deepEqual(f.mainEntries().map((entry) => [entry.state, entry.pr]), [['published', 42], ['published', 42]]);
+  assert.equal(f.files['/w/programs/main-health/goals'], undefined);
+  assert.equal(Object.keys(f.files).some((path) => path.startsWith('/w/programs/main-health/')), false);
+});
+
+test('the third main-red attempt waits on Martin with its session log and keeps the same branch', async () => {
+  const f = mainRedFixture();
+  const runner = createRunner({ deps: f.deps });
+  const branch = runner.nextWork().branch;
+  // First attempt publishes, but its ordinary merge fails. It rejoins the mend rank.
+  f.answer = (call) => { publishMainMend({ ...f.mainState, branch, pr: 42 }); return okSession()(call); };
+  await runner.pass();
+  answerMainMend({ ...f.mainState, pr: 42, landed: false, reason: 'candidate red' });
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'queued' && entry.failures === 1));
+  f.answer = okSession(); // The one recovery ends without publication.
+  await runner.pass();
+  assert.ok(f.mainEntries().every((entry) => entry.state === 'Martin' && entry.failures === 2));
+  assert.equal((await runner.pass()).ran, 0, 'the third attempt waits on Martin');
+  assert.deepEqual(f.mainEntries().map((entry) => entry.branch), [branch, branch]);
+  assert.ok(f.mainEntries().every((entry) => entry.session_log === f.calls.sessions.at(-1).logPath));
+  assert.equal(new Set(f.calls.sessions.map((call) => call.cwd)).size, 1);
+  assert.equal(f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add').length, 1);
+  assert.equal(runner.nextWork(), null, 'Martin starts no third session');
+  assert.equal(f.calls.sessions.length, 2);
 });

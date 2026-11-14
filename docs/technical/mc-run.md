@@ -1,14 +1,15 @@
 # mc run — the runner
 
-`mc run` starts fresh headless sessions on goals until stopped. It reads
-GOAL.json and LOG.md, chooses work, launches a coding tool through the shared
+`mc run` starts fresh headless goal sessions and main-red mends until stopped.
+It reads goal files and main-mend requests, chooses work, launches a coding tool through the shared
 adapter, and records the outcome. The runner itself makes no model turn.
 `src/mc/run.js` owns processes and file boundaries; `src/mc/run-plan.js`
 holds prompts, argument lists, output parsing and chore cadence rules.
 
 Projects went on 2026-11-03; migration is documented in
 [mc-goals.md § From a project](mc-goals.md#from-a-project). The runner now
-starts goals only. A goal's worktree stays on its one branch until it lands.
+starts goal sessions and goal-less main-red mends. A goal's worktree stays on
+its one branch until it lands.
 
 ```
 mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]
@@ -19,7 +20,7 @@ mc run lanes [<n>]
 mc run --billing [<claude|codex> <on|off>]
 ```
 
-With no flags it keeps picking. `--once` runs one runnable goal session and
+With no flags it keeps picking. `--once` runs one runnable lane session and
 no chores. `--no-merge` leaves the pull requests open; goal builds already
 publish without merge, and their review owns the hand-off. `--idle-sleep`
 is the idle delay, 600 s by default, checked in short slices for orders.
@@ -179,7 +180,7 @@ order without a model call:
    before judging them. An unreadable goal is not runnable.
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
    `merge · blocked`, or `merge · ready` after its first red or moved head
-   and once it is no longer in the merger's line. Only a merge failure wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
+   and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
    waits for the person. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
@@ -187,7 +188,7 @@ order without a model call:
 4. Exclude goals already claimed or named by a live current file, and goals
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend first, then finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -282,7 +283,7 @@ role tells the session to read LOG.md first.
 - A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
   review found, gates, publishes and `mc goal stage merge`. One that ends
   with the goal still `finish · ready` is set `finish · Martin`.
-- A mend uses `mend-session` only for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, finish on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
+- A goal mend uses `mend-session` for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, finish on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
   [finish and mend](mc-goals.md#finish-and-mend). Planning is a separate next-draft assignment under the rule below.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
@@ -646,15 +647,19 @@ dependency readings and tidy use their own recorded rows too.
 
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
-**nightly tick**: `runNightly` reads `runs.tsv` and, when 24 hours have passed
-since the last `kind: nightly` row (or there is none), runs
-`mc test <repo> --full` for every repository as a meter and writes its row. A
-chore pass with STOP present performs no tick, `--once` runs no chores and so
-no tick, and the runner's `runningRound` guard is what it was — a gate round a
-lane holds ends the tick for that repository rather than being waited for. The
-detached scheduler that used to do this (`mc test nightly start`, a pid file)
-is deleted; `mc test nightly status` says where the tick now comes from. See
-[`mc-merge.md`](mc-merge.md) § *The full run nobody asks for*.
+**full runs** (Martin, 2026-11-13): once a day (`nightlyDue`), `runNightly`
+starts, without waiting for it, `mc test <repo> --full` for each repository whose
+origin/main moved since its last measured full run and that has no full run in
+flight, as a meter beside the sessions and the merge rounds. One run per
+repository at a time across chore passes (the runner keeps the map). It takes no round lock and no lease and measures in its
+own checkout, so no merge round waits for it, at 2 test lanes
+(`MC_FULL_RUN_LANES`). A `kind: nightly` row goes in `runs.tsv` only for a pass
+that started a run. A chore pass with STOP or UPDATE present starts none, the
+chore loop ends the runs in flight before the runner leaves, and `--once` runs
+no chores and so no full run. The detached scheduler that once did this
+(`mc test nightly start`, a pid file) is deleted; `mc test nightly status` says
+where the full runs now come from. See [`mc-merge.md`](mc-merge.md) § *The full
+run nobody asks for*.
 
 Nothing else runs beside it. There was a shell supervisor — it fetched,
 fast-forwarded `~/memoro-cli`, ran the runner for one pass and slept — written
@@ -697,3 +702,27 @@ retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing
 remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-planning).
+
+
+## Goal-less main-red mend
+
+Queued `runner/main-mend/<repo>.json` requests share merge-failure mend's
+earliest rank, ahead of finish, review and build, within the unchanged
+machine-wide lane total. A newly queued request wakes idle lanes at the existing
+30-second control poll instead of waiting the ten-minute idle delay. `mainMendWork` groups files by repository and finder,
+preserving a used batch on retries. Before launch fetch origin and use the
+same branch-worktree helper as goals to make
+`runner/work/mend-main-<repo>-<digest>/<repo>` on
+`mend/main-<repo>-<digest>` from origin/main. Keep that branch and tree on retry.
+`runMainMend` runs `mend-session` with its default catalog list and class fast,
+normal capacity/billing, disk and memory admission, current-lane ownership,
+scratch and session logs. Goal/programme identity is unset. The main-red prompt
+carries the files, errors, base and finder; no goal files or proposal are written.
+
+The [merge contract](mc-merge.md) defines request deduplication, acceptance,
+publication and the two attempts (a third waits on Martin), without a goal.
+The runner records sessions ending without publication and recovers a dead
+runner's running request. Its settlement pass restores missing published queue
+handoffs, recognizes merged/closed PRs and retries safe landed-tree cleanup.
+Martin requests show on the page, in `mc repo status` and `mc martin get`.
+The daily full run's once-a-day cadence and existing repair goals are unchanged.

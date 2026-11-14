@@ -24,6 +24,41 @@ const WEIGHT = 0.5;
 
 export const TIMES_REPORTER = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-times-reporter.mjs')).href;
 
+/**
+ * The preload a whole-suite run gives every test file's process
+ * (`test-progress-preload.mjs`): a line when the file's process starts and one
+ * when it exits, written whatever node's in-order reporter is still holding back.
+ */
+export const PROCESS_PROGRESS_PRELOAD = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-progress-preload.mjs')).href;
+
+/**
+ * What the heartbeat files say (`PROCESS_PROGRESS_PRELOAD`): `running`, the files
+ * whose process started and has not exited, and `exited`, every file whose process
+ * exited, as `{ file, code }`. Counted per process, so a file run twice is running
+ * until both have exited. A line that will not parse is skipped.
+ */
+export function processProgress(paths) {
+  const started = new Map();
+  const exited = [];
+  const ended = new Map();
+  for (const path of paths || []) {
+    let text = '';
+    try { text = readFileSync(path, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (typeof entry?.file !== 'string') continue;
+      if (entry.process === 'started') started.set(entry.file, (started.get(entry.file) || 0) + 1);
+      else if (entry.process === 'exited') {
+        ended.set(entry.file, (ended.get(entry.file) || 0) + 1);
+        exited.push({ file: entry.file, code: entry.code ?? null });
+      }
+    }
+  }
+  const running = [...started].filter(([file, count]) => (ended.get(file) || 0) < count).map(([file]) => file);
+  return { running: running.sort(), exited };
+}
+
 export function testTimesPath(root, repo) {
   return join(root, 'test-times', `${repo}.json`);
 }
@@ -359,8 +394,29 @@ export function progressTracker() {
   const active = new Set();
   const completed = [];
   const outcomes = [];
+  // Heartbeat files of whole-suite runs (`processProgress`): read live, and kept as
+  // a snapshot once their run has completed and the file is gone.
+  const beating = new Set();
+  const beaten = [];
   return {
     track: (file) => active.add(file),
+    trackProcesses: (file) => beating.add(file),
+    /**
+     * The test files whose process is running now, and how many file processes
+     * have exited (`processProgress`): a whole suite's forward motion, which
+     * `read()` may not show until a slow file ahead of them has reported.
+     */
+    processes: () => {
+      const all = [...beaten, processProgress(beating)];
+      return {
+        running: [...new Set(all.flatMap((one) => one.running))].sort(),
+        exited: all.reduce((sum, one) => sum + one.exited.length, 0),
+      };
+    },
+    completeProcesses: (file) => {
+      if (!beating.delete(file)) return;
+      beaten.push(processProgress([file]));
+    },
     complete: (file) => {
       if (!active.delete(file)) return;
       completed.push(runProgress([file]));

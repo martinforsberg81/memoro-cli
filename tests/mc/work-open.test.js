@@ -569,9 +569,16 @@ function authorityFixture(t, tool) {
   process.env.PATH = `${bin}:${oldPath}`;
   t.after(() => { process.env.PATH = oldPath; setLogPath(null); rmSync(root, { recursive: true, force: true }); });
   let serial = 0;
-  async function remember({ role = 'plan-session', programme = 'mc', cwd = areaRoot, evidence = true, updated = 1 } = {}) {
+  async function remember({ role = 'plan-session', programme = 'mc', cwd = areaRoot, evidence = true, updated = 1, closedBy = null } = {}) {
     const id = `00000000-0000-4000-8000-${String(++serial).padStart(12, '0')}`;
-    if (tool === 'claude' && evidence) {
+    if (tool === 'claude' && closedBy) {
+      // A resumed launch (launched_id null) whose process left this new id behind.
+      for (const entry of [
+        { event: 'work.open', tool: 'claude-code', cwd, launched_id: null, resuming: 'earlier', role, programme,
+          instructions: true, instruction_channel: 'append-system-prompt', ...closedBy },
+        { event: 'work.closed', tool: 'claude-code', area: cwd, resumed: 'earlier', started: id, ...closedBy },
+      ]) appendFileSync(logFile, `${JSON.stringify(entry)}\n`);
+    } else if (tool === 'claude' && evidence) {
       appendFileSync(logFile, `${JSON.stringify({ event: 'work.open', tool: 'claude-code', cwd,
         launched_id: id, role, programme, instructions: true, instruction_channel: 'append-system-prompt' })}\n`);
     }
@@ -682,6 +689,24 @@ for (const tool of ['codex', 'claude']) {
       assert.equal(f.decisions().at(-1).identified_role, 'plan');
       assert.equal(conversationIdentityReader()(plan).source, tool === 'claude' ? 'launch-log' : 'developer-instructions');
     });
+
+    if (tool === 'claude') {
+      it('a conversation a resumed launch left behind carries that launch identity, and only that run\'s', async (t) => {
+        const f = authorityFixture(t, tool);
+        const cleared = await f.remember({ closedBy: { run: 'run_a', pid: 11 } });
+        const { result, calls } = await f.open({ pick: cleared.id });
+        assert.equal(result.ok, true);
+        assert.equal(result.conversation, cleared.id);
+        assert.ok(calls[0].args.includes(cleared.id));
+        assert.equal(f.decisions().at(-1).identified_role, 'plan');
+        // Same run name from another process is not this launch.
+        const stray = await f.remember({ closedBy: { run: 'run_b', pid: 12 }, programme: 'other' });
+        appendFileSync(join(f.env.MC_WORK_ROOT, 'mc.log'), `${JSON.stringify({ event: 'work.closed', tool: 'claude-code', run: 'run_c', pid: 13, started: stray.id })}\n`);
+        const { result: refused } = await f.open({ pick: stray.id });
+        assert.equal(refused.ok, false);
+        assert.match(refused.reason, /identified role=plan programme=other/u);
+      });
+    }
 
     it('--new ignores a compatible conversation and preserves requested tool/model', async (t) => {
       const f = authorityFixture(t, tool);

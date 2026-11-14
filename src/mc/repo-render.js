@@ -44,6 +44,13 @@ export function renderRepoLines(report, {
     lines.push(...section(c, wide, 'main', mainRows(c, repo, now)));
     lines.push(...section(c, wide, 'full run', nightlyRows(c, repo, now)));
     lines.push(...section(c, wide, 'selection', missRows(c, repo, now)));
+    if (repo.main_mend?.error || repo.main_mend?.entries?.length) lines.push(...section(c, wide, 'main mend', [
+      ...(repo.main_mend.error ? [c(repo.main_mend.error, 'red')] : []),
+      ...(repo.main_mend.entries || []).flatMap((entry) => [
+        c(`${entry.file} · ${entry.state}${entry.pr ? ` · #${entry.pr}` : ''}`, entry.state === 'Martin' ? 'red' : 'yellow'),
+        ...(entry.state === 'Martin' ? [entry.reason, entry.session_log].filter(Boolean) : []),
+      ]),
+    ]));
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
@@ -127,18 +134,18 @@ export function renderNightlyLines(state, {
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
   const { runner, tick } = state;
-  const cadence = `a full run of every repository every ${hours(state.interval_ms)}`;
+  // Once a day (Martin, 2026-11-13), and only a main that moved.
+  const cadence = 'once a day, a full run of each repository whose origin/main moved since its last measured full run, '
+    + 'one at a time per repository, beside merges and sessions';
   if (!runner.running) {
-    lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no tick will happen until mc run start', 'grey')}`);
-    lines.push(`  ${c('tick', 'grey')}  ${cadence}, a chore of the runner; ${tick.detail || 'none has run yet'}`);
+    lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no full run will start until mc run start', 'grey')}`);
+    lines.push(`  ${c('full runs', 'grey')}  ${cadence}, a chore of the runner; ${tick.detail || 'none has started yet'}`);
   } else if (runner.stop_requested) {
-    lines.push(`  ${c('runner stopping', 'yellow')}  pid ${runner.pid}  ${c('— a STOP is present; no further tick will start', 'grey')}`);
+    lines.push(`  ${c('runner stopping', 'yellow')}  pid ${runner.pid}  ${c('— a STOP is present; no further full run will start', 'grey')}`);
   } else {
-    lines.push(`  ${c('runner running', 'green')}  pid ${runner.pid}  ${c('— the tick is its chore', 'grey')}`);
+    lines.push(`  ${c('runner running', 'green')}  pid ${runner.pid}  ${c('— the full runs are its chore', 'grey')}`);
     if (runner.started_at) lines.push(`  ${c('since', 'grey')}  ${runner.started_at}`);
-    lines.push(`  ${c('tick', 'grey')}  ${cadence}; ${tick.due
-      ? `a tick is due now — it comes with the runner's next chore pass${tick.detail ? ` (${tick.detail})` : ''}`
-      : tick.detail}`);
+    lines.push(`  ${c('full runs', 'grey')}  ${cadence}; ${tick.detail || 'none has started yet'}`);
   }
   lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
   for (const repo of repos) {
@@ -148,12 +155,6 @@ export function renderNightlyLines(state, {
   }
   lines.push('');
   return lines;
-}
-
-function hours(ms) {
-  const value = Number(ms) || 0;
-  if (value < 3_600_000) return `${Math.round(value / 1000)}s`;
-  return `${Math.round((value / 3_600_000) * 10) / 10}h`;
 }
 
 /** The label is written once; the rows below it line up under the first. */
