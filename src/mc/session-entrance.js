@@ -148,8 +148,8 @@ export async function prepareSessionEntrance(options, driver, {
   try {
     release = await lock(options);
     const rows = await driver.list(options);
-    const sessions = deskSessions(options, rows, records(options.env), alive);
-    const held = new Set(rows.filter(row => row.cwd === resolve(options.worktree.path) && alive(row.pid)).map(row => row.sessionId).filter(Boolean));
+    const sessions = driver.discover ? rows : deskSessions(options, rows, records(options.env), alive);
+    const held = new Set(rows.filter(row => driver.discover || (row.cwd === resolve(options.worktree.path) && alive(row.pid))).map(row => row.sessionId).filter(Boolean));
     let selected = options.chosen && sessions.find(session => session.sessionId === options.chosen.id);
     if (!options.chosen && options.pick !== 'new' && sessions.length) {
       const id = choose('join a session, or start a new one?', [

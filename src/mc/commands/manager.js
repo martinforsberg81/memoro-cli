@@ -14,7 +14,7 @@ export function usage() {
 
 /** Each subcommand and the scan it is read with; '' is the bare verb, '*' a first word that names something. help-routes.test.js walks the help with it. */
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
-export const ROUTES = { '': { booleans: ['--new', '--headless', '--resume'], strictValues: ['--model', '--prompt', '--minutes'], toolSugar: true, check: managerArguments } };
+export const ROUTES = { '': { booleans: ['--local', '--new', '--headless', '--resume'], strictValues: ['--model', '--prompt', '--minutes'], toolSugar: true, check: managerArguments } };
 
 function managerArguments({ flags, positional }) {
   if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;

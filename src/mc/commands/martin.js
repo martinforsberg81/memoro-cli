@@ -11,7 +11,7 @@ import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 export function usage() { return commandUsage('martin'); }
 
 export const ROUTES = {
-  '': { booleans: ['--new', '--resume'], strictValues: ['--model'], toolSugar: true, check: ({ flags, positional }) => {
+  '': { booleans: ['--local', '--new', '--resume'], strictValues: ['--model'], toolSugar: true, check: ({ flags, positional }) => {
     if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;
     if (flags.resume && flags.new) return '--resume and --new cannot be combined';
     if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';

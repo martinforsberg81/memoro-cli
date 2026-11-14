@@ -305,7 +305,7 @@ export function programmeReadmeTemplate(programme) {
  * today: the next piece of that work belongs under the heading that already
  * exists rather than under a parallel one somebody invents.
  */
-export function chooseProgramme({ repos, env = process.env, stdout, rows = null } = {}) {
+export function chooseProgramme({ repos, env = process.env, stdout, rows = null, choose = select, question = ask } = {}) {
   const listed = rows || programmeRows({ repos, env });
   const items = listed.map((row, index) => ({
     key: index + 1,
@@ -314,10 +314,10 @@ export function chooseProgramme({ repos, env = process.env, stdout, rows = null 
     value: row.name,
   }));
   items.push({ key: 'n', name: 'new', label: 'a new programme', value: NEW_PROGRAMME });
-  const chosen = select('\nwhich programme?', items, { stdout });
+  const chosen = choose('\nwhich programme?', items, { stdout });
   if (chosen === null) return null;
   if (chosen !== NEW_PROGRAMME) return chosen;
-  return ask('name it:', { stdout }) || null;
+  return question('name it:', { stdout }) || null;
 }
 
 /**
@@ -443,7 +443,7 @@ export function parseArgs(argv) {
   if (argv.includes('--repo')) {
     return { error: 'a programme spans both repositories — mc plan takes no --repo' };
   }
-  const scanned = scanArgs(argv, { booleans: ['--new', '--archive', '--resume'], strictValues: ['--model'], toolSugar: true });
+  const scanned = scanArgs(argv, { booleans: ['--local', '--new', '--archive', '--resume'], strictValues: ['--model'], toolSugar: true });
   if (scanned.error) return { error: scanned.error };
   const words = scanned.positional;
   if (words.length > (scanned.flags.resume ? 2 : 1)) return { error: `unexpected argument ${words[scanned.flags.resume ? 2 : 1]}` };

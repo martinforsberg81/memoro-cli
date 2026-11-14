@@ -297,7 +297,7 @@ export function codexSessionDriver({
     io.writeFileSync(join(clients, String(mcPid)), '', { mode: 0o600 });
     let result;
     try {
-      result = run(options.launch.spec.bin, clientArgs(session.socket, session), {
+      result = await run(options.launch.spec.bin, clientArgs(session.socket, session), {
         cwd: options.worktree.path, stdio: 'inherit', env: terminalEnvironment(options.env),
       });
     } finally { io.rmSync(join(clients, String(mcPid)), { force: true }); }

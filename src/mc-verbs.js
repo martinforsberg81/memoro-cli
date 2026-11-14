@@ -8,6 +8,8 @@
 
 /** Every verb the dispatcher routes, and the module that answers it. */
 export const VERB_MODULES = {
+  server: './mc/commands/server.js',
+  session: './mc/commands/session.js',
   tidy: './mc/commands/tidy.js',
   scratch: './mc/commands/scratch.js',
   layout: './mc/commands/layout.js',
@@ -123,6 +125,12 @@ export async function runModule(path, argv, { stdout = process.stdout } = {}) {
     const text = module.usage();
     stdout.write(text.endsWith('\n') ? text : `${text}\n`);
     return 0;
+  }
+  if (['plan', 'manager', 'brief', 'martin', 'helper'].some(verb => path.endsWith(`/commands/${verb}.js`))) {
+    const { routeServerEntrance } = await import('./mc/server-client.js');
+    const remote = await routeServerEntrance(path.split('/').at(-1).slice(0, -3), argv);
+    if (remote !== null) return remote;
+    argv = argv.filter(arg => arg !== '--local');
   }
   return (await module.run(argv)) ?? 0;
 }

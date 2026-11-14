@@ -4,6 +4,9 @@
  * Every routed verb's usage lives here, and IN FULL prints the same text.
  */
 export const COMMAND_USAGE = Object.freeze({
+  server: "usage — mc server\n        mc server set <ssh-destination>\n        mc server clear\n\nCheck or configure this computer's interactive mc server through your OpenSSH.\nThe setting is under the work root's runner/. Use mc plan --local to stay here; manager, martin and helper accept the same override.\n",
+  session: "usage — mc session version|list|start|join <entrance> [--json]\nInternal server protocol; use mc server on the client.\n",
+
   run: [
     "usage — mc run [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]\n",
     "        mc run start [same flags]   the runner, in the background; takes over from one that is stopping\n",
@@ -30,7 +33,7 @@ export const COMMAND_USAGE = Object.freeze({
     "The lane count applies live. The merge lanes, one per repository, are not these lanes.\n",
   ].join(''),
   helper: [
-    "usage — mc helper [--new] [--codex|--claude] [--model <model>]\n",
+    "usage — mc helper [--local] [--new] [--codex|--claude] [--model <model>]\n",
     "        mc helper --resume [<id>] [--codex|--claude] [--model <model>]\n",
     "        mc helper --collect [--since <iso>] [--limit <n>] [--threshold <n>]\n",
     "        mc helper --intake [--collect] [--since <iso>] [--limit <n>] [--threshold <n>] [--model <model>]\n",
@@ -548,7 +551,7 @@ export const COMMAND_USAGE = Object.freeze({
     "Reads only: nothing is closed, merged or moved.\n",
   ].join(''),
   manager: [
-    "usage — mc manager [--new] [--codex|--claude] [--model <model>]\n",
+    "usage — mc manager [--local] [--new] [--codex|--claude] [--model <model>]\n",
     "        mc manager --resume [<id>] [--codex|--claude] [--model <model>]\n",
     "\n",
     "        mc manager --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n",
@@ -560,7 +563,7 @@ export const COMMAND_USAGE = Object.freeze({
     "Default limit: 30 minutes. Prints outcome and result log path. No automatic trigger.\n",
   ].join(''),
   martin: [
-    "usage — mc martin [--new] [--resume [<id>]] [--codex|--claude] [--model <model>]\n",
+    "usage — mc martin [--local] [--new] [--resume [<id>]] [--codex|--claude] [--model <model>]\n",
     "        mc martin get [--all] [--json]\n",
     "        mc martin get --programme <programme> [--json]\n",
     "        mc martin get --goal <programme>/<goal> [--json]\n",
@@ -574,7 +577,7 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   brief: "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n        mc brief --resume [<id>] [--codex|--claude] [--model <model>]\n        mc brief --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n\nCompatibility alias for mc manager.\n",
   plan: [
-    "usage — mc plan [<programme>] [--new] [--codex|--claude] [--model <model>]\n",
+    "usage — mc plan [<programme>] [--local] [--new] [--codex|--claude] [--model <model>]\n",
     "        mc plan <programme> --resume [<id>] [--codex|--claude] [--model <model>]\n",
     "        mc plan <programme> --archive\n",
     "--resume lists compatible conversations; --resume <id> selects an ID or unique prefix.\n",
