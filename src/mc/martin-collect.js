@@ -102,7 +102,12 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
   return { items, programme_context: [...programme_context.values()], issues: dedupeIssues(issues), selected: selector };
 }
 
-/** Preserve the newest unresolved structured question, not merely the log tail. */
+/**
+ * The question of a goal that reads Martin, from its current run (the entries since the last one not
+ * carrying status Martin): its newest structured `Martin is asked:` entry; else its newest goal-defect or
+ * runner-stop entry (`goal defect:`, `no progress:`); else the entry that set the goal Martin. A later entry
+ * that only carries the status is never the question.
+ */
 export function currentQuestion(log, status) {
   if (status !== 'Martin') return null;
   const start = log.findLastIndex((entry) => entry.status !== 'Martin') + 1;
@@ -119,7 +124,8 @@ export function currentQuestion(log, status) {
     const jev = comment.match(/^(jev unavailable:.*|jev:.*|jev not asked:.*|mc: jev did not settle it:.*|mc: reserved act .* — Martin decides, jev is not asked)$/gmu)?.at(-1) || null;
     return { at: entry.at, question: q[1], options, recommendation, jev, reason: comment };
   }
-  const entry = current.at(-1);
+  const reported = current.findLast((x) => /^(goal defect|no progress):/u.test(String(x.comment || '')));
+  const entry = reported || current[0];
   const comment = String(entry?.comment || '');
   return { at: entry?.at || null, reason: comment || entry?.done || 'The goal is Martin but the current log has no recorded reason.', limitation: 'No structured question/options/recommendation were recorded.' };
 }

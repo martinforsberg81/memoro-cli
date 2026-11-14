@@ -8,6 +8,7 @@ import { deskItemId, deskItemQuestion, syncDeskItems, listDeskItems } from '../.
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { goalJson } from './_helpers/goal-file.js';
+import { NO_PROGRESS_STOP } from '../../src/mc/goals.js';
 
 const roots=[]; after(()=>roots.forEach(x=>rmSync(x,{recursive:true,force:true})));
 function fixture() { const root=mkdtempSync(join(tmpdir(),'mc-desk-items-')); roots.push(root); const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs'); mkdirSync(join(home,'alpha','goals','one'),{recursive:true}); return {root,env,home,dir:join(home,'alpha','goals','one')}; }
@@ -26,6 +27,7 @@ test('sync opens the current source once, closes resolved goal items, and is ide
 });
 
 const DEFECT_LINE = 'goal defect: criterion 2 — its check names a test that is not on main';
+const LEGACY_LINE = 'legacy build · blocked reconciled to Martin; existing obstacle and evidence are retained above — no pre-merge mend is started';
 const defectEntry = (at, comment = `${DEFECT_LINE}\nEvidence: tests/x.test.js is missing`) => `## ${at} · claude opus · build · Martin\n\nComment: ${comment}\n`;
 
 test('a goal defect opens one desk item, labelled by its first line, and a second sync opens no other',()=>{
@@ -52,7 +54,7 @@ test('the label of an item is the Martin entry of its minute, even when another 
   assert.equal(deskItemQuestion(item,{env:f.env,home:f.home,read:fixtureRead}),DEFECT_LINE);
 });
 
-test('a later Martin entry on the same goal (a decision takeover) closes the defect item as a later question and opens its own: R6, observed',()=>{
+test('a later entry that only carries status Martin (a decision takeover) neither closes the defect item nor opens one',()=>{
   const f=fixture();
   writeFileSync(join(f.dir,'GOAL.json'),goalJson({status:'Martin'}));
   writeFileSync(join(f.dir,'LOG.md'),defectEntry(stamp));
@@ -60,12 +62,76 @@ test('a later Martin entry on the same goal (a decision takeover) closes the def
   const [defect]=syncDeskItems(dep);
   writeFileSync(join(f.dir,'LOG.md'),`${readFileSync(join(f.dir,'LOG.md'),'utf8')}\n## 2026-11-14T10:20:00Z · claude opus · build · Martin\n\nComment: jev was asked: not a question for Martin\n\n## 2026-11-14T10:25:00Z · claude opus · build · Martin\n\nComment: decision takeover: the amendment changes what users are promised, a brief for Martin\n`);
   const items=syncDeskItems(dep);
-  const old=items.find((item)=>item.id===defect.id);
-  assert.equal(old.state,'closed'); assert.equal(old.outcome.by,'source'); assert.match(old.outcome.summary,/^A later question now waits at 2026-11-14T10:25:00Z\.$/u);
+  assert.equal(items.length,1,'no second item opens for the takeover note');
+  assert.equal(items[0].id,defect.id); assert.equal(items[0].state,'new'); assert.equal(items[0].outcome,null); assert.equal(items[0].source_at,stamp);
+  assert.equal(deskItemQuestion(items[0],{env:f.env,home:f.home,read:fixtureRead}),DEFECT_LINE);
+});
+
+test('a goal stopped by the runner, briefed for Martin, keeps its item when a later note by decision is written on it',async ()=>{
+  const f=fixture();
+  writeFileSync(join(f.dir,'GOAL.json'),goalJson({status:'Martin'}));
+  writeFileSync(join(f.dir,'LOG.md'),`## ${stamp} · runner · build · Martin\n\nComment: ${NO_PROGRESS_STOP}\n`);
+  const dep={env:f.env,home:f.home,now:()=>new Date('2026-11-14T10:10:00Z'),read:fixtureRead};
+  const [stop]=syncDeskItems(dep);
+  assert.equal(stop.state,'new'); assert.equal(stop.source_at,stamp);
+  const dir=join(f.env.MC_WORK_ROOT,'martin','items',stop.id);
+  writeFileSync(join(dir,'prepared.md'),'The goal stopped with no progress.\n'); writeFileSync(join(dir,'brief.md'),'The goal stopped with no progress; Martin decides whether it goes on.\n');
+  const asDecision={env:{...f.env,MC_ROLE:'decision'},stdout:{write:()=>{}},stderr:{write:()=>{}}};
+  assert.equal(await martin(['item',stop.id,'prepared','--sort','product'],asDecision),0);
+  assert.equal(await martin(['item',stop.id,'brief','--sort','product','--reversible','no'],asDecision),0);
+  const [briefed]=syncDeskItems(dep);
+  assert.equal(briefed.state,'for-martin');
+  writeFileSync(join(f.dir,'LOG.md'),`${readFileSync(join(f.dir,'LOG.md'),'utf8')}\n## 2026-11-14T10:25:00Z · claude opus · build · Martin · by decision\n\nComment: decision account: the item is briefed and the stop still stands; its question is unchanged.\n`);
+  const items=syncDeskItems({...dep,now:()=>new Date('2026-11-14T10:30:00Z')});
+  assert.equal(items.length,1,'no item opens beside the briefed one');
+  assert.equal(items[0].id,stop.id); assert.equal(items[0].state,'for-martin'); assert.equal(items[0].source_at,stamp); assert.equal(items[0].outcome,null);
+  assert.equal(deskItemQuestion(items[0],{env:f.env,home:f.home,read:fixtureRead}),NO_PROGRESS_STOP);
+});
+
+test('a later structured question still closes the older item as superseded and opens its own',()=>{
+  const f=fixture();
+  writeFileSync(join(f.dir,'GOAL.json'),goalJson({status:'Martin'}));
+  writeFileSync(join(f.dir,'LOG.md'),`## ${stamp} · person · build · Martin\n\nComment: Martin is asked: Which way?\nOption a: A\nOption b: B\nRecommended: a\n`);
+  const dep={env:f.env,home:f.home,now:()=>new Date('2026-11-14T10:30:00Z'),read:fixtureRead};
+  const [first]=syncDeskItems(dep);
+  writeFileSync(join(f.dir,'LOG.md'),`${readFileSync(join(f.dir,'LOG.md'),'utf8')}\n## 2026-11-14T10:25:00Z · person · build · Martin\n\nComment: Martin is asked: Which way now?\nOption a: A\nOption b: B\nRecommended: b\n`);
+  const items=syncDeskItems(dep);
+  const old=items.find((item)=>item.id===first.id);
+  assert.equal(old.state,'closed'); assert.equal(old.outcome.by,'source'); assert.equal(old.outcome.summary,'A later question now waits at 2026-11-14T10:25:00Z.');
   const fresh=items.filter((item)=>item.state!=='closed');
-  assert.equal(fresh.length,1,'one item stays open, for the later entry'); assert.equal(fresh[0].source_at,'2026-11-14T10:25:00Z');
-  assert.equal(deskItemQuestion(fresh[0],{env:f.env,home:f.home,read:fixtureRead}),'decision takeover: the amendment changes what users are promised, a brief for Martin');
-  assert.equal(deskItemQuestion(defect,{env:f.env,home:f.home,read:fixtureRead}),DEFECT_LINE,'the closed item keeps its own label');
+  assert.equal(fresh.length,1,'one item stays open, for the later question'); assert.equal(fresh[0].kind,'goal'); assert.equal(fresh[0].reference,'alpha/one'); assert.equal(fresh[0].source_at,'2026-11-14T10:25:00Z'); assert.equal(fresh[0].state,'new');
+  assert.equal(deskItemQuestion(fresh[0],{env:f.env,home:f.home,read:fixtureRead}),'Which way now?');
+  assert.equal(deskItemQuestion(old,{env:f.env,home:f.home,read:fixtureRead}),'Which way?','the closed item keeps its own label');
+});
+
+test('a goal set Martin by a legacy reconcile entry has the later goal defect as its question: the older item closes and the defect opens its own',()=>{
+  const f=fixture();
+  writeFileSync(join(f.dir,'GOAL.json'),goalJson({status:'Martin'}));
+  writeFileSync(join(f.dir,'LOG.md'),`## ${stamp} · runner · build · Martin\n\nComment: ${LEGACY_LINE}\n`);
+  const dep={env:f.env,home:f.home,now:()=>new Date('2026-11-14T10:30:00Z'),read:fixtureRead};
+  const [legacy]=syncDeskItems(dep);
+  assert.equal(legacy.source_at,stamp); assert.equal(deskItemQuestion(legacy,{env:f.env,home:f.home,read:fixtureRead}),LEGACY_LINE);
+  writeFileSync(join(f.dir,'LOG.md'),`${readFileSync(join(f.dir,'LOG.md'),'utf8')}\n${defectEntry('2026-11-14T10:25:00Z')}`);
+  const items=syncDeskItems(dep);
+  const old=items.find((item)=>item.id===legacy.id);
+  assert.equal(old.state,'closed'); assert.equal(old.outcome.by,'source'); assert.equal(old.outcome.summary,'A later question now waits at 2026-11-14T10:25:00Z.');
+  const fresh=items.filter((item)=>item.state!=='closed');
+  assert.equal(fresh.length,1); assert.equal(fresh[0].kind,'goal'); assert.equal(fresh[0].source_at,'2026-11-14T10:25:00Z'); assert.equal(fresh[0].state,'new');
+  assert.equal(deskItemQuestion(fresh[0],{env:f.env,home:f.home,read:fixtureRead}),DEFECT_LINE);
+});
+
+test('an open item keyed on a later note than the entry that set the goal Martin stays the goal\'s only item',()=>{
+  const f=fixture();
+  writeFileSync(join(f.dir,'GOAL.json'),goalJson({status:'Martin'}));
+  writeFileSync(join(f.dir,'LOG.md'),`## ${stamp} · runner · build · Martin\n\nComment: ${LEGACY_LINE}\n\n## 2026-11-14T10:25:00Z · claude opus · build · Martin · by decision\n\nComment: decision account: the question is unchanged and nothing is decided here.\n`);
+  // The item the day before this change opened, keyed on the later note.
+  const keyed='2026-11-14T10:25:00Z', id=deskItemId('goal','alpha/one',keyed), dir=join(f.env.MC_WORK_ROOT,'martin','items',id);
+  mkdirSync(dir,{recursive:true});
+  writeJsonAtomic(join(dir,'item.json'),{schema:'mc-desk-item',version:1,id,kind:'goal',reference:'alpha/one',source_at:keyed,opened_at:keyed,state:'new',sort:null,reversible:null,due_at:null,outcome:null});
+  const items=syncDeskItems({env:f.env,home:f.home,now:()=>new Date('2026-11-14T10:30:00Z'),read:fixtureRead});
+  assert.equal(items.length,1,'no other item opens beside it');
+  assert.equal(items[0].id,id); assert.equal(items[0].state,'new'); assert.equal(items[0].source_at,keyed); assert.equal(items[0].outcome,null);
+  assert.equal(deskItemQuestion(items[0],{env:f.env,home:f.home,read:fixtureRead}),LEGACY_LINE);
 });
 
 test('decision rows open only when decided and flagged by a different chosen key or product >= .70',()=>{
