@@ -606,8 +606,7 @@ never zero.
   runner log by window and one of four words, `absent`, `not an object`,
   `utilization` or `resets_at`, never by a value. A response with no valid
   window is a failure, and its log line names both windows and their words.
-  Neither provider's
-  credentials or raw response is logged/persisted. Each collector is bounded
+  Neither provider's credentials or raw response is logged/persisted. Each collector is bounded
   to 20 s and 1 MiB. Failures retain the last valid snapshot and record attempt
   and failure. Claude's passive stream observations remain supplementary.
 - **Not verified live.** Controlled fixtures test the collectors; the fixed
