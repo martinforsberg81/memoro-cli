@@ -25,8 +25,8 @@
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
- *   mc goal martin [<programme>/<goal>] --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
- *                  [--document <repo>/<path>]… [--reserved <act>]   jev first (`askMartin`), then Martin
+ *   mc goal martin [<programme>/<goal>] --kind technical|product --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
+ *                  [--document <repo>/<path>]… [--reserved <act>]   one jev consultation (`askMartin`)
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
@@ -81,7 +81,7 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--evidence', '--evidence-file', '--reserved'];
+const VALUE_FLAGS = ['--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved'];
 /** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
 const REPEATABLE_FLAGS = ['--option', '--document'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
@@ -101,7 +101,7 @@ const VERB_FLAGS = {
   log: ['--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--stage', '--status'],
   stage: ['--reason'],
   status: ['--reason'],
-  martin: ['--reason', '--option', '--recommend', '--evidence', '--evidence-file', '--document', '--reserved'],
+  martin: ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'],
   pr: [],
   archive: [],
   show: [],
@@ -387,18 +387,18 @@ function logEntry(args, fields, ctx) {
 }
 
 /**
- * `mc goal martin [<programme>/<goal>] --reason "<question>" --option "<key>: <text>"…
+ * `mc goal martin [<programme>/<goal>] --kind technical|product --reason "<question>" --option "<key>: <text>"…
  * --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]…
- * [--reserved <act>]` — ask Martin, jev first (`jev.js`, docs/technical/mc-jev.md).
+ * [--reserved <act>]` — one jev consultation (`jev.js`, docs/technical/mc-jev.md).
  *
  * A call that is not well formed exits 2 with a return instruction and writes
  * nothing; so does one whose question, options, evidence and goal alone are
  * over jev's budget. Who may set Martin is `refusedMove`'s. A reserved act, or
  * a person (MC_TOOL unset or `person`), goes to Martin with no request. A
  * session's question goes to jev once: when jev answers, the status is kept,
- * stdout says the answer and the session continues with it; anything else —
- * a miss or a failure — sets Martin as before, jev's reading or why in the
- * entry. jev never fails the verb. Every call appends one line to the ledger.
+ * stdout says the answer and the session continues with it. An unsettled
+ * technical question uses the recommendation when jev does not settle it;
+ * product choices and reserved acts reach Martin. Every valid call is ledgered.
  */
 async function askMartin(args, flags, ctx) {
   const { stdout, stderr, env, read } = ctx;
@@ -408,7 +408,8 @@ async function askMartin(args, flags, ctx) {
   try { values = ctx.readKeys(); } catch { values = null; }
   const secrets = secretsOf(values);
   const clean = (value) => redactText(value, secrets);
-  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, reserved: flags.reserved });
+  const session = Boolean(env.MC_TOOL && env.MC_TOOL !== 'person');
+  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, kind: flags.kind, requireKind: session, reserved: flags.reserved });
   const problems = [...(call.problems ?? [])];
   if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
   let evidence = flags.evidence ?? '';
@@ -433,7 +434,7 @@ async function askMartin(args, flags, ctx) {
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
 
   const tool = env.MC_TOOL || 'person';
-  const { question, options, recommend } = call;
+  const { question, options, recommend, kind } = call;
   let sent = { documents: [], trimmed: [], length: null, sha256: null, budget: null, error_type: null };
   let asked = null;
   if (call.reserved) asked = { martin: `jev not asked: reserved act ${call.reserved}` };
@@ -448,12 +449,12 @@ async function askMartin(args, flags, ctx) {
     });
     if (built.problems?.[0]?.includes('alone are')) { stderr.write(clean(returnInstruction(built.problems, named))); return 2; }
     if (built.problems) {
-      asked = { martin: 'jev unavailable: state over budget after trimming' };
+      asked = { unavailable: 'jev unavailable: state over budget after trimming', martin: 'jev unavailable: state over budget after trimming' };
       sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null, budget: null, error_type: limit };
     } else {
       sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text), budget, error_type: limit };
       const parsed = result.unavailable ? result : readAnswers(result.response, options);
-      if (parsed.unavailable) asked = { martin: `jev unavailable: ${parsed.unavailable}` };
+      if (parsed.unavailable) asked = { unavailable: `jev unavailable: ${parsed.unavailable}`, martin: `jev unavailable: ${parsed.unavailable}` };
       else {
         const judged = judge(parsed.answers, recommend);
         asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
@@ -464,19 +465,26 @@ async function askMartin(args, flags, ctx) {
 
   const lines = [...Object.entries(options).map(([key, option]) => `Option ${key}: ${oneLine(option)}`), `Recommended: ${recommend}`];
   const answered = asked.outcome === 'answered';
-  const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}` : asked.martin;
-  const comment = clean([`${answered ? 'jev was asked' : 'Martin is asked'}: ${oneLine(question)}`, ...lines, answered ? said : asked.martin].join('\n'));
+  const decided = session && kind === 'technical' && !call.reserved && !answered;
+  const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}`
+    : decided ? `decided by the session: ${recommend} — jev did not settle it (${asked.reading || asked.unavailable}) — continue with: ${oneLine(options[recommend])}`
+    : asked.martin;
+  const comment = clean([`${answered ? `jev was asked: ${oneLine(question)}` : decided ? `Decided by the session (technical): ${oneLine(question)}` : `Martin is asked: ${oneLine(question)}`}`, ...lines, `Evidence: ${evidence || 'none supplied'}`, decided ? `jev reading: ${asked.reading || asked.unavailable}` : said].join('\n'));
   const ledger = redactValue({
     at: ctx.now.toISOString(), goal: target.name, verb: 'goal martin', programme: target.programme, tool, role: writerRole(env),
-    question, options, recommend, reserved: call.reserved,
+    question, options, recommend, kind, reserved: call.reserved,
     documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
     model: asked.model ?? null, answers: asked.answers ?? null,
-    outcome: answered ? 'answered' : 'martin', reason: answered ? `jev answered ${asked.reading}` : asked.martin,
+    outcome: answered ? 'answered' : decided ? 'decided' : 'martin', reason: said,
   }, secrets);
   try { ctx.ledger(`${JSON.stringify(ledger)}\n`); }
   catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
 
-  if (!answered) return logEntry(args, { stage: null, status: 'Martin', done: null, comment, next: null }, ctx);
+  if (!answered && !decided) {
+    const resultCode = logEntry(args, { stage: null, status: 'Martin', done: null, comment, next: null }, ctx);
+    if (tool === 'person' || call.reserved) return resultCode;
+    return 1;
+  }
   const entry = { at: logStamp(ctx.now), tool, model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: null, stage: goal.stage, status: goal.status };
   appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
   stdout.write(`mc: ${clean(said)}\n`);

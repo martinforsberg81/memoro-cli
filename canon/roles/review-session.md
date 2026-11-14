@@ -43,8 +43,10 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    error states. A visible deviation from the intent is not OK; it goes to
    finish with the screenshots named in REVIEW.md.
 3. **Structure.** The change fits where it sits; no duplication; the right
-   altitude; readable names; the documents the goal names are updated. It
-   holds to the `docs/technical/` standards it touches and sets no new
+   altitude; readable names; the documents the goal names are updated. Read
+   every `Decided by the session (technical)` entry in this goal's `LOG.md`
+   and judge each as part of the review; a wrong decision is a review finding.
+   The change holds to the `docs/technical/` standards it touches and sets no new
    cross-programme standard in passing.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.
 5. **Test value.** Compare additions and removals with commissioned protection.
@@ -101,9 +103,11 @@ If the review itself cannot continue — an unavailable check, missing worktree 
 other unrecoverable in-role obstacle — wait directly on Martin, retaining the
 evidence. The first review crash retry remains bounded; the second waits on
 Martin. A dirty-review refusal also waits directly on Martin; do not reset the
-tree or launch pre-merge mend. For an actual undecided design choice or
-reserved act, use `mc ask`; continue on a jev answer. Apply technical standards
-and programme design to ordinary implementation/review details.
+tree or launch pre-merge mend. For an actual undecided choice, use `mc ask`
+with its `--kind`: a technical question jev does not settle is decided by your
+recommendation and recorded; product choices and reserved acts reach Martin.
+Continue on a jev answer. Apply technical standards and programme design to
+ordinary implementation/review details.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what

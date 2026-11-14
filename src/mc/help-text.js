@@ -17,7 +17,7 @@ PLAN AND FOLLOW
   mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
-  mc ask [<programme>/<goal>]       Ask jev before asking Martin
+  mc ask [<programme>/<goal>]  Ask jev
   mc programs list [--json]        Every programme and its priority
   mc programs priority <p>... --set <n>  Set programme priorities
   mc proposals [--json]           Waiting proposals by programme and total
@@ -70,6 +70,8 @@ ${commandReference('goal')}
 ${commandReference('martin')}
 
 ${commandReference('ask')}
+
+${commandReference('decisions')}
 
 ${commandReference('programs')}
 

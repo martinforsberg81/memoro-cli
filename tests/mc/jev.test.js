@@ -44,7 +44,7 @@ const ANSWER = ok({
   model: 'jev-1.14.0',
   answers: {
     answer: { type: 'choice', choice: 'fake_timer', confidence: 0.98, probabilities: { fake_timer: 0.99, real_wait: 0.01 } },
-    fits: { type: 'noul', noul: 0.95 }, settled: { type: 'noul', noul: 0.95 },
+    fits: { type: 'noul', noul: 0.95 }, settled: { type: 'noul', noul: 0.95 }, product: { type: 'noul', noul: 0.1 },
   },
   usage: { input_tokens: 539, output_tokens: 70 },
 });
@@ -83,7 +83,7 @@ function fixture(files = {}) {
 }
 
 const CALL = [
-  'martin', '--reason', `Which timer should the timeout test use? (${KEY})`,
+  'martin', '--kind', 'product', '--reason', `Which timer should the timeout test use? (${KEY})`,
   '--option', 'fake_timer: inject a timer that fires at once',
   '--option', `real_wait: wait the full 15 seconds, ${OTHER}`,
   '--recommend', 'fake_timer',
@@ -91,7 +91,7 @@ const CALL = [
   '--document', 'memoro-cli/docs/extra.md',
 ];
 
-test('the request: POST to the endpoint, model jev-1.14.0, Bearer key, and the three questions with the texts the goal gives', async () => {
+test('the request: POST to the endpoint, model jev-1.14.0, Bearer key, and the four questions with the texts the goal gives', async () => {
   const f = fixture();
   assert.equal(await run(CALL, f.deps), 0, f.err());
   assert.equal(f.requests.length, 1);
@@ -103,7 +103,7 @@ test('the request: POST to the endpoint, model jev-1.14.0, Bearer key, and the t
   const body = JSON.parse(init.body);
   assert.equal(body.model, 'jev-1.14.0');
   assert.equal(JEV_MODEL, 'jev-1.14.0');
-  assert.deepEqual(Object.keys(body.questions), ['answer', 'fits', 'settled']);
+  assert.deepEqual(Object.keys(body.questions), ['answer', 'fits', 'settled', 'product']);
   assert.deepEqual(body.questions.answer, {
     type: 'choice',
     instructions: 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state',
@@ -111,6 +111,7 @@ test('the request: POST to the endpoint, model jev-1.14.0, Bearer key, and the t
   });
   assert.deepEqual(body.questions.fits, { type: 'noul', instructions: 'One of the options in `options` is a correct way for this goal to proceed' });
   assert.deepEqual(body.questions.settled, { type: 'noul', instructions: 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed' });
+  assert.deepEqual(body.questions.product, { type: 'noul', instructions: 'Choosing between the options is a choice of product direction that changes what users are promised, what the product costs or how personal data is handled, and that the goal, the programme page and the standards in the state do not already answer' });
   assert.equal(INSTRUCTIONS.fits, body.questions.fits.instructions);
 });
 
@@ -145,7 +146,7 @@ test('the key and every keys-source value of 8+ characters are in the Authorizat
   for (const outcome of ['answered', 'martin']) {
     const f = fixture();
     if (outcome === 'martin') f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 500, headers: { get: () => null }, text: async () => `echo ${KEY}` }; };
-    assert.equal(await run(CALL, f.deps), 0, f.err());
+    assert.equal(await run(CALL, f.deps), outcome === 'answered' ? 0 : 1, f.err());
     const body = f.requests[0].init.body;
     const written = Object.entries(f.store).filter(([path]) => path.startsWith(DIR) && !path.includes('/memoro-cli/')).map(([, text]) => text).join('\n');
     for (const [where, text] of [['body', body], ['GOAL.json and LOG.md', written], ['ledger', f.ledger.join('')], ['stdout', f.out()], ['stderr', f.err()]]) {
@@ -216,7 +217,7 @@ test('a state over jev\'s input limit is refused with max_tokens_exceeded, rebui
 test('a persistent max_tokens_exceeded is rebuilt twice, at 63,000 then 44,100 characters, and ends unavailable with the error_type in the reason, the LOG entry and the ledger', async () => {
   const f = fixture();
   f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return refusal(); };
-  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(await run(CALL, f.deps), 1, f.err());
   assert.equal(f.requests.length, 3, 'the state, and two rebuilds of it');
   const reason = 'jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the state, the last at 44100 characters';
   const ledger = JSON.parse(f.ledger[0]);
@@ -228,7 +229,7 @@ test('a persistent max_tokens_exceeded is rebuilt twice, at 63,000 then 44,100 c
 test('a 400 without an error_type is unavailable as before, with no rebuild', async () => {
   const f = fixture();
   f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 400, headers: { get: () => null }, text: async () => '{"detail":"bad request"}' }; };
-  assert.equal(await run(CALL, f.deps), 0, f.err());
+  assert.equal(await run(CALL, f.deps), 1, f.err());
   assert.equal(f.requests.length, 1, 'no rebuild');
   const ledger = JSON.parse(f.ledger[0]);
   assert.deepEqual([ledger.outcome, ledger.reason, ledger.error_type, ledger.budget], ['martin', 'jev unavailable: HTTP 400', null, STATE_BUDGET]);
@@ -283,7 +284,7 @@ test('documents whose path metadata keeps the state over budget are dropped whol
   assert.deepEqual(ledger.documents, state.documents.map((item) => item.path), 'the ledger lists only documents included in the sent state');
 });
 
-test('the thresholds are 0.90, 0.70 and 0.70 and every one is required with agreement', () => {
+test('the answer thresholds are 0.90, 0.70 and 0.70 and every one is required with agreement', () => {
   assert.deepEqual({ ...THRESHOLDS }, { choice: 0.90, fits: 0.70, settled: 0.70 });
   const at = (choice, p, fits, settled) => judge({ answer: { choice, probabilities: { [choice]: p } }, fits, settled }, 'a').outcome;
   assert.equal(at('a', 0.90, 0.70, 0.70), 'answered');
@@ -316,6 +317,6 @@ test('a 2xx body read is under the attempt timer, so a stalled text() is unavail
 
 test('readMartinCall keeps the option texts by key and the recommendation', () => {
   assert.deepEqual(readMartinCall({ reason: ' Which? ', option: ['a: one: with a colon', 'b_2: two'], recommend: 'b_2', reserved: null }),
-    { question: 'Which?', options: { a: 'one: with a colon', b_2: 'two' }, recommend: 'b_2', reserved: null });
+    { question: 'Which?', options: { a: 'one: with a colon', b_2: 'two' }, recommend: 'b_2', reserved: null, kind: null });
   assert.deepEqual(readMartinCall({ reason: 'q', option: [`${'k'.repeat(33)}: x`, 'b: y'], recommend: 'b' }).problems.length, 1, 'a key of 33 characters is refused');
 });

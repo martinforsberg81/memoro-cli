@@ -16,7 +16,7 @@ for (const arg of rawArgv) {
 }
 const first = argv[0];
 
-// Every invocation, at its two ends.
+// Every invocation except the strictly read-only decisions report, at its two ends.
 //
 // This is the only place that sees all of them: `routeV1Command` covers the
 // V1 verbs and everything it declines falls through to the capability
@@ -30,9 +30,11 @@ const first = argv[0];
 let log = () => {};
 let shape = { verb: first || '(page)' };
 try {
-  const logger = await import('./mc/logger.js');
-  log = logger.log;
-  shape = logger.invocationShape(argv);
+  if (first !== 'decisions') {
+    const logger = await import('./mc/logger.js');
+    log = logger.log;
+    shape = logger.invocationShape(argv);
+  }
 } catch { /* no record is bad; a broken command is worse */ }
 
 const startedAt = Date.now();

@@ -40,17 +40,26 @@ function askFixture(home, reference, env = {}) {
     ledger: () => { effects.push('ledger'); },
   };
   return { ...output, effects, call: async ({ question = 'Original unresolved policy?', p = 0.5, at = '2026-01-01T00:00:00Z', reserved = false } = {}) => ask([
-    ...(reference ? [reference] : []), '--reason', question,
+    ...(reference ? [reference] : []), '--kind', 'product', '--reason', question,
     '--option', 'a: keep rule', '--option', 'b: change rule', '--recommend', 'a',
     '--evidence', 'Investigated evidence for this rule.', ...(reserved ? ['--reserved', 'admin'] : []),
   ], { ...deps, now: () => new Date(at), jev: {
     transport: async () => { effects.push('provider'); return { status: 200, text: async () => JSON.stringify({ model: 'jev-1.14.0', answers: {
-      answer: { choice: 'a', probabilities: { a: p } }, fits: { noul: 0.99 }, settled: { noul: 0.99 },
+      answer: { choice: 'a', probabilities: { a: p } }, fits: { noul: 0.99 }, settled: { noul: 0.99 }, product: { noul: 0.1 },
     } }) }; }, timer: () => new Promise(() => {}),
   } }) };
 }
 
 describe('mc martin get', () => {
+  it('does not queue a decided technical entry, and reads an unresolved question and its options whole', () => {
+    const f = fixture();
+    f.make('alpha', 'decided', { status: 'ready' }, [log('2026-01-02T00:00Z', 'ready', 'Decided by the session (technical): Which timer?\nOption inject: inject a timer\nOption wait: wait 15 seconds\nRecommended: inject\nEvidence: criterion 1\njev reading: a (p 0.50, fits 0.88, settled 0.30)')]);
+    f.make('alpha', 'waiting', {}, [log('2026-01-03T00:00Z', 'Martin', 'Martin is asked: Which timer?\nOption inject: inject a timer\nOption wait: wait 15 seconds\nRecommended: inject\njev: a (p 0.50, fits 0.88, settled 0.30)')]);
+    const result = collectMartinQueue({ home: f.home });
+    assert.deepEqual(result.items.map((item) => item.reference), ['alpha/waiting']);
+    assert.equal(result.items[0].question.question, 'Which timer?');
+    assert.deepEqual(result.items[0].question.options, [{ key: 'inject', text: 'inject a timer' }, { key: 'wait', text: 'wait 15 seconds' }]);
+  });
   it('keeps the unresolved real ask and its ordering after a different consultation is answered', async () => {
     const f = fixture();
     f.make('alpha', 'waiting', { status: 'ready' });

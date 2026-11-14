@@ -1,11 +1,12 @@
 # jev before Martin: `mc ask` and `mc goal martin`
 
-A goal's question for Martin is read by TypeSafe's Jev model first (Martin,
+An options question is read by TypeSafe's Jev model first (Martin,
 2026-11-07; programme `jev`). Jev is a System One model: it generates no
 text; it takes a `state` and typed questions and returns probabilities. When
 jev settles the question with high probability, the answer goes back to the
-calling session, which keeps working. Otherwise the goal waits on Martin as
-before, with jev's reading attached. The shared code is `src/mc/jev.js`;
+calling session, which keeps working. Otherwise an unsettled technical question
+is decided by the session's recommendation; product choices and reserved acts
+reach Martin. The shared code is `src/mc/jev.js`;
 `mc goal martin` is `askMartin` in `src/mc/commands/goal.js`, and `mc ask` is
 in `src/mc/commands/ask.js`.
 
@@ -27,24 +28,44 @@ goal contracts; recording it only in a goal log is insufficient.
 
 Martin, 2026-11-08: jev is asked from any session, interactive or headless,
 with or without a goal, as decision support. An interactive session always
-asks jev before it puts a question with options to Martin in chat: when jev
-settles it, the session continues with jev's answer and names it in its
-account; otherwise Martin gets the question with its options, the session's
-recommendation and jev's reading. A goal-bound `mc ask` or compatible `mc goal martin` call makes one jev consultation. An answer leaves stage/status unchanged, appends the trace and continues. A valid unanswered, reserved or unavailable result stores the sanitized question/options/recommendation/evidence/reading and sets that goal directly to Martin; it must not trigger another jev request or mend hop. Build, review and finish use this path for a remaining design choice or reserved act; acceptance obstacles are repaired in-role. Reserved acts never go to jev, from any session.
+asks jev before using options to make a decision: when jev settles it, the
+session continues with jev's answer and names it in its account; otherwise the
+technical/product flow below applies. A goal-bound `mc ask` or compatible `mc goal
+martin` call makes one jev consultation. An answer leaves stage/status unchanged,
+appends the trace and continues. Martin's mandate of 2026-11-14 is that the system
+decides every technical question itself and reports afterwards. A session labels
+`product` as a choice of direction that the goal, programme page and standards do not
+already answer, and that changes what users are promised, product cost, personal-data
+handling or test strategy. `technical` is everything else, including implementation,
+architecture, tooling, environment, order of work, whether a goal adopts or changes
+what its own criteria need, and carrying out an already decided design, even when
+users see the result. The session's kind determines the route; jev's product reading
+is recorded but never moves a technical question to Martin. An unsettled technical
+call, whatever that reading, or any unavailable jev result, records the session's
+recommendation and continues. An unresolved product call stores the sanitized
+question/options/recommendation/evidence/reading and sets that goal directly to
+Martin; it must not trigger another jev request or mend hop. Build, review and finish
+repair acceptance obstacles in-role. Reserved acts never go to jev, from any session.
 
 `mc ask` is the general route and the single-pass goal-bound escalation path (landed, `jev/ask-anywhere`); `mc goal martin` remains compatible with it and needs no mend caller. A person caller of `mc goal martin` (`MC_TOOL` unset) still skips jev (*The flow*, step 1).
 
 ## `mc ask`
 
 ```
-mc ask [<programme>/<goal>] --reason "<the question>" \
+mc ask [<programme>/<goal>] --kind technical|product --reason "<the question>" \
   --option "<key>: <text>" --option "<key>: <text>" [--option …] \
   --recommend <key> [--evidence "…" | --evidence-file <path|->] \
   [--document <path>]… [--reserved <act>]
 ```
 
+Session callers require `--kind technical|product`; person callers may omit it.
 It uses the same validation, request, thresholds and ledger as `mc goal martin`,
-but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. For a goal-bound valid unresolved question it sets that goal Martin after logging evidence; answered calls leave stage/status unchanged. A no-goal call changes no goal. A named goal (or `MC_GOAL`) supplies exactly the
+but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. A
+technical result not answered, whatever its product reading, or unavailable,
+logs and continues with the recommendation, preserving goal stage/status. A
+product result sets a goal Martin; a
+no-goal product call exits 1 without changing a goal. A no-goal technical call
+is decided and ledgered without changing a goal. A named goal (or `MC_GOAL`) supplies exactly the
 `jevContext` state of `mc goal martin`. Without a goal, programme context is
 `MC_PROGRAMME`, otherwise the programme containing the working directory under
 `~/mc/programs/`; its README is sent,
@@ -52,15 +73,20 @@ and `goal` is null. With no programme, it carries only question, options,
 evidence and documents. The questions say “this work” when there is no goal;
 the goal-bound instruction texts remain unchanged.
 
-Answered calls exit 0 and say `mc: jev answered … — continue with: …`. A miss,
-unavailable request or residual over-budget state exits 1; reserved acts exit 1
-with Martin's decision message. A malformed call exits 2. An answered call with
-a named goal appends the same kind of LOG.md entry as `mc goal martin`; a valid unresolved goal-bound call changes only that goal status to Martin and appends the escalation trace; invalid calls change neither goal nor ledger. No-goal calls do not change a goal.
+Answered calls exit 0 and say `mc: jev answered … — continue with: …`. An
+unsettled or unavailable technical call exits 0 after recording the session's
+decision; an unresolved product call exits 1. Reserved acts exit 1 with
+Martin's decision message. A malformed call exits 2. An answered call with
+a named goal appends the same kind of LOG.md entry as `mc goal martin`; an
+unsettled technical call records the session's recommendation in the goal log
+and ledger without changing stage/status. A product escalation changes that
+goal to Martin. Invalid calls change neither goal nor ledger. No-goal calls do
+not change a goal.
 
 ## The call
 
 ```
-mc goal martin [<programme>/<goal>] --reason "<the question>" \
+mc goal martin [<programme>/<goal>] --kind technical|product --reason "<the question>" \
   --option "<key>: <text>" --option "<key>: <text>" [--option …] \
   --recommend <key> [--evidence "…" | --evidence-file <path|->] \
   [--document <repo>/<path>]… [--reserved deploy|production-data|credentials|admin]
@@ -96,13 +122,13 @@ stage roles retain their existing bounded ask permissions.
 
 ## The flow
 
-1. **Not asked.** `--reserved <act>`, or a caller with `MC_TOOL` unset or
-   `person`, goes straight to Martin: no request. The entry says
-   `jev not asked: reserved act <act>` or `jev not asked: person`. Reserved
-   acts never go to jev (Martin, 2026-11-07).
+1. **Not asked.** `--reserved <act>` is never sent to jev. A person caller of
+   `mc goal martin` (`MC_TOOL` unset or `person`) also goes straight to Martin:
+   no request. The entry says `jev not asked: reserved act <act>` or
+   `jev not asked: person`. Reserved acts never go to jev (Martin, 2026-11-07).
 2. **One request.** `POST https://api.typesafe.ai/v1/systemone`, model
    `jev-1.14.0` (pinned), `Authorization: Bearer <TYPESAFE_API_KEY>`, Node's
-   `fetch`, no SDK, no long-context header. Three questions:
+   `fetch`, no SDK, no long-context header. Four questions:
    - `answer` — a Choice over the option keys, the option texts as criteria:
      *Which option is the right way for this goal to proceed, given the goal,
      its contract and the decided standards in the state.*
@@ -111,19 +137,30 @@ stage roles retain their existing bounded ask permissions.
    - `settled` — a Noul: *The goal, its contract, the programme README or
      the technical standards in the state already decide which option is
      right, so no new product or policy decision by Martin is needed.*
-3. **Answered** when all hold, else **Martin**.
-4. **Failure is Martin.** A missing key or unreadable keys source, a network
+   - `product` — a Noul: *Choosing between the options is a choice of product
+     direction that changes what users are promised, what the product costs or
+     how personal data is handled, and that the goal, programme page and
+     standards in the state do not already answer.*
+3. **Answered** when all existing answer conditions hold.
+4. **Technical decision.** Every unsettled technical call, whatever jev's
+   product reading, or if jev is unavailable for any reason, records and uses
+   the session's recommendation; the goal stays at the same stage/status.
+5. **Product escalation.** An unresolved product call follows the Martin path.
+   A missing key or unreadable keys source, a network
    error, a 15-second timeout, a non-2xx (429 and 5xx are retried once,
    honouring `retry-after` up to 10 seconds; one without waits 1 second), a
-   malformed response and a choice that is not an option key all set `Martin`
-   with `jev unavailable: <reason>`. jev never makes the verb fail.
+   malformed response and a choice that is not an option key are unavailable.
+   Unavailability decides a technical call by the session; a product call sets
+   Martin with `jev unavailable: <reason>`.
 
 ## The thresholds
 
 jev answers only when its `answer.choice` equals `--recommend`,
-`probabilities[choice] >= 0.90`, `fits >= 0.70` and `settled >= 0.70`. The
-four live as `THRESHOLDS` (and the agreement in `judge`) in `src/mc/jev.js`.
-They, and the pinned model, change only with Martin. The session's
+`probabilities[choice] >= 0.90`, `fits >= 0.70` and `settled >= 0.70`. These
+live as `THRESHOLDS` in `src/mc/jev.js`; the `judge` for answered questions is
+unchanged. The three original thresholds, and the pinned model, change only
+with Martin. The `product` reading has no routing threshold; `mc decisions`
+flags a session decision with product `>= 0.70` for Martin to notice. The session's
 recommendation is never in the state: jev chooses blind, and agreement is the
 check.
 
@@ -161,7 +198,7 @@ retried as it is: the state is rebuilt at 0.7 of the budget (63,000, then
 `budget shrunk to <n> characters after max_tokens_exceeded`. If the third
 state is refused too, the call ends unavailable:
 `jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the
-state, the last at 44100 characters`, and Martin is asked. Any other non-2xx
+state, the last at 44100 characters`; the kind-based flow above applies. Any other non-2xx
 keeps its handling (429 and 5xx are retried once) and its reason names the
 body's error_type when it has one, e.g. `HTTP 400 (invalid_schema)`.
 
@@ -188,9 +225,15 @@ LOG.md, the ledger, stdout or stderr.
   with: <option text>`, and LOG.md gets an entry with the question, the
   options, the recommendation and jev's answer. The session continues with the
   answer as if Martin had given it.
-- **Martin:** the status becomes `Martin`; the entry records the question, the
-  options, the recommendation and jev's reading with each condition missed,
-  or why jev was not asked or was unavailable.
+- **Decided:** an unsettled or unavailable technical call exits 0. The status
+  and stage are unchanged; stdout names the selected recommendation and the
+  reading/unavailable reason. The goal's LOG.md comment starts `Decided by the
+  session (technical):` and includes the question, options, recommendation,
+  evidence and jev reading. The ledger has `kind: "technical"` and
+  `outcome: "decided"`.
+- **Martin:** an unresolved product call sets a goal to `Martin` and exits 1;
+  the entry records the question, options, recommendation and reading.
+  Reserved acts keep their existing behavior.
 
 ## The ledger
 
@@ -198,10 +241,10 @@ Every call that passes validation appends one JSON line to
 `<mc home>/jev/decisions.jsonl` (`mcHome`: `MC_HOME`, else
 `~/.memoro/mc`): `at`, `verb` (`ask` or `goal martin`), `programme` (or null),
 `goal` (or null), `tool`, `role`, `question`, `options`,
-`recommend`, `reserved`, `documents` (the paths sent), `trimmed` (each part
+`recommend`, `kind` (absent on rows predating this change), `reserved`, `documents` (the paths sent), `trimmed` (each part
 cut), `state_length`, `state_sha256`, `model` (the response's model id),
 `answers` (`answer` with choice, probabilities and confidence; `fits`;
-`settled`), `outcome` (`answered` or `martin`) and `reason`. No key and no
+`settled`, `product`), `outcome` (`answered`, `decided`, `martin` or `reserved`) and `reason`. No key and no
 state body go there. A ledger that cannot be written is a warning, never a
 failure.
 
@@ -213,6 +256,21 @@ keys source and the ledger are injected through `deps`
 transport refuses to run under the Node test runner. Drift in TypeSafe's real
 response shape is not covered by acceptance; plan runs a live smoke call
 after landing.
+
+## `mc decisions`
+
+`mc decisions [--since <date>] [--programme <programme>] [--json]` reads only
+the ledger; it makes no model or network request and writes no file, including
+invocation logs (the explicit exception in [mc-log.md](mc-log.md)). By default
+it lists `decided` and `answered` rows from the last seven days; `--since`
+(YYYY-MM-DD) and `--programme` narrow the set. Rows are newest first and show
+time, programme/goal, kind (`-` for old rows), one-line question, chosen key and
+option text, and jev's reading. A differing jev choice is marked
+`jev preferred <key>`. An unparseable line is named on stderr and skipped.
+For `decided` rows, product readings of `0.70` or higher are marked `jev read
+this as a product choice` and listed first, so Martin sees them before the
+other rows. `--json` returns the same rows as data. An absent ledger says there
+is nothing to report and exits 0.
 
 Not here yet: the ledger on the mc page, a way for Martin to overturn a jev
 answer, and calibrating the thresholds against Martin's answers.
