@@ -22,6 +22,7 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
+  if (env.MC_ROLE === 'desk-prepare') { stderr.write('mc: desk-prepare cannot ask or decide\n'); return 2; }
   if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') {
     stderr.write('mc: the Martin role is interactive-only; unattended sessions cannot use mc ask\n');
     return 2;

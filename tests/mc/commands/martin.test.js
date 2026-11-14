@@ -6,6 +6,8 @@ import { after, describe, it } from 'node:test';
 
 import { run, get, usage } from '../../../src/mc/commands/martin.js';
 import { run as ask } from '../../../src/mc/commands/ask.js';
+import { deskRunsPath } from '../../../src/mc/desk-budget.js';
+import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-items.js';
@@ -375,3 +377,54 @@ function snapshot(root) {
   function walk(path) { for (const name of readdirSync(path)) { const child = join(path, name); const st = lstatSync(child); if (st.isDirectory()) { rows.push([child, 'directory']); walk(child); } else rows.push([child, 'file', readFileSync(child).toString()]); } }
   walk(root); return rows.sort((a, b) => a[0].localeCompare(b[0]));
 }
+
+describe('mc martin ceiling', () => {
+  it('ships off, sets a ceiling, shows today desk sum, and switches off again', async () => {
+    const f = fixture(); const env = { MC_WORK_ROOT: f.home, MC_HOME: join(f.home, 'mc-home'), MC_TOOL: 'person' };
+    const now = () => new Date('2026-11-14T10:00:00Z');
+    mkdirSync(join(f.home, 'runner', 'log'), { recursive: true });
+    const rows = [['2026-11-14T01:00:00Z','desk-prepare',2], ['2026-11-14T02:00:00Z','decision',3], ['2026-11-13T23:00:00Z','decision',100], ['2026-11-14T02:00:00Z','intake',100]];
+    writeFileSync(deskRunsPath(env), `${tsvHeader()}\n${rows.map(([ts,kind,cost]) => tsvRow({ts,kind,cost})).join('\n')}\n`);
+    const initial = snapshot(f.home);
+    for (const [args, expected] of [[[], 'off'], [['5'], '$5/day'], [[], '$5/day'], [['off'], 'off'], [[], 'off']]) {
+      const output = io();
+      assert.equal(await run(['ceiling', ...args], { ...output, env, now }), 0, output.out.stderr);
+      assert.equal(output.out.stdout, `mc: desk ceiling: ${expected}; today (2026-11-14 UTC): $5.0000\n`);
+      if (!args.length && expected === 'off' && !existsSync(join(f.home,'runner','desk.json'))) assert.deepEqual(snapshot(f.home), initial);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(join(f.home,'runner','desk.json'),'utf8')), { ceiling_usd_per_day: null });
+  });
+  it('refuses invalid settings and session writes without changing files', async () => {
+    const f = fixture(); const env = { MC_WORK_ROOT: f.home, MC_HOME: join(f.home,'mc-home'), MC_TOOL: 'person' };
+    for (const [args, extra] of [[['-1'], {}], [['NaN'], {}], [['5','off'], {}], [['Infinity'], {}], [['5'], { MC_ROLE: 'desk-prepare' }], [['off'], { MC_ROLE: 'build-session:goal' }]]) {
+      const before = snapshot(f.home), output = io();
+      assert.equal(await run(['ceiling', ...args], { ...output, env: { ...env, ...extra } }), 2);
+      assert.deepEqual(snapshot(f.home), before);
+    }
+  });
+});
+
+describe('mc martin prepare', () => {
+  it('uses the same headless turn by hand and refuses a session launcher', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-manual-prepare-')); roots.push(root);
+    const env = { MC_WORK_ROOT: root, MC_HOME: join(root,'mc-home'), MC_TOOL: 'person' };
+    const record = { id: deskItemId('goal','alpha/item','2026-11-14T00:00:00Z'), kind: 'goal', reference: 'alpha/item', state: 'new', source_at: '2026-11-14T00:00:00Z' };
+    writeDeskItem(record, { env });
+    let calls = 0;
+    const output = io();
+    const prepareDeps = { route: () => ({ ok: true, candidate: { tool: 'claude', model: 'sonnet', effort: 'high' } }),
+      launch: () => ({ ok: true, id: 'claude-code', spec: {bin:'/fake/claude'} }), billingRoute: () => ({billing:'plan'}),
+      session: async call => {
+        calls++; assert.equal(call.cwd, itemDirectory(record, env)); assert.equal(call.env.MC_ROLE,'desk-prepare');
+        writeFileSync(join(call.cwd,'prepared.md'),'Facts');
+        assert.equal(await run(['item',record.id,'prepared','--sort','technical'],{...io(),env:call.env}),0);
+        return {status:0,stdout:'{}',stderr:''};
+      },
+    };
+    const before = snapshot(root);
+    assert.equal(await run(['prepare',record.id],{...output,env:{...env,MC_ROLE:'desk-prepare'},prepareDeps}),2);
+    assert.deepEqual(snapshot(root),before); assert.equal(calls,0);
+    assert.equal(await run(['prepare',record.id],{...output,env,prepareDeps}),0,output.out.stderr);
+    assert.equal(calls,1); assert.equal(JSON.parse(readFileSync(join(itemDirectory(record,env),'item.json'),'utf8')).state,'prepared');
+  });
+});

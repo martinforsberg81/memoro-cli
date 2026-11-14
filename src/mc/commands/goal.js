@@ -127,6 +127,10 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const env = deps.env || process.env;
   const rawStderr = deps.stderr || process.stderr;
+  // Preparation has no goal mutation authority, including goal-less calls.
+  if (env.MC_ROLE === 'desk-prepare' && !['show', 'list'].includes(argv[0])) {
+    rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
+  }
   let refusalSecrets = [];
   if (argv[0] === 'martin' || (argv[0] === 'log' && argv.includes('Martin'))) {
     try { refusalSecrets = secretsOf((deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values))()); } catch { refusalSecrets = []; }
@@ -1108,6 +1112,7 @@ function goalNamed(arg, { env, home }) {
  * decision or reserved act.
  */
 export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
+  if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (!isSession(env)) return null;
   if (env.MC_ROLE === 'martin') {
     if (env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';

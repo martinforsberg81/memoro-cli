@@ -60,7 +60,7 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: five stage/goal roles, each one file, plus the Martin desk role and the three that
+What canon holds today: five stage/goal roles, each one file, plus the Martin desk and preparation roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
 the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Finish
 and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09).
@@ -76,6 +76,7 @@ and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-1
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
+| `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 
 ## Parts: one role, started more than one way
 

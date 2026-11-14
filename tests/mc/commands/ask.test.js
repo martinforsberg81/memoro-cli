@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -366,4 +366,20 @@ test('goal-bound ask refuses role/goal mismatches and finished goals without mut
   assert.equal(await run(['jev/closed-ask', ...argv.slice(1)], { ...closed.deps, read, write: writeFileSync }), 1);
   assert.equal(closed.requests.length, 0);
   assert.equal(JSON.parse(readFileSync(finishedFile, 'utf8')).stage, 'done');
+});
+
+test('desk-prepare cannot ask with or without goal identity and writes no file or ledger', async () => {
+  const snapshot = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = join(dir, entry.name);
+    return entry.isDirectory() ? [[path, 'directory'], ...snapshot(path)] : [[path, readFileSync(path, 'utf8')]];
+  });
+  for (const goal of [undefined, 'jev/blocked']) {
+    const f = fixture({ env: { MC_ROLE: 'desk-prepare', MC_GOAL: goal, MC_HOME: scratch, MC_WORK_ROOT: scratch } });
+    const before = snapshot(scratch);
+    f.deps.readKeys = () => assert.fail('preparation read question credentials');
+    assert.equal(await run([...(goal ? [goal] : []), ...options, '--kind', 'technical'], f.deps), 2);
+    assert.match(f.err(), /desk-prepare cannot ask/u);
+    assert.deepEqual(snapshot(scratch), before);
+    assert.deepEqual(f.requests, []); assert.deepEqual(f.ledger, []);
+  }
 });

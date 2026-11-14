@@ -33,9 +33,11 @@ const GRACE_MS = 1000;
 /**
  * `tool` with `args`, no shell. A `signal` that aborts stops the child, as it
  * does for `runShell`: a round's ceiling must not leave `npm ci` running.
+ * `group` opts a bounded session into the same detached process-group cleanup
+ * as runShell, so the provider and its tool children share the deadline.
  */
-export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS } = {}) {
-  return collect(() => spawn(tool, args, { cwd, env: env || process.env, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs });
+export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal = null, graceMs = GRACE_MS, group = false } = {}) {
+  return collect(() => spawn(tool, args, { cwd, env: env || process.env, detached: group, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs, group });
 }
 
 /**

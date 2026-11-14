@@ -1614,3 +1614,23 @@ test('a build or review session may ask Martin directly after one jev consultati
     assert.deepEqual([f.requests.length, f.ledger().length], [1, 1]);
   }
 });
+
+for (const [name, args] of [
+  ['log', ['log', 'mc/plain', '--done', 'Unauthorized']],
+  ['stage', ['stage', 'mc/plain', 'review']],
+  ['ready', ['ready', 'mc/plain']],
+  ['set', ['set', 'mc/plain', 'title', '--text', 'Unauthorized']],
+  ['criterion met', ['criterion', 'met', 'mc/plain', '1']],
+  ['martin', ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Question?', '--option', 'a: A', '--option', 'b: B', '--recommend', 'a']],
+  ['new', ['new', 'mc/other', '--repo', 'memoro-cli', '--class', 'medium', '--title', 'Unauthorized']],
+  ['pr', ['pr', 'mc/plain', 'memoro-cli#1']],
+  ['archive', ['archive', 'mc/plain']],
+]) test(`desk-prepare refuses goal ${name} before any file, Git or ledger effect`, async () => {
+  const f = fixture({ files: seededGoal(), env: { MC_ROLE: 'desk-prepare', MC_TOOL: 'person' } });
+  const before = structuredClone(f.store);
+  f.deps.readKeys = () => assert.fail('preparation read question credentials');
+  assert.equal(await run(args, f.deps), 2);
+  assert.match(f.err(), /desk-prepare cannot write goals/u);
+  assert.deepEqual(f.store, before);
+  assert.deepEqual(f.calls, []); assert.deepEqual(f.requests, []); assert.deepEqual(f.ledger(), []);
+});
