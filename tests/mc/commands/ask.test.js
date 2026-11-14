@@ -225,39 +225,41 @@ test('an unresolved goal-bound ask records safe evidence and sets Martin directl
   assert.equal(f.ledger[0].goal, 'jev/unsettled');
 });
 
-test('a goal-bound technical mc ask records the recommendation and preserves stage and status', async () => {
-  const goal = join(programmeHome, 'jev', 'goals', 'technical');
-  mkdirSync(goal, { recursive: true });
-  const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
-  writeFileSync(file, goalJson({ stage: 'build', title: 'Technical call', goal: ['Ask once.'], repos: ['memoro-cli'] }));
-  writeFileSync(log, '');
-  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.10 }), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
-  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer', '--evidence', 'No standard selects one.'];
-  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 0, f.err());
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'ready');
-  const entry = parseLog(readFileSync(log, 'utf8')).at(-1);
-  assert.deepEqual([entry.stage, entry.status], ['build', 'ready']);
-  assert.match(entry.comment, /^Decided by the session \(technical\): Which timer\?/u);
-  assert.match(entry.comment, /Evidence: No standard selects one/u);
-  assert.deepEqual(f.ledger.map(({ kind, outcome }) => [kind, outcome]), [['technical', 'decided']]);
-  assert.match(f.out(), /^mc: decided by the session: fake_timer .* continue with: inject a timer/u);
-});
-
-test('a goal-bound technical mc ask stays with the recommendation when jev product reading is high', async () => {
-  const goal = join(programmeHome, 'jev', 'goals', 'technical-product-reading');
-  mkdirSync(goal, { recursive: true });
-  const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
-  writeFileSync(file, goalJson({ stage: 'build', title: 'Technical product reading', goal: ['Ask once.'], repos: ['memoro-cli'] }));
-  writeFileSync(log, '');
-  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical-product-reading', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
-  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer'];
-  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 0, f.err());
-  assert.deepEqual([JSON.parse(readFileSync(file, 'utf8')).stage, JSON.parse(readFileSync(file, 'utf8')).status], ['build', 'ready']);
-  assert.match(parseLog(readFileSync(log, 'utf8')).at(-1).comment, /^Decided by the session \(technical\): Which timer\?/u);
-  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
-});
+for (const [label, response, keys, expectedReading, product] of [
+  ['a missed jev reading', reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'fake_timer (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)', 0.10],
+  ['a high product reading', reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), undefined, 'fake_timer (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)', 0.95],
+  ['a network error', () => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)', undefined],
+  ['a missing key', reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source', undefined],
+]) {
+  test(`a goal-bound technical mc ask decides on ${label} and preserves stage and status`, async () => {
+    const goal = join(programmeHome, 'jev', 'goals', 'technical');
+    const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
+    const original = goalJson({ stage: 'build', title: 'Technical call', goal: ['Ask once.'], repos: ['memoro-cli'] });
+    const store = { [file]: original, [log]: '' };
+    const f = fixture({ response, env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+    if (keys) f.deps.readKeys = () => keys;
+    const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer', '--evidence', 'No standard selects one.'];
+    const read = (path) => store[path] ?? null;
+    const write = (path, text) => { store[path] = text; };
+    assert.equal(await run(argv, { ...f.deps, read, write }), 0, f.err());
+    assert.equal(store[file], original, 'GOAL.json is byte-identical');
+    assert.deepEqual([JSON.parse(store[file]).stage, JSON.parse(store[file]).status], ['build', 'ready']);
+    assert.equal(f.out(), `mc: decided by the session: fake_timer — jev did not settle it (${expectedReading}) — continue with: inject a timer\n`);
+    const entries = parseLog(store[log]);
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
+    assert.deepEqual([entry.stage, entry.status], ['build', 'ready']);
+    assert.equal(entry.comment.split('\n')[0], 'Decided by the session (technical): Which timer?');
+    for (const text of ['Option fake_timer: inject a timer', 'Option real_wait: wait fifteen seconds', 'Recommended: fake_timer', 'Evidence: No standard selects one.', `jev reading: ${expectedReading}`]) assert.ok(entry.comment.split('\n').includes(text), text);
+    assert.equal(f.ledger.length, 1);
+    assert.deepEqual([f.ledger[0].goal, f.ledger[0].kind, f.ledger[0].outcome], ['jev/technical', 'technical', 'decided']);
+    assert.equal(f.ledger[0].question, 'Which timer?');
+    assert.deepEqual(f.ledger[0].options, { fake_timer: 'inject a timer', real_wait: 'wait fifteen seconds' });
+    assert.equal(f.ledger[0].recommend, 'fake_timer');
+    assert.equal(f.ledger[0].answers?.product, product);
+    assert.equal(f.requests.length, keys ? 0 : 1);
+  });
+}
 
 test('jev product reading does not reroute an unsettled technical mc ask to Martin', async () => {
   const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_TOOL: 'claude', MC_ROLE: 'build-session:goal' } });

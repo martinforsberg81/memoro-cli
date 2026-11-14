@@ -11,9 +11,10 @@ alternatives/tradeoffs, recommendation and proposed wording/file/section in
 
 Every question with options goes to jev first. `product` is a choice of direction
 the goal, programme page and standards do not answer, changing user promises,
-product cost or personal-data handling. `technical` is everything else:
-implementation, architecture, tooling, environment, order of work, a goal's own
-criteria and carrying out an already decided design, even when users see it.
+product cost, personal-data handling or test strategy. `technical` is everything
+else: implementation, architecture, tooling, environment, order of work, whether
+a goal adopts or changes what its own criteria need, and carrying out an already
+decided design, even when users see it.
 
 Use goal-bound `mc ask <programme>/<goal>` (`mc goal martin` remains compatible); without a goal, use `mc ask` before asking Martin in chat:
 
@@ -37,7 +38,7 @@ mc ask [<programme>/<goal>] --kind technical|product --reason "…" \
 
 ## What reaches Martin
 
-Only a reserved act (`mc deploy`, production data, credentials, `--admin`), a product choice no standard or established practice answers, or an exception to a decided standard. Write his answer where the standard belongs.
+Only a reserved act (`mc deploy`, production data, credentials, `--admin`) or a product choice the goal, programme page and standards do not answer reaches Martin. An exception to a standard follows the same kind-based route: technical exceptions are decided by the session; product choices and reserved acts reach Martin. Write the decision where the standard belongs.
 
 Never permission to run a check, a time budget, a quiet machine or a lane count.
 A `SETTLED` red goes as a proposal to the programme that owns the failing file.

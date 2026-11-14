@@ -30,7 +30,22 @@ Martin, 2026-11-08: jev is asked from any session, interactive or headless,
 with or without a goal, as decision support. An interactive session always
 asks jev before using options to make a decision: when jev settles it, the
 session continues with jev's answer and names it in its account; otherwise the
-technical/product flow below applies. A goal-bound `mc ask` or compatible `mc goal martin` call makes one jev consultation. An answer leaves stage/status unchanged, appends the trace and continues. Martin's mandate of 2026-11-14 is that the system decides every technical question itself and reports afterwards. A session labels `product` as a choice of direction that the goal, programme page and standards do not already answer, and that changes what users are promised, product cost or personal-data handling. `technical` is everything else, including implementation, architecture, tooling, environment, order of work, a goal's own criteria and carrying out an already decided design, even when users see the result. The session's kind determines the route; jev's product reading is recorded but never moves a technical question to Martin. An unsettled technical call, whatever that reading, or any unavailable jev result, records the session's recommendation and continues. An unresolved product call stores the sanitized question/options/recommendation/evidence/reading and sets that goal directly to Martin; it must not trigger another jev request or mend hop. Build, review and finish repair acceptance obstacles in-role. Reserved acts never go to jev, from any session.
+technical/product flow below applies. A goal-bound `mc ask` or compatible `mc goal
+martin` call makes one jev consultation. An answer leaves stage/status unchanged,
+appends the trace and continues. Martin's mandate of 2026-11-14 is that the system
+decides every technical question itself and reports afterwards. A session labels
+`product` as a choice of direction that the goal, programme page and standards do not
+already answer, and that changes what users are promised, product cost, personal-data
+handling or test strategy. `technical` is everything else, including implementation,
+architecture, tooling, environment, order of work, whether a goal adopts or changes
+what its own criteria need, and carrying out an already decided design, even when
+users see the result. The session's kind determines the route; jev's product reading
+is recorded but never moves a technical question to Martin. An unsettled technical
+call, whatever that reading, or any unavailable jev result, records the session's
+recommendation and continues. An unresolved product call stores the sanitized
+question/options/recommendation/evidence/reading and sets that goal directly to
+Martin; it must not trigger another jev request or mend hop. Build, review and finish
+repair acceptance obstacles in-role. Reserved acts never go to jev, from any session.
 
 `mc ask` is the general route and the single-pass goal-bound escalation path (landed, `jev/ask-anywhere`); `mc goal martin` remains compatible with it and needs no mend caller. A person caller of `mc goal martin` (`MC_TOOL` unset) still skips jev (*The flow*, step 1).
 
@@ -183,7 +198,7 @@ retried as it is: the state is rebuilt at 0.7 of the budget (63,000, then
 `budget shrunk to <n> characters after max_tokens_exceeded`. If the third
 state is refused too, the call ends unavailable:
 `jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the
-state, the last at 44100 characters`, and Martin is asked. Any other non-2xx
+state, the last at 44100 characters`; the kind-based flow above applies. Any other non-2xx
 keeps its handling (429 and 5xx are retried once) and its reason names the
 body's error_type when it has one, e.g. `HTTP 400 (invalid_schema)`.
 
@@ -245,7 +260,8 @@ after landing.
 ## `mc decisions`
 
 `mc decisions [--since <date>] [--programme <programme>] [--json]` reads only
-the ledger; it makes no model or network request and writes no file. By default
+the ledger; it makes no model or network request and writes no file, including
+invocation logs (the explicit exception in [mc-log.md](mc-log.md)). By default
 it lists `decided` and `answered` rows from the last seven days; `--since`
 (YYYY-MM-DD) and `--programme` narrow the set. Rows are newest first and show
 time, programme/goal, kind (`-` for old rows), one-line question, chosen key and

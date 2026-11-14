@@ -52,7 +52,7 @@ with ✓/✗ and its check, and each worktree's state.
   <option text>`, the status stays, and the session continues with that answer.
   Every unsettled technical call, whatever jev reads or if jev is unavailable,
   logs and continues with the session's recommendation, without changing
-  stage/status. Product calls reach Martin; a goal-bound product escalation
+  stage/status. Unresolved product calls reach Martin; a goal-bound product escalation
   exits 1. `mc decisions` lists answered and
   session-decided records read-only. A reserved
   act (`--reserved deploy|production-data|credentials|admin`) and a person's

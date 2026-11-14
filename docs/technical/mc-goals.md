@@ -276,20 +276,10 @@ Seventeen verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
-- **`martin [<p>/<g>] --reason "<question>" --option "<key>: <text>"… --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]… [--reserved deploy|production-data|credentials|admin]`** —
-  asks Martin, jev first (Martin, 2026-11-07; [mc-jev.md](mc-jev.md)). 2 to 4
-  options, keys `^[a-z][a-z0-9_]{0,31}$` and unique, `--recommend` one of them,
-  `--reason` required; a call that breaks any of these, or whose question,
-  options, evidence and goal alone are over jev's budget, exits 2, writes
-  nothing and prints what is wrong with a complete example call. A reserved
-  act or a person's call (MC_TOOL unset or `person`) sets `Martin` with no
-  request. A session's call asks jev once: when jev answers, the status stays,
-  stdout says `mc: jev answered <key> (p …, fits …, settled …, <model>) —
-  continue with: <option text>`, the entry records question, options and
-  answer, and the session continues with it; otherwise the status is `Martin`
-  and the entry records question, options, recommendation and jev's reading,
-  `jev not asked: <reserved act …|person>` or `jev unavailable: <reason>`.
-  jev never fails the verb. Who may set `Martin` (`refusedMove`) is unchanged,
+- **`martin [<p>/<g>] --kind technical|product --reason "<question>" --option "<key>: <text>"… --recommend <key>`** —
+  the compatible goal-bound question command. Optional evidence, documents,
+  reserved acts, caller validation, recording and routing are specified once
+  in [mc-jev.md](mc-jev.md). Who may set `Martin` (`refusedMove`) is unchanged,
   and so are the runner's own recovery settings of `Martin`.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
@@ -606,8 +596,8 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   A queued PR remains the merger's. The failure limit counts merger results:
   failures one and two run mend and retry, failure three waits on Martin.
   Mend's ready handoff does not reset that count. An obstacle outside its
-  authority is escalated with evidence through goal-bound `mc ask`; a settled jev answer
-  continues work, otherwise the goal waits on Martin. Pre-merge blocked goals
+  authority uses goal-bound `mc ask` with evidence under the question contract
+  in [mc-jev.md](mc-jev.md). Pre-merge blocked goals
   never start mend: legacy records are reconciled to Martin without a diagnostic
   launch. Build/review/finish own their acceptance repairs.
 
@@ -639,9 +629,8 @@ stop. It runs each criterion's check and records the ones that hold with
 `--stage review` when every criterion is met and the pull request carries
 them, or, when it cannot go on, asks Martin directly. An acceptance obstacle it
 cannot repair within its scope goes to Martin with `mc goal martin` and its
-evidence. An actual design choice or reserved act goes through goal-bound
-`mc ask`: a jev answer continues the session; otherwise the same call sets the
-goal Martin. No build exit goes through pre-merge mend. `blocked` is for
+evidence. Questions use goal-bound `mc ask` under the question contract in
+[mc-jev.md](mc-jev.md). No build exit goes through pre-merge mend. `blocked` is for
 compatibility only: a `blocked` goal before merge, left by an older session, is
 reconciled to Martin by the runner without a session and wakes no mend. A build session
 publishes; it never authorizes PR landing, sets `done` or moves the goal
@@ -822,7 +811,7 @@ and reserved-act rules. Interactive planning checkouts remain separate.
 Complete exactly the selected draft's goal, contract, exclusions, documents,
 protection scope and executable criteria, reconcile the programme README and
 phases, and move it to build immediately when ready. Resolve a remaining policy
-choice through goal-bound mc ask. Do not implement the draft or process the
+choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
 `draft · ready` waits on Martin with an incomplete-session diagnostic; provider
 refusals/offline failures keep their existing retries. Broader programme design

@@ -107,8 +107,8 @@ export function returnInstruction(problems, goal, lead = 'mc: goal martin is not
     '--evidence "…" or --evidence-file <path|->, --document <repo>/<path> and --reserved deploy|production-data|credentials|admin are optional.',
     'For example:',
     exampleCall(goal),
-    'Kinds: technical — implementation, architecture, tooling, environment, order of work, a goal’s own criteria, or carrying out an already decided design.',
-    '        product — a choice of direction not already answered by the goal, programme page or standards, changing promises, cost or personal-data handling.',
+    'Kinds: technical — everything else: implementation, architecture, tooling, environment, order of work, adopting or changing what a goal’s own criteria need, and carrying out an already decided design, even when users see it.',
+    '        product — a choice of direction not already answered by the goal, programme page or standards, changing promises, cost, personal-data handling or test strategy.',
     'Call mc goal martin again with this fixed; when jev answers, continue with its answer.',
     '',
   ].join('\n');
@@ -219,7 +219,7 @@ export function buildState({ question, options, evidence, goal, programme, docum
   return { state, text, trimmed };
 }
 
-/** The request body: the pinned model, the state, and the three questions. */
+/** The request body: the pinned model, the state, and the four questions. */
 export function requestBody(state, options, instructions = INSTRUCTIONS) {
   return {
     model: JEV_MODEL,

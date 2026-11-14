@@ -44,8 +44,8 @@ call `get` rather than starting another desk.
 
 The role investigates each source question against relevant shared technical
 contracts and the programme README and design. Details answered there are
-resolved without escalation. A remaining product, privacy, cost, test
-strategy or other design choice is presented only after synthesis: scope and
+resolved without escalation. A remaining choice for Martin, classified by the question contract in
+[mc-jev.md](mc-jev.md), is presented only after synthesis: scope and
 general rule, evidence, uncertainty, alternatives/tradeoffs, recommendation,
 proposed normative wording and exact `docs/technical/` destination. The
 original queue question/options/jev reading remain source evidence, distinct

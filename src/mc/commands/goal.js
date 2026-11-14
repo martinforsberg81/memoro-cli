@@ -465,7 +465,7 @@ async function askMartin(args, flags, ctx) {
 
   const lines = [...Object.entries(options).map(([key, option]) => `Option ${key}: ${oneLine(option)}`), `Recommended: ${recommend}`];
   const answered = asked.outcome === 'answered';
-  const decided = kind === 'technical' && !call.reserved && !answered;
+  const decided = session && kind === 'technical' && !call.reserved && !answered;
   const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}`
     : decided ? `decided by the session: ${recommend} — jev did not settle it (${asked.reading || asked.unavailable}) — continue with: ${oneLine(options[recommend])}`
     : asked.martin;

@@ -27,8 +27,8 @@ about an unplanned decision means the programme was not designed.
 1. Define the aim and measurable meaning of better/done.
 2. Read the affected code, technical standards, the programme README and proposals; design
    claims cite files actually opened.
-3. Resolve every product/policy choice and exception with Martin (2–4 options,
-   tradeoffs, recommendation). Record the answer in the programme README or its goal,
+3. Resolve questions and exceptions through [asking-martin](asking-martin.md): technical
+   by the session, product/reserved by Martin. Record the decision in the programme README or its goal,
    or in the technical standard if it reaches beyond it, then in affected goals. Add a
    needed technical standard within the app's direction. No goal is written with its decision still open.
 4. Cut work into goals buildable start to finish by headless sessions. Do
@@ -46,7 +46,7 @@ about an unplanned decision means the programme was not designed.
 
 Investigate until relevant facts and remaining uncertainty are established.
 Separate facts/technical gaps planning can resolve from product or policy
-choices only Martin decides. Ask only a remaining concrete design choice, with
+choices only Martin decides. Ask Martin only a remaining product choice or reserved act, with
 evidence, alternatives/tradeoffs and a recommendation. On clarification, amend
 the affected README/design, standards, goal briefs and criteria consistently;
 change only clarified scope and preserve other requirements/prerequisites unless

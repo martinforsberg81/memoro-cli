@@ -72,8 +72,9 @@ handoff succeeds, end the session in that same turn.
 session. Do not return it ready merely to make another session repeat the same
 work. If progress requires an unresolved design or policy choice, an exception,
 a reserved act, or a repair outside your authority, use goal-bound `mc ask`
-with the evidence and a concrete recommendation. Continue when jev settles it;
-otherwise leave the goal waiting on Martin. The first two failed merges
+with `--kind technical|product`, evidence and a concrete recommendation.
+Continue on a jev answer or the session's recorded technical recommendation;
+only a product choice or reserved act leaves the goal waiting on Martin. The first two failed merges
 receive mend and another merge attempt; the third failed merge waits on Martin.
 The runner counts merge failures, not your launches or ready handoffs.
 Repeating an unchanged failed attempt is not progress. Keep no

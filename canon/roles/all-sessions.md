@@ -23,10 +23,11 @@ search them when the work touches what they cover; never read one whole.
 
 When a question has options, ask jev first as [asking-martin](../tasks/asking-martin.md) says.
 Use kind `product` for a choice of direction the goal, programme page and
-standards do not already answer, and that changes promises, product cost or
-personal-data handling. Everything else is `technical`: implementation,
-architecture, tooling, environment, order of work, a goal's own criteria, and
-carrying out an already decided design, even when users see the result.
+standards do not already answer, and that changes promises, product cost,
+personal-data handling or test strategy. Everything else is `technical`:
+implementation, architecture, tooling, environment, order of work, whether a
+goal adopts or changes what its own criteria need, and carrying out an already
+decided design, even when users see the result.
 
 Design has two places, and no third. What runs — landed functionality — is
 described once, in memoro's (or memoro-cli's) `docs/technical/`: the only
@@ -44,10 +45,10 @@ first a pattern the app already uses for the same problem, then the documented
 behaviour of the provider or platform involved, then the widely adopted
 engineering pattern that mature integrations use (idempotency keys with a
 bounded lifetime, an outbox emptied after delivery, cursor-based sync). Name
-the source, apply it and write it into the standard. Martin is asked only to
-deviate from established practice, or where practice leaves a real product,
-cost or privacy line open; that question names the practice and why it does
-not suffice.
+the source, apply it and write it into the standard. A deviation follows the
+same kind-based route: the session decides technical deviations; only an
+unanswered product choice or reserved act reaches Martin. Name the practice
+and why it does not suffice.
 
 Build for the intended scope from the start. When the right design for the
 intended rollout is known, do not choose a narrower interim design that has
@@ -56,8 +57,8 @@ to be rebuilt before a wider launch, and do not defer a known requirement to
 
 Before asking, read the relevant technical contracts and the programme README and design. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. Every decision for Martin is a design-level amendment ready for `docs/technical/`: evidence, remaining uncertainty, alternatives/tradeoffs, recommendation, proposed normative wording and exact destination/section. A technical gap within existing direction is resolved in planning and recorded; only an unapproved product/privacy choice or reserved act is Martin's. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md. A decision that reaches beyond the programme goes in `docs/technical/`; one that is the programme's alone goes in its README or the goal it governs.
 >Plan writes a technical standard into `docs/technical/` within the app's
-existing direction. A product choice — a direction changing promises, cost or
-privacy that the goal, programme design and standards leave open — is Martin's;
+existing direction. A product choice — a direction changing promises, cost,
+privacy or test strategy that the goal, programme design and standards leave open — is Martin's;
 his answer is written into `docs/technical/` when it reaches beyond the programme,
 or into the programme README and the goal it governs when it is that programme's
 alone, not only into a goal's log. A shared component that falls short of a

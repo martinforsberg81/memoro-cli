@@ -1,6 +1,9 @@
 # mc log — what mc did, and what happened to it
 
-Every mc invocation writes down that it started and that it ended. `mc log`
+Every mc invocation except `mc decisions` writes down that it started and that
+it ended. `mc decisions` must create or change no file, including invocation
+logs, even when its ledger is absent; its read-only contract takes precedence
+([mc-jev.md](mc-jev.md#mc-decisions)). `mc log`
 reads that back, and joins it to the two other files that record what mc does,
 so the question "what happened in that merge?" is one command instead of three
 files and a script.
@@ -92,7 +95,7 @@ adds nothing a person could not have read in the file.
 ## Start and end, and why the pair is the record
 
 `src/mc-cli.js` writes `mc.start` before dispatching and `mc.end` after, at the
-one funnel every verb passes through — `routeV1Command` plus the fallthrough to
+one funnel every verb passes through (with `decisions` logging disabled) — `routeV1Command` plus the fallthrough to
 the capability dispatcher. Seven hand-placed call sites had already proved they
 miss things.
 
