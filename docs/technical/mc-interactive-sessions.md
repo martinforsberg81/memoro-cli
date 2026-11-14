@@ -67,10 +67,19 @@ Claude receives the name through `--name`; Codex keeps it in its session record.
 Roles normalize as for session identity:
 `brief` is `manager`, and `plan-session` is `plan`.
 
-For Claude, the area must already be trusted. If `--bg` reports “Workspace not trusted”,
-mc refuses visibly; open that directory once in Claude Code and accept its
-native trust prompt, then retry. mc does not edit Claude's trust settings or
-answer a trust prompt on the person's behalf.
+Every folder mc opens Claude in is trusted before Claude starts, foreground
+or background; no session waits on, or is refused for, Claude's trust prompt
+(Martin, 2026-11-14). `claude-trust.js` records
+`projects[<realpath of the launch folder>].hasTrustDialogAccepted: true` in
+Claude's global config (`$CLAUDE_CONFIG_DIR/.claude.json`, else
+`~/.claude.json`), the key Claude itself names as the alternative to its
+dialog. Claude finds a folder's trust at the folder or above it up to its
+git root, so the launch folder is sufficient. An existing record is never
+rewritten. A write takes Claude's own `<file>.lock` directory lock (10 s
+stale), merges only that key and replaces the file atomically with its
+mode kept; an unreadable config or a lock that stays held is logged
+(`work.claude-trust-failed`) and leaves the file untouched, and the launch
+continues to Claude's own answer. mc changes no other Claude setting.
 
 ## Claude: launch, environment and registration
 

@@ -183,7 +183,7 @@ export async function holdClaudeBackground(request, {
     });
     if (launched.error || launched.status !== 0) {
       if (String(launched.stderr || '').includes('Workspace not trusted')) {
-        return failure('Claude refused background launch because this workspace is not trusted; open this directory in Claude Code once, accept its trust prompt, then retry the entrance');
+        return failure(`Claude refused background launch because this workspace is not trusted: mc could not record trust for ${request.cwd} (work.claude-trust-failed in mc's log names why)`);
       }
       return failure(`Claude background launch did not exit successfully (status ${launched.status ?? 'unknown'}); no session was registered`);
     }
