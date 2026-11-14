@@ -1635,8 +1635,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const ended = deps.deskItems.read(name);
       // A due item unchanged by the session is not a successful for-martin ending.
       const unfinished = decisionUnfinished(ended, deps.now());
+      // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
+      // It counts for nothing and writes nothing; the item is taken again when the provider answers.
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
-      if (unfinished) {
+      if (unfinished && !providerEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };

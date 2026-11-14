@@ -784,7 +784,8 @@ adds a `decision` row named by item id. The same launch is exposed to the person
 as `mc decision [<id>]`; nesting it inside a session is refused.
 
 The shared daily desk ceiling is rechecked before launch; unset means no
-ceiling. One unfinished ending retries once, then a non-reversible mechanical
-brief waits on Martin instead of looping. Future, irreversible and reserved
-briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+ceiling. One unfinished ending retries once; a second in the item's current
+state, not counting a quota, offline or provider-refusing login ending, makes a
+non-reversible mechanical brief that waits on Martin instead of looping. Future,
+irreversible and reserved briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.
