@@ -36,7 +36,7 @@ SEE AND SHIP
   mc test dev | prod              Measure the running app, locally or live
   mc shot dev | prod <target>     A PNG of the running app; prints its path
   mc dev list                     Which dev server runs in which worktree
-  mc deploy [--dry-run] [--accept-red "<why>"]  memoro's main to production, measured whole, after a question
+  mc deploy [--dry-run]            memoro's main to production, after a question
   mc asc build                    Does memoro need a new iOS binary?
   mc asc status [<version>]       An iOS version's state, build and storefronts
 
