@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { parseGoal } from '../../src/mc/goals.js';
 import { writeRedDetail } from '../../src/mc/merge-red.js';
-import { mainMendPath, mainMendPrompt, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
+import { mainMendPath, mainMendPrompt, publishMainMend, readMainMends, removeFinishedWorktrees, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
 import {
@@ -1584,6 +1584,98 @@ describe('main\'s red found by the round queues a main-red mend', () => {
     const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: () => ({ created: ['memoro-cli-b-5678abcd'], open: ['memoro-cli-a-1234abcd'] }) });
     await landJob(JOB, m.deps);
     assert.ok(m.said.some((line) => /main-red mend queued: memoro-cli-b-5678abcd; already under way: memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+  });
+});
+
+describe('the one removal of a finished main-red repair\'s worktree', () => {
+  const REPO = 'memoro-cli';
+  const seed = (...rows) => updateMainMends({ root, repo: REPO }, (entries) => {
+    rows.forEach((row, i) => entries.push({ id: `e${i}`, file: `tests/e${i}.test.js`, base: 'b', state: 'landed', failures: 0, branch: 'mend/main-memoro-cli-x', worktree: '/wt/x', pr: 671, owner: `main-red:e${i}`, created: 't', ...row }));
+  });
+  /** git and the file system as fakes: every `worktree remove` is recorded, paths in `gone` do not exist. */
+  const sweep = (over = {}) => {
+    const calls = [];
+    const git = over.git || ((cwd, args) => { calls.push([cwd, ...args]); return { ok: true, stderr: '' }; });
+    return { calls, run: (options = {}) => removeFinishedWorktrees({ root, repo: REPO, repoPath: '/repos/memoro-cli', exists: (path) => !(over.gone || []).includes(path), git, ...options }) };
+  };
+
+  it('the merger removes a landed repair\'s tree without force, in its repository, when its pull request lands', async () => {
+    seed({ state: 'published' });
+    const calls = [];
+    const sweeper = (options) => removeFinishedWorktrees({ ...options, exists: () => true, git: (cwd, args) => { calls.push([cwd, ...args]); return { ok: true, stderr: '' }; } });
+    const m = machine([green], { sweepMendWorktrees: sweeper });
+    await landJob(JOB, m.deps);
+    assert.deepEqual(calls, [['/repos/memoro-cli', 'worktree', 'remove', '/wt/x']]);
+  });
+
+  it('the merger says a tree git refused to remove stays, with git\'s reason, and does not force it', async () => {
+    seed({ state: 'published' });
+    const calls = [];
+    const sweeper = (options) => removeFinishedWorktrees({ ...options, exists: () => true, git: (cwd, args) => { calls.push(args); return { ok: false, stderr: 'contains modified or untracked files\n' }; } });
+    const m = machine([green], { sweepMendWorktrees: sweeper });
+    await landJob(JOB, m.deps);
+    assert.equal(calls.length, 1);
+    assert.ok(!calls[0].includes('--force') && !calls[0].includes('-f'));
+    assert.ok(m.said.some((line) => /landed main-red repair; worktree retained at \/wt\/x — contains modified or untracked files$/u.test(line)), m.said.join('\n'));
+  });
+
+  it('a red round removes nothing', async () => {
+    seed({ state: 'published' });
+    const m = machine([red], { sweepMendWorktrees: () => assert.fail('swept after a red round') });
+    await landJob(JOB, m.deps);
+  });
+
+  it('removes a landed and a dropped entry\'s tree once, naming each path one time', () => {
+    seed({}, { worktree: '/wt/y', state: 'dropped' }, { worktree: '/wt/y', state: 'landed' });
+    const { calls, run } = sweep();
+    assert.deepEqual(run().removed, ['/wt/x', '/wt/y']);
+    assert.deepEqual(calls.map((call) => call.at(-1)), ['/wt/x', '/wt/y']);
+    assert.ok(calls.every((call) => call[0] === '/repos/memoro-cli' && call.slice(1, 3).join(' ') === 'worktree remove' && call.length === 4), 'no force flag');
+  });
+
+  for (const state of ['queued', 'running', 'published', 'Martin']) {
+    it(`keeps a tree an entry that reads ${state} still names, so a landed entry sharing it does not take it away`, () => {
+      seed({}, { state, worktree: '/wt/x' });
+      const { calls, run } = sweep();
+      const result = run();
+      assert.deepEqual([calls, result.removed, result.inUse], [[], [], ['/wt/x']]);
+    });
+  }
+
+  it('keeps a tree a runner session is standing in (a current-*.json names it)', () => {
+    seed({});
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(join(root, 'runner', 'current-memoro-cli.json'), JSON.stringify({ worktree: '/wt/x' }));
+    const { calls, run } = sweep();
+    assert.deepEqual([calls, run().inUse], [[], ['/wt/x']]);
+  });
+
+  it('keeps a tree whose entry\'s owner still runs (busy), and says nothing of it as refused', () => {
+    seed({});
+    const { calls, run } = sweep();
+    const result = run({ busy: (entry) => entry.owner === 'main-red:e0' });
+    assert.deepEqual([calls, result.inUse, result.kept], [[], ['/wt/x'], []]);
+  });
+
+  it('skips a path that no longer exists: git is not asked and nothing is reported', () => {
+    seed({});
+    const { calls, run } = sweep({ gone: ['/wt/x'] });
+    assert.deepEqual([calls, run()], [[], { removed: [], kept: [], inUse: [] }]);
+  });
+
+  it('reports what git refused with its reason, once, and does not retry with force', () => {
+    seed({});
+    const calls = [];
+    const { run } = sweep({ git: (cwd, args) => { calls.push(args); return { ok: false, stderr: 'is dirty\n' }; } });
+    assert.deepEqual(run().kept, [{ path: '/wt/x', reason: 'is dirty' }]);
+    assert.equal(calls.length, 1);
+  });
+
+  it('an unreadable state file removes nothing', () => {
+    mkdirSync(join(root, 'runner', 'main-mend'), { recursive: true });
+    writeFileSync(mainMendPath(root, REPO), '{');
+    const { calls, run } = sweep();
+    assert.deepEqual([calls, run().removed], [[], []]);
   });
 });
 

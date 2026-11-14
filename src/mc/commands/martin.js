@@ -2,7 +2,8 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commandUsage } from '../command-help.js';
-import { martinDir, mcHome, programsHome } from '../paths.js';
+import { martinDir, mcHome, programsHome, workRoot } from '../paths.js';
+import { readMainMends } from '../main-repair.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
@@ -106,6 +107,19 @@ function items(argv, deps) {
   return 0;
 }
 
+/** Why a main-red item cannot be closed by hand, or null when its entry no longer reads Martin. Judged without the main-mend lock: it only reads. */
+function heldMainMend(record, env, deps) {
+  const [, repo, entryId] = record.reference.match(/^main-red:([^/]+)\/(.+)$/u) || [];
+  if (!repo) return null;
+  const answer = `answer it with mc repo mend ${repo} ${entryId} requeue|drop --reason "<text>"; the desk item then closes by source`;
+  let entries;
+  try {
+    entries = readMainMends({ root: workRoot(env), repo, read: deps.mendRead || ((path) => readFileSync(path, 'utf8')) });
+  } catch (error) { return `main-red ${repo}/${entryId}: its state cannot be read (${error.message}), so it is taken to be still held; ${answer}`; }
+  const entry = entries.find((x) => x.id === entryId);
+  return entry?.state === 'Martin' ? `main-red ${repo}/${entryId} still reads Martin; ${answer}` : null;
+}
+
 function item(argv, deps) {
   const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
   const [id, verb, ...rest] = argv;
@@ -137,6 +151,11 @@ function item(argv, deps) {
       if (f.recommend !== null && !briefOptions(maybeRead(join(dir, 'brief.md'))).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
       if (f.recommend !== null) fresh.recommend = f.recommend;
       fresh.state = 'for-martin'; fresh.sort = f.sort; fresh.reversible = f.reversible === 'yes'; fresh.due_at = fresh.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; return fresh;
+    }
+    // A main-red question is answered by its repair state, never by a close: mc repo mend is the answer, and the sync closes the item.
+    if (verb === 'close' && fresh.kind === 'main-red') {
+      const held = heldMainMend(fresh, env, deps);
+      if (held) return refuse(held);
     }
     if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin','default'].includes(f.by)) {
       let summary = f.summary;
@@ -229,7 +248,7 @@ function lessons(argv, deps) {
 }
 
 const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
-function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
+export function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 /** Closed by the source after it was prepared or briefed: the one closed item a close still applies to. */
 function sourceClosedWithSort(record) { return record.state === 'closed' && record.outcome?.by === 'source' && record.sort != null; }
 function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' || sourceClosedWithSort(record) ? 'close' : 'no verb'} applies\n`); return 2; }

@@ -1861,6 +1861,14 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
     assert.match(out.stderr, /no main-red mend holds it/u);
   });
 
+  it('a mend a person dropped is not named as holding the red', async () => {
+    const { out } = await attempt([], { runs: [RED_RUN()], mends: [MEND({ state: 'dropped' }), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
+    assert.match(out.stderr, /main-red mend: command:lint \(running #77\)/u);
+    assert.doesNotMatch(out.stderr, /dropped|money\.test\.js \(/u);
+    const alone = await attempt([], { runs: [RED_RUN()], mends: [MEND({ state: 'dropped' })] });
+    assert.match(alone.out.stderr, /no main-red mend holds it/u);
+  });
+
   it('a stalled run refuses, naming the stalled file and its mend', async () => {
     const stalled = fullRunOf(SHA, { outcome: 'stalled', red: null, stopped_at: 'stalled', reason: 'tests/slow.test.js never ended' });
     const { code, out, spawned, asked, row } = await attempt([], { runs: [stalled], mends: [MEND({ file: 'tests/slow.test.js', state: 'running' })] });

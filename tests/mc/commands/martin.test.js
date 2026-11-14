@@ -503,6 +503,52 @@ describe('mc martin item transitions', () => {
     assert.match(result.out.stderr, id ? /unknown item.*no item state or verb applies/u : new RegExp(`is ${state};.*${state === 'new' ? 'prepared' : state === 'prepared' ? 'brief or close' : state === 'for-martin' ? 'close' : 'no verb'} applies`, 'u'));
     assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before, 'refusal writes no file');
   });
+  // A main-red question is answered by `mc repo mend`; a hand close would hide a repair that still waits on Martin.
+  describe('closing a main-red item', () => {
+    function mainRed(entryFields = null) {
+      const root = mkdtempSync(join(tmpdir(), 'mc-martin-red-')); roots.push(root);
+      const env = { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home') };
+      const reference = 'main-red:memoro/red1', source_at = '2026-11-14T10:00:00Z', id = deskItemId('main-red', reference, source_at);
+      const record = { schema: 'mc-desk-item', version: 1, id, kind: 'main-red', reference, source_at, opened_at: source_at, state: 'for-martin', sort: 'product', reversible: false, due_at: null, outcome: null };
+      mkdirSync(join(env.MC_WORK_ROOT, 'runner', 'main-mend'), { recursive: true });
+      const state = join(env.MC_WORK_ROOT, 'runner', 'main-mend', 'memoro.json');
+      if (entryFields) writeFileSync(state, JSON.stringify({ version: 1, entries: [{ id: 'red1', file: 'tests/a.test.js', state: 'Martin', created: source_at, ...entryFields }] }));
+      writeDeskItem(record, { env });
+      return { env, record, state, dir: itemDirectory(record, env) };
+    }
+    const close = (f, by, role) => run(['item', f.record.id, 'close', '--by', by, '--summary', 'Closed by hand.'], { ...(f.out = io()), env: { ...f.env, MC_ROLE: role }, now: () => new Date('2026-11-14T11:00:00Z') });
+    for (const [by, role] of [['decision', 'decision'], ['martin', 'martin'], ['default', 'decision']]) {
+      it(`exits 2 naming mc repo mend while the entry reads Martin (--by ${by}), and writes nothing`, async () => {
+        const f = mainRed({}); const itemBefore = readFileSync(join(f.dir, 'item.json'), 'utf8'), stateBefore = readFileSync(f.state, 'utf8');
+        assert.equal(await close(f, by, role), 2);
+        assert.match(f.out.out.stderr, /still reads Martin; answer it with mc repo mend memoro red1 requeue\|drop/u);
+        assert.equal(readFileSync(join(f.dir, 'item.json'), 'utf8'), itemBefore);
+        assert.equal(readFileSync(f.state, 'utf8'), stateBefore);
+      });
+    }
+    for (const [label, make] of [['unreadable', (f) => writeFileSync(f.state, '{')], ['missing', (f) => rmSync(f.state)]]) {
+      it(`exits 2 with item.json unchanged when the state file is ${label}`, async () => {
+        const f = mainRed({}); make(f); const before = readFileSync(join(f.dir, 'item.json'), 'utf8');
+        assert.equal(await close(f, 'decision', 'decision'), 2);
+        assert.match(f.out.out.stderr, /cannot be read.*mc repo mend memoro red1/u);
+        assert.equal(readFileSync(join(f.dir, 'item.json'), 'utf8'), before);
+      });
+    }
+    for (const answer of [{ state: 'queued', failures: 0 }, { state: 'dropped' }]) {
+      it(`succeeds once the entry was answered (${answer.state})`, async () => {
+        const f = mainRed({ ...answer, answered: { verb: answer.state === 'queued' ? 'requeue' : 'drop', by: 'person', at: '2026-11-14T10:30:00.000Z', reason: 'x' } });
+        assert.equal(await close(f, 'decision', 'decision'), 0, f.out.out.stderr);
+        assert.equal(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')).state, 'closed');
+      });
+    }
+    it('judges the entry as the hold reads it, not as it was before: an answer that lands first lets the close through', async () => {
+      const f = mainRed({}); let reads = 0;
+      const lock = (root, fn) => { writeFileSync(f.state, JSON.stringify({ version: 1, entries: [{ id: 'red1', file: 'tests/a.test.js', state: 'queued', created: '2026-11-14T10:00:00Z', answered: { verb: 'requeue', by: 'person', at: '2026-11-14T10:30:00.000Z', reason: 'x' } }] })); reads += 1; return fn(); };
+      const out = io();
+      assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary', 'Closed.'], { ...out, env: { ...f.env, MC_ROLE: 'decision' }, lock }), 0, out.out.stderr);
+      assert.equal(reads, 1);
+    });
+  });
   it('refuses surplus listing arguments before sync writes anything', async () => {
     const f = stored(); const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
     assert.equal(await run(['items', 'unexpected'], { ...result, env: f.env }), 2);
