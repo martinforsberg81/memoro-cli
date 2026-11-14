@@ -178,9 +178,8 @@ export async function holdClaudeBackground(request, {
     const settingsIndex = args.indexOf('--settings');
     if (settingsIndex < 0) args.unshift('--settings', settingsPath);
     else args[settingsIndex + 1] = settingsPath;
-    // The record says the launch was made with Remote Control; the flag names it as the session's name.
-    const remote = request.record?.remoteControl === true ? withRemoteControl([], request.name) : [];
-    const launched = run(launch.spec.bin, ['--bg', '--name', request.name, ...remote, ...args], {
+    // Every interactive Claude session is in the app through Remote Control, named after the session.
+    const launched = run(launch.spec.bin, ['--bg', '--name', request.name, ...withRemoteControl([], request.name), ...args], {
       cwd: request.cwd, env: terminalEnvironment(env), encoding: 'utf8',
     });
     if (launched.error || launched.status !== 0) {

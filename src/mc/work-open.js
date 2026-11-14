@@ -42,7 +42,7 @@ import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { entersPersistentSession, prepareSessionEntrance, sessionName, withRemoteControl } from './session-entrance.js';
+import { BACKGROUND_REFUSALS, entersPersistentSession, prepareSessionEntrance, sessionName, withRemoteControl } from './session-entrance.js';
 
 /** Provider mechanics of a persistent entrance, by launch id; loaded only when one is used. */
 const PERSISTENT_DRIVERS = {
@@ -245,7 +245,6 @@ export async function interactiveLaunchPlan({
 
   const record = {
     verb, area: areaName, programme, tool: launch.shortName || toolId, model: chosenModel || null, env,
-    ...(remoteControl ? { remoteControl: true } : {}),
     // Record only the instructions actually handed to this launch.
     role: roleRecord({
       name: roleName,
@@ -283,8 +282,10 @@ export async function interactiveLaunchPlan({
 /** One provider decision; every start, persistent or not, uses interactiveLaunchPlan. */
 export async function openInWorkArea(options = {}) {
   const { env = process.env, platform = process.platform, isInteractive = interactive,
-    background, spawn = spawnSync, register = registerForeground, onProvider, trust = trustClaudeFolder, ...rest } = options;
+    background, bg = false, spawn = spawnSync, register = registerForeground, onProvider, trust = trustClaudeFolder, ...rest } = options;
   const eligible = entersPersistentSession({ env, platform, isInteractive, verb: options.verb });
+  // `--bg` leaves the session in the background, which only the persistent path can do: refused before any launch is planned.
+  if (bg && !eligible) return { ok: false, reason: BACKGROUND_REFUSALS.terminal };
   let entrance;
   try {
     const plan = await interactiveLaunchPlan({ ...rest, env, isInteractive, onProvider,
@@ -294,8 +295,9 @@ export async function openInWorkArea(options = {}) {
         return findBackgroundConversation({ ...options, env }, prefix);
       }),
       resolved: async ({ launch, before, chosen }) => {
+        if (bg && launch.id !== 'claude-code') return { result: { ok: false, reason: BACKGROUND_REFUSALS.codex } };
         if (!eligible || !(launch.id in PERSISTENT_DRIVERS)) return {};
-        const settings = { ...options, env, launch, before, chosen };
+        const settings = { ...options, env, launch, before, chosen, bg };
         entrance = background ? await background(settings)
           : await prepareSessionEntrance(settings, await PERSISTENT_DRIVERS[launch.id]());
         return entrance;

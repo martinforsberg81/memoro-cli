@@ -27,7 +27,7 @@ import { runnerDir } from '../../src/mc/paths.js';
 import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
-import { entersPersistentSession, terminalEnvironment } from '../../src/mc/session-entrance.js';
+import { BACKGROUND_REFUSALS, entersPersistentSession, terminalEnvironment } from '../../src/mc/session-entrance.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 
@@ -305,19 +305,17 @@ describe('openInWorkArea in a role area', () => {
 
 // Every interactive Claude launch is Remote Control, whatever its billing; Codex has no such flag.
 describe('openInWorkArea and Remote Control', () => {
-  it('a claude launch on the API reserve carries the flag too, through the gateway, and registers it', async () => {
+  it('a claude launch on the API reserve carries the flag too, through the gateway', async () => {
     const { areaRoot, worktree, env } = fixture();
     env.MC_WORK_ROOT = mkdtempSync(join(tmpdir(), 'mc-work-root-'));
     writeCapacity(applyRefusal({}, 'claude', new Date(Date.now() + 3_600_000).toISOString()), { root: runnerDir(env) });
-    const registered = [];
     const { calls, options } = opening();
-    const result = await openInWorkArea({ areaRoot, worktree, env, register: item => { registered.push(item); return () => {}; }, ...options });
+    const result = await openInWorkArea({ areaRoot, worktree, env, ...options });
     assert.equal(result.ok, true);
     assert.match(calls[0].args[0], /billing-gateway-session\.js$/u);
     const at = calls[0].args.indexOf('--remote-control');
     assert.ok(at > 0);
     assert.equal(calls[0].args[at + 1], 'mc manager');
-    assert.equal(registered[0].remoteControl, true);
   });
 
   it('a new claude launch with an opening prompt keeps the prompt as the last argv member', async () => {
@@ -335,6 +333,27 @@ describe('openInWorkArea and Remote Control', () => {
     assert.equal(result.ok, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].args.includes('--remote-control'), false);
+  });
+
+  // `--bg` is the invocation's choice and needs the persistent path: refused before any provider or holder starts.
+  it('--bg on a Codex launch on the persistent path is refused before any provider starts', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening({ tool: 'codex' });
+    const result = await openInWorkArea({ areaRoot, worktree, env: { ...env, SSH_CONNECTION: 'x', MC_HEADLESS: '' },
+      platform: 'linux', isInteractive: () => true, ...options, bg: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, BACKGROUND_REFUSALS.codex);
+    assert.equal(calls.length, 0);
+  });
+
+  it('--bg off the persistent path is refused before anything starts, and names the terminal', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    const result = await openInWorkArea({ areaRoot, worktree, env: { ...env, SSH_CONNECTION: '', SSH_TTY: '' },
+      platform: 'linux', isInteractive: () => true, ...options, bg: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, BACKGROUND_REFUSALS.terminal);
+    assert.equal(calls.length, 0);
   });
 });
 
@@ -361,7 +380,7 @@ describe('openInWorkArea and the foreground register', () => {
       areaRoot, worktree, env, areaName: 'plan/mc', model: 'opus', register, ...options,
     });
     assert.deepEqual(events, [
-      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null, remoteControl: true },
+      { event: 'register', verb: 'plan', area: 'plan/mc', programme: null, tool: 'claude', model: 'opus', env, role: null },
       { event: 'release' },
     ]);
   });

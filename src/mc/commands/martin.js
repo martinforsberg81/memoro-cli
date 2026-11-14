@@ -21,7 +21,7 @@ import { addLesson, briefLesson, briefOptions, buildChanges, carryLesson, dismis
 export function usage() { return commandUsage('martin'); }
 
 export const ROUTES = {
-  '': { booleans: ['--local', '--new', '--resume'], strictValues: ['--model'], toolSugar: true, check: ({ flags, positional }) => {
+  '': { booleans: ['--local', '--new', '--resume', '--bg'], strictValues: ['--model'], toolSugar: true, check: ({ flags, positional }) => {
     if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;
     if (flags.resume && flags.new) return '--resume and --new cannot be combined';
     if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
@@ -76,7 +76,7 @@ export async function run(argv, deps = {}) {
     env, areaRoot: root, conversationRoots: [root],
     worktree: { repo: null, path: root, is_git: false }, tool: flags.tool || role.tools?.[0] || 'claude',
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
-    resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin',
+    resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin', bg: flags.bg,
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,
     model: flags.model, overlay: launch.overlay, prompt: launch.prompt, resumePrompt: `Refresh from the desk now; what you remember of earlier openings is not current.\n\n${opening}`,
     defaultModel: role.model, defaultModelTool: role.tools?.[0] || null,

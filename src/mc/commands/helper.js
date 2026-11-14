@@ -47,7 +47,7 @@ export function usage() {
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
 export const ROUTES = {
   '': {
-    booleans: ['--local', '--intake', '--collect', '--new', '--resume'],
+    booleans: ['--local', '--intake', '--collect', '--new', '--resume', '--bg'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
     check: ({ flags, positional }) => {
@@ -55,6 +55,7 @@ export const ROUTES = {
       if (flags.resume && flags.new) return '--resume and --new cannot be combined';
       if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
       if (flags.resume && (flags.intake || flags.collect)) return '--resume requires an interactive session';
+      if (flags.bg && (flags.intake || flags.collect)) return '--bg needs an interactive session';
       return null;
     },
   },
@@ -207,6 +208,7 @@ async function openDesk({ flags, resume, stdout, stderr, deps }) {
     // NOW says "mc helper" while this is up. Its room is nobody's workarea,
     // so there is no area name to give it.
     verb: 'helper',
+    bg: flags.bg,
     roleName: role.name || 'helper',
     roleSource: roleSourceOf(role),
     model: flags.model,

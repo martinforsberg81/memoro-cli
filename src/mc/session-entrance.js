@@ -128,24 +128,35 @@ export function registerSession(record, session, { env = process.env, register =
   return register({ ...record, pid: session.pid, env, onExit: () => {} });
 }
 
-/** A session mc started with Remote Control is found by its register record, which holds the flag. */
-export function remoteControlled(options, session, records) {
-  return records.some(item => item.pid === session.pid && item.remoteControl === true && recordMatchesDesk(options, item));
-}
+/** Why `--bg` is refused, named as the entrance says it: a Codex launch, or an entrance with no persistent path. */
+export const BACKGROUND_REFUSALS = Object.freeze({
+  codex: '--bg is for Claude sessions: a Codex session has no client but the terminal',
+  terminal: '--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal',
+});
 
+/**
+ * `--bg` is the invocation's choice: the session keeps running for its app and the entrance returns
+ * with two lines instead of attaching. A remote driver's join is the server half, which decides the
+ * same way on its host, so the client only forwards the flag and adds nothing to what the host printed.
+ */
 export async function joinSession(options, session, driver, {
-  alive = pidAlive, stdout = options.stdout || process.stdout, records = readRegister } = {}) {
-  // The app is the session's interface: the terminal is only told where it is, never attached.
-  if (remoteControlled(options, session, records(options.env))) {
+  alive = pidAlive, stdout = options.stdout || process.stdout } = {}) {
+  const resumed = Boolean(options.joining || options.chosen);
+  const started = options.starting && !options.chosen ? session.sessionId : null;
+  const entrance = `mc ${options.verb}${options.programme ? ` ${options.programme}` : ''}`;
+  if (options.bg && !driver.discover) {
     const on = options.host ? ` on ${options.host}` : '';
-    const ssh = options.host ? `ssh -t ${options.host} ` : '';
     stdout.write(`mc: ${session.name} is running${on}. Open it in the Claude app or at claude.ai/code: session "${session.name}".\n`);
-    stdout.write(`mc: terminal view: ${ssh}claude attach ${session.id}\n`);
+    stdout.write(`mc: terminal view: ${entrance}\n`);
     return { ok: true, code: 0, background: session.id, conversation: session.sessionId, running: alive(session.pid),
-      resumed: Boolean(options.joining || options.chosen),
-      started: options.starting && !options.chosen ? session.sessionId : null, kept_nothing: false };
+      resumed, started, kept_nothing: false };
   }
   const result = await driver.join(options, session);
+  if (options.bg) {
+    return result.error ? failure(`could not reach ${session.name}: ${result.error.message}`)
+      : { ok: true, code: result.status ?? 0, background: session.id, conversation: session.sessionId, running: alive(session.pid),
+        resumed, started, kept_nothing: false };
+  }
   let running;
   try { running = (await driver.list(options)).some(row => row.id === session.id && row.pid === session.pid && alive(row.pid)); }
   catch {

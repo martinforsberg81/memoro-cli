@@ -89,8 +89,6 @@ export async function run(argv, {
             emitted = true;
             return { result: { ok: true, code: 0 } };
           }
-          // Refused before any start: a flagged session never reaches driver.join, and a JSON frame cannot carry its terminal lines.
-          if (request.json && provider !== 'codex') throw new Error('Claude requires ssh -t, not a local Claude client');
           let attaching;
           const attach = async (_bin, _args) => {
             if (!request.json) return run(_bin, _args, { stdio: 'inherit', env });
@@ -106,7 +104,6 @@ export async function run(argv, {
           const join = driver.join;
           driver.join = async (opts, row) => {
             attaching = row;
-            if (request.json && provider !== 'codex') throw new Error('Claude requires ssh -t, not a local Claude client');
             return join(opts, row);
           };
           if (request.operation === 'join') {
@@ -125,8 +122,9 @@ export async function run(argv, {
     if (emitted && messages.length) stderr.write(messages.join(''));
     if (!emitted) {
       if (status !== 0) throw new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`);
-      // A non-json success has no protocol frame: its status or app lines are the terminal's text.
-      if (!request.json && messages.length) stdout.write(messages.join(''));
+      // A `--bg` success has no protocol frame: its two app lines are the terminal's text. An attached
+      // success prints nothing here; the client's own status line is the one the person reads.
+      if (!request.json && request.args.includes('--bg') && messages.length) stdout.write(messages.join(''));
       if (request.json) emit(descriptor('result', { status: 0, signal: null }));
     }
     return status;
