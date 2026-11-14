@@ -161,7 +161,7 @@ const fullRunOf = (commit = SHA, extra = {}) => ({
  */
 function gateFake({
   runs = [fullRunOf()], started = null, mends = [], suites = ['smoke'], outcomes = {}, served = SHA, declared = null,
-  appError = null,
+  appError = null, dirtyNow = [], servedDirty = undefined,
 } = {}) {
   const calls = { fullRun: [], history: 0, servers: [], suites: [], mends: 0 };
   const declaration = declared || { suites: suites.map((name) => ({ name })), environments: { dev: { service: 'app' } } };
@@ -185,11 +185,13 @@ function gateFake({
     ensureAppServer: async (worktree) => {
       if (appError) return { ok: false, error: appError };
       calls.servers.push({ worktree, commit: served });
-      return { ok: true, server: { built_from: { commit: served }, health_url: 'http://127.0.0.1:1/api/version' }, baseUrl: 'http://127.0.0.1:1' };
+      const builtFrom = servedDirty === undefined ? { commit: served } : { commit: served, dirty: servedDirty };
+      return { ok: true, server: { built_from: builtFrom, health_url: 'http://127.0.0.1:1/api/version' }, baseUrl: 'http://127.0.0.1:1' };
     },
     ensureDevServer: async () => ({ ok: false, error: 'no static tier in this test' }),
     tokenFor: async () => ({ name: null, token: null, from: null }),
     head: () => SHA,
+    dirty: () => dirtyNow,
     answers: async () => true,
     runSuites: async ({ declaration: declared, worktree }) => {
       calls.suites.push({ worktree, names: declared.suites.map((suite) => suite.name) });
@@ -1878,6 +1880,7 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
     assert.equal(spawned.length, 0);
     assert.match(out.stderr, /stopped at install and measured nothing: npm ci failed/u);
     assert.doesNotMatch(out.stderr, /--accept-red/u, 'a run that measured nothing is not a red to accept');
+    assert.match(out.stderr, /nothing to accept — mc test memoro --full measures 1a2b3c4 again and writes the history this reads/u, 'the refusal names the way out');
   });
 
   it('no run of the commit: one is started and followed, and a red from it refuses', async () => {
@@ -2008,6 +2011,26 @@ describe('mc deploy — the app, used, before the question', () => {
     assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: OLDER }]);
     assert.equal(calls.suites.length, 0, 'no suite ran against the wrong tree');
     assert.match(out.stderr, /the app server serves 0123456, not 1a2b3c4 that would ship/u);
+  });
+
+  it('a shared checkout at the commit with uncommitted changes measures them, not the commit, and refuses', async () => {
+    const { code, out, spawned, asked, calls, row } = await attempt([], { dirtyNow: [' M src/app.js', '?? scratch.txt'] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0);
+    assert.deepEqual(calls.servers, [], 'no server was asked for on a dirty tree');
+    assert.equal(calls.suites.length, 0, 'no suite ran against uncommitted changes');
+    assert.match(out.stderr, /the suites could not run: \/tmp\/does-not-exist\/shared\/memoro has uncommitted changes \(M src\/app\.js, \?\? scratch\.txt\)/u);
+    assert.match(row.suites, /^cannot-run:/u);
+  });
+
+  it('a server of the commit that was started on uncommitted changes measures them, and refuses', async () => {
+    const { code, out, spawned, calls } = await attempt([], { servedDirty: ['src/app.js'] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: SHA }]);
+    assert.equal(calls.suites.length, 0, 'no suite ran against the dirty server');
+    assert.match(out.stderr, /the app server was started on uncommitted changes in \/tmp\/does-not-exist\/shared\/memoro \(src\/app\.js\)/u);
   });
 
   it('a checkout that declares no suites to run cannot be exercised, and refuses', async () => {

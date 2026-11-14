@@ -252,17 +252,24 @@ passed over. What is left says:
 | none | starts `fullRun` — the daily run's own round, so the same history and the same main-red mends — and follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
 | `red` | refuses, naming the commit measured, the red files and commands, and the main-red mend that holds them. When no mend holds it, says so; the history keeps red test names, not files, so the gate cannot queue one itself |
 | `stalled` | a run that began and never finished its suite: refuses like a red |
-| `unmeasured` | the run stopped for a reason that is not the machine's and measured nothing: refuses, never green |
+| `unmeasured` | the run stopped for a reason that is not the machine's and measured nothing: refuses, never green, and `--accept-red` does not take it. A deploy starts a run only when there is none, so every later deploy of that sha reads the same run; the refusal names the way out — `mc test memoro --full`, which writes the history the gate reads |
 | `moved` | the run measured another commit than the one it was started for: refuses |
 
 **The app, used.** `exerciseApp` reads the suites declared in memoro's
 `.mc/test.json` and runs them against a local server built from that sha,
-started the way `mc test dev` starts one (`ensureAppServer`, the shared
-worktree `deploy` already found). The tests assert the commit the server was
-started on. A suite that fails, or one that cannot run (the server never came
-up, a suite never started), refuses and names the suite and its last lines. A
-suite that exits with the declared skip code (78) is named as skipped with its
-reason and does not refuse.
+started the way `mc test dev` starts one (`ensureAppServer`). The server is the
+shared checkout's, `~/mc/self/memoro` (`sharedWorktree`) — not the worktree with
+main that the script runs in, which can be another checkout. That checkout must
+be clean and on main at the sha: `ensureDevServer` fast-forwards it when it is
+clean and on main, and otherwise serves what it holds. So the gate refuses, as
+suites that cannot run, when the checkout has uncommitted changes
+(`git status --porcelain`, read before any server is asked for), when the
+server was started on uncommitted changes (`built_from.dirty`), or when the
+server serves another commit (off main, diverged, or held as it is). The tests
+assert the commit the server was started on. A suite that fails, or one that
+cannot run (the server never came up, a suite never started), refuses and
+names the suite and its last lines. A suite that exits with the declared skip
+code (78) is named as skipped with its reason and does not refuse.
 
 **The reading** shows both results beside the nightly line, and each suite on
 a line of its own; then the question.

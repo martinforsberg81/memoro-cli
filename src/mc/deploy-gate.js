@@ -182,7 +182,12 @@ export function fullRunLines({ state, run, sha, mends = [], started = false }) {
         `mc:   ${mend || 'no main-red mend holds it — none names a file for this run'}`,
       ];
     case 'unmeasured':
-      return [`mc: full run — ${where} stopped at ${run.stopped_at || 'an unknown step'} and measured nothing${run.reason ? `: ${run.reason}` : ''}`];
+      return [
+        `mc: full run — ${where} stopped at ${run.stopped_at || 'an unknown step'} and measured nothing${run.reason ? `: ${run.reason}` : ''}`,
+        // A deploy starts a run only when there is none of the commit, so this run is what every later
+        // deploy of it reads: the way out is a new run, which writes the history read here.
+        `mc:   nothing to accept — mc test memoro --full measures ${where} again and writes the history this reads; then deploy`,
+      ];
     case 'moved':
       return [`mc: full run — measured ${short(run.commit)}, not ${where}: main moved while it ran`];
     default:
@@ -210,14 +215,33 @@ function headOf(worktree) {
   return asked.status === 0 ? String(asked.stdout || '').trim() : null;
 }
 
+/** What `git status --porcelain` lists in the checkout: `[]` when clean, null when git could not say. */
+function dirtyOf(worktree) {
+  const asked = runGit(worktree, ['status', '--porcelain']);
+  if (asked.status !== 0) return null;
+  return String(asked.stdout || '').split('\n').map((line) => line.trimEnd()).filter(Boolean);
+}
+
+/** A few of the dirty paths, for a refusal to name. */
+function pathsWords(paths) {
+  const shown = paths.slice(0, 5).map((line) => String(line).trim()).join(', ');
+  return paths.length > 5 ? `${shown}, … and ${paths.length - 5} more` : shown;
+}
+
 /**
  * Run the declared suites against a local server of the commit that would ship.
  *
  * The server is `mc test dev`'s: the shared checkout's own, started through the
  * same door (`ensureDevServer`, which follows main when it can), the static tier
- * first. A server that is not built from `sha` — the checkout is off main, dirty,
- * or the server is held as it is — measures another tree and so measures
- * nothing: every suite is then `cannot-run`, named with why.
+ * first. A server that is not built from `sha` — the checkout is off main, or
+ * the server is held as it is — measures another tree and so measures nothing:
+ * every suite is then `cannot-run`, named with why. So does a checkout at `sha`
+ * that is not clean: its server serves the uncommitted changes, which are not
+ * the commit that would ship either. Read twice — the checkout's own
+ * `git status --porcelain` before any server is asked for, and the server's
+ * `built_from.dirty` (what was dirty when it started). The checkout's
+ * `unfollowed` answer (why it was not fast-forwarded) names the cause of a
+ * server at another commit.
  *
  * Returns `{ suites, commit, error }`: one `{ name, state, seconds, tail }` per
  * declared suite, `state` one of `ok`, `red`, `skipped` (the declared skip code;
@@ -225,10 +249,13 @@ function headOf(worktree) {
  */
 export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {} }) {
   const d = {
-    sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, ...deps,
+    sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf, ...deps,
   };
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
+  const dirtyNow = d.dirty(worktree);
+  if (dirtyNow === null) return cannot(`git status failed in ${worktree} — whether it is clean at ${short(sha)} is unknown`);
+  if (dirtyNow.length) return cannot(`${worktree} has uncommitted changes (${pathsWords(dirtyNow)}) — a server of it serves them, not ${short(sha)} that would ship; it must be clean and on main`);
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
@@ -236,9 +263,16 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
   const staticService = serviceFor(declaration, 'static');
   const wantsApp = declaration.suites.some((suite) => tierOf(suite) === 'app' || !staticService);
   const wantsStatic = Boolean(staticService) && declaration.suites.some((suite) => tierOf(suite) === 'static');
-  const refuseTree = (what, server) => {
+  const refuseTree = (what, server, unfollowed = null) => {
     const served = servedCommit(server, worktree, d.head);
-    return sameCommit(served, sha) ? null : cannot(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} is not at origin/main (off main, uncommitted changes, or its server was held as it is)`, served);
+    if (!sameCommit(served, sha)) {
+      return cannot(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} is not at origin/main (${unfollowed || 'off main, or its server was held as it is'}); it must be clean and on main`, served);
+    }
+    const dirtyAtStart = Array.isArray(server?.built_from?.dirty) ? server.built_from.dirty.filter(Boolean) : [];
+    if (dirtyAtStart.length) {
+      return cannot(`the ${what} server was started on uncommitted changes in ${worktree} (${pathsWords(dirtyAtStart)}) — it serves them, not ${short(sha)} that would ship; it must be clean and on main`, served);
+    }
+    return null;
   };
 
   let server = null;
@@ -250,7 +284,7 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
     if (!ensured.ok) return cannot(ensured.error);
     staticServer = ensured.server;
     staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
-    const wrong = refuseTree('static', staticServer);
+    const wrong = refuseTree('static', staticServer, ensured.unfollowed || null);
     if (wrong) return wrong;
     say(`mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})`);
   }
