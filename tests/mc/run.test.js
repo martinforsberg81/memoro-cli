@@ -1513,7 +1513,8 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
     f.deps.capacity.write(next);
     return { ok: true, why: null, state: next };
   };
-  f.deps.refreshClaude = async () => { reads.claude.push(clock); return { ok: false, why: 'login unavailable' }; };
+  const claudeAnswers = [{ ok: false, why: 'login unavailable' }, { ok: true, unread: { five_hour: 'absent' } }, { ok: true, unread: {} }];
+  f.deps.refreshClaude = async () => { reads.claude.push(clock); return claudeAnswers[reads.claude.length - 1]; };
   const runner = createRunner({ deps: f.deps });
   runner.startCapacityTicker();
   const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
@@ -1532,6 +1533,9 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   timer(); await flush();
   assert.equal(reads.codex.length, 2, 'failed attempt is suppressed for fifteen minutes');
   assert.equal(reads.claude.length, 2, 'Claude has its own fifteen-minute attempt window');
+  const log = () => f.files['/w/runner/log/runner.log'];
+  assert.match(log(), /codex capacity read — its subscription windows are noted$/mu, 'the Codex success line is as before');
+  assert.match(log(), /claude capacity read — its subscription windows are noted; not read: five_hour \(absent\)$/mu, 'a read that did not validate a window names it');
   clock += 15 * 60 * 1000;
   f.files['/w/runner/UPDATE'] = '';
   timer(); await flush();
@@ -1540,6 +1544,10 @@ test('both subscriptions are read at startup, due at 15 minutes, and a failed at
   delete f.files['/w/runner/UPDATE'];
   timer(); await flush();
   assert.equal(reads.claude.length, 3, 'polling resumes once the UPDATE is gone');
+  await flush(); await flush();
+  const claudeLines = log().split('\n').filter((line) => line.includes('claude capacity'));
+  assert.match(claudeLines.at(-1), /claude capacity read — its subscription windows are noted$/u, 'a read that validated both windows carries no note');
+  assert.equal(log().split('\n').filter((line) => line.includes('noted; not read:')).length, 1, 'only the read that did not validate a window carries the note');
   f.files['/w/runner/STOP'] = '';
   timer();
   assert.equal(timer, null, 'STOP stops the independent ticker');

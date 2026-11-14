@@ -865,6 +865,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const lastAttempt = new Map();
     let stopped = false;
     let stopTimer = null;
+    // The windows a successful read did not validate, by window name and the fixed word that refused each.
+    const notRead = (unread) => {
+      const parts = Object.entries(unread || {}).filter(([, word]) => typeof word === 'string' && word).map(([name, word]) => `${name} (${word})`);
+      return parts.length ? `; not read: ${parts.join(', ')}` : '';
+    };
     const tick = () => {
       if (stopped || stopRequested()) { stop(); return; }
       // An UPDATE pauses reads only: a handover that fails gives the runner
@@ -879,7 +884,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         lastAttempt.set(provider, deps.now().getTime());
         inFlight.add(provider);
         Promise.resolve().then(refresh).then((got) => {
-          say(got?.ok ? `${provider} capacity read — its subscription windows are noted` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
+          say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
         }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
       }
     };
