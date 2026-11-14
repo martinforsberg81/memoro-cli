@@ -58,9 +58,10 @@ and `goal` is null. With no programme, it carries only question, options,
 evidence and documents. The questions say “this work” when there is no goal;
 the goal-bound instruction texts remain unchanged.
 
-Answered calls exit 0 and say `mc: jev answered … — continue with: …`. A miss,
-unavailable request or residual over-budget state exits 1; reserved acts exit 1
-with Martin's decision message. A malformed call exits 2. An answered call with
+Answered calls exit 0 and say `mc: jev answered … — continue with: …`. An
+unsettled or unavailable technical call exits 0 after recording the session's
+decision; an unresolved product call exits 1. Reserved acts exit 1 with
+Martin's decision message. A malformed call exits 2. An answered call with
 a named goal appends the same kind of LOG.md entry as `mc goal martin`; an
 unsettled technical call records the session's recommendation in the goal log
 and ledger without changing stage/status. A product escalation changes that
@@ -106,10 +107,10 @@ stage roles retain their existing bounded ask permissions.
 
 ## The flow
 
-1. **Not asked.** `--reserved <act>`, or a caller with `MC_TOOL` unset or
-   `person`, goes straight to Martin: no request. The entry says
-   `jev not asked: reserved act <act>` or `jev not asked: person`. Reserved
-   acts never go to jev (Martin, 2026-11-07).
+1. **Not asked.** `--reserved <act>` is never sent to jev. A person caller of
+   `mc goal martin` (`MC_TOOL` unset or `person`) also goes straight to Martin:
+   no request. The entry says `jev not asked: reserved act <act>` or
+   `jev not asked: person`. Reserved acts never go to jev (Martin, 2026-11-07).
 2. **One request.** `POST https://api.typesafe.ai/v1/systemone`, model
    `jev-1.14.0` (pinned), `Authorization: Bearer <TYPESAFE_API_KEY>`, Node's
    `fetch`, no SDK, no long-context header. Four questions:
