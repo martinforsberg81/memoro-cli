@@ -98,7 +98,8 @@ import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainM
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
-import { syncDeskItems } from './desk-items.js';
+import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
+import { decisionEligible, decisionFailure, decisionPrompt } from './desk-decision.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
@@ -560,6 +561,7 @@ export function realDeps(env = process.env) {
       }, { name: 'claude-capacity' });
       return { ...got, state };
     },
+    deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
     launch: resolveLaunch,
@@ -1436,11 +1438,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     all = goals();
     const drafts = [...new Set(all.map(goal => goal.programme))]
       .map(programme => nextDraft(all, programme)).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)))
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json')) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, all) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all) && may(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
@@ -1489,6 +1491,134 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return { ...ran, stop: true };
     }
     return ran;
+  }
+
+  function decisionClaimed(path) {
+    try { const claim = JSON.parse(deps.read(path)); return Boolean(claim && alive(claim.pid)); }
+    catch { return false; }
+  }
+  function decisionWork(names, passed = new Set()) {
+    const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
+    const all = goals();
+    return (deps.deskItems?.list() || []).filter(item => decisionEligible(item, deps.now())).flatMap(item => {
+      const goal = item.kind === 'goal' ? all.find(g => `${g.programme}/${g.goal}` === item.reference && !g.problems.length) : null;
+      if (item.kind === 'goal' && !goal) return [];
+      const repo = goal?.repos[0] || names[0];
+      const name = item.id;
+      const claimName = goal ? goalName(goal) : name;
+      const claimPath = join(goal?.dir || itemDirectory(item, deps.env), '.decision.json');
+      if (!names.includes(repo) || passed.has(name) || held.has(claimName) || decisionClaimed(claimPath)) return [];
+      return [{ name, repo, kind: 'decision', variant: null, since: item.due_at || item.source_at,
+        decision: item, goal, claimName, claimPath, priority: 0 }];
+    });
+  }
+  async function decisionOne(id) {
+    const item = decisionWork(repos.map(x => x.name)).find(x => x.name === id);
+    if (!item) return { ran: 0, reason: 'item is not eligible or is already held' };
+    return decisionPass(item, { lane: `decision-${id}` });
+  }
+  async function decisionPass(item, { lane }) {
+    const { name, repo: repoName, claimName, claimPath, goal } = item;
+    const claimed = lock(root, () => {
+      if (claims.has(claimName) || decisionClaimed(claimPath) || stepsHeld().some(x => x.name === claimName)) return false;
+      writeJson(claimPath, { pid, item: name });
+      claims.add(claimName); claimRepos.set(claimName, repoName);
+      return true;
+    }, { strict: true, name: 'decision-claim' });
+    if (!claimed) return { ran: 0 };
+    try {
+      const outcome = await runDecision(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, goal: Boolean(goal) } : { ran: 0, reason: outcome };
+    } finally {
+      remove(claimPath); claims.delete(claimName); claimRepos.delete(claimName);
+    }
+  }
+  async function runDecision(item, { lane }) {
+    const { name, repo: repoName, goal } = item;
+    const role = deps.role('decision');
+    if (!role?.overlay) return 'skipped:role-missing';
+    const route = routeClass('decision');
+    if (!route.ok) return 'skipped:no-capacity';
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) return 'skipped:tool-missing';
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
+    let admission; let scratch; let marker; let result;
+    const currentPath = paths.currentFor(repoName, lane);
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) return 'skipped:offline';
+      if (goal) {
+        const lost = placeGoalWorktrees(goal, name);
+        if (lost) { say(`${name}: ${lost}`); return 'skipped:worktree'; }
+      }
+      const cwd = goal ? join(goal.dir, repoName) : itemDirectory(item.decision, deps.env);
+      if (goal) await deps.attachDeps(cwd);
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      const currentItem = deps.deskItems.read(name);
+      if (!decisionEligible(currentItem, deps.now())) return 'skipped:changed';
+      try {
+        const budget = deskBudget({ env: deps.env, now: deps.now(), read: deps.read });
+        if (budget.held) { say(`${name}: desk ceiling reached ($${budget.spent} of $${budget.ceiling})`); return 'skipped:desk-ceiling'; }
+      } catch (error) { say(`${name}: desk ceiling unreadable — ${error.message}`); return 'skipped:desk-ceiling'; }
+      const prompt = decisionPrompt(currentItem, { env: deps.env, goal, now: deps.now() });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, instructions, prompt, profileArgs, cache: role.cache });
+      const stem = `decision-${name}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
+      const out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'decision', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const current = { name, kind: 'decision', variant: null, repo: repoName, lane, pid, worktree: cwd, started: stamp(),
+        ...(goal ? { goal_reference: currentItem.reference, programme: goal.programme } : {}),
+        tool: settings.tool, model: settings.model, effort: settings.effort, billing: picked.billing,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: 'decision', source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${name}: decision starting (${settings.tool} ${settings.model})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      try {
+        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
+          ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
+          env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
+            ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
+          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
+        admission.release?.();
+        result = await pending;
+      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout || '');
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      const ended = deps.deskItems.read(name);
+      // A due item unchanged by the session is not a successful for-martin ending.
+      const unfinished = ended && ended.state !== 'closed' && (ended.state !== 'for-martin' || decisionEligible(ended, deps.now()));
+      const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
+      if (unfinished) {
+        decisionFailure(ended, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson });
+        if (ended.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
+      }
+      logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      return 'ran';
+    } finally {
+      remove(currentPath);
+      try {
+        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
+      } finally { admission?.release?.(); dropSlot(); }
+    }
   }
 
   const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
@@ -2242,11 +2372,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed)];
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...decisionWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend) continue;
+      if (item.mainMend || item.decision) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -2287,7 +2417,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         return [];
       }
       const lane = Number.isInteger(held?.lane) && held.lane > 0 ? held.lane : 0;
-      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign, ...(identityStatus ? { identityStatus } : {}) }];
+      return [{ path, programme: held?.programme, kind: held?.kind, name: held?.goal_reference ? `goal:${held.goal_reference}` : held?.name || null, repo: held?.repo || null, lane, pid: known ? owner : null, other: foreign, ...(identityStatus ? { identityStatus } : {}) }];
     });
   }
 
@@ -2351,7 +2481,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (!pick) return { ran: 0 };
       // Goal sessions and goal-less main-red mends use the same lane admission.
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
-      const ran = pick.mainMend
+      const ran = pick.decision
+        ? await decisionPass(pick, { lane })
+        : pick.mainMend
         ? await mainMendPass(pick, { lane })
         : await goalPass(pick.goal, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;
@@ -2600,7 +2732,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }

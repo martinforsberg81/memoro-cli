@@ -229,3 +229,16 @@ test('an invalid persisted provider priority is refused without replacing the ca
     assert.equal(readFileSync(modelsPath(c.env), 'utf8'), before);
   } finally { c.done(); }
 });
+
+
+test('decision defaults read without rewriting old catalogs and mc model lists and changes them', async () => {
+  const c = catalogAt(BEFORE_MEDIUM);
+  try {
+    const before = readFileSync(modelsPath(c.env),'utf8');
+    assert.deepEqual(readModels(c.env).decision,[{tool:'claude',model:'fable',effort:'high'},{tool:'codex',model:'gpt-6.1-sol',effort:'high'}]);
+    assert.match((await c.verb('list')).out,/decision\n  1  claude:fable:high\n  2  codex:gpt-6\.1-sol:high/u);
+    assert.equal(readFileSync(modelsPath(c.env),'utf8'),before);
+    assert.equal((await c.verb('set','decision','codex:gpt-6.1-sol:high')).code,0);
+    assert.deepEqual(c.file().decision,[{tool:'codex',model:'gpt-6.1-sol',effort:'high'}]);
+  } finally { c.done(); }
+});

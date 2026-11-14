@@ -588,6 +588,7 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
   };
   for (const [command, id] of Object.entries(REFUSED)) {
     it(`refuses ${command} headless, with no escape`, () => {
+      for (const role of ['decision', 'martin']) assert.equal(preToolDecision(bash(command), { env: { MC_HEADLESS: '1', MC_ROLE: role } })?.id, id);
       assert.equal(preToolDecision(bash(command), headless)?.id, id);
       assert.equal(preToolDecision(bash(`${command} # ${ALLOW_MARK}`), headless)?.id, id);
       assert.match(preToolDecision(bash(command), headless).reason, /only in an interactive session/u);

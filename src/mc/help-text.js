@@ -69,6 +69,8 @@ ${commandReference('goal')}
 
 ${commandReference('martin')}
 
+${commandReference('decision')}
+
 ${commandReference('ask')}
 
 ${commandReference('decisions')}

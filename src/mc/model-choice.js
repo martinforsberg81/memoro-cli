@@ -113,8 +113,9 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
 }
 
 /**
- * The candidate a list runs on. Every list but review is judged the same way,
- * over its own candidates only: a role list never borrows a class's.
+ * The candidate a list runs on. Decision takes the first usable subscription
+ * in catalog order; the other lists balance capacity (review also avoids the
+ * build model). Each judges its own candidates only: a role list never borrows a class's.
  *
  * `{ ok: true, class, candidate, spec, basis, headroom, why }`, where `basis` is
  * `preferred` (the review candidate with most headroom), `known` (the candidate with the most headroom; the
@@ -134,6 +135,10 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
   if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority);
   if (!LISTS.includes(cls)) throw new Error(`"${cls}" is not a list — ${LISTS.join(', ')}`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
+  if (cls === 'decision') {
+    const usable = judged.find(entry => entry.state === 'known' || (entry.state === 'unknown' && entry.candidate.tool === 'claude'));
+    if (usable) return answer(cls, usable.candidate, usable.state === 'known' ? 'known' : 'bootstrap', usable.headroom, `${usable.why}; first usable decision candidate`);
+  }
   if (priority !== 'auto') {
     const known = judged.filter((entry) => entry.state === 'known');
     const usable = known.length ? known : judged.filter((entry) => entry.state === 'unknown' && entry.candidate.tool === 'claude');

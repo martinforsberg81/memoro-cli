@@ -181,14 +181,14 @@ order without a model call:
 2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
    `merge · blocked`, or `merge · ready` after its first red or moved head
    and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
-   waits for the person. `draft · ready`, `done` and `dropped` do not start a
+   waits for the desk decision pass, not a delivery session. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below.
 3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
 4. Exclude goals already claimed or named by a live current file, and goals
    whose first repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend and goal-less main-red mend first, then finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -511,8 +511,8 @@ billing boundaries starts a cold cache context.
 A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
 routes the goal's build sessions only. Every other unattended role runs on its
 own catalog list, whatever the goal's class: `review`, `finish`, `mend`, `plan`
-(the runner's next-draft planning) and `manager` (an unattended manager turn
-without an explicit tool or model). A role list never borrows a class's
+(the runner's next-draft planning), `manager` (an unattended manager turn
+without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc manager` keep their own
 selection. The route
@@ -522,7 +522,7 @@ is decided locally, before a tool is launched, from the catalog
 account. The snapshot is refreshed by sessions that run anyway, and by
 independent read-only collectors due at startup and every 15 minutes for both
 providers. Every list is judged by the same capacity, provider-priority,
-bootstrap and API-reserve rules over its own candidates; review adds one.
+bootstrap and API-reserve rules over its own candidates; review adds one. Decision instead takes the first usable subscription candidate in catalog order, including unknown-Claude bootstrap; only when none is usable does the usual API reserve apply.
 Review ranks usable subscriptions by provider priority, then
 headroom; ties avoid the build model, then follow catalog order. Codex needs a
 fresh successful capacity observation listing the model and effort. Auto mode
@@ -536,17 +536,17 @@ candidates. The review waits when the selected API is off.
 written whole or not at all:
 
 - `mc model [list] [--json]` — the candidates of fast, medium, large, review, finish,
-  mend, plan and manager, each a numbered list in catalog order, and whether
+  mend, plan, manager and decision, each a numbered list in catalog order, and whether
   they come from the file or the defaults.
 - `mc model priority [auto|codex|claude]` — show or change the provider
   preference for unattended launches; an absent setting means `auto`.
 - `mc model add fast|medium|large|review <tool>:<model>:<effort>` — appends a candidate;
-  `add` takes finish, mend, plan and manager as well.
+  `add` takes finish, mend, plan, manager and decision as well.
 - `mc model remove fast|medium|large|review <tool>:<model>` — removes the candidate
   with exactly that tool and model; a list keeps at least one. `remove` takes
   every list as `add` does.
 - `mc model set review <tool>:<model>:<effort>` — replaces the whole review
-  list with that one candidate; `set` takes finish, mend, plan and manager as
+  list with that one candidate; `set` takes finish, mend, plan, manager and decision as
   well, never a work class.
 
 With no file, the defaults are: `fast`, `claude:haiku:high` then
@@ -557,7 +557,8 @@ With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
 `codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
-`codex:gpt-6.1-sol:medium`. A file without finish, mend, plan or manager reads
+`codex:gpt-6.1-sol:medium`; decision, `claude:fable:high` then
+`codex:gpt-6.1-sol:high`. A file without finish, mend, plan, manager or decision reads
 that list from the defaults; a file without `medium` also reads its default.
 Missing defaulted lists are written back with every list the first time
 `mc model` changes it. A file whose
@@ -739,3 +740,23 @@ runner's running request. Its settlement pass restores missing published queue
 handoffs, recognizes merged/closed PRs and retries safe landed-tree cleanup.
 Martin requests show on the page, in `mc repo status` and `mc martin get`.
 The daily full run's once-a-day cadence and existing repair goals are unchanged.
+
+
+## Decision lane
+
+Prepared desk items and overdue reversible product/judgement briefs share the
+machine-wide lane total, behind mend and ahead of other delivery sessions.
+`decisionWork`, `decisionPass` and `runDecision` use the same slot, disk,
+capacity, billing, worktree, watch/check-in and log machinery as main-red mend.
+Two items of the same goal cannot run together; goal delivery also honours the
+decision claim. A decision current file carries the item id as `name` and the
+goal reference separately, so handovers exclude the goal, not just that item.
+The role runs headless with goal identity only for a goal item. Each launch
+adds a `decision` row named by item id. The same launch is exposed to the person
+as `mc decision [<id>]`; nesting it inside a session is refused.
+
+The shared daily desk ceiling is rechecked before launch; unset means no
+ceiling. One unfinished ending retries once, then a non-reversible mechanical
+brief waits on Martin instead of looping. Future, irreversible and reserved
+briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+for item state, failure evidence, authority and the fixed Swedish brief shape.
