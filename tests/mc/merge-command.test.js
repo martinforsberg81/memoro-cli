@@ -17,6 +17,8 @@ import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { roundLogPath } from '../../src/mc/repo-round-log.js';
+import { claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 let root = null;
@@ -494,3 +496,57 @@ describe('mc merge <repo> <pr> --admin lands past the gate and books it (Martin\
   });
 });
 
+describe('mc test <repo> --full measures main beside the merge lane, and one run of a tree at a time', () => {
+  fresh('mc-test-full');
+
+  const report = (extra = {}) => ({
+    ok: true, verdict: 'green', stopped_at: null, reason: null, full: true,
+    started_at: '2026-09-06T18:00:00.000Z', duration_ms: 1000,
+    base: { ref: 'origin/main', commit: 'a'.repeat(40) },
+    candidate: { commit: 'a'.repeat(40), red: [], totals: { tests: 12, finished: true } },
+    ...extra,
+  });
+  const fullRun = (runGate, extra = {}) => {
+    const d = deps();
+    d.io.runGate = runGate;
+    d.io.historyRoot = home;
+    d.io.claims = { lock: (_root, fn) => fn(), alive: () => true, pollMs: 1, sleep: async () => {}, ...extra };
+    return d;
+  };
+
+  it('runs isolated, takes no lease, writes the history and gives its claim back', async () => {
+    const seen = [];
+    const d = fullRun(async (round) => { seen.push(round); return report(); });
+    assert.equal(await gate({ repo: 'memoro-cli', check: true, full: true }, d.io), 0);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].isolated, true);
+    assert.equal(seen[0].holdLease, false, 'a merger holding the repository must not stop a full run at lease');
+    assert.ok(seen[0].lanes >= 1);
+    assert.equal(readNightlyHistory('/repos/memoro-cli', { root: home }).runs.length, 1);
+    assert.deepEqual(liveClaims({ root: home, alive: () => true }), []);
+  });
+
+  it('follows a run of the same tree already in flight instead of measuring it again', async () => {
+    let rounds = 0;
+    const d = fullRun(async () => { rounds += 1; return report(); }, { pid: 5150 });
+    const other = claimFullRun({ repo: 'memoro-cli', sha: null, verb: 'mc deploy', root: home, pid: 4242, alive: () => true, lock: (_root, fn) => fn(), now: () => new Date('2026-09-06T17:00:00.000Z') }).claim;
+    d.io.claims.sleep = async () => {
+      // The run followed ends: its answer is in the history and its claim is gone.
+      recordNightlyRun({ repo: 'memoro-cli', path: '/repos/memoro-cli', started_at: '2026-09-06T17:00:05.000Z', duration_ms: 1000, commit: 'a'.repeat(40), verdict: 'green', red: [], tests: 12 }, { root: home });
+      releaseClaim(other, { root: home, alive: () => true, lock: (_root, fn) => fn() });
+    };
+    assert.equal(await gate({ repo: 'memoro-cli', check: true, full: true }, d.io), 0);
+    assert.equal(rounds, 0, 'no second full run of a tree already being measured');
+    assert.match(d.out.err, /a full run of main is already being measured \(pid 4242, since 2026-09-06T17:00:00.000Z\) — following it, not starting a second/u);
+    assert.match(d.out.out, /the full run followed has ended — memoro-cli aaaaaaa: 0 red, 12 tests/u);
+  });
+
+  it('a check of a pull request still holds the lease and runs in the lane', async () => {
+    const seen = [];
+    const d = fullRun(async (round) => { seen.push(round); return report({ full: false }); });
+    assert.equal(await gate({ repo: 'memoro-cli', check: true, pr: 671 }, d.io), 0);
+    assert.equal(seen[0].isolated, undefined);
+    assert.equal(seen[0].holdLease, undefined);
+    assert.deepEqual(liveClaims({ root: home, alive: () => true }), []);
+  });
+});

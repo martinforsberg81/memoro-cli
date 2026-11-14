@@ -543,6 +543,21 @@ describe('the lease is held as the area, and always given back', () => {
     } finally { fx.cleanup(); }
   });
 
+  // 2026-11-14: `mc test memoro --full` stopped twice at `lease` because the
+  // merger held the repository. A full run of the default branch is not a merge
+  // round — it merges nothing and measures in its own checkout — so another
+  // holder's lease is no reason to stop it.
+  it('a full run that holds no lease is not stopped by another holder\'s lease', async () => {
+    const fx = fixture();
+    try {
+      claimLease({ repoPath: fx.repoPath, errand: 'their own round', holder: OTHER, root: fx.mcHome });
+      const report = await fx.run({ pr: null, full: true, isolated: true, holdLease: false, lanes: 2 });
+      assert.notEqual(report.stopped_at, 'lease', report.reason);
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(fx.lease().holder, OTHER.name, 'the other holder\'s lease is untouched');
+    } finally { fx.cleanup(); }
+  });
+
   it('has no merge path in its source at all — not even behind a flag', () => {
     // A gate that could also merge is one `if` away from merging on a verdict
     // it had not finished forming. Asserted against the file, because the
