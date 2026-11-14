@@ -567,8 +567,12 @@ ratchets, every CI binding command and all three contract suites, including
 optional tools, never landing requirements. Wide regression protection belongs
 to the daily full run and before a deploy, not to a merge. Main may carry a
 red this merge did not look for: the daily run finds it within a day and sends
-it to a main-red mend; the deploy gate keeps it from production. Until the
-separate deploy-gate goal lands, the person deploying must read that full run.
+it to a main-red mend; the deploy gate keeps it from production: `mc deploy`
+ships a commit only when a completed full run of exactly that commit is green
+(it starts one when none exists) and the app's declared suites have been run
+against a local server of it, and a headless session cannot deploy
+([`mc-deploy.md`](mc-deploy.md), *The gate*). Neither is a merge's duty, and the
+deploy's full run never refuses or delays a merge.
 
 The shipped declarations' `select` commands serve the change scope;
 `select_whole` serves the optional wide diff scope and `select_full` the daily
@@ -887,7 +891,9 @@ command gates. A merge round and a bare gate ask for the change scope and run
 none of those commands. The generic execution and command-failure paragraphs
 on this page describe full/wide runs where commands actually occur, not a
 requirement to run them on a merge. The runner's full run and the deploy retain
-wide regression protection; main is not production.
+wide regression protection; main is not production. The deploy asks for a green
+full run of the exact commit and the exercised app before its one question
+(`mc-deploy.md`, *The gate*).
 
 ### What the second side cost, while it existed
 
