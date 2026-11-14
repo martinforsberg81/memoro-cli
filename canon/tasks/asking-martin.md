@@ -4,56 +4,55 @@ description: Asking Martin a question or reporting to him in mc — a decision o
 ---
 # Asking Martin, and telling him
 
-Never a question without its options. When unclear or settled, read first; apply technical standards and programme design.
-Investigate details as general rules. Bring one proposal, not a menu: a design decision with evidence, costs/tradeoffs, alternatives, recommendation
-and proposed rule text/file/section in docs/technical/; see mc-jev.md.
+Never a question without its options. When unclear, read standards and programme
+design first. Bring one proposal, not a menu, at design level: evidence,
+alternatives/tradeoffs, recommendation and proposed wording/file/section in
+`docs/technical/`; see [mc-jev](../../docs/technical/mc-jev.md).
 
-Every question with options goes to jev first (docs/technical/mc-jev.md).
-For goal questions, use `mc ask <programme>/<goal>` as the single goal-bound path;
-`mc goal martin` remains compatible. Without a goal, call `mc ask` before asking Martin in chat:
+Every question with options goes to jev first. `product` is a choice of direction
+the goal, programme page and standards do not answer, changing user promises,
+product cost or personal-data handling. `technical` is everything else:
+implementation, architecture, tooling, environment, order of work, a goal's own
+criteria and carrying out an already decided design, even when users see it.
+
+Use goal-bound `mc ask <programme>/<goal>` (`mc goal martin` remains compatible); without a goal, use `mc ask` before asking Martin in chat:
 
 ```
-mc ask [<programme>/<goal>] --reason "…" --option "<key>: <text>" --option "<key>: <text>" \
-  --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]
+mc ask [<programme>/<goal>] --kind technical|product --reason "…" \
+  --option "<key>: <text>" --option "<key>: <text>" --recommend <key> \
+  [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]
 ```
 
-- 2–4 whole-way options, unique keys `^[a-z][a-z0-9_]{0,31}$`; recommend your
-  proposal and include evidence. A malformed call gives an example to fix.
-- Goal-bound `mc ask` is one complete escalation: one jev consultation; an
-  answer leaves stage/status unchanged, appends its trace and continues. A valid
-  unresolved, unavailable or reserved result logs safe question/options/recommendation/
-  evidence/reading and sets that goal directly to Martin. Do not call `mc goal martin`
-  again or route through mend. Invalid calls exit 2 with no mutation; a no-goal ask changes no goal.
-- Reserved acts use `--reserved <act>`, never jev. Never send user data or passwords: key redaction is only the guard.
+- Use 2–4 whole-way options, unique keys `^[a-z][a-z0-9_]{0,31}$`, and
+  recommend one. Session callers must give `--kind`; a person may omit it.
+- One consultation answers as before when jev settles. An unsettled technical
+  call records the recommendation and continues, whatever jev reads or if jev is
+  unavailable. The product reading is reported, never acted on.
+- Unresolved product choices and reserved acts reach Martin; a goal-bound result records
+  the evidence and sets the goal Martin. Technical decisions are logged in the
+  goal and jev ledger. Never ask jev twice for one question.
+- A no-goal technical call is decided and ledgered without changing a goal. A no-goal product call exits 1 and changes no goal. Malformed calls exit 2 without writing and show a complete correction example.
+- Reserved acts use `--reserved <act>` and never go to jev. Never send user data
+  or passwords; key redaction is only the guard.
 
 ## What reaches Martin
 
-Three things, and nothing else:
+Only a reserved act (`mc deploy`, production data, credentials, `--admin`), a product choice no standard or established practice answers, or an exception to a decided standard. Write his answer where the standard belongs.
 
-- A reserved act: `mc deploy`, production data, credentials, `--admin`.
-- A product or policy choice that neither a decided standard nor established
-  practice answers (all-sessions, Decided standards). His answer is written where the standard belongs, so the
-  same question is never asked twice.
-- An exception to a decided standard, named and bounded.
-
-Never permission to run or rerun a check, a run or time budget, a quiet machine or a lane count.
-Never a red that is `SETTLED` (red alike at the base): it is not the goal's, and goes as a proposal
-to the programme that owns the failing file. The owning build, review or finish role resolves
-in-scope acceptance repairs; plan commissions broader protection scope. Never which session owns a
-goal: the one whose LOG.md entry took it, until it hands over.
+Never permission to run a check, a time budget, a quiet machine or a lane count.
+A `SETTLED` red goes as a proposal to the programme that owns the failing file.
+Build, review and finish repair their in-scope acceptance obstacles; plan
+commissions broader protection. Never decide which session owns a goal: the
+session whose LOG.md entry took it does, until it hands over.
 
 ## How to ask and tell
 
-- Every answer to Martin is well-written Swedish prose, reasoned from evidence and raised to
-  structure and architecture: what it means for the system and the programme, which standard decides
-  it, your recommendation and why. Hashes, log paths, test counts, session bookkeeping and mc jargon
-  stay in LOG.md and the goal. Never ask him a detail question: resolve it from standards and
-  practice, or ask about the missing general rule it exposes.
-- Headless, there is nobody to ask: your role says where the question goes. Build, review and finish
-  repair their own in-scope acceptance obstacles. An actual design choice or reserved act goes
-  directly to Martin; continue on a jev answer. Only merge failures wake mend.
-- Tell Martin the outcome, not the bookkeeping, each with your recommendation: a merge that needed
-  your judgement to go green, anything the gate refused, anything that changes what is deployed.
-- A headless session cannot do `mc deploy`, `--admin`, production data or credentials: the hook
-  refuses them (`MC_HEADLESS=1`); work that needs one waits, and your entry says what it waits on.
-  At the terminal, say any act that changes what is deployed or what users see before it runs.
+- Write to Martin in reasoned Swedish prose: system/programme impact, the rule, evidence, uncertainty, alternatives, recommendation and proposed wording. Hashes, test counts and session bookkeeping stay in the goal's LOG.md.
+- Headless, your role says where a question goes. Technical questions are decided
+  by the session's recommendation; product choices and reserved acts reach
+  Martin. Acceptance obstacles are repaired in-role; only merge failures wake mend.
+- Tell Martin outcomes, not bookkeeping: a merge requiring judgement, anything
+  the gate refused, or anything changing what is deployed.
+- Headless hooks refuse deploy, admin, production data and credentials; record
+  what the work waits on. At a terminal, say before an act changes deployment or
+  what users see.

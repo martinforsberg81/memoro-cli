@@ -25,10 +25,10 @@ const options = [
   '--option', 'fake_timer: inject a timer', '--option', 'real_wait: sleep 15 seconds',
   '--recommend', 'fake_timer', '--document', 'memoro-cli/docs/technical/standard.md',
 ];
-const reply = (p = 0.95, choice = 'fake_timer') => ({ status: 200, text: async () => JSON.stringify({
+const reply = (p = 0.95, choice = 'fake_timer', { fits = 0.9, settled = 0.9, product = 0.1 } = {}) => ({ status: 200, text: async () => JSON.stringify({
   model: 'jev-1.14.0', answers: {
     answer: { choice, probabilities: { [choice]: p } },
-    fits: { noul: 0.9 }, settled: { noul: 0.9 },
+    fits: { noul: fits }, settled: { noul: settled }, product: { noul: product },
   },
 }) });
 function fixture({ response = reply(), env = { MC_PROGRAMME: 'jev', cwd: repoDir }, realpath, list = ['memoro-cli'] } = {}) {
@@ -42,7 +42,7 @@ function fixture({ response = reply(), env = { MC_PROGRAMME: 'jev', cwd: repoDir
     list: () => list, known: () => ['/home/m/memoro-cli'], realpath,
     readKeys: () => ({ TYPESAFE_API_KEY: 'fixture-secret-value' }),
     ledger: (line) => ledger.push(JSON.parse(line)),
-    jev: { transport: (url, init) => { requests.push({ url, init }); return response; }, timer: () => new Promise(() => {}) },
+    jev: { transport: (url, init) => { requests.push({ url, init }); return typeof response === 'function' ? response(url, init) : response; }, timer: () => new Promise(() => {}) },
   };
   return { deps, requests, ledger, out: () => output.join(''), err: () => errors.join('') };
 }
@@ -61,6 +61,32 @@ test('mc ask without a goal asks jev, sends programme context and a confined doc
   assert.deepEqual(state.documents, [{ path: 'memoro-cli/docs/technical/standard.md', text: 'The standard.' }]);
   assert.match(f.out(), /^mc: jev answered fake_timer /u);
   assert.deepEqual([f.ledger.length, f.ledger[0].verb, f.ledger[0].programme, f.ledger[0].goal, f.ledger[0].model], [1, 'ask', 'jev', null, 'jev-1.14.0']);
+});
+
+test('a session mc ask decides technical questions that jev does not settle, including unavailable jev, without a goal', async () => {
+  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
+  for (const [response, keys, expectedReading] of [
+    [reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'inject (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)'],
+    [() => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)'],
+    [reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source'],
+  ]) {
+    const f = fixture({ env, response });
+    if (keys) f.deps.readKeys = () => keys;
+    assert.equal(await run(args, f.deps), 0, f.err());
+    assert.equal(f.out(), `mc: decided by the session: inject — jev did not settle it (${expectedReading}) — continue with: inject a timer\n`);
+    assert.equal(f.ledger.length, 1);
+    assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome], ['technical', 'decided']);
+    assert.equal(existsSync(join(programmeDir, 'goals')), false, 'no goal was created or changed');
+    assert.ok(f.out().includes(expectedReading));
+  }
+  for (const kind of [null, 'unknown']) {
+    const malformed = fixture({ env });
+    assert.equal(await run([...args.filter((value) => value !== '--kind' && value !== 'technical'), ...(kind ? ['--kind', kind] : [])], malformed.deps), 2);
+    assert.deepEqual([malformed.ledger.length, malformed.requests.length, malformed.out()], [0, 0, '']);
+    assert.match(malformed.err(), /technical.*product/u);
+    assert.match(malformed.err(), /--kind technical/u);
+  }
 });
 
 test('mc ask rebuilds a state jev refuses for its input limit and answers from the smaller one; the ledger names the budget sent', async () => {
@@ -138,6 +164,7 @@ test('answering with a named goal appends a goal log entry without changing its 
   assert.equal(questions.answer.instructions, 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state');
   assert.equal(questions.fits.instructions, 'One of the options in `options` is a correct way for this goal to proceed');
   assert.equal(questions.settled.instructions, 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed');
+  assert.equal(questions.product.instructions, 'Choosing between the options is a choice of product direction that changes what users are promised, what the product costs or how personal data is handled, and that the goal, the programme page and the standards in the state do not already answer');
   const logged = readFileSync(join(goal, 'LOG.md'), 'utf8');
   assert.match(logged, /jev answered one/u);
   assert.match(logged, /jev was asked: Which\?/u);
@@ -172,7 +199,7 @@ test('an unresolved goal-bound ask records safe evidence and sets Martin directl
   writeFileSync(log, '');
   const f = fixture({ response: reply(0.5, 'one'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/unsettled', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  const argv = ['--reason', 'Which design?', '--option', 'one: keep current rule', '--option', 'two: change rule', '--recommend', 'one', '--evidence', 'The standard is silent.'];
+  const argv = ['--kind', 'product', '--reason', 'Which design?', '--option', 'one: keep current rule', '--option', 'two: change rule', '--recommend', 'one', '--evidence', 'The standard is silent.'];
   assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 1, f.err());
   assert.equal(f.requests.length, 1, 'one consultation sequence');
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
@@ -184,6 +211,34 @@ test('an unresolved goal-bound ask records safe evidence and sets Martin directl
   assert.equal(f.ledger[0].goal, 'jev/unsettled');
 });
 
+test('a goal-bound technical mc ask records the recommendation and preserves stage and status', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'technical');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
+  writeFileSync(file, goalJson({ stage: 'build', title: 'Technical call', goal: ['Ask once.'], repos: ['memoro-cli'] }));
+  writeFileSync(log, '');
+  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.10 }), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer', '--evidence', 'No standard selects one.'];
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 0, f.err());
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'ready');
+  const entry = parseLog(readFileSync(log, 'utf8')).at(-1);
+  assert.deepEqual([entry.stage, entry.status], ['build', 'ready']);
+  assert.match(entry.comment, /^Decided by the session \(technical\): Which timer\?/u);
+  assert.match(entry.comment, /Evidence: No standard selects one/u);
+  assert.deepEqual(f.ledger.map(({ kind, outcome }) => [kind, outcome]), [['technical', 'decided']]);
+  assert.match(f.out(), /^mc: decided by the session: fake_timer .* continue with: inject a timer/u);
+});
+
+test('jev product reading does not reroute an unsettled technical mc ask to Martin', async () => {
+  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_TOOL: 'claude', MC_ROLE: 'build-session:goal' } });
+  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer'];
+  assert.equal(await run(argv, f.deps), 0, f.err());
+  assert.match(f.out(), /^mc: decided by the session: fake_timer — jev did not settle it \(fake_timer \(p 0\.60, fits 0\.88, settled 0\.30, jev-1\.14\.0\)/u);
+  assert.equal(f.ledger.length, 1);
+  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
+});
+
 test('interactive Martin may consult jev on a newly synthesized question and keeps truthful role evidence', async () => {
   const goal = join(programmeHome, 'jev', 'goals', 'martin-choice');
   mkdirSync(goal, { recursive: true });
@@ -193,7 +248,7 @@ test('interactive Martin may consult jev on a newly synthesized question and kee
   const f = fixture({ response: reply(0.95, 'shared'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/martin-choice', MC_TOOL: 'claude', MC_ROLE: 'martin', cwd: repoDir } });
   f.deps.readKeys = () => ({ TYPESAFE_API_KEY: 'fixture-secret-value' });
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  assert.equal(await run(['--reason', 'Which general rule?', '--option', 'specific: keep local behavior', '--option', 'shared: define a shared rule', '--recommend', 'shared'], { ...f.deps, read, write: writeFileSync }), 0, `${f.err()}${f.out()}`);
+  assert.equal(await run(['--kind', 'product', '--reason', 'Which general rule?', '--option', 'specific: keep local behavior', '--option', 'shared: define a shared rule', '--recommend', 'shared'], { ...f.deps, read, write: writeFileSync }), 0, `${f.err()}${f.out()}`);
   assert.equal(f.requests.length, 1);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
   assert.equal(parseLog(readFileSync(log, 'utf8')).at(-1).role, 'martin');
@@ -207,7 +262,7 @@ test('a reserved goal-bound ask sets Martin without a jev request', async () => 
   writeFileSync(join(goal, 'LOG.md'), '');
   const f = fixture({ env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/reserved', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  assert.equal(await run(['--reason', 'Deploy?', '--option', 'yes: deploy', '--option', 'no: do not', '--recommend', 'no', '--reserved', 'deploy'], { ...f.deps, read, write: writeFileSync }), 1);
+  assert.equal(await run(['--kind', 'product', '--reason', 'Deploy?', '--option', 'yes: deploy', '--option', 'no: do not', '--recommend', 'no', '--reserved', 'deploy'], { ...f.deps, read, write: writeFileSync }), 1);
   assert.equal(f.requests.length, 0);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
   const entry = parseLog(readFileSync(join(goal, 'LOG.md'), 'utf8')).at(-1);
@@ -222,7 +277,7 @@ test('a goal finished or moved by a person while jev is asked is not set over by
   const file = join(goal, 'GOAL.json');
   const log = join(goal, 'LOG.md');
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  const argv = ['jev/raced', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
+  const argv = ['jev/raced', '--kind', 'product', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
   const env = { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/raced', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
   const build = (fields) => goalJson({ stage: 'build', title: 'Raced', goal: ['Move while asked.'], repos: ['memoro-cli'], ...fields });
 

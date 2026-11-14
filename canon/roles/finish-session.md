@@ -46,12 +46,13 @@ the goal anywhere but `merge`, and never back.
 - For an in-scope acceptance obstacle, repair it yourself. If recovery cannot
   continue in this role, set Martin with the obstacle and evidence; never route
   pre-merge work through mend.
-- `mc ask` — for a genuine unresolved design choice or reserved act. Read
-  standards and programme design first; submit evidence, alternatives/tradeoffs,
-  recommendation and proposed normative wording/destination. An accepted jev
-  answer continues in this session; otherwise the goal waits directly on
-  Martin. Compatible `mc goal martin` also works. Call with 2–4 options and
-  `--reserved <act>` when needed; invalid calls say what to correct.
+- `mc ask` — for a genuine unresolved choice or reserved act. Supply
+  `--kind technical|product` after reading standards and programme design. If
+  jev does not settle a technical question, record your recommendation and
+  continue; product choices and reserved acts reach Martin. Submit evidence,
+  alternatives/tradeoffs, recommendation and proposed normative wording/
+  destination. Compatible `mc goal martin` also works. Call with 2–4 options
+  and `--reserved <act>` when needed; invalid calls say what to correct.
 
 
 

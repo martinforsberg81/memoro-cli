@@ -1,14 +1,14 @@
 /**
- * jev — TypeSafe's System One model, asked before a question reaches Martin
+ * jev — TypeSafe's System One model, asked before a question is decided
  * (`mc goal martin`, docs/technical/mc-jev.md).
  *
  * A session's question comes with 2 to 4 options and its recommendation. mc
  * builds one state from the goal, the programme and the session's evidence,
- * asks jev three typed questions (`answer`, a Choice over the option keys;
- * `fits` and `settled`, Nouls) and answers the session itself when jev agrees
- * with the recommendation with high probability (`THRESHOLDS`). Everything
- * else — a miss, a failure, a malformed answer — is Martin's: jev never makes
- * the verb fail.
+ * asks jev four typed questions (`answer`, a Choice over the option keys;
+ * `fits`, `settled` and `product`, Nouls). A settled answer continues; an
+ * unsettled technical question is decided by the session's recommendation.
+ * A product choice or reserved act reaches
+ * Martin. jev never makes the verb fail.
  *
  * The key is read here from the `mc keys` source (`keys-dotenv.js`) and goes
  * only into the Authorization header; every value of 8 or more characters
@@ -58,11 +58,12 @@ export const RESERVED_ACTS = ['deploy', 'production-data', 'credentials', 'admin
 export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 4;
 
-/** The three questions' instructions, as the goal states them. */
+/** The four questions' instructions, as the goal states them. */
 export const INSTRUCTIONS = Object.freeze({
   answer: 'Which option is the right way for this goal to proceed, given the goal, its contract and the decided standards in the state',
   fits: 'One of the options in `options` is a correct way for this goal to proceed',
   settled: 'The goal, its contract, the programme README or the technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
+  product: 'Choosing between the options is a choice of product direction that changes what users are promised, what the product costs or how personal data is handled, and that the goal, the programme page and the standards in the state do not already answer',
 });
 
 /** Goal-less sessions use the same questions, phrased for the work at hand. */
@@ -70,6 +71,7 @@ export const WORK_INSTRUCTIONS = Object.freeze({
   answer: 'Which option is the right way for this work to proceed, given the evidence and decided standards in the state',
   fits: 'One of the options in `options` is a correct way for this work to proceed',
   settled: 'The programme or technical standards in the state already decide which option is right, so no new product or policy decision by Martin is needed',
+  product: 'Choosing between the options is a choice of product direction that changes what users are promised, what the product costs or how personal data is handled, and that the programme page and the standards in the state do not already answer',
 });
 
 /** The ledger: one JSON line per `mc ask` or `mc goal martin` call. */
@@ -89,7 +91,7 @@ export function appendLedgerLine(path, line) {
  */
 export function exampleCall(goal = '<programme>/<goal>') {
   return [
-    `  mc goal martin ${goal} --reason "Which timer should the timeout test use?" \\`,
+    `  mc goal martin ${goal} --kind technical --reason "Which timer should the timeout test use?" \\`,
     '    --option "fake_timer: inject a timer that fires at once, as the goal\'s deterministic clock asks" \\',
     '    --option "real_wait: wait the full 15 seconds in the test" \\',
     '    --recommend fake_timer --evidence "criterion 2: no real waits over 1 s"',
@@ -105,6 +107,8 @@ export function returnInstruction(problems, goal, lead = 'mc: goal martin is not
     '--evidence "…" or --evidence-file <path|->, --document <repo>/<path> and --reserved deploy|production-data|credentials|admin are optional.',
     'For example:',
     exampleCall(goal),
+    'Kinds: technical — implementation, architecture, tooling, environment, order of work, a goal’s own criteria, or carrying out an already decided design.',
+    '        product — a choice of direction not already answered by the goal, programme page or standards, changing promises, cost or personal-data handling.',
     'Call mc goal martin again with this fixed; when jev answers, continue with its answer.',
     '',
   ].join('\n');
@@ -115,7 +119,7 @@ export function returnInstruction(problems, goal, lead = 'mc: goal martin is not
  * options: { key: text }, recommend, reserved }`, or `{ problems }` naming each
  * thing wrong.
  */
-export function readMartinCall({ reason, option = [], recommend, reserved }) {
+export function readMartinCall({ reason, option = [], recommend, reserved, kind, requireKind = false }) {
   const problems = [];
   const question = typeof reason === 'string' ? reason.trim() : '';
   if (!question) problems.push('--reason "<the question>" is required');
@@ -135,8 +139,10 @@ export function readMartinCall({ reason, option = [], recommend, reserved }) {
   if (recommend === null || recommend === undefined || !recommend.trim()) problems.push('--recommend <key> is required');
   else if (!Object.hasOwn(options, recommend.trim())) problems.push(`--recommend ${recommend} is not one of the option keys${Object.keys(options).length ? ` (${Object.keys(options).join(', ')})` : ''}`);
   if (reserved !== null && reserved !== undefined && !RESERVED_ACTS.includes(reserved)) problems.push(`--reserved is ${RESERVED_ACTS.join(', ')}, not ${reserved}`);
+  if (requireKind && !kind) problems.push('--kind technical|product is required for a session call');
+  else if (kind !== null && kind !== undefined && !['technical', 'product'].includes(kind)) problems.push(`--kind is technical or product, not ${kind}`);
   if (problems.length) return { problems };
-  return { question, options, recommend: recommend.trim(), reserved: reserved ?? null };
+  return { question, options, recommend: recommend.trim(), reserved: reserved ?? null, kind: kind ?? null };
 }
 
 /** The values of the keys source that are redacted: every one of `REDACT_MIN` characters or more, longest first. */
@@ -222,6 +228,7 @@ export function requestBody(state, options, instructions = INSTRUCTIONS) {
       answer: { type: 'choice', instructions: instructions.answer, criteria: { ...options } },
       fits: { type: 'noul', instructions: instructions.fits },
       settled: { type: 'noul', instructions: instructions.settled },
+      product: { type: 'noul', instructions: instructions.product },
     },
   };
 }
@@ -341,9 +348,10 @@ export function readAnswers(response, options) {
   const answer = response?.answers?.answer;
   const fits = response?.answers?.fits?.noul;
   const settled = response?.answers?.settled?.noul;
+  const product = response?.answers?.product?.noul;
   if (typeof response?.model !== 'string' || !answer || typeof answer.choice !== 'string'
-      || !answer.probabilities || typeof answer.probabilities !== 'object' || !isProbability(fits) || !isProbability(settled)) {
-    return { unavailable: 'malformed response (no model, answer, fits or settled)' };
+      || !answer.probabilities || typeof answer.probabilities !== 'object' || !isProbability(fits) || !isProbability(settled) || !isProbability(product)) {
+    return { unavailable: 'malformed response (no model, answer, fits, settled or product)' };
   }
   if (!Object.hasOwn(options, answer.choice)) return { unavailable: `unknown choice ${JSON.stringify(answer.choice).slice(0, 40)}` };
   const probability = answer.probabilities[answer.choice];
@@ -352,7 +360,7 @@ export function readAnswers(response, options) {
     model: response.model,
     answers: {
       answer: { choice: answer.choice, probabilities: answer.probabilities, confidence: answer.confidence ?? null },
-      fits, settled,
+      fits, settled, product,
     },
   };
 }

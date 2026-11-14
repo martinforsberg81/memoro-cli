@@ -42,15 +42,19 @@ with ✓/✗ and its check, and each worktree's state.
   session moves it to `review` or may set Martin; a review session moves it to
   `merge` (`mc goal stage merge` sends all registered PRs to merge) or `finish`
   (with REVIEW.md); a finish session moves `finish` to `merge`; the merger sets
-  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks Martin, jev
-  first: `mc goal martin --reason "<the question>" --option "<key>: <text>"
+  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks jev once; session callers require `--kind technical|product`, while a person may omit it:
+  `mc goal martin --kind technical|product --reason "<the question>" --option "<key>: <text>"
   --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
   <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys
   `^[a-z][a-z0-9_]{0,31}$`, the recommendation one of them. A call without them is refused with a return
   instruction (exit 2, nothing written): fix it and call again. When jev
   settles the question it prints `mc: jev answered <key> … — continue with:
-  <option text>`, the status stays, and the session continues with that answer;
-  otherwise the goal is `Martin` with jev's reading in the entry. A reserved
+  <option text>`, the status stays, and the session continues with that answer.
+  Every unsettled technical call, whatever jev reads or if jev is unavailable,
+  logs and continues with the session's recommendation, without changing
+  stage/status. Product calls reach Martin; a goal-bound product escalation
+  exits 1. `mc decisions` lists answered and
+  session-decided records read-only. A reserved
   act (`--reserved deploy|production-data|credentials|admin`) and a person's
   call never go to jev. Interactive Martin may use `mc ask` for a newly
   synthesized question after investigating the standards; do not repeat jev for
@@ -73,7 +77,7 @@ with ✓/✗ and its check, and each worktree's state.
   interactive decision desk. That role investigates it against technical and
   programme design, resolves settled details, records actual decisions
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
-  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles or wait directly on Martin; only merge failure uses mend. An actual design choice or reserved act uses goal-bound `mc ask` (or compatible `mc goal martin`), directly; continue if jev answers. A design-level choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --reason "…" --option "<key>: <text>"… --recommend
+  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; product choices and reserved acts reach Martin. Continue if jev answers. A product choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session except the interactive Martin role a backward move, naming both stages

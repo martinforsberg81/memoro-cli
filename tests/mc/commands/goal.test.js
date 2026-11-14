@@ -106,7 +106,7 @@ function dropFixture(f) {
 }
 
 /** A well-formed `mc goal martin` call: the question, two options, the first recommended. */
-const martinCall = (reason, ...goal) => ['martin', ...goal, '--reason', reason, '--option', 'widen: widen the contract to allow the fix', '--option', 'keep: keep the contract and drop the criterion', '--recommend', 'widen'];
+const martinCall = (reason, ...goal) => ['martin', ...goal, '--kind', 'product', '--reason', reason, '--option', 'widen: widen the contract to allow the fix', '--option', 'keep: keep the contract and drop the criterion', '--recommend', 'widen'];
 
 /** A goal already made: GOAL.json and LOG.md under its directory. */
 function seededGoal(extra = {}) {
@@ -1046,7 +1046,7 @@ test('mc goal list <programme> lists that programme alone, and says when it has 
 
 test('usage names the five verbs, and mc goal --help prints it', async () => {
   const text = usage();
-  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal criterion set', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|ready', 'mc goal martin \\[<programme>/<goal>\\] --reason', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
+  for (const verb of ['mc goal new', 'mc goal set', 'mc goal document add', 'mc goal criterion add', 'mc goal criterion met', 'mc goal criterion unmet', 'mc goal criterion set', 'mc goal convert', 'mc goal phase', 'mc goal log', 'mc goal stage', 'mc goal blocked\\|ready', 'mc goal martin \\[<programme>/<goal>\\] --kind technical\\|product --reason', 'mc goal done', 'mc goal drop', 'mc goal show', 'mc goal list']) {
     assert.match(text, new RegExp(verb, 'u'));
   }
   const printed = [];
@@ -1277,12 +1277,12 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
   assert.match(f.err(), /a session does not move a goal back/u);
   assert.equal(await run(['stage', 'mc/plain', 'merge'], f.deps), 0, f.err());
   assert.equal(stateOf(f), 'merge · ready');
-  assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 0, f.err());
+  assert.equal(await run(martinCall('choose scope; recommend keeping it', 'mc/plain'), f.deps), 1, f.err());
   assert.equal(stateOf(f), 'merge · Martin');
   for (const role of ['build-session:goal', 'review-session:goal']) {
     const stage = role === 'review-session:goal' ? 'review' : 'build';
     const allowed = fixture({ files: inStage(stage), env: { MC_GOAL: 'mc/plain', MC_TOOL: 'codex', MC_ROLE: role } });
-    assert.equal(await run(martinCall('question'), allowed.deps), 0, role);
+    assert.equal(await run(martinCall('question'), allowed.deps), 1, role);
     assert.equal(stateOf(allowed), `${stage} · Martin`, 'the valid unresolved goal question escalates directly');
   }
 });
@@ -1303,7 +1303,7 @@ test('a finish session moves finish to merge, sets blocked or Martin, and is ref
   assert.equal(parseLog(merged.store[`${DIR}/LOG.md`]).at(-1).role, 'finish', 'the entry names its writer');
   for (const [status, argv] of [['blocked', ['blocked', '--reason', 'the fixture is broken']], ['Martin', martinCall('the contract forbids the fix; recommend widening it')]]) {
     const f = fixture({ files: inStage('finish'), env: FINISH });
-    assert.equal(await run(argv, f.deps), 0, f.err());
+    assert.equal(await run(argv, f.deps), status === 'Martin' ? 1 : 0, f.err());
     assert.equal(stateOf(f), `finish · ${status}`);
   }
   for (const [from, argv, said] of [
@@ -1331,7 +1331,7 @@ test('a mend session repairs and requeues only a merge failure, and is refused e
   assert.deepEqual(requeued.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]], 'every registered pull request is queued again');
   for (const [from, argv, said] of [
     ['build', ['ready', '--reason', 'fixture repaired'], /mend session is only for merge/u],
-    ['review', ['martin', 'mc/plain', '--reason', 'the contract forbids the fix', '--option', 'widen: widen it', '--option', 'keep: keep it', '--recommend', 'widen'], /mend session is only for merge/u],
+    ['review', ['martin', 'mc/plain', '--kind', 'product', '--reason', 'the contract forbids the fix', '--option', 'widen: widen it', '--option', 'keep: keep it', '--recommend', 'widen'], /mend session is only for merge/u],
     ['finish', ['blocked', '--reason', 'still red'], /mend session is only for merge/u],
     ['build', ['stage', 'review'], /a mend session is only for merge failures/u],
     ['finish', ['stage', 'merge'], /a mend session is only for merge failures/u],
@@ -1352,7 +1352,7 @@ test('a mend session repairs and requeues only a merge failure, and is refused e
  * transport the fixture stands in for (no network), and only what jev does not
  * settle reaches Martin.
  */
-const TIMER = ['martin', 'mc/plain', '--reason', 'Which timer should the timeout test use?'];
+const TIMER = ['martin', 'mc/plain', '--kind', 'product', '--reason', 'Which timer should the timeout test use?'];
 const FAKE = ['--option', 'fake_timer: inject a timer that fires at once'];
 const REAL = ['--option', 'real_wait: wait the full 15 seconds'];
 const ASK = [...TIMER, ...FAKE, ...REAL, '--recommend', 'fake_timer'];
@@ -1365,12 +1365,13 @@ const reply = (status, body, headers = {}) => ({
   text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
 });
 /** jev's 200, shaped as the live call returned it (LOG.md, 2026-11-07T22:41Z). */
-const jevSays = ({ choice = 'fake_timer', p = 0.99, fits = 0.95, settled = 0.95, model = 'jev-1.14.0' } = {}) => reply(200, {
+const jevSays = ({ choice = 'fake_timer', p = 0.99, fits = 0.95, settled = 0.95, product = 0.1, model = 'jev-1.14.0' } = {}) => reply(200, {
   model,
   answers: {
     answer: { type: 'choice', choice, confidence: 0.98, probabilities: { fake_timer: choice === 'fake_timer' ? p : 1 - p, real_wait: choice === 'real_wait' ? p : 1 - p } },
     fits: { type: 'noul', noul: fits },
     settled: { type: 'noul', noul: settled },
+    product: { type: 'noul', noul: product },
   },
   usage: { input_tokens: 539, output_tokens: 70 },
 });
@@ -1399,7 +1400,7 @@ for (const [refusal, argv, said] of [
     assert.equal(f.store[`${DIR}/GOAL.json`], before.goal, 'GOAL.json unchanged');
     assert.equal(f.store[`${DIR}/LOG.md`], before.log, 'LOG.md unchanged');
     assert.match(f.err(), said);
-    assert.match(f.err(), /mc goal martin mc\/plain --reason "[^"]+" \\\n {4}--option "fake_timer: [^"]+" \\\n {4}--option "real_wait: [^"]+" \\\n {4}--recommend fake_timer/u, 'a complete example call');
+    assert.match(f.err(), /mc goal martin mc\/plain --kind technical --reason "[^"]+" \\\n {4}--option "fake_timer: [^"]+" \\\n {4}--option "real_wait: [^"]+" \\\n {4}--recommend fake_timer/u, 'a complete example call');
     assert.match(f.err(), /Call mc goal martin again/u);
     assert.deepEqual([f.requests.length, f.ledger().length, f.out()], [0, 0, ''], 'no request, no ledger line, nothing on stdout');
   });
@@ -1407,13 +1408,14 @@ for (const [refusal, argv, said] of [
 
 test('mc goal martin accepts a well-formed call: a person\'s goes to Martin with no request, the entry and the ledger saying so', async () => {
   const f = fixture({ files: seededGoal(), env: {}, keys: KEYS });
-  assert.equal(await run(ASK, f.deps), 0, f.err());
+  const withoutKind = ASK.filter((value, index) => value !== '--kind' && !(ASK[index - 1] === '--kind'));
+  assert.equal(await run(withoutKind, f.deps), 0, f.err());
   assert.equal(stateOf(f), 'build · Martin');
   assert.equal(f.requests.length, 0);
   assert.equal(lastComment(f), [
     'Martin is asked: Which timer should the timeout test use?',
     'Option fake_timer: inject a timer that fires at once', 'Option real_wait: wait the full 15 seconds', 'Recommended: fake_timer',
-    'jev not asked: person',
+    'Evidence: none supplied', 'jev not asked: person',
   ].join('\n'));
   const [line] = f.ledger();
   assert.deepEqual([line.goal, line.tool, line.outcome, line.reason, line.recommend], ['mc/plain', 'person', 'martin', 'jev not asked: person', 'fake_timer']);
@@ -1426,12 +1428,64 @@ test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >=
   assert.equal(f.out(), 'mc: jev answered fake_timer (p 0.90, fits 0.70, settled 0.70, jev-1.14.0) — continue with: inject a timer that fires at once\n');
   const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
   assert.deepEqual([last.stage, last.status, last.role], ['finish', 'ready', 'finish']);
-  assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
+  assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\nEvidence: none supplied\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
   const lines = f.ledger();
   assert.equal(lines.length, 1);
-  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'verb', 'programme', 'tool', 'role', 'question', 'options', 'recommend', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'budget', 'error_type', 'model', 'answers', 'outcome', 'reason']);
+  assert.deepEqual(Object.keys(lines[0]), ['at', 'goal', 'verb', 'programme', 'tool', 'role', 'question', 'options', 'recommend', 'kind', 'reserved', 'documents', 'trimmed', 'state_length', 'state_sha256', 'budget', 'error_type', 'model', 'answers', 'outcome', 'reason']);
   assert.deepEqual([lines[0].outcome, lines[0].model, lines[0].answers.answer.choice, lines[0].answers.fits, lines[0].answers.settled], ['answered', 'jev-1.14.0', 'fake_timer', 0.70, 0.70]);
   assert.match(lines[0].state_sha256, /^[0-9a-f]{64}$/u);
+});
+
+test('technical questions not settled by jev are recorded as the session recommendation and keep the goal ready', async () => {
+  for (const [label, options, reading] of [
+    ['reading below product threshold', { replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.10 })] }, /settled 0\.30/u],
+    ['network unavailable', { replies: [() => { throw new Error('offline'); }] }, /network error \(offline\)/u],
+    ['missing key', { keys: {} }, /no TYPESAFE_API_KEY/u],
+  ]) {
+    const f = asking({ ...options, env: FINISH });
+    const argv = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer', '--evidence', 'The contract is silent.'];
+    assert.equal(await run(argv, f.deps), 0, `${label}: ${f.err()}`);
+    assert.equal(stateOf(f), 'finish · ready', label);
+    assert.match(f.out(), /^mc: decided by the session: fake_timer — jev did not settle it \(/u, label);
+    const entry = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+    assert.match(entry.comment, /^Decided by the session \(technical\): Which timer should the timeout test use\?/u, label);
+    for (const evidence of ['Option fake_timer:', 'Option real_wait:', 'Recommended: fake_timer', 'Evidence: The contract is silent.']) assert.ok(entry.comment.includes(evidence), `${label}: ${evidence}`);
+    assert.match(entry.comment, reading, label);
+    assert.deepEqual(f.ledger().map(({ kind, outcome }) => [kind, outcome]), [['technical', 'decided']], label);
+  }
+});
+
+test('technical questions are decided on any unsettled jev reading, while malformed session kinds write nothing', async () => {
+  const f = asking({ replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.95 })] });
+  const argv = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
+  assert.equal(await run(argv, f.deps), 0, f.err());
+  assert.equal(stateOf(f), 'finish · ready');
+  assert.match(f.out(), /^mc: decided by the session: fake_timer/u);
+  assert.match(lastComment(f), /^Decided by the session \(technical\): Which timer should the timeout test use\?/u);
+  assert.deepEqual(f.ledger().map(({ kind, outcome, answers }) => [kind, outcome, answers.product]), [['technical', 'decided', 0.95]]);
+
+  const answered = asking({ replies: [jevSays({ p: 0.99, fits: 0.95, settled: 0.95, product: 0.10 })] });
+  const answerCall = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
+  assert.equal(await run(answerCall, answered.deps), 0, answered.err());
+  assert.equal(stateOf(answered), 'finish · ready');
+  assert.equal(answered.ledger()[0].outcome, 'answered');
+
+  const reserved = asking();
+  assert.equal(await run([...answerCall, '--reserved', 'deploy'], reserved.deps), 0, reserved.err());
+  assert.equal(reserved.requests.length, 0, 'reserved acts bypass jev for any kind');
+  assert.deepEqual(reserved.ledger().map(({ kind, outcome }) => [kind, outcome]), [['technical', 'martin']]);
+
+  for (const kind of [null, 'other']) {
+    const bad = asking();
+    const before = bad.store[`${DIR}/LOG.md`];
+    const malformed = ['martin', 'mc/plain', ...(kind ? ['--kind', kind] : []), '--reason', 'question?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
+    assert.equal(await run(malformed, bad.deps), 2);
+    assert.equal(stateOf(bad), 'finish · ready');
+    assert.equal(bad.store[`${DIR}/LOG.md`], before);
+    assert.deepEqual([bad.requests.length, bad.ledger().length], [0, 0]);
+    assert.match(bad.err(), /technical.*product/u);
+    assert.match(bad.err(), /--kind technical --reason/u);
+  }
 });
 
 for (const [miss, says, reading] of [
@@ -1442,7 +1496,7 @@ for (const [miss, says, reading] of [
 ]) {
   test(`jev's ${miss} sets Martin, its reading in the entry`, async () => {
     const f = asking({ replies: [jevSays(says)] });
-    assert.equal(await run(ASK, f.deps), 0, f.err());
+    assert.equal(await run(ASK, f.deps), 1, f.err());
     assert.equal(stateOf(f), 'finish · Martin');
     assert.match(lastComment(f), /^Martin is asked: Which timer should the timeout test use\?\n[\s\S]*Recommended: fake_timer\n/u);
     assert.match(lastComment(f), reading);
@@ -1476,13 +1530,13 @@ for (const [failure, options, reason, requests] of [
   ['a timeout', { replies: [() => new Promise(() => {})], timer: async () => {} }, 'jev unavailable: no answer in 15 seconds', 1],
   ['a network error', { replies: [() => Promise.reject(new Error('getaddrinfo ENOTFOUND'))] }, 'jev unavailable: network error (getaddrinfo ENOTFOUND)', 1],
   ['a body that is not JSON', { replies: [reply(200, '<html>')] }, 'jev unavailable: malformed response (not JSON)', 1],
-  ['a malformed body', { replies: [reply(200, { model: 'jev-1.14.0', answers: { answer: { choice: 'fake_timer' } } })] }, 'jev unavailable: malformed response (no model, answer, fits or settled)', 1],
+  ['a response without the product Noul', { replies: [reply(200, { model: 'jev-1.14.0', answers: { answer: { choice: 'fake_timer', probabilities: { fake_timer: 0.9 } }, fits: { noul: 0.9 }, settled: { noul: 0.2 } } })] }, 'jev unavailable: malformed response (no model, answer, fits, settled or product)', 1],
   ['an unknown choice', { replies: [jevSays({ choice: 'sleep' })] }, 'jev unavailable: unknown choice "sleep"', 1],
 ]) {
   test(`${failure} sets Martin with '${reason}' and exits 0`, async () => {
     const f = asking(options);
     if (options.readKeys) f.deps.readKeys = options.readKeys;
-    assert.equal(await run(ASK, f.deps), 0, f.err());
+    assert.equal(await run(ASK, f.deps), 1, f.err());
     assert.equal(stateOf(f), 'finish · Martin');
     assert.match(lastComment(f), new RegExp(`\\n${reason.replace(/[()]/gu, '\\$&')}$`, 'u'));
     assert.equal(f.requests.length, requests);
@@ -1504,7 +1558,7 @@ test('429 then 200 retries once, after the retry-after it names, and answers', a
 
 test('a stalled 2xx response body times out and the goal asks Martin with that reason', async () => {
   const f = asking({ replies: [() => ({ status: 200, text: () => new Promise(() => {}) })], timer: async () => {} });
-  assert.equal(await run(ASK, f.deps), 0, f.err());
+  assert.equal(await run(ASK, f.deps), 1, f.err());
   assert.match(lastComment(f), /jev unavailable: no answer in 15 seconds/u);
   assert.equal(stateOf(f), 'finish · Martin');
 });
@@ -1513,7 +1567,7 @@ test('mc goal martin omits absolute and symlink-escaping --document paths, while
   const f = asking({ files: { ...inStage('finish'), '/outside.md': 'outside secret', [`${DIR}/memoro-cli/docs/extra.md`]: 'inside', [`${DIR}/memoro-cli/docs/link.md`]: 'linked outside' } });
   f.deps.realpath = (path) => path === `${DIR}/memoro-cli/docs/link.md` ? '/outside.md' : path;
   const argv = [...ASK, '--document', 'memoro-cli/docs/extra.md', '--document', '/outside.md', '--document', '~/outside.md', '--document', 'memoro-cli/docs/link.md'];
-  assert.equal(await run(argv, f.deps), 0, f.err());
+  assert.equal(await run(argv, f.deps), 1, f.err());
   const state = JSON.parse(f.requests[0].init.body).state;
   assert.deepEqual(state.documents.map((item) => item.path), ['memoro-cli/docs/extra.md']);
   assert.equal((f.err().match(/outside the goal's and programme's repositories/gu) || []).length, 3);

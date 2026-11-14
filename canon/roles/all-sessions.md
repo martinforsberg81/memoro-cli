@@ -22,6 +22,11 @@ search them when the work touches what they cover; never read one whole.
 ## Decided standards
 
 When a question has options, ask jev first as [asking-martin](../tasks/asking-martin.md) says.
+Use kind `product` for a choice of direction the goal, programme page and
+standards do not already answer, and that changes promises, product cost or
+personal-data handling. Everything else is `technical`: implementation,
+architecture, tooling, environment, order of work, a goal's own criteria, and
+carrying out an already decided design, even when users see the result.
 
 Design has two places, and no third. What runs — landed functionality — is
 described once, in memoro's (or memoro-cli's) `docs/technical/`: the only
@@ -51,13 +56,14 @@ to be rebuilt before a wider launch, and do not defer a known requirement to
 
 Before asking, read the relevant technical contracts and the programme README and design. State which rule answers the question and apply it, or identify the precise missing/conflicting design rule. Investigate implementation details locally. Every decision for Martin is a design-level amendment ready for `docs/technical/`: evidence, remaining uncertainty, alternatives/tradeoffs, recommendation, proposed normative wording and exact destination/section. A technical gap within existing direction is resolved in planning and recorded; only an unapproved product/privacy choice or reserved act is Martin's. After a decision, update the canonical standard and affected programme/goal contracts, not only LOG.md. A decision that reaches beyond the programme goes in `docs/technical/`; one that is the programme's alone goes in its README or the goal it governs.
 >Plan writes a technical standard into `docs/technical/` within the app's
-existing direction. A product or policy choice — what users see or are
-promised, a cost or privacy line, the test strategy — is Martin's, and his
-answer is written into `docs/technical/` when it reaches beyond the programme,
+existing direction. A product choice — a direction changing promises, cost or
+privacy that the goal, programme design and standards leave open — is Martin's;
+his answer is written into `docs/technical/` when it reaches beyond the programme,
 or into the programme README and the goal it governs when it is that programme's
-alone, not only into a goal's log. A shared component
-that falls short of a standard is changed by the work that owns it, not in
-passing: a goal that finds it writes a proposal to that programme.
+alone, not only into a goal's log. A shared component that falls short of a
+standard may be changed by a goal only to the bounded extent its own criteria
+require; say so in its LOG.md and pull request, and let review judge it. Anything
+beyond that is a proposal to the owning programme, not a passing change.
 
 ## Test authority
 

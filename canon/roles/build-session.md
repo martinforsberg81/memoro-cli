@@ -45,9 +45,10 @@ moves forward. You do one of two things to it, nothing else:
   commission. If it cannot be resolved in this role, set Martin directly with
   the obstacle/evidence; do not use pre-merge mend.
 - **Unresolved choice:** read relevant technical standards and programme design;
-  ordinary details are settled there. Ask directly through `mc ask` only for an
-  actual design choice or reserved act; continue on a jev answer, otherwise wait
-  on Martin. Follow asking-martin for evidence and proposed design wording.
+  ordinary details are settled there. Call `mc ask` with `--kind technical` or
+  `--kind product`; if jev does not settle a technical question, record your
+  recommendation and continue. Product choices and reserved acts reach Martin.
+  Follow asking-martin for evidence and proposed design wording.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 

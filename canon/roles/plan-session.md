@@ -21,9 +21,10 @@ assigned phase, including goals waiting for an earlier phase. `draft` means its
 brief is unfinished, never a queue for completed planning. Unresolved planning
 prerequisites mean the work is not build-ready: do not hand it to build with a
 ceremonial `LOG.md` hold. Investigate until relevant facts and remaining
-uncertainty are established; distinguish facts you can resolve from product or
-policy choices only Martin decides. Ask only the remaining concrete design
-choice, with evidence and a recommendation. Do not infer that deferring consumer
+uncertainty are established; distinguish technical questions, which the session
+decides by its recommendation when jev does not settle them, from product or
+policy choices only Martin decides. Ask only the remaining product choice, with
+evidence and a recommendation. Do not infer that deferring consumer
 features also defers provider, data or DPA prerequisites. When Martin clarifies
 scope, amend the affected README/design, standards, goals and criteria
 consistently; change only what he clarified and preserve other requirements and
@@ -55,9 +56,10 @@ Resolve implementation questions yourself; finish the goal, contract,
 exclusions, documents, protection scope and executable criteria through
 `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
-remaining product/privacy choice or reserved act through goal-bound `mc ask`;
-continue on a jev answer and amend the canonical rule and goal consistently.
-An unresolved answer leaves the draft waiting on Martin.
+remaining question through goal-bound `mc ask --kind technical|product`; continue
+on a jev answer. An unsettled technical question is decided by the session's
+recommendation and recorded; only a product choice or reserved act leaves the
+draft waiting on Martin. Amend the canonical rule and goal consistently.
 
 Your headless assignment ends after that one draft is ready for build or
 waits on a concrete decision. Do not implement it, plan another draft or
@@ -73,13 +75,17 @@ Read the code and relevant `docs/technical/` contracts, programme README and des
 
 The goal's text is yours: goal, contract, out of scope, criteria and their
 checks, documents, phase, and whether the goal exists at all (`mc goal drop`).
-A headless delivery session never changes it; when one finds an actual design choice or reserved act, it asks Martin directly; otherwise it resolves its own acceptance obstacle. If the goal itself is wrong, it sets
-`Martin` with the question, and you or Martin answer by amending the goal with
-the verbs. A decision kept only in LOG.md is judged against the old text by
-the next reader.
+A headless delivery session never changes it; when one finds a genuine choice,
+it supplies the kind to `mc ask`: jev's answer continues, an unsettled technical
+question is decided and recorded by that session, and only a product choice or
+reserved act reaches Martin. Otherwise it resolves its own acceptance obstacle.
+If the goal itself is wrong, report the technical decision or ask Martin only
+for a product choice; amend the goal with the verbs. A decision kept only in
+LOG.md is judged against the old text by the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
-  `review`, or asks Martin about an unresolved design choice or reserved act.
+  `review`, or records a technical decision, or asks Martin about a product
+  choice or reserved act.
 - A **review session** judges and moves it to `merge` (OK) or `finish` (not
   OK, with REVIEW.md).
 - A **finish session** takes `finish · ready`: fixes what review found,
@@ -88,7 +94,7 @@ the next reader.
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.
 - `Martin` waits for him and wakes nothing. Interactive planning reads those goals when it
-  starts: each carries a question and a recommendation.
+  starts: each carries a product question, reserved act or runner issue and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
 over a goal yourself — a blocked one, one waiting on Martin, one in finish —
@@ -139,13 +145,15 @@ duplicate of something already taken or declined.
 If a goal is wrong, close its pull request, write the right goal with the
 verbs when needed, and `mc goal drop --reason "…"`. Only what
 tasks/asking-martin.md names reaches him: goal-bound `mc ask` (or compatible
-`mc goal martin`) with `--reason "<the
+`mc goal martin`) with `--kind technical|product --reason "<the
 question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>
 [--evidence "…"] [--document <repo>/<path>] [--reserved <act>]`, 2 to 4
 options. jev reads it first; when it prints `mc: jev answered <key> … —
 continue with: <text>`, the goal's status stays and you continue with that
-answer. Otherwise the goal is `Martin` with jev's reading. With Martin at the
-terminal, bring him the concrete question after jev has read it. A failing check, missing instructions,
+answer. An unsettled technical question is decided by the session's
+recommendation and recorded; only a product choice or reserved act leaves the
+goal `Martin` with jev's reading. With Martin at the terminal, bring him the
+concrete product question after jev has read it. A failing check, missing instructions,
 review rejection or check-in alone is not a reason to stop.
 
 Yours without asking:
