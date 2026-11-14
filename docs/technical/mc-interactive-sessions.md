@@ -69,7 +69,10 @@ sessions, helper intake and collect, and Codex get no flag.
 
 A session started with `--bg` is ended with `/exit` in the app, or on its host
 with `claude stop <id>`. A session started before this change carries no Remote
-Control and is not adopted; mc does not add the flag to a running session.
+Control. mc does not check for the flag when it lists or joins a session, so such a
+session is joined as today; a join with `--bg` prints the two lines for it, though the
+Claude app cannot reach it. Stop it with `claude stop <id>`. mc does not add the flag
+to a running session.
 
 - `--new` starts a fresh conversation without asking.
 - `--resume <id>` joins a session already holding that conversation. Otherwise
