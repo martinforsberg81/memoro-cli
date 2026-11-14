@@ -55,3 +55,36 @@ reconcile programme/goal text before returning or handing off work.
 See [mc-roles.md](mc-roles.md) for launch ownership and [mc-goals.md](mc-goals.md)
 for enforced mutation authority. Goal evidence, gate, review, publish and merge
 lifecycle remain unchanged.
+
+## Durable desk items
+
+`~/mc/martin/items/<id>/item.json` is the model-free record shared by chores,
+preparation, decisions and the interactive desk. Its schema is
+`mc-desk-item` version 1; `id` is a stable digest of kind, reference and
+`source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
+(`main-red:<repo>/<id>`) and `decision` (`decision:<at>`). A goal's source time
+is its current question/log entry time; a later question is a distinct item.
+Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
+`opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`.
+
+States are `new` → `prepared` → `for-martin` → `closed`, with `prepared` also
+able to close directly. Sort is null or mechanical, technical, product,
+judgement or reserved; reversible and due time are nullable. Closing records
+`{by, at, summary}` where by is decision, martin, default or source. Sync opens
+waiting goals and main-reds and flagged decided jev ledger rows once, skips
+ledger rows older than the store's first sync, closes open goal/main-red items
+whose source no longer waits, and writes only beneath the item store. It never
+changes a source record. Chores syncs once each round.
+
+`mc martin items [--state <state>] [--json]` syncs then lists open items before
+closed ones, by oldest source time. `mc martin item <id>` shows the complete
+record, available live source and prepared/brief text. Writers are the person
+and roles `martin`, `desk-prepare` and `decision`; desk-prepare may only prepare.
+`prepared --sort <sort>` requires `prepared.md` and moves new to prepared.
+`brief --sort product|judgement|reserved --reversible yes|no` requires
+`brief.md`, moves prepared to for-martin and records a 48-hour due time only
+when reversible. `close --by decision|martin|default --summary <paragraph>`
+(or `--summary-file`) closes prepared/for-martin. Invalid transitions, roles,
+ids and missing required files are refused with exit 2 and no write. Item JSON
+is written atomically. The interactive `mc martin` launch and read-only
+`mc martin get` remain unchanged.

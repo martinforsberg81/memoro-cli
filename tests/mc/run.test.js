@@ -2,7 +2,7 @@ import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,6 +20,7 @@ import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { goalField, goalJson, withGoal } from './_helpers/goal-file.js';
 import { run as goalCommand } from '../../src/mc/commands/goal.js';
+import { listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -466,6 +467,20 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], unmerge
   };
   return { deps, files, dirs, scratchAges, log, calls, root, duringSession, sweepHook };
 }
+
+test('chores syncs a waiting goal item without adding a run row', async (t) => {
+  const runLog='ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds\tmodel\tclass\ttool\teffort\tbilling\tcost\n2026-08-29T09:00:00Z\thelper\thelper\t0\t0\t-\t-\t-\t-\t-\t-\t-\tsuccess,memoro,1-new\t-\t-\t-\t-\t-\t-\t-\n2026-08-29T09:00:00Z\thelper\thelper\t0\t0\t-\t-\t-\t-\t-\t-\t-\tsuccess,memoro-cli,1-new\t-\t-\t-\t-\t-\t-\t-\n';
+  const f=fixture({runs:runLog}); const physical=mkdtempSync(join(tmpdir(),'mc-chores-desk-')); t.after(()=>rmSync(physical,{recursive:true,force:true}));
+  const env={MC_WORK_ROOT:join(physical,'mc'),MC_HOME:join(physical,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs');
+  const dir=join(home,'alpha','goals','waiting'); mkdirSync(dir,{recursive:true});
+  const at='2026-11-14T10:00:00Z'; writeFileSync(join(dir,'GOAL.json'),goalJson({status:'Martin'}));
+  writeFileSync(join(dir,'LOG.md'),`## ${at} · person · build · Martin\n\nComment: Martin is asked: Which option?\nOption a: A\nOption b: B\nRecommended: a\n`);
+  f.deps.syncDeskItems=()=>syncDeskItems({env,home,now:()=>new Date(at)});
+  const before=f.files[`${f.root}/runner/log/runs.tsv`] ?? null;
+  await createRunner({deps:f.deps}).chores();
+  const [item]=listDeskItems({env}); assert.equal(item.reference,'alpha/waiting'); assert.equal(item.state,'new');
+  assert.equal(f.files[`${f.root}/runner/log/runs.tsv`] ?? null,before);
+});
 
 /** The helper's two halves, faked: a digest that was written and a turn that ran. */
 const okCollect = async () => ({

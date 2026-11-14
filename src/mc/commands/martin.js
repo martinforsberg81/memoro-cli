@@ -1,12 +1,16 @@
 /** Martin's interactive decision desk and its read-only queue command. */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { commandUsage } from '../command-help.js';
-import { martinDir, programsHome } from '../paths.js';
+import { martinDir, mcHome, programsHome } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
+import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
+import { sessionIdentity } from '../session-role.js';
+import { ledgerPath } from '../jev.js';
 
 export function usage() { return commandUsage('martin'); }
 
@@ -25,6 +29,8 @@ export const ROUTES = {
 };
 
 export async function run(argv, deps = {}) {
+  if (argv[0] === 'items') return items(argv.slice(1), deps);
+  if (argv[0] === 'item') return item(argv.slice(1), deps);
   if (argv[0] === 'get') return get(argv.slice(1), deps);
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -56,6 +62,62 @@ export async function run(argv, deps = {}) {
   if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return 1; }
   return opened.code ?? 0;
 }
+
+function items(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const role = writerRole(env);
+  if (!['person','martin','desk-prepare','decision'].includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
+  const parsed = scanArgs(argv, { booleans: ['--json'], strictValues: ['--state'], check: ({ positional, flags }) => positional.length ? `unknown argument ${positional[0]}` : flags.state && !['new','prepared','for-martin','closed'].includes(flags.state) ? `unknown state ${flags.state}` : null });
+  if (parsed.error) { stderr.write(`mc: ${parsed.error}\n`); return 2; }
+  syncDeskItems({ env: deps.env || process.env, home: deps.home || programsHome(deps.env || process.env), ...(deps.syncDeps || {}) });
+  const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
+  const sourceItems = [...collectMartinQueue({ home: deps.home || programsHome(deps.env || process.env) }).items, ...readDecisionRows(env)];
+  const shown = result.map((x) => ({ ...x, question: sourceLine(sourceItems.find((s) => s.reference === x.reference) || {}) }));
+  if (parsed.flags.json) stdout.write(`${JSON.stringify(shown, null, 2)}\n`);
+  else for (const x of shown) stdout.write(`${x.id} · ${x.kind} · ${x.reference} · ${x.state} · ${x.sort || 'unsorted'} · ${x.due_at || 'no due date'} · ${x.question}\n`);
+  return 0;
+}
+
+function item(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const [id, verb, ...rest] = argv;
+  if (!id) { stderr.write('mc: usage: mc martin item <id> [prepared|brief|close …]\n'); return 2; }
+  const env = deps.env || process.env; const record = readDeskItem(id, { env });
+  if (!record) { stderr.write(`mc: unknown item ${id}; no item state or verb applies\n`); return 2; }
+  if (!verb) {
+    const source = record.kind === 'decision' ? readDecisionRows(env).find((x) => `decision:${x.at}` === record.reference) || null
+      : collectMartinQueue({ home: deps.home || programsHome(env) }).items.find((x) => x.reference === record.reference) || null;
+    const dir = itemDirectory(record, env); const prepared = maybeRead(join(dir, 'prepared.md')); const brief = maybeRead(join(dir, 'brief.md'));
+    stdout.write(`${JSON.stringify({ ...record, source, prepared, brief }, null, 2)}\n`); return 0;
+  }
+  const role = writerRole(env);
+  if (!['person','martin','desk-prepare','decision'].includes(role)) return refused(record, verb, stderr, `role ${role} cannot write desk items`);
+  const parsed = scanArgs(rest, { strictValues: ['--sort','--reversible','--by','--summary','--summary-file'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null });
+  if (parsed.error) { stderr.write(`mc: ${parsed.error}\n`); return 2; }
+  const f = parsed.flags, dir = itemDirectory(record, env), state = record.state;
+  const refuse = (message) => refused(record, verb, stderr, message);
+  if (role === 'desk-prepare' && verb !== 'prepared') return refuse('desk-prepare may only use prepared');
+  if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
+    record.state = 'prepared'; record.sort = f.sort; writeDeskItem(record, { env }); return 0;
+  }
+  if (verb === 'brief' && state === 'prepared' && ['product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
+    record.state = 'for-martin'; record.sort = f.sort; record.reversible = f.reversible === 'yes'; record.due_at = record.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; writeDeskItem(record, { env }); return 0;
+  }
+  if (verb === 'close' && ['prepared','for-martin'].includes(state) && ['decision','martin','default'].includes(f.by)) {
+    let summary = f.summary;
+    if (f['summary-file']) { try { summary = (deps.readFile || readFileSync)(f['summary-file'], 'utf8').trim(); } catch { return refuse('summary file is missing'); } }
+    if (!summary?.trim() || summary.trim().split(/\n\s*\n/u).length > 1) return refuse('close requires one paragraph with --summary or --summary-file');
+    record.state = 'closed'; record.outcome = { by: f.by, at: (deps.now || (() => new Date()))().toISOString(), summary: summary.trim() }; writeDeskItem(record, { env }); return 0;
+  }
+  return refuse('transition not allowed');
+}
+function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
+function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' ? 'close' : 'no verb'} applies\n`); return 2; }
+function sourceLine(x) { return String(x.question?.question || x.question?.reason || x.reason || x.question || x.outcome?.summary || '').split(/\r?\n/u)[0]; }
+function maybeRead(path) { try { return readFileSync(path, 'utf8'); } catch { return null; } }
+function exists(path) { try { return readFileSync(path); } catch { return null; } }
+function readDecisionRows(env) { return String(maybeRead(ledgerPath(mcHome(env))) || '').split(/\n/u).filter(Boolean).flatMap(line=>{ try { const row=JSON.parse(line); return [{...row,reference:`decision:${row.at}`}]; } catch { return []; } }); }
 
 export function get(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
