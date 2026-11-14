@@ -7,8 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { registerForeground } from './foreground.js';
-import { deskSessions, readRegister, recordMatchesDesk, registerSession } from './session-entrance.js';
-import { terminalEnvironment } from './interactive-terminal.js';
+import { deskSessions, readRegister, recordMatchesDesk, registerSession, terminalEnvironment } from './session-entrance.js';
 import { normalizeSessionRole, SESSION_IDENTITY_ENV } from './session-role.js';
 import { workRoot, mcHome } from './paths.js';
 import { pidAlive } from './status-collect.js';

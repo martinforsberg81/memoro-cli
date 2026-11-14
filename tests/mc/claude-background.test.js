@@ -55,7 +55,7 @@ function entrance(overrides = {}) {
   const calls = [];
   const options = { ...base, launch, ...overrides };
   const deps = {
-    agents: () => [row], records: () => [record], alive: () => true, owners: () => [row.pid],
+    agents: () => [row], records: () => [record], alive: () => true,
     lock: () => () => calls.push('release'),
     choose: (_title, items) => { calls.push(items); return row.id; },
     attach: (_options, session) => { calls.push(['attach', session.id]); return { status: 0 }; },
@@ -65,16 +65,15 @@ function entrance(overrides = {}) {
 }
 
 for (const [name, changes, route] of [
-  ['eligible Claude goes to background and never tmux', {}, 'background'],
-  ['eligible Codex keeps tmux and never background', { tool: 'codex' }, 'tmux'],
+  ['eligible Claude goes to its background session', {}, 'background'],
+  ['eligible Codex goes to its own app-server session', { tool: 'codex' }, 'codex-session'],
   ['macOS Claude stays foreground even over SSH', { platform: 'darwin' }, 'foreground'],
   ['noninteractive Linux stays foreground', { isInteractive: () => false }, 'foreground'],
   ['MC_HEADLESS=1 stays foreground', { env: { ...env, MC_HEADLESS: '1' } }, 'foreground'],
 ]) test(name, async () => {
   const reached = [];
   const result = await openInWorkArea({ ...base, ...changes,
-    terminal: () => { reached.push('tmux'); return { ok: true }; },
-    background: () => ({ start: async plan => { reached.push('background'); assert.equal(plan.tool, 'claude-code'); return { ok: true }; } }),
+    background: () => ({ start: async plan => { reached.push(plan.tool === 'claude-code' ? 'background' : 'codex-session'); return { ok: true }; } }),
     spawn: () => { reached.push('foreground'); return { status: 0 }; }, register: () => () => {},
   });
   assert.equal(result.ok, true);
@@ -84,7 +83,6 @@ for (const [name, changes, route] of [
 test('a named Claude resume resolves provider before routing without a tool flag', async () => {
   const reached = [];
   await openInWorkArea({ ...base, tool: null, pick: 'held', conversations: () => [{ id: 'held-1', tool: 'claude-code' }],
-    terminal: () => { reached.push('tmux'); return { ok: true }; },
     background: options => { reached.push(options.launch.id); return { result: { ok: true } }; },
     spawn: () => { reached.push('foreground'); return { status: 0 }; },
   });
@@ -93,7 +91,7 @@ test('a named Claude resume resolves provider before routing without a tool flag
 
 test('no session for the desk starts once and attaches', async () => {
   const f = entrance();
-  const prepared = await prepareClaudeBackground(f.options, { ...f.deps, agents: () => [], records: () => [], owners: () => [] });
+  const prepared = await prepareClaudeBackground(f.options, { ...f.deps, agents: () => [], records: () => [] });
   const plan = await interactiveLaunchPlan(base);
   const result = await prepared.start(plan);
   assert.equal(result.background, 'bg-2');
@@ -167,15 +165,12 @@ test('discovery requires matching agents and register pids, cwd and desk, not st
   assert.deepEqual(deskSessions(base, [row], [record], () => false), []);
 });
 
-test('a legacy owner or an unregistered held conversation refuses a duplicate without killing it', async () => {
+test('an unregistered held conversation refuses a duplicate without killing it', async () => {
   const f = entrance({ chosen: { id: 'held-1' } });
-  const legacy = await prepareClaudeBackground(f.options, { ...f.deps, owners: () => [42] });
-  assert.match(legacy.result.reason, /PID 42/u);
-  legacy.release();
-  const orphan = await prepareClaudeBackground(f.options, { ...f.deps, records: () => [], owners: () => [] });
+  const orphan = await prepareClaudeBackground(f.options, { ...f.deps, records: () => [] });
   assert.match(orphan.result.reason, /without matching desk registration/u);
   orphan.release();
-  assert.deepEqual(f.calls, ['release', 'release']);
+  assert.deepEqual(f.calls, ['release']);
 });
 
 test('an unreadable agents response is a discovery failure, not an empty desk', async () => {
@@ -519,7 +514,7 @@ test('grant expiry during uncertain discovery exits with clean credentials and r
     run: (_bin, args) => { assert.deepEqual(args, ['attach', row.id]); return { status: 0 }; },
     start: () => assert.fail('a pending launch never authorizes a second start'),
   });
-  const deps = { lock: () => () => {}, alive: () => true, owners: () => [], records: () => records, choose: () => row.id };
+  const deps = { lock: () => () => {}, alive: () => true, records: () => records, choose: () => row.id };
   const refused = await prepareSessionEntrance({ ...base, launch }, driver, deps);
   assert.match(refused.result.reason, /pending discovery/u);
   assert.ok(f.files.has(pending));
@@ -544,7 +539,7 @@ test('the same entrance accepts a different provider driver without changing des
     list: () => sessions,
     start: () => assert.fail('join must not start or replace a session'),
     join: (_options, session) => { calls.push(session.id); return { status: 0 }; },
-  }, { lock: () => () => {}, alive: () => true, owners: () => [row.pid],
+  }, { lock: () => () => {}, alive: () => true,
     records: () => [{ ...record, tool: 'codex' }], choose: (_title, choices) => choices[0].value });
   assert.equal(prepared.result.background, 'remote-thread');
   assert.deepEqual(calls, ['remote-thread']);

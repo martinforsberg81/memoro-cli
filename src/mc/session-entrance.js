@@ -6,14 +6,30 @@ import { join, resolve } from 'node:path';
 
 import { isSameTool } from '../adapters/index.js';
 import { foregroundDir, registerForeground } from './foreground.js';
-import { liveTerminalOwners, terminalEnvironment } from './interactive-terminal.js';
 import { normalizeSessionRole } from './session-role.js';
+import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 import { workRoot } from './paths.js';
 import { pidAlive } from './status-collect.js';
 import { select } from './prompt.js';
 import { log } from './logger.js';
 
 const failure = reason => ({ ok: false, reason });
+const ENTRANCES = new Set(['plan', 'manager', 'brief', 'helper', 'martin']);
+
+/** Linux SSH entrances of the four person roles keep their provider alive past the terminal. */
+export function entersPersistentSession({ env = process.env, platform = process.platform, isInteractive, verb } = {}) {
+  return platform === 'linux' && ENTRANCES.has(verb) && env.MC_HEADLESS !== '1'
+    && Boolean(env.SSH_CONNECTION || env.SSH_TTY) && isInteractive(env);
+}
+
+/** The environment of a process mc starts for a desk: nothing a launching shell or an older holder left behind. */
+export function terminalEnvironment(env) {
+  const allowed = new Set(['HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'LANG', 'TERM', 'COLORTERM',
+    'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+    'MC_HOME', 'MC_WORK_ROOT', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR']);
+  return Object.fromEntries(Object.entries(scrubRuntimeSecretsFromEnv(env))
+    .filter(([key, value]) => typeof value === 'string' && (allowed.has(key) || /^LC_[A-Z_]+$/u.test(key))));
+}
 
 export function readRegister(env, io = fs) {
   const dir = foregroundDir(env);
@@ -125,7 +141,7 @@ export async function joinSession(options, session, driver, {
 
 /** Selection stays in the caller's terminal; the detached holder starts and registers the provider. */
 export async function prepareSessionEntrance(options, driver, {
-  records = readRegister, alive = pidAlive, owners = liveTerminalOwners,
+  records = readRegister, alive = pidAlive,
   lock = lockDesk, choose = options.choose || select,
 } = {}) {
   let release;
@@ -133,8 +149,6 @@ export async function prepareSessionEntrance(options, driver, {
     release = await lock(options);
     const rows = await driver.list(options);
     const sessions = deskSessions(options, rows, records(options.env), alive);
-    const old = owners(options).filter(pid => !sessions.some(session => session.pid === pid));
-    if (old.length) return { result: failure(`this desk has a live process outside provider session registration (PID ${old.join(', ')}); return to its terminal. No second provider was started`), release };
     const held = new Set(rows.filter(row => row.cwd === resolve(options.worktree.path) && alive(row.pid)).map(row => row.sessionId).filter(Boolean));
     let selected = options.chosen && sessions.find(session => session.sessionId === options.chosen.id);
     if (!options.chosen && options.pick !== 'new' && sessions.length) {

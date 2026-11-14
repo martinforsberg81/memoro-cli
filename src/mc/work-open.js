@@ -5,7 +5,9 @@
  * directory the work lives in. The conversation is the tool's, kept in the
  * tool's own store, indexed by that directory — so mc looks it up rather than
  * remembering it. The tool inherits this terminal and mc waits. Linux SSH
- * entrances use provider-owned persistence for Claude and tmux for Codex.
+ * entrances of the person roles are served by a provider-owned persistent
+ * session instead (see `session-entrance.js`): Claude's background daemon,
+ * Codex's own app-server.
  *
  * Conversation selection (`pick`):
  *   (nothing)   the most recent conversation here, or a new one if there is none
@@ -39,6 +41,13 @@ import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
+import { entersPersistentSession, prepareSessionEntrance } from './session-entrance.js';
+
+/** Provider mechanics of a persistent entrance, by launch id; loaded only when one is used. */
+const PERSISTENT_DRIVERS = {
+  'claude-code': async () => (await import('./claude-background.js')).claudeBackgroundDriver(),
+  codex: async () => (await import('./codex-sessions.js')).codexSessionDriver(),
+};
 
 export async function interactiveLaunchPlan({
   areaRoot,
@@ -264,13 +273,11 @@ export async function interactiveLaunchPlan({
 
 }
 
-/** One provider decision; every start uses interactiveLaunchPlan, including the tmux worker. */
+/** One provider decision; every start, persistent or not, uses interactiveLaunchPlan. */
 export async function openInWorkArea(options = {}) {
   const { env = process.env, platform = process.platform, isInteractive = interactive,
-    persistentTerminal = true, terminal, background, spawn = spawnSync,
-    register = registerForeground, onProvider, ...rest } = options;
-  const transport = persistentTerminal && platform === 'linux' ? await import('./interactive-terminal.js') : null;
-  const eligible = Boolean(transport?.needsPersistentTerminal({ env, platform, isInteractive, verb: options.verb }));
+    background, spawn = spawnSync, register = registerForeground, onProvider, ...rest } = options;
+  const eligible = entersPersistentSession({ env, platform, isInteractive, verb: options.verb });
   let entrance;
   try {
     const plan = await interactiveLaunchPlan({ ...rest, env, isInteractive, onProvider,
@@ -280,17 +287,11 @@ export async function openInWorkArea(options = {}) {
         return findBackgroundConversation({ ...options, env }, prefix);
       }),
       resolved: async ({ launch, before, chosen }) => {
-        if (!eligible) return {};
-        if (launch.id === 'codex') return { result: await (terminal || transport.openPersistentTerminal)({ ...options, tool: launch.id, ...(chosen ? { pick: chosen.id } : {}) }) };
-        if (launch.id === 'claude-code') {
-          const { claudeBackgroundDriver } = await import('./claude-background.js');
-          const { prepareSessionEntrance } = await import('./session-entrance.js');
-          const settings = { ...options, env, launch, before, chosen };
-          entrance = background ? await background(settings)
-            : await prepareSessionEntrance(settings, claudeBackgroundDriver());
-          return entrance;
-        }
-        return {};
+        if (!eligible || !(launch.id in PERSISTENT_DRIVERS)) return {};
+        const settings = { ...options, env, launch, before, chosen };
+        entrance = background ? await background(settings)
+          : await prepareSessionEntrance(settings, await PERSISTENT_DRIVERS[launch.id]());
+        return entrance;
       },
     });
     if (!plan.launch) return plan;
