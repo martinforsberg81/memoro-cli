@@ -15,7 +15,7 @@ export function validateDescriptor(value, { destination = 'server', localVersion
   if (value?.version !== DESCRIPTOR_VERSION) refuse(`mc here does not know descriptor v${value?.version ?? 'unknown'} from ${destination}`);
   const common = ['version', 'mcVersion', 'kind'];
   if (!string(value.mcVersion)) refuse('descriptor has no mc version');
-  const shape = (keys) => { if (!exact(value, [...common, ...keys])) refuse('descriptor has unknown or missing fields'); };
+  const shape = (keys, optional = []) => { if (!exact(value, [...common, ...keys, ...optional.filter(key => Object.hasOwn(value, key))])) refuse('descriptor has unknown or missing fields'); };
   if (value.kind === 'handshake') shape([]);
   else if (value.kind === 'refusal') { shape(['reason']); if (!string(value.reason)) refuse('descriptor has no refusal reason'); }
   else if (value.kind === 'question') {
@@ -26,7 +26,8 @@ export function validateDescriptor(value, { destination = 'server', localVersion
   } else if (value.kind === 'session') {
     const keys = ['provider', 'providerVersion', 'id', 'name', 'sessionId', 'started'];
     if (value.provider === 'codex') keys.push('socket', 'access');
-    shape(keys);
+    shape(keys, value.provider === 'codex' ? ['prompt'] : []);
+    if (Object.hasOwn(value, 'prompt') && (!string(value.prompt) || value.prompt.includes('\0'))) refuse('invalid opening user message');
     if (!['codex', 'claude-code'].includes(value.provider) || !string(value.providerVersion)
       || !string(value.id) || !string(value.name) || !nullable(value.sessionId) || !nullable(value.started)) refuse('invalid session descriptor');
     if (value.provider === 'codex') {
@@ -60,5 +61,6 @@ export function descriptor(kind, fields = {}) {
 export function sessionDescriptor(session, provider, providerVersion) {
   return descriptor('session', { provider, providerVersion, id: session.id, name: session.name,
     sessionId: session.resume ?? null, started: session.started ?? null,
-    ...(provider === 'codex' ? { socket: session.socket, access: session.resume ? [] : session.access ?? [] } : {}) });
+    ...(provider === 'codex' ? { socket: session.socket, access: session.resume ? [] : session.access ?? [],
+      ...(session.prompt ? { prompt: session.prompt } : {}) } : {}) });
 }

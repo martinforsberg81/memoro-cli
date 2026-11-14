@@ -7,29 +7,10 @@ import { workRoot } from './paths.js';
 import { terminalEnvironment } from './session-entrance.js';
 import { MC_VERSION, validateDescriptor } from './server-protocol.js';
 
-const settingPath = env => join(workRoot(env), 'runner', 'server.json');
-const refusal = message => { throw new Error(message); };
+import { sshDestination } from './server-settings.js';
+export { sshDestination, readServer, saveServer, clearServer } from './server-settings.js';
 
-export function sshDestination(value) {
-  if (typeof value !== 'string' || !value || value.startsWith('-') || /[\x00-\x20\x7f]/u.test(value)) refusal('SSH destination must be one OpenSSH destination, not options or a command');
-  return value;
-}
-export function readServer(env = process.env, io = fs) {
-  let value;
-  try { value = JSON.parse(io.readFileSync(settingPath(env), 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  if (!value || Object.keys(value).join() !== 'destination') refusal('invalid mc server setting');
-  return sshDestination(value.destination);
-}
-export function saveServer(destination, env = process.env, io = fs) {
-  sshDestination(destination);
-  const file = settingPath(env);
-  io.mkdirSync(join(workRoot(env), 'runner'), { recursive: true, mode: 0o700 });
-  const pending = `${file}.${process.pid}.tmp`;
-  try { io.writeFileSync(pending, `${JSON.stringify({ destination })}\n`, { mode: 0o600 }); io.renameSync(pending, file); }
-  finally { io.rmSync(pending, { force: true }); }
-}
-export function clearServer(env = process.env, io = fs) { io.rmSync(settingPath(env), { force: true }); }
+const refusal = message => { throw new Error(message); };
 
 /** OpenSSH sends one shell command, not an argv vector. Quote every word once here. */
 export function remoteCommand(argv) {
@@ -40,7 +21,7 @@ export function remoteCommand(argv) {
 }
 
 export function serverLink(destination, {
-  env = process.env, io = fs, spawnProcess = spawn, run = spawnSync, now = Date.now, sleep = delay,
+  env = process.env, io = fs, spawnProcess = spawn, run = spawnSync, now = Date.now, sleep = delay, stderr = process.stderr,
 } = {}) {
   sshDestination(destination);
   const options = { env: terminalEnvironment(env) };
@@ -58,7 +39,10 @@ export function serverLink(destination, {
     const result = run('ssh', [destination, remoteCommand(command(operation, entrance, args, answers))],
       { ...options, encoding: 'utf8', timeout: 30_000, maxBuffer: 1 << 20 });
     // A server refusal is structured even when mc exits nonzero.
-    if (result.stdout?.trim()) return decode(result.stdout);
+    if (result.stdout?.trim()) {
+      const value = decode(result.stdout);
+      if (!result.error && result.status === 0) return value;
+    }
     refusal(`ssh ${destination}: ${result.error?.message || result.stderr?.trim() || `exited ${result.status ?? result.signal ?? 'unknown'}`}`);
   }
   function passthrough(operation, entrance, args = [], answers = []) {
@@ -71,36 +55,58 @@ export function serverLink(destination, {
   async function connect(operation, entrance, args = [], answers = []) {
     const child = spawnProcess('ssh', [destination, remoteCommand(command(operation, entrance, args, answers))],
       { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
-    let output = ''; let errors = ''; let settled = false;
+    let output = ''; let errors = ''; let response; let problem; let exited = false;
     let resolveClosed;
     const closed = new Promise(resolve => { resolveClosed = resolve; });
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', chunk => { errors += chunk; });
+    child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-8192); });
     child.stdin.on('error', () => {});
-    const first = new Promise((resolve, reject) => {
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', chunk => {
-        output += chunk;
-        if (output.length > 1 << 20) { reject(new Error(`ssh ${destination}: descriptor exceeds 1 MiB`)); child.kill(); return; }
-        if (!settled && output.includes('\n')) {
-          settled = true;
-          try { resolve(decode(output.slice(0, output.indexOf('\n')))); } catch (error) { reject(error); }
-        }
-      });
-      child.once('error', error => reject(new Error(`ssh ${destination}: ${error.message}`)));
-      child.once('close', (status, signal) => {
-        resolveClosed({ status: status ?? 1, signal });
-        if (!settled) reject(new Error(`ssh ${destination}: ${errors.trim() || `exited ${status ?? signal}`}`));
-      });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      if (response || problem) return;
+      output += chunk;
+      if (Buffer.byteLength(output) > 1 << 20) { problem = new Error(`ssh ${destination}: descriptor exceeds 1 MiB`); return; }
+      if (output.includes('\n')) {
+        try { response = decode(output.slice(0, output.indexOf('\n'))); } catch (error) { problem = error; }
+      }
     });
+    child.once('error', error => { problem = new Error(`ssh ${destination}: ${error.message}`); });
+    child.once('close', (status, signal) => {
+      exited = true;
+      resolveClosed({ status: status ?? 1, signal });
+      if (!response && !problem) problem = new Error(`ssh ${destination}: ${errors.trim() || `exited ${status ?? signal}`}`);
+    });
+    const waitFor = async (done, ms) => {
+      for (const deadline = now() + ms; !done();) {
+        if (now() >= deadline) return false;
+        await sleep(25);
+      }
+      return true;
+    };
+    const abort = async () => {
+      child.stdin.destroy();
+      if (!exited) {
+        child.kill('SIGTERM');
+        if (!await waitFor(() => exited, 5000)) {
+          child.kill('SIGKILL');
+          await waitFor(() => exited, 1000);
+        }
+      }
+    };
     try {
-      const session = await first;
-      if (session.kind !== 'session') refusal(`ssh ${destination}: expected a session descriptor, got ${session.kind}`);
-      return { session, closed, finish: async clean => {
-        child.stdin.end(clean ? 'end\n' : '');
+      if (!await waitFor(() => response || problem, 30_000)) refusal(`ssh ${destination}: no session descriptor within 30000 ms`);
+      if (problem) throw problem;
+      if (response.kind !== 'session') refusal(`ssh ${destination}: expected a session descriptor, got ${response.kind}`);
+      return { session: response, closed, finish: async clean => {
+        child.stdin.end(clean && !exited ? 'end\n' : '');
+        if (!await waitFor(() => exited, 30_000)) {
+          await abort();
+          refusal(`ssh ${destination}: session connection did not close within 30000 ms`);
+        }
+        if (errors.trim()) stderr.write(`${errors.trim().split('\n').map(line => prefix(line.replace(/^mc: /u, ''))).join('\n')}\n`);
         return await closed;
-      }, abort: () => child.kill('SIGTERM') };
-    } catch (error) { child.stdin.destroy(); child.kill('SIGTERM'); throw error; }
+      }, abort };
+    } catch (error) { await abort(); throw error; }
   }
 
   async function tunnel(remote) {
@@ -136,20 +142,22 @@ export function serverLink(destination, {
     } catch (error) { await cleanup(); throw error; }
   }
 
-  /** Only access flags cross for a new thread; the provider's launch remains server-owned. */
+  /** Access and the opening user message cross; role configuration remains server-owned. */
   async function codexClient(connection) {
-    const session = validateDescriptor(connection.session, { destination });
     let forward;
     let client;
     let result;
     let linkLost = false;
     try {
+      const session = validateDescriptor(connection.session, { destination });
+      if (session.kind !== 'session' || session.provider !== 'codex') refusal(`on ${destination}: expected a Codex session descriptor`);
       const measured = run('codex', ['--version'], { ...options, encoding: 'utf8' });
-      const localVersion = measured.status === 0 ? measured.stdout.trim() : `unavailable (${measured.error?.message || measured.stderr?.trim() || measured.status})`;
+      const localVersion = measured.status === 0 && measured.stdout?.trim() ? measured.stdout.trim() : `unavailable (${measured.error?.message || measured.stderr?.trim() || measured.status})`;
       if (localVersion !== session.providerVersion) refusal(`${localVersion} here, ${session.providerVersion} on ${destination}`);
       forward = await tunnel(session.socket);
       result = await new Promise(resolve => {
-        client = spawnProcess('codex', [...(session.sessionId ? ['resume', session.sessionId] : session.access), '--remote', `unix://${forward.socket}`],
+        client = spawnProcess('codex', [...(session.sessionId ? ['resume', session.sessionId] : session.access), '--remote', `unix://${forward.socket}`,
+          ...(session.prompt ? (session.prompt.startsWith('-') ? ['--', session.prompt] : [session.prompt]) : [])],
           { ...options, stdio: 'inherit' });
         client.once('error', error => resolve({ status: 1, error }));
         client.once('close', (status, signal) => resolve({ status: status ?? 1, signal }));
@@ -160,8 +168,8 @@ export function serverLink(destination, {
       return result;
     } finally {
       // Finish first: removing the tunnel must not turn a clean quit into a lost connection.
-      if (!result) await connection.finish(false);
-      await forward?.cleanup();
+      try { if (!result) await connection.finish(false); }
+      finally { await forward?.cleanup(); }
     }
   }
   return { destination, request, handshake: () => request('version'), passthrough, connect, tunnel, codexClient };

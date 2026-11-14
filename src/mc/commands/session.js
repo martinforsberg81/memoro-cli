@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { openInWorkArea } from '../work-open.js';
-import { deskSessions, readRegister } from '../session-entrance.js';
+import { deskSessions, readRegister, prepareSessionEntrance } from '../session-entrance.js';
 import { codexSessionDriver } from '../codex-sessions.js';
 import { claudeBackgroundDriver } from '../claude-background.js';
 import { descriptor, sessionDescriptor, ENTRANCES } from '../server-protocol.js';
@@ -45,6 +45,7 @@ export async function run(argv, {
   stdout = process.stdout, stderr = process.stderr, stdin = process.stdin, env = process.env,
   run = spawnSync, load = name => import(`./${name}.js`),
   open = openInWorkArea, records = readRegister, alive = pidAlive, realpath = realpathSync,
+  entranceDeps = {},
   drivers = { codex: codexSessionDriver, 'claude-code': claudeBackgroundDriver },
 } = {}) {
   let request;
@@ -80,7 +81,6 @@ export async function run(argv, {
       return open({ ...settings, platform: 'linux', env: { ...env, SSH_CONNECTION: 'mc-session-protocol' },
         // Only the internal entrance forces persistent mechanics on the server.
         background: async resolved => {
-          const { prepareSessionEntrance } = await import('../session-entrance.js');
           const { provider, providerVersion, describe } = mechanics(resolved.launch);
           if (request.operation === 'list') {
             const rows = await drivers[provider]().list(resolved);
@@ -112,21 +112,15 @@ export async function run(argv, {
             const row = deskSessions(resolved, rows, records(env), alive).find(item => item.id === request.session);
             if (!row) return { result: { ok: false, reason: `session ${request.session} is not running for this desk` } };
             if (resolved.chosen && row.sessionId !== resolved.chosen.id) return { result: { ok: false, reason: 'listed session does not hold the selected conversation' } };
-            return prepareSessionEntrance({ ...resolved, pick: null, chosen: null }, driver, { choose: () => row.id });
+            return prepareSessionEntrance({ ...resolved, pick: null, chosen: null }, driver, { ...entranceDeps, choose: () => row.id });
           }
-          const prepared = await prepareSessionEntrance({ ...resolved, pick: 'new' }, driver);
-          if (provider === 'codex' && prepared.start) {
-            const start = prepared.start;
-            prepared.start = plan => {
-              if (plan.args.at(-1) && !plan.chosen && options.prompt) return { ok: false, reason: 'remote Codex opening-prompt delivery has no approved wire contract; no session was started' };
-              return start(plan);
-            };
-          }
+          const prepared = await prepareSessionEntrance({ ...resolved, pick: 'new' }, driver, entranceDeps);
           return prepared;
         } });
     };
     const status = await module.run(request.args, { env, stdout: capture, stderr: capture, interactive: () => true,
       choose: options => chooseProgramme({ ...options, choose, question: title => choose(title) }), open: opened });
+    if (emitted && messages.length) stderr.write(messages.join(''));
     if (!emitted) {
       if (status !== 0) throw new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`);
       if (request.json) emit(descriptor('result', { status: 0, signal: null }));

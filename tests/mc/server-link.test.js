@@ -5,6 +5,9 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { remoteCommand, serverLink } from '../../src/mc/server-link.js';
 import { descriptor, sessionDescriptor, validateDescriptor, MC_VERSION } from '../../src/mc/server-protocol.js';
+import { run as serverSession } from '../../src/mc/commands/session.js';
+import { openInWorkArea } from '../../src/mc/work-open.js';
+import { splitLaunchArgs } from '../../src/mc/codex-sessions.js';
 import { routeServerEntrance, remoteEntrance } from '../../src/mc/server-client.js';
 
 const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc manager', resume: null,
@@ -94,7 +97,7 @@ function processStub() {
   child.kill = signal => { child.killedWith.push(signal); queueMicrotask(() => child.emit('close', null, signal)); };
   return child;
 }
-function clientFixture({ outcome = 'clean', resume = null, version = 'codex 0.168.0', root = '/mc', mode = 0o700 } = {}) {
+function clientFixture({ outcome = 'clean', resume = null, version = 'codex 0.168.0', root = '/mc', mode = 0o700, prompt = null } = {}) {
   const calls = []; const removed = []; const modes = []; const present = new Set();
   let tunnelProcess; let client; let clock = 0; let ended;
   const io = {
@@ -104,7 +107,7 @@ function clientFixture({ outcome = 'clean', resume = null, version = 'codex 0.16
     rmSync: (path, options) => removed.push([path, options]),
   };
   let resolveConnection;
-  const connection = { session: session({ resume }), closed: new Promise(resolve => { resolveConnection = resolve; }),
+  const connection = { session: session({ resume, prompt }), closed: new Promise(resolve => { resolveConnection = resolve; }),
     finish: async clean => { ended = clean; return { status: 0 }; } };
   const link = serverLink('tc', { env: { MC_WORK_ROOT: root }, io, now: () => clock,
     sleep: async ms => { clock += ms; }, run: (bin, args) => { calls.push({ bin, args }); return { status: 0, stdout: version }; },
@@ -131,8 +134,8 @@ test('Codex version mismatch refuses before any tunnel, naming both measured ver
   assert.equal(f.ended, false);
   assert.deepEqual(f.removed, []);
 });
-for (const resume of [null, 'thread-a']) test(`Codex ${resume ? 'join' : 'new thread'} argv by member; tunnel argv and private short socket`, async () => {
-  const f = clientFixture({ resume });
+for (const resume of [null, 'thread-a']) for (const prompt of [null, 'opening words', '-dash message']) test(`Codex ${resume ? 'join' : 'new thread'} argv by member (${prompt ?? 'no prompt'}); tunnel argv and private short socket`, async () => {
+  const f = clientFixture({ resume, prompt });
   assert.equal((await f.link.codexClient(f.connection)).status, 0);
   const forward = f.calls.find(call => call.bin === 'ssh');
   const socket = '/mc/runner/s/c-abcdef/s';
@@ -140,7 +143,7 @@ for (const resume of [null, 'thread-a']) test(`Codex ${resume ? 'join' : 'new th
   assert.ok(Buffer.byteLength(socket) < 100);
   assert.deepEqual(f.modes, [['/mc/runner/s', 0o700], ['/mc/runner/s/c-abcdef', 0o700]]);
   const tui = f.calls.find(call => call.bin === 'codex' && call.args[0] !== '--version');
-  assert.deepEqual(tui.args, [...(resume ? ['resume', resume] : ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request']), '--remote', `unix://${socket}`]);
+  assert.deepEqual(tui.args, [...(resume ? ['resume', resume] : ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request']), '--remote', `unix://${socket}`, ...(prompt ? (prompt.startsWith('-') ? ['--', prompt] : [prompt]) : [])]);
   for (const forbidden of ['-c', '--model', '--add-dir', '--effort', 'instructions']) assert.equal(tui.args.includes(forbidden), false);
   assert.deepEqual(forward.child.killedWith, ['SIGTERM']);
   assert.deepEqual(f.removed, [['/mc/runner/s/c-abcdef', { recursive: true, force: true }]]);
@@ -185,4 +188,126 @@ test('remote driver reuses join-or-new choice locally and joins without starting
   } });
   assert.equal(result, 0);
   assert.deepEqual(calls, [['join', 'manager', ['--session', 'session-a'], []]]);
+});
+
+
+/** Server entrance adapter with only provider, register, lock and launch boundaries replaced. */
+function serverFixture({ prompt = null, resumePrompt = null, historical = false, joining = false, entrance = 'manager' } = {}) {
+  const input = new PassThrough(); const output = sink(); const errors = sink(); const attaches = [];
+  const row = { id: 'session-a', name: 'mc manager', pid: 42, cwd: '/server/desk', socket: '/server/socket',
+    resume: 'thread-a', sessionId: 'thread-a', prompt: undefined };
+  const programme = entrance === 'plan' ? 'example' : null;
+  const records = [{ pid: 42, verb: entrance, programme, area: programme ? 'programs/example' : null, tool: 'codex', started: '2026-11-14T10:00:00Z' }];
+  const launch = { ok: true, id: 'codex', shortName: 'codex', spec: { bin: '/provider/codex', executionAccess: 'host', args: args => args[0] === 'resume' ? ['resume', '--sandbox', 'danger-full-access', ...args.slice(1)] : ['--sandbox', 'danger-full-access', ...args] },
+    adapter: { modelArgs: value => value ? ['-m', value] : [], resumeArgs: ({ sessionId }) => ['resume', sessionId] } };
+  const settings = { areaRoot: '/server/desk', worktree: { path: '/server/desk' }, verb: entrance, roleName: entrance, programme, areaName: programme ? 'programs/example' : null,
+    prompt, resumePrompt, pick: historical ? 'thread-a' : 'new', tool: 'codex' };
+  let started = null;
+  const deps = { env: { MC_WORK_ROOT: '/server', MC_HOME: '/server/home' }, stdin: input, stdout: output, stderr: errors,
+    realpath: path => path, records: () => records, alive: () => true,
+    run: () => ({ status: 0, stdout: 'codex 0.168.0' }),
+    entranceDeps: { lock: () => () => {}, records: () => records, alive: () => true },
+    load: async () => ({ run: async (_args, { open }) => {
+      const result = await open(settings);
+      if (!result.ok) { errors.write(result.reason); return 1; }
+      return result.code;
+    } }),
+    open: options => openInWorkArea({ ...options, resolve: () => launch,
+      conversations: () => historical ? [{ id: 'thread-a', tool: 'codex', updated_ms: 1 }] : [],
+      identify: () => ({ role: entrance, programme }), billingRoute: () => ({ billing: 'plan' }) }),
+    drivers: { codex: boundaries => ({
+      list: async () => joining ? [row] : [],
+      start: async (_options, plan, name) => {
+        started = plan;
+        return { ok: true, session: { ...row, name, ...splitLaunchArgs(plan.args) } };
+      },
+      join: async (_options, session) => {
+        const result = await boundaries.run('/provider/codex', []);
+        attaches.push({ session, result });
+        return result;
+      },
+    }) },
+  };
+  return { deps, input, output, errors, attaches, get started() { return started; } };
+}
+for (const [name, options, expected] of [
+  ['fresh plan', { entrance: 'plan', prompt: 'plan opening' }, 'plan opening'],
+  ['fresh helper', { entrance: 'helper', prompt: 'helper opening' }, 'helper opening'],
+  ['historical resumePrompt', { entrance: 'martin', prompt: 'not repeated', resumePrompt: 'refresh current queue', historical: true }, 'refresh current queue'],
+  ['join of a running session', { prompt: 'not repeated', resumePrompt: 'not refreshed', joining: true }, undefined],
+]) test(`server descriptor opening message: ${name}, no other launch settings cross`, async () => {
+  const f = serverFixture(options);
+  f.input.end();
+  assert.equal(await serverSession([options.joining ? 'join' : 'start', options.entrance || 'manager', '--json', ...(options.joining ? ['--session', 'session-a'] : [])], f.deps), 1);
+  const value = validateDescriptor(JSON.parse(f.output.value));
+  assert.equal(value.kind, 'session', f.output.value + f.errors.value);
+  assert.equal(value.prompt, expected);
+  assert.equal(Object.hasOwn(value, 'prompt'), expected !== undefined);
+  assert.equal(value.providerVersion, 'codex 0.168.0');
+  assert.deepEqual(value.access, options.historical || options.joining ? [] : ['--sandbox', 'danger-full-access']);
+  assert.deepEqual(Object.keys(value).sort(), ['version', 'mcVersion', 'kind', 'provider', 'providerVersion', 'id', 'name', 'sessionId', 'started', 'socket', 'access', ...(expected ? ['prompt'] : [])].sort());
+});
+for (const clean of [false, true]) test(`server connection holder: ${clean ? 'explicit end' : 'EOF'} ${clean ? 'permits' : 'does not permit'} the driver's end rule`, async () => {
+  const f = serverFixture();
+  f.input.end(clean ? 'end\n' : '');
+  const status = await serverSession(['start', 'manager', '--json'], f.deps);
+  assert.equal(status, clean ? 0 : 1, f.output.value + f.errors.value);
+  assert.equal(f.attaches[0].result.status, clean ? 0 : 1);
+  assert.equal(f.attaches[0].result.signal, null);
+});
+
+test('opening message schema refuses nonstrings and NUL, while role/model/effort/roots remain forbidden', () => {
+  for (const fields of [{ prompt: 4 }, { prompt: 'a\0b' }, { prompt: '' }, { role: 'role' }, { model: 'model' }, { effort: 'high' }, { roots: ['/root'] }]) {
+    assert.throws(() => validateDescriptor({ ...session(), ...fields }), /descriptor|opening user message/u);
+  }
+});
+
+for (const clean of [true, false]) test(`SSH connection lifetime: ${clean ? 'clean end' : 'disconnection'} sends ${clean ? 'end' : 'EOF'}, then closes the holder`, async () => {
+  const child = processStub(); const writes = []; let clock = 0;
+  child.stdin.on('data', data => writes.push(String(data)));
+  child.stdin.end = data => { if (data) writes.push(data); queueMicrotask(() => child.emit('close', 0, null)); };
+  const link = serverLink('tc', { env: {}, now: () => clock, sleep: async ms => { clock += ms; },
+    spawnProcess: (bin, args) => {
+      assert.equal(bin, 'ssh');
+      assert.deepEqual(shellWords(args[1]), ['mc', 'session', 'start', 'manager', '--new', '--json', '--answers', '[]']);
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify(session())}\n`));
+      return child;
+    } });
+  const connection = await link.connect('start', 'manager', ['--new']);
+  assert.equal(connection.session.name, 'mc manager');
+  assert.equal((await connection.finish(clean)).status, 0);
+  assert.deepEqual(writes, clean ? ['end\n'] : []);
+  assert.deepEqual(child.killedWith, []);
+});
+for (const [name, response, reason] of [
+  ['stale descriptor', { ...session(), version: 9 }, /descriptor v9/u],
+  ['server refusal', descriptor('refusal', { reason: 'measured refusal' }), /on tc: measured refusal/u],
+  ['silent connection', null, /no session descriptor within 30000 ms/u],
+]) test(`SSH startup ${name} refuses and closes the connection without applying end`, async () => {
+  const child = processStub(); const writes = []; let clock = 0;
+  child.stdin.on('data', data => writes.push(String(data)));
+  const link = serverLink('tc', { env: {}, now: () => clock, sleep: async ms => { clock += ms; },
+    spawnProcess: () => {
+      if (response) queueMicrotask(() => child.stdout.write(`${JSON.stringify(response)}\n`));
+      return child;
+    } });
+  await assert.rejects(link.connect('start', 'manager'), reason);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(child.killedWith, ['SIGTERM']);
+});
+
+test('a stale Codex descriptor closes the holder without opening a tunnel', async () => {
+  const f = clientFixture();
+  f.connection.session.version = 9;
+  await assert.rejects(f.link.codexClient(f.connection), /descriptor v9/u);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.ended, false);
+});
+
+test('failure to finish a clean client still cleans the tunnel process and local socket', async () => {
+  const f = clientFixture();
+  f.connection.finish = async () => { throw new Error('measured connection close failure'); };
+  await assert.rejects(f.link.codexClient(f.connection), /measured connection close failure/u);
+  assert.deepEqual(f.calls.find(call => call.bin === 'ssh').child.killedWith, ['SIGTERM']);
+  assert.deepEqual(f.removed.map(row => row[0]), ['/mc/runner/s/c-abcdef']);
 });

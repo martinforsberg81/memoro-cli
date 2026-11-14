@@ -1,24 +1,28 @@
 /** Interactive routing before any local programme or desk is read or created. */
 import { interactive, select, ask } from './prompt.js';
-import { prepareSessionEntrance } from './session-entrance.js';
-import { readServer, serverLink } from './server-link.js';
-import { ENTRANCES } from './server-protocol.js';
+import { readServer } from './server-settings.js';
+
+const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
 
 export async function routeServerEntrance(entrance, args, {
-  env = process.env, isInteractive = interactive, read = readServer, link = serverLink,
+  env = process.env, isInteractive = interactive, read = readServer, link,
   stdout = process.stdout, stderr = process.stderr, choose = select, question = ask,
 } = {}) {
   if (!ENTRANCES.has(entrance) || args.includes('--local') || env.MC_HEADLESS === '1' || !isInteractive(env)
     || args.some(arg => ['--headless', '--intake', '--collect', '--archive', '--help', '-h'].includes(arg))
     || (entrance === 'martin' && args[0] === 'get')) return null;
-  const destination = read(env);
-  if (!destination) return null;
-  try { return await remoteEntrance(entrance, args, link(destination, { env }), { stdout, stderr, choose, question }); }
+  try {
+    const destination = read(env);
+    if (!destination) return null;
+    const createLink = link || (await import('./server-link.js')).serverLink;
+    return await remoteEntrance(entrance, args, createLink(destination, { env }), { stdout, stderr, choose, question });
+  }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
 }
 
 export async function remoteEntrance(entrance, args, link, { stdout = process.stdout, stderr = process.stderr,
   choose = select, question = ask } = {}) {
+  const { prepareSessionEntrance } = await import('./session-entrance.js');
   const answers = [];
   let snapshot;
   for (;;) {

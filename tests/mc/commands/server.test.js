@@ -34,6 +34,7 @@ test('set ok saves only after successful version handshake, inside runner and ne
 });
 for (const [name, result, measured] of [
   ['unreachable', () => ({ status: 255, stderr: 'connection refused' }), /ssh tc: connection refused/u],
+  ['failed SSH carrying stdout', () => ({ status: 255, stdout: JSON.stringify(descriptor('handshake')), stderr: 'connection lost' }), /ssh tc: connection lost/u],
   ['mc missing', () => ({ status: 127, stderr: 'mc: command not found' }), /ssh tc: mc: command not found/u],
   ['version unknown', { ...descriptor('handshake'), version: 8, mcVersion: 'future' }, /descriptor v8.*mc .* here, mc future on tc/u],
 ]) test(`set refused (${name}) preserves the prior setting and measured reason`, async () => {
