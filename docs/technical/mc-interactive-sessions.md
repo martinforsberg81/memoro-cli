@@ -39,13 +39,25 @@ including while idle or detached; the last turn and the number of attached
 terminals do not determine its lifetime, except by the end rule of a Codex
 session below.
 
-With no session, the entrance starts one (Claude: `--bg`, then `attach <id>`;
-Codex: its own server, then a `--remote` client) and attaches. Otherwise the
-existing numbered `select` prompt lists each session's name and started time, plus “start a new one”. Joining never sends
-a turn, replaces another session or kills a provider. Claude: `Ctrl+Z` detaches;
-losing SSH or closing the attaching terminal leaves the provider in Claude's
-background daemon. After attach returns, mc reports whether the session is
-still running and names the entrance to rejoin.
+With no session, the entrance starts one (Claude: `--bg` with Remote Control;
+Codex: its own server, then a `--remote` client). Otherwise the existing
+numbered `select` prompt lists each session's name and started time, plus “start
+a new one”. Joining never sends a turn, replaces another session or kills a
+provider.
+
+Every interactive Claude session mc starts, foreground or background, carries
+Remote Control: `--remote-control <name>`, with the session's name as its value,
+so the session is reached in the Claude app or at claude.ai/code. Foreground
+launches run in the terminal as before. For a flagged session the persistent
+entrance, start or join, runs no `claude attach`: it writes two lines, the
+session's name with where to open it, and the terminal view (`claude attach
+<id>`, prefixed `ssh -t <host>` when the entrance was reached over SSH), then
+returns 0. A flagged session is ended with `/exit` in the app, or on its host
+with `claude stop <id>`. A Claude session whose register record names no Remote
+Control (one started before this change) attaches once, as before, with today's
+status line: `Ctrl+Z` detaches; losing SSH or closing the attaching terminal
+leaves the provider in Claude's background daemon. After attach returns, mc
+reports whether the session is still running and names the entrance to rejoin.
 
 - `--new` starts a fresh conversation without asking.
 - `--resume <id>` joins a session already holding that conversation. Otherwise
@@ -67,7 +79,8 @@ still running and names the entrance to rejoin.
 
 Names are `mc <role> <programme>`, or `mc <role>` for a desk without a
 programme. Additional sessions take the lowest unused suffix: ` 2`, ` 3`, …
-Claude receives the name through `--name`; Codex keeps it in its session record.
+Claude receives the name through `--name` and as the `--remote-control` value;
+Codex keeps it in its session record.
 Roles normalize as for session identity:
 `brief` is `manager`, and `plan-session` is `plan`.
 
@@ -257,14 +270,16 @@ or rewrite history to force entry.
 
 ## Evidence boundary
 
-`tests/mc/claude-background.test.js` protects routing, entrance choice,
-conversation exclusion, identity, credentials, holder lifetime and registration
+`tests/mc/claude-background.test.js` protects routing, entrance choice, the
+Remote Control flag and name with the two-line flagged entrance, conversation
+exclusion, identity, credentials, holder lifetime and registration
 with injected process, agents, register, filesystem, gateway and clock
 boundaries. `tests/mc/codex-sessions.test.js` protects the Codex server and
 client argv, environment, directory mode, billing, entrance rules with the
 Codex driver, the session-thread rule, the end rule and the rpc limits with
-injected spawn, rpc, filesystem, liveness and clock boundaries. Existing
-work-open, foreground, session-role and billing tests retain their protection.
+injected spawn, rpc, filesystem, liveness and clock boundaries. `tests/mc/work-open.test.js` protects the flag's place in the argv (leading, name
+as its value, opening prompt last) and its absence on Codex. Existing foreground,
+session-role and billing tests retain their protection.
 Bounded real-binary pty checks separately measure launch, SIGHUP survival,
 rejoin, suffix naming and tool environment for each provider. They do not
 certify a real Mac→TC SSH logout, host reboot, or future provider CLI changes.
