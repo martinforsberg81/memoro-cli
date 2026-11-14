@@ -29,8 +29,8 @@ You do not edit, commit, push, merge, `mc publish` or comment-fix. Nothing in
 the worktree is yours to change; the route to `main` is the merger's, after you.
 
 1. **Read what was promised.** The goal the prompt gives (as `mc goal show`
-   renders it: its numbered parts and each criterion with its check; a version 1
-   goal shows GOAL and CONTRACT instead) and `LOG.md`. Then the change: `git
+   renders it: its numbered parts and each criterion with its check) and
+   `LOG.md`. Then the change: `git
    fetch origin`, `git diff origin/main...<head>` and `git log --oneline
    origin/main..<head>`. Check that the worktree's `HEAD` is the head the prompt
    names; if it is not, judge the head the prompt names. A claim about help or

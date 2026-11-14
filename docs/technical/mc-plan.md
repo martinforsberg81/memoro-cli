@@ -140,7 +140,7 @@ See [mc-goals.md](mc-goals.md).
 ## Writing goals
 
 `goal-verb.md`, included by the role, describes the verbs. The goal carries
-the goal's numbered parts (a version 1 goal: goal, contract and out of scope), its documents and its criteria with their checks.
+the goal's numbered parts, its documents and its criteria with their checks.
 Stages move forward; `ready` or `blocked` is a separate status. Phases order
 work across the programme: all goals of a lower phase finish or are dropped
 before any goal in a higher phase starts. Build sessions neither rewrite the

@@ -17,9 +17,8 @@ PRESERVE item still holds after your change, and OUT OF SCOPE is left alone.
 OBLIGATIONS take a stand per rule area: what a `touched` one says holds in your
 change, and your diff stays out of an `untouched` one (`mc goal areas` shows
 each area's questions). Log your evidence under the id it belongs to (`C2`,
-`V1`, criterion 3). A goal that shows GOAL and CONTRACT instead is version 1 and
-is read as its own headings say. `LOG.md` is what the sessions before you did
-and what the last one said comes next. Read it first.
+`V1`, criterion 3). `LOG.md` is what the sessions before you did and what the
+last one said comes next. Read it first.
 
 Your worktree is `<goal dir>/<repo>`, on branch `goal/<goal>`. Work towards the
 goal's criteria from where the last session left it. There is no step and no

@@ -64,10 +64,6 @@ not reviewed.
   leaves the rest; the log keeps what it replaced.
 - A session that finds a premise false, or the goal otherwise wrong, reports a
   goal defect naming the item (`mc goal defect --part P2 …`).
-- A version 1 goal has `goal`, `contract` and `out of scope` as prose instead.
-  What this page says of the parts holds for it part by part: the contract is
-  where it states what must be preserved, and its claims about the code carry
-  their source in the prose.
 
 ## Success criteria
 

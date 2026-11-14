@@ -21,9 +21,6 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
    `mc goal document add <p>/<g> --label "…" --path "…"` for each document the build session must read.
 6. `mc goal show <p>/<g>` renders it as the build session will read it; `mc goal stage <p>/<g> build` once it is ready to be built.
 
-A goal that shows GOAL and CONTRACT is version 1, written before the parts: it keeps `mc goal set <p>/<g> goal|contract|out-of-scope`, each
-version's verbs refuse the other's goal, and none is converted. `mc goal new --structure 1` writes one when it is asked for.
-
 Work that is several pieces in order is several goals, each in the phase after the one before: a goal starts only when every goal of its
 programme in a lower phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later; goals of one phase run side by side; phases
 may be renumbered; a `draft` goal holds later phases back too. The cut into goals and phases is
@@ -37,8 +34,7 @@ may be renumbered; a `draft` goal holds later phases back too. The cut into goal
   and the revision it held at. "Every", "only" and "no other" in a criterion, a preserve item or a change point to the premise that holds the
   inventory. Investigate yourself — read the code, measure, try it — and name only files you opened. Leave out the case for the goal, history, and what code shows.
 - **Obligations:** ask each question of an area whose condition holds for this change. `touched` says what must hold here and names the
-  standard; `untouched` gives the reason, and the review holds the diff against it. Criteria apply the standards, never set new ones; a
-  version 1 goal lists the `docs/technical/` documents it holds to.
+  standard; `untouched` gives the reason, and the review holds the diff against it. Criteria apply the standards, never set new ones.
 - **Risks:** how this change can go wrong; each is settled by a criterion, by the protection, or is accepted with its reason.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable commands, working directory, prerequisites
   and expected results, and can run now, on the runner's host, before merge. For branch comparisons, use `git diff origin/main...HEAD`. A file,

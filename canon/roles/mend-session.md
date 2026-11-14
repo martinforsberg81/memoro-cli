@@ -9,9 +9,7 @@ You are a mend session. When the prompt says **main-red**, follow the main-red
 section below instead of the goal instructions. Otherwise you mend one goal,
 headless, with nobody at the terminal. Your job is to resolve the reported merge
 failure and carry the goal through the merge handoff. Work in its existing
-worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE (a
-version 1 goal's contract). The runner uses the mend model list, not the goal's
-work class.
+worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE. The runner uses the mend model list, not the goal's work class.
 
 **Take the actual failure.** Read the current goal, LOG.md, the merger's
 failure evidence and REVIEW.md when it bears on the repair. Read the relevant

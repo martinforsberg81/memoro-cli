@@ -52,7 +52,7 @@ starts no plan session.
 
 Complete that draft's planning: read the programme README first, its relevant
 design, technical contracts, goal and log, and the affected code.
-Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`; a draft that shows GOAL and CONTRACT is version 1 and is finished with version 1's verbs. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
+Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
 remaining question through goal-bound `mc ask --kind technical|product`; continue
 on a jev answer. An unsettled technical question is decided by the session's

@@ -17,10 +17,7 @@ its check, and each worktree's state.
   twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them),
   `mc goal document add <p>/<g> --label "…" --path "…"`, `mc goal criterion add
   <p>/<g> --criterion "…" --check "…"`, and `--evidence "…"`
-  on `criterion add|set`. A goal that shows GOAL and CONTRACT is version 1
-  (`mc goal new --structure 1` writes one): it has `mc goal set <p>/<g>
-  title|goal|contract|out-of-scope --text "…"` instead of the parts, and each
-  version's verbs refuse the other's goal. A build, review, finish or mend
+  on `criterion add|set`. A build, review, finish or mend
   session cannot write the parts. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
   it back. Every write is validated; an invalid one is refused and not written.
@@ -113,7 +110,7 @@ its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|medium|large --title "…" [--stage draft|build] [--structure 1]` makes one: GOAL.json and
+  fast|medium|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
