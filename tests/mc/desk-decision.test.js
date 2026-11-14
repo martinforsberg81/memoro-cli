@@ -73,7 +73,8 @@ test('a fake session can brief an item for Martin instead of closing it', async 
 test('an unfinished item retries once then becomes a non-reversible mechanical brief with failure evidence', async t => {
   const f = fixture(t), item = f.add('alpha/first'), r = f.runner();
   await r.pass(); assert.equal(f.state(item).state,'prepared');
-  assert.equal(f.state(item).decision_failures.length,1);
+  assert.deepEqual(f.state(item).decision_failures.map(x=>x.at),['2026-11-14T12:00:00Z']);
+  assert.match(f.state(item).decision_failures[0].reason,/decision session exited 0 without settling/u);
   f.deps.session = async () => { throw new Error('fake tool failed'); };
   await r.pass(); const ended = f.state(item);
   assert.equal(ended.state,'for-martin'); assert.equal(ended.sort,'mechanical'); assert.equal(ended.reversible,false); assert.equal(ended.due_at,null);
@@ -101,7 +102,7 @@ test('a reached daily desk ceiling starts no decision session, including after a
   const f = fixture(t), a = f.add('decision:first'), b = f.add('decision:second',{source_at:'2026-11-14T11:00:00Z'}), r = f.runner();
   setDeskCeiling(0,{env:f.env}); assert.equal((await r.pass()).ran,0);
   assert.deepEqual(f.calls,[]); assert.equal(f.state(a).decision_failures,undefined);
-  setDeskCeiling(1,{env:f.env}); await r.pass(); assert.equal(f.calls.length,1);
+  setDeskCeiling(1,{env:f.env}); await r.pass(); assert.deepEqual(f.calls.map(call=>call.prompt.match(/Decide desk item ([a-f0-9]{24})/u)?.[1]),[a.id]);
   assert.equal((await r.pass()).ran,0); assert.equal(f.state(b).decision_failures,undefined);
 });
 

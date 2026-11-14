@@ -394,6 +394,7 @@ test('headless decision may ask at every active goal stage, with decision attrib
     const read = path => {try {return readFileSync(path,'utf8');} catch {return null;}};
     assert.equal(await run(['--kind','technical',...options],{...f.deps,read,write:writeFileSync}),0,f.err());
     assert.equal(f.requests.length,1);
+    assert.match(f.requests[0].init.body,/How should the timeout test work/u);
     assert.equal(parseLog(readFileSync(join(goal,'LOG.md'),'utf8')).at(-1).role,'decision');
   }
 });
