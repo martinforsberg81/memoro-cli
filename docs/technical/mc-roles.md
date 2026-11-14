@@ -60,7 +60,7 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: five stage/goal roles, each one file, plus the Martin desk and preparation roles and the three that
+What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation and decision roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
 the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Finish
 and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09).
@@ -76,6 +76,7 @@ and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-1
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
+| `decision` | fable | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 
 ## Parts: one role, started more than one way
@@ -95,7 +96,7 @@ stage, hand off to an appropriate stage, rewrite goal/criteria/programme plan,
 move stages backward or forward, or drop. The goal verbs enforce it and log
 `by martin`; the role text alone is not authorization. It preserves JSON
 validation and acceptance, review, gate, publish and merge evidence. It cannot
-mark criteria met administratively. Other session roles retain their bounds.
+mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.

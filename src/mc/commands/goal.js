@@ -686,7 +686,7 @@ function setField(args, flags, ctx) {
   const words = ['title', ...Object.keys(PROSE_FIELDS)];
   if (args.length !== 2 || !words.includes(args[1])) { stderr.write(`mc: set <programme>/<goal> ${words.join('|')} --text "…"\n`); return 2; }
   const writer = goalSessionWord(env);
-  if (writer && writer !== 'martin') { stderr.write(`mc: a ${writer} session does not rewrite goal text — the brief is written by plan, interactive Martin or a person\n`); return 2; }
+  if (writer && !['martin', 'decision'].includes(writer)) { stderr.write(`mc: a ${writer} session does not rewrite goal text — the brief is written by plan, interactive Martin or a person\n`); return 2; }
   if (flags.text === null) { stderr.write('mc: set needs --text "…"\n'); return 2; }
   const [named, field] = args;
   const paragraphs = flags.text.split(/\n\s*\n/u).map((part) => part.trim()).filter(Boolean);
@@ -700,7 +700,7 @@ function addDocument(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length !== 1) { stderr.write(usage()); return 2; }
   const writer = goalSessionWord(env);
-  if (writer && writer !== 'martin') { stderr.write(`mc: a ${writer} session does not change goal documents — the brief is written by plan, interactive Martin or a person\n`); return 2; }
+  if (writer && !['martin', 'decision'].includes(writer)) { stderr.write(`mc: a ${writer} session does not change goal documents — the brief is written by plan, interactive Martin or a person\n`); return 2; }
   const missing = ['label', 'path'].filter((key) => !flags[key]?.trim()).map((key) => `--${key}`);
   if (missing.length) { stderr.write(`mc: document add needs ${missing.join(', ')}\n`); return 2; }
   return changeGoal(args[0], ctx, (goal) => ({ ...goal, documents: [...goal.documents, { label: flags.label.trim(), path: flags.path.trim() }] }),
@@ -712,7 +712,7 @@ function addCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length !== 1) { stderr.write(usage()); return 2; }
   const writer = goalSessionWord(env);
-  if (writer && writer !== 'martin') { stderr.write(`mc: a ${writer} session does not add a criterion — acceptance is written by plan, interactive Martin or a person\n`); return 2; }
+  if (writer && !['martin', 'decision'].includes(writer)) { stderr.write(`mc: a ${writer} session does not add a criterion — acceptance is written by plan, interactive Martin or a person\n`); return 2; }
   const missing = ['criterion', 'check'].filter((key) => !flags[key]?.trim()).map((key) => `--${key}`);
   if (missing.length) { stderr.write(`mc: criterion add needs ${missing.join(', ')} — what must be true, and how it is checked\n`); return 2; }
   return changeGoal(args[0], ctx, (goal) => ({ ...goal, success_criteria: [...goal.success_criteria, { criterion: flags.criterion.trim(), check: flags.check.trim(), met: false }] }),
@@ -748,7 +748,7 @@ function setCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
-  if (goalSessionWord(env) && role !== 'martin') { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan, Martin or a person\n`); return 2; }
+  if (goalSessionWord(env) && !['martin', 'decision'].includes(role)) { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan, Martin or a person\n`); return 2; }
   const given = ['criterion', 'check'].filter((key) => flags[key] !== null);
   if (!given.length) { stderr.write('mc: criterion set needs --criterion "…" or --check "…" — what is rewritten\n'); return 2; }
   const blank = given.filter((key) => !flags[key].trim()).map((key) => `--${key}`);
@@ -789,7 +789,7 @@ function removeCriterion(args, flags, ctx) {
   const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
-  if (goalSessionWord(env) && role !== 'martin') { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan, Martin or a person\n`); return 2; }
+  if (goalSessionWord(env) && !['martin', 'decision'].includes(role)) { stderr.write(`mc: a ${role} session does not remove a criterion — acceptance is written by plan, Martin or a person\n`); return 2; }
   if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: criterion remove needs --reason "…" with text in it — why the criterion is obsolete\n'); return 2; }
   const reason = oneLine(flags.reason.trim());
   const [named, number] = args.length === 2 ? args : [undefined, args[0]];
@@ -857,7 +857,7 @@ function changeGoal(named, ctx, change, said, after = null) {
     for (const problem of outcome.problems) stderr.write(`mc: ${outcome.prefix === false ? '' : `${target.name}: `}${problem}\n`);
     return outcome.code ?? 1;
   }
-  if (ctx.env.MC_ROLE === 'martin') {
+  if (['martin', 'decision'].includes(ctx.env.MC_ROLE)) {
     appendEntry({ dir: target.dir, entry: { at: logStamp(ctx.now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null,
       role: writerRole(ctx.env), stage: outcome.goal.stage, status: outcome.goal.status,
       done: `goal updated: ${said(outcome.goal)}`, comment: null, next: null }, read, write });
@@ -1113,12 +1113,12 @@ function goalNamed(arg, { env, home }) {
  */
 export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
-  if (!isSession(env)) return null;
-  if (env.MC_ROLE === 'martin') {
-    if (env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';
+  if (['martin', 'decision'].includes(env.MC_ROLE)) {
+    if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';
     if (to === 'done') return 'Martin does not mark a goal done administratively — preserve the normal review, publish and merger handoff';
     return null;
   }
+  if (!isSession(env)) return null;
   const moves = to !== null && to !== from;
   if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
   if ([PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return null;
@@ -1172,7 +1172,7 @@ function sessionNotPlan(env) {
  */
 function goalSessionWord(env) {
   const role = writerRole(env);
-  return ['build', 'review', 'finish', 'mend', 'martin'].includes(role) ? role : null;
+  return ['build', 'review', 'finish', 'mend', 'martin', 'decision'].includes(role) ? role : null;
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */

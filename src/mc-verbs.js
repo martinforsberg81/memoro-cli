@@ -31,6 +31,7 @@ export const VERB_MODULES = {
   prs: './mc/commands/prs.js',
   manager: './mc/commands/manager.js',
   martin: './mc/commands/martin.js',
+  decision: './mc/commands/decision.js',
   brief: './mc/commands/brief.js',
   helper: './mc/commands/helper.js',
   plan: './mc/commands/plan.js',

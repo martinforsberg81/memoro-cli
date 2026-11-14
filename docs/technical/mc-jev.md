@@ -274,3 +274,9 @@ is nothing to report and exits 0.
 
 Not here yet: the ledger on the mc page, a way for Martin to overturn a jev
 answer, and calibrating the thresholds against Martin's answers.
+
+
+The unattended `decision` desk role may make goal-bound `mc ask` calls at any
+active stage without acquiring a delivery role's stage restriction. Its goal
+mutations retain `by decision` attribution. This does not authorize headless
+reserved acts; those remain briefs for Martin ([mc-martin.md](mc-martin.md)).

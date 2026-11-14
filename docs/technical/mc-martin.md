@@ -148,4 +148,69 @@ When the setting is non-null and the sum is at least it, no desk turn starts;
 the chores pass explains the hold once in that round. Already running turns
 are not interrupted and a turn can take the day's cost over the ceiling.
 An unreadable/invalid setting holds preparation with an explicit error, rather
-than silently disabling a ceiling. The decision pass is delivered separately.
+than silently disabling a ceiling. Decision admission uses the same reading and refuses invalid settings too.
+
+
+## Unattended decision pass
+
+`mc decision [<id>]` is a person's one-session entrance, refused inside a
+session. No id takes the oldest prepared item; no prepared item prints that
+fact and exits 0. An explicit id may also name an eligible due brief. It uses
+exactly the runner's decision launch and prints the outcome and new state.
+
+The runner supplies every `prepared` item and every overdue reversible
+`for-martin` product or judgement item as lane work, behind merge-failure and
+main-red mend and ahead of finish, review, build and planning. The `decision`
+list defaults to `claude:fable:high`, then `codex:gpt-6.1-sol:high`; old catalogs
+without it read these defaults without rewriting the file. Its first usable
+subscription candidate wins in catalog order (including unknown-Claude
+bootstrap); if none can run, existing API-reserve admission applies. It never
+borrows another list. No cost ceiling exists unless Martin sets one.
+
+A session has `MC_ROLE=decision`, `MC_HEADLESS=1` and the canon decision role's
+instructions, the usual watch/check-in, scratch and session logs. A goal item
+stands in its first repository worktree, made by ordinary goal allocation if
+absent, with `MC_GOAL` and programme identity. Other items stand in their item
+directory without goal identity. Every session writes a `runs.tsv` row of kind
+`decision`, named by item id, including usage and cost. Goal claims and current
+files exclude other sessions on that goal; a short lock and live-PID
+`.decision.json` claim in the goal directory (or non-goal item directory) also
+exclude concurrent manual decision launches. The claim is removed on exit.
+
+The role reads prepared evidence, the live source, the whole goal log,
+worktree and stage instructions, records takeover and tests the question's
+frame before answering it. It may finish, rewrite or drop the goal with the
+desk's authority; acceptance checks, independent review, gate, publication
+and merge remain mandatory. Only the merger marks done. Martin's interactive
+role remains refused unattended. Headless deploy, admin override, production
+data and credential hooks still apply to decision sessions.
+
+Only three kinds reach Martin: an unanswered product direction changing user
+promises, product cost, personal-data handling or test strategy; a judgement
+(look, listen, try); or a reserved act. Everything technical is decided by the
+goal, standards, app patterns and established practice, even a privacy,
+security or cost question labelled policy. Required admin audit records are
+one such established practice: inability to write the audit record does not
+justify proceeding without it (Martin, 2026-11-14). One root cause across items
+is one decision applied to each, not repeated questions. No budget, allocation,
+exception or new rule is added without measured need.
+
+Settled work is carried out or handed to the appropriate goal stage, then
+closed `--by decision` with a two- or three-sentence Swedish summary. What is
+Martin's gets `brief.md` in Swedish, with only: what the user would notice;
+options as consequences; one recommendation and reason; what waits; whether
+it can be changed afterwards; for a judgement, material paths; for a reserved
+act, the exact act and its effects. `brief --sort … --reversible yes|no` leaves
+the goal in `Martin`. Only reversible product/judgement briefs past `due_at`
+are picked for default execution: carry out the recommendation as if chosen
+and close `--by default`. Irreversible and reserved items never default,
+even if a reserved record erroneously says reversible and has a due date.
+
+A session ending without closing or briefing appends `{at, reason}` to
+`decision_failures`. An unchanged overdue brief also counts as unfinished.
+After one failure the item is eligible once more. After the second, the
+runner writes a Swedish failure brief with the reasons and session log paths,
+sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`, and
+keeps the goal waiting on Martin. Admission refusals spend no attempt. The
+runner's existing mechanical `Martin` settings are unchanged; the pass handles
+what they leave rather than moving their ownership into the runner.

@@ -1634,3 +1634,34 @@ for (const [name, args] of [
   assert.deepEqual(f.store, before);
   assert.deepEqual(f.calls, []); assert.deepEqual(f.requests, []); assert.deepEqual(f.ledger(), []);
 });
+
+
+test('decision alone gains unattended desk moves, acceptance rewrites and attribution, never done', async () => {
+  const env = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
+  const f = fixture({ files: inStage('finish'), env });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
+  assert.equal(await run(['ready','mc/plain'], f.deps), 0, f.err());
+  assert.equal(await run(['criterion','set','mc/plain','1','--criterion','A truthful check'], f.deps), 0, f.err());
+  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met,false);
+  assert.ok(parseLog(f.store[`${DIR}/LOG.md`]).some(x=>x.role === 'decision' && x.comment?.includes('moved back')));
+  assert.equal(await run(['stage','mc/plain','done'], f.deps), 2);
+  assert.equal(await run(['done','mc/plain'], f.deps), 2);
+  assert.equal(stateOf(f),'build · ready');
+  dropFixture(f);
+  assert.equal(await run(['drop','mc/plain','--reason','Obsolete scope'], f.deps),0,f.err());
+  for (const from of STAGES) {
+    for (const to of STAGES.filter(x=>x!=='done')) assert.equal(refusedMove({ from,to,env }),null,`${from} to ${to}`);
+    for (const status of ['ready','blocked','Martin']) assert.equal(refusedMove({ from,status,env }),null);
+    assert.match(refusedMove({ from,to:'done',env }),/does not mark/u);
+  }
+});
+
+test('headless Martin still cannot move, rewrite criteria, drop or ask', async () => {
+  const env = { MC_ROLE:'martin', MC_HEADLESS:'1', MC_TOOL:'codex', MC_GOAL:'mc/plain' };
+  for (const args of [['stage','build'],['ready'],['criterion','set','1','--criterion','Changed'],['drop','--reason','Obsolete'],['martin','--kind','technical','--reason','Why?','--option','a: A','--option','b: B','--recommend','a']]) {
+    const f = fixture({ files:inStage('finish'), env });
+    assert.equal(await run(args,f.deps),2,args.join(' '));
+    assert.equal(stateOf(f),'finish · ready');
+    assert.match(f.err(),/interactive-only/u);
+  }
+});

@@ -383,3 +383,18 @@ test('desk-prepare cannot ask with or without goal identity and writes no file o
     assert.deepEqual(f.requests, []); assert.deepEqual(f.ledger, []);
   }
 });
+
+
+test('headless decision may ask at every active goal stage, with decision attribution', async () => {
+  for (const stage of ['draft','build','review','finish','merge']) {
+    const goal = join(programmeHome,'jev','goals',`decision-${stage}`);
+    mkdirSync(goal,{recursive:true});
+    writeFileSync(join(goal,'GOAL.json'),goalJson({stage,status:'Martin'})); writeFileSync(join(goal,'LOG.md'),'');
+    const f = fixture({env:{MC_ROLE:'decision',MC_HEADLESS:'1',MC_TOOL:'codex',MC_GOAL:`jev/decision-${stage}`,cwd:repoDir}});
+    const read = path => {try {return readFileSync(path,'utf8');} catch {return null;}};
+    assert.equal(await run(['--kind','technical',...options],{...f.deps,read,write:writeFileSync}),0,f.err());
+    assert.equal(f.requests.length,1);
+    assert.match(f.requests[0].init.body,/How should the timeout test work/u);
+    assert.equal(parseLog(readFileSync(join(goal,'LOG.md'),'utf8')).at(-1).role,'decision');
+  }
+});

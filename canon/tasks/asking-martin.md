@@ -38,7 +38,7 @@ mc ask [<programme>/<goal>] --kind technical|product --reason "…" \
 
 ## What reaches Martin
 
-Only a reserved act (`mc deploy`, production data, credentials, `--admin`) or a product choice the goal, programme page and standards do not answer reaches Martin. An exception to a standard follows the same kind-based route: technical exceptions are decided by the session; product choices and reserved acts reach Martin. Write the decision where the standard belongs.
+Only three kinds reach Martin: a product choice the goal, programme page and standards do not answer; a judgement (look, listen, try), with material ready; or a reserved act (`mc deploy`, money, production data, credentials, `--admin`). A question established practice answers is technical even about privacy, security or cost, and even when labelled policy. The unattended decision pass settles it before Martin sees the item; a reversible product choice or judgement may default after its brief has waited two days, never an irreversible choice or reserved act. An exception to a standard follows the same kind-based route: technical exceptions are decided by the session; product choices and reserved acts reach Martin. Write the decision where the standard belongs.
 
 Never permission to run a check, a time budget, a quiet machine or a lane count.
 A `SETTLED` red goes as a proposal to the programme that owns the failing file.

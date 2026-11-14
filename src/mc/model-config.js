@@ -4,14 +4,14 @@
  *
  * `fast`, `medium` and `large` are the work classes: a goal's class routes its build
  * sessions and nothing else. The role lists — `review`, `finish`, `mend`, `plan`
- * and `manager` — each route their own unattended role, whatever the goal's
+ * `manager` and `decision` — each route their own unattended role, whatever the goal's
  * class (ruling 59 § 2 for review; the 2026-11-09 ruling for the others). None
  * of them falls back to a class.
  *
  * A file whose `review` is one candidate object, as every catalog was before
  * review became a list, reads as a list of that one candidate; it is written
  * back as a list the first time `mc model` changes the file. A file that lacks
- * `finish`, `mend`, `plan` or `manager` reads that list from the defaults, and
+ * `finish`, `mend`, `plan`, `manager` or `decision` reads that list from the defaults, and
  * is written back with every list the first time `mc model` changes it.
  *
  * It is a file the person owns — `~/mc/runner/models.json` — and mc writes it
@@ -45,11 +45,11 @@ export const MODELS_FILE = 'models.json';
 /** The work classes: a goal's class routes its build sessions, and nothing else. */
 export const CLASSES = Object.freeze(['fast', 'medium', 'large']);
 /** The role lists, each routing its own unattended role. `set` replaces one whole. */
-export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager']);
+export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'manager', 'decision']);
 /** Every list the catalog holds. `mc model add` and `remove` take any of them. */
 export const LISTS = Object.freeze([...CLASSES, ...ROLE_LISTS]);
 /** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
-const DEFAULTED_LISTS = Object.freeze(['medium', 'finish', 'mend', 'plan', 'manager']);
+const DEFAULTED_LISTS = Object.freeze(['medium', 'finish', 'mend', 'plan', 'manager', 'decision']);
 export const TOOLS = Object.freeze(['claude', 'codex']);
 const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, 'provider_priority']);
 export const PROVIDER_PRIORITIES = Object.freeze(['auto', 'codex', 'claude']);
@@ -76,6 +76,7 @@ export const DEFAULT_CATALOG = Object.freeze({
   mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
   plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
   manager: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
+  decision: Object.freeze([candidate('claude', 'fable', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
 });
 
 export function modelsPath(env = process.env) {

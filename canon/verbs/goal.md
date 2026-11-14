@@ -18,10 +18,10 @@ with ✓/✗ and its check, and each worktree's state.
   it back. Every write is validated; an invalid one is refused and not written.
   `mc goal criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`
   rewrites a criterion's text or check and leaves it unmet, logged with the old
-  and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin may.
+  and new text; a goal session (build, review, finish, mend) cannot, but interactive Martin or unattended decision may.
   `mc goal criterion remove [<p>/<g>] <n> --reason "…"` takes criterion `n`
   out, the later ones move up one number, and the removed text, check, met state
-  and reason are logged; a goal session cannot, but interactive Martin may.
+  and reason are logged; a goal session cannot, but interactive Martin or unattended decision may.
 
 - **Entries.** A session writes to its goal with `mc goal log --done "…"
   --comment "…" --next "…" [--stage …] [--status …]`; `MC_GOAL` names the
@@ -80,8 +80,8 @@ with ✓/✗ and its check, and each worktree's state.
   In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; product choices and reserved acts reach Martin. Continue if jev answers. A product choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
-- **Refused.** mc refuses every session except the interactive Martin role a backward move, naming both stages
-  — a person (`MC_TOOL=person`, or none) and interactive Martin may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin, any
+- **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages
+  — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin or decision, any
   move but `build → review` from a build session, any but `review →
   merge|finish` from a review, `finish` without REVIEW.md, any but `finish →
   merge` from a finish session, every stage move from a mend session, and
@@ -92,7 +92,7 @@ with ✓/✗ and its check, and each worktree's state.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" [--stage draft|build]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
-  --reason "…"` abandons delivery; only plan, interactive Martin or a person may drop. The stage is
+  --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
   cancelled, and the goal is archived immediately when safe. Shared PRs stay
   open and queued. Failed or unsafe cleanup stays visible and retries through
@@ -104,3 +104,11 @@ with ✓/✗ and its check, and each worktree's state.
   on Martin prevents that launch. One session completes only that draft into
   build using its goal worktrees. Interactive mc plan remains the person's
   entrance; empty programmes and proposals alone start no plan turn.
+
+The unattended `decision` desk role has Martin's goal mutation authority,
+including backward moves, ready, goal/criterion rewrites and dropping, but
+never administrative done. It logs `by decision`, runs criteria before marking
+them met, and preserves gate, review, publication and merger evidence. The
+interactive Martin role remains refused with `MC_HEADLESS=1`. Headless deploy,
+admin override, production-data and credential hooks still refuse decision;
+these become Swedish briefs rather than acts ([mc-martin.md](../../docs/technical/mc-martin.md)).
