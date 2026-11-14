@@ -344,14 +344,6 @@ function chromeToLocal(tool, args) {
   return false;
 }
 
-/**
- * What a headless session may not do: Martin's acts, which happen only with
- * him at the terminal. This is the one place mc forbids an act by who runs
- * it; canon's skills say how and what breaks, never who may (canon-text test).
- * `MC_HEADLESS=1` is set by the runner and the intake turn on every session
- * they start; an interactive session never carries it. No escape: the rules
- * above turn a raw command to an mc verb, these are a boundary.
- */
 /*
  * The shell's simple commands on a line, read the way a POSIX shell reads
  * them, so a headless rule matches a command the line would run and never the
@@ -406,12 +398,35 @@ function parseInto(text, out) {
   return scanLine(text, 0, false, out) !== -1;
 }
 
-/** The index after the `}` that closes a `${` whose body starts at `start`, or -1. */
-function braceEnd(s, start) {
+/**
+ * The index after the `}` that closes a `${` whose body starts at `start`, or
+ * -1. The body is a word too: its `$(…)` and backquoted substitutions run
+ * (`${X:-$(…)}`), so their commands are added. A single quote is read as a
+ * plain character: inside double quotes it does not quote, so its text is read
+ * as commands either way, and a `}` within it leaves the line unparsed.
+ */
+function braceEnd(s, start, out) {
   let depth = 1;
-  for (let k = start; k < s.length; k += 1) {
-    if (s[k] === '{') depth += 1;
-    else if (s[k] === '}' && (depth -= 1) === 0) return k + 1;
+  let k = start;
+  while (k < s.length) {
+    const c = s[k];
+    let end = 0;
+    if (c === '\\') {
+      k += 2;
+      continue;
+    }
+    if (c === '$' && s[k + 1] === '(') end = scanLine(s, k + 2, true, out);
+    else if (c === '$' && s[k + 1] === '{') end = braceEnd(s, k + 2, out);
+    else if (c === '`') end = backquoted(s, k + 1, out);
+    else if (c === '"') end = doubleQuoted(s, k + 1, out)?.next ?? -1;
+    if (end === -1) return -1;
+    if (end > 0) {
+      k = end;
+      continue;
+    }
+    if (c === '{') depth += 1;
+    else if (c === '}' && (depth -= 1) === 0) return k + 1;
+    k += 1;
   }
   return -1;
 }
@@ -441,7 +456,7 @@ function doubleQuoted(s, start, out) {
     }
     let end = 0;
     if (c === '$' && s[j + 1] === '(') end = scanLine(s, j + 2, true, out);
-    else if (c === '$' && s[j + 1] === '{') end = braceEnd(s, j + 2);
+    else if (c === '$' && s[j + 1] === '{') end = braceEnd(s, j + 2, out);
     else if (c === '`') end = backquoted(s, j + 1, out);
     if (end === -1) return null;
     if (end > 0) {
@@ -500,7 +515,7 @@ function readWord(s, start, out) {
       end = scanLine(s, j + 2, true, out);
       if (end === -1) return null;
     } else if (c === '$' && s[j + 1] === '{') {
-      end = braceEnd(s, j + 2);
+      end = braceEnd(s, j + 2, out);
       if (end === -1) return null;
     } else if (c === '`') {
       end = backquoted(s, j + 1, out);
@@ -641,8 +656,16 @@ export function shellCommands(line) {
 const begins = (command, ...want) => want.every((word, k) => (k === 0 ? basename(command.words[0] ?? '') : command.words[k]) === word);
 
 /**
- * The acts a headless session may not run. Each `test` takes one command the
- * line runs (see `shellCommands`); `act` is the name `mc ask --reserved` takes.
+ * What a headless session may not do: Martin's acts, which happen only with
+ * him at the terminal. This is the one place mc forbids an act by who runs
+ * it; canon's skills say how and what breaks, never who may (canon-text test).
+ * `MC_HEADLESS=1` is set by the runner and the intake turn on every session
+ * they start; an interactive session never carries it. No escape: the rules
+ * above turn a raw command to an mc verb, these are a boundary.
+ *
+ * Each `test` takes one command the line runs (see `shellCommands`), so a
+ * rule matches the command's position, never text in another command's
+ * arguments; `act` is the name `mc ask --reserved` takes (`RESERVED_ACTS`).
  */
 export const HEADLESS_RULES = [
   {

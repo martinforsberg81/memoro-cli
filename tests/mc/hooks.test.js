@@ -613,10 +613,21 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
     assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials']);
   });
 
+  // 2026-11-14: one Bash call held two reserved-act questions; the words of an
+  // option refused it, and both were lost.
+  const TWO_ASKS = 'mc ask alpha/one --kind technical --reserved deploy --reason "Production runs an older commit." --option "deploy: Martin runs mc deploy so production includes the import" --option "hold: the work waits for a later deploy" --recommend deploy --evidence "curl -s https://example.test/api/version" 2>&1 | tail -8; echo ----; mc ask alpha/one --kind technical --reserved production-data --reason "The import needs production data." --option "run: Martin sets CLAUDE_ALLOW_PROD_WRANGLER=1 and runs it" --option "read_only: nothing is written" --recommend run 2>&1 | tail -8';
+
   it('allows a line that only quotes, comments or documents an act', () => {
     const LINES = [
-      'mc ask mc/g --kind product --reason "Ship it?" --option "a: run mc deploy after the gate" --option "b: wait" --recommend b',
-      'mc ask mc/g --kind technical --reason "Deploy?" --option "a: wait" --recommend a && mc ask mc/g --kind technical --reason "Merge?" --option "a: mc merge 14 --admin" --option "b: hold" --recommend b',
+      TWO_ASKS,
+      'mc goal log --comment "waits on mc deploy by Martin"',
+      'git commit -m "docs: say when mc deploy runs"',
+      "git commit -F - <<'EOF'\nhooks: mc deploy is named in a message\nEOF",
+      `echo "mc merge memoro 1 --admin is Martin's"`,
+      'grep -rn "mc test token --set" docs/',
+      'echo done # mc deploy',
+      'mc ask alpha/one --kind product --reason "Ship it?" --option "a: run mc deploy after the gate" --option "b: wait" --recommend b',
+      'mc ask alpha/one --kind technical --reason "Deploy?" --option "a: wait" --recommend a && mc ask alpha/one --kind technical --reason "Merge?" --option "a: mc merge 14 --admin" --option "b: hold" --recommend b',
       'echo "mc deploy is Martin\'s act"',
       'git commit -F msg.txt # then mc deploy',
       "cat <<'EOF'\nmc deploy\nCLAUDE_ALLOW_PROD_WRANGLER=1\nEOF",
@@ -631,14 +642,28 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
 
   it('refuses an act the line runs, however the line runs it, and names the way forward', () => {
     const RUNS = {
+      'echo ok; mc deploy': 'headless-deploy',
+      'X=1 mc deploy --yes': 'headless-deploy',
+      'echo "$(mc deploy)"': 'headless-deploy',
+      'echo `mc deploy`': 'headless-deploy',
+      "bash -c 'mc deploy --yes'": 'headless-deploy',
+      'eval "mc deploy"': 'headless-deploy',
+      'env FOO=1 mc deploy': 'headless-deploy',
+      'timeout 600 mc deploy': 'headless-deploy',
+      '/usr/local/bin/mc deploy': 'headless-deploy',
+      'true && gh pr merge 12 --admin': 'headless-admin',
+      'export CLAUDE_ALLOW_PROD_WRANGLER=1': 'headless-production-data',
+      'env CLAUDE_ALLOW_PROD_WRANGLER=1 npx wrangler d1 execute db --remote': 'headless-production-data',
+      'mc test token --rm': 'headless-credentials',
+      'echo "x; mc deploy': 'headless-deploy',
+      'echo ${X:-$(mc deploy)}': 'headless-deploy',
+      'echo "${X:-$(mc deploy)}"': 'headless-deploy',
+      'echo ${X:-`mc deploy`}': 'headless-deploy',
       'mc deploy --follow': 'headless-deploy',
       '(mc deploy)': 'headless-deploy',
       'echo ok | mc deploy': 'headless-deploy',
-      'timeout 600 mc deploy': 'headless-deploy',
       'sudo mc deploy': 'headless-deploy',
       'bash -c "mc deploy --yes"': 'headless-deploy',
-      'eval "mc deploy"': 'headless-deploy',
-      'echo "$(mc deploy)"': 'headless-deploy',
       'echo "unterminated mc deploy': 'headless-deploy',
       'mc merge memoro 3 --admin || true': 'headless-admin',
       'export CLAUDE_ALLOW_PROD_WRANGLER=1; npx wrangler d1 execute memoro --remote': 'headless-production-data',
@@ -650,17 +675,36 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
       const decision = preToolDecision(bash(command), headless);
       assert.equal(decision?.id, id, command);
       assert.match(decision.reason, /only in an interactive session/u, command);
-      assert.match(decision.reason, /--reserved (deploy|admin|production-data|credentials)\b/u, command);
+      assert.ok(decision.reason.includes(`--reserved ${HEADLESS_RULES.find((rule) => rule.id === id).act} `), command);
+      assert.ok(!decision.reason.includes('Leave the work waiting on it'), command);
+    }
+  });
+
+  it('tells each refused act to be asked for under its own reserved name', () => {
+    const ONE_EACH = [
+      ['mc deploy', 'headless-deploy', '--reserved deploy '],
+      ['gh pr merge 12 --admin', 'headless-admin', '--reserved admin '],
+      ['export CLAUDE_ALLOW_PROD_WRANGLER=1', 'headless-production-data', '--reserved production-data '],
+      ['mc test token --set', 'headless-credentials', '--reserved credentials '],
+    ];
+    for (const [command, id, reserved] of ONE_EACH) {
+      const decision = preToolDecision(bash(command), headless);
+      assert.equal(decision?.id, id, command);
+      assert.match(decision.reason, /only in an interactive session/u, command);
+      assert.ok(decision.reason.includes(reserved), `${command}: ${decision.reason}`);
       assert.ok(!decision.reason.includes('Leave the work waiting on it'), command);
     }
   });
 
   it('reads the commands a line runs, with quotes removed, and null for a line it cannot read', () => {
     const words = (line) => shellCommands(line)?.map((entry) => entry.words);
+    assert.deepEqual(shellCommands(TWO_ASKS).map((entry) => entry.words[0]), ['mc', 'tail', 'echo', 'mc', 'tail']);
+    assert.equal(shellCommands('echo "x'), null);
     assert.deepEqual(words('echo "mc deploy" && env A=1 timeout 600 mc deploy'), [['echo', 'mc deploy'], ['mc', 'deploy']]);
     assert.deepEqual(shellCommands('env A=1 timeout 600 mc deploy')[0].assignments, ['A=1']);
     assert.deepEqual(words("cat <<'EOF'\nmc deploy\nEOF\nmc publish --no-merge"), [['cat'], ['mc', 'publish', '--no-merge']]);
-    assert.deepEqual(words('mc ask mc/g --option "a: $(mc deploy)"'), [['mc', 'deploy'], ['mc', 'ask', 'mc/g', '--option', 'a: $(mc deploy)']]);
+    assert.deepEqual(words('mc ask alpha/one --option "a: $(mc deploy)"'), [['mc', 'deploy'], ['mc', 'ask', 'alpha/one', '--option', 'a: $(mc deploy)']]);
+    assert.deepEqual(words('echo ${X:-$(mc deploy)}'), [['mc', 'deploy'], ['echo', '${X:-$(mc deploy)}']]);
     assert.equal(shellCommands('echo "unterminated'), null);
   });
 });
