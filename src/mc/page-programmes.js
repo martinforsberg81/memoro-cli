@@ -39,7 +39,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
     lines.push(prefix.replace(/ · $/u, ''));
     lines.push(line(c, wide, 10, count, ['grey']));
   }
-  if (goal.hold) lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`, []));
+  if (goal.hold) lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`, ['red']));
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
     const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');

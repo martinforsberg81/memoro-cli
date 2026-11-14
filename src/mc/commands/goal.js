@@ -1240,8 +1240,13 @@ function fromProject(args, ctx) {
  * Why a hold is not for this caller, or null: a headless caller, which is never a holder, or a session of another goal
  * (the refusal `logEntry` gives). Both hold verbs use it.
  */
+function headlessHoldRefusal(env) {
+  return env.MC_HEADLESS === '1' ? 'a hold is set by a person or an interactive session — a headless session that cannot continue asks with mc ask or reports with mc goal defect' : null;
+}
+
 function holdCallerRefusal(target, env) {
-  if (env.MC_HEADLESS === '1') return 'a hold is set by a person or an interactive session — a headless session that cannot continue asks with mc ask or reports with mc goal defect';
+  const headless = headlessHoldRefusal(env);
+  if (headless) return headless;
   if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) return `goal session ${env.MC_GOAL} cannot change ${target.name}`;
   return null;
 }
@@ -1287,7 +1292,7 @@ function holdVerb(args, flags, ctx) {
 /**
  * `mc goal release [<programme>/<goal>] [--reason "…"]` — hands a held goal back: one log entry at its stage and
  * status, whose comment says who held it and since when and then each worktree's state (`worktreeStates`), and
- * the hold file removed. Refused, with nothing written, for a headless caller, a session of another goal, and a
+ * the hold file removed. Refused, with nothing written, for a headless caller, and a
  * goal that is not held.
  */
 function releaseVerb(args, flags, ctx) {
@@ -1295,7 +1300,7 @@ function releaseVerb(args, flags, ctx) {
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const target = goalNamed(args[0], ctx);
   if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
-  const refusal = holdCallerRefusal(target, env);
+  const refusal = headlessHoldRefusal(env);
   if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
   const text = read(join(target.dir, GOAL_FILE));
   if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }

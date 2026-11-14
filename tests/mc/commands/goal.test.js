@@ -1083,11 +1083,10 @@ test('mc goal release removes the hold, and logs who held it, since when, and ea
   assert.match(f.out(), /^mc: mc\/plain released\nmemoro-cli: 2 changed · 2 commits past origin\/main · last commit 2026-11-01T21:00:00\+01:00\nmemoro: no worktree\n$/u);
 });
 
-test('mc goal release refuses a goal that is not held, and a headless caller or another goal\'s session, and removes nothing', async () => {
+test('mc goal release refuses a goal that is not held, and a headless caller, and removes nothing', async () => {
   const cases = [
     ['a goal not held', PLAN, inStage('build'), /mc\/plain is not held/u],
     ['a headless session', { ...PLAN, MC_HEADLESS: '1' }, heldGoal(), /a hold is set by a person or an interactive session/u],
-    ['another goal\'s session', { ...BUILD, MC_GOAL: 'mc/other' }, heldGoal(), /goal session mc\/other cannot change mc\/plain/u],
   ];
   for (const [why, env, files, message] of cases) {
     const f = fixture({ files, env });

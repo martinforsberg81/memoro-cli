@@ -1805,7 +1805,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (!hold) { holdsSaid.delete(name); return false; }
     const key = `${hold.by}|${hold.at}`;
     if (holdsSaid.get(name) !== key) {
-      say(`${name}: held by ${hold.by ?? '—'} since ${hold.at ?? '—'} — no session starts on it until mc goal release`);
+      say(`${name}: held by ${hold.by ?? '—'} since ${hold.at ?? '—'} — no session is started (${hold.reason ?? '—'})`);
       holdsSaid.set(name, key);
     }
     return true;

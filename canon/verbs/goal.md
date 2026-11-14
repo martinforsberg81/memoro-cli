@@ -89,8 +89,8 @@ with ✓/✗ and its check, and each worktree's state.
   `merge` (a merge failure, the only case mend takes) uses [mend-session](../roles/mend-session.md) with
   [publish-and-merge](../tasks/publish-and-merge.md). Do this on every
   takeover, even in an existing conversation. Hold the goal first with
-  `mc goal hold <p>/<g> --reason "…"` so no runner session starts on it while
-  you work, and release it with `mc goal release` when you hand it back.
+  `mc goal hold --reason "…"`: the runner starts no session on a held goal, and
+  `mc goal release` hands it back with the worktree's state in the log.
   Resolve the blocker yourself
   within the current stage, including implementation, checks and publication
   when needed; then follow that stage's normal transition. Merely clearing

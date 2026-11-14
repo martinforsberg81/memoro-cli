@@ -101,9 +101,12 @@ judged against the old text by the next reader.
   starts: each carries a product question, reserved act or runner issue and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
-over a goal yourself — a blocked one, one waiting on Martin, one in finish —
-hold it first with `mc goal hold <p>/<g> --reason "…"`: the runner starts no
-session on a held goal until you `mc goal release` it when you hand it back.
+over a goal yourself — one in build, one waiting on Martin, one in finish — hold
+it first: `mc goal hold <programme>/<goal> --reason "…"` keeps the runner from
+starting a session on it and writes the log entry, and `mc goal release` hands
+it back with what the worktree holds. `mc goal blocked` and `mc goal martin` are
+not holds: the runner turns the first into a question for Martin, and the second
+is one.
 
 ## Commissioning test protection
 

@@ -185,11 +185,11 @@ order without a model call:
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
-   delivery session. A focused plan session may complete the next draft under the programme rule below. A held goal (`mc goal hold`, [mc-goals.md](mc-goals.md)) starts no session of any kind — planning, build, review, finish, mend or decision — and the runner says so once; a held `blocked` goal outside merge is still reconciled to Martin without a launch.
-3. Hold any goal whose programme has an unfinished goal in a lower phase.
+   delivery session. A focused plan session may complete the next draft under the programme rule below.3. Hold any goal whose programme has an unfinished goal in a lower phase.
    All goals of a phase can run side by side; there is no separate queue file.
-4. Exclude goals already claimed or named by a live current file, and goals
-   whose first repository is not served by the lane. A review without an
+4. Exclude goals already claimed or named by a live current file, held goals
+   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
+   repository is not served by the lane. A review without an
    available route does not stand in front of other work.
 5. Take merge-failure mend and goal-less main-red mend first, then decision, finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
