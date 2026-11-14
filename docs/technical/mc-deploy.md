@@ -277,10 +277,10 @@ two terminals cannot both start one (`prepareStage`):
 |---|---|
 | running, same sha | follows it — *"already being prepared … following it, not starting a second"* — and reaches the question when it is green |
 | done, same sha, green | goes straight to the question; nothing is measured again |
-| done, same sha, red | the refusal as if it had run here; `--accept-red` reads the same result |
+| done, same sha, red | the refusal as if it had run here; `--accept-red` reads the same result. The main-red mends that hold the red are read as they stand now (`withMendsNow`): one landed or dropped since is not named |
 | another sha (main moved) | a new preparation, said in one line: *"the last preparation was of `<x>`, main is `<y>` now — starting a new one"* |
 | its process gone before it ended | *"interrupted at `<stage>`"*, and a new one |
-| done without suites and `--accept-red` given | prepares again: the suites are what a red needs |
+| done without suites and `--accept-red` given, whether found done or joined while running | prepares again, once: the suites are what a red needs |
 
 **A measuring preparation is never silent (2026-11-14).** The full run is tens of
 minutes and the suites more; a watcher that sees nothing for that long cannot tell

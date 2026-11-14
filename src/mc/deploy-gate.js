@@ -167,6 +167,17 @@ export async function measureFull({
 }
 
 /**
+ * A full-run reading made earlier — a finished preparation's — with the
+ * main-red mends as they stand now: a mend landed or dropped since is not
+ * named as holding the red. The measurement itself is not touched.
+ */
+export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
+  if (!full || (full.state !== 'red' && full.state !== 'stalled')) return full;
+  const mends = mendsFor(full.commit, { root: deps.mendRoot || workRoot(env), read: deps.readMends || readMainMends });
+  return { ...full, mends, lines: fullRunLines({ state: full.state, run: full.run, sha: full.commit, mends, started: full.started }) };
+}
+
+/**
  * Both measurements of the commit that would ship — the full run, then the app
  * used — and nothing said about them: `{ full, exercise }`, `exercise` null when
  * the full run already refuses the deploy and nobody accepts that (the suites

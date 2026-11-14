@@ -88,7 +88,7 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
-import { gateRecord, measureGate, reds, suiteLines } from '../deploy-gate.js';
+import { gateRecord, measureGate, reds, suiteLines, withMendsNow } from '../deploy-gate.js';
 import {
   preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
   writePreparation,
@@ -1254,7 +1254,9 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
   let watch;
   if (chosen.done) {
     say(`mc: ${plan.short} was prepared ${when(chosen.done.ended)} — the gate's answer is read from that, nothing is measured again`);
-    return { result: chosen.done.result };
+    // The measurement is read; the mends holding its red are read as they are now.
+    const { result } = chosen.done;
+    return { result: { ...result, full: withMendsNow(result.full, { env, deps: deps.gate || {} }) } };
   }
   if (chosen.join) {
     record = chosen.join;
