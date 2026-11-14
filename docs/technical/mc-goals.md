@@ -194,16 +194,18 @@ is read, written and shown exactly as above. Version 2 has the same header
 }
 ```
 
-- `aim`, `outcome`, `latitude`, `protection` — arrays of paragraphs. `outcome`
-  must not be empty.
+- `aim`, `outcome`, `latitude`, `protection` — arrays of paragraphs, possibly
+  empty. `mc goal new --structure 2` writes them empty.
 - `problem` (B), `premises` (P), `decisions` (D), `change` (C), `preserve` (V),
   `risks` (R), `out_of_scope` (X) — items. Each has an `id` (its part's letter
   and a number, shown `B1`, `C2`), a text (`claim` for a premise, `what` for a
   change) and the fields its part names (`goal-parts.js`, `ITEM_PARTS`); no
-  other key. `change` must have at least one item.
+  other key. Every item part may be empty; validation requires no part to have
+  content. `mc goal show` prints OUTCOME, CHANGE, OBLIGATIONS and CRITERIA as
+  `none yet` when they are empty and leaves any other empty part out.
 - `obligations` — one entry per rule area (`area`, `stand` `touched` or
-  `untouched`, `text`, and for a touched area an optional `standard`
-  `<repo>/<path>#<section>`). A second write for an area replaces the first.
+  `untouched`, `text`, and an optional `standard`
+  `<repo>/<path>#<section>`, on either stand). A second write for an area replaces the first.
 - `success_criteria` — as in version 1, with an optional `evidence` (what the
   build logs for the criterion).
 - `ids` — for each part letter, the highest number ever given. A new item takes
