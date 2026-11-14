@@ -15,6 +15,10 @@
  * the pid whose death means the session is over, and it is the one that can be tested
  * for life from outside.
  *
+ * Claude background sessions are the exception to launcher ownership: they
+ * register the provider pid, with no launcher-exit hook. The same sweep and
+ * page liveness check then follow the daemon's provider, not its attached client.
+ *
  * Two things keep the directory honest without any bookkeeping:
  *
  *   - the reader (`page-collect.js`) drops an entry whose pid is not alive, so

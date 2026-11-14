@@ -438,6 +438,14 @@ grant, and requests only the chosen model through the provider-specific route.
 An interactive session (`mc plan`, `mc manager`, `mc helper`) is the exception: its grant names
 no model, because `/model` inside the session changes it, and a grant on the
 launch model refused every request after the switch.
+Linux SSH Claude background sessions use a detached gateway holder rather than
+letting the attaching client own the wrapper. It shares the wrapper's key-opening,
+API-switch recheck and grant construction. The holder outlives both `--bg` and
+`attach`, serving the same 500-request, 12-hour grant until the provider pid dies
+or the grant expires. The grant reaches Claude only through settings env
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in a 0600 file in a 0700 directory
+under `runner/claude-background/`; cleanup removes it on death or expiry. The
+provider key is opened only in the holder, never in the attaching client.
 The runner never reads or places the key in a session's environment or argv.
 The vault must be unlocked and the relevant record configured before an API
 reserve can run. A missing or unreadable key fails the API launch visibly.
