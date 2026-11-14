@@ -57,12 +57,12 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
       return result;
     },
   };
-  const modelIndex = args.indexOf('--model');
-  const tool = args.includes('--codex') ? 'codex' : args.includes('--claude') ? 'claude' : null;
-  const options = { verb: entrance, programme: entrance === 'plan' ? args.find(arg => !arg.startsWith('-')) || null : null,
+  const { scanArgs } = await import('./commands/flags.js');
+  const { flags, positional } = scanArgs(args, { booleans: ['--new', '--resume'], strictValues: ['--model'], toolSugar: true });
+  const options = { verb: entrance, programme: entrance === 'plan' ? positional[0] || null : null,
     launch: { id: snapshot.provider }, pick: args.includes('--new') ? 'new' : null,
-    chosen: snapshot.chosen ? { id: snapshot.chosen } : null, model: modelIndex >= 0 ? args[modelIndex + 1] : null,
-    resumeTool: tool, stdout, stderr };
+    chosen: snapshot.chosen ? { id: snapshot.chosen } : null, model: flags.model,
+    resumeTool: flags.tool, stdout, stderr };
   const prepared = await prepareSessionEntrance(options, driver, { lock: () => () => {}, alive: () => true, choose });
   try {
     const result = prepared.result || await prepared.start({ chosen: options.chosen });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { runModule, VERB_MODULES } from '../../src/mc-verbs.js';
 import { remoteCommand, serverLink } from '../../src/mc/server-link.js';
 import { descriptor, sessionDescriptor, validateDescriptor, MC_VERSION } from '../../src/mc/server-protocol.js';
 import { run as serverSession } from '../../src/mc/commands/session.js';
@@ -24,20 +25,22 @@ for (const entrance of ['plan', 'manager', 'brief', 'martin', 'helper']) {
   ];
   for (const [name, env, args, interactive, destination, remote] of cases) test(`${entrance}: ${name} ${remote ? 'goes remote' : 'stays local'}`, async () => {
     const calls = [];
-    const result = await routeServerEntrance(entrance, args, { env, isInteractive: () => interactive,
+    const result = await runModule(VERB_MODULES[entrance], args, { load: async () => ({ run: () => 17 }),
+      routeEntrance: (verb, forwarded) => routeServerEntrance(verb, forwarded, { env, isInteractive: () => interactive,
       read: () => destination, stdout: sink(), stderr: sink(), link: dest => {
         calls.push(dest);
         return { request: () => { throw new Error('recorded boundary'); } };
-      } });
+      } }) });
     assert.deepEqual(calls, remote ? ['tc'] : []);
-    assert.equal(result, remote ? 1 : null);
+    assert.equal(result, remote ? 1 : 17);
   });
 }
 for (const [verb, args] of [['run', []], ['goal', []], ['gate', []], ['server', []], ['manager', ['--headless']],
   ['helper', ['--intake']], ['helper', ['--collect']], ['plan', ['--archive']], ['martin', ['get']]]) {
   test(`${verb} ${args.join(' ')} non-entrance stays local`, async () => {
-    assert.equal(await routeServerEntrance(verb, args, { env: {}, isInteractive: () => true,
-      read: () => assert.fail('must not read configuration'), link: () => assert.fail('must not call SSH') }), null);
+    assert.equal(await runModule(VERB_MODULES[verb], args, { load: async () => ({ run: () => 17 }),
+      routeEntrance: (entrance, forwarded) => routeServerEntrance(entrance, forwarded, { env: {}, isInteractive: () => true,
+        read: () => assert.fail('must not read configuration'), link: () => assert.fail('must not call SSH') }) }), 17);
   });
 }
 
@@ -310,4 +313,29 @@ test('failure to finish a clean client still cleans the tunnel process and local
   await assert.rejects(f.link.codexClient(f.connection), /measured connection close failure/u);
   assert.deepEqual(f.calls.find(call => call.bin === 'ssh').child.killedWith, ['SIGTERM']);
   assert.deepEqual(f.removed.map(row => row[0]), ['/mc/runner/s/c-abcdef']);
+});
+
+for (const [name, args, chosen, operation, allowed] of [
+  ['--new starts rather than joining', ['--new', '--model', 'new-model'], null, 'start', true],
+  ['--resume joins its held conversation without asking', ['--resume', 'thread-a'], 'thread-a', 'join', true],
+  ['join refuses --model without starting', ['--model', 'new-model'], null, null, false],
+]) test(`remote driver: ${name}`, async () => {
+  const row = session({ resume: 'thread-a' }); const calls = []; const errors = sink();
+  const link = { destination: 'tc',
+    request: () => descriptor('snapshot', { provider: 'codex', providerVersion: row.providerVersion, chosen, sessions: [row] }),
+    connect: (...values) => { calls.push(values); return { session: row }; }, codexClient: () => ({ status: 0 }) };
+  const result = await remoteEntrance('manager', args, link, { stdout: sink(), stderr: errors,
+    choose: () => { assert.equal(chosen, null); assert.equal(allowed, false); return 'session-a'; } });
+  assert.equal(result, allowed ? 0 : 1);
+  assert.deepEqual(calls, operation ? [[operation, 'manager', [...args, ...(operation === 'join' ? ['--session', row.id] : [])], []]] : []);
+  if (!allowed) assert.match(errors.value, /on tc: joining an existing session cannot apply --model/u);
+});
+
+test('remote plan identifies its programme after a model value when reporting the entrance', async () => {
+  const output = sink(); const row = session();
+  const link = { destination: 'tc', request: () => descriptor('snapshot', { provider: 'codex', providerVersion: row.providerVersion, chosen: null, sessions: [] }),
+    connect: () => ({ session: row }), codexClient: () => ({ status: 0 }) };
+  assert.equal(await remoteEntrance('plan', ['--model', 'new-model', 'example', '--new'], link, { stdout: output, stderr: sink() }), 0);
+  assert.match(output.value, /with mc plan example\./u);
+  assert.doesNotMatch(output.value, /mc plan new-model/u);
 });

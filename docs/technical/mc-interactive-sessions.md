@@ -1,5 +1,9 @@
 # Interactive sessions across SSH
 
+For entrances from another computer with a configured server, see
+[mc server: configuration, remote driver and local Codex client](mc-server.md).
+The provider mechanics below also serve that server half.
+
 ## Platform boundary
 
 On Linux, an interactive `mc plan <programme>`, `mc manager` (`mc brief`),

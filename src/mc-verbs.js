@@ -116,19 +116,19 @@ export function quietOnClosedReader(stream = process.stdout) {
 }
 
 /** Import the module and run it, or print its usage on stdout and exit 0. */
-export async function runModule(path, argv, { stdout = process.stdout } = {}) {
+export async function runModule(path, argv, { stdout = process.stdout, load = path => import(path), routeEntrance } = {}) {
   // The guard is on process.stdout even when a caller passes its own stdout:
   // the verbs write to process.stdout themselves.
   quietOnClosedReader(process.stdout);
-  const module = await import(path);
+  const module = await load(path);
   if (wantsHelp(argv) && !module.handlesHelp?.(argv)) {
     const text = module.usage();
     stdout.write(text.endsWith('\n') ? text : `${text}\n`);
     return 0;
   }
   if (['plan', 'manager', 'brief', 'martin', 'helper'].some(verb => path.endsWith(`/commands/${verb}.js`))) {
-    const { routeServerEntrance } = await import('./mc/server-client.js');
-    const remote = await routeServerEntrance(path.split('/').at(-1).slice(0, -3), argv);
+    const route = routeEntrance || (await import('./mc/server-client.js')).routeServerEntrance;
+    const remote = await route(path.split('/').at(-1).slice(0, -3), argv);
     if (remote !== null) return remote;
     argv = argv.filter(arg => arg !== '--local');
   }
