@@ -651,7 +651,8 @@ before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
 them, or, when the goal's own text is wrong, reports it with `mc goal defect`
 and ends (*The verbs*). An acceptance obstacle it cannot repair within its
-scope is recorded with its evidence and leaves the goal `build · ready`.
+scope goes to Martin with `mc goal martin` (or goal-bound `mc ask`) and its
+evidence; it is not a goal defect, since the goal's text is not what is wrong.
 Questions use goal-bound `mc ask` under the question contract in
 [mc-jev.md](mc-jev.md). No build exit goes through pre-merge mend.
 

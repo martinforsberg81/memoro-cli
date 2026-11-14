@@ -45,8 +45,10 @@ moves forward. You do one of two things to it, nothing else:
   all, add `--stage review`. mc refuses it while one is not met, naming it.
 - **Acceptance obstacle:** investigate and repair it within the goal and its
   commission. If it cannot be resolved in this role and the work, the
-  environment or the checkout is what is wrong, record the obstacle and its
-  evidence and let the goal stay `build · ready`; do not use pre-merge mend.
+  environment or the checkout is what is wrong, take it to Martin with
+  `mc goal martin` (or goal-bound `mc ask`) and the obstacle and its
+  evidence; do not use pre-merge mend. It is not a goal defect: the goal's
+  text is not what is wrong.
 - **The goal itself is wrong:** a criterion that cannot hold, a check that
   does not test what the criterion says, a premise the code contradicts, two
   parts of the goal that cannot both be met. That is a goal defect, not an

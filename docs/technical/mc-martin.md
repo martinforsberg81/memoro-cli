@@ -264,8 +264,10 @@ runner after three build sessions that committed nothing and met no criterion)
 is `mechanical`. Preparation names the sort; the decision verifies the claim,
 amends the goal with the verbs, records it and sets it ready with
 `mc goal ready`. An amendment that changes what users are promised is a brief
-for Martin; a second defect or stop on text the desk already amended is briefed
-for Martin and the goal is not set ready again. An item's label is the first
+for Martin. A second defect or stop on a goal whose text has not been amended
+since the one before is briefed for Martin and the goal is not set ready again
+(the bound on a report that does not hold coming back); so is a second one on
+text the desk already amended. An item's label is the first
 line of the `Martin` entry of its minute, so a defect is never shown under
 another entry that shares the minute.
 

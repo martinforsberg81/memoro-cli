@@ -68,14 +68,20 @@ again. Decide them so:
 
 - Verify the claim against the code, the check and the standards, and say what
   you ran. A defect that does not hold is closed with the goal set ready and
-  the reason recorded; a stop is read against the last `Next` and the heads.
+  the reason recorded, once (see the second report below); a stop is read
+  against the last `Next` and the heads, and may be set ready with a note.
 - Amend the goal with the verbs (`mc goal set`, `criterion set`, `criterion
   add`, `criterion remove`, `document add`); record the finding and the new
   text in LOG.md; then `mc goal ready`. The goal continues in its stage.
 - If the amendment changes what users are promised, it is a brief for Martin:
   the goal stays `Martin`.
+- A second defect or stop on a goal whose text has not been amended since the
+  one before is briefed for Martin and the goal is not set ready again: the
+  earlier one was found not to hold or was set ready with a note, and it came
+  back. Read LOG.md for the previous `goal defect:` or `no progress:` entry and
+  whether a goal verb changed the text after it.
 - A second defect or stop on text this role has already amended is briefed for
-  Martin and not set ready again; the same words failing twice is the sign
+  Martin too and not set ready again; the same words failing twice is the sign
   that the frame, not the wording, is wrong.
 
 ## Brief what is Martin's
