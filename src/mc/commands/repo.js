@@ -23,7 +23,7 @@ import { existsSync } from 'node:fs';
 
 import { followMerge } from '../merge-watch.js';
 import { mergerLogPath, queueMerge } from '../merger.js';
-import { programsHome, workRoot } from '../paths.js';
+import { mcHome, programsHome, workRoot } from '../paths.js';
 import { FINISHED, goalReferences } from '../goals.js';
 import { tryGit } from '../git.js';
 import { painter } from '../status-render.js';
@@ -31,7 +31,10 @@ import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../rep
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
-import { runGate, verdictHeadline } from '../repo-gate.js';
+import { fullRunLanes, runGate, verdictHeadline } from '../repo-gate.js';
+import { awaitClaim, claimFullRun, releaseClaim } from '../full-run-claim.js';
+import { runOfReport } from '../nightly-loop.js';
+import { readNightlyHistory, recordNightlyRun } from '../nightly-history.js';
 import { slowTestLines } from '../test-times.js';
 import { runMergeRound } from '../repo-merge.js';
 import { countRounds, readRounds, recordRound, recordRoundStart } from '../repo-round-log.js';
@@ -370,13 +373,57 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     return code;
   }
 
-  const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
-  recordRoundStart({
-    repo: repoPath, mode, holder: holder?.name || null,
-    prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
-  });
-  const report = opts.check ? await runGate(round) : await (deps.mergeRound || runMergeRound)(round);
-  recordRound(report, { mode });
+  // The full run of the default branch, asked for by hand, is the one the
+  // daily run and `mc deploy` take: beside the merge lane, in its own checkout,
+  // with no lease (it merges nothing, so a merger holding the repository could
+  // stop it at `lease` twice on 2026-11-14), and written to the history the
+  // page and the deploy gate read. Only one of them measures a tree at a time:
+  // a run already in flight is followed, not started again (`full-run-claim.js`).
+  const alone = Boolean(opts.check && opts.full && opts.pr == null && !opts.prs?.length);
+  const onProgress = (message) => stderr.write(`mc: ${message}\n`);
+  const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), mode, holder, onProgress };
+  const historyRoot = deps.historyRoot || mcHome();
+  const claims = deps.claims || {};
+  const repoRef = { name: repoNameOf(repoPath), path: repoPath };
+  let claim = null;
+  if (alone) {
+    for (;;) {
+      const taken = claimFullRun({ repo: repoRef.name, sha: null, verb: 'mc test --full', root: historyRoot, ...claims });
+      if (taken.claimed) { claim = taken.claim; break; }
+      if (taken.waitFor) {
+        stderr.write(`mc: a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
+        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still waiting for the full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} (pid ${taken.waitFor.pid}), ${Math.round(ms / 60000)} min so far\n`) });
+        continue;
+      }
+      const other = taken.joined;
+      stderr.write(`mc: a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}) — following it, not starting a second\n`);
+      await awaitClaim(other, { root: historyRoot, ...claims, onWait: (ms) => stderr.write(`mc: still following the full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} (pid ${other.pid}), ${Math.round(ms / 60000)} min so far\n`) });
+      const last = readNightlyHistory(repoPath, { root: historyRoot }).runs.at(-1);
+      if (last && Date.parse(last.at) >= Date.parse(other.started) - 1000) {
+        const answer = last.red === null
+          ? `stopped at ${last.stopped_at || 'an unknown step'}${last.reason ? ` — ${last.reason}` : ''}`
+          : `${last.red.length} red, ${last.tests ?? '?'} tests`;
+        if (opts.json) stdout.write(`${JSON.stringify({ followed: true, run: last }, null, 2)}\n`);
+        else stdout.write(`mc: the full run followed has ended — ${repoRef.name} ${String(last.commit || 'unknown').slice(0, 7)}: ${answer}\n`);
+        return last.red && last.red.length === 0 ? 0 : 1;
+      }
+      stderr.write('mc: the run being followed ended without a record — starting one\n');
+    }
+    const lanes = fullRunLanes(process.env);
+    Object.assign(round, { isolated: true, holdLease: false, lanes, env: { ...process.env, MC_TEST_LANES: String(lanes) } });
+  }
+  let report;
+  try {
+    recordRoundStart({
+      repo: repoPath, mode, holder: holder?.name || null,
+      prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
+    });
+    report = opts.check ? await (deps.runGate || runGate)(round) : await (deps.mergeRound || runMergeRound)(round);
+    recordRound(report, { mode });
+    if (alone) recordNightlyRun(runOfReport(repoRef, report), { root: historyRoot });
+  } finally {
+    if (claim) releaseClaim(claim, { root: historyRoot, ...claims });
+  }
 
   const code = report.ok ? 0 : 1;
   if (opts.json) {

@@ -29,7 +29,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
-import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteTimeoutMs, TEST_TIMEOUT_MS, ROUND_STALL_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
+import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteProgressLine, suiteTimeoutMs, TEST_TIMEOUT_MS, ROUND_STALL_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { runSessionGate } from '../../src/mc/session-gate-run.js';
 import { measurementCheckoutPath } from '../../src/mc/measurement-checkout.js';
 import { measureDocs } from '../../src/mc/docs-measure.js';
@@ -540,6 +540,21 @@ describe('the lease is held as the area, and always given back', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'lease');
       assert.match(report.reason, /held by pm .*their own round”/u);
+    } finally { fx.cleanup(); }
+  });
+
+  // 2026-11-14: `mc test memoro --full` stopped twice at `lease` because the
+  // merger held the repository. A full run of the default branch is not a merge
+  // round — it merges nothing and measures in its own checkout — so another
+  // holder's lease is no reason to stop it.
+  it('a full run that holds no lease is not stopped by another holder\'s lease', async () => {
+    const fx = fixture();
+    try {
+      claimLease({ repoPath: fx.repoPath, errand: 'their own round', holder: OTHER, root: fx.mcHome });
+      const report = await fx.run({ pr: null, full: true, isolated: true, holdLease: false, lanes: 2 });
+      assert.notEqual(report.stopped_at, 'lease', report.reason);
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(fx.lease().holder, OTHER.name, 'the other holder\'s lease is untouched');
     } finally { fx.cleanup(); }
   });
 
@@ -3741,6 +3756,88 @@ describe('the selected files run in their resource classes', () => {
       assert.equal(tracker.processes().exited, 2);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, { timeout: 20_000 });
+
+  // Martin, 2026-11-14: a running measurement never looks stuck — files done
+  // of files, elapsed and reds so far, at least once a minute.
+  it('realSuite: says how far a whole suite has got at each interval, with files done and running', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-suite-progress-')));
+    try {
+      const flag = join(dir, 'release');
+      writeFileSync(join(dir, 'a-slow.test.js'), [
+        "import test from 'node:test';",
+        "import { existsSync } from 'node:fs';",
+        `test('waits', async () => { while (!existsSync(${JSON.stringify(flag)})) await new Promise((resolve) => setTimeout(resolve, 20)); });`,
+      ].join('\n'));
+      writeFileSync(join(dir, 'b-fast.test.js'), "import test from 'node:test';\ntest('fast', () => {});\n");
+      const tracker = progressTracker();
+      const times = { root: join(dir, 'home'), repo: 'r', where: 'full', track: tracker.track, complete: tracker.complete,
+        trackProcesses: tracker.trackProcesses, completeProcesses: tracker.completeProcesses };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const lines = [];
+      const run = realSuite({ cwd: dir, command: 'node --test --test-concurrency=2 a-slow.test.js b-fast.test.js', env, lanes: 2, times, progressMs: 100, onLine: (line) => lines.push(line) });
+      for (let i = 0; i < 500 && lines.filter((line) => /^progress — 1 test files done, 1 running/u.test(line)).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      writeFileSync(flag, '');
+      const done = await run;
+      assert.equal(done.code, 0, done.tap);
+      const progress = lines.filter((line) => line.startsWith('progress —'));
+      assert.ok(progress.length >= 2, `a line at each interval: ${JSON.stringify(lines)}`);
+      for (const line of progress) assert.match(line, /^progress — \d+ test files done(, \d running)?, 0 red so far, \d+ s elapsed$/u);
+      assert.ok(progress.some((line) => /1 test files done, 1 running/u.test(line)), `the fast file done, the slow one running: ${progress.join(' | ')}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('realTests: says how far a batch of files has got at each interval — files done of files, running, reds so far', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'mc-batch-progress-')));
+    try {
+      const flag = join(dir, 'release');
+      writeFileSync(join(dir, 'a-slow.test.js'), [
+        "import test from 'node:test';",
+        "import { existsSync } from 'node:fs';",
+        `test('waits', async () => { while (!existsSync(${JSON.stringify(flag)})) await new Promise((resolve) => setTimeout(resolve, 20)); });`,
+      ].join('\n'));
+      writeFileSync(join(dir, 'b-fast.test.js'), "import test from 'node:test';\ntest('fast', () => {});\n");
+      const tracker = progressTracker();
+      const times = { root: join(dir, 'home'), repo: 'r', where: 'full', track: tracker.track, complete: tracker.complete,
+        trackProcesses: tracker.trackProcesses, completeProcesses: tracker.completeProcesses };
+      const env = { PATH: process.env.PATH, MC_WORK_ROOT: join(dir, 'work') };
+      const lines = [];
+      const run = realTests({ cwd: dir, files: ['a-slow.test.js', 'b-fast.test.js'], env, lanes: 2, times, progressMs: 100, onLine: (line) => lines.push(line) });
+      for (let i = 0; i < 500 && lines.filter((line) => /^progress — 1 of 2 test files done, 1 running/u.test(line)).length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      writeFileSync(flag, '');
+      const done = await run;
+      assert.equal(done.code, 0, done.tap);
+      const progress = lines.filter((line) => line.startsWith('progress —'));
+      for (const line of progress) assert.match(line, /^progress — \d+ of 2 test files done(, \d running)?, 0 red so far, \d+ s elapsed$/u);
+      assert.ok(progress.some((line) => /1 of 2 test files done, 1 running/u.test(line)), `the fast file done, the slow one running: ${JSON.stringify(lines)}`);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, { timeout: 20_000 });
+
+  it('suiteProgressLine: counts a failed test once, not the suites that failed because of it', () => {
+    const tap = [
+      'TAP version 13',
+      '# Subtest: outer',
+      '    # Subtest: leaf one',
+      '    not ok 1 - leaf one',
+      '      ---',
+      '      duration_ms: 1',
+      '      ...',
+      '    # Subtest: leaf two',
+      '    ok 2 - leaf two',
+      'not ok 1 - outer',
+    ].join('\n');
+    const dir = mkdtempSync(join(tmpdir(), 'mc-beat-'));
+    try {
+      const beat = join(dir, 'beat.jsonl');
+      writeFileSync(beat, [
+        { file: '/a.test.js', pid: 1, process: 'started' }, { file: '/a.test.js', pid: 1, process: 'exited' },
+        { file: '/b.test.js', pid: 2, process: 'started' },
+      ].map((entry) => JSON.stringify(entry)).join('\n'));
+      assert.equal(
+        suiteProgressLine({ beatFile: beat, tap, startedAt: 0, total: 250, now: 125_000 }),
+        'progress — 1 of ~250 test files done, 1 running, 1 red so far, 2 min 5 s elapsed',
+      );
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 
   it('realTests: a round already stopped spawns nothing', async () => {
     const controller = new AbortController();

@@ -45,7 +45,7 @@
  * digest's shape from helper-collect.js.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
 import { run as runGitSync, runAsync as runGitAsync } from './git.js';
 import { join } from 'node:path';
 
@@ -73,7 +73,8 @@ import { runningMerges } from './merges-collect.js';
 import { BUILD_LANE, runningRound } from './gate-lock.js';
 import { gateLaneOf } from './repo-gate-table.js';
 import { readLease } from './repo-lease.js';
-import { readRounds } from './repo-round-log.js';
+import { readRounds, settleInterruptedRounds } from './repo-round-log.js';
+import { preparationState, readPreparation, STAGE_WORDS } from './deploy-prepare.js';
 import { duration } from './page-grid.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
@@ -179,12 +180,64 @@ function sameCommit(a, b) {
  * a machine that has never deployed and never collected has nothing to say
  * about production, and a line saying "unknown" is worse than no line.
  */
+/**
+ * The deploy's preparation as the page shows it: the commit, the stage in
+ * words, and whether it runs, is done (waiting for `mc deploy` to ask), failed
+ * or was interrupted. Null when there is none, or when it is done and old news
+ * is not worth a line — a finished one stays, because `mc deploy` goes straight
+ * to its question.
+ */
+/** The last non-empty line of a log, its `mc:` lead cut, and when the log was last written. */
+export function lastLogLine(path) {
+  if (!path) return null;
+  let fd = null;
+  try {
+    fd = openSync(path, 'r');
+    const { size, mtimeMs } = fstatSync(fd);
+    const length = Math.min(size, 4096);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString('utf8').split('\n').map((line) => line.replace(/^mc:\s+/u, '').trim()).filter(Boolean);
+    const text = lines.at(-1);
+    return text ? { text: text.length > 160 ? `${text.slice(0, 159)}…` : text, at: mtimeMs } : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* gone */ } }
+  }
+}
+
+export function preparationOf(record, { alive = pidAlive, now = new Date() } = {}) {
+  const state = preparationState(record, { alive, now: now.getTime() });
+  if (!state) return null;
+  const since = Date.parse(record.started);
+  // What a measuring preparation said last — its progress line (files done of
+  // files, reds so far, elapsed) or its once-a-minute "still preparing" — and
+  // when the log last moved.
+  const last = state === 'running' ? lastLogLine(record.log) : null;
+  return {
+    progress: last ? last.text : null,
+    progress_age_seconds: last ? Math.max(0, Math.round((now.getTime() - last.at) / 1000)) : null,
+    sha: record.sha,
+    short: shortSha(record.sha),
+    state,
+    stage: record.stage || 'starting',
+    stage_words: STAGE_WORDS[record.stage] || record.stage || 'starting',
+    pid: Number(record.pid) || null,
+    age_seconds: Number.isNaN(since) ? null : Math.max(0, Math.round((now.getTime() - since) / 1000)),
+    error: record.error || null,
+  };
+}
+
 export function productionSection({
   deploy = null, attempt = null, live = null, progress = null, now = new Date(), alive = pidAlive,
+  // The deploy's preparation record (`deploy-prepare.json`) and the gate
+  // rounds settled as interrupted, newest first (`settleInterruptedRounds`).
+  preparation = null, interrupted = [],
 } = {}) {
   // Keep the first attempt even when it failed or was refused before any
   // successful deployment or production reading.
-  if (!deploy?.sha && !live && !attempt) return null;
+  if (!deploy?.sha && !live && !attempt && !preparation && !interrupted.length) return null;
   const at = now.getTime();
   const age = (iso) => {
     const t = Date.parse(iso);
@@ -243,6 +296,10 @@ export function productionSection({
     differs: Boolean(observed?.commit && deploy?.sha && !sameCommit(observed.commit, deploy.sha)),
     running,
     progress,
+    preparation: preparationOf(preparation, { alive, now }),
+    interrupted: interrupted.slice(0, 3).map((round) => ({
+      repo: round.repo, mode: round.mode, pid: round.pid, age_seconds: age(round.started), reason: round.reason,
+    })),
     failed: since?.outcome === 'failed' ? attemptState(since) : null,
     attempt: attempt ? { ...attemptState(attempt), outcome: attempt.outcome } : null,
   };
@@ -253,6 +310,7 @@ export function runnerSection({
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
   deploy = null, attempt = null, live = null, progress = null, repos = REPO_NAMES,
+  preparation = null, interrupted = [],
   // What `mc run lanes` set: how many sessions run at once, across every
   // repository. The rows are one per lane, so the page needs the number.
   lanes: setting = { lanes: DEFAULT_LANES },
@@ -305,7 +363,7 @@ export function runnerSection({
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
-    production: productionSection({ deploy, attempt, live, progress, now, alive }),
+    production: productionSection({ deploy, attempt, live, progress, now, alive, preparation, interrupted }),
     day: {
       ...summariseRuns(rows),
       by_kind: dayByKind(rows),
@@ -1536,6 +1594,11 @@ export async function collectPage({
     attempt: deployAttempt,
     progress: readDeployProgress(deployAttempt, env),
     live: readLiveVersion(env, now),
+    // A preparation in flight (or finished, waiting for its question), and the
+    // gate rounds whose process died without an end — settled as interrupted
+    // here, so the log says so too.
+    preparation: readPreparation(root),
+    interrupted: settleInterruptedRounds({ root: home, alive, now }),
     now,
     alive,
   });

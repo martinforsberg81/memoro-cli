@@ -13,16 +13,18 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
-  deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault,
+  deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
+import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
+import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
@@ -220,6 +222,9 @@ function deps(extra = {}) {
     // The deployer, run in the test's own process once its row is written
     // (ruling 30): the same `ship` the detached `deploy-run.js` runs.
     startDeployer: (job, d) => ({ pid: process.pid, inline: () => ship(job, d) }),
+    // The preparation, run in the test's own process: the same `prepare` the
+    // detached `deploy-prepare-run.js` runs, its record written for real.
+    startPreparer: (job, d) => ({ pid: process.pid, inline: () => prepare(job, { stdout: d.stdout, env: d.env, deps: d }) }),
     ...extra,
   };
 }
@@ -2112,5 +2117,254 @@ describe('mc deploy — a headless session cannot deploy', () => {
     assert.equal(asked.length, 0);
     assert.ok(calls.history > 0, 'the reading did read the history');
     assert.match(out.stdout, /nothing was deployed/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The preparation (goal deploy-survives-lost-terminal): everything before the
+// one question runs in a process of its own, recorded, and a second `mc
+// deploy` of the same commit joins it. On 2026-11-14 it ran in the page's own
+// process and died with the SSH connection that carried it.
+// ---------------------------------------------------------------------------
+
+/**
+ * A preparer that is a separate process as far as the verb can tell: a pid,
+ * a log, and work that happens only when the test says (`state.pending()`).
+ * Its record and history are written for real by the same `prepare`.
+ */
+function detachedPreparer(fake, { prepareWith = {} } = {}) {
+  const state = { starts: 0, jobs: [], pending: null, up: true };
+  const extra = {
+    gate: fake.gate,
+    suites: fake.suites,
+    startPreparer: (job, d) => {
+      state.starts += 1;
+      state.up = true;
+      state.jobs.push(job);
+      mkdirSync(dirname(job.log), { recursive: true });
+      writeFileSync(job.log, 'mc: full run — measuring\n');
+      state.pending = async () => {
+        await prepare(job, { stdout: { write() {} }, env: d.env, deps: d, ...prepareWith });
+        state.up = false;
+      };
+      return { pid: 31337, log: job.log };
+    },
+    alive: (pid) => (pid === 31337 ? state.up : processAlive(pid)),
+  };
+  return { state, extra };
+}
+
+describe('mc deploy — the preparation, in a process of its own', () => {
+  it('a cut follow leaves the preparation running; the next mc deploy joins it, measures nothing twice and asks once', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    const signals = new EventEmitter();
+    const first = io();
+    const cut = await run([], {
+      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); }, ask: () => { throw new Error('asked while cut'); } }),
+      stdout: first.stdout,
+      stderr: first.stderr,
+    });
+    assert.equal(cut, 130);
+    assert.match(first.out.stdout, /preparing 1a2b3c4 in its own process \(pid 31337\).*a lost terminal does not stop it/u);
+    assert.match(first.out.stdout, /stopped watching — the preparation goes on \(pid 31337\); mc deploy joins it and asks/u);
+    assert.equal(fake.calls.fullRun.length, 0, 'the watcher measured nothing: the full run is the other process\'s');
+    const record = readPreparation(work);
+    assert.deepEqual([record.sha, record.pid, record.stage], [SHA, 31337, 'starting']);
+    assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'no deploy row: nothing was asked');
+
+    // A new terminal, the same commit: joins; the process finishes while it watches.
+    const asked = [];
+    const second = io();
+    const joined = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'n'; } }),
+      stdout: second.stdout,
+      stderr: second.stderr,
+    });
+    assert.equal(joined, 1, 'a no at the one question');
+    assert.equal(state.starts, 1, 'no second preparation was started');
+    assert.deepEqual(fake.calls.fullRun, [{ name: 'memoro', path: PATH }], 'the full run was called once, in the preparer');
+    assert.match(second.out.stdout, /1a2b3c4 is already being prepared \(.*pid 31337.*\) — following it, not starting a second/u);
+    assert.equal(asked.length, 1);
+    assert.deepEqual(asked, ['deploy 1a2b3c4 to production? [y/N]']);
+
+    // And once it is done, deploying goes straight to the question.
+    const third = io();
+    const again = await run([], {
+      ...deps({ ...extra, ask: (question) => { asked.push(question); return 'n'; } }),
+      stdout: third.stdout,
+      stderr: third.stderr,
+    });
+    assert.equal(again, 1);
+    assert.equal(state.starts, 1);
+    assert.equal(fake.calls.fullRun.length, 1, 'nothing was measured again');
+    assert.match(third.out.stdout, /1a2b3c4 was prepared .* — the gate's answer is read from that, nothing is measured again/u);
+    assert.equal(asked.length, 2);
+  });
+
+  it('while it measures, the log — and so mc deploy, --follow and the page — has a line at least each minute', async () => {
+    // A fixture round on a simulated clock: it reports its progress in minutes 1 and
+    // 2, then says nothing for three minutes. The preparation's own beat fills them.
+    const T0 = Date.parse('2026-11-14T10:00:00.000Z');
+    let clock = 0;
+    let tick = null;
+    const lines = [];
+    const fake = gateFake({ runs: [] });
+    const gate = {
+      ...fake.gate,
+      fullRun: async (repo, { say }) => {
+        for (let minute = 1; minute <= 5; minute += 1) {
+          clock += 60_000;
+          if (minute <= 2) say(`progress — ${minute * 40} of ~250 test files done, 3 running, ${minute - 1} red so far, ${minute} min 0 s elapsed`);
+          else tick();
+        }
+        return fullRunOf(SHA);
+      },
+    };
+    const { state, extra } = detachedPreparer({ gate, suites: fake.suites }, {
+      prepareWith: {
+        now: () => new Date(T0 + clock),
+        beat: (fn) => { tick = fn; return () => {}; },
+        stdout: { write: (text) => { lines.push({ at: clock, text: text.replace(/\n$/u, '') }); appendFileSync(state.jobs[0].log, text); } },
+      },
+    });
+    const watched = io();
+    const code = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      stdout: watched.stdout,
+      stderr: watched.stderr,
+    });
+    assert.equal(code, 1, 'a no at the one question');
+    const said = lines.filter((line) => /progress —|still preparing —/u.test(line.text));
+    assert.deepEqual(said.map((line) => line.at / 60_000), [1, 2, 3, 4, 5], 'a line in each of the five minutes');
+    assert.match(said[0].text, /^mc:   progress — 40 of ~250 test files done, 3 running, 0 red so far, 1 min 0 s elapsed$/u);
+    assert.match(said[2].text, /^mc: still preparing — the full run, 3 min so far$/u);
+    assert.match(said[4].text, /^mc: still preparing — the full run, 5 min so far$/u);
+    // What the watcher shows is that log.
+    for (const line of said) assert.ok(watched.out.stdout.includes(line.text), `the watcher shows: ${line.text}`);
+    // No gap between lines reaches a minute and a bit.
+    for (let i = 1; i < lines.length; i += 1) assert.ok(lines[i].at - lines[i - 1].at <= 60_000, `a gap of ${(lines[i].at - lines[i - 1].at) / 1000} s before: ${lines[i].text}`);
+  });
+
+  it('a finished red preparation refuses as before, and a second mc deploy refuses from it without measuring', async () => {
+    const fake = gateFake({ runs: [], started: RED_RUN() });
+    const { state, extra } = detachedPreparer(fake);
+    const attemptOnce = async (argv, over = {}) => {
+      const { out, stdout, stderr } = io();
+      const asked = [];
+      const code = await run(argv, {
+        ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; }, ...over }),
+        stdout, stderr,
+      });
+      return { code, out, asked };
+    };
+    const first = await attemptOnce([]);
+    assert.equal(first.code, 1);
+    assert.match(first.out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
+    assert.equal(first.asked.length, 0);
+    const second = await attemptOnce([]);
+    assert.equal(second.code, 1);
+    assert.match(second.out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
+    assert.equal(second.asked.length, 0);
+    assert.equal(state.starts, 1);
+    assert.equal(fake.calls.fullRun.length, 1);
+    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'refused');
+  });
+
+  it('--accept-red after a red preparation that skipped the suites prepares again, and says so', async () => {
+    const fake = gateFake({ runs: [], started: RED_RUN() });
+    const { state, extra } = detachedPreparer(fake);
+    const asked = [];
+    const attemptOnce = async (argv) => {
+      const { out, stdout, stderr } = io();
+      const code = await run(argv, {
+        ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+        stdout, stderr,
+      });
+      return { code, out };
+    };
+    await attemptOnce([]);
+    assert.equal(fake.calls.suites.length, 0, 'a red deploy runs no suites');
+    const accepted = await attemptOnce(['--accept-red', 'known']);
+    assert.equal(accepted.code, 0);
+    assert.equal(state.starts, 2);
+    assert.match(accepted.out.stdout, /the preparation of 1a2b3c4 skipped the suites, which --accept-red needs — preparing again/u);
+    assert.equal(fake.calls.suites.length, 1);
+    assert.equal(asked.length, 1);
+  });
+
+  it('--accept-red joining a running preparation that then skips the suites prepares again: no throw, the suites once, one question', async () => {
+    const fake = gateFake({ runs: [], started: RED_RUN() });
+    const { state, extra } = detachedPreparer(fake);
+    const signals = new EventEmitter();
+    const first = io();
+    const cut = await run([], {
+      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); }, ask: () => { throw new Error('asked while cut'); } }),
+      stdout: first.stdout,
+      stderr: first.stderr,
+    });
+    assert.equal(cut, 130, 'the terminal is lost while the preparation runs');
+    const asked = [];
+    const second = io();
+    const accepted = await run(['--accept-red', 'known'], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+      stdout: second.stdout,
+      stderr: second.stderr,
+    });
+    assert.equal(accepted, 0, second.out.stderr);
+    assert.match(second.out.stdout, /1a2b3c4 is already being prepared .* — following it, not starting a second/u);
+    assert.match(second.out.stdout, /the preparation of 1a2b3c4 skipped the suites, which --accept-red needs — preparing again/u);
+    assert.equal(state.starts, 2, 'one preparation joined, one started with the suites');
+    assert.equal(fake.calls.suites.length, 1, 'the suites ran once');
+    assert.equal(asked.length, 1, 'asked once');
+  });
+
+  it('main moved: a new preparation of the new commit, in one line, and the old one is left to finish', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    writePreparation(work, { sha: OLDER, pid: 31337, started: new Date().toISOString(), stage: 'full-run', log: join(work, 'runner', 'log', 'old.log') });
+    const { out, stdout, stderr } = io();
+    const code = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      stdout, stderr,
+    });
+    assert.equal(code, 1);
+    assert.equal(state.starts, 1);
+    const said = out.stdout.match(/^mc: the last preparation was of .*$/gmu);
+    assert.equal(said.length, 1, 'one line');
+    assert.match(said[0], /the last preparation was of 0123456 and is still running, main is 1a2b3c4 now — starting a new one, of 1a2b3c4/u);
+    assert.equal(readPreparation(work).sha, SHA);
+  });
+
+  it('a preparation whose process is gone is interrupted: said, and a new one starts', async () => {
+    const fake = gateFake({ runs: [] });
+    const { state, extra } = detachedPreparer(fake);
+    state.up = false;
+    writePreparation(work, { sha: SHA, pid: 4242, started: '2026-11-14T10:00:00Z', stage: 'suites', log: join(work, 'runner', 'log', 'x.log') });
+    const { out, stdout, stderr } = io();
+    state.up = true;
+    const code = await run([], {
+      ...deps({ ...extra, alive: (pid) => (pid === 31337 ? state.up : false), sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      stdout, stderr,
+    });
+    assert.equal(code, 1);
+    assert.match(out.stdout, /the preparation of 1a2b3c4 started 2026-11-14 10:00 was interrupted at the suites against a local server — starting a new one/u);
+    assert.equal(state.starts, 1);
+    assert.equal(fake.calls.fullRun.length, 1);
+  });
+
+  it('the real start: detached, the job as its argument, its output in deploy-prepare.log', () => {
+    const calls = [];
+    const job = { root: work, sha: SHA, path: PATH, started: '2026-11-14T10:00:00Z', acceptRed: false, log: preparationLogPath(work), holder: 'm' };
+    const started = startPreparerDefault(job, {
+      env: { PATH: '/bin' },
+      spawnProcess: (bin, args, options) => { calls.push({ bin, args, options }); return { pid: 31337, unref() {} }; },
+    });
+    assert.deepEqual(started, { pid: 31337, log: preparationLogPath(work) });
+    assert.equal(calls[0].bin, process.execPath);
+    assert.match(calls[0].args[0], /deploy-prepare-run\.js$/u);
+    assert.deepEqual(JSON.parse(calls[0].args[1]), job);
+    assert.equal(calls[0].options.detached, true, 'its own process group: a lost terminal does not reach it');
+    assert.equal(calls[0].options.stdio[0], 'ignore', 'the preparation asks nothing');
   });
 });

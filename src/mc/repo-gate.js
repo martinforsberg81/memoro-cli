@@ -43,7 +43,7 @@
  * checks out main, reproduces its failures or walks its history. Missing or stale
  * evidence fails closed; it is not proof that this PR introduced the failure.
  */
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -136,13 +136,14 @@ export async function runGate({
   // nightly`, which calls this function with this flag rather than copying
   // what it does.
   full = false,
-  // The scheduled full run of the default branch, beside the merge lane rather
+  // The full run of the default branch — the daily one, a deploy's, a hand-typed
+  // `mc test <repo> --full` — beside the merge lane rather
   // than in it (Martin, 2026-11-13): no round lock, no phase notes in the lane's
   // lock file, and its own measurement checkout (`<slug>/full`) instead of the
   // merger's (`<slug>/candidate`), so merges, sessions and full runs proceed at
   // once. Only with `full` and no pull request; the caller takes no lease for it
-  // (`holdLease: false`), since it merges nothing. A person's `--full` stays in
-  // the lane.
+  // (`holdLease: false`), since it merges nothing. A `--full` asked about a pull
+  // request stays in the lane.
   isolated = false,
   // The test lanes, when the caller declares them (the full run's
   // `fullRunLanes`); null asks `testLanes` for the round's mode.
@@ -2659,7 +2660,7 @@ export function testBatches(files, classes = {}, lanes = 1) {
  * as one result: the TAP of each batch in order (`tapTotals` adds up one
  * summary per process), the first non-zero exit, and the time budget shared.
  */
-export async function realTests({ cwd, files, flags = [], plan = null, onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, times = null, runBatch = runTestBatch } = {}) {
+export async function realTests({ cwd, files, flags = [], plan = null, onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), classes = {}, signal = null, times = null, runBatch = runTestBatch, progressMs = SUITE_PROGRESS_MS } = {}) {
   // Resolved once here, unless the caller resolved it (the session's worker and the
   // candidate round do, so provenance reaches the spawn): the same function as
   // `mc gate` configuration reads, so the requested policy and the spawned one agree.
@@ -2673,7 +2674,7 @@ export async function realTests({ cwd, files, flags = [], plan = null, onBatch =
   const launched = [];
   const noteBatch = (batch) => { launched.push(batch); onBatch?.(batch); };
   if (batches.length === 1) {
-    const only = await runBatch({ cwd, files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs, lanes: batches[0].lanes, resource: batches[0].name, signal, times });
+    const only = await runBatch({ cwd, files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs, lanes: batches[0].lanes, resource: batches[0].name, signal, times, progressMs });
     return { ...only, batches: launched };
   }
   const started = Date.now();
@@ -2684,7 +2685,7 @@ export async function realTests({ cwd, files, flags = [], plan = null, onBatch =
   const cut = [];
   for (const batch of batches) {
     const left = timeoutMs - (Date.now() - started);
-    const ran = await runBatch({ cwd, files: batch.files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, resource: batch.name, signal, times });
+    const ran = await runBatch({ cwd, files: batch.files, plan: resolved, flags: resolved.flags, onBatch: noteBatch, onLine, env, timeoutMs: Math.max(1000, left), lanes: batch.lanes, resource: batch.name, signal, times, progressMs });
     tap += ran.tap;
     stderr += ran.stderr || '';
     tests.push(...(ran.tests || []));
@@ -2703,7 +2704,7 @@ export async function realTests({ cwd, files, flags = [], plan = null, onBatch =
 /** test-stdio-blocking.mjs, loaded by every batch (`runTestBatch`). */
 const STDIO_BLOCKING = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'test-stdio-blocking.mjs')).href;
 
-function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), resource = 'standard', signal = null, times = null } = {}) {
+function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), resource = 'standard', signal = null, times = null, progressMs = SUITE_PROGRESS_MS } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned, and no batch is recorded.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
@@ -2725,12 +2726,23 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
     // Told to the caller before the run starts, so a ceiling can read what it
     // had finished while the run is still going (`runProgress`).
     if (timesFile) times.track?.(timesFile);
+    // A test file's process starting and exiting, which node's reporter shows
+    // only once the files before it have reported (see `realSuite`): what the
+    // minute's progress line counts.
+    const beatFile = times?.trackProcesses ? join(tmpdir(), `mc-test-progress-${randomUUID()}.jsonl`) : null;
+    if (beatFile) times.trackProcesses(beatFile);
+    const noteBeats = () => {
+      if (!beatFile) return;
+      times.completeProcesses?.(beatFile);
+      rmSync(beatFile, { force: true });
+    };
     const reporters = timesFile
       ? ['--test-reporter=tap', '--test-reporter-destination=stdout', `--test-reporter=${TIMES_REPORTER}`, `--test-reporter-destination=${timesFile}`]
       : ['--test-reporter=tap'];
     // What the run measured, each test by name (`testsMeasured`), read before the
     // file goes; the tests cut at their limit go to the too-slow file (`recordTooSlow`).
     const noteTimes = () => {
+      noteBeats();
       if (!timesFile) return { tests: [], cut: [] };
       let text = '';
       try { text = readFileSync(timesFile, 'utf8'); recordTestTimes({ ...times, cwd, text }); } catch { /* a run that wrote none */ }
@@ -2756,7 +2768,7 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
     };
     const child = spawn(process.execPath, argv, {
       cwd,
-      env: { ...clean, NODE_OPTIONS: inherited },
+      env: { ...clean, NODE_OPTIONS: beatFile ? `${inherited} --import=${PROCESS_PROGRESS_PRELOAD}`.trim() : inherited, ...(beatFile ? { MC_TEST_PROGRESS: beatFile } : {}) },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
@@ -2777,6 +2789,17 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
     let tap = '';
     let stderr = '';
     let pending = '';
+    // A run of hundreds of files says nothing for minutes: once a minute it
+    // says how far it is, from what its own times file has recorded.
+    const startedAt = Date.now();
+    const beat = progressMs > 0
+      ? setInterval(() => {
+        try {
+          onLine(suiteProgressLine({ beatFile, tap, startedAt, total: files.length, exact: true }));
+        } catch { /* a courtesy */ }
+      }, progressMs)
+      : null;
+    beat?.unref?.();
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
       tap += chunk;
@@ -2787,9 +2810,10 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', (error) => { settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
+    child.on('error', (error) => { clearInterval(beat); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A batch whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
+      clearInterval(beat);
       const { tests, cut } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
       resolve({ code: cut.length && code === 0 ? -1 : code, tap, stderr, timedOut, timeoutMs, aborted, lanes: resolved.concurrencyDeclared ? null : lanes, tests, cut });
@@ -2858,6 +2882,57 @@ function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
 }
 
+/** How often a running whole suite says how far it has got (Martin, 2026-11-14: never looks stuck). */
+export const SUITE_PROGRESS_MS = 60_000;
+
+/** The test files a repository tracks — the denominator of "files done", read once; null when it cannot say. */
+function trackedTestFiles(cwd, then) {
+  try {
+    execFile('git', ['ls-files', '--', '*.test.js', '*.test.mjs', '*.test.cjs', '*.test.ts'], { cwd, encoding: 'utf8', timeout: 10_000 }, (error, stdout) => {
+      const count = error ? 0 : String(stdout).split('\n').filter(Boolean).length;
+      then(count || null);
+    });
+  } catch { then(null); }
+}
+
+/**
+ * One line of how a whole suite is going, from what is already on disk and in
+ * the TAP so far: the test files whose process has exited out of the files the
+ * repository tracks, those running, the failed tests read so far and the time
+ * since it started. A failed test is a leaf — `not ok` right after its own
+ * `# Subtest:` — so the suites that fail because a test in them did are not
+ * counted again.
+ */
+export function suiteProgressLine({ beatFile = null, tap = '', startedAt, total = null, now = Date.now(), exact = false }) {
+  const started = new Set();
+  const exited = new Set();
+  if (beatFile) {
+    let text = '';
+    try { text = readFileSync(beatFile, 'utf8'); } catch { /* no heartbeat yet */ }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      const key = `${entry?.file}#${entry?.pid}`;
+      if (entry?.process === 'started') started.add(key);
+      else if (entry?.process === 'exited') exited.add(key);
+    }
+  }
+  let red = 0;
+  let before = '';
+  for (const line of tap.split('\n')) {
+    if (/^\s*not ok /u.test(line) && /^\s*# Subtest:/u.test(before) && before.search(/\S/u) === line.search(/\S/u)) red += 1;
+    if (line.trim()) before = line;
+  }
+  const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
+  const elapsed = seconds >= 60 ? `${Math.floor(seconds / 60)} min ${seconds % 60} s` : `${seconds} s`;
+  // A batch knows its files (`exact`); a whole suite's total is the tracked
+  // test files, an estimate.
+  const files = beatFile
+    ? `${exited.size}${total ? ` of ${exact ? '' : '~'}${total}` : ''} test files done${started.size > exited.size ? `, ${started.size - exited.size} running` : ''}`
+    : 'test files not counted';
+  return `progress — ${files}, ${red} red so far, ${elapsed} elapsed`;
+}
+
 /**
  * The whole suite, as a process.
  *
@@ -2867,7 +2942,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
+export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null, progressMs = SUITE_PROGRESS_MS } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
@@ -2955,12 +3030,23 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       // of saying anything is to show the round is alive.
       for (const line of lines) if (/^# (tests|pass|fail) /u.test(line)) onLine(line.trim());
     });
+    // Once a minute the suite says how far it has got, so that a run of tens
+    // of minutes is never taken for a stuck one: the terminal following a deploy,
+    // the log and the page show the last such line.
+    const startedAt = Date.now();
+    let total = null;
+    trackedTestFiles(cwd, (count) => { total = count; });
+    const beat = progressMs > 0
+      ? setInterval(() => { try { onLine(suiteProgressLine({ beatFile, tap, startedAt, total })); } catch { /* a courtesy */ } }, progressMs)
+      : null;
+    beat?.unref?.();
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => { noteBeats(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
+    child.on('error', (error) => { clearInterval(beat); noteBeats(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A suite whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
+      clearInterval(beat);
       const { cut, tests, covered } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
       resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests, covered });

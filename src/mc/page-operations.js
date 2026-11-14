@@ -204,7 +204,33 @@ export function deployLines(lines, c, wide, production, expand) {
         state === 'failed' ? ['red'] : ['grey']);
     });
   }
-  if (!attempt) operation(lines, c, wide, 'idle', 'no deploy running');
+  // The preparation: the full run and the suites before the question, in a
+  // process of its own — a lost terminal does not stop it.
+  const prep = p.preparation;
+  if (prep && !(prep.state === 'done' && p.sha === prep.sha)) {
+    const tone = prep.state === 'running' ? 'green' : prep.state === 'done' ? 'green' : 'red';
+    operationFrame(lines, c, wide, tone, (body, room) => {
+      const states = {
+        running: `PREPARING ${prep.short} · ${prep.stage_words}`,
+        done: `PREPARED  ${prep.short} · done, \`mc deploy\` asks`,
+        failed: `PREPARATION FAILED ${prep.short}`,
+        interrupted: `PREPARATION INTERRUPTED ${prep.short} · \`mc deploy\` starts a new one`,
+      };
+      const pid = prep.state === 'running' && prep.pid ? ` · pid ${prep.pid}` : '';
+      const since = prep.age_seconds == null ? '' : ` · started ${age(prep.age_seconds)}`;
+      detail(body, c, room, 6, `${states[prep.state] || prep.state}${since}${pid}`);
+      if (prep.error) detail(body, c, room, 6, prep.error, ['red']);
+      if (prep.state === 'running' && prep.progress) {
+        detail(body, c, room, 6, `${prep.progress}${prep.progress_age_seconds == null ? '' : ` · said ${age(prep.progress_age_seconds)}`}`);
+      }
+    });
+  }
+  for (const round of p.interrupted || []) {
+    detail(lines, c, wide, 4,
+      `interrupted gate round · ${round.repo || 'unknown'} ${round.mode || ''} · pid ${round.pid ?? '?'} ended without an end record · started ${age(round.age_seconds)}`.replace(/ {2,}/gu, ' '),
+      ['yellow']);
+  }
+  if (!attempt && !(prep && prep.state === 'running')) operation(lines, c, wide, 'idle', 'no deploy running');
   if (p.differs) detail(lines, c, wide, 4, 'version mismatch · live and recorded commits differ', ['yellow']);
   if (expand) {
     if (p.build) detail(lines, c, wide, 4, `recorded build ${p.build}${p.at ? ` · ${p.at}` : ''}`);

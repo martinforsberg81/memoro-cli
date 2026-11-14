@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -548,6 +548,38 @@ describe('DEPLOY', () => {
     assert.match(strip(line({ attempt: old })), /ATTEMPT + b3e65b6 · no end recorded · 4 h ago/u);
   });
 
+  /**
+   * The deploy's preparation runs in a process of its own (2026-11-14: it died
+   * with an SSH connection when it ran in the page's). The panel shows it while
+   * it runs, with its stage, and says plainly when it was interrupted.
+   */
+  it('shows a deploy preparation in flight with its stage, and an interrupted one as such', () => {
+    const started = new Date(NOW.getTime() - 7 * 60 * 1000).toISOString();
+    const record = { schema: 'mc-deploy-prepare', sha: OTHER, pid: 5151, started, stage: 'suites' };
+    const running = section({ preparation: record, alive: (pid) => pid === 5151 });
+    assert.equal(running.preparation.state, 'running');
+    assert.equal(running.preparation.short, 'b3e65b6');
+    assert.equal(running.preparation.stage_words, 'the suites against a local server');
+    const text = strip(line({ preparation: record, alive: (pid) => pid === 5151 }));
+    assert.match(text, /PREPARING b3e65b6 · the suites against a local server · started 7 min ago · pid 5151/u);
+    assert.doesNotMatch(text, /no deploy running/u, 'a preparation in flight is not idle');
+
+    const gone = strip(line({ preparation: record, alive: () => false }));
+    assert.match(gone, /PREPARATION INTERRUPTED b3e65b6 · `mc deploy` starts a new one/u);
+
+    const done = { ...record, stage: 'done', ended: NOW.toISOString(), result: { full: { state: 'green' } } };
+    assert.match(strip(line({ preparation: done, alive: () => false })), /PREPARED + b3e65b6 · done, `mc deploy` asks/u);
+    assert.equal(section({ preparation: null }).preparation, null);
+  });
+
+  it('shows a gate round that died without an end as interrupted', () => {
+    const interrupted = [{ repo: 'memoro', mode: 'check', pid: 2836246, prs: [], started: '2026-08-29T10:00:00Z', ended: '2026-08-29T11:50:00Z', reason: 'process 2836246 ended without an end record' }];
+    const p = section({ interrupted });
+    assert.equal(p.interrupted[0].pid, 2836246);
+    assert.match(strip(line({ interrupted })), /interrupted gate round · memoro check · pid 2836246 ended without an end record · started 2 h ago/u);
+    assert.deepEqual(section({ interrupted: [] }).interrupted, []);
+  });
+
   it('reads a running deploy\'s pid from the record: alive is running however long, gone is late at once', () => {
     const started = new Date(NOW.getTime() - 5 * 60 * 1000).toISOString();
     const row = { ...DEPLOYED, started: '2026-08-29T08:00:00Z', ended: '', sha: OTHER, outcome: 'running', pid: '4242' };
@@ -698,6 +730,48 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
       { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: undefined },
     );
     assert.match(renderPage(data, { columns: 120, now: NOW }), /^ {2}language: sv-forms-cutover stopped after purge-wiktionary-forms — sv has no forms · mc language resume$/mu);
+  });
+});
+
+describe('collectPage — a deploy preparation and a round that lost its process', () => {
+  it('finds the preparation record again and settles a dead round as interrupted, from disk', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-prepare-'));
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    try {
+      mkdirSync(join(root, 'runner'), { recursive: true });
+      const started = new Date(NOW.getTime() - 4 * 60 * 1000).toISOString();
+      // Its log: the last thing it said is on the page, with when it said it.
+      const log = join(root, 'runner', 'deploy-prepare-test.log');
+      writeFileSync(log, 'mc: full run — measuring\nmc:   progress — 120 of ~250 test files done, 3 running, 1 red so far, 4 min 10 s elapsed\n');
+      utimesSync(log, new Date(NOW.getTime() - 40_000), new Date(NOW.getTime() - 40_000));
+      writeFileSync(join(root, 'runner', 'deploy-prepare.json'), JSON.stringify({
+        schema: 'mc-deploy-prepare', sha: 'b3e65b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f00', pid: process.pid, started, stage: 'full-run', log,
+      }));
+      // The round the page's own process was running when its SSH connection closed.
+      writeFileSync(join(root, 'gate-rounds.jsonl'), `${JSON.stringify({
+        schema: 'mc-gate-round', version: 1, phase: 'start', at: '2026-08-29T10:00:00Z', repo: 'memoro',
+        mode: 'check', prs: [], holder: null, pid: 2 ** 22 + 7, run: 'run_lost',
+      })}\n`);
+      const data = await collectPage({
+        claudeSettings: () => null, env, now: NOW, repos: [], offline: true,
+        exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+        checkout: null, alive: (pid) => pid === process.pid,
+        cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }), savePrs: () => {} },
+      });
+      const production = data.runner.production;
+      assert.equal(production.preparation.state, 'running');
+      assert.equal(production.preparation.stage, 'full-run');
+      assert.equal(production.interrupted[0].repo, 'memoro');
+      assert.match(readFileSync(join(root, 'gate-rounds.jsonl'), 'utf8'), /"phase":"end".*"stopped_at":"interrupted"/u, 'recorded, not only shown');
+      const text = strip(renderPage(data, { columns: 120, now: NOW }));
+      assert.match(text, /PREPARING b3e65b6 · the full run/u);
+      assert.equal(production.preparation.progress, 'progress — 120 of ~250 test files done, 3 running, 1 red so far, 4 min 10 s elapsed');
+      // The line wraps inside the frame: the pieces are what is asserted.
+      assert.match(text, /progress — 120 of ~250 test files done, 3/u);
+      assert.match(text, /1 red so far, 4 min 10 s elapsed/u);
+      assert.match(text, /said 40s ago/u);
+      assert.match(text, /interrupted gate round · memoro check/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

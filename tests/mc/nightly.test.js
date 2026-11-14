@@ -29,7 +29,8 @@ import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
-import { fullRunTick, loggedTick, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { fullRun, fullRunTick, loggedTick, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -340,6 +341,137 @@ describe('a full run, one at a time per repository', () => {
       });
       assert.deepEqual(asked, [SHA], 'the next is the next day\'s');
       assert.deepEqual(runs.map((run) => run.commit), [SHA]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('a full run, one at a time per tree — whoever starts it', () => {
+  // The other starter's claim, written the way `mc deploy`'s preparation or a
+  // hand-typed `--full` writes it; `alive` says which pids are running.
+  const OTHER_PID = 4242;
+  const STARTED = new Date('2026-09-03T02:00:00.000Z');
+  const held = (root, { sha = SHA, alive = () => true } = {}) => claimFullRun({
+    repo: 'memoro', sha, verb: 'mc deploy', root, pid: OTHER_PID, alive, now: () => STARTED,
+  }).claim;
+  const REPO = REPOS[0];
+  /** What the run being followed leaves behind when it ends: its answer, its claim given back. */
+  const finish = (root, claim, extra = {}) => {
+    recordNightlyRun({
+      repo: 'memoro', path: REPO.path, started_at: '2026-09-03T02:00:01.000Z', duration_ms: 1000,
+      commit: SHA, verdict: 'green', stopped_at: null, reason: null, red: [], tests: 17_982, ...extra,
+    }, { root });
+    releaseClaim(claim, { root, alive: () => true });
+  };
+
+  it('a second starter of a tree already being measured follows the run and calls the round once', async () => {
+    const root = home();
+    try {
+      const claim = held(root);
+      let rounds = 0;
+      const said = [];
+      const slept = [];
+      const run = await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null,
+        round: () => { rounds += 1; return report(); },
+        claims: { alive: () => true, pollMs: 1, sleep: async (ms) => { slept.push(ms); finish(root, claim); } },
+      });
+      assert.equal(rounds, 0, 'the follower measures nothing of its own');
+      assert.equal(slept.length, 1, 'it waited for the run, once');
+      assert.equal(run.joined, true);
+      assert.equal(run.commit, SHA);
+      assert.deepEqual(run.red, []);
+      assert.match(said.join('\n'), /already being measured \(pid 4242, since 2026-09-03T02:00:00.000Z\); following it, not starting a second/u);
+      assert.equal(readNightlyHistory(REPO.path, { root }).runs.length, 1, 'one answer in the history, not two');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a follower of a long run says each minute that it is still following', async () => {
+    const root = home();
+    try {
+      const claim = held(root);
+      const said = [];
+      let at = 0;
+      let polls = 0;
+      await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null, round: () => report(),
+        claims: {
+          alive: () => true, pollMs: 1, clock: () => at,
+          sleep: async () => { at += 20_000; polls += 1; if (polls === 10) finish(root, claim); },
+        },
+      });
+      const still = said.filter((message) => /still following the full run of/u.test(message));
+      assert.equal(still.length, 3, `one line per minute over 200 s: ${said.join(' | ')}`);
+      assert.match(still[0], /still following the full run of aaaaaaa \(pid 4242\), 1 min so far/u);
+      assert.match(still[2], /3 min so far/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('two starters of the same sha at once call the round once', async () => {
+    const root = home();
+    try {
+      let rounds = 0;
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const claims = { alive: () => true, pollMs: 1, sleep: async () => { await gate; } };
+      const round = async () => { rounds += 1; await gate; return report({ started_at: new Date().toISOString() }); };
+      const first = fullRun(REPO, { root, sha: SHA, say: () => {}, repair: null, round, claims });
+      // The same process holds both claims in this test: a claim is told apart by its start,
+      // so the second starter's own pid is another process.
+      const second = fullRun(REPO, { root, sha: SHA, say: () => {}, repair: null, round, claims: { ...claims, pid: 9999 } });
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      release();
+      const [a, b] = await Promise.all([first, second]);
+      assert.equal(rounds, 1, 'one full run for one tree');
+      assert.equal([a, b].filter((run) => run.joined).length, 1);
+      assert.deepEqual(liveClaims({ root, alive: () => true }), [], 'both claims are given back');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run of another sha waits for the one in flight: the full-run checkout is never prepared under it', async () => {
+    const root = home();
+    try {
+      const claim = held(root, { sha: OTHER });
+      const events = [];
+      const said = [];
+      const run = await fullRun(REPO, {
+        root, sha: SHA, say: (message) => said.push(message), repair: null,
+        round: () => { events.push('round'); return report(); },
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { events.push('wait'); releaseClaim(claim, { root, alive: () => true }); } },
+      });
+      assert.deepEqual(events, ['wait', 'round'], 'measured only after the other tree\'s run had ended');
+      assert.notEqual(run.joined, true, 'another tree\'s answer is no answer to this one');
+      assert.match(said.join('\n'), /a full run of bbbbbbb is using the full-run checkout \(pid 4242\); waiting for it before measuring aaaaaaa/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a claim whose process died is no claim, and a follower whose run left no answer starts its own', async () => {
+    const root = home();
+    try {
+      // Dead before anyone looked: nothing to join.
+      held(root, { alive: () => false });
+      let rounds = 0;
+      await fullRun(REPO, {
+        root, sha: SHA, say: () => {}, repair: null,
+        round: () => { rounds += 1; return report(); },
+        claims: { alive: (pid) => pid !== OTHER_PID, pollMs: 1, sleep: async () => {} },
+      });
+      assert.equal(rounds, 1, 'a dead claimant is ignored');
+
+      // Alive when joined, gone without a word: the follower measures.
+      const root2 = home();
+      try {
+        const claim = held(root2);
+        let up = true;
+        const said = [];
+        await fullRun(REPO, {
+          root: root2, sha: SHA, say: (message) => said.push(message), repair: null,
+          round: () => { rounds += 1; return report(); },
+          claims: { alive: (pid) => (pid === OTHER_PID ? up : true), pollMs: 1, sleep: async () => { up = false; } },
+        });
+        assert.equal(rounds, 2, 'the run that left no record is run again');
+        assert.match(said.join('\n'), /ended without a record; starting one/u);
+        assert.ok(claim);
+      } finally { rmSync(root2, { recursive: true, force: true }); }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

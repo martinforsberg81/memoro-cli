@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  countRounds, readRounds, recordRound, recordRoundStart, roundLogPath, unfinishedRounds,
+  countRounds, readRounds, recordRound, recordRoundStart, roundLogPath, settleInterruptedRounds, unfinishedRounds,
 } from '../../src/mc/repo-round-log.js';
 import { resetRunId } from '../../src/mc/logger.js';
 
@@ -212,6 +212,38 @@ describe('a round that was killed is still a fact', () => {
       })}\n`);
       const { rounds } = readRounds({ root });
       assert.deepEqual(unfinishedRounds(rounds, { alive: () => false }), []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a round whose process died is settled as interrupted: an end line under its own run, once', () => {
+    const root = home();
+    try {
+      resetRunId();
+      const start = recordRoundStart({ repo: '/x/memoro', mode: 'check', prs: [] }, { root, now: NOW });
+      const later = new Date(NOW.getTime() + 60_000);
+      const settled = settleInterruptedRounds({ root, alive: () => false, now: later });
+      assert.equal(settled.length, 1);
+      assert.equal(settled[0].pid, process.pid);
+      assert.match(settled[0].reason, /ended without an end record/u);
+      const { rounds } = readRounds({ root });
+      assert.equal(rounds.length, 2);
+      assert.deepEqual([rounds[1].phase, rounds[1].stopped_at, rounds[1].ok, rounds[1].run], ['end', 'interrupted', false, start.run]);
+      assert.deepEqual(unfinishedRounds(rounds, { alive: () => false }), [], 'the pair now joins');
+      settleInterruptedRounds({ root, alive: () => false, now: later });
+      assert.equal(readRounds({ root }).rounds.length, 2, 'settled once, not on every look');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a round whose process lives is left running, and an old interruption leaves the page', () => {
+    const root = home();
+    try {
+      resetRunId();
+      recordRoundStart({ repo: '/x/memoro', mode: 'check', prs: [] }, { root, now: NOW });
+      assert.deepEqual(settleInterruptedRounds({ root, alive: () => true, now: NOW }), []);
+      assert.equal(readRounds({ root }).rounds.length, 1, 'nothing is written for a live round');
+      assert.equal(settleInterruptedRounds({ root, alive: () => false, now: NOW }).length, 1);
+      const tomorrow = new Date(NOW.getTime() + 25 * 60 * 60 * 1000);
+      assert.deepEqual(settleInterruptedRounds({ root, alive: () => false, now: tomorrow }), []);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
