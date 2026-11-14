@@ -96,6 +96,7 @@ import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, updateMainMends } from './main-repair.js';
 import { pickWork } from './lane-pick.js';
+import { syncDeskItems } from './desk-items.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
@@ -2420,6 +2421,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     await dropPredecessor();
     await runHelperDay();
     await runIntakeDrain();
+    try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env, reportIssue: issue => say(`martin items: source issue ${issue.path}: ${issue.error}`) }); }
+    catch (error) { say(`martin items: sync failed — ${error?.message || error}`); }
     askGithub();
     // `askGithub()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.

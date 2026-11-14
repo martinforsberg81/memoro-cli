@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
-import { run, get } from '../../../src/mc/commands/martin.js';
+import { run, get, usage } from '../../../src/mc/commands/martin.js';
 import { run as ask } from '../../../src/mc/commands/ask.js';
 import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
+import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-items.js';
 import { goalJson } from '../_helpers/goal-file.js';
 
 const roots = [];
@@ -212,6 +213,7 @@ describe('Martin ask authority', () => {
 });
 
 describe('mc martin launch', () => {
+  it('advertises durable item commands in the routed help', () => { assert.match(usage(),/mc martin items/u); assert.match(usage(),/mc martin item <id>/u); });
   it('opens a distinct role/path with fresh queue context and launcher conventions', async () => {
     const { out, stdout, stderr } = io(); let opened;
     const code = await run(['--resume', 'abc', '--codex', '--model', 'gpt-6.1-sol'], {
@@ -231,6 +233,140 @@ describe('mc martin launch', () => {
     let opened = 0, made = 0; const { out, stdout, stderr } = io();
     assert.equal(await run([], { stdout, stderr, env: { MC_HEADLESS: '1' }, interactive: () => true, mkdir: () => { made += 1; }, open: () => { opened += 1; } }), 2);
     assert.equal(opened, 0); assert.equal(made, 0); assert.match(out.stderr, /interactive-only/u);
+  });
+});
+
+describe('mc martin item transitions', () => {
+  function stored(state='new') {
+    const root=mkdtempSync(join(tmpdir(),'mc-martin-item-')); roots.push(root);
+    const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')};
+    const source_at='2026-11-14T10:00:00Z', id=deskItemId('goal','alpha/one',source_at);
+    const record={schema:'mc-desk-item',version:1,id,kind:'goal',reference:'alpha/one',source_at,opened_at:source_at,state,sort:null,reversible:null,due_at:null,outcome:null};
+    writeDeskItem(record,{env}); return {env,record,dir:itemDirectory(record,env)};
+  }
+  it('requires each prepared artifact and advances prepared, brief and close with a deterministic clock', async()=>{
+    const f=stored(); const roleEnv={...f.env,MC_ROLE:'decision'}; let result=io();
+    const newBytes=readFileSync(join(f.dir,'item.json'),'utf8');
+    assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...result,env:roleEnv}),2);
+    assert.match(result.out.stderr,/new.*prepared applies/u);
+    assert.equal(readFileSync(join(f.dir,'item.json'),'utf8'),newBytes);
+    writeFileSync(join(f.dir,'prepared.md'),'Evidence');
+    assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...io(),env:roleEnv}),0);
+    const preparedBytes=readFileSync(join(f.dir,'item.json'),'utf8'); result=io();
+    rmSync(join(f.dir,'brief.md'),{force:true});
+    assert.equal(await run(['item',f.record.id,'brief','--sort','product','--reversible','yes'],{...result,env:roleEnv}),2);
+    assert.match(result.out.stderr,/prepared.*brief or close applies/u); assert.equal(readFileSync(join(f.dir,'item.json'),'utf8'),preparedBytes);
+    writeFileSync(join(f.dir,'brief.md'),'Choice');
+    assert.equal(await run(['item',f.record.id,'brief','--sort','product','--reversible','yes'],{...io(),env:roleEnv,now:()=>new Date('2026-11-14T10:00:00Z')}),0);
+    let current=JSON.parse(readFileSync(join(f.dir,'item.json'),'utf8'));
+    assert.equal(current.state,'for-martin'); assert.equal(current.due_at,'2026-11-16T10:00:00.000Z');
+    assert.equal(await run(['item',f.record.id,'close','--by','martin','--summary','Martin chose the recommended option.'],{...io(),env:{...f.env,MC_ROLE:'martin'},now:()=>new Date('2026-11-14T11:00:00Z')}),0);
+    current=JSON.parse(readFileSync(join(f.dir,'item.json'),'utf8')); assert.equal(current.state,'closed'); assert.equal(current.outcome.by,'martin');
+    const fixed=stored('prepared'); writeFileSync(join(fixed.dir,'brief.md'),'No default');
+    assert.equal(await run(['item',fixed.record.id,'brief','--sort','judgement','--reversible','no'],{...io(),env:{...fixed.env,MC_ROLE:'decision'},now:()=>new Date('2026-11-14T10:00:00Z')}),0);
+    const fixedRecord=JSON.parse(readFileSync(join(fixed.dir,'item.json'),'utf8')); assert.equal(fixedRecord.due_at,null); assert.equal(fixedRecord.reversible,false);
+  });
+  it('refuses invalid sorts, role writes, closed transitions and unknown ids without modifying bytes', async()=>{
+    const f=stored('prepared'); writeFileSync(join(f.dir,'brief.md'),'Brief');
+    const path=join(f.dir,'item.json'); const before=readFileSync(path,'utf8');
+    for (const [args,env] of [
+      [['item',f.record.id,'brief','--sort','technical','--reversible','no'],{...f.env,MC_ROLE:'decision'}],
+      [['item',f.record.id,'close','--by','martin','--summary','A choice.'],{...f.env,MC_ROLE:'build-session:goal'}],
+      [['item','unknown','prepared','--sort','technical'],{...f.env,MC_ROLE:'decision'}],
+      [['item',f.record.id,'brief','--sort','product','--reversible','yes'],{...f.env,MC_ROLE:'desk-prepare'}],
+    ]) { const result=io(); assert.equal(await run(args,{...result,env}),2); assert.match(result.out.stderr,/is (?:prepared|new|for-martin|closed)|unknown item/u); assert.equal(readFileSync(path,'utf8'),before); }
+    const deskRoot=join(f.env.MC_WORK_ROOT,'martin','items'); const denied=io();
+    assert.equal(await run(['items'],{...denied,env:{...f.env,MC_ROLE:'build-session:goal'}}),2);
+    assert.match(denied.out.stderr,/cannot sync desk items/u); assert.equal(existsSync(join(deskRoot,'.store.json')),false);
+    const closed=stored('closed'); const closedPath=join(closed.dir,'item.json'); const closedBefore=readFileSync(closedPath,'utf8');
+    const refuse=io(); assert.equal(await run(['item',closed.record.id,'close','--by','decision','--summary','Already done.'],{...refuse,env:{...closed.env,MC_ROLE:'decision'}}),2);
+    assert.match(refuse.out.stderr,/closed.*no verb applies/u); assert.equal(readFileSync(closedPath,'utf8'),closedBefore);
+    const absent=stored('new'); const absentPath=join(absent.dir,'item.json'); const absentBefore=readFileSync(absentPath,'utf8');
+    for (const args of [['item',absent.record.id,'prepared','--sort','mechanical'],['item',absent.record.id,'brief','--sort','product','--reversible','no']]) {
+      const result=io(); assert.equal(await run(args,{...result,env:{...absent.env,MC_ROLE:'decision'}}),2); assert.match(result.out.stderr,/new.*prepared applies/u); assert.equal(readFileSync(absentPath,'utf8'),absentBefore);
+    }
+  });
+  const refusedCases = [
+    ['prepared requires prepared.md', 'new', ['prepared', '--sort', 'technical'], [], 'decision'],
+    ['brief requires brief.md', 'prepared', ['brief', '--sort', 'product', '--reversible', 'yes'], [], 'decision'],
+    ...['mechanical', 'technical'].map(sort => [`brief refuses ${sort}`, 'prepared', ['brief', '--sort', sort, '--reversible', 'no'], ['brief.md'], 'decision']),
+    ...['prepared', 'brief', 'close'].map(verb => [`closed refuses ${verb}`, 'closed', [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'martin', '--summary', 'Done.'], ['prepared.md', 'brief.md'], 'decision']),
+    ...[['new', 'brief'], ['new', 'close'], ['prepared', 'prepared'], ['for-martin', 'prepared'], ['for-martin', 'brief']].map(([state, verb]) => [`${state} refuses ${verb}`, state, [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'martin', '--summary', 'Done.'], ['prepared.md', 'brief.md'], 'decision']),
+    ['unknown id', 'new', ['prepared', '--sort', 'technical'], ['prepared.md'], 'decision', 'unknown'],
+    ...['build-session', 'review-session', 'finish-session', 'mend-session', 'plan', 'helper'].map(role => [`refuses role ${role}`, 'new', ['prepared', '--sort', 'technical'], ['prepared.md'], role]),
+    ...['brief', 'close'].map(verb => [`desk-prepare refuses ${verb}`, 'prepared', [verb, '--sort', 'product', '--reversible', 'yes', '--by', 'decision', '--summary', 'Done.'], ['brief.md'], 'desk-prepare']),
+    ...[
+      ['new', 'prepared', ['--sort', 'technical']],
+      ['prepared', 'brief', ['--sort', 'product', '--reversible', 'no']],
+      ['prepared', 'close', ['--by', 'martin', '--summary', 'Fixture close.']],
+    ].map(([state, verb, flags]) => [`${verb} refuses surplus positionals`, state, [verb, 'unexpected', ...flags], ['prepared.md', 'brief.md'], 'decision']),
+  ];
+  for (const [name, state, args, artifacts, role, id] of refusedCases) it(name, async () => {
+    const f = stored(state);
+    for (const artifact of artifacts) writeFileSync(join(f.dir, artifact), 'Evidence');
+    const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
+    assert.equal(await run(['item', id || f.record.id, ...args], { ...result, env: { ...f.env, MC_ROLE: role } }), 2);
+    assert.match(result.out.stderr, id ? /unknown item.*no item state or verb applies/u : new RegExp(`is ${state};.*${state === 'new' ? 'prepared' : state === 'prepared' ? 'brief or close' : state === 'for-martin' ? 'close' : 'no verb'} applies`, 'u'));
+    assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before, 'refusal writes no file');
+  });
+  it('refuses surplus listing arguments before sync writes anything', async () => {
+    const f = stored(); const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
+    assert.equal(await run(['items', 'unexpected'], { ...result, env: f.env }), 2);
+    assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before);
+  });
+  it('allows desk-prepare to prepare and decision to close prepared directly using a summary file', async () => {
+    const f = stored(); writeFileSync(join(f.dir, 'prepared.md'), 'Evidence');
+    assert.equal(await run(['item', f.record.id, 'prepared', '--sort', 'mechanical'], { ...io(), env: { ...f.env, MC_ROLE: 'desk-prepare' } }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'prepared', sort: 'mechanical' });
+    const summary = join(f.dir, 'summary.md'); writeFileSync(summary, 'Resolved mechanically.\n');
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary-file', summary], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'closed', sort: 'mechanical', outcome: { by: 'decision', at: new Date(f.record.source_at).toISOString(), summary: 'Resolved mechanically.' } });
+  });
+  for (const reversible of ['yes', 'no']) it(`prepared advances to for-martin with reversible ${reversible}`, async () => {
+    const f = stored('prepared'); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation');
+    assert.equal(await run(['item', f.record.id, 'brief', '--sort', 'reserved', '--reversible', reversible], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'for-martin', sort: 'reserved', reversible: reversible === 'yes', due_at: reversible === 'yes' ? '2026-11-16T10:00:00.000Z' : null });
+  });
+  it('for-martin closes with a default outcome and exposes persisted fields and artifacts', async () => {
+    const f = stored('for-martin'); writeFileSync(join(f.dir, 'prepared.md'), 'Evidence'); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation');
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'default', '--summary', 'The default applies.'], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
+    const current = JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8'));
+    assert.deepEqual(current, { ...f.record, state: 'closed', outcome: { by: 'default', at: new Date(f.record.source_at).toISOString(), summary: 'The default applies.' } });
+    const output = io(); assert.equal(await run(['item', f.record.id], { ...output, env: f.env, home: join(f.env.MC_WORK_ROOT, 'programs') }), 0);
+    const { source, prepared, brief, ...detail } = JSON.parse(output.out.stdout);
+    assert.deepEqual(detail, current); assert.equal(source, null); assert.equal(prepared, 'Evidence'); assert.equal(brief, 'Recommendation');
+  });
+  it('lists each historical goal question or runner reason by its own source time even after resolution', async () => {
+    const f = stored(); const home = join(f.env.MC_WORK_ROOT, 'programs'); const dir = join(home, 'alpha', 'goals', 'one'); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(home, 'alpha', 'README.md'), 'Alpha');
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+    const history = [log(f.record.source_at, 'Martin', 'Martin is asked: Original question?'), log('2026-11-14T11:00:00Z', 'Martin', 'Martin is asked: Later question?')];
+    writeFileSync(join(dir, 'LOG.md'), history.join('\n\n'));
+    async function listing() {
+      const out = io(); assert.equal(await run(['items', '--json'], { ...out, env: f.env, home }), 0, out.out.stderr);
+      return JSON.parse(out.out.stdout);
+    }
+    let rows = await listing();
+    assert.deepEqual(rows.map(x => [x.state, x.question]), [['new', 'Later question?'], ['closed', 'Original question?']]);
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready' }));
+    rows = await listing(); assert.deepEqual(rows.map(x => [x.state, x.question]), [['closed', 'Original question?'], ['closed', 'Later question?']]);
+    const runnerAt = '2026-11-14T12:00:00Z';
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+    writeFileSync(join(dir, 'LOG.md'), [...history, log('2026-11-14T11:30:00Z', 'ready', 'Resolved'), log(runnerAt, 'Martin', 'runner failure: no response')].join('\n\n'));
+    rows = await listing(); assert.equal(rows[0].question, 'runner failure: no response');
+    const detail = io(); assert.equal(await run(['item', rows[0].id], { ...detail, env: f.env, home }), 0);
+    const { source, prepared, brief, ...persistedDetail } = JSON.parse(detail.out.stdout);
+    const { question, ...persistedListing } = rows[0];
+    assert.deepEqual(persistedListing, JSON.parse(readFileSync(join(itemDirectory(rows[0], f.env), 'item.json'), 'utf8')));
+    assert.deepEqual(persistedDetail, persistedListing); assert.equal(source.question.at, runnerAt);
+    assert.equal(prepared, null); assert.equal(brief, null);
+  });
+  it('renders a decision ledger record on both the item detail and item listing', async()=>{
+    const f=stored(); f.record.kind='decision'; f.record.reference=`decision:${f.record.source_at}`; f.record.id=deskItemId('decision',f.record.reference,f.record.source_at); f.dir=itemDirectory(f.record,f.env); writeDeskItem(f.record,{env:f.env});
+    const ledger=join(f.env.MC_HOME,'jev','decisions.jsonl'); mkdirSync(join(f.env.MC_HOME,'jev'),{recursive:true});
+    writeFileSync(ledger,JSON.stringify({at:f.record.source_at,outcome:'decided',recommend:'keep',question:'Which rule should stand?',answers:{answer:{choice:'change'},product:0.1}})+'\n');
+    const detail=io(); assert.equal(await run(['item',f.record.id],{...detail,env:f.env}),0); const {source,prepared,brief,...record}=JSON.parse(detail.out.stdout); assert.deepEqual(record,f.record); assert.equal(source.question,'Which rule should stand?'); assert.equal(prepared,null); assert.equal(brief,null);
+    const listing=io(); assert.equal(await run(['items','--json'],{...listing,env:f.env}),0); const shown=JSON.parse(listing.out.stdout).find(x=>x.id===f.record.id); const {question,...listed}=shown; assert.deepEqual(listed,f.record); assert.equal(question,'Which rule should stand?');
   });
 });
 
