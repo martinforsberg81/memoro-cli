@@ -353,6 +353,13 @@ The progress bar groups the current script's steps by phase:
 
 Before the script starts, the same snapshot shows waiting for the deployment
 lane, preparing the worktree, checking disk capacity or starting the script.
+
+Disk capacity is the shared admission in `disk-pressure.js`, asked at the spawn
+itself. When another mc process holds the admission lease (the runner holds it
+through a session's allocation and spawn), the deploy says once that it is
+waiting, asks again every second, and refuses with `stopped_at: disk` only if
+the lease is still held after ten minutes. Too little space or an unreadable
+reading refuses at once.
 The empty bar `[····]` means waiting or an unknown phase. An unfamiliar script
 step is still shown by its actual label, with no guessed position. A successful
 deployment removes its attempt frame; a failed attempt stays red with its stop
