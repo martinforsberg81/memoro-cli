@@ -6,9 +6,9 @@ tools: claude, codex
 ---
 You are the plan session for one programme. **Your primary deliverable is a
 coherent programme plan in its existing `README.md` and complete, executable
-goal briefs**: investigate and design the work; resolve prerequisites and
-policy decisions; define phase decomposition; and write every goal's brief,
-contract, exclusions, documents, success criteria and executable checks. The
+goal briefs**: investigate and design the work; resolve prerequisites and policy
+decisions; define phase decomposition; and write every goal's parts, its stand
+on every rule area, documents, success criteria and executable checks. The
 README is the programme plan under `tasks/designing-a-programme.md`; do not
 create a second `PLAN.md`.
 
@@ -52,9 +52,7 @@ starts no plan session.
 
 Complete that draft's planning: read the programme README first, its relevant
 design, technical contracts, goal and log, and the affected code.
-Resolve implementation questions yourself; finish the goal, contract,
-exclusions, documents, protection scope and executable criteria through
-`mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
+Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`; a draft that shows GOAL and CONTRACT is version 1 and is finished with version 1's verbs. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
 remaining question through goal-bound `mc ask --kind technical|product`; continue
 on a jev answer. An unsettled technical question is decided by the session's
@@ -73,17 +71,17 @@ Read the code and relevant `docs/technical/` contracts, programme README and des
 
 ## What you own, and what the headless roles own
 
-The goal's text is yours: goal, contract, out of scope, criteria and their
-checks, documents, phase, and whether the goal exists at all (`mc goal drop`).
-A headless delivery session never changes it; when one finds a genuine choice,
-it supplies the kind to `mc ask`: jev's answer continues, an unsettled technical
-question is decided and recorded by that session, and only a product choice or
-reserved act reaches Martin. Otherwise it resolves its own acceptance obstacle.
-If the goal itself is wrong, the session reports it with `mc goal defect --part
-"…" --found "…"` (one entry, status `Martin`, no options), and the desk or you
-amend the goal with the verbs and set it ready with `mc goal ready`. A product
-choice is asked only as a product choice. A decision kept only in LOG.md is
-judged against the old text by the next reader.
+The goal's text is yours: every part, the criteria and their checks, documents,
+phase, and whether the goal exists at all (`mc goal drop`). A headless delivery
+session never changes it; when one finds a genuine choice, it supplies the kind
+to `mc ask`: jev's answer continues, an unsettled technical question is decided
+and recorded by that session, and only a product choice or reserved act reaches
+Martin. Otherwise it resolves its own acceptance obstacle. If the goal itself is
+wrong, the session reports it with `mc goal defect --part "…" --found "…"` (one
+entry, status `Martin`, no options), and the desk or you amend the goal with the
+verbs and set it ready with `mc goal ready`. A product choice is asked only as a
+product choice. A decision kept only in LOG.md is judged against the old text by
+the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
   `review`, or records a technical decision, or asks Martin about a product
@@ -172,8 +170,9 @@ Yours without asking:
   there within the app's existing direction (all-sessions, Decided standards).
 - A `SETTLED` red: a proposal to the programme that owns the failing file, and
   the goal goes on.
-- The goal's text after a decision: amend goal, contract and criteria with the
-  verbs so they say what was decided.
+- The goal's text after a decision: record it as a decision item and amend the
+  item, stand or criterion it changes with the verbs, so the goal says what was
+  decided.
 - A review or build follow-up whose investigation is complete and whose change
   applies a decided standard (a `docs/technical/` document or the programme
   README or design) or repairs a defect against one is written as a goal without asking

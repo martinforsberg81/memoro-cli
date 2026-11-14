@@ -26,6 +26,49 @@ A separately commissioned diagnosis has explicit subjects, a time box,
 deliverable and evidence limits. Its criteria accept a bounded investigation,
 including a supported negative result, never an unimplemented repair.
 
+## The parts
+
+Each part answers one question the build session has. The review of the built
+change checks the change against the same part, so what a part leaves out is
+not reviewed.
+
+| Part | The build's question | Holds |
+|---|---|---|
+| `aim` | Why is this done? | One or two sentences against the programme's aim; the goals it builds on and the goals that touch the same files. |
+| `outcome` | What is true when I am done? | Short prose: what a user or a consuming component observes. |
+| `problem` (B) | What is wrong or missing now? | Observed behaviour and its cause, each with its basis: measured, reported or inferred. |
+| `premises` (P) | What does the solution rest on? | Claims about the code and the system: the claim, its source (file and line, or the command that produced it), its basis (read, measured or inferred) and the revision it held at. |
+| `decisions` (D) | What is already decided? | Each with who decided and when. The build does not reopen one. |
+| `change` (C) | What do I change, and where? | Components with their path and what changes in each; the depth follows the class. |
+| `latitude` | What may I choose? | The choices the build owns. |
+| `preserve` (V) | What must not change? | Invariants, each naming what upholds it: a criterion, a test, a command. |
+| `obligations` | Which standards apply here? | One stand per rule area of the goal's repositories: `touched` with what must hold in this change and the standard and section, or `untouched` with the reason. |
+| `risks` (R) | How can this change go wrong? | Failure modes of this change, each settled by a criterion, by the protection, or accepted with its reason. |
+| criteria | When am I done? | One outcome each, with its check and the evidence to log. |
+| `protection` | What do I test? | Behaviour, consequence of failure, level, existing tests to reuse and the fault to replay; or no new test, with the reason and the residual risk. |
+| `out-of-scope` (X) | What do I leave? | Adjacent work, each with its owner: another goal, another programme, or nobody. |
+| documents | Where is support? | Documents with the section and when it is needed. |
+
+- A premise is a claim the goal would be wrong without. Where a function lives
+  is orientation: it belongs in `change` and the documents.
+- A criterion, a preserve item or a change that says "every", "only" or "no
+  other" points to a premise that holds the inventory and the command that
+  produced it. An inventory that was sampled is a sample, and the goal says so.
+- A rule area is a short list of pointed questions, each with the condition
+  under which it is asked (`mc goal areas <repo>`). Ask each question whose
+  condition holds for this change and write the answer as the area's stand. A
+  stand of `untouched` is a claim about the diff: the change does not go there.
+- A fast goal prescribes the mechanism, so its premises and change carry the
+  whole design and are read hardest before build.
+- An amendment after handoff replaces one numbered item or one stand and
+  leaves the rest; the log keeps what it replaced.
+- A session that finds a premise false, or the goal otherwise wrong, reports a
+  goal defect naming the item (`mc goal defect --part P2 …`).
+- A version 1 goal has `goal`, `contract` and `out of scope` as prose instead.
+  What this page says of the parts holds for it part by part: the contract is
+  where it states what must be preserved, and its claims about the code carry
+  their source in the prose.
+
 ## Success criteria
 
 Each criterion states an observable result and a pass/fail boundary. Together
@@ -53,6 +96,19 @@ change rather than adding a fixed number of criteria.
 - Read each criterion against its check: could the check pass while the
   promised behaviour is wrong? If so, repair the check or narrow the claim
   honestly. Missing or partial evidence leaves the criterion unmet.
+- Distinguish measured, historical and missing proof. Record revision, scope
+  and logs; partial, skipped or unavailable evidence is not green. A criterion
+  is marked met only after its whole check holds. Follow
+  [writing-tests](../writing-tests.md) for costs; moving work between clocks is
+  not a saving. A report as a deliverable specifies its reconciliation and
+  evidence.
+- A live check (app, browser) gives its command and prerequisites; read the
+  ceiling from evidence: the verdict's wall time is under N s, not enforced by
+  a wrapper. Do not set a run count, stage allocation, reserved run or load
+  condition: a check that holds only on a quiet machine is a defect to repair.
+  Rerun after a change or diagnosis; failure is evidence, not budget.
+- A goal that says a state is set wrongly names the caller that sets it today
+  and the stage it runs in; its fixture uses that stage.
 
 ## Out of scope
 
@@ -61,13 +117,14 @@ with enough specificity to prevent expansion: for example, a related host,
 data migration, API redesign or legacy retirement. Select actual boundaries
 of this solution; do not paste a standard list of prohibitions into every goal.
 
-State what behaviour or interface must be preserved in the contract, and any
-deliberately omitted protection and residual risk in the protection decision.
+State what behaviour or interface must be preserved in `preserve`, and any
+deliberately omitted protection and residual risk in `protection`.
 If excluded work is a prerequisite or belongs to another goal, name that
 owner and the dependency rather than leaving the delivery boundary implicit.
 
 An exclusion cannot remove work required for a promised result, necessary
 failure handling or the criterion's check. Resolve that conflict by changing
 the solution or explicitly agreeing a smaller outcome before commissioning.
-Read goal, contract, criteria, checks and exclusions together: a build session
-must be able to finish the agreed delivery without crossing those boundaries.
+Read outcome, change, preserve, criteria, checks and out of scope together: a
+build session must be able to finish the agreed delivery without crossing those
+boundaries.

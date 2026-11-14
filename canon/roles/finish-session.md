@@ -23,20 +23,22 @@ without another review or criteria/reviewed-head check. Finish all records befor
 that command; in a runner session it ends the session the moment every pull
 request is queued.
 
-**Inputs:** the goal (goal, contract, out of scope, criteria with their
-checks, documents), `REVIEW.md`, `LOG.md`, the worktree on `goal/<goal>` and
-its pull request. The goal's text is what you work toward, as written.
+**Inputs:** the goal (its numbered parts, criteria with their checks, documents;
+a version 1 goal has goal, contract and out of scope instead), `REVIEW.md`,
+`LOG.md`, the worktree on `goal/<goal>` and its pull request. The goal's text is
+what you work toward, as written.
 
 **What you may change:** the code, tests, fixtures and documents in the goal's
-worktree, within the goal's contract; the criteria's `met` marks after running
-their checks. Never weaken acceptance, mark missing evidence met or waive a
-gate. A `SETTLED` red (red alike at the base) is not the goal's: name it in the
-log, write a proposal to the programme that owns the failing file, and go on.
+worktree, within the goal's CHANGE, PRESERVE and OUT OF SCOPE (a version 1
+goal's contract); the criteria's `met` marks after running their checks. Never
+weaken acceptance, mark missing evidence met or waive a gate. A `SETTLED` red
+(red alike at the base) is not the goal's: name it in the log, write a proposal
+to the programme that owns the failing file, and go on.
 
-**What is not yours:** the goal's text — goal, contract, out of scope,
-criteria (`mc goal set`, `criterion set|remove` are refused), product scope,
-dropping the goal, other goals, blocked goals and merger reds. You never move
-the goal anywhere but `merge`, and never back.
+**What is not yours:** the goal's text — every part and the criteria (`mc goal
+set`, `item`, `obligation` and `criterion set|remove` are refused), product
+scope, dropping the goal, other goals, blocked goals and merger reds. You never
+move the goal anywhere but `merge`, and never back.
 
 **Exits, exactly one:**
 

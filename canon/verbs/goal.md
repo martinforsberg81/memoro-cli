@@ -1,26 +1,27 @@
 ## `mc goal`
 
 A goal is a directory, `~/mc/programs/<programme>/goals/<goal>/`: `GOAL.json`
-(the goal, contract, out of scope, documents, and success criteria, each with a
+(the goal's numbered parts, its documents, and success criteria, each with a
 check and a `met`) and `LOG.md` (one entry per session). A worktree per
 repository on branch `goal/<goal>` is made at the goal's first use: the runner
-makes it before the first session on the goal (a plan, build, review, finish or mend
-session), and `mc tidy` releases it when no session can use it. Its
-branch stays, and the next use re-adds it as it was. `mc goal --help` is the
-reference; `mc goal show <programme>/<goal>` renders one goal, each criterion
-with ✓/✗ and its check, and each worktree's state.
+makes it before the first session on the goal (a plan, build, review, finish or
+mend session), and `mc tidy` releases it when no session can use it. Its branch
+stays, and the next use re-adds it as it was. `mc goal --help` is the reference;
+`mc goal show <programme>/<goal>` renders one goal, each criterion with ✓/✗ and
+its check, and each worktree's state.
 
-- **Written by verbs.** Never edit GOAL.json by hand. `mc goal set <p>/<g>
-  title|goal|contract|out-of-scope --text "…"` (a blank line parts paragraphs),
-  `mc goal document add <p>/<g> --label "…" --path "…"`, `mc goal criterion add
-  <p>/<g> --criterion "…" --check "…"`. A version 2 goal (`mc goal new
-  --structure 2`; version 1 stays as it is) has numbered parts instead of goal
-  and contract: `mc goal set <p>/<g> title|aim|outcome|latitude|protection
-  --text "…"`, `mc goal item add|set|remove <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope …`
+- **Written by verbs.** Never edit GOAL.json by hand. A goal has numbered
+  parts: `mc goal set <p>/<g> title|aim|outcome|latitude|protection --text "…"`
+  (a blank line parts paragraphs), `mc goal item add|set|remove <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope …`
   (it prints the item's id, B, P, D, C, V, R or X and a number, never given
-  twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them), and `--evidence "…"`
-  on `criterion add|set`. Each version's verbs refuse the other's goal; a
-  build, review, finish or mend session cannot write the parts. A session that ran a criterion's check
+  twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them),
+  `mc goal document add <p>/<g> --label "…" --path "…"`, `mc goal criterion add
+  <p>/<g> --criterion "…" --check "…"`, and `--evidence "…"`
+  on `criterion add|set`. A goal that shows GOAL and CONTRACT is version 1
+  (`mc goal new --structure 1` writes one): it has `mc goal set <p>/<g>
+  title|goal|contract|out-of-scope --text "…"` instead of the parts, and each
+  version's verbs refuse the other's goal. A build, review, finish or mend
+  session cannot write the parts. A session that ran a criterion's check
   and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
   it back. Every write is validated; an invalid one is refused and not written.
   `mc goal criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`
@@ -112,7 +113,7 @@ with ✓/✗ and its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|medium|large --title "…" [--stage draft|build]` makes one: GOAL.json and
+  fast|medium|large --title "…" [--stage draft|build] [--structure 1]` makes one: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
