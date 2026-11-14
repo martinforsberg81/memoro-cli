@@ -74,6 +74,8 @@ export function syncDeskItems({ env = process.env, home = programsHome(env), roo
   for (const source of opens) {
     const id = deskItemId(source.kind, source.reference, source.source_at);
     if (existing.has(id)) continue;
+    // A goal's item is its current question: a note that is not one opens nothing beside an item at or after it.
+    if (source.kind === 'goal' && [...existing.values()].some(item => item.kind === 'goal' && item.reference === source.reference && open(item) && Date.parse(item.source_at) >= Date.parse(source.source_at))) continue;
     const item = { schema: 'mc-desk-item', version: 1, id, kind: source.kind, reference: source.reference,
       source_at: source.source_at, opened_at: now().toISOString(), state: 'new', sort: null, reversible: null, due_at: null, outcome: null };
     write(join(dir, id, 'item.json'), item); existing.set(id, item);

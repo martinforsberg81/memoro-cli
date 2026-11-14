@@ -66,8 +66,9 @@ records are named with their source paths, not treated as resolved.
 Ordering is by oldest current unresolved question, then `programme/goal` for
 ties. The full pending question is read independently of the bounded last
 three LOG entries. A later ready/resolved handoff prevents an older question
-from returning. If a runner sets Martin without structured options, get shows
-the recorded failure reason and the missing-question limitation. It never
+from returning. If a goal is set Martin without structured options, get shows the reason
+recorded by the entry that set it, or by a later goal-defect or runner-stop
+entry, and the missing-question limitation. It never
 manufactures options or rewrites historical evidence.
 
 Answered consultations (`jev was asked:`) leave the goal's status unchanged;
@@ -109,7 +110,7 @@ preparation, decisions and the interactive desk. Its schema is
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`) and `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync). A goal's source time
-is its current question/log entry time; a later question is a distinct item.
+is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing.
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`.
 
