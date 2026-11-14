@@ -17,6 +17,7 @@ import { run } from '../../src/mc/commands/merge.js';
 import { gate, parseMergeArgs } from '../../src/mc/commands/repo.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { roundLogPath } from '../../src/mc/repo-round-log.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 let root = null;
 let home = null;
@@ -205,6 +206,110 @@ describe('the door refuses what cannot land as asked (ruling 43)', () => {
     assert.equal(d.out.err, '');
     assert.equal(queue().length, 1);
     assert.match(d.out.out, /^mc: #671 is queued for the merger — it is next$/mu);
+  });
+});
+
+describe('a goal\'s pull request reaches the merger only in stage merge (mc merge refuses before)', () => {
+  fresh('mc-merge-goal');
+
+  /** A goal as `programsGoals` lists it. */
+  const rec = ({ goal = 'asc', stage = 'build', prs = [{ repo: 'memoro-cli', pr: 671 }], repos = ['memoro-cli'], problems = [] } = {}) => ({ programme: 'ios', goal, stage: problems.length ? null : stage, repos: problems.length ? [] : repos, prs: problems.length ? [] : prs, problems });
+
+  /** `run` with every way it could land or queue recorded; the lookup is injected. */
+  function door({ goals, head = null, files = ['src/a.js'], env = undefined } = {}) {
+    const d = deps({ head });
+    const calls = { gate: 0, docs: 0, goals: 0 };
+    return {
+      d, calls,
+      go: (argv) => run(argv, {
+        ...d.io,
+        goalsOf: goals ? () => { calls.goals += 1; return goals; } : undefined,
+        env: env ?? d.io.env,
+        resolveRepoPath: async () => '/repos/memoro-cli',
+        gate: async () => { calls.gate += 1; return 0; },
+        runDocsMerge: async () => { calls.docs += 1; return { ok: true, merged: true }; },
+        prFiles: () => files,
+      }),
+      refused: () => { assert.equal(calls.gate, 0, 'no gate'); assert.equal(calls.docs, 0, 'no docs landing'); assert.deepEqual(queue(), []); assert.equal(d.starts.length, 0); },
+    };
+  }
+
+  for (const stage of ['draft', 'build', 'review', 'finish']) {
+    it(`a pull request a goal in ${stage} registers is refused with exit 1, naming the goal, its stage and mc goal stage merge`, async () => {
+      const t = door({ goals: [rec({ stage })] });
+      assert.equal(await t.go(['memoro-cli', '671']), 1);
+      assert.match(t.d.out.err, new RegExp(`^mc: #671: goal ios/asc is in stage ${stage} — .*mc goal stage merge ios/asc hands it over — nothing was queued or landed\\n$`, 'u'));
+      t.refused();
+    });
+  }
+
+  it('several pull requests in one call: when one is a goal\'s before merge, none is queued', async () => {
+    const t = door({ goals: [rec({ prs: [{ repo: 'memoro-cli', pr: 672 }] })] });
+    assert.equal(await t.go(['memoro-cli', '671', '672', '673']), 1);
+    assert.match(t.d.out.err, /^mc: #672: goal ios\/asc is in stage build/u);
+    t.refused();
+  });
+
+  it('explicit --docs and a documents-only pull request are refused before the docs landing', async () => {
+    const explicit = door({ goals: [rec()] });
+    assert.equal(await explicit.go(['memoro-cli', '671', '--docs']), 1);
+    explicit.refused();
+    const only = door({ goals: [rec()], files: ['docs/technical/a.md'] });
+    assert.equal(await only.go(['memoro-cli', '671']), 1);
+    only.refused();
+  });
+
+  it('a pull request found only by its head branch goal/<g> is refused, and so is one of a goal whose GOAL.json cannot be read', async () => {
+    const byBranch = door({ goals: [rec({ prs: [] })], head: 'goal/asc' });
+    assert.equal(await byBranch.go(['memoro-cli', '671']), 1);
+    assert.match(byBranch.d.out.err, /goal ios\/asc is in stage build/u);
+    byBranch.refused();
+    const broken = door({ goals: [rec({ problems: ['GOAL.json is not JSON'] })], head: 'goal/asc' });
+    assert.equal(await broken.go(['memoro-cli', '671']), 1);
+    assert.match(broken.d.out.err, /goal ios\/asc is in a stage mc cannot read.*mc goal stage merge ios\/asc/u);
+    broken.refused();
+    const other = door({ goals: [rec({ prs: [] })], head: 'goal/elsewhere' });
+    assert.equal(await other.go(['memoro-cli', '671']), 0);
+    assert.equal(other.calls.gate, 1);
+  });
+
+  it('a pull request carried by two goals goes on only when every goal not done or dropped is in merge', async () => {
+    const mixed = door({ goals: [rec({ goal: 'a', stage: 'merge' }), rec({ goal: 'b', stage: 'review' })] });
+    assert.equal(await mixed.go(['memoro-cli', '671']), 1);
+    assert.match(mixed.d.out.err, /goal ios\/b is in stage review/u);
+    mixed.refused();
+    const ready = door({ goals: [rec({ goal: 'a', stage: 'merge' }), rec({ goal: 'b', stage: 'done' }), rec({ goal: 'c', stage: 'dropped' })] });
+    assert.equal(await ready.go(['memoro-cli', '671']), 0);
+    assert.equal(ready.calls.gate, 1);
+  });
+
+  it('a goal in merge, no goal, --check and --admin behave as before', async () => {
+    const inMerge = door({ goals: [rec({ stage: 'merge' })] });
+    assert.equal(await inMerge.go(['memoro-cli', '671']), 0);
+    assert.equal(inMerge.calls.gate, 1);
+    const none = door({ goals: [] });
+    assert.equal(await none.go(['memoro-cli', '671']), 0);
+    assert.equal(none.calls.gate, 1);
+    const check = door({ goals: [rec()] });
+    assert.equal(await check.go(['memoro-cli', '671', '--check']), 0);
+    assert.equal(check.calls.gate, 1);
+    assert.equal(check.calls.goals, 0, '--check reads no goal');
+    const admin = door({ goals: [rec()] });
+    assert.equal(await admin.go(['memoro-cli', '671', '--admin']), 1, 'gh answers nothing: the admin route is its own');
+    assert.equal(admin.calls.goals, 0, '--admin reads no goal');
+    assert.match(admin.d.out.err, /gh could not read #671/u);
+  });
+
+  it('the default lookup reads the goals under MC_WORK_ROOT/programs', async () => {
+    const dir = join(root, 'programs', 'ios', 'goals', 'asc');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ stage: 'review', prs: ['memoro-cli#671'] }));
+    const t = door({});
+    assert.equal(await t.go(['memoro-cli', '671']), 1);
+    assert.match(t.d.out.err, /goal ios\/asc is in stage review/u);
+    t.refused();
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ stage: 'merge', prs: ['memoro-cli#671'] }));
+    assert.equal(await door({}).go(['memoro-cli', '671']), 0);
   });
 });
 
