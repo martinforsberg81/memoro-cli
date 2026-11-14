@@ -146,6 +146,8 @@ command (or a written file) that contains `MC_HOOK_ALLOW=1` passes — a
 `--force-with-lease` after rebasing a stack, a drag `mc shot` cannot do — and
 the session says why.
 
+**Headless.** In a session with `MC_HEADLESS=1` four acts are refused, and `MC_HOOK_ALLOW=1` does not pass them: `mc deploy` without `--dry-run` (`headless-deploy`); `mc merge` or `gh pr merge` with `--admin` (`headless-admin`); setting `CLAUDE_ALLOW_PROD_WRANGLER` (`headless-production-data`); `mc test token --set` or `--rm` (`headless-credentials`). A rule matches a command the line actually runs, after the shell's reading of its quotes, comments and here-documents: an option that quotes `mc deploy` is not refused, and an `eval`, a `sh -c` or a `$(…)` that runs it is. A line the reader cannot parse is matched as one string. The refusal names the way forward, `mc ask <programme>/<goal> --kind technical --reserved <act>`, with the act as `deploy`, `admin`, `production-data` or `credentials`.
+
 The rules are `src/mc/hooks.js`, pure over a git runner and the inputs; the
 door is `src/mc/commands/hook.js`; `tests/mc/hooks.test.js` holds both.
 

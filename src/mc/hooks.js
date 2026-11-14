@@ -352,28 +352,350 @@ function chromeToLocal(tool, args) {
  * they start; an interactive session never carries it. No escape: the rules
  * above turn a raw command to an mc verb, these are a boundary.
  */
+/*
+ * The shell's simple commands on a line, read the way a POSIX shell reads
+ * them, so a headless rule matches a command the line would run and never the
+ * text inside another command's quotes, a comment or a here-document
+ * (2026-11-14: `echo "… mc deploy …"` in an `mc ask` option refused the whole
+ * call, and the question was lost). A reader of the forms an agent writes, not
+ * a shell: a line it cannot read is `null`, and the caller matches the line as
+ * one string, as before.
+ */
+
+/** Unquoted characters that end a word; `{` and `}` end one only where a word starts. */
+const WORD_END = new Set([' ', '\t', '\n', ';', '&', '|', '(', ')', '<', '>']);
+/** Words a command may be prefixed with: the command is the first word after them. */
+const COMMAND_PREFIX = new Set(['env', 'sudo', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
+const DURATION = /^\d+[smhd]?$/u;
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
+const SHELL_C = /^-[a-zA-Z]*c[a-zA-Z]*$/u;
+
+const isWordStart = (ch) => ch !== undefined && !WORD_END.has(ch) && ch !== '{' && ch !== '}';
+const skipBlanks = (s, j) => { let k = j; while (s[k] === ' ' || s[k] === '\t') k += 1; return k; };
+
+/** The command a list of words runs: its leading NAME=value words, then the prefix words skipped. */
+function commandOf(words) {
+  const assignments = [];
+  let k = 0;
+  while (k < words.length) {
+    const word = words[k];
+    if (ASSIGNMENT.test(word)) assignments.push(word);
+    else if (!(COMMAND_PREFIX.has(basename(word)) || word.startsWith('-') || DURATION.test(word))) break;
+    k += 1;
+  }
+  return { words: words.slice(k), assignments };
+}
+
+/** Records one simple command, then the commands an `eval` or a shell's `-c` runs. False when one does not parse. */
+function addCommand(words, out) {
+  if (!words.length) return true;
+  const command = commandOf(words);
+  out.push(command);
+  const name = basename(command.words[0] ?? '');
+  if (name === 'eval') return parseInto(command.words.slice(1).join(' '), out);
+  if (SHELLS.has(name)) {
+    for (let k = 1; k < command.words.length - 1; k += 1) {
+      if (SHELL_C.test(command.words[k]) && !parseInto(command.words[k + 1], out)) return false;
+    }
+  }
+  return true;
+}
+
+function parseInto(text, out) {
+  return scanLine(text, 0, false, out) !== -1;
+}
+
+/** The index after the `}` that closes a `${` whose body starts at `start`, or -1. */
+function braceEnd(s, start) {
+  let depth = 1;
+  for (let k = start; k < s.length; k += 1) {
+    if (s[k] === '{') depth += 1;
+    else if (s[k] === '}' && (depth -= 1) === 0) return k + 1;
+  }
+  return -1;
+}
+
+/** The index after a backquoted substitution whose body starts at `start`, its commands added; -1 when it does not parse. */
+function backquoted(s, start, out) {
+  let j = start;
+  while (j < s.length && s[j] !== '`') j += s[j] === '\\' ? 2 : 1;
+  if (j >= s.length) return -1;
+  const inner = s.slice(start, j).replace(/\\([`\\$])/gu, '$1');
+  return parseInto(inner, out) ? j + 1 : -1;
+}
+
+/** The text of a double-quoted string from `start`, after its `"`, and the index after it; null when unterminated. */
+function doubleQuoted(s, start, out) {
+  let text = '';
+  let j = start;
+  while (j < s.length) {
+    const c = s[j];
+    if (c === '"') return { text, next: j + 1 };
+    if (c === '\\' && j + 1 < s.length) {
+      const next = s[j + 1];
+      if ('"\\$`'.includes(next)) text += next;
+      else if (next !== '\n') text += c + next;
+      j += 2;
+      continue;
+    }
+    let end = 0;
+    if (c === '$' && s[j + 1] === '(') end = scanLine(s, j + 2, true, out);
+    else if (c === '$' && s[j + 1] === '{') end = braceEnd(s, j + 2);
+    else if (c === '`') end = backquoted(s, j + 1, out);
+    if (end === -1) return null;
+    if (end > 0) {
+      text += s.slice(j, end);
+      j = end;
+      continue;
+    }
+    text += c;
+    j += 1;
+  }
+  return null;
+}
+
+/** One word from `start`: its text with quotes removed, whether any part was quoted, and the index after it; null when it does not parse. */
+function readWord(s, start, out) {
+  let text = '';
+  let quoted = false;
+  let j = start;
+  while (j < s.length) {
+    const c = s[j];
+    if (WORD_END.has(c)) break;
+    if (c === '\\') {
+      if (j + 1 >= s.length) { text += c; j += 1; continue; }
+      if (s[j + 1] !== '\n') text += s[j + 1];
+      quoted = true;
+      j += 2;
+      continue;
+    }
+    if (c === "'") {
+      const close = s.indexOf("'", j + 1);
+      if (close === -1) return null;
+      text += s.slice(j + 1, close);
+      quoted = true;
+      j = close + 1;
+      continue;
+    }
+    if (c === '"') {
+      const got = doubleQuoted(s, j + 1, out);
+      if (!got) return null;
+      text += got.text;
+      quoted = true;
+      j = got.next;
+      continue;
+    }
+    if (c === '$' && s[j + 1] === "'") {
+      let k = j + 2;
+      while (k < s.length && s[k] !== "'") k += s[k] === '\\' ? 2 : 1;
+      if (k >= s.length) return null;
+      text += s.slice(j + 2, k);
+      quoted = true;
+      j = k + 1;
+      continue;
+    }
+    let end = -1;
+    if (c === '$' && s[j + 1] === '(') {
+      end = scanLine(s, j + 2, true, out);
+      if (end === -1) return null;
+    } else if (c === '$' && s[j + 1] === '{') {
+      end = braceEnd(s, j + 2);
+      if (end === -1) return null;
+    } else if (c === '`') {
+      end = backquoted(s, j + 1, out);
+      if (end === -1) return null;
+    }
+    if (end !== -1) {
+      text += s.slice(j, end);
+      j = end;
+      continue;
+    }
+    text += c;
+    j += 1;
+  }
+  return { text, quoted, next: j };
+}
+
+/** The here-document body that starts at `start`, through its delimiter line; the index after that line, or -1. Unquoted, its substitutions are commands. */
+function heredocBody(s, start, doc, out) {
+  let j = start;
+  for (;;) {
+    const eol = s.indexOf('\n', j);
+    const line = s.slice(j, eol === -1 ? s.length : eol);
+    if ((doc.dash ? line.replace(/^\t+/u, '') : line) === doc.delim) {
+      const body = s.slice(start, j);
+      if (!doc.quoted && !bodySubstitutions(body, out)) return -1;
+      return eol === -1 ? s.length : eol + 1;
+    }
+    if (eol === -1) return -1;
+    j = eol + 1;
+  }
+}
+
+/** Adds the commands of the `$(…)` and backquoted substitutions in a here-document body; false when one does not parse. */
+function bodySubstitutions(body, out) {
+  for (let k = 0; k < body.length; k += 1) {
+    if (body[k] === '\\') {
+      k += 1;
+    } else if (body[k] === '$' && body[k + 1] === '(') {
+      const end = scanLine(body, k + 2, true, out);
+      if (end === -1) return false;
+      k = end - 1;
+    } else if (body[k] === '`') {
+      const end = backquoted(body, k + 1, out);
+      if (end === -1) return false;
+      k = end - 1;
+    }
+  }
+  return true;
+}
+
+/**
+ * Scans commands from `start`, adds each to `out`, and returns the index it
+ * stopped at: the end of the text, or inside a `$(…)` (`inSubst`), the index
+ * after its `)`. -1 when the text does not parse.
+ */
+function scanLine(s, start, inSubst, out) {
+  let i = start;
+  let depth = 0;
+  let words = [];
+  const heredocs = [];
+  const endCommand = () => {
+    const ok = addCommand(words, out);
+    words = [];
+    return ok;
+  };
+  while (i < s.length) {
+    const c = s[i];
+    if (c === ' ' || c === '\t') {
+      i += 1;
+    } else if (c === '\\' && s[i + 1] === '\n') {
+      i += 2;
+    } else if (c === '\n') {
+      if (!endCommand()) return -1;
+      i += 1;
+      for (const doc of heredocs.splice(0)) {
+        i = heredocBody(s, i, doc, out);
+        if (i === -1) return -1;
+      }
+    } else if (c === '#') {
+      while (i < s.length && s[i] !== '\n') i += 1;
+    } else if (c === ')' && inSubst && depth === 0) {
+      return endCommand() ? i + 1 : -1;
+    } else if (c === ';' || c === '&' || c === '|' || c === '(' || c === ')' || c === '{' || c === '}') {
+      if (c === '&' && s[i + 1] === '>') {
+        i += 1;
+        continue;
+      }
+      if (c === '(') depth += 1;
+      else if (c === ')' && depth > 0) depth -= 1;
+      if (!endCommand()) return -1;
+      const pair = ((c === '&' || c === '|') && s[i + 1] === c) || (c === '|' && s[i + 1] === '&');
+      i += pair ? 2 : 1;
+    } else if (c === '<' || c === '>') {
+      let j = i + 1;
+      if (c === '<' && s[j] === '<' && s[j + 1] !== '<') {
+        const dash = s[j + 1] === '-';
+        j = skipBlanks(s, j + (dash ? 2 : 1));
+        const doc = isWordStart(s[j]) ? readWord(s, j, out) : null;
+        if (!doc || doc.text === '') return -1;
+        heredocs.push({ delim: doc.text, quoted: doc.quoted, dash });
+        i = doc.next;
+      } else {
+        if (c === '<' && s[j] === '<') j += 2;
+        else if (s[j] === '>' || s[j] === '&' || s[j] === '|' || s[j] === '<') j += 1;
+        j = skipBlanks(s, j);
+        if (isWordStart(s[j])) {
+          const target = readWord(s, j, out);
+          if (!target) return -1;
+          i = target.next;
+        } else {
+          i = j;
+        }
+      }
+    } else {
+      const word = readWord(s, i, out);
+      if (!word) return -1;
+      i = word.next;
+      // A file descriptor before a redirection (2>&1) is not a word.
+      if (!word.quoted && /^\d+$/u.test(word.text) && (s[i] === '<' || s[i] === '>')) continue;
+      words.push(word.text);
+    }
+  }
+  if (heredocs.length || !endCommand()) return -1;
+  return inSubst ? -1 : s.length;
+}
+
+/**
+ * The simple commands a shell line runs, each `{ words, assignments }` with
+ * quotes removed and the prefix words (`env`, `sudo`, `timeout 600`, …) skipped
+ * so `words[0]` is the command; `null` when the line does not parse.
+ */
+export function shellCommands(line) {
+  const out = [];
+  return parseInto(String(line), out) ? out : null;
+}
+
+/** Whether the words of a command begin with these, the first compared by basename. */
+const begins = (command, ...want) => want.every((word, k) => (k === 0 ? basename(command.words[0] ?? '') : command.words[k]) === word);
+
+/**
+ * The acts a headless session may not run. Each `test` takes one command the
+ * line runs (see `shellCommands`); `act` is the name `mc ask --reserved` takes.
+ */
 export const HEADLESS_RULES = [
   {
     id: 'headless-deploy',
-    test: /(^|[;&|(]\s*|\s)mc\s+deploy\b(?![^\n;&|]*--dry-run)/u,
+    act: 'deploy',
     reason: 'mc deploy',
+    test: (command) => begins(command, 'mc', 'deploy') && !command.words.includes('--dry-run'),
   },
   {
     id: 'headless-admin',
-    test: /(^|[;&|(]\s*|\s)(mc\s+merge|gh\s+pr\s+merge)\b[^\n;&|]*--admin\b/u,
+    act: 'admin',
     reason: '--admin (a landing past the gate)',
+    test: (command) => (begins(command, 'mc', 'merge') || begins(command, 'gh', 'pr', 'merge')) && command.words.includes('--admin'),
   },
   {
     id: 'headless-production-data',
-    test: /\bCLAUDE_ALLOW_PROD_WRANGLER\s*=/u,
+    act: 'production-data',
     reason: 'production data (CLAUDE_ALLOW_PROD_WRANGLER)',
+    test: (command) => command.assignments.some((word) => word.split('=')[0] === 'CLAUDE_ALLOW_PROD_WRANGLER')
+      || (['export', 'declare', 'typeset'].includes(basename(command.words[0] ?? ''))
+        && command.words.slice(1).some((word) => word.startsWith('CLAUDE_ALLOW_PROD_WRANGLER='))),
   },
   {
     id: 'headless-credentials',
-    test: /(^|[;&|(]\s*|\s)mc\s+test\s+token\s+--(set|rm)\b/u,
+    act: 'credentials',
     reason: 'credentials (mc test token)',
+    test: (command) => begins(command, 'mc', 'test', 'token') && command.words.some((word) => word === '--set' || word === '--rm'),
   },
 ];
+
+/**
+ * Today's whole-line patterns, for a line `shellCommands` cannot read: such a
+ * line is refused exactly as it was before the rules read commands.
+ */
+const UNPARSED_LINE_PATTERNS = [
+  ['headless-deploy', /(^|[;&|(]\s*|\s)mc\s+deploy\b(?![^\n;&|]*--dry-run)/u],
+  ['headless-admin', /(^|[;&|(]\s*|\s)(mc\s+merge|gh\s+pr\s+merge)\b[^\n;&|]*--admin\b/u],
+  ['headless-production-data', /\bCLAUDE_ALLOW_PROD_WRANGLER\s*=/u],
+  ['headless-credentials', /(^|[;&|(]\s*|\s)mc\s+test\s+token\s+--(set|rm)\b/u],
+];
+
+/** The first headless rule the line runs, or `null`. */
+export function headlessRule(command) {
+  const commands = shellCommands(command);
+  if (commands) return HEADLESS_RULES.find((rule) => commands.some((entry) => rule.test(entry))) || null;
+  const hit = UNPARSED_LINE_PATTERNS.find(([, pattern]) => pattern.test(command));
+  return hit ? HEADLESS_RULES.find((rule) => rule.id === hit[0]) : null;
+}
+
+/** What a headless session is told about a refused act: the way forward is `mc ask` with its reserved name. */
+function headlessReason(rule) {
+  return `${rule.reason} is Martin's act and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Ask for it: mc ask <programme>/<goal> --kind technical --reserved ${rule.act} --reason "…" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> records the question and sets the goal Martin. A session without a goal says in its step note what waits on it.`;
+}
 
 /** Whether the session was started by the runner or the intake turn, with nobody at the terminal. */
 export function headlessSession(env = process.env) {
@@ -390,14 +712,8 @@ export function preToolDecision(input, { inRepo = () => false, programs = progra
   const tool = input?.tool_name;
   const args = input?.tool_input || {};
   if (tool === 'Bash' && headlessSession(env)) {
-    const command = String(args.command || '');
-    const rule = HEADLESS_RULES.find((entry) => entry.test.test(command));
-    if (rule) {
-      return {
-        id: rule.id,
-        reason: `${rule.reason} is Martin's act and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Leave the work waiting on it, and say in your log entry or step note what it waits on.`,
-      };
-    }
+    const rule = headlessRule(String(args.command || ''));
+    if (rule) return { id: rule.id, reason: headlessReason(rule) };
   }
   if (typeof tool === 'string' && tool.startsWith(CHROME)) {
     if (JSON.stringify(args).includes(ALLOW_MARK) || !chromeToLocal(tool, args)) return null;
