@@ -119,7 +119,15 @@ function codexWorld(t) {
     },
   }));
 
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, MC_WORK_ROOT: work, MC_REPOS_HOME: reposHome };
+  // This fixture calls runLoop directly, outside the live runner process
+  // that owns these runtime-only Linux admission tokens. Never let the
+  // parent runner's reservation or handover identity claim this isolated root.
+  const {
+    MC_RUN_RESERVED_GENERATION: _reservedGeneration,
+    MC_RUN_SUCCESSOR_OF: _successorOf,
+    ...parentEnv
+  } = process.env;
+  const env = { ...parentEnv, PATH: `${bin}:${process.env.PATH}`, MC_WORK_ROOT: work, MC_REPOS_HOME: reposHome };
   // `resolveLaunch` finds codex with `which -a codex`, which reads the
   // process's own PATH and not `deps.env` — so this one has to move too.
   const realPath = process.env.PATH;
