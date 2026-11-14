@@ -247,6 +247,13 @@ export async function fullRun(repo, {
         releaseClaim(taken.claim, { root, ...claims });
       }
     }
+    if (taken.waitFor) {
+      // Another tree of this repository is being measured, in the one
+      // checkout a full run has: wait for it, then measure this one.
+      say(`${repo.name} — a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}); waiting for it before measuring ${sha ? sha.slice(0, 7) : 'main'}`);
+      await awaitClaim(taken.waitFor, { root, ...claims });
+      continue;
+    }
     const other = taken.joined;
     say(`${repo.name} — a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}); following it, not starting a second`);
     await awaitClaim(other, { root, ...claims });

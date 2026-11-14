@@ -297,8 +297,10 @@ unknown (`mc test --full` does not know what the fetch will find). A starter
 that finds a live overlapping claim does not start a round: it follows the run
 (`awaitClaim`) and reads its answer from the nightly history; a run that died
 without writing one is no answer, and the follower starts its own. A claim
-whose pid is gone is no claim. A known, different sha is another tree and is
-measured on its own. `mc test <repo> --full` with no pull request is the same
+whose pid is gone is no claim. A known, different sha is another tree and
+waits for the run in flight (`waitFor`), then claims: a repository has one
+checkout for its full run (`<slug>/full`), and a second run must never prepare
+it under the first. `mc test <repo> --full` with no pull request is the same
 kind of run as the daily one — beside the merge lane, in its own checkout, no
 lease, written to the history (2026-11-14: it stopped twice at `lease` because
 the merger held memoro.git).

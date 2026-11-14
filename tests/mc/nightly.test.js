@@ -406,18 +406,20 @@ describe('a full run, one at a time per tree — whoever starts it', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a run of another known sha is another tree, measured on its own', async () => {
+  it('a run of another sha waits for the one in flight: the full-run checkout is never prepared under it', async () => {
     const root = home();
     try {
-      held(root, { sha: OTHER });
-      let rounds = 0;
+      const claim = held(root, { sha: OTHER });
+      const events = [];
+      const said = [];
       const run = await fullRun(REPO, {
-        root, sha: SHA, say: () => {}, repair: null,
-        round: () => { rounds += 1; return report(); },
-        claims: { alive: () => true, pollMs: 1, sleep: async () => { throw new Error('must not wait'); } },
+        root, sha: SHA, say: (message) => said.push(message), repair: null,
+        round: () => { events.push('round'); return report(); },
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { events.push('wait'); releaseClaim(claim, { root, alive: () => true }); } },
       });
-      assert.equal(rounds, 1);
-      assert.notEqual(run.joined, true);
+      assert.deepEqual(events, ['wait', 'round'], 'measured only after the other tree\'s run had ended');
+      assert.notEqual(run.joined, true, 'another tree\'s answer is no answer to this one');
+      assert.match(said.join('\n'), /a full run of bbbbbbb is using the full-run checkout \(pid 4242\); waiting for it before measuring aaaaaaa/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

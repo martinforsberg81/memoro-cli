@@ -16,7 +16,9 @@
  * starter expects to measure, or null when it does not know (a hand-typed
  * `--full` measures what the fetch finds). Two claims overlap when the repo is
  * the same and the shas are equal or either is unknown; a known, different sha
- * is another tree and is measured on its own. A claim whose pid is gone is a
+ * is another tree, and waits its turn: a repository has one checkout for its
+ * full run (`<slug>/full`), and a second run preparing it under the first would
+ * pull the tree from under the measurement. A claim whose pid is gone is a
  * run that died, and is no claim: it is dropped at the next write and ignored
  * at every read. The file lives with the history it points to, in mc's home.
  */
@@ -61,7 +63,8 @@ export function overlaps(claim, { repo, sha = null }) {
  * Claim a full run, or find the one already in flight that measures the same
  * thing. `{ claimed: true, claim }` when this process now holds the claim,
  * `{ claimed: false, joined }` when a live claim overlaps it and nothing was
- * written. Decided under a lock so two starters cannot both find
+ * written, `{ claimed: false, waitFor }` when the repository's run is of
+ * another sha — wait for it (`awaitClaim`), then claim again. Decided under a lock so two starters cannot both find
  * the repository free.
  */
 export function claimFullRun({
@@ -72,6 +75,8 @@ export function claimFullRun({
     const live = readAll(root).filter((claim) => alive(claim.pid));
     const joined = live.find((claim) => overlaps(claim, { repo, sha }));
     if (joined) return { claimed: false, joined };
+    const waitFor = live.find((claim) => claim.repo === repo);
+    if (waitFor) return { claimed: false, waitFor };
     const claim = { repo, sha: sha || null, pid, started: now().toISOString(), verb };
     try { writeJsonAtomic(claimsPath(root), { schema: CLAIMS_SCHEMA, claims: [...live, claim] }, { mode: 0o600 }); } catch { /* a claim that cannot be written leaves the run unclaimed, not unrun */ }
     return { claimed: true, claim };

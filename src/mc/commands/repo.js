@@ -355,6 +355,11 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     for (;;) {
       const taken = claimFullRun({ repo: repoRef.name, sha: null, verb: 'mc test --full', root: historyRoot, ...claims });
       if (taken.claimed) { claim = taken.claim; break; }
+      if (taken.waitFor) {
+        stderr.write(`mc: a full run of ${taken.waitFor.sha ? taken.waitFor.sha.slice(0, 7) : 'main'} is using the full-run checkout (pid ${taken.waitFor.pid}) — waiting for it\n`);
+        await awaitClaim(taken.waitFor, { root: historyRoot, ...claims });
+        continue;
+      }
       const other = taken.joined;
       stderr.write(`mc: a full run of ${other.sha ? other.sha.slice(0, 7) : 'main'} is already being measured (pid ${other.pid}, since ${other.started}) — following it, not starting a second\n`);
       await awaitClaim(other, { root: historyRoot, ...claims });
