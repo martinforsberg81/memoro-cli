@@ -1215,7 +1215,7 @@ function preparationInFlight({ root, plan, alive }) {
  * `{ result }` when the measurements are in, else `{ code, note }`: the exit
  * code the deploy ends with and, for a refusal, the row's note.
  */
-async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps }) {
+async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, again = false }) {
   const alive = deps.alive || processAlive;
   const lock = deps.lock || realLock;
   const startPreparer = deps.startPreparer || startPreparerDefault;
@@ -1288,7 +1288,17 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     return { code: 1, note };
   }
   const state = preparationState(ended, { alive });
-  if (state === 'done' && ended.result) return { result: ended.result };
+  if (state === 'done' && ended.result) {
+    if (preparationServes(ended, opts)) return { result: ended.result };
+    // A joined preparation was started without --accept-red and skipped the
+    // suites on a red full run: the same rule as a finished one — prepare
+    // again, with the suites, said in one line. Once: a preparation this
+    // asker started has its flags.
+    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, again: true });
+    const note = `the preparation of ${plan.short} did not run the suites --accept-red needs`;
+    stderr.write(`mc: ${note} — nothing was deployed\n`);
+    return { code: 1, note };
+  }
   const why = state === 'failed' ? `failed — ${ended.error}` : `was interrupted at ${STAGE_WORDS[ended.stage] || ended.stage} (its process is gone)`;
   const note = `the preparation of ${plan.short} ${why}`;
   stderr.write(`mc: ${note} — nothing was deployed; mc deploy starts a new one\n`);

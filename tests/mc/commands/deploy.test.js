@@ -2285,6 +2285,32 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.equal(asked.length, 1);
   });
 
+  it('--accept-red joining a running preparation that then skips the suites prepares again: no throw, the suites once, one question', async () => {
+    const fake = gateFake({ runs: [], started: RED_RUN() });
+    const { state, extra } = detachedPreparer(fake);
+    const signals = new EventEmitter();
+    const first = io();
+    const cut = await run([], {
+      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); }, ask: () => { throw new Error('asked while cut'); } }),
+      stdout: first.stdout,
+      stderr: first.stderr,
+    });
+    assert.equal(cut, 130, 'the terminal is lost while the preparation runs');
+    const asked = [];
+    const second = io();
+    const accepted = await run(['--accept-red', 'known'], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+      stdout: second.stdout,
+      stderr: second.stderr,
+    });
+    assert.equal(accepted, 0, second.out.stderr);
+    assert.match(second.out.stdout, /1a2b3c4 is already being prepared .* — following it, not starting a second/u);
+    assert.match(second.out.stdout, /the preparation of 1a2b3c4 skipped the suites, which --accept-red needs — preparing again/u);
+    assert.equal(state.starts, 2, 'one preparation joined, one started with the suites');
+    assert.equal(fake.calls.suites.length, 1, 'the suites ran once');
+    assert.equal(asked.length, 1, 'asked once');
+  });
+
   it('main moved: a new preparation of the new commit, in one line, and the old one is left to finish', async () => {
     const fake = gateFake({ runs: [] });
     const { state, extra } = detachedPreparer(fake);
