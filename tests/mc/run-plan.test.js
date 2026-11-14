@@ -33,7 +33,7 @@ test('headlessArgs: claude is -p on stream-json with the prompt on stdin; codex 
   assert.deepEqual(helper, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'acceptEdits', '--tools', CLAUDE_TOOLS, '--strict-mcp-config', '--append-system-prompt', 'INSTRUCTIONS', '--output-format', 'json']);
   // Every launch includes native Agent, but no Skill or MCP server, including
   // the helper. Grep and Glob are in it: the default set omits them.
-  assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob,Agent');
+  assert.equal(CLAUDE_TOOLS, 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch');
   assert.deepEqual(helper.slice(helper.indexOf('--tools'), helper.indexOf('--tools') + 3), ['--tools', CLAUDE_TOOLS, '--strict-mcp-config']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'INSTRUCTIONS', prompt: 'do it', profileArgs });
   assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="INSTRUCTIONS"', '--skip-git-repo-check', 'do it']);
@@ -94,7 +94,7 @@ test('headlessArgs: every role including plan has native delegation, fresh and r
         const base = { cache: role.cache, prompt: 'do it', profileArgs, resume, stream };
         const claude = headlessArgs({ ...base, toolId: 'claude-code', adapter: claudeAdapter, model: 'opus', instructions: instructionsFor('claude-code', role.overlay) });
         assert.deepEqual(claude.slice(claude.indexOf('--tools'), claude.indexOf('--tools') + 3), [
-          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent', '--strict-mcp-config',
+          '--tools', 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch', '--strict-mcp-config',
         ], name);
         assert.equal(claude.includes('--agents'), false, name);
 

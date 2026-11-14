@@ -161,8 +161,11 @@ export function sessionArgs({ cache = '1h' } = {}) {
   })];
 }
 
-/** The seven tools every session mc launches has, including native delegation. */
-export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob,Agent';
+/**
+ * The nine tools every session mc launches has, including native delegation
+ * and web search and fetch, so research cites its sources without a browser.
+ */
+export const CLAUDE_TOOLS = 'Bash,Read,Edit,Write,Grep,Glob,Agent,WebSearch,WebFetch';
 
 /**
  * The tools of every session mc launches, whatever its role: the allowlist and
