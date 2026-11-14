@@ -6,7 +6,7 @@ import { after, describe, it } from 'node:test';
 
 import { run, get, usage, buildOpening, renderOpening } from '../../../src/mc/commands/martin.js';
 import { run as ask } from '../../../src/mc/commands/ask.js';
-import { deskRunsPath } from '../../../src/mc/desk-budget.js';
+import { deskRunsPath, setDeskCeiling } from '../../../src/mc/desk-budget.js';
 import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
@@ -420,6 +420,37 @@ describe('mc martin brief', () => {
     assert.equal(renderOpening(data), text.out.stdout);
     for (const out of [text.out.stdout, json.out.stdout]) assert.doesNotMatch(out, /SECRET-LESSON-TEXT/u, 'no lesson text appears');
     assert.deepEqual(snapshot(d.root), before, 'brief writes nothing');
+  });
+  it('names a landed change by its goal\'s title also when the goal is archived, and by its reference when the goal is found nowhere', async () => {
+    const d = openingStore(); const dir = lessonsDir(d.env); mkdirSync(dir, { recursive: true });
+    const archived = (programme, name, fields) => { const at = join(d.home, programme, 'goals', '.archive', name); mkdirSync(at, { recursive: true }); writeFileSync(join(at, 'GOAL.json'), goalJson({ stage: 'done', status: 'ready', ...fields })); writeFileSync(join(at, 'LOG.md'), ''); };
+    archived('alpha', 'gone', { title: 'The archived title', prs: ['memoro-cli#2001'] });
+    archived('alpha', 'one', { title: 'The archived reused name', prs: ['memoro-cli#2003'] }); // alpha/one is also live, build, "Make the goal plain"
+    const lesson = (name, fields) => writeFileSync(join(dir, `${name}.md`), renderLesson({
+      name, kind: 'wrong-question', item: null, programme: null, state: 'landed', goal: null, pr: null, place: 'src/mc/run.js', by: 'decision', at: '2026-11-04T10:00:00Z',
+      carried_at: '2026-11-10T10:00:00Z', landed_at: '2026-11-14T09:00:00Z', dismissed_at: null, reason: null, repeat_of: null, ...fields,
+      parts: { happened: 'h', rule: 'r', where: 'w' },
+    }));
+    lesson('2026-11-04-archived', { goal: 'alpha/gone', pr: 'memoro-cli#2001', landed_at: '2026-11-14T09:00:00Z' });
+    lesson('2026-11-04-nowhere', { goal: 'alpha/nowhere', pr: 'memoro-cli#2002', landed_at: '2026-11-14T10:00:00Z' });
+    lesson('2026-11-04-reused', { goal: 'alpha/one', pr: 'memoro-cli#2003', landed_at: '2026-11-14T11:00:00Z' });
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    const data = JSON.parse(json.out.stdout);
+    assert.deepEqual(data.changes.landed.map((x) => [x.what, x.pr]), [['The archived title', 'memoro-cli#2001'], ['alpha/nowhere', 'memoro-cli#2002'], ['The archived reused name', 'memoro-cli#2003']]);
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    const lines = text.out.stdout.split('\n');
+    for (const line of ['- The archived title — code (src/mc/run.js) — memoro-cli#2001', '- alpha/nowhere — code (src/mc/run.js) — memoro-cli#2002', '- The archived reused name — code (src/mc/run.js) — memoro-cli#2003']) assert.ok(lines.includes(line), line);
+    assert.equal(data.yours.find((x) => x.reference === 'alpha/one').blocks, 2, 'later-phase blocking reads the live goals only');
+  });
+  it('counts the runs of unknown cost within the seven days its sums cover', async () => {
+    const d = openingStore(); mkdirSync(join(d.env.MC_WORK_ROOT, 'runner', 'log'), { recursive: true });
+    const rows = [['2026-11-14T01:00:00Z', 'desk-prepare', 2], ['2026-11-14T02:00:00Z', 'decision', undefined], ['2026-11-09T12:00:00Z', 'learning', 3], ['2026-11-06T12:00:00Z', 'decision', undefined], ['2026-11-14T03:00:00Z', 'intake', undefined]];
+    writeFileSync(deskRunsPath(d.env), `${tsvHeader()}\n${rows.map(([ts, kind, cost]) => tsvRow({ ts, kind, cost })).join('\n')}\n`);
+    setDeskCeiling(4, { env: d.env });
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    assert.match(text.out.stdout, /Today \(UTC 2026-11-14\): \$2\.0000\. Last seven days: \$5\.0000\. Ceiling: \$4\/day\.\nRuns with unknown cost, not counted: 1\.\n/u);
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    assert.deepEqual([JSON.parse(json.out.stdout).cost.unknown_cost_runs, JSON.parse(json.out.stdout).cost.last_seven_days], [1, 5]);
   });
   it('a first opening with no last-open.json says so and writes none', async () => {
     const d = openingStore({ lastOpen: null }); const out = io();

@@ -127,6 +127,18 @@ export function parseLessonInput(text) {
   return missing.length ? { error: `empty part: ${missing.join(', ')}` } : { parts };
 }
 
+/** The last, in `listLessons` order, of the landed lessons of this kind and place whose `landed_at` is not after `at`; or null. */
+function earlierLanded({ env, kind, place, at }) {
+  if (!place) return null;
+  return listLessons({ env }).filter((x) => x.state === 'landed' && x.kind === kind && x.place === place && Date.parse(x.landed_at) <= Date.parse(at)).at(-1) ?? null;
+}
+
+/** The first part with the sentence that says the lesson repeats `earlier`; `once` leaves a part that already ends with it as it is. */
+function withRepeat(happened, earlier, { once = false } = {}) {
+  const sentence = `This repeats a lesson of the same kind and place that landed${earlier.pr ? ` in ${earlier.pr}` : ''} (${earlier.name}): that change did not work.`;
+  return once && happened.endsWith(sentence) ? happened : `${happened}\n\n${sentence}`;
+}
+
 /**
  * Write a new open lesson. `kind`, `parts` and `by` are required; `item` is a desk item id or a
  * `<programme>/<goal>` reference. A lesson of the same kind and place as one that already landed
@@ -139,11 +151,11 @@ export function addLesson({ env = process.env, kind, item = null, programme = nu
   if (!parts || PARTS.some(([key]) => !parts[key])) return { error: 'a lesson needs all three parts' };
   const at = now.toISOString();
   const trimmedPlace = place === null ? null : String(place).trim() || null;
-  const earlier = trimmedPlace ? listLessons({ env }).filter((x) => x.state === 'landed' && x.kind === kind && x.place === trimmedPlace && Date.parse(x.landed_at) <= now.getTime()).at(-1) : null;
+  const earlier = earlierLanded({ env, kind, place: trimmedPlace, at });
   const lesson = {
     kind, item, programme, state: 'open', goal: null, pr: null, place: trimmedPlace, at, by, carried_at: null, landed_at: null, dismissed_at: null, reason: null,
     repeat_of: earlier?.pr ?? null,
-    parts: earlier ? { ...parts, happened: `${parts.happened}\n\nThis repeats a lesson of the same kind and place that landed${earlier.pr ? ` in ${earlier.pr}` : ''} (${earlier.name}): that change did not work.` } : parts,
+    parts: earlier ? { ...parts, happened: withRepeat(parts.happened, earlier) } : parts,
   };
   lesson.name = uniqueName(at, slug || [kind, item && ITEM_ID.test(item) ? item.slice(0, 8) : item?.replace('/', '-')].filter(Boolean).join('-'), env);
   writeLesson(lesson, { env });
@@ -164,6 +176,11 @@ export function carryLesson({ env = process.env, name, goal, place = null, now =
   const known = (goals ?? goalReferences({ home })).find((g) => `${g.programme}/${g.goal}` === goal && g.stage !== 'dropped' && g.stage !== 'done');
   if (!known) return { error: `no live goal ${goal} to carry the lesson` };
   Object.assign(lesson, { state: 'in-goal', goal, carried_at: now.toISOString(), ...(place ? { place: String(place).trim() } : {}) });
+  // A place given now is a place given at `add`: the same rule marks the repeat.
+  if (place && lesson.repeat_of === null) {
+    const earlier = earlierLanded({ env, kind: lesson.kind, place: lesson.place, at: lesson.at });
+    if (earlier) Object.assign(lesson, { repeat_of: earlier.pr ?? null, parts: { ...lesson.parts, happened: withRepeat(lesson.parts.happened, earlier, { once: true }) } });
+  }
   writeLesson(lesson, { env });
   return { lesson };
 }
@@ -292,6 +309,14 @@ const NOT_MARTINS = ['not-martins', 'wrong-question'];
 /** An item "reached Martin" when it was briefed to him: it waits for him or he or the default closed it. */
 const reached = (item) => item.state === 'for-martin' || (item.state === 'closed' && ['martin', 'default'].includes(item.outcome?.by));
 
+/** The goal a landed lesson names among live and archived ones: the `done` one, of several the one whose pull requests hold the lesson's, else the last. */
+function goalOfLesson(goals, lesson) {
+  const matches = goals.filter((g) => `${g.programme}/${g.goal}` === lesson.goal && !g.problems?.length);
+  const done = matches.filter((g) => g.stage === 'done');
+  const holds = (g) => (g.prs ?? []).some((p) => (typeof p === 'string' ? p : prRef(p)) === lesson.pr);
+  return done.filter(holds).at(-1) ?? done.at(-1) ?? matches.at(-1);
+}
+
 /**
  * What the system changed, as data, from the lessons and the item store only. `since` is the previous
  * opening (the landed changes and dismissals shown are those after it); the four weeks end at `now`,
@@ -306,7 +331,7 @@ export function buildChanges({ lessons, items, goals = [], since, now }) {
   const groups = new Map();
   for (const lesson of lessons.filter((x) => x.state === 'landed' && between(x.landed_at))) {
     const key = `${lesson.goal}|${lesson.pr}`;
-    const goal = goals.find((g) => `${g.programme}/${g.goal}` === lesson.goal);
+    const goal = goalOfLesson(goals, lesson);
     const entry = groups.get(key) ?? { what: goal?.title || lesson.goal, goal: lesson.goal, pr: lesson.pr, place: lesson.place, where: placeOf(lesson.place), lessons: 0, at: lesson.landed_at };
     entry.lessons += 1; groups.set(key, entry);
   }

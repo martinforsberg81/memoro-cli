@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { run as martin } from '../../src/mc/commands/martin.js';
-import { deskItemId, itemDirectory, readDeskItem, writeDeskItem } from '../../src/mc/desk-items.js';
+import { deskItemId, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../../src/mc/desk-items.js';
+import { goalJson } from './_helpers/goal-file.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { decisionFailure } from '../../src/mc/desk-decision.js';
-import { briefLesson, carryLesson, dismissLesson, listLessons, reconcileLessons } from '../../src/mc/desk-lessons.js';
+import { briefLesson, carryLesson, dismissLesson, lessonsDir, listLessons, reconcileLessons, renderLesson } from '../../src/mc/desk-lessons.js';
 
 const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -154,6 +155,56 @@ describe('a differing answer always leaves a lesson', () => {
     assert.equal(readDeskItem(item.id, { env: h.env }).state, 'closed');
   });
 
+  it('closes with --no-option when he chose none of the options: no chose, no lesson', async () => {
+    const h = home(); const item = briefedItem(h);
+    const r = await call(h, 'martin', ['item', item.id, 'close', '--by', 'martin', '--no-option', '--summary', 'Martin: frågan var fel.']);
+    assert.equal(r.code, 0, r.stderr);
+    const closed = readDeskItem(item.id, { env: h.env });
+    assert.deepEqual([closed.state, closed.outcome.by, closed.chose], ['closed', 'martin', undefined]);
+    assert.deepEqual(listLessons({ env: h.env }), []);
+    const plain = home(); const bare = briefedItem(plain, { recommend: undefined });
+    assert.equal((await call(plain, 'martin', ['item', bare.id, 'close', '--by', 'martin', '--no-option', '--summary', 'Martin: ingen fråga.'])).code, 0, 'an item with no recommend closes as a plain close');
+    assert.deepEqual([readDeskItem(bare.id, { env: plain.env }).state, readDeskItem(bare.id, { env: plain.env }).chose], ['closed', undefined]);
+  });
+
+  it('refuses --no-option with --chose, with any other --by and outside close, and a close naming neither flag names both; each leaves the tree as it was', async () => {
+    const h = home(); const item = briefedItem(h);
+    for (const [argv, wanted] of [
+      [['close', '--by', 'martin', '--no-option', '--chose', 'change'], /cannot be combined/u], [['close', '--by', 'martin', '--no-option', '--chose', 'keep'], /cannot be combined/u],
+      [['close', '--by', 'decision', '--no-option'], /only with --by martin/u], [['close', '--by', 'default', '--no-option'], /only with --by martin/u],
+      [['close', '--by', 'martin'], /--chose <key>.*--no-option/u], [['prepared', '--sort', 'product', '--no-option'], /--no-option belongs to close/u],
+    ]) {
+      const before = tree(h.root);
+      const r = await call(h, 'martin', ['item', item.id, ...argv, '--summary', 'Martin valde.']);
+      assert.equal(r.code, 2, argv.join(' ')); assert.match(r.stderr, wanted, argv.join(' '));
+      assert.deepEqual(tree(h.root), before, `${argv.join(' ')}: nothing written`);
+    }
+    assert.equal(readDeskItem(item.id, { env: h.env }).state, 'for-martin');
+    assert.deepEqual(listLessons({ env: h.env }), []);
+  });
+
+  it('applies --no-option to a close over a source closure, keeping the closure as outcome.replaced', async () => {
+    const h = home(); const programs = join(h.env.MC_WORK_ROOT, 'programs'), dir = join(programs, 'alpha', 'goals', 'one'); mkdirSync(dir, { recursive: true });
+    const stamp = '2026-11-13T10:00:00Z';
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+    writeFileSync(join(dir, 'LOG.md'), `## ${stamp} · person · build · Martin\n\nComment: Martin is asked: Which way?\nOption keep: A\nOption change: B\nRecommended: keep\n`);
+    const sync = () => syncDeskItems({ env: h.env, home: programs, now: () => NOW, reportIssue: () => {} });
+    const [waiting] = sync();
+    writeFileSync(join(itemDirectory(waiting, h.env), 'prepared.md'), 'Facts.'); writeFileSync(join(itemDirectory(waiting, h.env), 'brief.md'), BRIEF);
+    assert.equal((await call(h, 'decision', ['item', waiting.id, 'prepared', '--sort', 'product'])).code, 0);
+    assert.equal((await call(h, 'decision', ['item', waiting.id, 'brief', '--sort', 'product', '--reversible', 'yes', '--recommend', 'keep'])).code, 0);
+    writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready' })); // the goal left Martin: the sync closes the item by source
+    sync();
+    const source = readDeskItem(waiting.id, { env: h.env }).outcome;
+    assert.equal(source.by, 'source');
+    const r = await call(h, 'martin', ['item', waiting.id, 'close', '--by', 'martin', '--no-option', '--summary', 'Martin: frågan var fel.']);
+    assert.equal(r.code, 0, r.stderr);
+    const closed = readDeskItem(waiting.id, { env: h.env });
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.replaced, closed.chose], ['closed', 'martin', source, undefined]);
+    assert.deepEqual(listLessons({ env: h.env }), []);
+    assert.equal(listDeskItems({ env: h.env }).length, 1);
+  });
+
   it('records the recommendation with brief --recommend, only an option the brief names', async () => {
     const h = home(); const at = '2026-11-13T10:00:00Z';
     const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('goal', 'alpha/one', at), kind: 'goal', reference: 'alpha/one', source_at: at, opened_at: at, state: 'prepared', sort: 'product', reversible: null, due_at: null, outcome: null };
@@ -230,4 +281,58 @@ describe('a failed decision pass and a lesson brief are written under the lock, 
     assert.equal(await martin(['lesson', 'brief', name, '--file', '-'], { ...refused, env: { ...h.env, MC_ROLE: 'martin' }, now: () => NOW, readStdin: () => BRIEF, lock }), 1);
     assert.equal(refused.o.stderr, 'mc: the runner lock is held by pid 4242 — try again\n');
   });
+});
+
+describe('a lesson given its place at carry is marked as a repeat as at add', () => {
+  const HAPPENED = 'An item reached Martin that was not his.';
+  const SENTENCE = (pr, name) => `This repeats a lesson of the same kind and place that landed${pr ? ` in ${pr}` : ''} (${name}): that change did not work.`;
+  const PLACE = 'canon/roles/decision.md';
+  const live = [{ programme: 'mc', goal: 'learned', stage: 'build', prs: [], problems: [] }];
+  const put = (h, name, fields) => { mkdirSync(lessonsDir(h.env), { recursive: true }); writeFileSync(join(lessonsDir(h.env), `${name}.md`), renderLesson({
+    name, kind: 'wrong-question', item: null, programme: null, state: 'open', goal: null, pr: null, place: null, at: '2026-11-12T10:00:00Z', by: 'decision', carried_at: null, landed_at: null, dismissed_at: null, reason: null, repeat_of: null,
+    parts: { happened: HAPPENED, rule: 'The rule.', where: 'Where.' }, ...fields,
+  })); };
+  const read = (h, name) => listLessons({ env: h.env }).find((x) => x.name === name);
+  const carry = (h, name, place) => { const out = io(); return martin(['lesson', 'carry', name, '--goal', 'mc/learned', ...(place ? ['--place', place] : [])], { ...out, env: { ...h.env, MC_ROLE: 'learning' }, now: () => NOW, home: join(h.root, 'programs') }).then((code) => ({ code, ...out.o })); };
+  const live1 = (h) => { const dir = join(h.root, 'programs', 'mc', 'goals', 'learned'); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'GOAL.json'), goalJson({})); writeFileSync(join(dir, 'LOG.md'), ''); };
+  const landed = (h, fields = {}) => put(h, '2026-11-01-landed', { state: 'landed', goal: 'mc/old', pr: 'memoro-cli#9', place: PLACE, at: '2026-11-01T10:00:00Z', landed_at: '2026-11-10T10:00:00Z', ...fields });
+
+  it('sets repeat_of and the sentence once when a lesson of that kind and place landed, and leaves a lesson with no such one as it was', async () => {
+    const h = home(); live1(h); landed(h);
+    put(h, '2026-11-12-hit', {}); put(h, '2026-11-12-other-place', {}); put(h, '2026-11-12-other-kind', { kind: 'not-martins' }); put(h, '2026-11-05-before-landing', { at: '2026-11-05T10:00:00Z' });
+    for (const [name, place] of [['2026-11-12-hit', PLACE], ['2026-11-12-other-place', 'canon/roles/martin.md'], ['2026-11-12-other-kind', PLACE], ['2026-11-05-before-landing', PLACE]]) {
+      const r = await carry(h, name, place); assert.equal(r.code, 0, r.stderr);
+    }
+    const hit = read(h, '2026-11-12-hit');
+    assert.deepEqual([hit.state, hit.place, hit.repeat_of], ['in-goal', PLACE, 'memoro-cli#9']);
+    assert.equal(hit.parts.happened, `${HAPPENED}\n\n${SENTENCE('memoro-cli#9', '2026-11-01-landed')}`);
+    for (const name of ['2026-11-12-other-place', '2026-11-12-other-kind', '2026-11-05-before-landing']) { const x = read(h, name); assert.deepEqual([x.state, x.repeat_of, x.parts.happened], ['in-goal', null, HAPPENED], name); }
+    // add, in the same store, says the same.
+    const added = await call(h, 'martin', ['lesson', 'add', '--kind', 'wrong-question', '--place', PLACE, '--file', '-']); assert.equal(added.code, 0, added.stderr);
+    const twin = read(h, added.stdout.trim());
+    assert.deepEqual([twin.repeat_of, twin.parts.happened], [hit.repeat_of, hit.parts.happened]);
+    // A carry with no place changes nothing but the state; none landed at all leaves a lesson plain.
+    const none = home(); live1(none); put(none, '2026-11-12-plain', {});
+    assert.equal((await carry(none, '2026-11-12-plain', PLACE)).code, 0);
+    assert.deepEqual([read(none, '2026-11-12-plain').repeat_of, read(none, '2026-11-12-plain').parts.happened], [null, HAPPENED]);
+    landed(none, { name: '2026-11-01-landed' }); put(none, '2026-11-12-noplace', { place: PLACE });
+    assert.equal((await carry(none, '2026-11-12-noplace')).code, 0);
+    assert.deepEqual([read(none, '2026-11-12-noplace').repeat_of, read(none, '2026-11-12-noplace').parts.happened], [null, HAPPENED]);
+  });
+
+  for (const pr of ['memoro-cli#9', null]) {
+    it(`holds the sentence once when a lesson is carried, reopened by a dropped goal and carried again (landed lesson ${pr ? 'with' : 'without'} a pull request)`, () => {
+      const h = home(); landed(h, { pr }); put(h, '2026-11-12-again', {});
+      const dropped = [{ programme: 'mc', goal: 'learned', stage: 'dropped', prs: [], problems: [] }];
+      const once = `${HAPPENED}\n\n${SENTENCE(pr, '2026-11-01-landed')}`;
+      for (let round = 0; round < 2; round += 1) {
+        assert.ok(carryLesson({ env: h.env, name: '2026-11-12-again', goal: 'mc/learned', place: PLACE, now: NOW, goals: live }).lesson);
+        const carried = read(h, '2026-11-12-again');
+        assert.deepEqual([carried.repeat_of, carried.parts.happened], [pr, once], `round ${round + 1}`);
+        reconcileLessons({ env: h.env, now: NOW, goals: dropped });
+        assert.equal(read(h, '2026-11-12-again').state, 'open');
+      }
+      assert.equal(once.includes(' in null'), false);
+    });
+  }
 });

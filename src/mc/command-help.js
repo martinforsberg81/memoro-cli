@@ -623,6 +623,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc martin item <id> close --by <by> --summary-file <file>\n",
     "        mc martin item <id> brief --sort <sort> --reversible yes|no --recommend <key>\n",
     "        mc martin item <id> close --by martin --chose <key> --summary <text>\n",
+    "        mc martin item <id> close --by martin --no-option --summary <text>\n",
     "        mc martin item <id>\n",
     "        mc martin lesson add --kind <kind> [--item <id>] [--programme <p>] [--place <path>] --file <path|->\n",
     "        mc martin lesson carry <name> --goal <programme>/<goal> [--place <path>]\n",

@@ -11,10 +11,10 @@ import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, itemStore, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
-import { deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
+import { costSum, deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
-import { FINISHED, programsGoals } from '../goals.js';
+import { FINISHED, goalReferences, programsGoals } from '../goals.js';
 import { readRunRows } from '../landed.js';
 import { writeJsonAtomic } from '../atomic-write.js';
 import { addLesson, briefLesson, briefOptions, buildChanges, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
@@ -39,7 +39,7 @@ export const ROUTES = {
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
   lessons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  item: { strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  item: { booleans: ['--no-option'], strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
 export async function run(argv, deps = {}) {
@@ -157,14 +157,17 @@ function item(argv, deps) {
       const held = heldMainMend(fresh, env, deps);
       if (held) return refuse(held);
     }
+    if (f['no-option'] && verb !== 'close') return refuse('--no-option belongs to close');
     if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin','default'].includes(f.by)) {
+      if (f['no-option'] && f.by !== 'martin') return refuse('--no-option is that Martin chose none of the options: only with --by martin');
+      if (f['no-option'] && f.chose !== null) return refuse('--no-option and --chose cannot be combined: he chose an option or none');
       let summary = f.summary;
       if (f['summary-file']) { try { summary = (deps.readFile || readFileSync)(f['summary-file'], 'utf8').trim(); } catch { return refuse('summary file is missing'); } }
       if (!summary?.trim() || summary.trim().split(/\n\s*\n/u).length > 1) return refuse('close requires one paragraph with --summary or --summary-file');
       if (f.chose !== null && f.by !== 'martin') return refuse('--chose is what Martin chose: only with --by martin');
       const briefText = maybeRead(join(dir, 'brief.md'));
       if (f.chose !== null && !briefOptions(briefText).has(f.chose)) return refuse(`brief.md names no option "${f.chose}"`);
-      if (f.by === 'martin' && fresh.recommend && f.chose === null) return refuse(`the brief recommended "${fresh.recommend}": close --by martin needs --chose <key> of the option he chose`);
+      if (f.by === 'martin' && fresh.recommend && f.chose === null && !f['no-option']) return refuse(`the brief recommended "${fresh.recommend}": close --by martin needs --chose <key> of the option he chose, or --no-option when he chose none of them`);
       const closedAt = (deps.now || (() => new Date()))();
       if (f.chose !== null) fresh.chose = f.chose;
       if (fresh.recommend && f.chose !== null && f.chose !== fresh.recommend) {
@@ -327,10 +330,6 @@ function programmeOf(item) {
   return 'jev ledger';
 }
 
-function costOf(rows) {
-  return rows.reduce((sum, row) => { const cost = Number(row.cost); return sum + (Number.isFinite(cost) && cost >= 0 ? Math.round(cost * 10000) : 0); }, 0) / 10000;
-}
-
 function costReading({ env, now, read }) {
   const day = now.toISOString().slice(0, 10), nowMs = now.getTime();
   const out = { day, today: null, last_seven_days: null, unknown_cost_runs: 0, ceiling: null, error: null };
@@ -338,8 +337,8 @@ function costReading({ env, now, read }) {
     const rows = readRunRows(read(deskRunsPath(env)) ?? '').filter((row) => PASSES.includes(row.kind));
     const today = rows.filter((row) => String(row.ts).slice(0, 10) === day);
     const week = rows.filter((row) => timeOf(row.ts) <= nowMs && nowMs - timeOf(row.ts) < 7 * DAY_MS);
-    out.today = costOf(today); out.last_seven_days = costOf(week);
-    out.unknown_cost_runs = rows.filter((row) => !(Number.isFinite(Number(row.cost)) && Number(row.cost) >= 0)).length;
+    out.today = costSum(today); out.last_seven_days = costSum(week);
+    out.unknown_cost_runs = week.filter((row) => !(Number.isFinite(Number(row.cost)) && Number(row.cost) >= 0)).length;
   } catch (error) { out.error = `runs.tsv unreadable: ${error.message}`; }
   try { out.ceiling = deskBudget({ env, now, read }).ceiling; } catch (error) { out.error = `${out.error ? `${out.error}; ` : ''}ceiling setting unreadable: ${error.message}`; }
   return out;
@@ -381,7 +380,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
       failed,
     },
     cost: costReading({ env, now, read }),
-    changes: buildChanges({ lessons: listLessons({ env }), items, goals, since, now }),
+    changes: buildChanges({ lessons: listLessons({ env }), items, goals: goalReferences({ home }), since, now }),
   };
 }
 
