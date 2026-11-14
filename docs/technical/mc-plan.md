@@ -30,7 +30,18 @@ root remains supported ([mc-layout.md](mc-layout.md)).
 When `mc plan` opens a programme whose planning directory has no `README.md`,
 it writes the fenced page from `canon/tasks/references/programme-readme.md`
 before the session starts, and the opening prompt says it is a template to
-fill in. An existing README is never touched.
+fill in. An existing README is never touched by the command; its next plan
+session brings it to the template's shape, settling its aim with Martin.
+
+The page keeps an enduring user-state Aim, Measures, Gap, Next horizon,
+Phases, Martin's and Where things are, in that order (Martin, 2026-11-14).
+Measures are three to five observable signs, with dated readings or an explicit
+missing reading and how to obtain it. At plan end and when a goal lands, rewrite
+the dated Gap largest-first; the session taking a landing also rereads measures
+and replaces a reached horizon. Phases say which part of the horizon they serve.
+Landed functionality belongs in `docs/technical/`, not the Gap. The aim changes
+only with Martin; having no open goals does not finish it. Archive only when
+Martin says the aim is over or has moved to another programme.
 
 With no programme named, `chooseProgramme` offers a numbered list, a new name,
 or an empty answer to leave. A pipe gets usage instead of a question. The
