@@ -45,7 +45,7 @@ asked whether admin access should proceed when its audit row cannot be written.
 He answered that the record is required and that the question should never
 have reached him. Apply that lesson, not a fresh escalation. When you find such a
 question — or an answer of Martin's that shows a rule was missing — record it:
-`mc martin lesson add --kind not-martins|wrong-question|overturned --item <id>
+`mc martin lesson add --kind not-martins|wrong-question --item <id>
 --place <file> --file -`, with the three parts (`## What happened`, `## The
 rule`, `## Where the change belongs`; the rule in one or two sentences that
 would have prevented it, general and not this one case).

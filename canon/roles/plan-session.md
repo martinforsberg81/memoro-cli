@@ -67,7 +67,7 @@ planning checkouts remain separate. Reserved acts retain their headless boundary
 The runner contains an incomplete session that leaves draft ready so it cannot
 launch indefinitely without progress.
 
-Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question. A human decision is framed at design level, ready for `docs/technical/`: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then give alternatives/tradeoffs, evidence, one recommendation and proposed normative wording plus exact destination/section. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
+Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question. A human decision is framed at design level: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then bring what is his as the brief `tasks/asking-martin.md` sets. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
 ## What you own, and what the headless roles own
 

@@ -36,7 +36,8 @@ The opening has five parts, in this order:
    decision failure.
 4. **Cost** — the desk's spend on the UTC day and over the last seven days
    (`desk-prepare`, `decision` and `learning` rows of `runs.tsv`; runs of unknown
-   cost are counted, not summed), and the daily ceiling or `off`.
+   cost within those seven days are counted, not summed), and the daily ceiling
+   or `off`.
 5. **What the system changed** — from the lessons and the item store only (see
    *Lessons and the learning pass*). It never lists lessons or prints their text.
 
@@ -154,7 +155,15 @@ when reversible; `--recommend <key>` also records the recommended option's key
 as `recommend`, which must be an option of `brief.md` (a line `- <key>: its
 consequence`). Closing `--by martin` an item that has a `recommend` requires
 `--chose <key>`, an option of the brief, recorded as `chose`; `--chose` is
-refused with any other `--by`. `close --by decision|martin|default --summary <paragraph>`
+refused with any other `--by`. When he chose none of the brief's options (no
+decision is needed, or the question is wrong), `close --by martin --no-option`
+closes without `--chose`: it records no `chose` and writes no differing-answer
+lesson. `--no-option` is a flag, not a reserved value of `--chose`, because
+`none` is a valid option key; it is refused with `--chose` and with any `--by`
+but `martin` (exit 2, nothing written), is judged on the record read under the
+lock like `--chose`, applies to a close over a source closure too, and is
+accepted on an item with no `recommend` as a plain close. The close of an item
+that has a `recommend` with neither flag is refused naming both. `close --by decision|martin|default --summary <paragraph>`
 (or `--summary-file`) closes prepared/for-martin; an item the source closed
 after it was prepared or briefed (it has a sort) also takes
 `close --by decision|martin|default`, which replaces the source outcome and
@@ -327,8 +336,9 @@ null), `pr` (the pull request that landed it, as `repo#n`, or null), `place`
 (the file the change belongs in; its place is `code` under `src/`, `prompt`
 under `canon/`, `standard` under `docs/technical/`), `at`, `by`, `carried_at`,
 `landed_at`, `dismissed_at`, `reason` and `repeat_of` (the pull request of an
-earlier landed lesson of the same kind and place, computed on `add`; the
-lesson's first part then says that change did not work).
+earlier landed lesson of the same kind and place, computed on `add`, and on
+`carry` when it sets the place of a lesson that has no `repeat_of`; the lesson's
+first part then says that change did not work, once).
 
 **Verbs.** `mc martin lesson add --kind <kind> [--item] [--programme] [--place]
 --file <path|->` writes an open lesson; `lessons [--state] [--json]` lists them
@@ -353,8 +363,8 @@ desk records them when Martin says so; the decision pass records the same for an
 item it finds should never have reached him. (2) `answer-differs`: written by
 `close --by martin --chose <key>` when `recommend` and `chose` differ, before
 the item closes, naming the item and both options' text from `brief.md`; a close
-that matches leaves none, and a lesson that cannot be written leaves the item
-open. (3) `overturned`: the interactive desk, when Martin overturns something
+that matches leaves none, as does `--no-option`, and a lesson that cannot be
+written leaves the item open. (3) `overturned`: the interactive desk, when Martin overturns something
 decided without him or a rule the learning pass landed. (4) `review-finding`:
 the review session, for a session's technical decision it finds wrong.
 (5) `unsettled`: the runner, when the decision pass has failed on an item twice

@@ -56,9 +56,9 @@ move the goal anywhere but `merge`, and never back.
 - `mc ask` — for a genuine unresolved choice or reserved act. Supply
   `--kind technical|product` after reading standards and programme design. If
   jev does not settle a technical question, record your recommendation and
-  continue; product choices and reserved acts reach Martin. Submit evidence,
-  alternatives/tradeoffs, recommendation and proposed normative wording/
-  destination. Compatible `mc goal martin` also works. Call with 2–4 options
+  continue; product choices and reserved acts reach Martin. Submit evidence
+  and the options as their consequences with one recommendation, as
+  [asking-martin](../tasks/asking-martin.md) sets. Compatible `mc goal martin` also works. Call with 2–4 options
   and `--reserved <act>` when needed; invalid calls say what to correct.
 
 
