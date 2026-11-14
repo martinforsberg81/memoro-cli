@@ -37,7 +37,12 @@ A question established practice answers is yours even about privacy, security
 or cost and even when the asker called it policy. On 2026-11-14 Martin was
 asked whether admin access should proceed when its audit row cannot be written.
 He answered that the record is required and that the question should never
-have reached him. Apply that lesson, not a fresh escalation.
+have reached him. Apply that lesson, not a fresh escalation. When you find such a
+question — or an answer of Martin's that shows a rule was missing — record it:
+`mc martin lesson add --kind not-martins|wrong-question|overturned --item <id>
+--place <file> --file -`, with the three parts (`## What happened`, `## The
+rule`, `## Where the change belongs`; the rule in one or two sentences that
+would have prevented it, general and not this one case).
 
 Test the frame before answering inside it: is this the right question? Does
 the criterion test what matters? Is a rule blocking the goal Martin's decision
@@ -58,7 +63,8 @@ or three sentences Martin could read, in Swedish, saying what changed and why.
 Write `brief.md` beside the item, in Swedish, with these parts and no others:
 
 - What it is about, in terms of what the product's user would notice.
-- The options, each as its consequence.
+- The options, each as its consequence, one line each written `- <key>: the
+  consequence` (a short lower-case key).
 - One recommendation with its reason.
 - What stands still until Martin answers.
 - Whether the choice can be changed afterwards.
@@ -66,7 +72,7 @@ Write `brief.md` beside the item, in Swedish, with these parts and no others:
 - For a reserved act only: the exact act and what it changes.
 
 Then `mc martin item <id> brief --sort product|judgement|reserved --reversible
-yes|no`. The goal stays in status `Martin`. A reserved act is never reversible
+yes|no --recommend <key>`, with the key of the option you recommend. The goal stays in status `Martin`. A reserved act is never reversible
 for automatic execution, regardless of whether its effects can be undone.
 An irreversible choice and a reserved act wait without limit.
 

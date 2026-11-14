@@ -100,6 +100,8 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt } from './desk-decision.js';
+import { runLearningPass } from './desk-learning.js';
+import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
@@ -1260,6 +1262,27 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
+   * Lessons carried by a goal that is now done are `landed`, by one dropped `open` again: the runner
+   * is the only writer of either (`desk-lessons.js`). Then the learning pass, when a trigger holds.
+   */
+  async function runLearning() {
+    try {
+      const changed = reconcileLessons({ env: deps.env, now: deps.now(), goals: goalReferences({ home: programsHome(deps.env), list: deps.list, read: deps.read }) });
+      for (const lesson of changed) say(`lessons: ${lesson.name} is now ${lesson.state}${lesson.pr ? ` (${lesson.pr})` : ''}`);
+    } catch (error) { say(`lessons: reconcile failed — ${error?.message || error}`); }
+    if (offlineHeld() || stopRequested() || updateRequested()) return;
+    try {
+      const out = await runLearningPass({ env: deps.env, now: deps.now, deps: {
+        ...(deps.deskLearning || {}), route: routeClass, logRun,
+        budget: options => deskBudget({ ...options, read: deps.read }),
+      } });
+      if (out.started) say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
+      else if (out.reason) say(`learning: waiting — ${out.reason}`);
+      if (out.quota) await quotaPause(out.quotaReset);
+    } catch (error) { say(`learning: waiting — ${error?.message || error}`); }
+  }
+
+  /**
    * The machine's cap: at most `mc run lanes` sessions in flight anywhere, over
    * every repository and kind at once. The total is read from `lanes.json`
    * each time a slot is taken, so a new one applies to the next start without
@@ -1608,7 +1631,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const unfinished = ended && ended.state !== 'closed' && (ended.state !== 'for-martin' || decisionEligible(ended, deps.now()));
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       if (unfinished) {
-        decisionFailure(ended, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson });
+        const lessonError = decisionFailure(ended, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson });
+        if (lessonError) say(`${name}: the unsettled lesson was not written — ${lessonError}`);
         if (ended.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
       }
       logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
@@ -2568,6 +2592,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     try { (deps.syncDeskItems || syncDeskItems)({ env: deps.env || process.env, reportIssue: issue => say(`martin items: source issue ${issue.path}: ${issue.error}`) }); }
     catch (error) { say(`martin items: sync failed — ${error?.message || error}`); }
     await runDeskPreparation();
+    await runLearning();
     askGithub();
     // `askGithub()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.

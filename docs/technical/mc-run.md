@@ -659,6 +659,19 @@ The off-by-default shared daily desk ceiling is checked before every turn; a
 hold is said once per round. Failed-attempt fallback, manual preparation, role
 authority and the setting are defined in [mc-martin.md](mc-martin.md).
 
+Right after preparation each chores round reconciles lessons with their goals
+(`reconcileLessons`: an `in-goal` lesson whose goal is done becomes `landed`
+with its pull request, one whose goal was dropped becomes `open`), then
+`runLearning` starts the learning pass when it is due: five or more open
+lessons, or one open seven days; at most one session a UTC day (marker
+`~/mc/runner/learning.json`), none while the desk ceiling is reached. The
+session has `MC_ROLE=learning`, `MC_HEADLESS=1`, a sixty-minute limit, the first
+usable `routeClass('decision')` candidate and `~/mc/martin/lessons/` as its
+directory, and writes a `runs.tsv` row of kind `learning`. Quota endings pause
+the runner. When the decision pass has failed twice on an item the runner also
+writes its `unsettled` lesson. See [mc-martin.md](mc-martin.md) § *Lessons and the
+learning pass*.
+
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
 **full runs** (Martin, 2026-11-13): once a day (`nightlyDue`), `runNightly`

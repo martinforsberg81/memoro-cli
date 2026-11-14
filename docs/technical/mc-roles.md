@@ -78,6 +78,7 @@ and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-1
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 | `decision` | fable | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
+| `learning` | fable | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
 
 ## Parts: one role, started more than one way
 
@@ -97,6 +98,15 @@ move stages backward or forward, or drop. The goal verbs enforce it and log
 `by martin`; the role text alone is not authorization. It preserves JSON
 validation and acceptance, review, gate, publish and merge evidence. It cannot
 mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
+
+`MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),
+`new`, and `set`, `document add`, `criterion add` and `stage <programme>/<goal>
+build` on a goal it created in the running session (`learningRefusal`, and
+`refusedMove` allows only draft → build for it). `stage` to anything else,
+`ready`, `drop`, `criterion set|remove|met`, `log`, `pr`, `martin` and every verb on a
+goal it did not create exit 2 and change nothing. It adds lessons, carries and
+dismisses them (one in five); the `review-session:goal` role may only add
+one.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.

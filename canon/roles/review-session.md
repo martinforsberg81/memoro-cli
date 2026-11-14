@@ -58,7 +58,7 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated. Read
    every `Decided by the session (technical)` entry in this goal's `LOG.md`
-   and judge each as part of the review; a wrong decision is a review finding.
+   and judge each as part of the review; a wrong decision is a review finding, and a rule that would have prevented it is recorded as a lesson: write `## What happened` (the goal and the decision), `## The rule` (one or two sentences, general) and `## Where the change belongs` (a named file in `src/mc/`, `canon/` or `docs/technical/`) to a file in `$MC_SCRATCH` and run `mc martin lesson add --kind review-finding --item <programme>/<goal> --place <file> --file <path>`. You add lessons; you never carry or dismiss one.
    The change holds to the `docs/technical/` standards it touches and sets no new
    cross-programme standard in passing.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.

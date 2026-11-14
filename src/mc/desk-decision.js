@@ -1,6 +1,7 @@
 /** Eligibility and durable unsuccessful endings for the decision lane. */
 import { join } from 'node:path';
 import { itemDirectory } from './desk-items.js';
+import { recordUnsettled } from './desk-lessons.js';
 
 export function decisionDue(item, now) {
   return item.state === 'for-martin' && item.reversible === true
@@ -20,11 +21,17 @@ export function decisionPrompt(item, { env, goal, now }) {
     + 'Keep evidence, gate, review, publish and merge unchanged. Do not launch another decision or Martin session.';
 }
 
-export function decisionFailure(item, { reason, at, env, write, writeJson }) {
+export function decisionFailure(item, { reason, at, env, write, writeJson, now = new Date(at) }) {
   item.decision_failures = [...(item.decision_failures || []), { at, reason }];
   if (item.decision_failures.length >= 2) {
     write(join(itemDirectory(item, env), 'brief.md'), `## Vad det gäller\nBeslutspasset kunde inte avgöra ärendet ${item.id}; arbetet kan inte fortsätta automatiskt.\n\n## Alternativ och konsekvenser\n- Undersök underlaget: arbetet kan återupptas när felet är löst.\n- Låt ärendet vänta: arbetet står kvar.\n\n## Rekommendation och skäl\nUndersök underlaget; två beslutssessioner slutade utan att avgöra ärendet.\n\n## Vad som står still\nÄrendet väntar på Martin. Felunderlag:\n${item.decision_failures.map(x => `- ${x.at}: ${x.reason}`).join('\n')}\n\n## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`);
     Object.assign(item, { state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null });
   }
   writeJson(join(itemDirectory(item, env), 'item.json'), item);
+  // Giving up is a lesson: what this item needed that the pass did not have. The state above stands whether or not it is written.
+  if (item.decision_failures.length < 2) return null;
+  try {
+    const lesson = recordUnsettled({ env, item, failures: item.decision_failures, now: Number.isFinite(now.getTime()) ? now : new Date() });
+    return lesson.error ?? null;
+  } catch (error) { return error.message; }
 }

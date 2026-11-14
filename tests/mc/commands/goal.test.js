@@ -1665,3 +1665,51 @@ test('headless Martin still cannot move, rewrite criteria, drop or ask', async (
     assert.match(f.err(),/interactive-only/u);
   }
 });
+
+// ---- The learning role: it creates goals and writes the ones it created, and can do nothing to any other goal ----
+
+const LEARNING = { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: 'claude', MC_SESSION_STARTED: '2026-11-01T20:00:00.000Z' };
+const snapshot = (f) => JSON.stringify(f.store);
+
+test('the learning role creates a goal and writes it: set, criterion add and draft → build succeed on a goal it created in this session', async () => {
+  const f = fixture({ env: LEARNING });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
+  for (const argv of [
+    ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
+    ['criterion', 'add', 'mc/plain', '--criterion', 'It holds', '--check', 'mc gate x'],
+    ['stage', 'mc/plain', 'build'],
+  ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
+  assert.equal(stateOf(f), 'build · ready');
+  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.length, 1);
+});
+
+test('the learning role is refused every verb on a goal it did not create, and nothing changes', async () => {
+  const further = [
+    ['stage', 'mc/plain', 'build'], ['stage', 'mc/plain', 'review'], ['ready', 'mc/plain', '--reason', 'x'], ['drop', 'mc/plain', '--reason', 'x'],
+    ['criterion', 'set', 'mc/plain', '1', '--criterion', 'Changed'], ['log', 'mc/plain', '--comment', 'x'], ['set', 'mc/plain', 'goal', '--text', 'Changed'],
+    ['criterion', 'add', 'mc/plain', '--criterion', 'Extra', '--check', 'x'], ['criterion', 'met', 'mc/plain', '1'],
+  ];
+  for (const argv of further) {
+    // A goal made by a person, and one a learning session of an earlier day made: neither is this session's.
+    for (const files of [inStage('draft'), inStage('draft', 'ready', { [`${DIR}/LOG.md`]: '## 2026-10-31T09:00Z · claude · draft · ready · by learning\n\nDone: created\n' })]) {
+      const f = fixture({ files, env: LEARNING });
+      const before = snapshot(f);
+      assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+      assert.match(f.err(), /learning role/u, argv.join(' '));
+      assert.equal(snapshot(f), before, `${argv.join(' ')}: nothing written`);
+      assert.deepEqual(f.calls, [], `${argv.join(' ')}: no git`);
+    }
+  }
+});
+
+test('the learning role moves its own goal only from draft to build', async () => {
+  const f = fixture({ env: LEARNING });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
+  const before = snapshot(f);
+  for (const stage of ['review', 'merge', 'done']) {
+    assert.equal(await run(['stage', 'mc/plain', stage], f.deps), 2, stage);
+    assert.equal(snapshot(f), before, `${stage}: nothing written`);
+  }
+  assert.match(refusedMove({ from: 'build', to: 'review', env: LEARNING }), /learning role/u);
+  assert.equal(refusedMove({ from: 'draft', to: 'build', env: LEARNING }), null);
+});
