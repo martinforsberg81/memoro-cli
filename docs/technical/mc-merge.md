@@ -706,7 +706,7 @@ The atomic runner state `~/mc/runner/main-mend/<repo>.json` has version 1 and
 one entry per red file, preserving test names/errors, base, finder (round of
 `<repo>#<pr>`, or the full run) and state: queued, running, published (with PR),
 landed, dropped, or Martin. A queued, running or published file asks for nothing new;
-Martin also holds duplicates until resolved. A red after landed or dropped gets a
+a Martin entry also holds duplicates until `mc repo mend` answers it. A red after landed or dropped gets a
 fresh entry; a dropped entry is finished, so `mainMendReading` omits it and the
 deploy gate's mend words do not name it. All read-patch-write transitions use the shared strict runner lock.
 Queued files of one repository and finder run together, at merge-failure mend
@@ -755,7 +755,7 @@ that reaches Martin again is a new question to the desk
 ([`mc-martin.md`](mc-martin.md) § *Durable desk items*).
 Transient merge requeues do not consume an attempt. The runner settlement pass
 restores missing published queue handoffs and reconciles merged/closed PRs,
-using ordinary idempotent queueing, and retries safe landed-worktree cleanup.
+using ordinary idempotent queueing, and retries safe finished (landed or dropped) worktree cleanup.
 
 A red test green at the base, absent there, or a base run that
 could not be made or did not finish is the change's red, as before. Touched
