@@ -63,7 +63,8 @@ still running and names the entrance to rejoin.
 
 Names are `mc <role> <programme>`, or `mc <role>` for a desk without a
 programme. Additional sessions take the lowest unused suffix: ` 2`, ` 3`, …
-The name is passed through `--name`. Roles normalize as for session identity:
+Claude receives the name through `--name`; Codex keeps it in its session record.
+Roles normalize as for session identity:
 `brief` is `manager`, and `plan-session` is `plan`.
 
 For Claude, the area must already be trusted. If `--bg` reports “Workspace not trusted”,
@@ -144,7 +145,8 @@ created 0700 and verified user-owned and not group- or world-accessible before
 any server starts in it; a loose directory is refused. It holds `app.sock`,
 `server.log` (0600; the server's output, whose tail is named when a start
 fails), `session.json` (name, server pid, worktree, socket, the conversation
-resumed at start, started time; written after the spawn, atomically) and
+resumed at start, new-thread access flags, started time; written after the spawn,
+atomically) and
 `clients/` (one file per attached mc process, named by its pid). Nothing is
 written outside mc's work root. A long socket path is symlinked by Codex into
 `/tmp/codex-daemon-<uid>/`; mc follows the link when it speaks to the server.
@@ -157,9 +159,9 @@ every provider path uses; there is no second Codex argv builder) into two:
   `-m`, `--sandbox`, `--ask-for-approval` and `--add-dir` become `model`,
   `sandbox_mode`, `approval_policy` and `sandbox_workspace_write.writable_roots`.
   `developer_instructions`, `project_doc_max_bytes` and the other `-c` entries
-   go here too. Model, effort and role instructions reach a TUI-started thread
-   from the server. Access is different in Codex 0.168.0: a new thread takes
-   sandbox and approval from the client, not these server settings. A flag
+  go here too. Model, effort and role instructions reach a TUI-started thread
+  from the server. Access is different in Codex 0.168.0: a new thread takes
+  sandbox and approval from the client, not these server settings. A flag
   with no app-server equivalent refuses the launch, by name.
 - New-thread client argv: the launch plan's `--sandbox <mode>` and, when
   present, `--ask-for-approval <policy>`, then `--remote unix://<socket> [prompt]`.
