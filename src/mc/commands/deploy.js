@@ -11,7 +11,19 @@
  * production is Martin's word every time, so `mc deploy` refuses outright
  * where there is nobody to ask: without a terminal it exits 2 rather than
  * assuming yes. `--dry-run` is the reading and stops before the question. The
- * runner never calls this and no role tells a session to.
+ * runner never calls this and no role tells a session to: with `MC_HEADLESS=1`
+ * it refuses before it reads anything (the deploy is Martin's act), the reading
+ * and `--follow` excepted.
+ *
+ * Before the question the commit that would ship is measured twice
+ * (`deploy-gate.js`): a full run of exactly that commit from the history — one
+ * is started and followed when there is none — and the suites memoro's
+ * `.mc/test.json` declares, run against a local server of it. A red or stalled
+ * run, a failed suite or one that cannot run refuses, naming what and the last
+ * lines; only `--accept-red "<reason>"` goes past, with each red listed in the
+ * reading, the reason in the question and the row. Both results are in the row
+ * (`full_commit`, `full_verdict`, `suites`, `accepted_red`). The merge is never
+ * held by any of it.
  *
  * Where the script runs is mc's to decide, and it is always a worktree that is
  * `main`: the one where `main` is checked out — git allows one — or one mc
@@ -57,7 +69,8 @@
  *
  * Exit codes: 0 for a deploy verified, `--dry-run`, or `--follow` with none
  * running; 1 for a deploy that failed, a `no`, a deploy already running or a
- * repository this machine has no checkout of; 2 for a bad argument or no
+ * repository this machine has no checkout of, a refusal by the gate or a
+ * headless session; 2 for a bad argument or no
  * terminal; 130 when the watching was stopped and the deploy goes on. Run in
  * this process (a test), the script's own exit code.
  */
@@ -75,6 +88,9 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
+import {
+  exerciseApp, gateRecord, measureFull, reds, suiteLines,
+} from '../deploy-gate.js';
 import { mcDiskPressure } from '../disk-admission.js';
 import { POLL_MS as DISK_POLL_MS } from '../disk-pressure.js';
 import { BUILD_LANE, releaseGateLock, runningRounds, takeGateLock } from '../gate-lock.js';
@@ -100,13 +116,22 @@ export const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function parseDeployArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'] });
-  const opts = { dryRun: false, json: false, follow: false };
+  const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red'] });
+  const opts = { dryRun: false, json: false, follow: false, acceptRed: null };
   if (scanned.error) return { ...opts, error: scanned.error };
   if (scanned.positional.length) {
     return { ...opts, error: `mc deploy takes no arguments (${scanned.positional[0]}) — it deploys memoro's main, and nothing else` };
   }
-  return { dryRun: scanned.flags['dry-run'], json: scanned.flags.json, follow: scanned.flags.follow };
+  // The reason is the point of the flag: it is read at the question and kept in
+  // the record, so a blank one is no reason and the flag is refused with it.
+  const accepted = scanned.flags['accept-red'];
+  if (accepted !== null && !String(accepted).trim()) {
+    return { ...opts, error: '--accept-red needs a reason — say why the red is accepted, in words; it is on the record' };
+  }
+  return {
+    dryRun: scanned.flags['dry-run'], json: scanned.flags.json, follow: scanned.flags.follow,
+    acceptRed: accepted === null ? null : String(accepted).trim(),
+  };
 }
 
 export function usage() {
@@ -567,6 +592,77 @@ function failureLine(code, said, interrupted) {
   return `mc: npm run deploy exited ${code}${where} — ${production}\n`;
 }
 
+/**
+ * The gate for the commit that would ship: the full run, then the app used.
+ *
+ * Returns `{ full, exercise, lines, refusal, accepted }`. `refusal` is null when
+ * the deploy may go on to its question, else `{ note, lines }` — the row's note
+ * and what stderr says. A full run that measured nothing about this tree
+ * (`unmeasured`, `moved`) refuses whatever flag was given; a red or stalled
+ * run and a failed or unrunnable suite are what `--accept-red` accepts, each
+ * listed. A deploy a red full run already refuses does not run the suites: the
+ * answer is known and they cost minutes. A dry run and an accepted red run both,
+ * so that the reading shows everything.
+ */
+export async function gateStage({ plan, opts, env, say, deps = {} }) {
+  const full = await measureFull({
+    sha: plan.sha, path: plan.path, env, dryRun: opts.dryRun, say,
+    deps: deps.gate || {}, root: deps.gate?.root, mendRoot: deps.gate?.mendRoot,
+  });
+  const lines = [...full.lines];
+  const unmeasured = full.state === 'unmeasured' || full.state === 'moved';
+  const redFull = full.state === 'red' || full.state === 'stalled';
+  if (unmeasured || (redFull && !opts.dryRun && !opts.acceptRed)) {
+    return { full, exercise: null, lines, accepted: '', refusal: refusalOf({ full, exercise: null, plan }) };
+  }
+  say(`mc: suites — starting a local server of ${plan.short} and running what .mc/test.json declares`);
+  const exercise = await exerciseApp({ sha: plan.sha, env, say, deps: deps.suites || {} });
+  lines.push(...suiteLines(exercise, { sha: plan.sha }));
+
+  const found = reds({ full, exercise });
+  if (opts.dryRun) {
+    if (found.length) lines.push(`mc: ${found.length} red would refuse the deploy${opts.acceptRed ? ' (--accept-red takes them)' : ' unless --accept-red "<reason>" takes them'}`);
+    return { full, exercise, lines, refusal: null, accepted: '' };
+  }
+  if (!found.length) {
+    if (opts.acceptRed) lines.push('mc: --accept-red — nothing is red; the reason is not needed and is not recorded');
+    return { full, exercise, lines, refusal: null, accepted: '' };
+  }
+  if (!opts.acceptRed) return { full, exercise, lines, accepted: '', refusal: refusalOf({ full, exercise, plan }) };
+  lines.push(`mc: --accept-red — accepting ${found.length} red:`);
+  for (const item of found) lines.push(`mc:   ${item.replace(/\n/gu, '\nmc:     ')}`);
+  lines.push(`mc: reason: ${opts.acceptRed}`);
+  return { full, exercise, lines, refusal: null, accepted: opts.acceptRed };
+}
+
+function refusalOf({ full, exercise, plan }) {
+  const found = reds({ full, exercise });
+  const notes = [];
+  if (full.state === 'unmeasured') notes.push(`no full run measured ${plan.short} — stopped at ${full.run?.stopped_at || 'an unknown step'}`);
+  else if (full.state === 'moved') notes.push(`the full run measured ${short(full.run?.commit)}, not ${plan.short}`);
+  for (const item of found) notes.push(item.split('\n')[0]);
+  const lines = [`mc: refused — ${plan.short} is not measured whole and exercised:`, ...full.lines];
+  for (const suite of exercise?.suites || []) {
+    if (suite.state === 'red' || suite.state === 'cannot-run') {
+      lines.push(`mc:   suite ${suite.name} ${suite.state === 'red' ? `failed (exit ${suite.status ?? 'unknown'})` : 'could not run'} — its last lines:`);
+      for (const line of String(suite.tail || '').split('\n')) lines.push(`mc:     ${line}`);
+    }
+  }
+  if (exercise?.error) lines.push(`mc:   the suites could not run: ${exercise.error}`);
+  if (found.length) lines.push('mc: --accept-red "<reason>" is the only way past a red; the reason goes on the record');
+  return { note: notes.join('; ') || 'the gate refused', lines };
+}
+
+/** The gate as --json says it. */
+function gateSummary(gate) {
+  return {
+    full_run: { state: gate.full.state, commit: gate.full.commit, run: gate.full.run, mends: gate.full.mends },
+    suites: gate.exercise ? { commit: gate.exercise.commit, error: gate.exercise.error, results: gate.exercise.suites } : null,
+    refused: Boolean(gate.refusal),
+    accepted_red: gate.accepted || null,
+  };
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -576,6 +672,13 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write(usage());
     return 2;
+  }
+  // The deploy is Martin's act (2026-11-14): refused before anything is read —
+  // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
+  // the watching (`--follow`) change nothing in production and stay allowed.
+  if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
+    stderr.write('mc: mc deploy is Martin\'s act and happens only in an interactive session; this one is headless (MC_HEADLESS=1) — nothing was deployed. mc deploy --dry-run is the reading.\n');
+    return 1;
   }
   if (opts.follow) return follow({ env, stdout, deps });
 
@@ -625,20 +728,32 @@ export async function run(argv, deps = {}) {
     behind: state.behind,
   };
 
-  if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: opts.dryRun }, null, 2)}\n`);
-  else for (const line of planLines(plan)) stdout.write(`${line}\n`);
+  // The gate's two measurements of the commit that would ship. A dry run makes
+  // them too — the reading is only worth having with both — except that it
+  // starts no full run: it says one is needed.
+  const say = (line) => { if (!opts.json) stdout.write(`${line}\n`); };
+  const gateDeps = { gate: deps.gate || {}, suites: deps.suites || {} };
 
   // `--dry-run` is the question answered with the plan: it starts nothing and
-  // runs nothing, so it is the safe thing to type when you are not sure.
+  // deploys nothing, so it is the safe thing to type when you are not sure.
   if (opts.dryRun) {
-    if (!opts.json) stdout.write('mc: --dry-run — nothing was deployed\n');
+    if (!opts.json) for (const line of planLines(plan)) stdout.write(`${line}\n`);
+    const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
+    if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: gateSummary(gate) }, null, 2)}\n`);
+    else {
+      for (const line of gate.lines) stdout.write(`${line}\n`);
+      stdout.write('mc: --dry-run — nothing was deployed\n');
+    }
     return 0;
   }
+  if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: false }, null, 2)}\n`);
+  else for (const line of planLines(plan)) stdout.write(`${line}\n`);
 
   // The holder is who the record names, and it is needed before it: a
   // refusal is written by somebody too.
   const holder = deps.holder || currentHolder();
-  const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note }, env);
+  let cells = {};
+  const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note, gate: cells }, env);
 
   // Another deploy going on is read from the record. Asked here so nobody
   // answers a question for nothing, and again under the lock, where the
@@ -695,8 +810,22 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
+  // The commit is measured whole and the app used before anybody is asked
+  // anything — and after every refusal that costs nothing to make, so a deploy
+  // already running or a dirty main is not found out after a full run.
+  const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
+  cells = gateRecord({ full: gate.full, exercise: gate.exercise, accepted: gate.accepted });
+  if (opts.json) stdout.write(`${JSON.stringify({ gate: gateSummary(gate) }, null, 2)}\n`);
+  else for (const line of gate.lines) stdout.write(`${line}\n`);
+  if (gate.refusal) {
+    refuse(gate.refusal.note);
+    for (const line of gate.refusal.lines) stderr.write(`${line}\n`);
+    stderr.write('mc: nothing was deployed\n');
+    return 1;
+  }
+
   const ask = deps.ask || realAsk;
-  const answer = ask(`deploy ${plan.short} to production? [y/N]`, { stdout });
+  const answer = ask(`deploy ${plan.short} to production${gate.accepted ? `, accepting red (${gate.accepted})` : ''}? [y/N]`, { stdout });
   if (!/^y(es)?$/iu.test(String(answer || '').trim())) {
     refuse('answered no at the question');
     stdout.write('mc: nothing was deployed\n');
@@ -728,7 +857,7 @@ export async function run(argv, deps = {}) {
       key, sha: plan.sha, worktree: source.worktree, own, holder: holder.name, json: opts.json, root,
     };
     const deployer = startDeployer(job, { ...deps, stdout, stderr, env });
-    recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started }, env);
+    recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells }, env);
     return { key, deployer };
   }, { name: 'deploy' });
   if (!started) return 1;
@@ -874,16 +1003,16 @@ export async function ship(job, deps = {}) {
     progress.report('waiting', 'Waiting for deployment lane');
     holding = await holdBuildLane(job, { ...deps, stdout });
     progress.report('prepare', 'Preparing deploy worktree');
-    // The one movement of somebody else's checkout this verb may make.
-    // `origin/main` is what ships — whatever is on `main` is meant to — so it
-    // is fast-forwarded to `origin/main` as it is now, which may be later than
-    // the sha the question showed. `--ff-only` on a tree already proved clean
+    // The one movement of somebody else's checkout this verb may make: it is
+    // fast-forwarded to the sha the gate measured and the question named
+    // (2026-11-14) — not to whatever `origin/main` is by now, which no full
+    // run and no suite has seen. `--ff-only` on a tree already proved clean
     // and not ahead, so it either fast-forwards or does nothing.
     const behind = worktreeState({ worktree, git }).behind;
     if (behind) {
-      if (git(worktree, ['merge', '--ff-only', 'origin/main']) === null) {
-        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree}` }, env);
-        stderr.write(`mc: git merge --ff-only origin/main failed in ${worktree} — nothing was deployed\n`);
+      if (git(worktree, ['merge', '--ff-only', sha]) === null) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree} to ${short(sha)}` }, env);
+        stderr.write(`mc: git merge --ff-only ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
         return 1;
       }
     }
@@ -912,14 +1041,19 @@ export async function ship(job, deps = {}) {
     }
 
     // What ships is what that worktree stands on now, read rather than
-    // assumed: the merger lands and fetches all the time, and `origin/main` is
-    // a ref every worktree shares, so it can have moved between the question
-    // and the yes. Twice it had (2026-09-14, 2026-09-19), and the row named
-    // the sha the question showed instead of the one that went out — so the
-    // row is completed with the sha that shipped.
+    // assumed — and it is the sha the gate measured, or nothing. The merger
+    // lands and fetches all the time, and a main checkout moved between the
+    // question and the yes stands on a commit no full run and no suite has
+    // seen: that is a refusal, never a deploy of "main as it is now" (which it
+    // was until 2026-11-14, after two rows had named the wrong sha, 2026-09-14
+    // and 2026-09-19). The row is completed with the sha that stood.
     const shipping = git(worktree, ['rev-parse', '--verify', 'HEAD']) || sha;
     if (behind) stdout.write(`mc: fast-forwarded main in ${worktree} to ${short(shipping)}\n`);
-    if (shipping !== sha) stdout.write(`mc: main moved to ${short(shipping)} since the question; deploying ${short(shipping)}\n`);
+    if (shipping !== sha) {
+      recordEnd(key, { sha: shipping, outcome: FAILED, stopped_at: 'moved', note: `mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)}, the commit that was measured and asked about` }, env);
+      stderr.write(`mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)} — the commit the full run and the suites measured and the question named; run the deploy again — nothing was deployed\n`);
+      return 1;
+    }
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
     // The disk (disk-pressure.js), asked at the spawn itself: under 20 GB a

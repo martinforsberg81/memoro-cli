@@ -94,9 +94,9 @@ const NIGHTLY_MODE = 'nightly';
 export const FULL_RUN_RETRY_MS = 60 * 60 * 1000;
 
 /** Stops that are the machine's, not the tree's: tried again after `FULL_RUN_RETRY_MS`. */
-const RETRY_LATER = Object.freeze(['threw', 'fetch', 'worktree', 'lease', 'reservation', 'busy', 'base', 'pr']);
+export const RETRY_LATER = Object.freeze(['threw', 'fetch', 'worktree', 'lease', 'reservation', 'busy', 'base', 'pr']);
 /** Stops the runner caused itself: due again at once. */
-const RETRY_NOW = Object.freeze(['gone', 'killed']);
+export const RETRY_NOW = Object.freeze(['gone', 'killed']);
 
 /**
  * One full round for one repository, through the door a person's `--full`

@@ -145,9 +145,70 @@ const nightlyOn = (commit, red = 0) => () => ({
   measured: { at: '2026-09-03T02:00:00Z', outcome: red ? 'failed' : 'passed', commit, tests: 900, red },
 });
 
+/** A completed full run as the history keeps it. */
+const fullRunOf = (commit = SHA, extra = {}) => ({
+  at: '2026-11-14T02:00:00Z', duration_ms: 25 * 60_000, commit, outcome: 'passed', stopped_at: null, reason: null, tests: 900, red: [], ...extra,
+});
+
+/**
+ * The gate's two measurements with nothing real behind them: the run history
+ * and `fullRun` for the first, the shared checkout's server and the suite
+ * runner for the second. `calls` records what was started, so a refusal can say
+ * that nothing was — above all, that the deploy script never was.
+ *
+ * `served` is the commit the fake server says it was built from; `outcomes` is
+ * what each declared suite does (`ok`, `red`, `skip`, `unmeasured`).
+ */
+function gateFake({
+  runs = [fullRunOf()], started = null, mends = [], suites = ['smoke'], outcomes = {}, served = SHA, declared = null,
+  appError = null, dirtyNow = [], servedDirty = undefined,
+} = {}) {
+  const calls = { fullRun: [], history: 0, servers: [], suites: [], mends: 0 };
+  const declaration = declared || { suites: suites.map((name) => ({ name })), environments: { dev: { service: 'app' } } };
+  const resultOf = (name) => {
+    const how = outcomes[name] || 'ok';
+    return {
+      name, ok: how === 'ok' || how === 'skip', unmeasured: how === 'unmeasured', skipped: how === 'skip',
+      status: how === 'ok' ? 0 : how === 'skip' ? 78 : 1, seconds: 3, tail: outcomes[`${name}:tail`] || `${name} said ${how}\n`,
+    };
+  };
+  const gate = {
+    history: () => { calls.history += 1; return { runs }; },
+    fullRun: async (repo) => { calls.fullRun.push(repo); return started || fullRunOf(SHA); },
+    readMends: () => { calls.mends += 1; return mends; },
+    root: work,
+    mendRoot: work,
+  };
+  const suiteDeps = {
+    sharedWorktree: () => '/tmp/does-not-exist/shared/memoro',
+    readDeclaration: () => ({ ok: true, declaration }),
+    ensureAppServer: async (worktree) => {
+      if (appError) return { ok: false, error: appError };
+      calls.servers.push({ worktree, commit: served });
+      const builtFrom = servedDirty === undefined ? { commit: served } : { commit: served, dirty: servedDirty };
+      return { ok: true, server: { built_from: builtFrom, health_url: 'http://127.0.0.1:1/api/version' }, baseUrl: 'http://127.0.0.1:1' };
+    },
+    ensureDevServer: async () => ({ ok: false, error: 'no static tier in this test' }),
+    tokenFor: async () => ({ name: null, token: null, from: null }),
+    head: () => SHA,
+    dirty: () => dirtyNow,
+    answers: async () => true,
+    runSuites: async ({ declaration: declared, worktree }) => {
+      calls.suites.push({ worktree, names: declared.suites.map((suite) => suite.name) });
+      return { results: declared.suites.map((suite) => resultOf(suite.name)), gone: [], skipped: [] };
+    },
+  };
+  return { gate, suites: suiteDeps, calls };
+}
+
 function deps(extra = {}) {
+  const fake = gateFake();
   return {
-    env: { ...process.env, MC_WORK_ROOT: work },
+    // `MC_HEADLESS` is cleared: the suite itself may run in a headless session,
+    // and a deploy there is refused before anything else (its own tests set it).
+    env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '' },
+    gate: fake.gate,
+    suites: fake.suites,
     repos: REPOS,
     git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 } }),
     fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
@@ -172,7 +233,9 @@ beforeEach(() => {
 
 describe('mc deploy — the arguments', () => {
   it('takes --dry-run and --json, and nothing positional', () => {
-    assert.deepEqual(parseDeployArgs(['--dry-run']), { dryRun: true, json: false, follow: false });
+    assert.deepEqual(parseDeployArgs(['--dry-run']), {
+      dryRun: true, json: false, follow: false, acceptRed: null,
+    });
     assert.equal(parseDeployArgs(['--follow']).follow, true);
     assert.match(parseDeployArgs(['memoro']).error, /takes no arguments \(memoro\)/u);
     assert.match(parseDeployArgs(['--force']).error, /unknown flag: --force/u);
@@ -283,7 +346,8 @@ describe('mc deploy — what it says before it asks', () => {
       last_run: null,
       open_gap: null,
     });
-    assert.match(waiting, /\nmc: language — sv 724 rows waiting \(read 2h ago\) · mc language promote\nmc: --dry-run — nothing was deployed\n$/u);
+    // The gate's two readings (full run, suites) come between the plan and the closing line.
+    assert.match(waiting, /\nmc: language — sv 724 rows waiting \(read 2h ago\) · mc language promote\n(?:mc: [^\n]*\n)*?mc: full run — [^\n]*\n(?:mc: [^\n]*\n)*?mc: --dry-run — nothing was deployed\n$/u);
     assert.match(await said({ languages: [{ lang: 'sv', read_at: hoursAgo(3), waiting_rows: 0 }], last_run: null, open_gap: null }),
       /\nmc: language — nothing waiting \(read 3h ago\)\n/u);
     assert.match(await said({ languages: [], last_run: null, open_gap: null }),
@@ -434,7 +498,7 @@ describe('mc deploy — every case of where main is', () => {
     assert.equal(seen[0].cwd, MAIN_WT);
     assert.match(out.stdout, /main, 3 behind origin\/main, fast-forwarded before the script runs/u);
     const ff = git.calls.find((call) => call.args[0] === 'merge');
-    assert.deepEqual(ff, { cwd: MAIN_WT, args: ['merge', '--ff-only', 'origin/main'] });
+    assert.deepEqual(ff, { cwd: MAIN_WT, args: ['merge', '--ff-only', SHA] }, 'main goes to the commit that was measured, by sha');
     assert.match(out.stdout, /fast-forwarded main in .* to 1a2b3c4/u);
   });
 
@@ -466,27 +530,30 @@ describe('mc deploy — every case of where main is', () => {
     return git;
   }
 
-  it('origin/main moving after the question: main goes to origin/main, and the row and the terminal name what shipped', async () => {
+  it('origin/main moving after the question: main goes to the measured commit, not to origin/main, and that is what ships', async () => {
     const git = movingGit();
     const { code, seen, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
     assert.equal(code, 0);
-    assert.deepEqual(git.calls.find((call) => call.args[0] === 'merge').args, ['merge', '--ff-only', 'origin/main']);
-    assert.equal(seen[0].sha, LATER, 'the script is handed the sha the tree stands on');
-    assert.match(out.stdout, /fast-forwarded main in .* to 8e431c6\n/u);
-    assert.match(out.stdout, /mc: main moved to 8e431c6 since the question; deploying 8e431c6\n/u);
+    assert.deepEqual(git.calls.find((call) => call.args[0] === 'merge').args, ['merge', '--ff-only', SHA]);
+    assert.equal(seen[0].sha, SHA, 'the script is handed the commit the full run and the suites measured');
+    assert.match(out.stdout, /fast-forwarded main in .* to 1a2b3c4\n/u);
+    assert.doesNotMatch(out.stdout, /main moved/u);
     assert.equal(out.stderr, '', 'informational, not a warning');
     const row = lastDeploy({ MC_WORK_ROOT: work });
-    assert.equal(row.sha, LATER, 'the row records the commit that went out');
+    assert.equal(row.sha, SHA, 'the row records the commit that went out');
   });
 
-  it('main already moved on by somebody else: nothing to merge, and the row still names what is there', async () => {
+  it('main already moved on by somebody else: the commit that was measured is not what stands there, so nothing runs', async () => {
     const git = movingGit({ head: LATER, behind: 0 });
-    const { code, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
-    assert.equal(code, 0);
+    const { code, seen, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
+    assert.equal(code, 1);
+    assert.equal(seen.length, 0, 'a commit no full run and no suite has seen is not deployed');
     assert.equal(git.calls.some((call) => call.args[0] === 'merge'), false);
-    assert.doesNotMatch(out.stdout, /fast-forwarded/u);
-    assert.match(out.stdout, /main moved to 8e431c6 since the question; deploying 8e431c6/u);
-    assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, LATER);
+    assert.match(out.stderr, /main in .* stands on 8e431c6, not 1a2b3c4 — .*nothing was deployed/u);
+    const row = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(row.outcome, 'failed');
+    assert.equal(row.stopped_at, 'moved');
+    assert.equal(row.sha, LATER, 'the row says what stood there');
   });
 
   it('origin/main standing still: no line about it moving', async () => {
@@ -783,7 +850,9 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
   it('runs npm run deploy in the worktree that is main, with the environment, the row written first naming the deployer', async () => {
     const { stdout, stderr } = io();
     const seen = [];
-    const env = { ...process.env, MC_WORK_ROOT: work, MEMORO_DEPLOY_CONTAINERS: 'always' };
+    const env = {
+      ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '', MEMORO_DEPLOY_CONTAINERS: 'always',
+    };
     const code = await run([], {
       ...deps({ env }),
       stdout,
@@ -1697,5 +1766,343 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
         assert.deepEqual([row.outcome, row.stopped_at], ['failed', 'disk']);
       } else assert.equal(asked, 4);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gate (goal mc-tests/deploy-gate): a commit ships only when exactly that
+// commit has been measured whole and the app used. Every refused case asserts
+// the one thing that matters most: the deploy script was never started.
+// ---------------------------------------------------------------------------
+
+const OLDER = '0123456789abcdef0123456789abcdef01234567';
+
+/** One run of the verb with the gate faked, and everything it could have started. */
+async function attempt(argv, { extra = {}, ...fakeOptions } = {}) {
+  const fake = gateFake(fakeOptions);
+  const spawned = [];
+  const asked = [];
+  const { out, stdout, stderr } = io();
+  const code = await run(argv, {
+    ...deps({
+      gate: fake.gate,
+      suites: fake.suites,
+      ask: (question) => { asked.push(question); return 'y'; },
+      spawnDeploy: async (options) => { spawned.push(options); return { code: 0 }; },
+      ...extra,
+    }),
+    stdout,
+    stderr,
+  });
+  return {
+    code, out, spawned, asked, calls: fake.calls, row: lastAttempt({ MC_WORK_ROOT: work }),
+  };
+}
+
+const RED_RUN = (extra = {}) => fullRunOf(SHA, {
+  outcome: 'failed', red: ['tests/lib/money.test.js', 'command:lint'], tests: 904, ...extra,
+});
+const MEND = (extra = {}) => ({
+  id: 'm1', file: 'tests/lib/money.test.js', tests: ['rounds half up'], base: SHA, state: 'queued', finder: 'daily', ...extra,
+});
+
+describe('mc deploy — the full run of exactly the commit that would ship', () => {
+  it('a green run of the commit reaches the question, and the reading names the run', async () => {
+    const { code, out, asked, spawned, calls, row } = await attempt([]);
+    assert.equal(code, 0);
+    assert.equal(asked.length, 1, 'the question is asked');
+    assert.equal(spawned.length, 1);
+    assert.equal(calls.fullRun.length, 0, 'a green run of the commit is not run again');
+    assert.match(out.stdout, /mc: full run — 1a2b3c4 measured whole: green, 900 tests, 2026-11-14 02:00, took 25 min/u);
+    assert.deepEqual(
+      [row.full_commit, row.full_verdict, row.suites, row.accepted_red],
+      [SHA, 'green', 'smoke:ok', ''],
+      'the row keeps what the gate saw',
+    );
+  });
+
+  it('a green run of an older commit is no answer: one is started for this commit, and followed', async () => {
+    const { code, out, calls, asked } = await attempt([], { runs: [fullRunOf(OLDER)] });
+    assert.equal(code, 0);
+    assert.deepEqual(calls.fullRun, [{ name: 'memoro', path: PATH }], 'the older commit\'s green was not accepted');
+    assert.match(out.stdout, /full run — none of 1a2b3c4; starting one/u);
+    assert.match(out.stdout, /measured whole just now: green/u);
+    assert.equal(asked.length, 1);
+  });
+
+  it('a run that measured another commit than the one that would ship refuses, naming both', async () => {
+    const { code, out, spawned, asked, row } = await attempt([], { runs: [], started: fullRunOf(OLDER) });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0, 'and nobody was asked');
+    assert.match(out.stderr, /measured 0123456, not 1a2b3c4: main moved while it ran/u);
+    assert.equal(row.outcome, 'refused');
+    assert.match(row.note, /the full run measured 0123456, not 1a2b3c4/u);
+    assert.equal(row.full_commit, OLDER);
+  });
+
+  it('a red run refuses, naming the commit, the red files and commands and the mend that holds them', async () => {
+    const { code, out, spawned, asked, row } = await attempt([], { runs: [RED_RUN()], mends: [MEND(), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0);
+    assert.match(out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
+    assert.match(out.stderr, /red files and commands: tests\/lib\/money\.test\.js, command:lint/u);
+    assert.match(out.stderr, /main-red mend: tests\/lib\/money\.test\.js \(queued\), command:lint \(running #77\)/u);
+    assert.match(out.stderr, /--accept-red "<reason>" is the only way past a red/u);
+    assert.equal(row.outcome, 'refused');
+    assert.deepEqual([row.full_commit, row.full_verdict, row.suites], [SHA, 'red', ''], 'the suites were not run for a deploy already refused');
+  });
+
+  it('a red run no mend names says so instead of pretending one holds it', async () => {
+    const { out, spawned } = await attempt([], { runs: [RED_RUN()] });
+    assert.equal(spawned.length, 0);
+    assert.match(out.stderr, /red tests: tests\/lib\/money\.test\.js, command:lint/u);
+    assert.match(out.stderr, /no main-red mend holds it/u);
+  });
+
+  it('a stalled run refuses, naming the stalled file and its mend', async () => {
+    const stalled = fullRunOf(SHA, { outcome: 'stalled', red: null, stopped_at: 'stalled', reason: 'tests/slow.test.js never ended' });
+    const { code, out, spawned, asked, row } = await attempt([], { runs: [stalled], mends: [MEND({ file: 'tests/slow.test.js', state: 'running' })] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0);
+    assert.match(out.stderr, /1a2b3c4 STALLED: tests\/slow\.test\.js never ended/u);
+    assert.match(out.stderr, /red files and commands: tests\/slow\.test\.js/u);
+    assert.match(out.stderr, /main-red mend: tests\/slow\.test\.js \(running\)/u);
+    assert.equal(row.full_verdict, 'stalled');
+  });
+
+  it('a run that stopped before it measured anything is never green', async () => {
+    const stopped = fullRunOf(SHA, { outcome: 'failed', red: null, stopped_at: 'install', reason: 'npm ci failed' });
+    const { code, out, spawned } = await attempt([], { runs: [stopped] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stderr, /stopped at install and measured nothing: npm ci failed/u);
+    assert.doesNotMatch(out.stderr, /--accept-red/u, 'a run that measured nothing is not a red to accept');
+    assert.match(out.stderr, /nothing to accept — mc test memoro --full measures 1a2b3c4 again and writes the history this reads/u, 'the refusal names the way out');
+  });
+
+  it('no run of the commit: one is started and followed, and a red from it refuses', async () => {
+    const { code, out, spawned, calls } = await attempt([], { runs: [], started: RED_RUN(), mends: [MEND()] });
+    assert.equal(calls.fullRun.length, 1);
+    assert.match(out.stdout, /starting one \(mc test memoro --full, the round the daily run takes\) and following it/u);
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stderr, /main-red mend: tests\/lib\/money\.test\.js \(queued\)/u);
+  });
+
+  it('--dry-run starts nothing and says a full run is needed', async () => {
+    const { code, out, calls, spawned, asked } = await attempt(['--dry-run'], { runs: [] });
+    assert.equal(code, 0);
+    assert.equal(calls.fullRun.length, 0, 'no full run is started by a reading');
+    assert.equal(spawned.length, 0);
+    assert.equal(asked.length, 0);
+    assert.match(out.stdout, /full run — none of 1a2b3c4: one is needed, and starts when you deploy/u);
+    assert.match(out.stdout, /nothing was deployed/u);
+  });
+
+  it('--accept-red reaches the question with every red listed and the reason in it, and the row keeps the reason', async () => {
+    const reason = 'money rounding is tracked in #4412; the refund path is not in this release';
+    const { code, out, asked, spawned, row } = await attempt(['--accept-red', reason], {
+      runs: [RED_RUN()], mends: [MEND()], outcomes: { smoke: 'red', 'smoke:tail': 'expected 200\ngot 500\n' },
+    });
+    assert.equal(code, 0);
+    assert.equal(asked.length, 1, 'the flag does not skip the question');
+    assert.match(asked[0], /accepting red \(money rounding is tracked in #4412/u, 'the question names the reason');
+    assert.equal(spawned.length, 1);
+    assert.match(out.stdout, /accepting 2 red:/u);
+    assert.match(out.stdout, /the full run of 1a2b3c4 is red \(2\)/u);
+    assert.match(out.stdout, /suite smoke failed \(exit 1\):\n.*expected 200\n.*got 500/u);
+    assert.match(out.stdout, new RegExp(`reason: ${reason}`, 'u'));
+    assert.deepEqual([row.full_verdict, row.suites, row.accepted_red], ['red', 'smoke:red', reason]);
+    assert.equal(row.outcome, 'deployed');
+  });
+
+  it('--accept-red answered no is a refused row that still keeps the reason', async () => {
+    const { code, spawned, row } = await attempt(['--accept-red', 'known'], { runs: [RED_RUN()], extra: { ask: () => 'n' } });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.equal(row.outcome, 'refused');
+    assert.equal(row.accepted_red, 'known');
+  });
+
+  it('--accept-red without a reason is refused, and nothing is measured or started', async () => {
+    for (const argv of [['--accept-red'], ['--accept-red', '--dry-run'], ['--accept-red', '   ']]) {
+      const { code, out, spawned, calls } = await attempt(argv, { runs: [RED_RUN()] });
+      assert.equal(code, 2, argv.join(' '));
+      assert.match(out.stderr, /--accept-red needs a (value|reason)/u);
+      assert.equal(spawned.length, 0);
+      assert.equal(calls.history, 0, 'not even the history was read');
+      assert.equal(calls.suites.length, 0);
+    }
+  });
+
+  it('--accept-red does not carry a run that measured nothing, or another commit\'s', async () => {
+    const stopped = fullRunOf(SHA, { outcome: 'failed', red: null, stopped_at: 'install', reason: 'npm ci failed' });
+    const first = await attempt(['--accept-red', 'x'], { runs: [stopped] });
+    assert.equal(first.code, 1);
+    assert.equal(first.spawned.length, 0);
+    const second = await attempt(['--accept-red', 'x'], { runs: [], started: fullRunOf(OLDER) });
+    assert.equal(second.code, 1);
+    assert.equal(second.spawned.length, 0);
+  });
+});
+
+describe('mc deploy — the app, used, before the question', () => {
+  it('all suites passing reaches the question, each listed, on a server of the commit that would ship', async () => {
+    const { code, out, asked, spawned, calls, row } = await attempt([], { suites: ['smoke', 'journeys'] });
+    assert.equal(code, 0);
+    assert.equal(asked.length, 1);
+    assert.equal(spawned.length, 1);
+    assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: SHA }], 'one server, started on the commit that would ship');
+    assert.deepEqual(calls.suites[0].names, ['smoke', 'journeys']);
+    assert.match(out.stdout, /suites — 2 declared, run against a local server of 1a2b3c4:/u);
+    assert.match(out.stdout, /mc:   ok {2}smoke 3s\n/u);
+    assert.match(out.stdout, /mc:   ok {2}journeys 3s\n/u);
+    assert.equal(row.suites, 'smoke:ok,journeys:ok');
+  });
+
+  it('one failing suite refuses, naming it and its last lines', async () => {
+    const { code, out, spawned, asked, row } = await attempt([], {
+      suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'step 3 failed\nTypeError: x is not a function\n' },
+    });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0);
+    assert.match(out.stderr, /suite journeys failed \(exit 1\) — its last lines:\nmc: {5}step 3 failed\nmc: {5}TypeError: x is not a function/u);
+    assert.doesNotMatch(out.stderr, /suite smoke failed/u);
+    assert.equal(row.outcome, 'refused');
+    assert.equal(row.suites, 'smoke:ok,journeys:red');
+  });
+
+  it('a suite that cannot start refuses: the server never came up', async () => {
+    const { code, out, spawned, calls, row } = await attempt([], { appError: 'the dev server did not answer within 180s' });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.equal(calls.suites.length, 0, 'no suite ran');
+    assert.match(out.stderr, /the suites could not run: the dev server did not answer within 180s/u);
+    assert.equal(row.suites, 'cannot-run:the dev server did not answer within 180s');
+  });
+
+  it('a suite the server left while it ran is a suite that could not run, and refuses', async () => {
+    const { code, out, spawned, row } = await attempt([], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'unmeasured' } });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stderr, /suite journeys could not run — its last lines:/u);
+    assert.equal(row.suites, 'smoke:ok,journeys:cannot-run');
+  });
+
+  it('a suite exiting with the skip code is named as skipped, with its reason, and does not refuse', async () => {
+    const { code, out, asked, spawned, row } = await attempt([], {
+      suites: ['smoke', 'journeys'], outcomes: { journeys: 'skip', 'journeys:tail': 'skipped: no TC token in this environment\n' },
+    });
+    assert.equal(code, 0);
+    assert.equal(asked.length, 1);
+    assert.equal(spawned.length, 1);
+    assert.match(out.stdout, /mc: {3}skipped {2}journeys 3s — skipped: no TC token in this environment/u);
+    assert.equal(row.suites, 'smoke:ok,journeys:skipped');
+  });
+
+  it('a server that serves another commit than the one that would ship measures nothing, and refuses', async () => {
+    const { code, out, spawned, calls } = await attempt([], { served: OLDER });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: OLDER }]);
+    assert.equal(calls.suites.length, 0, 'no suite ran against the wrong tree');
+    assert.match(out.stderr, /the app server serves 0123456, not 1a2b3c4 that would ship/u);
+  });
+
+  it('a shared checkout at the commit with uncommitted changes measures them, not the commit, and refuses', async () => {
+    const { code, out, spawned, asked, calls, row } = await attempt([], { dirtyNow: [' M src/app.js', '?? scratch.txt'] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.equal(asked.length, 0);
+    assert.deepEqual(calls.servers, [], 'no server was asked for on a dirty tree');
+    assert.equal(calls.suites.length, 0, 'no suite ran against uncommitted changes');
+    assert.match(out.stderr, /the suites could not run: \/tmp\/does-not-exist\/shared\/memoro has uncommitted changes \(M src\/app\.js, \?\? scratch\.txt\)/u);
+    assert.match(row.suites, /^cannot-run:/u);
+  });
+
+  it('a server of the commit that was started on uncommitted changes measures them, and refuses', async () => {
+    const { code, out, spawned, calls } = await attempt([], { servedDirty: ['src/app.js'] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the deploy script was not started');
+    assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: SHA }]);
+    assert.equal(calls.suites.length, 0, 'no suite ran against the dirty server');
+    assert.match(out.stderr, /the app server was started on uncommitted changes in \/tmp\/does-not-exist\/shared\/memoro \(src\/app\.js\)/u);
+  });
+
+  it('a checkout that declares no suites to run cannot be exercised, and refuses', async () => {
+    const { code, out, spawned } = await attempt([], { extra: { suites: { ...gateFake().suites, readDeclaration: () => ({ ok: false, error: '/x does not declare .mc/test.json' }) } } });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stderr, /the suites could not run: \/x does not declare \.mc\/test\.json/u);
+  });
+
+  it('--dry-run reads both results beside today\'s reading and asks nothing', async () => {
+    const { code, out, spawned, asked, calls } = await attempt(['--dry-run'], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red' } });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 0);
+    assert.equal(asked.length, 0);
+    assert.match(out.stdout, /the nightly measured this tree 1a2b3c4/u);
+    assert.match(out.stdout, /full run — 1a2b3c4 measured whole: green/u);
+    assert.match(out.stdout, /RED {2}journeys/u);
+    assert.match(out.stdout, /1 red would refuse the deploy unless --accept-red "<reason>" takes them/u);
+    assert.equal(calls.servers.length, 1);
+  });
+
+  it('--dry-run --json carries the gate in the one document', async () => {
+    const { code, out } = await attempt(['--dry-run', '--json'], { runs: [] });
+    assert.equal(code, 0);
+    const doc = JSON.parse(out.stdout);
+    assert.equal(doc.dry_run, true);
+    assert.equal(doc.gate.full_run.state, 'needed');
+    assert.deepEqual(doc.gate.suites.results.map((suite) => [suite.name, suite.state]), [['smoke', 'ok']]);
+  });
+});
+
+describe('mc deploy — a headless session cannot deploy', () => {
+  /** Everything the verb could touch, as a spy that records it. */
+  function untouched() {
+    const touched = [];
+    const spy = (name) => (...args) => { touched.push([name, ...args]); throw new Error(`${name} must not be reached`); };
+    return {
+      touched,
+      extra: {
+        env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' },
+        git: spy('git'),
+        fetchVersion: spy('fetchVersion'),
+        gate: { history: spy('history'), fullRun: spy('fullRun'), readMends: spy('readMends') },
+        suites: {
+          sharedWorktree: spy('sharedWorktree'), readDeclaration: spy('readDeclaration'), ensureAppServer: spy('ensureAppServer'), runSuites: spy('runSuites'),
+        },
+        spawnDeploy: spy('spawnDeploy'),
+        ask: spy('ask'),
+        startDeployer: spy('startDeployer'),
+      },
+    };
+  }
+
+  for (const argv of [[], ['--accept-red', 'x']]) {
+    it(`mc deploy ${argv.join(' ')} exits non-zero before any fetch, full run or suite`.replace('mc deploy ', 'the verb '), async () => {
+      const spies = untouched();
+      const { out, stdout, stderr } = io();
+      const code = await run(argv, { ...deps(spies.extra), stdout, stderr });
+      assert.equal(code, 1);
+      assert.deepEqual(spies.touched, [], 'no git, history, suite, prompt or deployer call was made');
+      assert.match(out.stderr, /Martin's act/u);
+      assert.match(out.stderr, /headless \(MC_HEADLESS=1\)/u);
+      assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'not even a refused row: nothing was read or recorded');
+    });
+  }
+
+  it('--dry-run is still allowed headless: it is a reading', async () => {
+    const { code, out, spawned, asked, calls } = await attempt(['--dry-run'], { extra: { env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } } });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 0);
+    assert.equal(asked.length, 0);
+    assert.ok(calls.history > 0, 'the reading did read the history');
+    assert.match(out.stdout, /nothing was deployed/u);
   });
 });

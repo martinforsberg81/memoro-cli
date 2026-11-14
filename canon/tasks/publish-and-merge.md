@@ -28,8 +28,10 @@ ratchets, every CI binding command and all three contract suites, including
 optional tools, never landing requirements. Wide regression protection belongs
 to the daily full run and before a deploy, not to a merge. Main may carry a
 red this merge did not look for: the daily run finds it within a day and sends
-it to a main-red mend; the deploy gate keeps it from production. Until the
-separate deploy-gate goal lands, the person deploying must read that full run.
+it to a main-red mend; the deploy gate keeps it from production: `mc deploy`
+ships a commit only when a full run of exactly that commit is green and the app's
+suites have been run against it, with the red named and `--accept-red "<reason>"`
+as the one way past. A headless session cannot deploy; that is Martin's act.
 
 ## `mc gate` — the tests your change reaches
 - Bare: the repository's selector maps the branch's and the tree's changes

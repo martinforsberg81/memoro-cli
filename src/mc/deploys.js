@@ -41,16 +41,29 @@ import { workRoot } from './paths.js';
  */
 export const DEPLOYS_HEADER = [
   'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note', 'pid',
+  'full_commit', 'full_verdict', 'suites', 'accepted_red',
 ];
 
 /**
- * The header before `pid` (2026-10-07), the one every machine's file carries.
- * A file with exactly this header is given the new one the next time a row is
- * written, its rows with an empty `pid`: without it, a deploy in progress
- * could never be told from one that died, which is the one thing the column
- * is for. Any other header is kept as it is, and drops what it has no room for.
+ * The gate's four columns (2026-11-14): the commit of the full run the deploy
+ * stood on and its verdict (`green`, `red`, `stalled`, or `none` for a deploy
+ * that was refused because no run measured that commit), each suite's result
+ * as `name:state` joined by commas, and the reason `--accept-red` gave when a
+ * red was accepted — empty otherwise, so an empty cell is a deploy that
+ * accepted nothing.
  */
-const PREVIOUS_HEADER = DEPLOYS_HEADER.slice(0, -1);
+export const GATE_COLUMNS = ['full_commit', 'full_verdict', 'suites', 'accepted_red'];
+
+/**
+ * The headers earlier mc versions wrote, oldest first: before `pid`
+ * (2026-10-07) and before the gate's columns (2026-11-14). A file with exactly
+ * one of them is given the current header the next time a row is written, its
+ * old rows with the new cells empty: without `pid`, a deploy in progress could
+ * never be told from one that died, which is the one thing that column is for.
+ * Any other header is kept as it is, and drops what it has no room for.
+ */
+const PID_COLUMNS = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('pid') + 1);
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
@@ -90,13 +103,13 @@ function readFile(env) {
   try { return readFileSync(deploysPath(env), 'utf8'); } catch { return ''; }
 }
 
-/** The header this file has — the current one for the version just before
- * it — or the one it would be made with. */
+/** The header this file has — the current one for a version of this file
+ * before it — or the one it would be made with. */
 function fileHeader(text) {
   const first = String(text || '').split('\n').find((line) => line.trim());
   if (!first) return DEPLOYS_HEADER;
   const header = first.split('\t');
-  return header.join('\t') === PREVIOUS_HEADER.join('\t') ? DEPLOYS_HEADER : header;
+  return OLDER_HEADERS.includes(header.join('\t')) ? DEPLOYS_HEADER : header;
 }
 
 function rewrite(env, header, rows) {
@@ -152,8 +165,8 @@ function append(row, env) {
   const header = text.trim() ? fileHeader(text) : null;
   if (!header) appendFileSync(path, `${tsvHeader()}\n`);
   else if (header.join('\t') !== text.split('\n').find((line) => line.trim())) {
-    // The file carries the header before `pid`: written once with the new
-    // one, and appended to from then on.
+    // The file carries an older header: written once with the new one, and
+    // appended to from then on.
     rewrite(env, header, parseDeploys(text));
   }
   appendFileSync(path, `${tsvRow(row, header || DEPLOYS_HEADER)}\n`);
@@ -169,11 +182,11 @@ function append(row, env) {
  * deploy runs in, so that reader can tell a deploy going on from one that died.
  */
 export function recordStart({
-  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '',
+  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '', gate = {},
 }, env = process.env) {
   const row = {
     started, ended: '', sha, build, holder, outcome: RUNNING,
-    live_commit: '', live_build: '', stopped_at: '', note, pid,
+    live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate),
   };
   append(row, env);
   return { started, sha };
@@ -211,11 +224,18 @@ export function recordEnd(key, patch = {}, env = process.env) {
  * moment, with the reason in `note`. It is one row rather than a start and an
  * end because nothing happened in between.
  */
-export function recordRefusal({ sha = '', holder = '', note = '', at = new Date().toISOString() }, env = process.env) {
+export function recordRefusal({
+  sha = '', holder = '', note = '', at = new Date().toISOString(), gate = {},
+}, env = process.env) {
   return append({
     started: at, ended: at, sha, build: '', holder, outcome: REFUSED,
-    live_commit: '', live_build: '', stopped_at: '', note,
+    live_commit: '', live_build: '', stopped_at: '', note, ...gateCells(gate),
   }, env);
+}
+
+/** The gate's cells of a row, from what the gate found; every one empty when it did not run. */
+function gateCells(gate) {
+  return Object.fromEntries(GATE_COLUMNS.map((name) => [name, gate?.[name] ?? '']));
 }
 
 /**
