@@ -1,7 +1,7 @@
 /**
  * `mc model` — the model catalog (ruling 59, `src/mc/model-config.js`).
  *
- * It says which models a goal's build may run on for its class (fast, large),
+ * It says which models a goal's build may run on for its class (fast, medium, large),
  * and which ones each other unattended role runs on (review, finish, mend,
  * plan, manager), whatever the goal's class. It says nothing about capacity:
  * that is the routing's, and this verb does not poll anything.

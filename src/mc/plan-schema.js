@@ -23,9 +23,9 @@ export const CLAUDE_MODELS = Object.freeze(['haiku', 'opus']);
 export const CODEX_MODELS = Object.freeze(['gpt-6.1-sol', 'gpt-6-luna']);
 
 /**
- * The work classes (ruling 59): `fast` and `large` for a build, which mc
+ * The work classes (ruling 59): `fast`, `medium` and `large` for a build, which mc
  * resolves to a model when the session starts, and `review`, the review
  * session's class.
  */
-export const WORK_CLASSES = Object.freeze(['fast', 'large']);
+export const WORK_CLASSES = Object.freeze(['fast', 'medium', 'large']);
 export const REVIEW_CLASS = 'review';

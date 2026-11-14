@@ -91,7 +91,7 @@ export const GOAL_LOG_FILE = 'goal_log.md';
 /** The role a goal's review session runs with: `canon/roles/review-session.md`, its `goal` part. */
 export const REVIEW_ROLE = 'review-session:goal';
 /** `class` is the work class a goal's session runs on (ruling 59), as a step's is. */
-export const CLASSES = ['fast', 'large'];
+export const CLASSES = ['fast', 'medium', 'large'];
 
 /**
  * The labelled lines a log entry may carry, and the field each one names. An

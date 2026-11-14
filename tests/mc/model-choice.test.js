@@ -48,7 +48,7 @@ test('fast: either provider is chosen, the one with more headroom', () => {
 
 test('explicit Claude priority bootstraps unknown or stale usage ahead of known Codex', () => {
   const unknown = codex(empty(), win(0.1));
-  const classes = ['fast', 'large', 'review'];
+  const classes = ['fast', 'medium', 'large', 'review'];
   const mixedReview = { ...DEFAULT_CATALOG, review: [
     { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
     DEFAULT_CATALOG.review[0],
@@ -59,13 +59,13 @@ test('explicit Claude priority bootstraps unknown or stale usage ahead of known 
   const stale = bootstrap(codex(claude(empty(), win(0.1), win(0.1), old), win(0.1)));
   const reset = codex(claude(empty(), win(0.9, PAST), win(0.95, PAST)), win(0.1));
   const expired = bootstrap(reset);
-  const expected = ['claude', 'claude', 'claude'];
+  const expected = ['claude', 'claude', 'claude', 'claude'];
   assert.deepEqual({
     unknown: missing.map((chosen) => chosen.candidate.tool),
     stale: stale.map((chosen) => chosen.candidate.tool),
     reset: expired.map((chosen) => chosen.candidate.tool),
-  }, { unknown: expected, stale: expected, reset: expected }, 'unknown, stale and reset Claude usage honors priority for fast, large and review');
-  assert.deepEqual([...missing, ...stale, ...expired].map((chosen) => chosen.basis), Array(9).fill('bootstrap'));
+  }, { unknown: expected, stale: expected, reset: expected }, 'unknown, stale and reset Claude usage honors priority for fast, medium, large and review');
+  assert.deepEqual([...missing, ...stale, ...expired].map((chosen) => chosen.basis), Array(12).fill('bootstrap'));
 });
 
 test('billing status names stale and failed usage without claiming plan availability', () => {
@@ -291,7 +291,7 @@ test('an unavailable plan may still use the provider API reserve', () => {
 });
 
 test('a list is a work class or a role list', () => {
-  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a list — fast, large, review, finish, mend, plan, manager/u);
+  assert.throws(() => choose(empty(), 'credits'), /"credits" is not a list — fast, medium, large, review, finish, mend, plan, manager/u);
 });
 
 test('a role list chooses within itself and never borrows a class', () => {

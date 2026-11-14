@@ -121,7 +121,7 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
 
   it('names the catalog verbs, API reserve, and Codex hourly reading', () => {
     const text = DOC.replace(/\s+/gu, ' ');
-    for (const verb of ['mc model add fast|large|review <tool>:<model>:<effort>', 'mc model remove fast|large|review <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
+    for (const verb of ['mc model add fast|medium|large|review <tool>:<model>:<effort>', 'mc model remove fast|medium|large|review <tool>:<model>', 'mc model set review <tool>:<model>:<effort>']) {
       assert.ok(text.includes(verb), `the doc no longer names \`${verb}\``);
     }
     assert.ok(text.includes('When no candidate has eligible plan capacity, the first catalog candidate uses its provider\'s API key'), 'the doc no longer says how a class uses API reserve');

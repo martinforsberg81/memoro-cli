@@ -34,6 +34,16 @@ const LISTS = {
   large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
 };
 const OLD = { schema: 'mc-models', version: 1, ...LISTS, review: { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' } };
+const BEFORE_MEDIUM = {
+  schema: 'mc-models', version: 1,
+  fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }],
+  large: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
+  review: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
+  finish: [{ tool: 'claude', model: 'opus', effort: 'high' }],
+  mend: [{ tool: 'claude', model: 'sonnet', effort: 'medium' }],
+  plan: [{ tool: 'claude', model: 'opus', effort: 'high' }],
+  manager: [{ tool: 'claude', model: 'opus', effort: 'medium' }],
+};
 
 test('a catalog whose review is one object reads as a list of it, and is written back as a list only when changed', async () => {
   const c = catalogAt(OLD);
@@ -80,13 +90,13 @@ test('mc model add and remove review change the list as they do fast and large; 
 
     const unknown = await c.verb('add', 'slow', 'claude:opus:high');
     assert.equal(unknown.code, 2);
-    assert.match(unknown.err, /"slow" is not a list: add takes fast, large, review, finish, mend, plan, manager/u);
+    assert.match(unknown.err, /"slow" is not a list: add takes fast, medium, large, review, finish, mend, plan, manager/u);
   } finally {
     c.done();
   }
 });
 
-test('a file without the role lists reads them as the defaults; mc model lists all seven and writes them back on a change', async () => {
+test('a file without the role lists reads them as the defaults; mc model lists every list and writes them back on a change', async () => {
   const c = catalogAt({ ...OLD, review: [OLD.review] });
   try {
     const models = readModels(c.env);
@@ -95,7 +105,7 @@ test('a file without the role lists reads them as the defaults; mc model lists a
     assert.deepEqual(models.plan, [{ tool: 'claude', model: 'opus', effort: 'high' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }]);
     assert.deepEqual(models.manager, [{ tool: 'claude', model: 'opus', effort: 'medium' }, { tool: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }]);
     const listed = (await c.verb('list')).out;
-    for (const list of ['fast', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
+    for (const list of ['fast', 'medium', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.match(listed, new RegExp(`\\n${list}\\n {2}1 `, 'u'));
     assert.equal(c.file().finish, undefined, 'reading writes nothing');
 
     const set = await c.verb('set', 'finish', 'codex:gpt-6.1-sol:high');
@@ -118,6 +128,48 @@ test('a file without the role lists reads them as the defaults; mc model lists a
   } finally {
     bad.done();
   }
+});
+
+test('a pre-medium catalog reads the two medium defaults unchanged, then writes every list when medium changes', async () => {
+  const c = catalogAt(BEFORE_MEDIUM);
+  try {
+    const original = readFileSync(modelsPath(c.env), 'utf8');
+    const models = readModels(c.env);
+    assert.deepEqual(models.medium, [
+      { tool: 'claude', model: 'sonnet', effort: 'high' },
+      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
+    ]);
+    const listed = await c.verb('list');
+    assert.equal(listed.code, 0, listed.err);
+    assert.ok(listed.out.indexOf('\nfast\n') < listed.out.indexOf('\nmedium\n'));
+    assert.ok(listed.out.indexOf('\nmedium\n') < listed.out.indexOf('\nlarge\n'));
+    assert.match(listed.out, /\nmedium\n  1  claude:sonnet:high\n  2  codex:gpt-6\.1-terra:high\n/u);
+    assert.equal(readFileSync(modelsPath(c.env), 'utf8'), original, 'reading the old file does not rewrite it');
+
+    const added = await c.verb('add', 'medium', 'codex:gpt-6-luna:high');
+    assert.equal(added.code, 0, added.err);
+    assert.deepEqual(c.file().medium.map(({ tool, model, effort }) => ({ tool, model, effort })), [
+      { tool: 'claude', model: 'sonnet', effort: 'high' },
+      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
+      { tool: 'codex', model: 'gpt-6-luna', effort: 'high' },
+    ]);
+    for (const key of ['fast', 'large', 'review', 'finish', 'mend', 'plan', 'manager']) assert.deepEqual(c.file()[key], BEFORE_MEDIUM[key]);
+    assert.equal((await c.verb('remove', 'medium', 'codex:gpt-6-luna')).code, 0);
+    assert.deepEqual(c.file().medium.map((candidate) => candidate.model), ['sonnet', 'gpt-6.1-terra']);
+    const set = await c.verb('set', 'medium', 'claude:opus:high');
+    assert.equal(set.code, 2);
+    assert.match(set.err, /mc model set review\|finish\|mend\|plan\|manager/u);
+  } finally { c.done(); }
+});
+
+test('an absent catalog has the same ordered medium defaults', () => {
+  const c = catalogAt(null);
+  try {
+    assert.deepEqual(readModels(c.env).medium, [
+      { tool: 'claude', model: 'sonnet', effort: 'high' },
+      { tool: 'codex', model: 'gpt-6.1-terra', effort: 'high' },
+    ]);
+  } finally { c.done(); }
 });
 
 test('a review list that is empty or repeats a model is refused, not read as the defaults', () => {
