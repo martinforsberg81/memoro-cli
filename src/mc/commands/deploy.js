@@ -751,6 +751,10 @@ export async function run(argv, deps = {}) {
 
 /** How often the deployer looks again at a gate round it is waiting for. */
 export const GATE_POLL_MS = 5 * 1000;
+/** How often a deploy asks again while another mc process holds disk admission. */
+export const DISK_BUSY_RETRY_MS = 1000;
+/** How long a deploy waits for a held disk admission before it refuses. */
+export const DISK_BUSY_WAIT_MS = 10 * 60 * 1000;
 
 /**
  * The deploy builds alone (Martin, 2026-10-10: *"den kilar in sig efter
@@ -926,7 +930,23 @@ export async function ship(job, deps = {}) {
     let diskAdmission;
     if (disk) {
       progress.report('prepare', 'Checking disk capacity');
-      const admitted = diskAdmission = await disk.admit({ trigger: 'deploy', what: 'the deploy script', hold: true });
+      // Another mc process holding the admission lease is a moment, not a
+      // verdict: the runner holds it through a session's allocation and spawn.
+      // The deploy waits for it, bounded, as the runner itself retries; only a
+      // lease still held after DISK_BUSY_WAIT_MS refuses (2026-11-14: a deploy
+      // refused at 312 GB free because a lane was starting).
+      const sleep = deps.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); }));
+      const clock = deps.clock || (() => Date.now());
+      const until = clock() + DISK_BUSY_WAIT_MS;
+      let admitted;
+      let waited = false;
+      for (;;) {
+        admitted = await disk.admit({ trigger: 'deploy', what: 'the deploy script', hold: true });
+        if (admitted.admitted || !admitted.busy || clock() >= until) break;
+        if (!waited) { stdout.write(`mc: waiting for the disk admission — ${admitted.reason}\n`); waited = true; }
+        await sleep(DISK_BUSY_RETRY_MS);
+      }
+      diskAdmission = admitted;
       if (!admitted.admitted) {
         recordEnd(key, { outcome: FAILED, stopped_at: 'disk', note: `mc: ${admitted.line}` }, env);
         stderr.write(`mc: ${admitted.line} — nothing was deployed\n`);

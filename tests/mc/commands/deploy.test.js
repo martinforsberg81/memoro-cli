@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault,
-  worktreeState,
+  worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
@@ -1669,5 +1669,33 @@ describe('mc deploy — the disk (disk-pressure.js)', () => {
     finish({ code: 0 });
     assert.equal(await shipped, 0);
     assert.equal(timers[0].stopped, true, 'the monitor ends with the script');
+  });
+
+  it('admission held by another mc process is waited for, bounded, and only a lease still held then refuses', async () => {
+    const busy = { admitted: false, busy: true, available: 312e9, reason: 'pid 336571 is admitting work', line: 'disk: 312.1 GB free — the deploy script not started: pid 336571 is admitting work' };
+    for (const [busyFor, expected] of [[3, 0], [Infinity, 1]]) {
+      work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
+      let asked = 0;
+      let now = 0;
+      let spawned = 0;
+      const disk = {
+        admit: async () => { asked += 1; return asked <= busyFor ? busy : { admitted: true, available: 312e9, reason: null, release: () => {} }; },
+        poll: async () => null,
+      };
+      const { out, stdout, stderr } = io();
+      const code = await run([], {
+        ...deps({ disk, every: () => () => {}, spawnDeploy: async () => { spawned += 1; return { code: 0 }; } }),
+        sleep: async (ms) => { now += ms; }, clock: () => now, stdout, stderr,
+      });
+      assert.equal(code, expected);
+      assert.equal(spawned, expected === 0 ? 1 : 0);
+      assert.equal(out.stdout.match(/mc: waiting for the disk admission — pid 336571 is admitting work/gu)?.length, 1, 'said once');
+      if (expected === 1) {
+        assert.ok(now >= DISK_BUSY_WAIT_MS, 'refused only after the bound');
+        assert.match(out.stderr, /pid 336571 is admitting work — nothing was deployed/u);
+        const [row] = readDeploys({ MC_WORK_ROOT: work });
+        assert.deepEqual([row.outcome, row.stopped_at], ['failed', 'disk']);
+      } else assert.equal(asked, 4);
+    }
   });
 });
