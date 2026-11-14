@@ -7,7 +7,7 @@
  * 2026-11-13), which runs beside the merge lane and so never stands in the
  * merger's tree. Both resolve the shared dependency tree the same way.
  */
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { workRoot } from './paths.js';
@@ -36,6 +36,11 @@ export async function measurementCheckout({ repoPath, sha, git, cwds = cwdsOfUse
 
   const pruned = await git(['worktree', 'prune'], { cwd: repoPath });
   if (pruned.status !== 0) return { ok: false, reason: failure(pruned) };
+  // Every worktree has a `.git` entry at its top level. A directory left
+  // without one (its worktree gone, only stray files such as .test-timing)
+  // cannot be healed: git fails, or resolves a parent repository instead.
+  // It is mc's own tree: discard it and re-add it below.
+  if (existsSync(dir) && !existsSync(join(dir, '.git'))) rmSync(dir, { recursive: true, force: true });
   if (!existsSync(dir)) {
     mkdirSync(dirname(dir), { recursive: true, mode: 0o700 });
     const added = await git(['worktree', 'add', '--detach', dir, sha], { cwd: repoPath });

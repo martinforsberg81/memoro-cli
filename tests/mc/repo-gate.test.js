@@ -143,7 +143,8 @@ function fixture({
     if (args[0] === 'worktree' && args[1] === 'add') {
       const dir = args[args.length - 2];
       mkdirSync(dir, { recursive: true });
-      // A worktree carries the repository's manifest, as a real one would.
+      // A worktree carries its `.git` file and the repository's manifest, as a real one would.
+      writeFileSync(join(dir, '.git'), 'gitdir: fake\n');
       writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
       return { status: 0, stdout: '', stderr: '' };
     }
@@ -360,17 +361,20 @@ describe('the round measures a state worth measuring', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('heals a dirty or unfinished checkout and recreates a missing checkout before measuring', async () => {
-    for (const kind of ['dirty', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'missing']) {
+  it('heals a dirty or unfinished checkout and recreates a missing or orphaned checkout before measuring', async () => {
+    for (const kind of ['dirty', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'missing', 'orphaned']) {
       const fx = fixture();
       try {
         assert.equal((await fx.run()).ok, true);
-        if (kind === 'missing') rmSync(fx.candidateDir, { recursive: true });
+        const recreated = kind === 'missing' || kind === 'orphaned';
+        if (recreated) rmSync(fx.candidateDir, { recursive: true });
+        // The worktree gone but a stray file left behind (seen: only .test-timing).
+        if (kind === 'orphaned') mkdirSync(join(fx.candidateDir, '.test-timing'), { recursive: true });
         let tracked = kind === 'dirty';
         let untracked = kind === 'dirty';
         let operation = kind.endsWith('_HEAD') ? kind : null;
         const ignored = join(fx.candidateDir, 'node_modules');
-        if (kind !== 'missing') mkdirSync(ignored);
+        if (!recreated) mkdirSync(ignored);
         const report = await fx.run({
           git: (args, opts) => {
             const run = fx.git(args, opts);
@@ -393,8 +397,8 @@ describe('the round measures a state worth measuring', () => {
         assert.deepEqual(git.filter(({ args }) => args[0] === 'reset').map(({ args }) => args), [['reset', '--hard'], ['reset', '--hard']]);
         assert.deepEqual(git.filter(({ args }) => args[0] === 'clean').map(({ args }) => args), [['clean', '-fd'], ['clean', '-fd']]);
         assert.deepEqual(git.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').map(({ args }) => args),
-          Array.from({ length: kind === 'missing' ? 2 : 1 }, () => ['worktree', 'add', '--detach', fx.candidateDir, 'abc1234']));
-        if (kind !== 'missing') assert.equal(existsSync(ignored), true, 'ignored dependencies stay');
+          Array.from({ length: recreated ? 2 : 1 }, () => ['worktree', 'add', '--detach', fx.candidateDir, 'abc1234']));
+        if (!recreated) assert.equal(existsSync(ignored), true, 'ignored dependencies stay');
       } finally { fx.cleanup(); }
     }
   });
@@ -1253,6 +1257,7 @@ describe('a repository that selects by diff', () => {
       if (args[0] === 'worktree' && args[1] === 'add') {
         const dir = args.at(-2);
         mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, '.git'), 'gitdir: fake\n');
         writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
         for (const file of files) {
           mkdirSync(join(dir, dirname(file)), { recursive: true });

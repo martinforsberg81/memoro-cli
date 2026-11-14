@@ -38,7 +38,10 @@ function fixture({ conflicts = [], addFails = false, pushFails = false } = {}) {
   const calls = [];
   const git = (args, opts = {}) => {
     calls.push({ args, cwd: opts.cwd });
-    if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args.at(-2), { recursive: true });
+    if (args[0] === 'worktree' && args[1] === 'add') {
+      mkdirSync(args.at(-2), { recursive: true });
+      writeFileSync(join(args.at(-2), '.git'), 'gitdir: fake\n');
+    }
     if (args[0] === 'checkout' && args.includes('--detach') && addFails) return { status: 1, stdout: '', stderr: 'invalid reference' };
     if (args[0] === 'rev-parse' && args.includes('--verify')) return { status: 1, stdout: '', stderr: '' };
     if (args[0] === 'merge' && args[1] !== '--abort') {
