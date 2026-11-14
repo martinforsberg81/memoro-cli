@@ -7,5 +7,4 @@ section: Changed
   lost terminal leaves the server and its conversation; the same entrance
   offers join or new. A clean idle quit stops the server; a hangup, a signal,
   a nonzero exit, a running turn or another attached terminal leaves it. The
-  tmux transport (`interactive-terminal.js`, its worker and request directory)
-  is removed.
+  tmux transport, with its worker and request directory, is removed.
