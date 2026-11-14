@@ -184,8 +184,9 @@ A foreign process standing in the directory is refused as `worktree`, naming
 its pids; the round's own ancestry is excluded. Incomplete process evidence
 also refuses mutation. Nobody is directed to work in this directory.
 
-Before use mc heals its own workspace: `git worktree prune`, re-add a missing
-directory, abort any unfinished merge, cherry-pick or revert, then
+Before use mc heals its own workspace: `git worktree prune`, discard a
+directory that is not its own worktree's top level (its worktree gone, only
+stray files left), re-add a missing directory, abort any unfinished merge, cherry-pick or revert, then
 `git reset --hard` and `git clean -fd`. Ignored files, including dependencies,
 stay; preparation replaces a cached `node_modules` clone rather than nesting
 inside it. Finally `git checkout --detach <sha>` selects the candidate.

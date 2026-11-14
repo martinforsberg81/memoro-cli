@@ -7,7 +7,7 @@
  * and the TAP reading have their own tests; this one only needs their answers.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -43,6 +43,7 @@ function gitWith(log, answer = () => null) {
     if (explicit) return explicit;
     if (args[0] === 'worktree' && args[1] === 'add') {
       mkdirSync(DIR, { recursive: true });
+      writeFileSync(join(DIR, '.git'), 'gitdir: fake\n');
       return OK;
     }
     if (args[0] === 'rev-parse' && args.includes('--verify')) return { ...OK, status: 1 };

@@ -241,7 +241,10 @@ describe('identical landings write main coverage', () => {
           git: async args => ({ status: 0, stdout: args[0] === 'rev-parse' ? (identical ? 'measured-tree' : 'different-tree') : '' }),
           measure: args => measureDocs({ ...args, env: { MC_HOME: fx.mcHome, MC_WORK_ROOT: fx.root }, deps: {
             git: async args => {
-              if (args[0] === 'worktree' && args[1] === 'add') mkdirSync(args[3], { recursive: true });
+              if (args[0] === 'worktree' && args[1] === 'add') {
+                mkdirSync(args[3], { recursive: true });
+                writeFileSync(join(args[3], '.git'), 'gitdir: fake\n');
+              }
               return { status: args.includes('--verify') ? 1 : 0,
                 stdout: args[1] === 'origin/main' ? BASE : args[1] === 'HEAD^{tree}' ? 'measured-tree' : '' };
             },
