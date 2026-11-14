@@ -43,7 +43,7 @@
  * checks out main, reproduces its failures or walks its history. Missing or stale
  * evidence fails closed; it is not proof that this PR introduced the failure.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { availableParallelism, loadavg, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -2859,6 +2859,54 @@ function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
 }
 
+/** How often a running whole suite says how far it has got (Martin, 2026-11-14: never looks stuck). */
+export const SUITE_PROGRESS_MS = 60_000;
+
+/** The test files a repository tracks — the denominator of "files done", read once; null when it cannot say. */
+function trackedTestFiles(cwd) {
+  try {
+    const out = spawnSync('git', ['ls-files', '--', '*.test.js', '*.test.mjs', '*.test.cjs', '*.test.ts'], { cwd, encoding: 'utf8', timeout: 10_000 });
+    const count = out.status === 0 ? out.stdout.split('\n').filter(Boolean).length : 0;
+    return count || null;
+  } catch { return null; }
+}
+
+/**
+ * One line of how a whole suite is going, from what is already on disk and in
+ * the TAP so far: the test files whose process has exited out of the files the
+ * repository tracks, those running, the failed tests read so far and the time
+ * since it started. A failed test is a leaf — `not ok` right after its own
+ * `# Subtest:` — so the suites that fail because a test in them did are not
+ * counted again.
+ */
+export function suiteProgressLine({ beatFile = null, tap = '', startedAt, total = null, now = Date.now() }) {
+  const started = new Set();
+  const exited = new Set();
+  if (beatFile) {
+    let text = '';
+    try { text = readFileSync(beatFile, 'utf8'); } catch { /* no heartbeat yet */ }
+    for (const line of text.split('\n')) {
+      let entry = null;
+      try { entry = JSON.parse(line); } catch { continue; }
+      const key = `${entry?.file}#${entry?.pid}`;
+      if (entry?.process === 'started') started.add(key);
+      else if (entry?.process === 'exited') exited.add(key);
+    }
+  }
+  let red = 0;
+  let before = '';
+  for (const line of tap.split('\n')) {
+    if (/^\s*not ok /u.test(line) && /^\s*# Subtest:/u.test(before) && before.search(/\S/u) === line.search(/\S/u)) red += 1;
+    if (line.trim()) before = line;
+  }
+  const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
+  const elapsed = seconds >= 60 ? `${Math.floor(seconds / 60)} min ${seconds % 60} s` : `${seconds} s`;
+  const files = beatFile
+    ? `${exited.size}${total ? ` of ~${total}` : ''} test files done${started.size > exited.size ? `, ${started.size - exited.size} running` : ''}`
+    : 'test files not counted';
+  return `progress — ${files}, ${red} red so far, ${elapsed} elapsed`;
+}
+
 /**
  * The whole suite, as a process.
  *
@@ -2868,7 +2916,7 @@ function nameSome(names) {
  * `suiteCommand` stopped making; the default keeps that behaviour for a caller
  * that names nothing.
  */
-export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null } = {}) {
+export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = process.env, timeoutMs = suiteTimeoutMs(env), lanes = testLanes({ env }), signal = null, times = null, progressMs = SUITE_PROGRESS_MS } = {}) {
   return new Promise((resolve) => {
     // Stopped before it started: nothing is spawned.
     if (signal?.aborted) return resolve({ code: null, tap: '', timedOut: false, aborted: true, timeoutMs });
@@ -2956,12 +3004,22 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       // of saying anything is to show the round is alive.
       for (const line of lines) if (/^# (tests|pass|fail) /u.test(line)) onLine(line.trim());
     });
+    // Once a minute the suite says how far it has got, so that a run of tens
+    // of minutes is never taken for a stuck one: the terminal following a deploy,
+    // the log and the page show the last such line.
+    const startedAt = Date.now();
+    const total = trackedTestFiles(cwd);
+    const beat = progressMs > 0
+      ? setInterval(() => { try { onLine(suiteProgressLine({ beatFile, tap, startedAt, total })); } catch { /* a courtesy */ } }, progressMs)
+      : null;
+    beat?.unref?.();
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', () => { /* npm's own noise; the verdict is in the TAP */ });
 
-    child.on('error', (error) => { noteBeats(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
+    child.on('error', (error) => { clearInterval(beat); noteBeats(); settle(); signal?.removeEventListener('abort', onAbort); resolve({ code: -1, tap, stderr, error: error.message, aborted }); });
     // A suite whose output was cut short exits as an unknown exit, whatever its code said.
     child.on('close', (code) => {
+      clearInterval(beat);
       const { cut, tests, covered } = noteTimes();
       settle(); signal?.removeEventListener('abort', onAbort);
       resolve({ code: cut.length && code === 0 ? -1 : code, tap, timedOut, timeoutMs, aborted, cut, tests, covered });
