@@ -1210,6 +1210,7 @@ export async function runGate({
     // The suite and every selected gate have now finished; a process bound is stalled.
     if (!after.ok) return finish(after.stalled ? 'stalled' : 'suite', `the run ${after.reason}${after.stalled ? `; files in flight: ${nameSome(pendingFiles()) || 'none named'}; load ${loadavg()[0]}` : ''}`);
     report.candidate = after.result;
+    if (classifiedEmptyChange(selection)) report.candidate.empty_change = true;
     if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result, covered: after.result.covered, from: 'full' });
     // The measured tree's own hash, so a landing can later prove — not
     // assume — that main became exactly what was measured (track 3's
