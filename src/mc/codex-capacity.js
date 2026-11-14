@@ -40,7 +40,7 @@ export const MODEL_PAGES = 5;
 export const SENT_METHODS = Object.freeze(['initialize', 'initialized', 'account/rateLimits/read', 'model/list']);
 const CLIENT_INFO = Object.freeze({ name: 'mc', title: 'mc capacity', version: '1' });
 
-const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+export const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
 /** One rate-limit window as `{ fraction_used, resets_at }`, or null when its usage or reset does not read. */
 export function codexWindow(value) {
@@ -81,7 +81,7 @@ export function codexModelPage(result) {
   return { models, nextCursor: typeof result.nextCursor === 'string' && result.nextCursor ? result.nextCursor : null };
 }
 
-const errorText = (error) => (isObject(error) && typeof error.message === 'string' ? error.message : JSON.stringify(error));
+export const errorText = (error) => (isObject(error) && typeof error.message === 'string' ? error.message : JSON.stringify(error));
 
 /**
  * One read of the app server: `{ ok: true, windows, models }` or `{ ok: false, why }`.

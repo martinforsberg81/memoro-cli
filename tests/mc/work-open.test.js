@@ -12,7 +12,7 @@
  * for real, including role/programme selection and fresh fallbacks.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -27,7 +27,7 @@ import { runnerDir } from '../../src/mc/paths.js';
 import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
-import { liveTerminalOwners, needsPersistentTerminal, openPersistentTerminal, terminalAddress, terminalEnvironment } from '../../src/mc/interactive-terminal.js';
+import { entersPersistentSession, terminalEnvironment } from '../../src/mc/session-entrance.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 
@@ -734,154 +734,45 @@ it('resumes legacy Manager history while launching in the canonical manager dire
   assert.equal(calls[0].spawnOptions.cwd, canonical);
 });
 
-// Transport routing substitutes tmux, not the opener's provider composition.
+// A persistent entrance replaces the opener's launch, not its provider composition.
 describe('Linux SSH interactive continuity', () => {
-  function transportFixture() {
-    const root = mkdtempSync(join(tmpdir(), 'mc-interactive-'));
-    const options = { areaRoot: root, worktree: { path: root, is_git: false }, verb: 'plan',
-      roleName: 'plan', programme: 'example', areaName: 'programs/example', tool: 'codex', pick: null,
-      env: { HOME: root, PATH: '/current/tools:/usr/bin:/bin', MC_HOME: join(root, 'home'), MC_WORK_ROOT: root, SSH_CONNECTION: 'test', TERM: 'xterm-256color' },
-      stderr: { write() {} } };
-    const calls = [];
-    const state = { running: false, starts: 0, provider: 'codex', race: false, fail: false, requests: [] };
-    function run(args, spawnOptions) {
-      calls.push({ args, options: spawnOptions });
-      const verb = args[4];
-      if (verb === 'has-session') return { status: state.running ? 0 : 1 };
-      if (verb === 'show-option') return { status: 0, stdout: state.provider };
-      if (verb === 'new-session') {
-        const requests = join(root, 'runner', 'interactive-requests');
-        state.requests = readdirSync(requests).map(name => JSON.parse(readFileSync(join(requests, name), 'utf8')));
-        if (state.fail) return { status: 1 };
-        state.running = true;
-        if (state.race) return { status: 1 };
-        state.starts++;
-      }
-      return { status: 0 };
-    }
-    return { root, options, calls, state, deps: { run, owners: () => [] },
-      cleanup: () => rmSync(root, { recursive: true, force: true }) };
-  }
-
   it('uses persistence only for Linux SSH interactive entrances', () => {
     const base = { platform: 'linux', env: { SSH_CONNECTION: 'x' }, isInteractive: () => true, verb: 'plan' };
-    assert.equal(needsPersistentTerminal(base), true);
+    assert.equal(entersPersistentSession(base), true);
     for (const change of [{ platform: 'darwin' }, { env: {} }, { env: { SSH_CONNECTION: 'x', MC_HEADLESS: '1' } },
       { isInteractive: () => false }, { verb: 'project' }]) {
-      assert.equal(needsPersistentTerminal({ ...base, ...change }), false);
+      assert.equal(entersPersistentSession({ ...base, ...change }), false);
     }
-    for (const verb of ['manager', 'brief', 'helper', 'martin']) assert.equal(needsPersistentTerminal({ ...base, verb }), true);
+    for (const verb of ['manager', 'brief', 'helper', 'martin']) assert.equal(entersPersistentSession({ ...base, verb }), true);
   });
 
-  it('reattaches before history discovery and never starts a second worker, including matching provider flags', () => {
-    const f = transportFixture();
-    try {
-      assert.equal(openPersistentTerminal(f.options, f.deps).ok, true);
-      assert.equal(openPersistentTerminal({ ...f.options, resumeTool: 'codex' }, f.deps).ok, true);
-      assert.equal(f.state.starts, 1);
-      assert.equal(f.calls.filter(c => c.args[4] === 'attach-session').length, 2);
-      assert.equal(f.state.requests[0].roleName, 'plan');
-      assert.equal(f.state.requests[0].programme, 'example');
-      assert.equal(f.state.requests[0].env, undefined);
-    } finally { f.cleanup(); }
+  it('passes current nonsecret environment to what mc starts for a desk', () => {
+    const env = { HOME: '/home/x', PATH: '/current/tools:/usr/bin:/bin', MC_HOME: '/home/x/mc', MC_WORK_ROOT: '/work', TERM: 'xterm-256color',
+      MC_ROLE: 'build', MC_GOAL: 'other/work', TMUX: 'old', OPENAI_API_KEY: 'provider-secret', GH_TOKEN: 'github-secret',
+      UNRELATED_SECRET: 'private', LC_ALL: 'C.UTF-8' };
+    assert.deepEqual(terminalEnvironment(env), { HOME: '/home/x', PATH: '/current/tools:/usr/bin:/bin', MC_HOME: '/home/x/mc',
+      MC_WORK_ROOT: '/work', TERM: 'xterm-256color', LC_ALL: 'C.UTF-8' });
   });
 
-  it('does not replace live work for new, resume, model or different provider requests', () => {
-    const f = transportFixture();
-    try {
-      f.state.running = true;
-      for (const changes of [{ pick: 'new' }, { pick: true }, { pick: 'an-id' }, { model: 'another-model' }, { resumeTool: 'claude' }]) {
-        const result = openPersistentTerminal({ ...f.options, ...changes }, f.deps);
-        assert.equal(result.ok, false);
-        assert.match(result.reason, /already running/u);
-      }
-      assert.equal(f.state.starts, 0);
-      assert.equal(f.calls.some(c => ['attach-session', 'new-session', 'kill-session'].includes(c.args[4])), false);
-    } finally { f.cleanup(); }
-  });
-
-  it('joins an atomic creation race winner and cleans its losing request', () => {
-    const f = transportFixture();
-    try {
-      f.state.race = true;
-      assert.equal(openPersistentTerminal(f.options, f.deps).ok, true);
-      assert.equal(f.state.starts, 0);
-      assert.equal(f.calls.filter(c => c.args[4] === 'attach-session').length, 1);
-      assert.deepEqual(readdirSync(join(f.root, 'runner', 'interactive-requests')), []);
-    } finally { f.cleanup(); }
-  });
-
-  it('refuses transport failures and legacy owners but preserves created workers on cosmetic failures', () => {
-    const f = transportFixture();
-    try {
-      assert.match(openPersistentTerminal(f.options, { ...f.deps, run: () => ({ error: new Error('ENOENT') }) }).reason, /tmux is required/u);
-      const legacy = openPersistentTerminal(f.options, { ...f.deps, owners: () => [42] });
-      assert.equal(legacy.ok, false);
-      assert.match(legacy.reason, /PID 42/u);
-      assert.equal(f.calls.some(c => c.args[4] === 'new-session'), false);
-      f.state.fail = true;
-      assert.equal(openPersistentTerminal(f.options, f.deps).ok, false);
-      assert.deepEqual(readdirSync(join(f.root, 'runner', 'interactive-requests')), []);
-      assert.equal(f.calls.some(c => c.args[4] === 'attach-session'), false);
-      f.state.fail = false;
-      const created = openPersistentTerminal(f.options, { ...f.deps,
-        run: (args, opts) => args[4] === 'set-option' ? { status: 1 } : f.deps.run(args, opts) });
-      assert.equal(created.ok, true);
-      assert.equal(f.state.starts, 1);
-      assert.equal(readdirSync(join(f.root, 'runner', 'interactive-requests')).length, 1, 'successful worker still owns its unread request');
-    } finally { f.cleanup(); }
-  });
-
-  it('passes current nonsecret environment and isolates work roots and roles', () => {
-    const f = transportFixture();
-    try {
-      const env = { ...f.options.env, MC_ROLE: 'build', MC_GOAL: 'other/work', TMUX: 'old',
-        OPENAI_API_KEY: 'provider-secret', GH_TOKEN: 'github-secret', UNRELATED_SECRET: 'private', LC_ALL: 'C.UTF-8' };
-      const clean = terminalEnvironment(env);
-      assert.deepEqual(clean, { HOME: f.root, PATH: '/current/tools:/usr/bin:/bin', MC_HOME: join(f.root, 'home'), MC_WORK_ROOT: f.root, TERM: 'xterm-256color', LC_ALL: 'C.UTF-8' });
-      openPersistentTerminal({ ...f.options, env }, f.deps);
-      assert.deepEqual(f.calls[0].options.env, clean);
-      const command = f.calls.find(c => c.args[4] === 'new-session').args[10];
-      assert.match(command, /current\/tools/u);
-      assert.doesNotMatch(command, /provider-secret|github-secret|private|MC_GOAL/u);
-      const a = terminalAddress(f.options);
-      assert.notDeepEqual(a, terminalAddress({ ...f.options, programme: 'other' }));
-      assert.notDeepEqual(a, terminalAddress({ ...f.options, env: { ...env, MC_WORK_ROOT: join(f.root, 'other') } }));
-    } finally { f.cleanup(); }
-  });
-
-  it('detects live old owners and exact-area provider processes, ignoring dead records and descendant goals', () => {
-    const f = transportFixture();
-    try {
-      const foreground = join(f.root, 'runner', 'foreground');
-      mkdirSync(foreground, { recursive: true });
-      for (const pid of [41, 42]) writeFileSync(join(foreground, `${pid}.json`), JSON.stringify({ pid, verb: 'plan', area: 'programs/example', programme: 'example', role: { name: 'plan' } }));
-      const proc = join(f.root, 'proc');
-      for (const [pid, comm, cwd] of [[51, 'codex', f.root], [52, 'claude', join(f.root, 'goals', 'g')], [53, 'node', f.root]]) {
-        mkdirSync(join(proc, String(pid)), { recursive: true });
-        writeFileSync(join(proc, String(pid), 'comm'), comm);
-        symlinkSync(pid === 51 ? realpathSync(cwd) : cwd, join(proc, String(pid), 'cwd'));
-      }
-      assert.deepEqual(liveTerminalOwners(f.options, { procRoot: proc, alive: pid => pid === 42 }), [42, 51]);
-    } finally { f.cleanup(); }
-  });
-
-  it('the shared opener delegates eligible entrances before resolving a provider', async () => {
-    const f = transportFixture();
-    try {
-      const calls = [];
+  it('the shared opener delegates eligible entrances of either provider before spawning one', async () => {
+    const local = fixture();
+    // A gate runs headless; the entrance under test is a person's.
+    const sshEnv = { ...local.env, SSH_CONNECTION: 'test' };
+    delete sshEnv.MC_HEADLESS;
+    const entered = [];
+    for (const tool of ['codex', 'claude']) {
       for (const verb of ['plan', 'manager', 'helper', 'martin']) {
-        const result = await openInWorkArea({ ...f.options, verb, roleName: verb, platform: 'linux', isInteractive: () => true,
-          terminal: options => { calls.push(options); return { ok: true, terminal: 'existing' }; },
-          spawn: () => { throw new Error('provider must stay inside worker'); } });
-        assert.equal(result.terminal, 'existing');
+        const result = await openInWorkArea({ ...local, verb, roleName: verb, programme: 'example', areaName: 'programs/example', tool, env: sshEnv,
+          platform: 'linux', isInteractive: () => true,
+          background: settings => { entered.push([settings.launch.id, verb]); return { result: { ok: true, entered: settings.launch.id } }; },
+          spawn: () => { throw new Error('the provider must stay inside its persistent session'); } });
+        assert.equal(result.entered, tool === 'codex' ? 'codex' : 'claude-code');
       }
-      assert.deepEqual(calls.map(c => c.verb), ['plan', 'manager', 'helper', 'martin']);
-      const { options, calls: spawned } = opening();
-      const local = fixture();
-      await openInWorkArea({ ...local, ...options, platform: 'darwin', env: { ...local.env, SSH_CONNECTION: 'present-on-mac-too' },
-        isInteractive: () => true, terminal: () => { throw new Error('Mac must not enter tmux'); } });
-      assert.equal(spawned.length, 1);
-    } finally { f.cleanup(); }
+    }
+    assert.equal(entered.length, 8);
+    const { options, calls: spawned } = opening();
+    await openInWorkArea({ ...local, ...options, platform: 'darwin', env: sshEnv, isInteractive: () => true,
+      background: () => { throw new Error('a Mac keeps its terminal launch'); } });
+    assert.equal(spawned.length, 1);
   });
 });

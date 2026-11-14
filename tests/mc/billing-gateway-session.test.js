@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -16,9 +16,11 @@ test('tool settings carry only a bounded gateway grant, never a provider key', (
   assert.equal(claude.env.GH_TOKEN, undefined);
   assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, 'session-grant');
   assert.equal(claude.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:1234/claude');
+  assert.equal(JSON.stringify(claude.args).includes('session-grant'), false, 'the grant is never on Claude argv');
   const codex = gatewayToolConfig({ provider: 'codex', base: 'http://127.0.0.1:1234', grant: 'session-grant', args: ['exec', '--json'], env });
   assert.equal(codex.env.OPENAI_API_KEY, undefined);
   assert.equal(codex.env.MC_GATEWAY_GRANT, 'session-grant');
+  assert.equal(JSON.stringify(codex.args).includes('session-grant'), false, 'the grant is never on Codex argv');
   assert.ok(codex.args.includes('model_providers.mc_api.supports_websockets=true'));
   assert.equal(codex.args.at(-2), 'exec');
 });
@@ -112,4 +114,41 @@ test('off a terminal the tool gets pipes of its own, not this process\'s stdout'
   });
   assert.equal(result, 0);
   assert.deepEqual(stdio, ['inherit', 'pipe', 'pipe']);
+});
+
+test('sessionDirectory opts a detached server into grant-expiry stop; ordinary wrappers have no expiry timer and cancel nothing', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mc-gateway-expiry-'));
+  try {
+    for (const sessionDirectory of [null, directory]) {
+      const child = new EventEmitter();
+      child.pid = 123;
+      const signals = [];
+      child.kill = signal => { signals.push(signal); child.emit('close', null, signal); };
+      let timer;
+      let cancelled;
+      let closed = false;
+      const result = runGatewaySession({ provider: 'codex', model: '*', bin: 'resolved-codex', args: [], sessionDirectory,
+        now: () => 100,
+        openGrant: async () => ({ ok: true, grant: 'bounded-grant', base: 'http://gateway', expiresAt: new Date(150).toISOString(),
+          close: async () => { closed = true; } }),
+        spawnTool: () => child,
+        setTimer: (fire, ms) => { timer = { fire, ms }; return timer; }, clearTimer: handle => { cancelled = handle; },
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      if (sessionDirectory) {
+        assert.equal(timer.ms, 50);
+        timer.fire();
+        assert.equal(await result, 143);
+        assert.deepEqual(signals, ['SIGTERM']);
+        assert.equal(cancelled, timer);
+      } else {
+        assert.equal(timer, undefined);
+        child.emit('close', 0, null);
+        assert.equal(await result, 0);
+        assert.deepEqual(signals, []);
+        assert.equal(cancelled, undefined);
+      }
+      assert.equal(closed, true);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -1,6 +1,6 @@
 # mc manager — the session across all programmes
 
-Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
 `mc manager [--new|--resume [<id>]] [--codex|--claude] [--model <model>]` is the person's
 entrance to the Manager desk in `~/mc/manager/`. It opens or resumes a foreground

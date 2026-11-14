@@ -70,7 +70,6 @@ const LIVE = [
   'mc-admin-cli.js',                // the second package binary
   'mc/admin-dashboard.js',          // imported by scripts/admin-dashboard.js
   'mc/repo-watch-run.js',           // spawned by path from mc/repo-watch.js
-  'mc/interactive-terminal-worker.js', // spawned inside tmux by interactive-terminal.js
 ];
 
 /**

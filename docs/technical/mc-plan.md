@@ -1,6 +1,6 @@
 # mc plan — a programme's interactive session
 
-Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
 ```
 mc plan [<programme>] [--new|--resume [<id>]] [--codex|--claude] [--model <model>]

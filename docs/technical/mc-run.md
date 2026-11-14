@@ -447,6 +447,17 @@ or the grant expires. The grant reaches Claude only through settings env
 `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in a 0600 file in a 0700 directory
 under `runner/claude-background/`; cleanup removes it on death or expiry. The
 provider key is opened only in the holder, never in the attaching client.
+A Linux SSH Codex entrance session on credits runs its own `codex app-server`
+behind the same gateway wrapper: the wrapper is the long-lived parent of the
+server (and so of the session's tools) with the grant in the server's
+environment, and lives until the server dies or the grant expires. Its optional
+`--session-directory` mode stops the server at `expiresAt` and removes its
+directory and register entry, leaving a one-shot expiry status for the next
+entrance. Both providers' persistent credit sessions end at their bounded grant
+expiry, without renewal; the conversation can be resumed in a new session.
+Plan sessions have no grant clock. The terminal's `codex --remote`
+client holds no grant and no key. See
+[mc-interactive-sessions.md](mc-interactive-sessions.md#codex-its-own-app-server).
 The runner never reads or places the key in a session's environment or argv.
 The vault must be unlocked and the relevant record configured before an API
 reserve can run. A missing or unreadable key fails the API launch visibly.

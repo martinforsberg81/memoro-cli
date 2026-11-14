@@ -1,6 +1,6 @@
 # `mc martin` — current decision queue
 
-Linux SSH interactive launches use the [persistent terminal transport](mc-interactive-sessions.md); macOS retains the existing foreground terminal.
+Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
 `mc martin` is Martin's foreground interactive decision desk in
 `~/mc/martin/`. It has a distinct owner and conversation identity. `--new`,
