@@ -79,13 +79,17 @@ A headless delivery session never changes it; when one finds a genuine choice,
 it supplies the kind to `mc ask`: jev's answer continues, an unsettled technical
 question is decided and recorded by that session, and only a product choice or
 reserved act reaches Martin. Otherwise it resolves its own acceptance obstacle.
-If the goal itself is wrong, report the technical decision or ask Martin only
-for a product choice; amend the goal with the verbs. A decision kept only in
-LOG.md is judged against the old text by the next reader.
+If the goal itself is wrong, the session reports it with `mc goal defect --part
+"…" --found "…"` (one entry, status `Martin`, no options), and the desk or you
+amend the goal with the verbs and set it ready with `mc goal ready`. A product
+choice is asked only as a product choice. A decision kept only in LOG.md is
+judged against the old text by the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
   `review`, or records a technical decision, or asks Martin about a product
-  choice or reserved act.
+  choice or reserved act, or reports a wrong goal with `mc goal defect`. Three
+  build sessions in a row without a commit or a criterion met stop the goal
+  (`no progress:`, status `Martin`).
 - A **review session** judges and moves it to `merge` (OK) or `finish` (not
   OK, with REVIEW.md).
 - A **finish session** takes `finish · ready`: fixes what review found,

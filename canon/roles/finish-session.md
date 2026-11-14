@@ -46,6 +46,12 @@ the goal anywhere but `merge`, and never back.
 - For an in-scope acceptance obstacle, repair it yourself. If recovery cannot
   continue in this role, set Martin with the obstacle and evidence; never route
   pre-merge work through mend.
+- `mc goal defect --part "<the part or criterion that is wrong>" --found
+  "<what is wrong, with the file and line or the command and output>"` — the
+  goal itself is wrong (a criterion that cannot hold, a check that does not
+  test it, a premise the code contradicts), verified against the code. One
+  entry, status `Martin`, no options; the goal's text is not yours to change,
+  and nothing here is a choice to ask about.
 - `mc ask` — for a genuine unresolved choice or reserved act. Supply
   `--kind technical|product` after reading standards and programme design. If
   jev does not settle a technical question, record your recommendation and

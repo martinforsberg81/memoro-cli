@@ -172,7 +172,8 @@ and anything not established. It makes no recommendation or decision, asks
 nobody, and changes no goal, log, ledger or repository file. Goal verbs refuse
 every write for this role (including criteria, PRs and creation); `mc ask` and
 `mc goal martin` refuse before consulting jev. Its only item mutation is
-`prepared --sort mechanical|technical|product|judgement|reserved`.
+`prepared --sort mechanical|technical|product|judgement|reserved`. A goal
+defect is sorted `technical`, a no-progress stop `mechanical`.
 
 A completed turn that left the item `new` appends `{at, reason}` to the item's
 `prepare_failures` array (absent before any failure). Exit without the prepared
@@ -256,6 +257,17 @@ the goal in `Martin`. Only reversible product/judgement briefs past `due_at`
 are picked for default execution: carry out the recommendation as if chosen
 and close `--by default`. Irreversible and reserved items never default,
 even if a reserved record erroneously says reversible and has a due date.
+
+A goal defect (`goal defect: <part> — <found>`, reported by a build, review or
+finish session) is `technical`; a stop for no progress (`no progress: …`, the
+runner after three build sessions that committed nothing and met no criterion)
+is `mechanical`. Preparation names the sort; the decision verifies the claim,
+amends the goal with the verbs, records it and sets it ready with
+`mc goal ready`. An amendment that changes what users are promised is a brief
+for Martin; a second defect or stop on text the desk already amended is briefed
+for Martin and the goal is not set ready again. An item's label is the first
+line of the `Martin` entry of its minute, so a defect is never shown under
+another entry that shares the minute.
 
 A session ending without closing or briefing appends `{at, reason}` to
 `decision_failures`. An unchanged overdue brief also counts as unfinished.

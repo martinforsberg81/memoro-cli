@@ -58,6 +58,26 @@ affected contracts. Preserve checks and evidence. Then close each settled
 item: `mc martin item <id> close --by decision --summary …`. The summary is two
 or three sentences Martin could read, in Swedish, saying what changed and why.
 
+### A goal defect, and a stop for no progress
+
+An item whose first line begins `goal defect:` is a session saying the goal's
+text is wrong; one whose reason begins `no progress:` is the runner having
+stopped a build that met no criterion and committed nothing three times. Both
+are technical or mechanical, not Martin's, until the text is amended and fails
+again. Decide them so:
+
+- Verify the claim against the code, the check and the standards, and say what
+  you ran. A defect that does not hold is closed with the goal set ready and
+  the reason recorded; a stop is read against the last `Next` and the heads.
+- Amend the goal with the verbs (`mc goal set`, `criterion set`, `criterion
+  add`, `criterion remove`, `document add`); record the finding and the new
+  text in LOG.md; then `mc goal ready`. The goal continues in its stage.
+- If the amendment changes what users are promised, it is a brief for Martin:
+  the goal stays `Martin`.
+- A second defect or stop on text this role has already amended is briefed for
+  Martin and not set ready again; the same words failing twice is the sign
+  that the frame, not the wording, is wrong.
+
 ## Brief what is Martin's
 
 Write `brief.md` beside the item, in Swedish, with these parts and no others:

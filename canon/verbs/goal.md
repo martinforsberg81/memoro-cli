@@ -60,6 +60,18 @@ with ✓/✗ and its check, and each worktree's state.
   synthesized question after investigating the standards; do not repeat jev for
   the same recorded live question. `mc goal log --status Martin` is refused: use
   `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
+- **A wrong goal.** `mc goal defect [<programme>/<goal>] --part "<the part or
+  criterion that is wrong>" --found "<what is wrong, with the file and line or
+  the command and output>" [--evidence "…"] [--next "…"]` is how a build,
+  review or finish session in its own stage reports that the goal itself is
+  wrong: one entry whose first line is `goal defect: <part> — <found>`,
+  status `Martin`, no options, no jev; the session's last act. Without `--part`
+  or `--found` it exits 2 and writes nothing; a finished goal, a stage that is
+  not the session's own, and a mend session are refused. The desk labels the
+  item by that first line (sort `technical`); it amends the goal with the verbs
+  and `mc goal ready`. A build that makes no progress three sessions in a row
+  is stopped by the runner with one `Martin` entry whose comment begins
+  `no progress:` (sort `mechanical`).
 - **Taking over a goal interactively.** Always read the goal's current stage,
   its last entry in LOG.md (the blocking reason, or Martin's question, and
   REVIEW.md when present), and the instructions for that stage before acting:
@@ -77,7 +89,7 @@ with ✓/✗ and its check, and each worktree's state.
   interactive decision desk. That role investigates it against technical and
   programme design, resolves settled details, records actual decisions
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
-  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; product choices and reserved acts reach Martin. Continue if jev answers. A product choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
+  In a headless session, follow the assigned role: build/review/finish resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; product choices and reserved acts reach Martin. Continue if jev answers. A product choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages

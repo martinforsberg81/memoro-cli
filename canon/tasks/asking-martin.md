@@ -41,7 +41,12 @@ Only three kinds reach Martin: a product choice the goal, programme page and sta
 Never permission to run a check, a time budget, a quiet machine or a lane count.
 A `SETTLED` red goes as a proposal to the programme that owns the failing file.
 Build, review and finish repair their in-scope acceptance obstacles; plan
-commissions broader protection. Never decide which session owns a goal: the
+commissions broader protection. A goal that is itself wrong is not a question
+and has no options: the session reports it with `mc goal defect --part "…"
+--found "…"` (technical, decided by the desk, which amends the goal with the
+verbs), and a build that makes no progress three times in a row is stopped by
+the runner with `no progress:` (mechanical). Neither reaches Martin unless the
+amendment changes what users are promised, or the same text fails again. Never decide which session owns a goal: the
 session whose LOG.md entry took it does, until it hands over.
 
 ## How to ask and tell
