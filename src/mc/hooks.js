@@ -198,7 +198,7 @@ export function sessionStartContext({ cwd, inside, states, env = process.env, sy
 const PROTECTED = /^GOAL\.json$/u;
 
 /** The reason a goal-file refusal gives, whichever tool made it. */
-const GOAL_FILE_REASON = 'This file is mc\'s: a goal changes through `mc goal` (set, criterion add, criterion met, document add, after). Run `mc goal show <programme>/<goal>` to read it.';
+const GOAL_FILE_REASON = 'This file is mc\'s: a goal changes through `mc goal` (set, item, obligation, criterion add, criterion met, document add, after). Run `mc goal show <programme>/<goal>` to read it.';
 
 /** Whether `path` is one anywhere under `programs`. */
 export function protectedGoalFile(path, { programs = programsHome() } = {}) {

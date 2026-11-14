@@ -1,15 +1,21 @@
 /**
  * `mc goal` — a goal and its two text files and worktrees (`goals.js`).
  *
- *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|medium|large --title "<title>" [--phase <n>] [--stage draft|build]
+ *   mc goal new <programme>/<goal> --repo <repo>[,<repo>] --class fast|medium|large --title "<title>" [--phase <n>] [--stage draft|build] [--structure 1|2]
  *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
  *                                  repository's worktree on goal/<goal> at the goal's first session;
  *                                  in phase <n> (1 by default), at most one past the last;
- *                                  in stage draft (by default) or build
- *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field replaced; a blank line parts paragraphs
+ *                                  in stage draft (by default) or build; structure 1 (by default) is the brief as prose, 2 as numbered parts (`goal-parts.js`)
+ *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field of a version 1 goal replaced; a blank line parts paragraphs
+ *   mc goal set <programme>/<goal> title|aim|outcome|latitude|protection --text "…"   the part of a version 2 goal replaced
+ *   mc goal item add <programme>/<goal> problem|premise|decision|change|preserve|risk|out-of-scope --text "…" <the part's flags>   a version 2 item; its id printed
+ *   mc goal item set <programme>/<goal> <id> [--text "…"] [the part's flags]   what is given changed, logged with what it was and is now
+ *   mc goal item remove <programme>/<goal> <id> --reason "…"   the item taken out, logged; its id is not given again (`ids`)
+ *   mc goal obligation set <programme>/<goal> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]   the area's obligation, replaced when there is one, logged
+ *   mc goal obligation remove <programme>/<goal> <area> --reason "…"   the obligation taken out, logged
  *   mc goal document add <programme>/<goal> --label "…" --path "…"   a document the goal sends its reader to
- *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…"   a success criterion, not met
- *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a goal session (build, review, finish, mend)
+ *   mc goal criterion add <programme>/<goal> --criterion "…" --check "…" [--evidence "…"]   a success criterion, not met
+ *   mc goal criterion set [<programme>/<goal>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]   criterion <n> rewritten, unmet, logged with the old and new text; not by a goal session (build, review, finish, mend)
  *   mc goal criterion remove [<programme>/<goal>] <n> --reason "…"   criterion <n> taken out, the later ones moved up one number, logged with its text and the reason; not by a goal session
  *   mc goal criterion met|unmet [<programme>/<goal>] <n>   criterion <n> recorded as holding, or not
  *   mc goal convert [<programme>]       every goal still in markdown, not in .archive/, turned into GOAL.json; stage plan written draft,
@@ -67,6 +73,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
@@ -83,18 +90,25 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved'];
+const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard'];
 /** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
 const REPEATABLE_FLAGS = ['--option', '--document'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
+/** The flags the fields of the numbered parts are given by (`item add|set`); a part takes its own and refuses the others. */
+const ITEM_FLAGS = Object.freeze([...new Set(Object.values(ITEM_PARTS).flatMap((part) => part.fields.map((field) => `--${flagOf(field)}`)))]);
 /** The flags each verb takes; any other given is refused with exit 2. */
 const VERB_FLAGS = {
-  new: ['--repo', '--class', '--title', '--phase', '--stage'],
+  new: ['--repo', '--class', '--title', '--phase', '--stage', '--structure'],
   phase: [],
   set: ['--text'],
   'document add': ['--label', '--path'],
-  'criterion add': ['--criterion', '--check'],
-  'criterion set': ['--criterion', '--check'],
+  'item add': ['--text', ...ITEM_FLAGS],
+  'item set': ['--text', ...ITEM_FLAGS],
+  'item remove': ['--reason'],
+  'obligation set': ['--stand', '--text', '--standard'],
+  'obligation remove': ['--reason'],
+  'criterion add': ['--criterion', '--check', '--evidence'],
+  'criterion set': ['--criterion', '--check', '--evidence'],
   'criterion remove': ['--reason'],
   'criterion met': [],
   'criterion unmet': [],
@@ -142,8 +156,8 @@ export async function run(argv, deps = {}) {
   const scanned = scanArgs(argv, SCAN);
   if (scanned.error) { stderr.write(`mc: ${scanned.error}\n${usage()}`); return 2; }
   let [verb, ...rest] = scanned.positional;
-  // `document` and `criterion` take a second word: the form is both.
-  if ((verb === 'document' || verb === 'criterion') && rest.length) verb = `${verb} ${rest.shift()}`;
+  // `document`, `criterion`, `item` and `obligation` take a second word: the form is both.
+  if (['document', 'criterion', 'item', 'obligation'].includes(verb) && rest.length) verb = `${verb} ${rest.shift()}`;
 
   const verbFlags = verb === 'status' || verb === undefined ? null : verbFlagsOf(verb);
   if (!verbFlags) { stderr.write(usage()); return 2; }
@@ -189,13 +203,18 @@ export async function run(argv, deps = {}) {
   const { flags } = scanned;
 
   if (env.MC_ROLE === LEARNING_ROLE) {
-    const refused = learningRefusal(verb, rest, ctx);
+    const refused = learningRefusal(verb, rest, ctx, flags);
     if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   }
 
   if (verb === 'new') return newGoal(rest, flags, ctx);
   if (verb === 'phase') return setPhase(rest, ctx);
   if (verb === 'set') return setField(rest, flags, ctx);
+  if (verb === 'item add') return addItemVerb(rest, flags, ctx);
+  if (verb === 'item set') return setItemVerb(rest, flags, ctx);
+  if (verb === 'item remove') return removeItemVerb(rest, flags, ctx);
+  if (verb === 'obligation set') return setObligationVerb(rest, flags, ctx);
+  if (verb === 'obligation remove') return removeObligationVerb(rest, flags, ctx);
   if (verb === 'document add') return addDocument(rest, flags, ctx);
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
@@ -257,6 +276,8 @@ function newGoal(args, flags, ctx) {
   const repos = [...new Set(flags.repo.split(',').map((repo) => repo.trim()).filter(Boolean))];
   if (repos.length === 0) { stderr.write('mc: new needs --repo <repo>[,<repo>]\n'); return 2; }
 
+  if (flags.structure !== null && !['1', '2'].includes(flags.structure)) { stderr.write(`mc: --structure is 1 or 2, not ${flags.structure}\n`); return 2; }
+  const structure = flags.structure === '2' ? 2 : 1;
   const stage = flags.stage ?? 'draft';
   if (stage !== 'draft' && stage !== 'build') { stderr.write(`mc: --stage is draft or build for a new goal, not ${stage}\n`); return 2; }
   const phase = flags.phase === null ? 1 : Number(flags.phase);
@@ -281,10 +302,15 @@ function newGoal(args, flags, ctx) {
   }
 
   const created = stampSeconds(now);
-  ctx.write(join(dir, GOAL_FILE), renderGoal({ stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] }));
+  const made = { stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] };
+  ctx.write(join(dir, GOAL_FILE), renderGoal(structure === 2 ? { ...made, version: 2, ids: emptyIds() } : made));
   ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, role: writerRole(ctx.env), stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
   stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
+  if (structure === 2) {
+    stdout.write(`${GOAL_FILE} (version 2) is to be filled in by verbs: mc goal set ${programme}/${goal} ${PROSE_PARTS.join('|')} --text "…", mc goal item add ${programme}/${goal} ${ITEM_WORDS.join('|')} --text "…" …, mc goal obligation set ${programme}/${goal} <area> --stand touched|untouched --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
+    return 0;
+  }
   stdout.write(`${GOAL_FILE} is to be filled in by verbs: mc goal set ${programme}/${goal} goal|contract|out-of-scope --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
   return 0;
 }
@@ -593,12 +619,13 @@ export function jevContext(target, goal, extra, ctx) {
     documents.push({ path, ...(label ? { label } : {}), text });
   }
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '').slice(-LOG_ENTRIES).map((entry) => renderEntry(entry));
+  const criteria = goal.success_criteria.map((item) => ({ criterion: item.criterion, check: item.check, met: item.met }));
+  // Version 2 gives jev the parts a question is judged by — the outcome, what is decided and what must hold, the criteria and what is out — and not the whole brief (jev's core budget).
+  const brief = goal.version === 2
+    ? { title: goal.title, outcome: goal.outcome.join('\n\n'), decisions: goal.decisions.map((item) => `${item.id} ${item.text}`), preserve: goal.preserve.map((item) => `${item.id} ${item.text}`), criteria, out_of_scope: goal.out_of_scope.map((item) => item.text), stage: goal.stage, status: goal.status }
+    : { title: goal.title, goal: goal.goal.join('\n\n'), contract: goal.contract.join('\n\n'), out_of_scope: goal.out_of_scope.join('\n\n'), criteria, stage: goal.stage, status: goal.status };
   return {
-    goal: {
-      title: goal.title, goal: goal.goal.join('\n\n'), contract: goal.contract.join('\n\n'), out_of_scope: goal.out_of_scope.join('\n\n'),
-      criteria: goal.success_criteria.map((item) => ({ criterion: item.criterion, check: item.check, met: item.met })),
-      stage: goal.stage, status: goal.status,
-    },
+    goal: brief,
     programme: { readme: read(join(ctx.home, target.programme, 'README.md')) },
     documents,
     log,
@@ -755,17 +782,23 @@ function setPhase(args, ctx) {
  * between blank lines, and an empty text clears it.
  */
 function setField(args, flags, ctx) {
-  const { stdout, stderr, env } = ctx;
-  const words = ['title', ...Object.keys(PROSE_FIELDS)];
-  if (args.length !== 2 || !words.includes(args[1])) { stderr.write(`mc: set <programme>/<goal> ${words.join('|')} --text "…"\n`); return 2; }
+  const { stderr, env } = ctx;
+  const words = ['title', ...Object.keys(PROSE_FIELDS), ...PROSE_PARTS];
+  if (args.length !== 2 || !words.includes(args[1])) { stderr.write(`mc: set <programme>/<goal> title|${Object.keys(PROSE_FIELDS).join('|')} (version 1) or title|${PROSE_PARTS.join('|')} (version 2) --text "…"\n`); return 2; }
   const writer = goalSessionWord(env);
   if (writer && !['martin', 'decision'].includes(writer)) { stderr.write(`mc: a ${writer} session does not rewrite goal text — the brief is written by plan, interactive Martin or a person\n`); return 2; }
   if (flags.text === null) { stderr.write('mc: set needs --text "…"\n'); return 2; }
   const [named, field] = args;
   const paragraphs = flags.text.split(/\n\s*\n/u).map((part) => part.trim()).filter(Boolean);
-  return changeGoal(named, ctx, (goal) => (field === 'title'
-    ? { ...goal, title: flags.text.trim() }
-    : { ...goal, [PROSE_FIELDS[field]]: paragraphs }), () => `${field} set`);
+  return changeGoal(named, ctx, (goal) => {
+    if (field === 'title') return { ...goal, title: flags.text.trim() };
+    if (goal.version === 2) {
+      if (!PROSE_PARTS.includes(field)) return { problems: [`it is a version 2 goal — set ${field} is for version 1; version 2 has set ${PROSE_PARTS.join('|')} and the verbs item and obligation`], code: 2 };
+      return { ...goal, [field]: paragraphs };
+    }
+    if (PROSE_PARTS.includes(field)) return { problems: [`it is a version 1 goal — set ${field} is for version 2 (mc goal new --structure 2); version 1 has set ${Object.keys(PROSE_FIELDS).join('|')}`], code: 2 };
+    return { ...goal, [PROSE_FIELDS[field]]: paragraphs };
+  }, () => `${field} set`);
 }
 
 /** `mc goal document add <programme>/<goal> --label "…" --path "…"` — a document appended to the goal's. */
@@ -788,7 +821,11 @@ function addCriterion(args, flags, ctx) {
   if (writer && !['martin', 'decision'].includes(writer)) { stderr.write(`mc: a ${writer} session does not add a criterion — acceptance is written by plan, interactive Martin or a person\n`); return 2; }
   const missing = ['criterion', 'check'].filter((key) => !flags[key]?.trim()).map((key) => `--${key}`);
   if (missing.length) { stderr.write(`mc: criterion add needs ${missing.join(', ')} — what must be true, and how it is checked\n`); return 2; }
-  return changeGoal(args[0], ctx, (goal) => ({ ...goal, success_criteria: [...goal.success_criteria, { criterion: flags.criterion.trim(), check: flags.check.trim(), met: false }] }),
+  if (flags.evidence !== null && !flags.evidence.trim()) { stderr.write('mc: criterion add needs --evidence with text in it, or leave it out\n'); return 2; }
+  return changeGoal(args[0], ctx, (goal) => {
+    if (flags.evidence !== null && goal.version !== 2) return v1Refusal('--evidence');
+    return { ...goal, success_criteria: [...goal.success_criteria, { criterion: flags.criterion.trim(), check: flags.check.trim(), ...(flags.evidence === null ? {} : { evidence: flags.evidence.trim() }), met: false }] };
+  },
     (goal) => `criterion ${goal.success_criteria.length} added · ${criteriaWords(goal)}`,
     (goal, target) => warnAbsentTests(goal, target, flags.check.trim(), ctx));
 }
@@ -822,8 +859,8 @@ function setCriterion(args, flags, ctx) {
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const role = writerRole(env);
   if (goalSessionWord(env) && !['martin', 'decision'].includes(role)) { stderr.write(`mc: a ${role} session does not rewrite a criterion — acceptance is written by plan, Martin or a person\n`); return 2; }
-  const given = ['criterion', 'check'].filter((key) => flags[key] !== null);
-  if (!given.length) { stderr.write('mc: criterion set needs --criterion "…" or --check "…" — what is rewritten\n'); return 2; }
+  const given = ['criterion', 'check', 'evidence'].filter((key) => flags[key] !== null);
+  if (!given.length) { stderr.write('mc: criterion set needs --criterion "…", --check "…" or --evidence "…" — what is rewritten\n'); return 2; }
   const blank = given.filter((key) => !flags[key].trim()).map((key) => `--${key}`);
   if (blank.length) { stderr.write(`mc: criterion set needs ${blank.join(', ')} with text in it\n`); return 2; }
   const [named, number] = args.length === 2 ? args : [undefined, args[0]];
@@ -831,17 +868,21 @@ function setCriterion(args, flags, ctx) {
   if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${number} is not a criterion's number — 1, 2, …\n`); return 2; }
   const criterion = flags.criterion === null ? null : flags.criterion.trim();
   const check = flags.check === null ? null : flags.check.trim();
+  const evidence = flags.evidence === null ? null : flags.evidence.trim();
   let was = null;
   return changeGoal(named, ctx, (goal) => {
+    if (evidence !== null && goal.version !== 2) return v1Refusal('--evidence');
     if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`], code: 2 };
     was = goal.success_criteria[n - 1];
+    const kept = evidence ?? was.evidence;
     return { ...goal, success_criteria: goal.success_criteria.map((item, i) => (i === n - 1
-      ? { criterion: criterion ?? item.criterion, check: check ?? item.check, met: false }
+      ? { criterion: criterion ?? item.criterion, check: check ?? item.check, ...(kept === undefined ? {} : { evidence: kept }), met: false }
       : item)) };
   }, (goal) => `criterion ${n} rewritten, unmet · ${criteriaWords(goal)}`, (goal, target) => {
     const changed = [
       criterion === null ? null : `criterion was "${oneLine(was.criterion)}", now "${oneLine(criterion)}"`,
       check === null ? null : `check was "${oneLine(was.check)}", now "${oneLine(check)}"`,
+      evidence === null ? null : `evidence was ${was.evidence === undefined ? 'none' : `"${oneLine(was.evidence)}"`}, now "${oneLine(evidence)}"`,
     ].filter(Boolean);
     const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment: `criterion ${n} rewritten, unmet — ${changed.join('; ')}`, next: null, stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
@@ -879,6 +920,161 @@ function removeCriterion(args, flags, ctx) {
     const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment, next: null, stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
   });
+}
+
+/**
+ * Why a version 2 verb cannot be used on a version 1 goal, as a refusal for `changeGoal`: exit 2, nothing written,
+ * naming the goal's version and the verbs that apply to it.
+ */
+function v1Refusal(what) {
+  return { problems: [`it is a version 1 goal — ${what} is for version 2 goals (mc goal new --structure 2); version 1 has mc goal set goal|contract|out-of-scope, document add and criterion add|set|remove|met|unmet`], code: 2 };
+}
+
+/** Why the caller may not write the brief's parts, or null: only plan, interactive Martin or a person writes them. */
+function partsWriterRefusal(env, what) {
+  const writer = goalSessionWord(env);
+  return writer && !['martin', 'decision'].includes(writer)
+    ? `a ${writer} session does not ${what} — the brief is written by plan, interactive Martin or a person`
+    : null;
+}
+
+/** The flags `given` of `flags` among `names` (flag words, `--` kept), as `[field, value]` pairs by field name. */
+const givenOf = (flags, fields) => fields.filter((field) => flags[flagOf(field)] !== null).map((field) => [field, flags[flagOf(field)]]);
+
+/**
+ * The fields of a part's item given on the command line — `--text` as the part's text key — or why not: a field of
+ * another part, a blank text, a value outside the part's choices.
+ */
+function itemFields(part, flags, verb) {
+  const given = [];
+  const foreign = ITEM_FLAGS.map((flag) => flag.slice(2)).find((key) => flags[key] !== null && !part.fields.map(flagOf).includes(key));
+  if (foreign) return { error: `${verb} ${part.word} takes no --${foreign} — its flags are --text${part.fields.map((field) => ` --${flagOf(field)}`).join('')}` };
+  if (flags.text !== null) given.push([part.textKey, flags.text]);
+  given.push(...givenOf(flags, part.fields));
+  const blank = given.filter(([, value]) => !value.trim()).map(([field]) => `--${field === part.textKey ? 'text' : flagOf(field)}`);
+  if (blank.length) return { error: `${verb} ${part.word} needs ${blank.join(', ')} with text in it` };
+  const bad = given.find(([field, value]) => part.choices[field] && !part.choices[field].includes(value.trim()));
+  if (bad) return { error: `--${flagOf(bad[0])} is ${part.choices[bad[0]].join(', ')}, not ${bad[1].trim()}` };
+  return { fields: Object.fromEntries(given.map(([field, value]) => [field, value.trim()])) };
+}
+
+/** `mc goal item add <programme>/<goal> <part> --text "…" [the part's flags]` — an item appended, its id printed. */
+function addItemVerb(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length !== 2 || !ITEM_WORDS.includes(args[1])) { stderr.write(`mc: item add <programme>/<goal> ${ITEM_WORDS.join('|')} --text "…" and the part's flags\n`); return 2; }
+  const refused = partsWriterRefusal(env, 'add to the goal\'s parts');
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  const part = ITEM_PARTS[args[1]];
+  const read = itemFields(part, flags, 'item add');
+  if (read.error) { stderr.write(`mc: ${read.error}\n`); return 2; }
+  const missing = [part.textKey, ...part.fields].filter((field) => read.fields[field] === undefined).map((field) => `--${field === part.textKey ? 'text' : flagOf(field)}`);
+  if (missing.length) { stderr.write(`mc: item add ${part.word} needs ${missing.join(', ')} — each is required\n`); return 2; }
+  let id = null;
+  return changeGoal(args[0], ctx, (goal) => {
+    if (goal.version !== 2) return v1Refusal('item add');
+    const added = addItem(goal, part.word, read.fields);
+    id = added.id;
+    return added.goal;
+  }, () => `${part.word} ${id} added`);
+}
+
+/**
+ * `mc goal item set <programme>/<goal> <id> [--text "…"] [the part's flags]` — what is given changed, the rest
+ * kept; logged with what each field was and is now.
+ */
+function setItemVerb(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  const part = args.length === 2 ? partOfId(args[1]) : null;
+  if (!part) { stderr.write(`mc: item set <programme>/<goal> <id> — an id like ${ITEM_WORDS.map((word) => `${ITEM_PARTS[word].letter}1`).join(', ')} — and --text or the part's flags\n`); return 2; }
+  const refused = partsWriterRefusal(env, 'rewrite the goal\'s parts');
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  const read = itemFields(part, flags, 'item set');
+  if (read.error) { stderr.write(`mc: ${read.error}\n`); return 2; }
+  if (!Object.keys(read.fields).length) { stderr.write(`mc: item set needs --text or ${part.fields.map((field) => `--${flagOf(field)}`).join(', ')} — what is rewritten\n`); return 2; }
+  const [named, id] = args;
+  let changed = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (goal.version !== 2) return v1Refusal('item set');
+    const set = setItem(goal, id, read.fields);
+    if (!set) return { problems: [`it has no item ${id}`], code: 2 };
+    changed = Object.keys(read.fields).map((field) => `${field} was "${oneLine(set.was[field])}", now "${oneLine(set.item[field])}"`);
+    return set.goal;
+  }, () => `${id} rewritten`, (goal, target) => {
+    logChange(ctx, goal, target, `${id} rewritten — ${changed.join('; ')}`);
+  });
+}
+
+/** `mc goal item remove <programme>/<goal> <id> --reason "…"` — the item taken out, logged with its fields and the reason; its id is not given again. */
+function removeItemVerb(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length !== 2 || !partOfId(args[1])) { stderr.write('mc: item remove <programme>/<goal> <id> --reason "…"\n'); return 2; }
+  const refused = partsWriterRefusal(env, 'remove from the goal\'s parts');
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: item remove needs --reason "…" with text in it — why the item goes\n'); return 2; }
+  const reason = oneLine(flags.reason.trim());
+  const [named, id] = args;
+  let removed = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (goal.version !== 2) return v1Refusal('item remove');
+    const out = removeItem(goal, id);
+    if (!out) return { problems: [`it has no item ${id}`], code: 2 };
+    removed = out.was;
+    return out.goal;
+  }, () => `${id} removed`, (goal, target) => {
+    logChange(ctx, goal, target, `${id} removed — ${itemWords(removed)}; reason: ${reason}`);
+  });
+}
+
+/** `mc goal obligation set <programme>/<goal> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`. */
+function setObligationVerb(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length !== 2) { stderr.write('mc: obligation set <programme>/<goal> <area> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]\n'); return 2; }
+  const refused = partsWriterRefusal(env, 'write the goal\'s obligations');
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  const missing = [['--stand', flags.stand], ['--text', flags.text]].filter(([, value]) => value === null || !value.trim()).map(([flag]) => flag);
+  if (missing.length) { stderr.write(`mc: obligation set needs ${missing.join(', ')} with text in it\n`); return 2; }
+  if (!STANDS.includes(flags.stand.trim())) { stderr.write(`mc: --stand is ${STANDS.join(' or ')}, not ${flags.stand.trim()}\n`); return 2; }
+  if (flags.standard !== null && !/^[^\s#]+\/[^#]+#\S.*$/u.test(flags.standard.trim())) { stderr.write('mc: --standard is <repo>/<path>#<section>\n'); return 2; }
+  const [named, area] = [args[0], args[1].trim()];
+  if (!area) { stderr.write('mc: obligation set needs the area, in words\n'); return 2; }
+  let replaced = null;
+  const given = { stand: flags.stand.trim(), text: flags.text.trim(), standard: flags.standard === null ? null : flags.standard.trim() };
+  return changeGoal(named, ctx, (goal) => {
+    if (goal.version !== 2) return v1Refusal('obligation set');
+    const set = setObligation(goal, area, given);
+    replaced = set.was;
+    return set.goal;
+  }, () => `obligation "${area}" ${replaced ? 'replaced' : 'set'}`, (goal, target) => {
+    if (replaced) logChange(ctx, goal, target, `obligation "${area}" replaced — it was ${itemWords(replaced)}`);
+  });
+}
+
+/** `mc goal obligation remove <programme>/<goal> <area> --reason "…"` — the obligation taken out, logged with the reason. */
+function removeObligationVerb(args, flags, ctx) {
+  const { stderr, env } = ctx;
+  if (args.length !== 2) { stderr.write('mc: obligation remove <programme>/<goal> <area> --reason "…"\n'); return 2; }
+  const refused = partsWriterRefusal(env, 'remove the goal\'s obligations');
+  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  if (flags.reason === null || !flags.reason.trim()) { stderr.write('mc: obligation remove needs --reason "…" with text in it — why the area has none\n'); return 2; }
+  const reason = oneLine(flags.reason.trim());
+  const [named, area] = [args[0], args[1].trim()];
+  let removed = null;
+  return changeGoal(named, ctx, (goal) => {
+    if (goal.version !== 2) return v1Refusal('obligation remove');
+    const out = removeObligation(goal, area);
+    if (!out) return { problems: [`it has no obligation for "${area}"`], code: 2 };
+    removed = out.was;
+    return out.goal;
+  }, () => `obligation "${area}" removed`, (goal, target) => {
+    logChange(ctx, goal, target, `obligation "${area}" removed — ${itemWords(removed)}; reason: ${reason}`);
+  });
+}
+
+/** One LOG.md entry saying what a verb changed in the brief, written by the caller's role. */
+function logChange(ctx, goal, target, comment) {
+  const { env } = ctx;
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: null, stage: goal.stage, status: goal.status };
+  appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
 }
 
 /** A text on one line, for a LOG.md comment. */
@@ -1251,8 +1447,9 @@ function createdInThisSession(target, ctx) {
  * Why the learning role may not make this call, or null. It may read, make a goal, write one it made in this
  * session (`set`, `document add`, `criterion add`) and move that goal draft → build; a refused call changes nothing.
  */
-function learningRefusal(verb, rest, ctx) {
+function learningRefusal(verb, rest, ctx, flags = {}) {
   if (!LEARNING_VERBS.includes(verb)) return `the learning role cannot use ${verb} — it creates and writes new goals, nothing else`;
+  if (verb === 'new' && flags.structure === '2') return 'the learning role makes version 1 goals — --structure 2 is not for it';
   if (['show', 'list', 'new'].includes(verb)) return null;
   if (verb === 'stage' && rest.length !== 2) return 'the learning role moves a goal it created with mc goal stage <programme>/<goal> build';
   const target = goalNamed(rest[0], ctx);

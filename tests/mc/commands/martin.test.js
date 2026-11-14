@@ -12,7 +12,7 @@ import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-items.js';
 import { lessonsDir, renderLesson } from '../../../src/mc/desk-lessons.js';
-import { goalJson } from '../_helpers/goal-file.js';
+import { goalJson, goalJsonV2 } from '../_helpers/goal-file.js';
 
 const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -55,6 +55,21 @@ function askFixture(home, reference, env = {}) {
 }
 
 describe('mc martin get', () => {
+  it('reads a version 2 goal whole: its version, outcome, decisions and preserve as the contract, what is out of scope, and the goal as shown', () => {
+    const f = fixture(); const dir = f.make('alpha', 'two', {}, [log('2026-01-02T00:00Z', 'Martin', 'Martin is asked: Which way?\nOption a: this\nOption b: that\nRecommended: a')]);
+    writeFileSync(join(dir, 'GOAL.json'), goalJsonV2({ status: 'Martin' }));
+    const [item] = collectMartinQueue({ home: f.home }).items;
+    assert.equal(item.version, 2);
+    assert.deepEqual(item.goal_text, ['Two files and a worktree.', 'And nothing else.']);
+    assert.deepEqual(item.contract, ['Parts are numbered.', 'Version 1 is as before.']);
+    assert.deepEqual(item.exclusions, ['Converting version 1 goals.']);
+    assert.equal(item.criteria[0].evidence, 'the gate log');
+    assert.match(item.goal_markdown, /^# Make the goal plain\n\nAIM\n {2}Why the goal exists\.\n\nOUTCOME\n/u);
+    assert.match(item.goal_markdown, /\nDECISIONS\n {2}D1 Parts are numbered\.\n {6}by: Martin · on: 2026-11-14\n/u);
+    const text = io();
+    assert.equal(get([], { home: f.home, ...text }), 0);
+    assert.ok(text.out.stdout.includes(item.goal_markdown.trimEnd()), 'the desk shows the goal whole');
+  });
   it('does not queue a decided technical entry, and reads an unresolved question and its options whole', () => {
     const f = fixture();
     f.make('alpha', 'decided', { status: 'ready' }, [log('2026-01-02T00:00Z', 'ready', 'Decided by the session (technical): Which timer?\nOption inject: inject a timer\nOption wait: wait 15 seconds\nRecommended: inject\nEvidence: criterion 1\njev reading: a (p 0.50, fits 0.88, settled 0.30)')]);
