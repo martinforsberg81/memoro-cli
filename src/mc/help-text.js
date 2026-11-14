@@ -13,7 +13,7 @@ THE PAGE
 PLAN AND FOLLOW
   mc server set <dest>|clear      Set server; entrances accept --local
   mc manager                      Person: manage work across all programmes
-  mc martin                       Person: resolve goals waiting on Martin
+  mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
   mc goal list [<programme>]       Goals and their last session's next action
