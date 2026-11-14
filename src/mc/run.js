@@ -884,7 +884,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         lastAttempt.set(provider, deps.now().getTime());
         inFlight.add(provider);
         Promise.resolve().then(refresh).then((got) => {
-          say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` :`${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
+          say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
         }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
       }
     };
