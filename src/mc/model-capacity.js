@@ -13,9 +13,10 @@
  * it; it says so. A window whose reset has passed is expired: its usage is
  * unknown, never zero.
  *
- * Nothing here spends a model turn. Claude's windows come from the stream of a
- * session that ran anyway (billing.js `planWindows`); Codex's come from the
- * read-only collector in codex-capacity.js.
+ * Nothing here spends a model turn. Claude's windows come from its usage read
+ * (claude-capacity.js) and from the stream of a session that ran anyway
+ * (billing.js `planWindows`); Codex's come from the read-only collector in
+ * codex-capacity.js.
  *
  * The functions that read the state take `now`, so the tests pin every answer.
  */
@@ -130,6 +131,15 @@ export function applyFailure(state, provider, { why }, now = new Date()) {
 }
 
 /**
+ * Claude's windows of a successful read. A window the read did not validate
+ * (null) keeps the one the snapshot holds, as observeClaudeStream keeps a window
+ * a stream does not carry; its own reset still governs it (windowsAt).
+ */
+function claudeWindowsOf(held, read) {
+  return Object.fromEntries(WINDOWS.claude.map((name) => [name, read?.[name] ?? held[name]]));
+}
+
+/**
  * Apply one completed collector read to the latest state. A concurrent
  * provider-local observation wins over an older in-flight success; a failure
  * records its attempt while keeping the last valid snapshot. The caller holds
@@ -140,7 +150,7 @@ export function applyCollectedCapacity(state, provider, answer, now = new Date()
   const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
   if (answer?.ok && changed) return current;
   if (answer?.ok) return applyObservation(current, provider, {
-    windows: answer.windows,
+    windows: provider === 'claude' ? claudeWindowsOf(current.providers.claude.windows, answer.windows) : answer.windows,
     models: answer.models ?? null,
   }, now);
   return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);

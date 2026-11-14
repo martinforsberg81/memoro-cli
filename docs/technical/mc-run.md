@@ -599,14 +599,26 @@ never zero.
   fixed `https://api.anthropic.com/api/oauth/usage` origin using the installed
   Claude Code login (Keychain service on macOS, otherwise its standard
   credentials file); redirects are denied. It parses subscription
-  `five_hour`/`seven_day` usage only, never overage credits. Neither provider's
+  `five_hour`/`seven_day` usage only, never overage credits. Each Claude window
+  is validated on its own, by the same rules (finite `utilization` from 0 to
+  100, a strict `resets_at` instant). A read counts when one window validates;
+  a window that does not keeps the last valid observation and is named in the
+  runner log by window and one of four words, `absent`, `not an object`,
+  `utilization` or `resets_at`, never by a value. A response with no valid
+  window is a failure, and its log line names both windows and their words.
+  Neither provider's
   credentials or raw response is logged/persisted. Each collector is bounded
   to 20 s and 1 MiB. Failures retain the last valid snapshot and record attempt
   and failure. Claude's passive stream observations remain supplementary.
 - **Not verified live.** Controlled fixtures test the collectors; the fixed
   Claude request/auth contract was matched to inspected installed-tool code.
-  No live provider request, login or model run was made. Codex account type is
-  inferred from the successful capacity response.
+  No live provider request, login or model run was made. The polled Claude
+  response itself has still not been seen: every `rate_limit_event` in this
+  runner's Claude session streams from 2026-11-01 to 2026-11-14 carries
+  `seven_day` and none carries `five_hour`, so an absent or null `five_hour` is
+  the likely refusal (an inference). The runner log names the refused window
+  when a read fails. Codex account type is inferred from the successful capacity
+  response.
 - The retired cadence was: Codex was read once an hour from the chore pass.
 
 **The choice at launch.** `chooseCandidate` judges each candidate of the class

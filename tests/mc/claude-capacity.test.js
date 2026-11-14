@@ -12,13 +12,56 @@ const response = (body, { status = 200, headers = {} } = {}) => ({
   body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(body)); controller.close(); } }),
 });
 
-test('Claude usage normalization requires percentages and strict reset instants', () => {
-  assert.deepEqual(claudeUsageWindows(JSON.parse(valid)), {
-    five_hour: { fraction_used: 0.375, resets_at: '2026-11-06T15:00:00.000Z' },
-    seven_day: { fraction_used: 0.82, resets_at: '2026-11-10T00:00:00.000Z' },
+test('Claude usage normalization validates each window alone and names the one it refused', () => {
+  const seven = JSON.parse(valid).seven_day;
+  const sevenValid = { fraction_used: 0.82, resets_at: '2026-11-10T00:00:00.000Z' };
+  const one = (five_hour, unread) => ({ windows: { five_hour: null, seven_day: sevenValid }, unread: { five_hour: unread } });
+  assert.deepEqual(claudeUsageWindows({ seven_day: seven }), one(null, 'absent'));
+  assert.deepEqual(claudeUsageWindows({ five_hour: null, seven_day: seven }), one(null, 'absent'));
+  assert.deepEqual(claudeUsageWindows({ five_hour: { utilization: 0, resets_at: null }, seven_day: seven }), one(null, 'resets_at'));
+  assert.deepEqual(claudeUsageWindows({ five_hour: { utilization: 0, resets_at: '2026-02-30T00:00:00Z' }, seven_day: seven }), one(null, 'resets_at'));
+  assert.deepEqual(claudeUsageWindows({ five_hour: { utilization: 101, resets_at: '2026-11-06T15:00:00Z' }, seven_day: seven }), one(null, 'utilization'));
+  assert.deepEqual(claudeUsageWindows({ five_hour: JSON.parse(valid).five_hour, seven_day: [] }), {
+    windows: { five_hour: { fraction_used: 0.375, resets_at: '2026-11-06T15:00:00.000Z' }, seven_day: null },
+    unread: { seven_day: 'not an object' },
   });
-  assert.equal(claudeUsageWindows({ five_hour: { utilization: 0, resets_at: '2026-02-30T00:00:00Z' }, seven_day: JSON.parse(valid).seven_day }), null);
-  assert.equal(claudeUsageWindows({ five_hour: { utilization: 101, resets_at: '2026-11-06T15:00:00Z' }, seven_day: JSON.parse(valid).seven_day }), null);
+  assert.deepEqual(claudeUsageWindows([]), { windows: { five_hour: null, seven_day: null }, unread: { five_hour: 'absent', seven_day: 'absent' } });
+  assert.deepEqual(claudeUsageWindows(JSON.parse(valid)), {
+    windows: {
+      five_hour: { fraction_used: 0.375, resets_at: '2026-11-06T15:00:00.000Z' },
+      seven_day: sevenValid,
+    },
+    unread: {},
+  });
+});
+
+test('Claude collector reads a body with one valid window, and refuses one with none by naming each window and rule, never a value', async () => {
+  const seven = JSON.parse(valid).seven_day;
+  const one = await collectClaudeCapacity({ credentials: () => 'fixture-login', fetch: async () => response(JSON.stringify({ five_hour: null, seven_day: seven })) });
+  assert.equal(one.ok, true);
+  assert.equal(one.windows.five_hour, null);
+  assert.equal(one.windows.seven_day.fraction_used, 0.82);
+  assert.deepEqual(one.unread, { five_hour: 'absent' });
+  const none = await collectClaudeCapacity({ credentials: () => 'fixture-login', fetch: async () => response(JSON.stringify({ five_hour: { utilization: 'LEAK-7', resets_at: 'LEAK-8' }, extra: 'LEAK-9' })) });
+  assert.deepEqual(none, { ok: false, why: 'Claude subscription response had an invalid schema (five_hour: utilization; seven_day: absent)' });
+  const array = await collectClaudeCapacity({ credentials: () => 'fixture-login', fetch: async () => response('[]') });
+  assert.deepEqual(array, { ok: false, why: 'Claude subscription response had an invalid schema (five_hour: absent; seven_day: absent)' });
+  assert.doesNotMatch(JSON.stringify([one, none, array]), /LEAK|fixture-login/u);
+});
+
+test('a successful Claude read keeps the window it did not validate; a Codex null window still replaces', () => {
+  const now = new Date('2026-11-14T12:00:00Z');
+  const later = new Date('2026-11-14T12:15:00Z');
+  const window = (fraction_used) => ({ fraction_used, resets_at: '2026-11-20T13:00:00.000Z' });
+  const base = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: window(0.2), seven_day: window(0.4) } }, now);
+  const claude = applyCollectedCapacity(base, 'claude', { ok: true, windows: { five_hour: null, seven_day: window(0.43) }, unread: { five_hour: 'absent' } }, later).providers.claude;
+  assert.deepEqual(claude.windows, { five_hour: window(0.2), seven_day: window(0.43) });
+  assert.equal(claude.observed_at, later.toISOString());
+  assert.equal(claude.failure, null);
+  assert.equal('unread' in claude, false);
+  const codex = applyObservation(base, 'codex', { windows: { primary: window(0.5), secondary: window(0.6) }, models: [] }, now);
+  const replaced = applyCollectedCapacity(codex, 'codex', { ok: true, windows: { primary: window(0.7), secondary: null }, models: [] }, later).providers.codex.windows;
+  assert.deepEqual(replaced, { primary: window(0.7), secondary: null });
 });
 
 test('Claude collector makes only the fixed bounded read and returns subscription windows', async () => {
@@ -82,7 +125,7 @@ test('Claude collector sanitizes absent login, auth errors, redirects and malfor
   }
   assert.equal((await collectClaudeCapacity({ credentials: () => 'secret', fetch: async () => response('', { status: 302 }) })).why, 'Claude subscription request redirected');
   assert.equal((await collectClaudeCapacity({ credentials: () => 'secret', fetch: async () => response('{') })).why, 'Claude subscription response was not valid JSON');
-  assert.equal((await collectClaudeCapacity({ credentials: () => 'secret', fetch: async () => response('{}') })).why, 'Claude subscription response had an invalid schema');
+  assert.equal((await collectClaudeCapacity({ credentials: () => 'secret', fetch: async () => response('{}') })).why, 'Claude subscription response had an invalid schema (five_hour: absent; seven_day: absent)');
 });
 
 test('Claude collector bounds response bytes and total request time without leaking failures', async () => {

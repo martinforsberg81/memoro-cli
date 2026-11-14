@@ -44,19 +44,33 @@ function resetInstant(value) {
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
+/** One window of a usage body: `{ window, unread }`, where `unread` is the first rule it fails, as a fixed word. */
+function claudeWindow(item) {
+  if (item === undefined || item === null) return { window: null, unread: 'absent' };
+  if (typeof item !== 'object' || Array.isArray(item)) return { window: null, unread: 'not an object' };
+  if (typeof item.utilization !== 'number' || !Number.isFinite(item.utilization)
+    || item.utilization < 0 || item.utilization > 100) return { window: null, unread: 'utilization' };
+  const resets_at = resetInstant(item.resets_at);
+  if (!resets_at) return { window: null, unread: 'resets_at' };
+  return { window: { fraction_used: item.utilization / 100, resets_at }, unread: null };
+}
+
+/**
+ * `{ windows, unread }` of a usage body. Each of `five_hour` and `seven_day` is
+ * validated on its own: a window that validates is `{ fraction_used, resets_at }`,
+ * any other is null and named in `unread` by one of four fixed words. A body that
+ * is not a plain object leaves both windows absent. No value from the body is kept.
+ */
 export function claudeUsageWindows(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const plain = Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   const windows = {};
+  const unread = {};
   for (const key of ['five_hour', 'seven_day']) {
-    const item = value[key];
-    if (!item || typeof item !== 'object' || Array.isArray(item)
-      || typeof item.utilization !== 'number' || !Number.isFinite(item.utilization)
-      || item.utilization < 0 || item.utilization > 100) return null;
-    const resets_at = resetInstant(item.resets_at);
-    if (!resets_at) return null;
-    windows[key] = { fraction_used: item.utilization / 100, resets_at };
+    const { window, unread: word } = plain ? claudeWindow(value[key]) : { window: null, unread: 'absent' };
+    windows[key] = window;
+    if (word) unread[key] = word;
   }
-  return windows;
+  return { windows, unread };
 }
 
 async function readBounded(response, cap) {
@@ -92,8 +106,9 @@ export async function collectClaudeCapacity({ credentials = readClaudeCredential
     const raw = await Promise.race([readBounded(response, maxBytes), timeout]);
     let body;
     try { body = JSON.parse(raw); } catch { return { ok: false, why: 'Claude subscription response was not valid JSON' }; }
-    const windows = claudeUsageWindows(body);
-    return windows ? { ok: true, windows } : { ok: false, why: 'Claude subscription response had an invalid schema' };
+    const { windows, unread } = claudeUsageWindows(body);
+    if (windows.five_hour || windows.seven_day) return { ok: true, windows, unread };
+    return { ok: false, why: `Claude subscription response had an invalid schema (five_hour: ${unread.five_hour}; seven_day: ${unread.seven_day})` };
   } catch (error) {
     return { ok: false, why: error?.message === 'timeout' || controller.signal.aborted ? 'Claude subscription request timed out' : 'Claude subscription request unavailable' };
   } finally { if (timer) clearTimer(timer); }
