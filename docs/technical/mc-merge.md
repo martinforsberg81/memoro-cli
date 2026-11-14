@@ -1442,13 +1442,12 @@ measuring the selection` and goes on as before (`previousRedFiles` in
 
 ## The full run nobody asks for
 
-The runner runs `mc test <repo> --full` for each repository mc knows whenever
-that repository's origin/main has moved since its last measured full run, with
-nobody typing anything, **beside all other work** (Martin, 2026-11-13). This
-reverses the decision of 2026-11-09 that a whole-suite run was "a later
-concern" and replaces the once-a-day tick that preceded it: on mc-server
-(12 cores, 31 GB) Martin ruled that every repository's whole suite runs on main
-continuously and in parallel with all sessions.
+The runner runs `mc test <repo> --full` **once a day** for each repository mc
+knows whose origin/main has moved since its last measured full run, with nobody
+typing anything, **beside all other work** (Martin, 2026-11-13). On mc-server
+(12 cores, 31 GB) Martin ruled that the daily whole suite runs in parallel with
+all sessions and merges, and that it stays once a day; a run started by hand is
+an exception.
 
 It is a **chore of the runner** (`runNightly` in `src/mc/run.js`, the last
 thing a chore pass does), implemented in
@@ -1485,21 +1484,20 @@ the one way the runner is: no runner, no full run.
   a repository's whole suite is. Every run is counted in `gate-rounds.jsonl`
   like any other round, so `mc repo rounds` stays true about what this machine
   did.
-- **When: whenever main moved** (`fullRunDue`). Each chore pass reads
-  origin/main of each repository with `git ls-remote origin HEAD` and compares
+- **When: once a day, and only a main that moved** (`nightlyDue`, then
+  `fullRunDue`). A day after the last chore pass that started a run, the pass
+  reads origin/main of each repository with `git ls-remote origin HEAD` and compares
   it with the commit of the last run that measured something. Equal: the tree
   is the one already measured, so nothing runs and **nothing is written** — a
   branch that has not moved is not measured again, and a line per chore pass
   would push the measurements out of the history. A repository never measured
   is due. A head that cannot be read is measured, but not again within
   `FULL_RUN_RETRY_MS` (an hour) of the last attempt, so an offline machine does
-  not start a suite every pass. There is no interval to configure.
-- **One at a time per repository, coalesced.** The runner keeps one map of the
-  runs in flight across chore passes; a repository with a run in flight is not
-  started again however often main moves. A run that ends asks again and starts
-  the next only if origin/main moved since that run was started: ten landings
-  during one run are one more run, of the newest main. Repositories run in
-  parallel with each other. A repository the board lists under two paths is
+  not start a suite every pass. The day is `NIGHTLY_INTERVAL_MS`.
+- **One at a time per repository.** The runner keeps one map of the runs in
+  flight across chore passes; a repository with a run in flight is not started
+  again. A run that ends starts nothing after it: the next is the next day's.
+  Repositories run in parallel with each other. A repository the board lists under two paths is
   measured once, under the first.
 - **A run that stopped on a commit waits for main to move.** A suite that
   stalled, could not be prepared, or did not reach its summary will do the same
@@ -1526,15 +1524,14 @@ the one way the runner is: no runner, no full run.
   lanes reach the suite as `MC_TEST_LANES`: memoro's runner reads it, and
   memoro-cli's `npm test` passes it as `--test-concurrency` when it is set
   (node refuses `--test-concurrency` in `NODE_OPTIONS`).
-- **Its reds go to a repair.** A measured run's red on main is main's by
+- **Its reds are evidence.** A measured run's red on main is main's by
   construction. The round records it as exact-commit evidence
-  (`recordMainRed`, `from: full`), and the run hands the red files and tests to
-  `requestMainRepair` (`main-repair.js`), the same door a merge round's main red
-  goes through in `merger.js`, so the `main-health` programme gets a repair goal
-  for each red file no unfinished repair names. Before 2026-11-13 the full run
-  wrote the evidence and asked for no repair.
+  (`recordMainRed`, `from: full`). A red test never becomes a goal (Martin,
+  2026-11-13): the run accepts a `repair` callback, which the runner leaves
+  unset until main's red is repaired by a mend session started at once
+  (`main-health/main-red-direct-mend`).
 - **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` or `UPDATE`
-  starts no run and chains none. Before the runner leaves, the chore loop ends
+  starts no run. Before the runner leaves, the chore loop ends
   the runs in flight through their round's signal and waits for them
   (`settleFullRuns`), so no suite outlives the runner; each is written
   `stopped at gone` and is due again for the runner that comes next. The

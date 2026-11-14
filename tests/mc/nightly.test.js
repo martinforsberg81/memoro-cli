@@ -3,12 +3,12 @@
  *
  * The guarantees under test: a full run measures each repository mc knows
  * and writes down what it found — when it started, what it cost, which commit
- * of the branch it measured, and how it came out; it runs whenever main moved
- * since the last measurement (Martin, 2026-11-13), one at a time per
- * repository, and starts the next only if main moved meanwhile; a merge
- * round's lock does not hold it back; a round that could not measure is never
- * mistaken for one that found nothing; the reds it finds go to the repair of
- * main; and a STOP starts no further run.
+ * of the branch it measured, and how it came out; once a day it runs where main
+ * moved since the last measurement (Martin, 2026-11-13), one at a time per
+ * repository, and a run starts nothing after it; a merge round's lock does not
+ * hold it back; a round that could not measure is never mistaken for one that
+ * found nothing; its reds reach a repair only through a `repair` it is given;
+ * and a STOP starts no further run.
  *
  * And where it is reached from: `mc test nightly status`, the verb whose round
  * it runs — the only word it has, since the full run is a chore of the runner
@@ -139,7 +139,7 @@ describe('a full run', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('the reds it finds on main are handed to the repair of main', async () => {
+  it('the reds it finds on main are handed to a repair it is given, and to none by default', async () => {
     const root = home();
     try {
       const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
@@ -149,8 +149,16 @@ describe('a full run', () => {
         repo: 'memoro-cli', base: SHA, files: ['tests/mc/names.test.js'],
         tests: [{ file: 'tests/mc/names.test.js', name: 'names', error: ['expected 1', 'got 2'] }],
       }]);
-      assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — repair goal main-health\/repair-goal written/u);
+      assert.match(said.join('\n'), /main is red in tests\/mc\/names\.test\.js at aaaaaaa — repair repair-goal requested/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
+    // Without one (the runner's default, Martin 2026-11-13: a red test never becomes a goal), nothing is asked.
+    const bare = home();
+    try {
+      const red = { ...report({ verdict: 'red', red: ['memoro-cli › names'] }) };
+      red.candidate.red_tests = [{ file: 'tests/mc/names.test.js', name: 'names', error: [] }];
+      const { said } = await pass(bare, { repos: [REPOS[1]], round: () => red, repair: null });
+      assert.doesNotMatch(said.join('\n'), /repair/u);
+    } finally { rmSync(bare, { recursive: true, force: true }); }
     // A green run asks for nothing.
     const other = home();
     try {
@@ -269,7 +277,7 @@ describe('a full run, one at a time per repository', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a run that ends starts the next only if main moved meanwhile, and measures the newest main', async () => {
+  it('a run that ends starts nothing after it, even though main moved meanwhile', async () => {
     const root = home();
     try {
       // main moves from a… to b… while the first run measures a…, then stays.
@@ -285,8 +293,8 @@ describe('a full run, one at a time per repository', () => {
           return report({ commit: measured });
         },
       });
-      assert.deepEqual(asked, [SHA, OTHER], 'one more run, of the newest main, and then none');
-      assert.deepEqual(runs.map((run) => run.commit), [SHA, OTHER]);
+      assert.deepEqual(asked, [SHA], 'the next is the next day\'s');
+      assert.deepEqual(runs.map((run) => run.commit), [SHA]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -301,7 +309,7 @@ describe('a full run, and a STOP', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('a STOP during a run chains no next run, even though main moved', async () => {
+  it('a STOP during a run leaves one run written', async () => {
     const root = home();
     try {
       let main = SHA;
@@ -425,7 +433,7 @@ describe('mc test nightly status — red, and since when', () => {
 
       const state = json((await runVerb(['test', 'nightly', 'status', '--json'], fx.env)));
       assert.equal(state.runner.running, false);
-      assert.equal(state.cadence, 'main-moved');
+      assert.equal(state.cadence, 'daily');
       const reading = state.repos.repo;
       assert.equal(reading.runs, 2);
       assert.equal(reading.measured.commit, 'b'.repeat(40));
@@ -469,7 +477,7 @@ describe('mc test nightly status — red, and since when', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('says the full runs are the runner\'s chore, started whenever main moves, while the runner runs', async () => {
+  it('says the full runs are the runner\'s chore, once a day, while the runner runs', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -485,8 +493,7 @@ describe('mc test nightly status — red, and since when', () => {
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner running {2}pid \d+/u);
       assert.match(page.stdout, /the full runs are its chore/u);
-      // No clock (Martin, 2026-11-13): no "next is due in".
-      assert.match(page.stdout, /whenever its origin\/main moved since its last measured full run/u);
+      assert.match(page.stdout, /once a day, a full run of each repository whose origin\/main moved since its last measured full run/u);
       assert.match(page.stdout, /the last was started 2 h ago/u);
       assert.doesNotMatch(page.stdout, /due in/u);
       assert.match(page.stdout, /\n {4}full run\s+never/u, 'the per-repository block is still there');

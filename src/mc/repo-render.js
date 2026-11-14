@@ -127,8 +127,8 @@ export function renderNightlyLines(state, {
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
   const { runner, tick } = state;
-  // No clock (Martin, 2026-11-13): a repository's run starts when its main moved.
-  const cadence = 'a full run of each repository whenever its origin/main moved since its last measured full run, '
+  // Once a day (Martin, 2026-11-13), and only a main that moved.
+  const cadence = 'once a day, a full run of each repository whose origin/main moved since its last measured full run, '
     + 'one at a time per repository, beside merges and sessions';
   if (!runner.running) {
     lines.push(`  ${c('runner stopped', 'yellow')}  ${c('— no full run will start until mc run start', 'grey')}`);

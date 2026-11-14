@@ -2329,32 +2329,38 @@ test('a repository whose deps cannot be read is named in the row, and the others
 /* ------------------------------------------------------- the full runs */
 
 /**
- * The full runs are the last thing a chore pass does (Martin, 2026-11-13). No
- * clock: every pass asks the pass (`fullRunTick`) to start the repositories whose
- * main moved, hands it the map that keeps one run per repository across passes,
- * and does not wait for the runs. A row goes in runs.tsv only for a pass that
- * started one; STOP is asked before it, and the runs in flight are ended before
- * the runner leaves.
+ * The full runs are the last thing a chore pass does, once a day (Martin,
+ * 2026-11-13): a day after the last pass that started one, the pass
+ * (`fullRunTick`) starts the repositories whose main moved, with the map that
+ * keeps one run per repository across passes, and does not wait for the runs. A
+ * row goes in runs.tsv only for a pass that started one; STOP is asked before
+ * it, and the runs in flight are ended before the runner leaves.
  */
 const NIGHTLY_HEADER = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
 const nightlyRowAt = (ts) => `${ts}\tnightly\tnightly\t0\t1\t-\t-\t-\t-\t-\t-\t-\tstarted,memoro\n`;
 
-test('every chore pass asks for the full runs, a minute after the last as well, with one map across passes', async () => {
-  const f = fixture({
+test('the full runs are asked for once a day: not a minute after a pass that started one, again a day later', async () => {
+  const soon = fixture({
     now: '2026-08-29T10:00:00Z',
+    runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
+  });
+  await createRunner({ deps: soon.deps }).chores();
+  assert.equal(soon.calls.ticks.length, 0, 'the day gate holds');
+
+  const f = fixture({
+    now: '2026-08-30T10:00:00Z',
     runs: NIGHTLY_HEADER + nightlyRowAt('2026-08-29T09:59:00Z'),
     nightly: async () => ({ started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: Promise.resolve([]) }),
   });
   const runner = createRunner({ deps: f.deps });
   await runner.chores();
   await runner.chores();
-  assert.equal(f.calls.ticks.length, 2, 'no day gate');
+  assert.equal(f.calls.ticks.length, 1, 'the row the first pass wrote gates the second');
   assert.equal(typeof f.calls.ticks[0].shouldStop, 'function');
   assert.ok(f.calls.ticks[0].running instanceof Map);
-  assert.equal(f.calls.ticks[0].running, f.calls.ticks[1].running, 'the same map, so one run per repository holds across passes');
   const rows = runRows(f.files).filter((r) => r.kind === 'nightly');
   assert.deepEqual(rows.slice(1).map((row) => ({ name: row.name, exit: row.exit, pr: row.pr, note: row.note })),
-    [{ name: 'nightly', exit: '0', pr: '-', note: 'started,memoro' }, { name: 'nightly', exit: '0', pr: '-', note: 'started,memoro' }]);
+    [{ name: 'nightly', exit: '0', pr: '-', note: 'started,memoro' }]);
 });
 
 test('a pass that started nothing writes no row', async () => {
@@ -2372,7 +2378,7 @@ test('a STOP file means no full run: the suite is never started', async () => {
   assert.deepEqual(runRows(f.files).filter((r) => r.kind === 'nightly'), []);
 });
 
-test('a pass that throws is a failed row, and the next pass asks again', async () => {
+test('a pass that throws is a failed row', async () => {
   const f = fixture({ nightly: async () => { throw new Error('disk full'); } });
   const runner = createRunner({ deps: f.deps });
   await runner.chores();

@@ -1,6 +1,6 @@
 /**
- * The full run: each repository's whole suite on its main, measured whenever
- * main has moved, beside everything else on the machine.
+ * The full run: once a day, each repository's whole suite on its main when main
+ * has moved, beside everything else on the machine.
  *
  * Kept apart from the runner that calls it (`runNightly` in `run.js`), for the
  * reason the watcher's round is: a tick is a plain async function, so a test
@@ -17,29 +17,21 @@
  * about its own round using the ordinary aggregator, and it is why there is no
  * second implementation here to drift.
  *
- * ## When: whenever main moved (Martin, 2026-11-13)
+ * ## When: once a day, beside all other work (Martin, 2026-11-13)
  *
- * Until 2026-11-13 a tick measured every repository once a day, one after the
- * other, and only when no merge round held the repository's lane (Martin,
- * 2026-11-09: the nightly was "a later concern"). On the twelve-core,
- * 31 GB mc-server Martin reversed that: every repository's whole suite runs on
- * main continuously, in parallel with all other work. So the runner's chore
- * pass asks, for each repository, whether its full run is due (`fullRunDue`),
- * and starts the ones that are without waiting for them (`fullRunTick`):
+ * The runner's chore pass asks once a day (`nightlyDue` in `run.js`) and then,
+ * for each repository, whether its full run is due (`fullRunDue`), and starts
+ * the ones that are without waiting for them (`fullRunTick`). On mc-server
+ * Martin ruled that the daily run goes beside the merges and sessions instead of
+ * behind them, and that it stays once a day.
  *
  *  - **Due when origin/main moved** since the last full run that measured
  *    something. Equal, and the tree is the one already measured: nothing runs
- *    and nothing is written — a branch that has not moved is not measured
- *    again. A repository never measured is due.
- *  - **At most one at a time per repository**, coalesced. A repository whose
- *    run is in flight is not started again, however often main moves; when
- *    the run ends it starts the next only if main moved meanwhile. Ten
- *    landings during one run are one more run, of the tenth.
- *  - **A run that stopped on a commit waits for main to move.** A suite that
- *    stalled, could not be prepared or did not reach its summary on a commit
- *    will do it again on the same tree, and a retry would pin cores in a
- *    loop. What stopped because of the machine rather than the tree — git could
- *    not fetch, the round threw, no head could be read — is tried again after
+ *    and nothing is written. A repository never measured is due.
+ *  - **At most one at a time per repository.** A repository whose run is in
+ *    flight is not started again; a run that ends starts nothing after it.
+ *  - **A run that stopped on a commit waits for main to move.** What stopped
+ *    because of the machine rather than the tree is tried again after
  *    `FULL_RUN_RETRY_MS`. A run the runner itself cut short (STOP, UPDATE) is
  *    due again at once, for the runner that comes next.
  *
@@ -51,14 +43,13 @@
  * runs its tests at `fullRunLanes` (2, or `MC_FULL_RUN_LANES`), which is what
  * lets it share the machine; `repo-gate.js` says why two.
  *
- * ## Reds go to a repair
+ * ## Reds are evidence
  *
  * The reds a measured run finds on main are main's, by construction: there is
  * no change in the tree. They are recorded as exact-commit evidence
- * (`recordMainRed`, written by the round) and handed to `requestMainRepair`
- * (`main-repair.js`), as a merge round's main reds are, so the `main-health`
- * programme gets a repair goal for each red file no unfinished repair already
- * names.
+ * (`recordMainRed`, written by the round). A red test never becomes a goal
+ * (Martin, 2026-11-13); `repair` is the seam for the mend session that will
+ * take them (`main-health/main-red-direct-mend`), unset until then.
  *
  * ## What it leaves behind
  *
@@ -71,7 +62,6 @@
  * out of the history.
  */
 import { tryGit } from './git.js';
-import { requestMainRepair, MAIN_HEALTH_PROGRAMME } from './main-repair.js';
 import { mcHome } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
@@ -199,7 +189,7 @@ export function fullRunDue(repo, { root = mcHome(), head = remoteHead, clock = (
  */
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
-  clock = () => Date.now(), signal = null, repair = requestMainRepair,
+  clock = () => Date.now(), signal = null, repair = null,
 } = {}) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
@@ -258,13 +248,13 @@ export async function fullRun(repo, {
   // red tests with their files (`measure`), a selected one its files as well.
   const redTests = report.candidate?.red_tests || [];
   const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
-  if (Array.isArray(run.red) && run.commit && files.length) {
+  if (repair && Array.isArray(run.red) && run.commit && files.length) {
     const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
     const asked = repair({ repo: repo.name, base: run.commit, files, tests });
     const where = files.join(', ');
-    if (asked?.created) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — repair goal ${MAIN_HEALTH_PROGRAMME}/${asked.created} written${asked.open ? `; already under way: ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}` : ''}`);
-    else if (asked?.open) say(`${repo.name}: main is red in ${where} — its repair is under way in ${asked.open.map((name) => `${MAIN_HEALTH_PROGRAMME}/${name}`).join(', ')}`);
-    else say(`${repo.name}: main is red in ${where} — no repair goal written: ${asked?.skipped || 'no answer'}`);
+    if (asked?.created) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — repair ${asked.created} requested${asked.open ? `; already under way: ${asked.open.join(', ')}` : ''}`);
+    else if (asked?.open) say(`${repo.name}: main is red in ${where} — its repair is under way: ${asked.open.join(', ')}`);
+    else say(`${repo.name}: main is red in ${where} — no repair requested: ${asked?.skipped || 'no answer'}`);
   }
   return run;
 }
@@ -275,15 +265,14 @@ export async function fullRun(repo, {
  *
  * `running` is the caller's own map of repository path to the promise of its
  * run, kept across passes: it is what makes "one at a time per repository"
- * true. A run that ends asks `fullRunDue` again for its repository and starts
- * the next only if main moved meanwhile, unless `shouldStop` says the runner is
- * leaving. `done` settles when every run this pass started, and any it chained,
- * has ended, with their records: the runner does not wait on it, a test does.
+ * true. A run that ends starts nothing after it. `done` settles when every run
+ * this pass started has ended, with their records: the runner does not wait on
+ * it, a test does.
  */
 export async function fullRunTick({
   root = mcHome(), env = process.env, say = () => {}, narrate = say,
   repos = null, round = scheduledRound, clock = () => Date.now(), head = remoteHead,
-  shouldStop = () => false, running = new Map(), signal = null, repair = requestMainRepair,
+  shouldStop = () => false, running = new Map(), signal = null, repair = null,
   retryMs = FULL_RUN_RETRY_MS,
 } = {}) {
   const at = new Date(clock()).toISOString();
@@ -293,25 +282,10 @@ export async function fullRunTick({
   const waiting = [];
   const leaving = () => shouldStop() || Boolean(signal?.aborted);
 
-  const launch = (repo, sha) => {
-    const chain = (async () => {
-      const runs = [];
-      let from = sha;
-      for (;;) {
-        const ran = await fullRun(repo, { root, env, say, narrate, round, clock, signal, repair });
-        runs.push(ran);
-        if (leaving()) return runs;
-        // Only a main known to have moved since this run was started, and past
-        // what it measured. A head that cannot be read, or one the run's own
-        // measurement does not match, is the next chore pass's question, never
-        // a loop of runs.
-        const next = fullRunDue(repo, { root, head, clock, retryMs });
-        if (!next.due || !next.sha || next.sha === from || next.sha === ran.commit) return runs;
-        say(`${repo.name} — main moved during the full run (${next.why}); the next starts now`);
-        from = next.sha;
-      }
-    })();
-    const tracked = chain.finally(() => { if (running.get(repo.path) === tracked) running.delete(repo.path); });
+  const launch = (repo) => {
+    const tracked = fullRun(repo, { root, env, say, narrate, round, clock, signal, repair })
+      .then((ran) => [ran])
+      .finally(() => { if (running.get(repo.path) === tracked) running.delete(repo.path); });
     running.set(repo.path, tracked);
     return tracked;
   };
@@ -324,7 +298,7 @@ export async function fullRunTick({
     const due = fullRunDue(repo, { root, head, clock, retryMs });
     if (!due.due) { waiting.push({ repo: repo.name, why: due.why }); continue; }
     started.push({ repo: repo.name, why: due.why });
-    chains.push(launch(repo, due.sha));
+    chains.push(launch(repo));
   }
   const done = Promise.all(chains).then((all) => all.flat());
   return { at, started, running: busy, waiting, stopped, done };

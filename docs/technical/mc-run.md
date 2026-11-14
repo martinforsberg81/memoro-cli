@@ -627,12 +627,11 @@ dependency readings and tidy use their own recorded rows too.
 
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
-**full runs** (Martin, 2026-11-13): `runNightly` starts, without waiting for
-it, `mc test <repo> --full` for each repository whose origin/main moved since
-its last measured full run and that has no full run in flight, as a meter beside
-the sessions and the merge rounds. One run per repository at a time across
-chore passes (the runner keeps the map); a run that ends starts the next only if
-main moved meanwhile. It takes no round lock and no lease and measures in its
+**full runs** (Martin, 2026-11-13): once a day (`nightlyDue`), `runNightly`
+starts, without waiting for it, `mc test <repo> --full` for each repository whose
+origin/main moved since its last measured full run and that has no full run in
+flight, as a meter beside the sessions and the merge rounds. One run per
+repository at a time across chore passes (the runner keeps the map). It takes no round lock and no lease and measures in its
 own checkout, so no merge round waits for it, at 2 test lanes
 (`MC_FULL_RUN_LANES`). A `kind: nightly` row goes in `runs.tsv` only for a pass
 that started a run. A chore pass with STOP or UPDATE present starts none, the

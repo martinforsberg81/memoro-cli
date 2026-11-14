@@ -213,13 +213,9 @@ export const DEPS_NAME = 'deps';
 export const TIDY_KIND = 'tidy';
 
 /**
- * Once a day: the cadence of the daily chores that are gated by their own row
- * (`DEPS_KIND`, `TIDY_KIND`).
- *
- * It was the full run's cadence until 2026-11-13. The full run is no longer on
- * a clock: each repository's whole suite runs whenever its origin/main moved
- * since its last measured full run (Martin, 2026-11-13; `fullRunDue`,
- * `nightly-loop.js`). The name stays because the daily chores are gated by it.
+ * Once a day: the cadence of the full run and of the daily chores that are
+ * gated by their own row (`NIGHTLY_KIND`, `DEPS_KIND`, `TIDY_KIND`). The full
+ * run stays once a day (Martin, 2026-11-13).
  */
 export const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
