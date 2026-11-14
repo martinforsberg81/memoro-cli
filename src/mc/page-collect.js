@@ -57,7 +57,7 @@ import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.j
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
 import { readProgrammePriority } from './programme-priority.js';
-import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, sessions as goalSessions, waitsOnPerson } from './goals.js';
+import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, readHold, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -1242,6 +1242,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     // session's question, or the runner's word on why it stopped.
     question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     problems: goal.problems,
+    // The hold `mc goal hold` wrote (`{by, tool, at, reason}`), or null.
+    hold: readHold(goal.dir),
     };
   });
 }

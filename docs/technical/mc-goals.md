@@ -447,6 +447,23 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
+- **`hold [<p>/<g>] --reason "…"`** — an interactive takeover's hold. It writes
+  `.hold.json` in the goal's directory (`{by, tool, at, reason}`; `by` is the
+  writer's role or `person`) and one log entry, `held: <reason>`. A session
+  already running is not stopped, and the entry says so. Stage and status stay;
+  no desk item opens. The runner starts no planning, build, review, finish,
+  mend or decision session on a held goal and says so once. A held `blocked`
+  goal outside merge still reconciles to Martin without a launch. A damaged
+  `.hold.json` still holds. Refused, nothing written: a headless caller
+  (`MC_HEADLESS=1`), another goal's session, no `--reason`, a finished goal, a
+  goal already held.
+- **`release [<p>/<g>] [--reason "…"]`** — removes `.hold.json` and logs
+  `released: held by … since … (reason)` with each worktree's state (changed
+  files, commits past origin/main, last commit). The runner starts sessions on
+  the goal again. Refused, nothing removed: the same callers as `hold`, and a
+  goal that is not held.
+- The page shows a held goal's row with `held by <by> since <at> — <reason>`
+  beneath it.
 - **`martin [<p>/<g>] --kind technical|product --reason "<question>" --option "<key>: <text>"… --recommend <key>`** —
   the compatible goal-bound question command. Optional evidence, documents,
   reserved acts, caller validation, recording and routing are specified once

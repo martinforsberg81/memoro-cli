@@ -102,8 +102,8 @@ judged against the old text by the next reader.
 
 You move a stage forward only; mc refuses a session's move back. When you take
 over a goal yourself — a blocked one, one waiting on Martin, one in finish —
-say so in its LOG.md; another session does not act on it until you hand it
-back.
+hold it first with `mc goal hold <p>/<g> --reason "…"`: the runner starts no
+session on a held goal until you `mc goal release` it when you hand it back.
 
 ## Commissioning test protection
 
