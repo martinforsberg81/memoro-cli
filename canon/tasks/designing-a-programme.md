@@ -36,13 +36,15 @@ means the programme was not designed.
 5. Order by prerequisites and shared files: independent goals share a phase; dependent goals go later. A prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
-7. Write/read back the README as a headless session will; each goal stands on the design's decisions and prerequisites, and landed sections leave it.
+7. Write/read back the README as a headless session will: Aim, Measures, Gap, Next horizon,
+   Phases, Martin's, Where things are, in that order. Rewrite the dated Gap at every plan session's end.
+   At its next plan session, bring an existing page to this template, settling its aim with Martin.
+   Each goal stands on the design's decisions and prerequisites; landed sections leave the README.
 
 ## When a goal lands
 
-The plan session (or session that takes the landing) rereads measures, rewrites the dated Gap largest-first, and writes a new
-horizon when the current one is reached. Landed work is in `mc goal list` and `docs/technical/`, not Gap. Archive only when
-Martin says the aim is over or has moved to another programme, never because its goals are done.
+The plan session (or session that takes the landing) rereads measures, rewrites the dated Gap largest-first, and writes a new horizon when reached.
+Landed work is in `mc goal list` and `docs/technical/`, not Gap. Archive only when Martin says the aim is over or has moved to another programme, never because its goals are done.
 
 ## Faithful scope correction and handoff
 
@@ -55,5 +57,4 @@ does not imply deferring provider, data or DPA prerequisites. Before handoff rec
 briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build
 with a ceremonial LOG.md hold.
 
-A runner-assigned plan completes only its selected draft under the same rules;
-see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.
+A runner-assigned plan completes only its selected draft under the same rules; see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.
