@@ -172,6 +172,15 @@ test('an absent catalog has the same ordered medium defaults', () => {
   } finally { c.done(); }
 });
 
+test('a catalog with an unknown key remains refused and is not rewritten', () => {
+  const c = catalogAt({ ...BEFORE_MEDIUM, surprise: true });
+  try {
+    const before = readFileSync(modelsPath(c.env), 'utf8');
+    assert.throws(() => readModels(c.env), /surprise: unknown key/u);
+    assert.equal(readFileSync(modelsPath(c.env), 'utf8'), before);
+  } finally { c.done(); }
+});
+
 test('a review list that is empty or repeats a model is refused, not read as the defaults', () => {
   for (const [review, why] of [[[], /review: a list of at least one candidate/u], [[OLD.review, OLD.review], /review: codex:gpt-6\.1-sol is listed twice/u]]) {
     const c = catalogAt({ ...OLD, review });
