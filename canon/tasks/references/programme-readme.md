@@ -7,27 +7,39 @@ where it is and the page points at it. Written and kept by the plan session
 ```markdown
 # <programme> — <the aim in one line>
 
-<One paragraph: what this programme is for, and what it covers and does not
-cover. This is the aim every plan session drives toward. It changes only
-with Martin.>
+<One paragraph on what this programme covers and does not cover.>
 
 ## Aim
 
-<What "done" or "better" means for this programme, as a few lines a session
-can measure its work against. For an ongoing programme, the directions it
-keeps moving in.>
+<What the area is for its user when it is as good as it can be. State the
+user's enduring direction in terms of what they can do and rely on, not a list
+of work. This aim has no end: the programme is not finished when its goals
+are. It changes only with Martin.>
 
-## Now
+## Measures
 
-<Date. Where the programme stands: what has landed recently, what is under
-way, what is in the way. Brought up to date at the end of every plan
-session.>
+<Three to five observable or countable signs that the area is closer to the
+aim. Give each sign today's reading and its date. Where no reading exists yet,
+say so and what would give one.>
+
+## Gap
+
+<Date. What stands between today and the aim, largest first, each gap in a
+sentence or two. Rewrite this section, do not append to it, whenever a goal
+lands and at the end of every plan session. What landed belongs in `mc goal
+list` and `docs/technical/`, not here.>
+
+## Next horizon
+
+<The next reachable state, in terms of what the user can do then and which
+gaps it closes. When it is reached, write the next one. A programme with no
+open goal is waiting for its next horizon, not finished.>
 
 ## Phases
 
-<One line per phase that has goals: what the phase is for, and why it comes
-before the next. The goals themselves are in `mc goal list <programme>`;
-they are not repeated here.>
+<One line per phase that has goals: which part of the next horizon the phase
+serves and why it comes before the next. The goals themselves are in `mc goal
+list <programme>`; they are not repeated here.>
 
 1. <purpose of phase 1>
 2. <purpose of phase 2>
