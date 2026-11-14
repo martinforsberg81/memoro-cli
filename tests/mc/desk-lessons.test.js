@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { deskItemId, itemDirectory, readDeskItem, writeDeskItem } from '../../src/mc/desk-items.js';
+import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { decisionFailure } from '../../src/mc/desk-decision.js';
-import { carryLesson, dismissLesson, listLessons, reconcileLessons } from '../../src/mc/desk-lessons.js';
+import { briefLesson, carryLesson, dismissLesson, listLessons, reconcileLessons } from '../../src/mc/desk-lessons.js';
 
 const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -17,6 +18,7 @@ const BRIEF = 'Vad det gäller\n\n- keep: behåll regeln som den är\n- change: 
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), 'mc-lessons-')); roots.push(root);
+  mkdirSync(join(root, 'mc', 'runner', 'projects'), { recursive: true }); // the runner lock's directory
   return { root, env: { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home') } };
 }
 /** Every file under the fixture home, by path: what "nothing was written" is compared against. */
@@ -171,13 +173,60 @@ describe('a decision pass that gives up leaves an unsettled lesson', () => {
     const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('decision', 'decision:r', at), kind: 'decision', reference: 'decision:r', source_at: at, opened_at: at, state: 'prepared', sort: 'technical', reversible: null, due_at: null, outcome: null };
     writeDeskItem(item, { env: h.env });
     const io2 = { env: h.env, write: (path, text) => writeFileSync(path, text), writeJson: (path, value) => writeFileSync(path, JSON.stringify(value)) };
-    assert.equal(decisionFailure(item, { ...io2, reason: 'session exited', at: '2026-11-14T10:05:00Z' }), null);
+    const first = decisionFailure(item.id, { ...io2, reason: 'session exited', at: '2026-11-14T10:05:00Z' });
+    assert.deepEqual([first.lessonError, first.item.decision_failures.length], [null, 1]);
     assert.deepEqual(listLessons({ env: h.env }), [], 'one failure is not giving up');
-    assert.equal(decisionFailure(item, { ...io2, reason: 'session exited again', at: '2026-11-14T11:05:00Z' }), null);
+    assert.equal(decisionFailure(item.id, { ...io2, reason: 'session exited again', at: '2026-11-14T11:05:00Z' }).lessonError, null);
     const [lesson] = listLessons({ env: h.env });
     assert.deepEqual([lesson.kind, lesson.state, lesson.item, lesson.by], ['unsettled', 'open', item.id, 'runner']);
     assert.equal(readDeskItem(item.id, { env: h.env }).state, 'for-martin', 'the item still goes to Martin');
-    decisionFailure(item, { ...io2, reason: 'a third time', at: '2026-11-14T12:05:00Z' });
+    decisionFailure(item.id, { ...io2, reason: 'a third time', at: '2026-11-14T12:05:00Z' });
     assert.equal(listLessons({ env: h.env }).length, 1);
+  });
+});
+
+describe('a failed decision pass and a lesson brief are written under the lock, on the record read there', () => {
+  const at = '2026-11-14T10:00:00Z';
+  const prepared = () => ({ schema: 'mc-desk-item', version: 1, id: deskItemId('decision', 'decision:r', at), kind: 'decision', reference: 'decision:r', source_at: at, opened_at: at, state: 'prepared', sort: 'technical', reversible: null, due_at: null, outcome: null });
+  const io2 = (h) => ({ env: h.env, write: (path, text) => writeFileSync(path, text), writeJson: (path, value) => writeFileSync(path, JSON.stringify(value)) });
+  it('adds no failure, brief or lesson to an item the session settled before the hold', () => {
+    const h = home(); const item = prepared(); writeDeskItem(item, { env: h.env });
+    const settled = { ...item, state: 'closed', outcome: { by: 'decision', at: '2026-11-14T10:04:00.000Z', summary: 'Settled.' } };
+    const holds = [];
+    const lock = (root, fn, options) => { holds.push(options); writeJsonAtomic(join(itemDirectory(item, h.env), 'item.json'), settled); return fn(); };
+    const before = tree(h.root);
+    const ended = decisionFailure(item.id, { ...io2(h), reason: 'exited', at: '2026-11-14T10:05:00Z', lock, read: id => readDeskItem(id, { env: h.env }) });
+    assert.deepEqual(ended, { item: null, lessonError: null }); assert.deepEqual(holds, [{ strict: true, name: 'desk-item' }]);
+    assert.deepEqual(readDeskItem(item.id, { env: h.env }), settled);
+    assert.deepEqual(Object.keys(tree(h.root)), Object.keys(before), 'no brief.md and no other file appeared');
+    assert.deepEqual(listLessons({ env: h.env }), []);
+  });
+  it('lets a lock that cannot be taken stop the failure before anything is written', () => {
+    const h = home(); const item = prepared(); writeDeskItem(item, { env: h.env }); const before = tree(h.root);
+    const lock = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+    assert.throws(() => decisionFailure(item.id, { ...io2(h), reason: 'exited', at: '2026-11-14T10:05:00Z', lock }), /held by pid 4242/u);
+    assert.deepEqual(tree(h.root), before);
+  });
+  it('briefs a lesson once: an item that appears before the hold is kept, and the second brief is refused', async () => {
+    const h = home(); const [name] = await open(h);
+    const other = 'Vad det gäller\n\n- keep: behåll\n- change: ändra\n';
+    let made;
+    const lock = (root, fn) => { made = briefLesson({ env: h.env, name, brief: BRIEF, now: NOW }); return fn(); };
+    const twice = briefLesson({ env: h.env, name, brief: other, now: NOW, lock });
+    assert.equal(twice.error, `lesson ${name} has been brought to Martin already`);
+    assert.equal(readFileSync(join(itemDirectory(made.item, h.env), 'brief.md'), 'utf8'), `${BRIEF.trim()}\n`, 'the brief of the first stands');
+    assert.deepEqual(readDeskItem(made.item.id, { env: h.env }), made.item);
+    assert.equal(listLessons({ env: h.env })[0].state, 'dismissed');
+  });
+  it('briefs a lesson under the strict lock, writes nothing when it cannot be taken, and leaves the lesson open', async () => {
+    const h = home(); const [name] = await open(h); const holds = [];
+    const before = tree(h.root);
+    const lock = (root, fn, options) => { holds.push(options); throw new Error('the runner lock is held by pid 4242 — try again'); };
+    assert.throws(() => briefLesson({ env: h.env, name, brief: BRIEF, now: NOW, lock }), /held by pid 4242/u);
+    assert.deepEqual(holds, [{ strict: true, name: 'desk-item' }]); assert.deepEqual(tree(h.root), before);
+    assert.equal(listLessons({ env: h.env })[0].state, 'open');
+    const refused = io();
+    assert.equal(await martin(['lesson', 'brief', name, '--file', '-'], { ...refused, env: { ...h.env, MC_ROLE: 'martin' }, now: () => NOW, readStdin: () => BRIEF, lock }), 1);
+    assert.equal(refused.o.stderr, 'mc: the runner lock is held by pid 4242 — try again\n');
   });
 });

@@ -8,7 +8,7 @@ import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
-import { deskItemQuestion, itemDirectory, itemStore, listDeskItems, readDeskItem, syncDeskItems, writeDeskItem } from '../desk-items.js';
+import { deskItemQuestion, itemDirectory, itemStore, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
 import { deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
@@ -70,6 +70,7 @@ export async function run(argv, deps = {}) {
   const root = (deps.desk || martinDir)(env);
   (deps.mkdir || mkdirSync)(root, { recursive: true });
   const data = openingFor({ env, home, now, last, deps, stderr });
+  if (!data) return 1;
   const opening = renderOpening(data);
   const launch = { overlay: role.overlay, prompt: opening, model: role.model || null };
   const opened = await (deps.open || openInWorkArea)({
@@ -96,7 +97,8 @@ function items(argv, deps) {
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
   if (parsed.flags.state && !['new','prepared','for-martin','closed'].includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
   const home = deps.home || programsHome(env);
-  syncDeskItems({ env, home, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) });
+  try { syncDeskItems({ env, home, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) }); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
   const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
   const shown = result.map((x) => ({ ...x, question: deskItemQuestion(x, { env, home }) }));
   if (parsed.flags.json) stdout.write(`${JSON.stringify(shown, null, 2)}\n`);
@@ -120,34 +122,45 @@ function item(argv, deps) {
   if (!['person','martin','desk-prepare','decision'].includes(role)) return refused(record, verb, stderr, `role ${role} cannot write desk items`);
   const parsed = scanArgs(rest, ROUTES.item);
   if (parsed.error || parsed.positional.length) return refused(record, verb, stderr, parsed.error || `unknown argument ${parsed.positional[0]}`);
-  const f = parsed.flags, dir = itemDirectory(record, env), state = record.state;
-  const refuse = (message) => refused(record, verb, stderr, message);
-  if (role === 'desk-prepare' && verb !== 'prepared') return refuse('desk-prepare may only use prepared');
-  if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
-    record.state = 'prepared'; record.sort = f.sort; writeDeskItem(record, { env }); return 0;
-  }
-  if (verb === 'brief' && state === 'prepared' && ['product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
-    if (f.recommend !== null && !briefOptions(maybeRead(join(dir, 'brief.md'))).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
-    if (f.recommend !== null) record.recommend = f.recommend;
-    record.state = 'for-martin'; record.sort = f.sort; record.reversible = f.reversible === 'yes'; record.due_at = record.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; writeDeskItem(record, { env }); return 0;
-  }
-  if (verb === 'close' && ['prepared','for-martin'].includes(state) && ['decision','martin','default'].includes(f.by)) {
-    let summary = f.summary;
-    if (f['summary-file']) { try { summary = (deps.readFile || readFileSync)(f['summary-file'], 'utf8').trim(); } catch { return refuse('summary file is missing'); } }
-    if (!summary?.trim() || summary.trim().split(/\n\s*\n/u).length > 1) return refuse('close requires one paragraph with --summary or --summary-file');
-    if (f.chose !== null && f.by !== 'martin') return refuse('--chose is what Martin chose: only with --by martin');
-    const briefText = maybeRead(join(dir, 'brief.md'));
-    if (f.chose !== null && !briefOptions(briefText).has(f.chose)) return refuse(`brief.md names no option "${f.chose}"`);
-    if (f.by === 'martin' && record.recommend && f.chose === null) return refuse(`the brief recommended "${record.recommend}": close --by martin needs --chose <key> of the option he chose`);
-    const closedAt = (deps.now || (() => new Date()))();
-    if (f.chose !== null) record.chose = f.chose;
-    if (record.recommend && f.chose !== null && f.chose !== record.recommend) {
-      const written = recordAnswerDiffers({ env, item: record, brief: briefText, now: closedAt, by: role });
-      if (written.error) return refuse(written.error);
+  const f = parsed.flags;
+  if (role === 'desk-prepare' && verb !== 'prepared') return refused(record, verb, stderr, 'desk-prepare may only use prepared');
+  // Everything below is judged on the record read inside the lock, never on the one read above.
+  let code = 0;
+  const decide = (fresh) => {
+    if (!fresh) { stderr.write(`mc: unknown item ${id}; no item state or verb applies\n`); code = 2; return null; }
+    const dir = itemDirectory(fresh, env), state = fresh.state;
+    const refuse = (message) => { code = refused(fresh, verb, stderr, message); return null; };
+    if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
+      fresh.state = 'prepared'; fresh.sort = f.sort; return fresh;
     }
-    record.state = 'closed'; record.outcome = { by: f.by, at: closedAt.toISOString(), summary: summary.trim() }; writeDeskItem(record, { env }); return 0;
-  }
-  return refuse('transition not allowed');
+    if (verb === 'brief' && state === 'prepared' && ['product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
+      if (f.recommend !== null && !briefOptions(maybeRead(join(dir, 'brief.md'))).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
+      if (f.recommend !== null) fresh.recommend = f.recommend;
+      fresh.state = 'for-martin'; fresh.sort = f.sort; fresh.reversible = f.reversible === 'yes'; fresh.due_at = fresh.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; return fresh;
+    }
+    if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin','default'].includes(f.by)) {
+      let summary = f.summary;
+      if (f['summary-file']) { try { summary = (deps.readFile || readFileSync)(f['summary-file'], 'utf8').trim(); } catch { return refuse('summary file is missing'); } }
+      if (!summary?.trim() || summary.trim().split(/\n\s*\n/u).length > 1) return refuse('close requires one paragraph with --summary or --summary-file');
+      if (f.chose !== null && f.by !== 'martin') return refuse('--chose is what Martin chose: only with --by martin');
+      const briefText = maybeRead(join(dir, 'brief.md'));
+      if (f.chose !== null && !briefOptions(briefText).has(f.chose)) return refuse(`brief.md names no option "${f.chose}"`);
+      if (f.by === 'martin' && fresh.recommend && f.chose === null) return refuse(`the brief recommended "${fresh.recommend}": close --by martin needs --chose <key> of the option he chose`);
+      const closedAt = (deps.now || (() => new Date()))();
+      if (f.chose !== null) fresh.chose = f.chose;
+      if (fresh.recommend && f.chose !== null && f.chose !== fresh.recommend) {
+        const written = recordAnswerDiffers({ env, item: fresh, brief: briefText, now: closedAt, by: role });
+        if (written.error) return refuse(written.error);
+      }
+      // A close over a source closure keeps the closure it replaces.
+      const replaced = state === 'closed' ? fresh.outcome : null;
+      fresh.state = 'closed'; fresh.outcome = { by: f.by, at: closedAt.toISOString(), summary: summary.trim(), ...(replaced ? { replaced } : {}) }; return fresh;
+    }
+    return refuse('transition not allowed');
+  };
+  try { updateDeskItem(id, decide, { env, ...(deps.lock ? { lock: deps.lock } : {}) }); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  return code;
 }
 // ---- Lessons ------------------------------------------------------------------------
 
@@ -182,7 +195,8 @@ function lesson(argv, deps) {
     if (!f.file) return fail('lesson brief needs --file <path|-> with the brief for Martin');
     let text;
     try { text = f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8'); } catch { return fail(`cannot read ${f.file}`); }
-    const done = briefLesson({ env, name, brief: text, now });
+    let done;
+    try { done = briefLesson({ env, name, brief: text, now, ...(deps.lock ? { lock: deps.lock } : {}) }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
     if (done.error) return fail(done.error);
     stdout.write(`${name} · dismissed · item ${done.item.id}\n`);
     return 0;
@@ -216,7 +230,9 @@ function lessons(argv, deps) {
 
 const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
 function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
-function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' ? 'close' : 'no verb'} applies\n`); return 2; }
+/** Closed by the source after it was prepared or briefed: the one closed item a close still applies to. */
+function sourceClosedWithSort(record) { return record.state === 'closed' && record.outcome?.by === 'source' && record.sort != null; }
+function refused(record, verb, stderr, why) { stderr.write(`mc: item ${record.id} is ${record.state}; ${why}; ${record.state === 'new' ? 'prepared' : record.state === 'prepared' ? 'brief or close' : record.state === 'for-martin' || sourceClosedWithSort(record) ? 'close' : 'no verb'} applies\n`); return 2; }
 function maybeRead(path) { try { return readFileSync(path, 'utf8'); } catch { return null; } }
 function exists(path) { try { return readFileSync(path); } catch { return null; } }
 function readDecisionRows(env) { return String(maybeRead(ledgerPath(mcHome(env))) || '').split(/\n/u).filter(Boolean).flatMap(line=>{ try { const row=JSON.parse(line); return [{...row,reference:`decision:${row.at}`}]; } catch { return []; } }); }
@@ -265,8 +281,10 @@ const timeOf = (text) => Date.parse(text) || 0;
 const oneLine = (text) => String(text ?? '').replace(/\s+/gu, ' ').trim();
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+/** The opening, or null when the sync could not take the lock: the message is on stderr and nothing is printed or opened. */
 function openingFor({ env, home, now, last, deps, stderr }) {
-  syncDeskItems({ env, home, now: () => now, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) });
+  try { syncDeskItems({ env, home, now: () => now, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) }); }
+  catch (error) { stderr.write(`mc: ${error.message}\n`); return null; }
   return buildOpening({ env, home, now, last, read: deps.read || readDeskText });
 }
 
@@ -394,6 +412,7 @@ function brief(argv, deps) {
   let last;
   try { last = readLastOpen({ env, read: deps.read || readDeskText }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
   const data = openingFor({ env, home, now, last, deps, stderr });
+  if (!data) return 1;
   stdout.write(parsed.flags.json ? `${JSON.stringify(data, null, 2)}\n` : renderOpening(data));
   return 0;
 }

@@ -8,6 +8,7 @@ import { mainMendPath, readMainMends } from './main-repair.js';
 import { parseGoal, parseLog, GOAL_FILE, LOG_FILE } from './goals.js';
 import { mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath } from './jev.js';
+import { realLock } from './runner-lock.js';
 
 export const ITEM_STATES = ['new', 'prepared', 'for-martin', 'closed'];
 const open = (item) => item.state !== 'closed';
@@ -16,8 +17,19 @@ export function deskItemId(kind, reference, sourceAt) {
 }
 export function itemStore(env = process.env) { return join(martinDir(env), 'items'); }
 
-/** Sync is idempotent; its only writes are atomic files below ~/mc/martin/items. */
-export function syncDeskItems({ env = process.env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic, reportIssue = issue => process.stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`) } = {}) {
+/**
+ * Sync is idempotent. It runs in one hold of the strict runner lock, from the store marker's
+ * reading to the last item write, so every record it decides on was read under the lock
+ * (milliseconds: the collect is the bulk). Apart from the lock's own file, its only writes are
+ * atomic files below ~/mc/martin/items. A lock that cannot be had throws; nothing is written.
+ */
+export function syncDeskItems({ env = process.env, lock = realLock, reportIssue = issue => process.stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...options } = {}) {
+  const { items, issues } = lock(workRoot(env), () => syncHeld({ env, ...options }), { strict: true, name: 'desk-items-sync' });
+  for (const issue of issues) reportIssue(issue);
+  return items;
+}
+
+function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic }) {
   const dir = join(martinDir(env), 'items');
   mkdirSync(dir, { recursive: true });
   const marker = join(dir, '.store.json');
@@ -111,8 +123,7 @@ export function syncDeskItems({ env = process.env, home = programsHome(env), roo
     }
     if (summary) { item.state = 'closed'; item.outcome = { by: 'source', at: now().toISOString(), summary }; write(join(dir, item.id, 'item.json'), item); }
   }
-  for (const issue of issues.values()) reportIssue(issue);
-  return [...existing.values()];
+  return { items: [...existing.values()], issues: [...issues.values()] };
 }
 
 /** Recover the original label from source history, without extending item.json. */
@@ -141,7 +152,26 @@ export function readDeskItem(id, { env = process.env, read = readText } = {}) {
   if (!/^[a-f0-9]{24}$/u.test(id)) return null;
   try { return JSON.parse(read(join(itemStore(env), id, 'item.json'))); } catch { return null; }
 }
+/** An unlocked write: fixtures only. Every change of an item in the product goes through `updateDeskItem`. */
 export function writeDeskItem(item, { env = process.env, write = writeJsonAtomic } = {}) { write(join(itemStore(env), item.id, 'item.json'), item); }
+
+/**
+ * The one way an item.json changes: a read-modify-write under the strict runner lock, as
+ * `updateMainMends` does. `change` gets the record read inside the lock (null when there is none) and
+ * returns the record to write, or null to refuse: then nothing is written. The result is
+ * `{ item, written }`, `item` being the record written or, on a refusal, the record read. A lock that
+ * cannot be had throws and nothing is written. The lock is not re-entrant: nothing `change` calls may
+ * take it. `read` takes the id, `write` the item.json path and the record.
+ */
+export function updateDeskItem(id, change, { env = process.env, lock = realLock, read = (itemId) => readDeskItem(itemId, { env }), write = writeJsonAtomic } = {}) {
+  return lock(workRoot(env), () => {
+    const current = read(id);
+    const next = change(current);
+    if (!next) return { item: current, written: false };
+    write(join(itemStore(env), id, 'item.json'), next);
+    return { item: next, written: true };
+  }, { strict: true, name: 'desk-item' });
+}
 export function itemDirectory(item, env = process.env) { return join(itemStore(env), item.id); }
 export function listDeskItems({ env = process.env, state = null } = {}) {
   const dir = itemStore(env); const items = [];

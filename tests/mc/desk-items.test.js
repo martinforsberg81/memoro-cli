@@ -4,14 +4,14 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
-import { deskItemId, deskItemQuestion, syncDeskItems, listDeskItems } from '../../src/mc/desk-items.js';
+import { deskItemId, deskItemQuestion, itemDirectory, syncDeskItems, listDeskItems, readDeskItem, updateDeskItem } from '../../src/mc/desk-items.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { NO_PROGRESS_STOP } from '../../src/mc/goals.js';
 
 const roots=[]; after(()=>roots.forEach(x=>rmSync(x,{recursive:true,force:true})));
-function fixture() { const root=mkdtempSync(join(tmpdir(),'mc-desk-items-')); roots.push(root); const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs'); mkdirSync(join(home,'alpha','goals','one'),{recursive:true}); return {root,env,home,dir:join(home,'alpha','goals','one')}; }
+function fixture() { const root=mkdtempSync(join(tmpdir(),'mc-desk-items-')); roots.push(root); const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs'); mkdirSync(join(env.MC_WORK_ROOT,'runner','projects'),{recursive:true}); mkdirSync(join(home,'alpha','goals','one'),{recursive:true}); return {root,env,home,dir:join(home,'alpha','goals','one')}; }
 const stamp='2026-11-14T10:00:00Z';
 
 test('sync opens the current source once, closes resolved goal items, and is idempotent',()=>{
@@ -207,3 +207,83 @@ for (const source of ['goal', 'main-red']) for (const fault of ['missing', 'malf
     assert.equal(syncDeskItems(deps).find(x => x.id === item.id).state, 'new');
   });
 }
+
+// One writer at a time: the injected lock stands for a second writer, which does its write before the first one's hold begins.
+const waiting = (f) => {
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+  writeFileSync(join(f.dir, 'LOG.md'), `## ${stamp} · person · build · Martin\n\nComment: Martin is asked: Keep waiting?\n`);
+  const deps = { env: f.env, home: f.home, now: () => new Date(stamp), reportIssue: () => {} };
+  const [item] = syncDeskItems(deps);
+  return { deps, item, path: join(f.env.MC_WORK_ROOT, 'martin', 'items', item.id, 'item.json') };
+};
+const settled = (item, by = 'decision') => ({ ...item, state: 'closed', outcome: { by, at: '2026-11-14T10:30:00.000Z', summary: 'Settled while the sync waited.' } });
+
+// The item verbs are synchronous up to their first await, so a verb started inside the injected lock has written when the lock's function returns.
+const verb = (f, args, role = 'decision') => { martin(args, { env: { ...f.env, MC_ROLE: role }, home: f.home, stdout: { write() {} }, stderr: { write() {} } }); };
+
+test('the sync runs in one strict hold of the runner lock and never overwrites a decision close made through the real verb before it', () => {
+  const f = fixture(); const { deps, item } = waiting(f);
+  writeFileSync(join(itemDirectory(item, f.env), 'prepared.md'), 'Evidence'); verb(f, ['item', item.id, 'prepared', '--sort', 'technical']);
+  assert.equal(readDeskItem(item.id, { env: f.env }).state, 'prepared');
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'ready' })); // the goal has left Martin: the sync would close the item by source
+  const holds = [];
+  const lock = (root, fn, options) => { holds.push({ root, options }); verb(f, ['item', item.id, 'close', '--by', 'decision', '--summary', 'Carried out.']); return fn(); };
+  syncDeskItems({ ...deps, lock });
+  assert.deepEqual(holds, [{ root: f.env.MC_WORK_ROOT, options: { strict: true, name: 'desk-items-sync' } }], 'one hold for the whole sync');
+  const after = readDeskItem(item.id, { env: f.env });
+  assert.deepEqual([after.state, after.outcome.by, after.outcome.summary], ['closed', 'decision', 'Carried out.'], 'the decision close made before the hold stands');
+});
+
+test('the sync still closes by source when nobody settled the item first', () => {
+  const f = fixture(); const { deps, item } = waiting(f);
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'ready' }));
+  syncDeskItems({ ...deps, lock: (root, fn) => fn() });
+  assert.equal(readDeskItem(item.id, { env: f.env }).outcome.by, 'source');
+});
+
+test('a sync that cannot take the lock throws and writes nothing, not even the store', () => {
+  const f = fixture(); const { deps, item, path } = waiting(f);
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'ready' }));
+  const before = sourceSnapshot(f.root); const issues = [];
+  const lock = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+  assert.throws(() => syncDeskItems({ ...deps, lock, reportIssue: issue => issues.push(issue) }), /held by pid 4242/u);
+  assert.deepEqual(sourceSnapshot(f.root), before); assert.deepEqual(issues, []);
+  assert.equal(readDeskItem(item.id, { env: f.env }).state, 'new'); assert.ok(path);
+});
+
+test('updateDeskItem reads the record inside the hold, writes only a change, and stops when the lock cannot be taken', () => {
+  const f = fixture(); const { item, path } = waiting(f);
+  const order = []; const writes = [];
+  const lock = (root, fn, options) => { order.push(['enter', options]); writeJsonAtomic(path, { ...item, sort: 'technical' }); try { return fn(); } finally { order.push(['exit']); } };
+  const read = id => { order.push(['read']); return readDeskItem(id, { env: f.env }); };
+  const write = (target, value) => { order.push(['write']); writes.push([target, value]); };
+  const changed = updateDeskItem(item.id, current => ({ ...current, state: 'prepared' }), { env: f.env, lock, read, write });
+  assert.deepEqual(order.map(x => x[0]), ['enter', 'read', 'write', 'exit']);
+  assert.deepEqual(order[0][1], { strict: true, name: 'desk-item' });
+  assert.equal(changed.written, true); assert.deepEqual([changed.item.state, changed.item.sort], ['prepared', 'technical'], 'the change saw the record the earlier writer left');
+  assert.deepEqual(writes, [[path, changed.item]]);
+  order.length = 0; writes.length = 0;
+  const unchanged = updateDeskItem(item.id, () => null, { env: f.env, lock, read, write });
+  assert.equal(unchanged.written, false); assert.deepEqual(writes, []);
+  const refused = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+  assert.throws(() => updateDeskItem(item.id, current => ({ ...current, state: 'prepared' }), { env: f.env, lock: refused, read, write }), /held by pid 4242/u);
+  assert.deepEqual(writes, []);
+});
+
+test('the sync never writes a new record over an item a second sync created and the verbs advanced', () => {
+  const f = fixture();
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+  writeFileSync(join(f.dir, 'LOG.md'), `## ${stamp} · person · build · Martin\n\nComment: Martin is asked: Keep waiting?\n`);
+  const deps = { env: f.env, home: f.home, now: () => new Date(stamp), reportIssue: () => {} };
+  const lock = (root, fn) => {
+    const [made] = syncDeskItems({ ...deps, lock: (r, body) => body() });
+    writeFileSync(join(itemDirectory(made, f.env), 'prepared.md'), 'Evidence');
+    verb(f, ['item', made.id, 'prepared', '--sort', 'technical']);
+    return fn();
+  };
+  const items = syncDeskItems({ ...deps, lock });
+  assert.equal(items.length, 1, 'one item');
+  assert.deepEqual([items[0].state, items[0].sort], ['prepared', 'technical']);
+  assert.deepEqual(readDeskItem(items[0].id, { env: f.env }), items[0]);
+  assert.equal(readdirSync(join(f.env.MC_WORK_ROOT, 'martin', 'items')).filter(n => !n.startsWith('.')).length, 1);
+});

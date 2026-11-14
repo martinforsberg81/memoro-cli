@@ -99,7 +99,7 @@ import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
-import { decisionEligible, decisionFailure, decisionPrompt } from './desk-decision.js';
+import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
@@ -1629,12 +1629,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
       const ended = deps.deskItems.read(name);
       // A due item unchanged by the session is not a successful for-martin ending.
-      const unfinished = ended && ended.state !== 'closed' && (ended.state !== 'for-martin' || decisionEligible(ended, deps.now()));
+      const unfinished = decisionUnfinished(ended, deps.now());
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       if (unfinished) {
-        const lessonError = decisionFailure(ended, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson });
-        if (lessonError) say(`${name}: the unsettled lesson was not written — ${lessonError}`);
-        if (ended.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
+        // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
+        const failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item, deps.now()) });
+        if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
+        if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
       }
       logRun({ ...read, ts: stamp(), name, kind: 'decision', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', note: unfinished ? reason : ended?.state || 'item missing', model: settings.model, cls: '-', tool: settings.tool, effort: settings.effort, billing: picked.billing });
       return 'ran';

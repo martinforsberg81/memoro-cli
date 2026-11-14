@@ -123,3 +123,25 @@ test('the drain rereads the ceiling after recording a paid turn', async t => {
   assert.deepEqual(said.filter(line => line.includes('ceiling')), ['desk-prepare: desk ceiling holds turns: $1.0000 today (UTC), ceiling $1']);
   assert.equal(readDeskItem(second.id, { env: f.env }).prepare_failures, undefined);
 });
+
+test('a failed turn is counted on the record read under the lock: an item settled meanwhile gets no failure, and a lock that cannot be taken counts none', async t => {
+  const f = fixture(t);
+  const path = join(itemDirectory(f.item, f.env), 'item.json');
+  const holds = [];
+  // The competing preparation is the real verb, started inside the hold; the verb is synchronous up to its first await.
+  const lock = (root, fn, options) => {
+    holds.push(options); writeFileSync(join(itemDirectory(f.item, f.env), 'prepared.md'), 'Evidence');
+    martin(['item', f.item.id, 'prepared', '--sort', 'technical'], { env: { ...f.env, MC_ROLE: 'decision' }, stdout: { write() {} }, stderr: { write() {} } });
+    return fn();
+  };
+  const done = await f.call({ session: () => result, lock });
+  assert.deepEqual(holds, [{ strict: true, name: 'desk-item' }]);
+  const settled = readDeskItem(f.item.id, { env: f.env });
+  assert.deepEqual([settled.state, settled.sort, settled.prepare_failures], ['prepared', 'technical', undefined]);
+  assert.deepEqual(readDeskItem(f.item.id, { env: f.env }), settled, 'the preparation that landed first stands, with no failure added');
+  assert.equal(done.ok, true);
+  const g = fixture(t); const before = readFileSync(join(itemDirectory(g.item, g.env), 'item.json'), 'utf8');
+  const refused = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+  await assert.rejects(g.call({ session: () => result, lock: refused }), /held by pid 4242/u);
+  assert.equal(readFileSync(join(itemDirectory(g.item, g.env), 'item.json'), 'utf8'), before);
+});

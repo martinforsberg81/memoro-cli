@@ -11,6 +11,7 @@ import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { appendEntry } from '../../../src/mc/goals.js';
 import { collectMartinQueue, renderMartinQueue } from '../../../src/mc/martin-collect.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-items.js';
+import { writeJsonAtomic } from '../../../src/mc/atomic-write.js';
 import { lessonsDir, renderLesson } from '../../../src/mc/desk-lessons.js';
 import { goalJson, goalJsonV2 } from '../_helpers/goal-file.js';
 
@@ -292,6 +293,7 @@ function openingStore({ lastOpen = LAST } = {}) {
   const home = join(root, 'programs');
   const store = join(env.MC_WORK_ROOT, 'martin', 'items');
   mkdirSync(store, { recursive: true });
+  mkdirSync(join(env.MC_WORK_ROOT, 'runner', 'projects'), { recursive: true }); // the runner lock's directory
   writeFileSync(join(store, '.store.json'), JSON.stringify({ schema: 'mc-desk-item-store', version: 1, first_sync_at: '2026-11-01T00:00:00.000Z' }));
   if (lastOpen) writeFileSync(join(env.MC_WORK_ROOT, 'martin', 'last-open.json'), JSON.stringify({ at: lastOpen }));
   const goal = (programme, name, { phase = 1, status = 'Martin', question = null } = {}) => {
@@ -433,6 +435,7 @@ describe('mc martin item transitions', () => {
     const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')};
     const source_at='2026-11-14T10:00:00Z', id=deskItemId('goal','alpha/one',source_at);
     const record={schema:'mc-desk-item',version:1,id,kind:'goal',reference:'alpha/one',source_at,opened_at:source_at,state,sort:null,reversible:null,due_at:null,outcome:null};
+    mkdirSync(join(env.MC_WORK_ROOT,'runner','projects'),{recursive:true}); // the runner lock's directory
     writeDeskItem(record,{env}); return {env,record,dir:itemDirectory(record,env)};
   }
   it('requires each prepared artifact and advances prepared, brief and close with a deterministic clock', async()=>{
@@ -526,6 +529,92 @@ describe('mc martin item transitions', () => {
     const output = io(); assert.equal(await run(['item', f.record.id], { ...output, env: f.env, home: join(f.env.MC_WORK_ROOT, 'programs') }), 0);
     const { source, prepared, brief, ...detail } = JSON.parse(output.out.stdout);
     assert.deepEqual(detail, current); assert.equal(source, null); assert.equal(prepared, 'Evidence'); assert.equal(brief, 'Recommendation');
+  });
+  // The sync closes by source while the deciding session works: the session's close still stands and keeps the closure it replaces.
+  const sourceClosure = { by: 'source', at: '2026-11-14T10:20:00.000Z', summary: 'The source resolved.' };
+  const closeArgs = (f, by) => ['item', f.record.id, 'close', '--by', by, '--summary', 'Settled.'];
+  for (const by of ['decision', 'martin', 'default']) it(`close --by ${by} over a source closure replaces it and records it as outcome.replaced`, async () => {
+    const f = stored('prepared'); const path = join(f.dir, 'item.json');
+    writeJsonAtomic(path, { ...f.record, sort: 'product', state: 'closed', outcome: sourceClosure });
+    const result = io();
+    assert.equal(await run(closeArgs(f, by), { ...result, env: { ...f.env, MC_ROLE: by === 'decision' ? 'decision' : 'martin' }, now: () => new Date('2026-11-14T11:00:00Z') }), 0, result.out.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { ...f.record, sort: 'product', state: 'closed', outcome: { by, at: '2026-11-14T11:00:00.000Z', summary: 'Settled.', replaced: sourceClosure } });
+  });
+  it('a real sync closes a prepared item by source; the decision close then stands, is listed as decided and counts no source closure', async () => {
+    const f = stored('prepared'); const path = join(f.dir, 'item.json'); const home = join(f.env.MC_WORK_ROOT, 'programs');
+    writeJsonAtomic(path, { ...f.record, sort: 'technical' });
+    mkdirSync(join(home, 'alpha', 'goals', 'one'), { recursive: true }); writeFileSync(join(home, 'alpha', 'README.md'), 'Alpha');
+    writeFileSync(join(home, 'alpha', 'goals', 'one', 'GOAL.json'), goalJson({ status: 'ready' }));
+    assert.equal(await run(['items'], { ...io(), env: f.env, home, syncDeps: { now: () => new Date('2026-11-14T10:30:00Z') } }), 0);
+    mkdirSync(join(f.env.MC_WORK_ROOT, 'martin'), { recursive: true }); writeFileSync(join(f.env.MC_WORK_ROOT, 'martin', 'last-open.json'), JSON.stringify({ at: '2026-11-14T09:00:00Z' }));
+    const source = JSON.parse(readFileSync(path, 'utf8')); assert.deepEqual([source.state, source.outcome.by, source.sort], ['closed', 'source', 'technical']);
+    const asked = (by, role) => run(['item', f.record.id, 'close', '--by', by, '--summary', 'Carried out.'], { ...io(), env: { ...f.env, MC_ROLE: role }, home, now: () => new Date('2026-11-14T11:00:00Z') });
+    assert.equal(await asked('decision', 'decision'), 0);
+    const closed = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary, closed.outcome.replaced], ['closed', 'decision', 'Carried out.', source.outcome]);
+    const opening = io(); assert.equal(await run(['brief', '--json'], { ...opening, env: f.env, home, now: () => new Date(NOW) }), 0, opening.out.stderr);
+    const data = JSON.parse(opening.out.stdout);
+    assert.deepEqual(data.decided.programmes.flatMap(p => p.items.map(i => [i.id, i.by, i.summary])), [[f.record.id, 'decision', 'Carried out.']]);
+    assert.equal(data.decided.closed_by_source, 0);
+    const before = readFileSync(path, 'utf8'); const again = io();
+    assert.equal(await run(closeArgs(f, 'decision'), { ...again, env: { ...f.env, MC_ROLE: 'decision' }, home }), 2);
+    assert.equal(readFileSync(path, 'utf8'), before, 'a second close is refused');
+  });
+  it('a for-martin item the source closed takes close --by martin, which only stops counting as a source closure', async () => {
+    const f = stored('for-martin'); const path = join(f.dir, 'item.json'); const home = join(f.env.MC_WORK_ROOT, 'programs');
+    writeJsonAtomic(path, { ...f.record, sort: 'product', reversible: false });
+    mkdirSync(join(home, 'alpha', 'goals', 'one'), { recursive: true }); writeFileSync(join(home, 'alpha', 'README.md'), 'Alpha');
+    writeFileSync(join(home, 'alpha', 'goals', 'one', 'GOAL.json'), goalJson({ status: 'ready' }));
+    assert.equal(await run(['items'], { ...io(), env: f.env, home, syncDeps: { now: () => new Date('2026-11-14T10:30:00Z') } }), 0);
+    mkdirSync(join(f.env.MC_WORK_ROOT, 'martin'), { recursive: true }); writeFileSync(join(f.env.MC_WORK_ROOT, 'martin', 'last-open.json'), JSON.stringify({ at: '2026-11-14T09:00:00Z' }));
+    const opening = () => run(['brief', '--json'], { ...io(), env: f.env, home, now: () => new Date(NOW) });
+    const count = async () => { const out = io(); await run(['brief', '--json'], { ...out, env: f.env, home, now: () => new Date(NOW) }); return JSON.parse(out.out.stdout).decided; };
+    assert.ok(opening); assert.equal((await count()).closed_by_source, 1);
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'martin', '--summary', 'Martin chose.'], { ...io(), env: { ...f.env, MC_ROLE: 'martin' }, home, now: () => new Date('2026-11-14T11:00:00Z') }), 0);
+    const decided = await count(); assert.equal(decided.closed_by_source, 0); assert.deepEqual(decided.programmes, [], 'his own close is not listed as decided without him');
+  });
+  it('a source closure of an item that never had a sort, and a decision closure, are still refused without a byte changed', async () => {
+    for (const closed of [{ sort: null, outcome: sourceClosure }, { sort: 'product', outcome: { by: 'decision', at: sourceClosure.at, summary: 'Done.' } }]) {
+      const f = stored('prepared'); const path = join(f.dir, 'item.json');
+      writeJsonAtomic(path, { ...f.record, state: 'closed', ...closed }); const before = readFileSync(path, 'utf8'); const result = io();
+      assert.equal(await run(closeArgs(f, 'decision'), { ...result, env: { ...f.env, MC_ROLE: 'decision' } }), 2);
+      assert.match(result.out.stderr, /is closed;/u); assert.equal(readFileSync(path, 'utf8'), before);
+    }
+  });
+  it('the verb is judged on the record read under the lock: a source closure that lands first is replaced, a decision that lands first stands', async () => {
+    const f = stored('prepared'); const path = join(f.dir, 'item.json'); const prepared = { ...f.record, sort: 'technical' }; writeJsonAtomic(path, prepared);
+    const holds = [];
+    const first = (outcome) => (root, fn, options) => { holds.push([root, options]); writeJsonAtomic(path, { ...prepared, state: 'closed', outcome }); return fn(); };
+    const result = io();
+    assert.equal(await run(closeArgs(f, 'decision'), { ...result, env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date('2026-11-14T11:00:00Z'), lock: first(sourceClosure) }), 0, result.out.stderr);
+    assert.deepEqual(holds, [[f.env.MC_WORK_ROOT, { strict: true, name: 'desk-item' }]]);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).outcome, { by: 'decision', at: '2026-11-14T11:00:00.000Z', summary: 'Settled.', replaced: sourceClosure });
+    const other = { by: 'martin', at: '2026-11-14T10:30:00.000Z', summary: 'Martin chose.' }; const refused = io();
+    writeJsonAtomic(path, prepared);
+    assert.equal(await run(closeArgs(f, 'decision'), { ...refused, env: { ...f.env, MC_ROLE: 'decision' }, lock: first(other) }), 2);
+    assert.match(refused.out.stderr, /is closed;/u); assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).outcome, other);
+    const advance = io(); writeJsonAtomic(path, { ...f.record, state: 'new' }); // the item moved on before the hold: new is not prepared
+    assert.equal(await run(['item', f.record.id, 'brief', '--sort', 'product', '--reversible', 'yes'], { ...advance, env: { ...f.env, MC_ROLE: 'decision' }, lock: (root, fn) => { writeJsonAtomic(path, { ...f.record, state: 'new' }); return fn(); } }), 2);
+  });
+  it('an item verb that cannot take the lock prints one mc: line, exits 1 and changes nothing', async () => {
+    const f = stored('prepared'); writeFileSync(join(f.dir, 'brief.md'), 'Brief'); const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
+    const lock = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary', 'Settled.'], { ...result, env: { ...f.env, MC_ROLE: 'decision' }, lock }), 1);
+    assert.equal(result.out.stderr, 'mc: the runner lock is held by pid 4242 — try again\n'); assert.equal(result.out.stdout, '');
+    assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before);
+  });
+  it('items, brief and the opening that cannot take the lock print one mc: line, return 1, open nothing and write no last-open.json', async () => {
+    const d = openingStore({ lastOpen: null }); const lock = () => { throw new Error('the runner lock is held by pid 4242 — try again'); };
+    const line = 'mc: the runner lock is held by pid 4242 — try again\n'; const before = snapshot(d.root);
+    const listing = io(); assert.equal(await run(['items'], { ...listing, env: d.env, home: d.home, syncDeps: { lock } }), 1);
+    assert.deepEqual([listing.out.stdout, listing.out.stderr], ['', line]);
+    const brief = io(); assert.equal(await run(['brief'], { ...brief, env: d.env, home: d.home, now: () => new Date(NOW), syncDeps: { lock } }), 1);
+    assert.deepEqual([brief.out.stdout, brief.out.stderr], ['', line]);
+    let opened = false;
+    const started = await launch(d, NOW, { syncDeps: { lock }, open: async () => { opened = true; return { ok: true, code: 0 }; } });
+    assert.equal(started.code, 1); assert.deepEqual([started.out.stdout, started.out.stderr], ['', line]); assert.equal(opened, false);
+    assert.equal(existsSync(join(d.env.MC_WORK_ROOT, 'martin', 'last-open.json')), false);
+    assert.deepEqual(snapshot(d.root), before);
   });
   it('lists each historical goal question or runner reason by its own source time even after resolution', async () => {
     const f = stored(); const home = join(f.env.MC_WORK_ROOT, 'programs'); const dir = join(home, 'alpha', 'goals', 'one'); mkdirSync(dir, { recursive: true });
