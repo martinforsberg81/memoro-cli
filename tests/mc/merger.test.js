@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { parseGoal } from '../../src/mc/goals.js';
 import { writeRedDetail } from '../../src/mc/merge-red.js';
-import { mainMendPath, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
+import { mainMendPath, mainMendPrompt, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
 import {
@@ -1633,6 +1633,22 @@ describe('requestMainRepair — the main-red request file', () => {
     assert.equal(entries[0].pr, 15203);
     assert.equal(entries[1].finder, 'the full run');
     assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
+  });
+
+  it('a full-only command red queues once with its diagnostics and an executable mend check', () => {
+    const command = { id: 'css-tokens-all', packageScript: 'css:tokens:all',
+      command: 'npm run css:tokens:all', failure: { kind: 'output', tail: ['unbound token'] }, output_path: '/retained/full/css.log' };
+    const asked = { ...request, files: [], tests: [], commands: [command], pr: null, root, now };
+    const first = requestMainRepair(asked);
+    assert.equal(first.created.length, 1);
+    assert.deepEqual(requestMainRepair(asked), { created: [], open: first.created });
+    const entries = readMainMends({ root, repo: request.repo });
+    assert.deepEqual(entries.map(entry => [entry.file, entry.command, entry.finder]),
+      [['command:css:tokens:all', command, 'the full run']]);
+    const prompt = mainMendPrompt({ repo: request.repo, entries, branch: 'mend/main-fixture', worktree: '/fixture/mend' });
+    assert.match(prompt, /mc gate --fresh --command css-tokens-all/u);
+    assert.match(prompt, /then bare mc gate/u);
+    assert.doesNotMatch(prompt, /mc gate --whole-selection/u);
   });
 
   it('without a red file nothing is written, and malformed state is not overwritten', () => {

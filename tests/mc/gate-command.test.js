@@ -111,14 +111,28 @@ describe('mc gate <test files…>', () => {
     assert.deepEqual(out.removed, [LOCK]);
   });
 
-  it('an unnamed gate may leave costly files to the merge round; a goal\'s measurement may not', async () => {
+  it('a bare gate and a goal measurement both run without cost deferral', async () => {
     const plain = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run([], plain.deps), 0);
-    assert.equal(JSON.parse(plain.files.get(`${LOG}.request.json`)).defer, true);
+    assert.equal(JSON.parse(plain.files.get(`${LOG}.request.json`)).defer, false);
     const whole = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     whole.deps.wholeSelection = true;
     assert.equal(await run([], whole.deps), 0);
     assert.equal(JSON.parse(whole.files.get(`${LOG}.request.json`)).defer, false);
+  });
+
+  it('bare and whole-selection requests choose the declared change and wide commands', async () => {
+    for (const whole of [false, true]) {
+      const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+      h.deps.declaration = () => ({ ok: true, declaration: {
+        select: 'node select-change.js', select_whole: 'node select-wide.js',
+      } });
+      assert.equal(await run(whole ? ['--whole-selection'] : [], h.deps), 0);
+      const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+      assert.match(request.select, whole ? /^node select-wide\.js/u : /^node select-change\.js/u);
+      assert.equal(request.defer, false);
+      assert.deepEqual(request.mainOnly, []);
+    }
   });
 
   it('--whole-selection is a public bare-gate option and retains the selector request', async () => {
@@ -128,6 +142,19 @@ describe('mc gate <test files…>', () => {
     assert.equal(request.files, null);
     assert.equal(request.defer, false);
     assert.match(request.select, /--changed-path 'implementation\.js'/u);
+  });
+
+  it('an explicit command can repair a full-only red on unchanged main without running the full suite', async () => {
+    const h = harness({ changed: [], finishAfter: 1, output: GREEN });
+    h.deps.declaration = () => ({ ok: true, declaration: {
+      select: 'node change.js', select_whole: 'node wide.js', select_full: 'node full.js',
+    } });
+    assert.equal(await run(['--command', 'css-tokens-all'], h.deps), 0);
+    const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+    assert.match(request.select, /^node full\.js/u);
+    assert.deepEqual(request.commands, ['css-tokens-all']);
+    assert.equal(request.files, null);
+    assert.equal(request.defer, false);
   });
 
   it('--whole-selection refuses named files, patterns and wait observers before starting', async () => {

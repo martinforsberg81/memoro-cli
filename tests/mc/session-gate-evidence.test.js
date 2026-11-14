@@ -298,6 +298,59 @@ it('an empty selection and an aborted command sequence cannot mint green', async
   }
 });
 
+it('a real classified empty source or documentation scope has an explicit content-bound receipt, not an executed test', async (t) => {
+  for (const path of ['src/mc-cli.js', 'docs/guide.md']) {
+    const fx = fixture(t);
+    mkdirSync(join(fx.cwd, path.split('/')[0]));
+    writeFileSync(join(fx.cwd, path), path.endsWith('.js') ? 'export {};\n' : '# Guide\n');
+    let stdout = '';
+    selectorMain(['--changed-path', path], { root: fx.cwd, stdout: { write: text => { stdout += text; } } });
+    const parsed = JSON.parse(stdout);
+    assert.deepEqual(parsed.files, []);
+    assert.deepEqual(parsed.why.unexplained, []);
+    const req = { ...fx.request(), files: null, select: 'change selector' };
+    const select = options => selectFiles({ ...options, run: async () => ({ status: 0, stdout }) });
+    const forbidden = async () => { throw new Error('no checks belong to this scope'); };
+    const result = await runSessionGate(req, { ...quiet, select, tests: forbidden, shell: forbidden });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const receipt = receiptOf(result);
+    assert.equal(receipt.outcome, 'green');
+    assert.deepEqual(receipt.coverage.emptyChange, parsed.why);
+    assert.deepEqual(receipt.execution, { tests: null, commands: [] });
+    const context = { root: req.gate.root, repo: 'repo', repository: req.measurement.candidate.repository,
+      run: req.measurement.run, sessionRun: 'session-one', goalRevision: 3, configuration: req.measurement.configuration };
+    assert.equal(readGreenReceipt(context).run, receipt.run);
+    assert.ok(findGreen({ root: req.gate.root, repo: 'repo', tree: receipt.tree, selection: selectionHash(parsed) }));
+    const head = git(fx.cwd, 'rev-parse', 'HEAD');
+    assert.equal(findPublicationReceipt({ ...context, cwd: fx.cwd, head, pushed: head, selection: { ...result.coverage } }), null);
+    git(fx.cwd, 'add', '-A');
+    git(fx.cwd, 'commit', '-qm', 'Classified change with no own tests');
+    const committed = git(fx.cwd, 'rev-parse', 'HEAD');
+    assert.ok(findPublicationReceipt({ ...context, cwd: fx.cwd, head: committed, pushed: committed, selection: result.coverage }));
+    writeFileSync(join(fx.cwd, path), 'changed after measurement\n');
+    assert.equal(findPublicationReceipt({ ...context, cwd: fx.cwd, head: committed, pushed: committed, selection: result.coverage }), null);
+  }
+});
+
+it('unknown, wide, malformed or filtered empty scope remains unmeasured', async (t) => {
+  for (const why of [{ reason: 'change', unexplained: ['unknown.asset'] }, { reason: 'affected', unexplained: [] },
+    { reason: 'full-suite', unexplained: [] }, { reason: 'change' }, null]) {
+    const fx = fixture(t);
+    const req = { ...fx.request(), files: null, select: 'selector' };
+    const result = await runSessionGate(req, { ...quiet,
+      select: async () => ({ ok: true, files: [], commands: [], why }) });
+    assert.equal(result.ok, false);
+    assert.equal(result.stopped_at, 'no-checks');
+    assert.notEqual(receiptOf(result).outcome, 'green');
+  }
+  const fx = fixture(t);
+  const req = { ...fx.request(), files: null, select: 'selector', pattern: 'one' };
+  const result = await runSessionGate(req, { ...quiet, select: async () => ({ ok: true, files: [], commands: [],
+    why: { reason: 'change', unexplained: [] } }) });
+  assert.equal(result.ok, false);
+  assert.notEqual(receiptOf(result).outcome, 'green');
+});
+
 it('named or pattern-filtered runs never populate broader selector coverage; complete affected runs do', async (t) => {
   for (const mode of ['named', 'pattern', 'affected', 'flag-filter']) {
     const { request } = fixture(t);
@@ -513,7 +566,7 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const base = git(fx.cwd, 'rev-parse', 'HEAD');
     git(fx.cwd, 'switch', '-qc', 'feature');
     writeFileSync(join(fx.cwd, 'src/wrapper.js'), "export { value } from './shared.js';\n// feature\n");
-    const command = 'node scripts/affected-tests.js';
+    const command = 'node scripts/affected-tests.js --whole-selection';
     const configuration = gateConfiguration({ select: command });
     const req = { ...fx.request(), files: null, select: selectorCommand(command, { base }),
       measurement: { ...fx.request().measurement, base, configuration } };

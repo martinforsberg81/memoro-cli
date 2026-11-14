@@ -1,44 +1,14 @@
 #!/usr/bin/env node
 /**
- * Which test files a change reaches, for this repository.
+ * Repository-owned test planning. The command defaults to the change's own
+ * tests: changed tests and one-hop source importers at head, with deleted
+ * sources resolved against the base. No pin/data edge or transitive closure.
+ * Unclassified paths are reported, never silently treated as explained.
  *
- * `mc test` asks a repository this question rather than answering it itself,
- * and until now memoro-cli had no answer: its `npm test` globs every file under
- * `tests/`, so every round measured 2,353 tests on both sides to land a
- * two-line change. That is the same cost memoro was paying, and the same fix
- * applies — it just has to be written in the terms this repository is built in.
- *
- * Three edges are followed, because a test depends on what it reads in three
- * different ways and only one of them is visible to an import graph:
- *
- *  - **Imports.** A test that imports a module, directly or through any chain
- *    of modules, runs when that module changes. The closure is walked from each
- *    test file, so a change three modules deep still selects it.
- *  - **Pins.** A test that reads a source file as *text* — opens it, matches it
- *    with a regexp, asserts on its literal path — imports nothing and is
- *    invisible to the graph. This repository has such tests on purpose: the one
- *    asserting `repo-gate.js` contains no merge call is exactly this shape, and
- *    it is load-bearing. A path literal that resolves to a tracked file counts.
- *  - **Data.** A file nothing imports and no literal spells: `canon/roles/`
- *    holds one document per role, opened by a name built at run time. A
- *    directory literal is the only written-down link, and it says one of two
- *    things — the files *in* that directory, one join away, or the tree *under*
- *    it, walked. The first travels the import graph like a pin; the second
- *    stops at whoever spelled it, because walking a tree gives a caller no
- *    dependency on any one file in it. Measured 2026-08-30, not telling them
- *    apart made one new document under `docs/project/mc/` select 57 of 250
- *    test files.
- *
- * And it fails closed, loudly. A changed file that neither edge explains — a
- * manifest, a lockfile, a config, anything outside `src/` and `tests/` — means
- * the question cannot be answered by walking this repository's own structure,
- * so the answer is the whole suite. Being slow is a cost; being wrong about
- * what a change reaches is the thing a gate exists to prevent, and there is no
- * version of this script worth having that guesses in that direction.
- *
- * `--changed-path <p>` (repeatable) names the change instead of the diff to
- * the base. Prints `{"files": [...], "why": {...}}` on stdout. `--why` prints the same
- * thing as prose, for a person deciding whether to trust it.
+ * --whole-selection retains the wider import/pin/data graph and conservative
+ * full-suite fallback. --full lists every tracked test without reading a diff.
+ * The exported selectAffected API keeps its historical wide default for callers
+ * doing wide measurements; scope: 'change' opts into the merge contract.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -91,8 +61,8 @@ const DIR_TOKEN = /['"`]((?:[A-Za-z0-9_@.-]+\/)*[A-Za-z0-9_@.-]+)(?:\/[^'"`]*)?[
  */
 const DATA_DIRS = ['docs/', 'canon/', 'changelog.d/', '.claude/', '.mc/'];
 
-function git(root, args) {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function git(root, args, input) {
+  return execFileSync('git', args, { cwd: root, input, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
 }
 
 function tracked(root) {
@@ -102,10 +72,12 @@ function tracked(root) {
 /** What this branch changes against the base, the same set the gate compares. */
 function changedAgainst(root, baseRef) {
   const mergeBase = git(root, ['merge-base', baseRef, 'HEAD']).trim();
-  const committed = git(root, ['diff', '--name-only', '-z', `${mergeBase}...HEAD`]).split('\0');
-  const working = git(root, ['status', '--porcelain', '-z']).split('\0')
-    .filter((entry) => entry.length > 3)
-    .map((entry) => entry.slice(3));
+  const committed = git(root, ['diff', '--no-renames', '--name-only', '-z', `${mergeBase}...HEAD`]).split('\0');
+  const working = [
+    git(root, ['diff', '--no-renames', '--name-only', '-z']),
+    git(root, ['diff', '--cached', '--no-renames', '--name-only', '-z']),
+    git(root, ['ls-files', '--others', '--exclude-standard', '-z']),
+  ].flatMap(output => output.split('\0'));
   return { mergeBase, paths: [...new Set([...committed, ...working].filter(Boolean))] };
 }
 
@@ -196,8 +168,79 @@ function trackedDirs(all) {
   return dirs;
 }
 
-export function selectAffected({ baseRef = 'origin/main', changedPaths = [], root = ROOT } = {}) {
-  const all = tracked(root);
+/** Read base test blobs in one Git process, not one process per test. */
+function baseTestSources(root, ref, paths) {
+  if (!paths.length) return new Map();
+  const output = Buffer.from(git(root, ['cat-file', '--batch'], paths.map(path => `${ref}:${path}\n`).join('')));
+  const sources = new Map();
+  let offset = 0;
+  for (const path of paths) {
+    const end = output.indexOf(10, offset);
+    const header = output.subarray(offset, end).toString('utf8');
+    const match = /^\S+ blob (\d+)$/u.exec(header);
+    if (!match) throw new Error(`Cannot read base test ${path}: ${header}`);
+    const size = Number(match[1]);
+    offset = end + 1;
+    sources.set(path, output.subarray(offset, offset + size).toString('utf8'));
+    offset += size + 1;
+  }
+  return sources;
+}
+
+/** The merge contract: changed tests and one-hop source importers only. */
+function selectChange({ root, baseRef, mergeBase, changed, all, testFiles }) {
+  const changedSet = new Set(changed);
+  const source = path => SOURCE_FILE.test(path) && !TEST_FILE.test(path);
+  const deleted = changed.filter(path => source(path) && !existsSync(join(root, path)));
+  const before = deleted.length ? (mergeBase || git(root, ['merge-base', baseRef, 'HEAD']).trim()) : null;
+  const oldFiles = before ? git(root, ['ls-tree', '-r', '--name-only', '-z', before]).split('\0').filter(Boolean) : [];
+  const oldTests = oldFiles.filter(path => TEST_FILE.test(path));
+  const oldSources = before ? baseTestSources(root, before, oldTests) : new Map();
+  const selectedBy = {};
+  const imports = (test, text, known) => {
+    const found = new Set();
+    for (const pattern of IMPORTS) {
+      pattern.lastIndex = 0;
+      for (const match of text.matchAll(pattern)) {
+        if (!match[2].startsWith('.')) continue;
+        const path = relative(root, resolve(root, dirname(test), match[2]));
+        if (path.startsWith('..')) continue;
+        const target = [path, `${path}.js`, `${path}.mjs`, `${path}.cjs`, join(path, 'index.js')].find(p => known.has(p));
+        if (target) found.add(target);
+      }
+    }
+    return found;
+  };
+  const known = new Set(all);
+  const oldKnown = new Set(oldFiles);
+  for (const test of testFiles.filter(path => existsSync(join(root, path)))) {
+    const reasons = changedSet.has(test) ? ['changed-test-file'] : [];
+    for (const path of imports(test, readOr(root, test), known)) {
+      if (changedSet.has(path) && source(path)) reasons.push(`imports:${path}`);
+    }
+    if (oldSources.has(test)) {
+      for (const path of imports(test, oldSources.get(test), oldKnown)) {
+        if (deleted.includes(path)) reasons.push(`base-imports:${path}`);
+      }
+    }
+    if (reasons.length) selectedBy[test] = reasons;
+  }
+  // Classification still reports uncertainty, but never widens a change into
+  // the estate. Documents/configuration are not source modules or test files.
+  const unexplained = changed.filter(path => {
+    if (DATA_DIRS.some(prefix => path.startsWith(prefix)) || /^(?:README|AGENTS|CLAUDE)\.md$/u.test(path)) return false;
+    return !SOURCE_FILE.test(path) || !['src/', 'scripts/', 'tests/'].some(prefix => path.startsWith(prefix));
+  });
+  return { files: Object.keys(selectedBy).sort(), why: {
+    reason: 'change', base_ref: baseRef, merge_base: mergeBase, changed: changed.length,
+    test_files: testFiles.length, selected_by: selectedBy, unexplained,
+  } };
+}
+
+export function selectAffected({ baseRef = 'origin/main', changedPaths = [], root = ROOT, scope = 'whole' } = {}) {
+  const all = scope === 'change'
+    ? [...new Set([...tracked(root), ...git(root, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean)])]
+    : tracked(root);
   const trackedSet = new Set(all);
   const testFiles = all.filter((path) => TEST_FILE.test(path));
   // `--changed-path`, as memoro's `ci.mjs --list` takes it: the paths are named,
@@ -207,6 +250,8 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [], roo
     ? { mergeBase: null, paths: [...new Set(changedPaths)] }
     : changedAgainst(root, baseRef);
   const changedSet = new Set(changed);
+  if (scope === 'change') return selectChange({ root, baseRef, mergeBase, changed, all, testFiles });
+  if (scope !== 'whole') throw new Error(`Unknown selection scope: ${scope}`);
   // What a literal may name. `ls-files` no longer lists a path the change
   // deleted, but a module that spells one is still its reader — and that
   // deletion is precisely what breaks it. Indexing pins against the tracked
@@ -378,14 +423,22 @@ export function selectAffected({ baseRef = 'origin/main', changedPaths = [], roo
  * names its fixture's, and runs it in its own process.
  */
 export function main(argv, { root = ROOT, stdout = process.stdout } = {}) {
+  if (argv.includes('--full')) {
+    stdout.write(`${JSON.stringify({ files: tracked(root).filter(path => TEST_FILE.test(path)).sort(), commands: [], why: { reason: 'full-suite' } })}\n`);
+    return 0;
+  }
   const baseIndex = argv.indexOf('--base-ref');
   const baseRef = baseIndex >= 0 ? argv[baseIndex + 1] : 'origin/main';
   const changedPaths = argv.flatMap((word, index) => (word === '--changed-path' && argv[index + 1] ? [argv[index + 1].replace(/^\.\//u, '')] : []));
-  const result = selectAffected({ baseRef, changedPaths, root });
+  const scope = argv.includes('--whole-selection') ? 'whole' : 'change';
+  const result = selectAffected({ baseRef, changedPaths, root, scope });
   if (argv.includes('--why')) {
     stdout.write(`${result.why.reason === 'full-suite'
       ? `the whole suite: ${result.why.unexplained.length} changed path(s) this script cannot trace — ${result.why.unexplained.slice(0, 5).join(', ')}`
       : `${result.files.length} of ${result.why.test_files} test files, from ${result.why.changed} changed path(s)`}\n`);
+    if (result.why.reason === 'change' && result.why.unexplained.length) {
+      stdout.write(`unclassified paths (not widened to the suite): ${result.why.unexplained.join(', ')}\n`);
+    }
     for (const [file, reasons] of Object.entries(result.why.selected_by ?? {})) {
       stdout.write(`  ${file} — ${reasons.join('; ')}\n`);
     }

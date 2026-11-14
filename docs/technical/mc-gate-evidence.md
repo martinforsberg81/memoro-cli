@@ -1,5 +1,31 @@
 # Local gate evidence
 
+## Scope
+
+Main is where work meets; production is what users have. A merge checks four
+things: a clean merge onto current main; the change's own tests; no command
+gates; and the review's verdict on the judged head. Review judges whether the
+change is well written, free of bugs and works as intended.
+
+The change's own tests are every added or modified test file, every test that
+directly imports an added or modified source (one hop, read at head), and, for
+a deleted or renamed source, its direct importer tests at the base. Memoro
+also runs the eight-file mandatory core in `config/testing-registry.mjs`.
+No transitive import closure, pin, scan, area blanket or registry target widens
+this set. Bare `mc gate` and the merge round use the same scope without cost
+deferral or command gates.
+
+The daily full run retains every test, including deferred tests and main-only
+ratchets, every CI binding command and all three contract suites, including
+`test:browser-contracts`. The wide selection remains available through
+`mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
+optional tools, never landing requirements. Wide regression protection belongs
+to the daily full run and before a deploy, not to a merge. Main may carry a
+red this merge did not look for: the daily run finds it within a day and sends
+it to a main-red mend; the deploy gate keeps it from production. Until the
+separate deploy-gate goal lands, the person deploying must read that full run.
+
+
 `mc gate` freezes the base commit and fingerprints the launch worktree before
 starting its detached session worker. The worker checks that content before
 selection and after all checks. A temporary Git index computes the prospective
@@ -26,15 +52,22 @@ writes the receipt before publishing its result and exit marker. The waiting
 command then clears the matching worktree exclusion lock.
 
 Only completed checks with known successful exits and unchanged content produce
-a green receipt. No checks, zero executed tests, unknown exits, interruption,
-failed checks and content mutations are not green. An explicitly allowed
+a green receipt, with one explicit zero-check case: a readable, classified change
+scope with no own tests or commands (`why.reason: "change"`, explicit empty
+`why.unexplained`). Its affected, unfiltered coverage stores that answer as
+`emptyChange`; execution has no tests or commands. It proves complete empty
+scope for that fingerprinted tree, never that a test ran. It is reusable only
+under the same repository/content/configuration and selection rules; it covers
+no later selected member. Named, filtered, wide/full, legacy and unclassified
+empty plans remain incomplete. Unknown exits, interruption, failed checks and
+content mutations are not green. An explicitly allowed
 unavailable command gives the verdict `incomplete` (`ok` false, `complete` false,
 printed `INCOMPLETE`, no receipt line; `gate-local.js`, `commands/gate.js`). Its
 exit is 0, because the process held, and its stored receipt's outcome is
 `incomplete`, never green (`session-gate-evidence.js`). An interrupted worker may leave no receipt; absence is not green.
 A command reporting `RUNNING` does not create a receipt on the worker's behalf.
 
-After selection, the local session gate starts its test run and its selected
+In an optional wide gate, after selection the worker starts its test run and selected
 command sequence together. Commands remain serial, in selector order, and each
 receives the frozen base when requested. A normal verdict waits for both
 sequences to settle; a test or command failure/throw cannot hide the other
@@ -85,8 +118,12 @@ green, because its round had a failure. A command still red alone is red after
 its second run, and the verdict names it `command <id>: fail`. A command cut by
 its timeout, killed by a signal, unavailable at its declared exit, whose shell
 threw, or whose gate was aborted is not run again, and stays red as it was. No
-command runs at the base. `mc gate --command <id>` runs one command gate of this
-change's selection alone, reusing nothing, and a red there is counted at once.
+command runs at the base. `mc gate --command <id>` runs one command from the
+repository's declared command inventory alone, reusing nothing, and a red
+there is counted at once. In the two shipped repositories, `--command` asks
+`select_full` for that inventory, including full-only counterparts, then runs
+only the requested command and no test files. It can repair a daily command
+red even on otherwise unchanged main; it does not execute a full suite.
 
 A session's gate shares the machine with the runner's sessions and the merger,
 and a test red on main is red in every branch's gate. A red whose only cause is
@@ -108,7 +145,7 @@ failure), so it grants no reuse beyond its members: files that passed alone
 are `passed` members and resume, main's red files stay `failed` and run again.
 
 Session authorization and receipt reuse are distinct. Martin, 2026-11-11:
-a completed final whole selection with only adjudicated untouched-baseline
+a completed final change scope with only adjudicated untouched-baseline
 failures authorizes review/finish/mend handoff under
 [publish-and-merge](../../canon/tasks/publish-and-merge.md); delivery does not
 wait for the owning repair. Retain the frozen base and named failed members.
@@ -158,18 +195,15 @@ An absent cache entry simply causes the merger to measure again.
 
 Every completed worker result carries the selected coverage shape (`kind`,
 `files`, `commands` and `pattern`) and the exact `deferred` file members in its
-result JSON, whether or not the attempt can produce a reusable receipt. An
-ordinary gate with deferred files is explicitly `partial`: those files were
-not measured until `mc gate --whole-selection` or the merge round measures them.
-Every goal pull request now goes through the merge round (#1449;
-[publish-and-merge](../../canon/tasks/publish-and-merge.md)), which does not defer
-(`commands/gate.js` defers only a bare session gate). `mc gate --whole-selection`
-is the complete affected-selection measurement;
-timeouts, interruption and incomplete execution remain red.
+result JSON, whether or not the attempt can produce a reusable receipt. Bare gates measure the complete change scope without deferral or command
+gates. `mc gate --whole-selection` is an optional wide diff measurement,
+including command gates. Both retain exact coverage; a timeout, interruption
+or incomplete execution is not green. Historical partial receipts remain
+partial and never broaden into complete acceptance.
 
 Named runs and name-filtered runs retain exactly that limited scope, even when
 the resource selector names additional tests or commands. Only an entire,
-unfiltered affected selection can populate the existing `gate-greens.jsonl`
+unfiltered change or wide selection can populate the existing `gate-greens.jsonl`
 cache, after its receipt is durable. The shared measurement contract's current
 version (`GATE_MEASUREMENT_VERSION`, 5, `src/mc/gate-greens.js`; see
 [mc-merge.md](mc-merge.md)) invalidates older cache entries. Added-test discovery, repository
@@ -198,6 +232,5 @@ reuse reads a compatible full receipt for the PR head, then asks the existing
 dependency-aware selector about main's movement and derived paths. Newly selected
 or newly configured commands/checks are measured; missing receipts, changed
 configuration, untraceable ancestry or uncertain selector output cause normal
-relevant measurement, never assumed green. Required merge gates and PR-specific
-tests still run. Legacy cache entries remain readable to v1 callers, not to
+relevant measurement, never assumed green. The change's own tests still run; merge rounds run no command gates. Legacy cache entries remain readable to v1 callers, not to
 opt-in receipt-bound callers.

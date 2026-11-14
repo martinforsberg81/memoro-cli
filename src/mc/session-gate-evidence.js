@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, executionComplete, filesComplete, fullCoverage, greensPath, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
+import { GATE_MEASUREMENT_VERSION, checksHash, commandIdentity, emptyChangeCoverage, executionComplete, filesComplete, fullCoverage, greensPath, readGreenReceipt, recordGreen, selectionHash } from './gate-greens.js';
 import { run as runGit } from './git.js';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -128,7 +128,7 @@ export function gateReceipt({ measurement, before, after, result, started, ended
   // A resumed attempt is complete when every reused member passed earlier on this
   // content and its own work completed (`filesComplete`).
   const members = result.members ?? null;
-  const complete = Boolean(coverage && (coverage.files.length || coverage.commands.length)
+  const complete = Boolean(coverage && (coverage.files.length || coverage.commands.length || emptyChangeCoverage(coverage))
     && !(result.commands || []).some((command) => command.settled)
     && filesComplete(coverage, execution, members) && executionComplete(coverage, execution, members)
     && commands.length === coverage.commands.length

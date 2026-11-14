@@ -196,6 +196,20 @@ export function fullCoverage(coverage) {
     && !coverage.flags.some((flag) => /^--test-(name-pattern|skip-pattern|only|shard)(=|$)/u.test(flag));
 }
 
+/** A positively classified change may have no own tests. Unknown or legacy
+ * empty answers are not this contract, nor are named/filtered/wide requests. */
+export function classifiedEmptyChange(selection) {
+  return Array.isArray(selection?.files) && selection.files.length === 0
+    && Array.isArray(selection.commands) && selection.commands.length === 0
+    && selection.why?.reason === 'change' && Array.isArray(selection.why.unexplained)
+    && selection.why.unexplained.length === 0;
+}
+
+export function emptyChangeCoverage(coverage) {
+  return fullCoverage(coverage) && typeof coverage.selector === 'string' && Boolean(coverage.selector)
+    && classifiedEmptyChange({ ...coverage, why: coverage.emptyChange });
+}
+
 /** Read the immutable measurement itself, never just a mutable cache claim.
  * The run is a gate-run ID; optional session/revision bindings must match too.
  * Missing identity/configuration is uncertainty, not permission to reuse. */
@@ -220,7 +234,7 @@ export function readGreenReceipt({ root = mcHome(), repo, repository, run, sessi
     || coverage.commands.some((command) => typeof command?.packageScript !== 'string' || !command.packageScript
       || (command.needs != null && (!Array.isArray(command.needs) || command.needs.some((need) => typeof need !== 'string'))))
     || coverage.flags.some((flag) => typeof flag !== 'string')
-    || !(coverage.files.length || coverage.commands.length) || !Array.isArray(execution?.commands)
+    || !(coverage.files.length || coverage.commands.length || emptyChangeCoverage(coverage)) || !Array.isArray(execution?.commands)
     || execution.commands.length !== coverage.commands.length
     || execution.commands.some((command) => !command || command.exit !== 0 || command.ok !== true || command.error
       || (command.state === 'reused' && (typeof command.from !== 'string' || !command.from)))) return refused('execution');

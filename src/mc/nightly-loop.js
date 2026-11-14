@@ -219,6 +219,10 @@ export async function fullRun(repo, {
     return threw;
   }
 
+  const failedCommands = (report.extra_gates || []).filter(gate => !gate.ok && !gate.retry?.ok && !gate.unavailable
+    && !(report.alone?.gates || []).some(alone => alone.name === gate.name && alone.outcome === 'passed'))
+    .map(gate => ({ id: gate.id || gate.name, packageScript: gate.name, command: gate.command,
+      exit_code: gate.exit_code, failure: gate.failure, output_path: gate.output_path }));
   const run = {
     repo: repo.name,
     path: repo.path,
@@ -234,7 +238,9 @@ export async function fullRun(repo, {
     reason: report.reason,
     // The failing names, for whoever asks "since when". Names only: output
     // and stack traces turn a meter into an archive.
-    red: report.candidate?.red || null,
+    red: failedCommands.length
+      ? [...(report.candidate?.red || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
+      : report.candidate?.red || null,
     tests: report.candidate?.totals?.tests ?? null,
   };
   // The history the page reads. It is written here rather than by the round,
@@ -251,10 +257,11 @@ export async function fullRun(repo, {
   // red tests with their files (`measure`), a selected one its files as well.
   const redTests = report.candidate?.red_tests || [];
   const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
-  if (repair && Array.isArray(run.red) && run.commit && files.length) {
+  if (repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
     const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
-    const asked = repair({ repo: repo.name, base: run.commit, files, tests });
-    const where = files.join(', ');
+    const asked = repair({ repo: repo.name, base: run.commit, files, tests,
+      ...(failedCommands.length ? { commands: failedCommands } : {}) });
+    const where = [...files, ...failedCommands.map(command => `command:${command.packageScript}`)].join(', ');
     const created = [].concat(asked?.created || []);
     const open = [].concat(asked?.open || []);
     if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);

@@ -49,9 +49,9 @@ function repo({ base = {}, change = {}, remove = [] } = {}) {
     // The command in this process, on the fixture: a node process per test
     // and git through it took 0.5-4 s a test (2026-11-03). The script run as
     // a process is the last test below.
-    select: () => {
+    select: (scope = '--whole-selection') => {
       let out = '';
-      assert.equal(main(['--base-ref', 'origin-main'], { root, stdout: { write: (s) => { out += s; } } }), 0);
+      assert.equal(main(['--base-ref', 'origin-main', ...scope ? [scope] : []], { root, stdout: { write: (s) => { out += s; } } }), 0);
       return JSON.parse(out);
     },
     run: (argv) => execFileSync(process.execPath, [join(root, 'scripts/affected-tests.js'), ...argv], { cwd: root, encoding: 'utf8' }),
@@ -356,8 +356,8 @@ describe('which tests a change reaches', () => {
   });
 
   it('a change that reaches nothing selects nothing, and says so plainly', () => {
-    // Not an error, and not a licence either: the gate refuses to treat an
-    // empty selection as a measurement, so this is where that refusal starts.
+    // Wide scope retains this empty result. Change scope additionally identifies
+    // positively classified emptiness so the gate need not invent any tests.
     const fx = repo({
       base: {
         'src/a.js': 'export const a = 1;\n',
@@ -385,10 +385,61 @@ describe('which tests a change reaches', () => {
       },
     });
     try {
-      const { files, why } = JSON.parse(fx.run(['--changed-path', './src/a.js']));
+      const { files, why } = JSON.parse(fx.run(['--whole-selection', '--changed-path', './src/a.js']));
       assert.equal(why.reason, 'affected');
       assert.deepEqual(files, ['tests/a.test.js']);
       assert.equal(why.merge_base, null, 'named paths, not the diff to a base');
+    } finally { fx.cleanup(); }
+  });
+});
+
+// Change-only protection is distinct from the retained wide selector above.
+describe('the change scope', () => {
+  const base = {
+    'src/deep.js': 'export const value = 1;\n',
+    'src/wrapper.js': "import { value } from './deep.js';\nexport const wrapped = value;\n",
+    ...Object.fromEntries(Array.from({ length: 3 }, (_, n) => [`tests/direct-${n}.test.js`, "import { value } from '../src/deep.js';\nexport default value;\n"])),
+    ...Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`tests/indirect-${n}.test.js`, "import { wrapped } from '../src/wrapper.js';\nexport default wrapped;\n"])),
+    'tests/pin.test.js': "readFileSync('src/deep.js');\n",
+  };
+  const direct = Array.from({ length: 3 }, (_, n) => `tests/direct-${n}.test.js`);
+
+  it('(a) selects three direct imports, not twenty transitive imports', () => {
+    const fx = repo({ base, change: { 'src/deep.js': 'export const value = 2;\n' } });
+    try {
+      assert.deepEqual(fx.select('').files, direct);
+      assert.deepEqual(fx.select().files, [...direct, ...Array.from({ length: 20 }, (_, n) => `tests/indirect-${n}.test.js`), 'tests/pin.test.js'].sort());
+    } finally { fx.cleanup(); }
+  });
+  it('(b) selects the modified test itself', () => {
+    const fx = repo({ base, change: { 'tests/pin.test.js': "readFileSync('src/wrapper.js');\n" } });
+    try { assert.deepEqual(fx.select('').files, ['tests/pin.test.js']); } finally { fx.cleanup(); }
+  });
+  it('(c) selects deleted source importers at the base, not the whole suite', () => {
+    const fx = repo({ base, remove: ['src/deep.js'], change: {
+      'tests/direct-0.test.js': 'export default 0;\n',
+      'tests/new-import.test.js': "import { wrapped } from '../src/wrapper.js';\n",
+    } });
+    try {
+      assert.deepEqual(fx.select('').files, [...direct, 'tests/new-import.test.js']);
+      assert.equal(fx.select().why.reason, 'full-suite');
+    } finally { fx.cleanup(); }
+  });
+  it('(d) excludes pin and directory-read edges retained by whole selection', () => {
+    const fx = repo({ base: { ...base, 'docs/guide.md': '# before\n', 'tests/scan.test.js': "readdirSync('docs/guide');\nreadFileSync('docs/guide.md');\n" },
+      change: { 'docs/guide.md': '# after\n', 'src/deep.js': 'export const value = 2;\n' } });
+    try {
+      assert.deepEqual(fx.select('').files, direct);
+      assert.ok(fx.select().files.includes('tests/pin.test.js'));
+      assert.ok(fx.select().files.includes('tests/scan.test.js'));
+    } finally { fx.cleanup(); }
+  });
+  it('(e) reports unclassified paths rather than silently claiming no reach', () => {
+    const fx = repo({ base, change: { 'unknown.input': 'changed\n' } });
+    try {
+      assert.deepEqual(fx.select('').why.unexplained, ['unknown.input']);
+      assert.deepEqual(fx.select('').files, []);
+      assert.equal(fx.select().why.reason, 'full-suite');
     } finally { fx.cleanup(); }
   });
 });

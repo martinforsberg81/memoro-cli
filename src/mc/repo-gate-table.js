@@ -130,12 +130,12 @@ export const SHIPPED = Object.freeze({
       + '0 fail in 74.5 s, with no npm ci. Re-run it: mc test memoro-cli <pr> --full — and the round '
       + 'measures the resolution itself, so a package that stops resolving stops the round rather '
       + 'than shrinking the suite',
-    // This repository's own answer to "what does this change reach": the import
-    // closure of each test file, plus the source files a test reads as *text*
-    // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`
-    // asserts against `repo-gate.js`'s source that no merge call is in it, and
-    // an import graph cannot see that.
+    // Merge and bare session gates ask for changed tests and one-hop source
+    // importers, using base importers for deletions. Wide and daily full plans
+    // are separate declarations so neither can silently replace that scope.
     select: 'node scripts/affected-tests.js --base-ref origin/main',
+    select_whole: 'node scripts/affected-tests.js --whole-selection --base-ref origin/main',
+    select_full: 'node scripts/affected-tests.js --full',
     select_changed_path: true,
     select_changed_path_why: 'scripts/affected-tests.js:39,383 accepts repeatable --changed-path with --base-ref. '
       + 'Measured 2026-11-09: 16 of 55 green merge rounds since 2026-11-05 that reused nothing '
@@ -198,11 +198,11 @@ export const SHIPPED = Object.freeze({
     prepare_why: 'measured in D-0089: without npm ci ~30 files fail with ERR_MODULE_NOT_FOUND; '
       + 'with it the contract suite is 2352/2352, no browser binaries involved (verified with an '
       + 'empty PLAYWRIGHT_BROWSERS_PATH); matches .github/workflows/msr-contract.yml',
-    // How memoro lists what a change reaches (2026-08-30). Its `npm test` is
-    // `scripts/testing/ci.mjs`, which selects by diff against the base and
-    // follows the pin graph, so the list is the honest answer to "what does
-    // this change touch" rather than a profile that rides every round.
+    // The repository owns all three scopes. Change scope includes the small
+    // mandatory core and no commands; full scope keeps every file and command.
     select: 'node scripts/testing/ci.mjs --list --json --base-ref origin/main',
+    select_whole: 'node scripts/testing/ci.mjs --list --json --whole-selection --base-ref origin/main',
+    select_full: 'node scripts/testing/ci.mjs --list --json --full',
     select_why: 'measured 2026-08-30: a documentation diff selected 332 files and 6 of them were '
       + 'the diff\'s; 326 were the always-on msr-contract profile. With that profile bound to its '
       + 'own surface and pin-following closing the blindness it covered, the same diff selects 6',
@@ -269,7 +269,6 @@ export const SHIPPED = Object.freeze({
     // main, in a pull request that edits the test itself, and when nothing else
     // was selected.
     main_only: Object.freeze([
-      'tests/architecture/class-coverage.test.js',
       'tests/architecture/core-bundle-size.test.js',
       'tests/architecture/css-dead-rules.test.js',
       'tests/architecture/outside-ui-reach.test.js',
@@ -634,6 +633,10 @@ function normalise(entry, env) {
     // round that let each side choose would compare 56 files against 6 and
     // report main's own red as this change's doing.
     select: entry.select ?? null,
+    // The optional wide, per-diff plan and the complete daily plan. The
+    // ordinary selector measures only the change; neither is a landing gate.
+    select_whole: entry.select_whole ?? null,
+    select_full: entry.select_full ?? null,
     select_why: entry.select_why ?? null,
     // Whether `select` answers for explicit paths: the same command with
     // ` --changed-path <p>` appended once per path, printing the same JSON.
@@ -690,6 +693,8 @@ function normalise(entry, env) {
     // files cannot run without. Declared here, the round measures with the
     // repository's own environment rather than an inference about it.
     pr_tests_flags: Array.isArray(entry.pr_tests_flags) ? entry.pr_tests_flags.map(String) : [],
+    // Repository-owned instrumentation needed only by the daily/full plan.
+    full_tests_imports: Array.isArray(entry.full_tests_imports) ? entry.full_tests_imports.map(String) : [],
     // Commands whose first line of stdout `mc deps` prints as a note of its
     // own — run in the primary checkout, because the script is the
     // repository's. Not part of any round.
@@ -706,7 +711,7 @@ function normalise(entry, env) {
     retry_once_why: entry.retry_once_why ?? null,
     round_timeout_ms: entry.round_timeout_ms ?? null,
     round_timeout_why: entry.round_timeout_why ?? null,
-    // A session's gate runs all it selected, leaving nothing to the merge round.
+    // Legacy declaration retained for configuration/receipt compatibility.
     session_whole: entry.session_whole === true,
     // The test files a pull request's selection leaves to the run on main.
     main_only: Array.isArray(entry.main_only) ? entry.main_only.map(String) : [],

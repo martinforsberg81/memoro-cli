@@ -900,7 +900,13 @@ export class FakeGit {
     return this.cmd_diff({ dir, gitDir, argv: ['--name-only', ...argv.filter((arg) => arg !== '-r')] });
   }
 
-  cmd_cat_file({ dir, gitDir, argv }) {
+  cmd_cat_file({ dir, gitDir, argv, input }) {
+    if (argv.length === 1 && argv[0] === '--batch') {
+      return Buffer.concat(String(input ?? '').split('\n').filter(Boolean).map(object => {
+        const body = Buffer.from(this.cmd_cat_file({ dir, gitDir, argv: ['-p', object] }));
+        return Buffer.concat([Buffer.from(`${sha1(Buffer.concat([Buffer.from(`blob ${body.length}\0`), body]))} blob ${body.length}\n`), body, Buffer.from('\n')]);
+      })).toString('utf8');
+    }
     const flags = parse(argv, [], ['e', 't', 'p']);
     const { repo, worktree } = this.repoAt(dir, gitDir);
     const state = worktree ? repo.worktrees.get(worktree) : null;

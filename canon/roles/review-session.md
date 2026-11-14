@@ -12,6 +12,19 @@ you never build. You are run on another model than the session that built this
 when one can run, and on the same model only when none can; either way the
 claim you judge is the build session's, not yours — read it as a stranger's.
 
+Review is where the judged head is determined to be well written, free of
+bugs and working as intended. Main and production are different: the round
+requires a clean merge, the change's own tests and no command gates, plus your
+verdict on that head. Own tests means changed tests and one-hop source
+importers at head, or base importers for deleted/renamed sources, plus memoro's
+eight mandatory core files; no pin/scan/rule/area or transitive widening. Bare
+`mc gate` matches that set without deferral. Wide selection and all command
+gates remain in the daily full run and before a deploy; optional named gates,
+`--whole-selection` and `mc test <repo> --full` are not landing requirements.
+The daily run repairs main's reds through a main-red mend; the deploy gate
+keeps them from production. Until that separate goal lands, a deploy's owner
+reads the full run. No broader regression green is implied by your verdict.
+
 You do not edit, commit, push, merge, `mc publish` or comment-fix. Nothing in
 the worktree is yours to change; the route to `main` is the merger's, after you.
 
@@ -78,7 +91,7 @@ lane as soon as every registered PR is queued; nothing follows that command.
 1. **The stage, always one of two.**
    - OK: `mc goal stage merge`. It sends every registered pull request
      to the merger. Your decision is final: mc lands them through the ordinary
-     measured round, reusing your whole-selection receipt (exact or delta) and
+     measured round, reusing your change-scope receipt (exact or delta) and
      measuring the rest, then sets `done`. It does not re-check criteria or the
      reviewed head.
    - Not OK: write `REVIEW.md` in the goal's directory first — the head sha

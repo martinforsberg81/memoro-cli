@@ -72,7 +72,7 @@ import { readRounds, recordRound } from './repo-round-log.js';
 import { PROCESS_PROGRESS_PRELOAD, TIMES_REPORTER, measuredSeconds, outputCut, recordTestTimes, recordTooSlow, progressTracker, runProgress, slowTests, testsMeasured } from './test-times.js';
 import { UNKNOWN, declarationFor, gateLaneOf, repoDeclarationPath, tablePath } from './repo-gate-table.js';
 import { intakeDir, programmeNames, programmeProposalsDir, proposalsDir } from './helper-collect.js';
-import { GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
+import { classifiedEmptyChange, GATE_MEASUREMENT_VERSION, commandIdentity, findGreen, findGreenForHead, gateConfiguration, selectionHash } from './gate-greens.js';
 import { ensure as ensureDocker, needsDocker, release as releaseDocker } from './docker.js';
 import { repoNameOf } from './repos.js';
 import { nodeTestScript, scriptTimeoutAt, timeoutMs as positiveMs, timeoutValues } from './gate-local.js';
@@ -161,6 +161,7 @@ export async function runGate({
   git = null,
   gh = null,
   suite = null,
+  select = selectFiles,
   // How the command gates the selection named are run (`commandShell` when
   // null): asynchronous, after the suite has finished.
   shell: gateShell = null,
@@ -631,10 +632,11 @@ export async function runGate({
     // What gets run: the test files the repository's selector says this change
     // reaches, or the repository's own whole suite. `full` asks for the second
     // on purpose; a repository with no `select` gets it either way.
-    const selects = Boolean(declared.declaration.select) && !wholeSuite;
+    const selectCommand = wholeSuite ? declared.declaration.select_full : declared.declaration.select;
+    const selects = Boolean(selectCommand);
     const commandLine = suiteCommand({ repoPath, declaration: declared.declaration, root });
     if (!commandLine.ok && !selects) return finish('suite', commandLine.reason);
-    report.command = selects ? declared.declaration.select : commandLine.command;
+    report.command = selects ? selectCommand : commandLine.command;
     // Which command produced a whole-suite reading, and which of the two
     // answers it is. "It was full" is not enough on its own any more: `npm
     // test` and a declared `suite` are both whole-suite runs and are not the
@@ -644,7 +646,8 @@ export async function runGate({
     // Not the same field as `selection.full_suite`, which is the selector's
     // admission that it could not narrow a change. They are never both set:
     // this one exists only when no selection ran.
-    if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
+    if (wholeSuite && selects) report.full_suite = { command: selectCommand, source: 'declared-plan' };
+    else if (!selects) report.full_suite = { command: commandLine.run, source: commandLine.source };
 
     const candidate = await measurementCheckout({
       repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : baseRef,
@@ -807,7 +810,8 @@ export async function runGate({
     const measured = declarationFor(repoPath, { root, env, contentDir: headDir });
     if (!measured.ok) return finish('declaration', measured.reason);
     if (measured.notice) say(measured.notice);
-    const flags = measured.declaration.pr_tests_flags || [];
+    const flags = [...(measured.declaration.pr_tests_flags || []),
+      ...(wholeSuite ? (measured.declaration.full_tests_imports || []).flatMap(path => ['--import', path]) : [])];
     // The same resolution the session's `mc gate` makes, on the same declared flags and
     // the candidate's own script: what a green receipt is bound to, and what the tests
     // below are spawned with (`realTests` resolves the same way from `flags` and `headDir`).
@@ -1003,6 +1007,42 @@ export async function runGate({
       return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${hookReasons.length ? `; ${hookReasons.join('; ')}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
     };
 
+    // What this change reaches, asked of the repository rather than assumed.
+    let selection = null;
+    if (selects) {
+      selection = await timed('selection', () => select({
+        command: selectCommand, cwd: headDir, env, say, mainOnly: [], signal: childSignal(),
+      }));
+      if (!selection.ok) return finish('selection', selection.reason);
+      fileClasses = selection.classes || {};
+      report.selection = {
+        command: selectCommand,
+        files: selection.files.length,
+        // The selector's own admission that it could not narrow this change,
+        // carried through so the verdict does not read as a saving it is not.
+        full_suite: Boolean(selection.full),
+        why: selection.why,
+        // The command gates the same answer named. Counted here and listed in
+        // `extra_gates`, where every gate this round ran is listed.
+        commands: selection.commands.length,
+        // The files themselves, so a later red on main can be checked against
+        // what this round actually ran (`selector-miss.js`). A count cannot
+        // answer "was this test selected?".
+        selected: selection.files,
+        // The digest of the selector's exact stdout (`selectFiles`'s `raw`): what the
+        // selection was, byte for byte, without retaining the whole reason map here.
+        raw_sha256: selection.raw?.sha256 ?? null,
+      };
+      say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
+      if (selection.files.length === 0 && !classifiedEmptyChange(selection)) {
+        return finish('selection', 'the repository selected no test files for this change at all — that is not a measurement');
+      }
+      if (classifiedEmptyChange(selection)) {
+        report.selection.empty_change = true;
+        say('no own tests: complete classified empty change scope; no checks executed');
+      }
+    }
+
     // The files this pull request's last round found red, alone on the
     // prepared candidate, before anything else is asked of it (ruling 44 § 2).
     // 283 pull requests needed more than one round, and each round began with
@@ -1012,7 +1052,7 @@ export async function runGate({
     // one previous round to read.
     if (facts.pr && !batch) {
       const previous = previousRedFiles({ root, repoPath, pr: facts.pr.number })
-        .filter((file) => existsSync(join(headDir, file)));
+        .filter((file) => existsSync(join(headDir, file)) && (!selection || selection.files.includes(file)));
       if (previous.length) {
         say(`the last round was red in ${previous.join(', ')} — running ${previous.length === 1 ? 'it' : 'them'} alone first`);
         const first = await timed('previous red', () => measureSelected({
@@ -1034,38 +1074,6 @@ export async function runGate({
           report.previous_red = { files: previous, red: [] };
           say('previous red files green — measuring the selection');
         }
-      }
-    }
-
-    // What this change reaches, asked of the repository rather than assumed.
-    let selection = null;
-    if (selects) {
-      selection = await timed('selection', () => selectFiles({
-        command: declared.declaration.select, cwd: headDir, env, say, mainOnly: declared.declaration.main_only, signal: childSignal(),
-      }));
-      if (!selection.ok) return finish('selection', selection.reason);
-      fileClasses = selection.classes || {};
-      report.selection = {
-        command: declared.declaration.select,
-        files: selection.files.length,
-        // The selector's own admission that it could not narrow this change,
-        // carried through so the verdict does not read as a saving it is not.
-        full_suite: Boolean(selection.full),
-        why: selection.why,
-        // The command gates the same answer named. Counted here and listed in
-        // `extra_gates`, where every gate this round ran is listed.
-        commands: selection.commands.length,
-        // The files themselves, so a later red on main can be checked against
-        // what this round actually ran (`selector-miss.js`). A count cannot
-        // answer "was this test selected?".
-        selected: selection.files,
-        // The digest of the selector's exact stdout (`selectFiles`'s `raw`): what the
-        // selection was, byte for byte, without retaining the whole reason map here.
-        raw_sha256: selection.raw?.sha256 ?? null,
-      };
-      say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
-      if (selection.files.length === 0) {
-        return finish('selection', 'the repository selected no test files for this change at all — that is not a measurement');
       }
     }
 
@@ -1124,7 +1132,7 @@ export async function runGate({
       const delta = await timed('delta', () => deltaFromGreen({
         git: askGit, cwd: headDir, root, repo: repoNameOf(repoPath), headSha: facts.pr.head_sha,
         baseCommit: report.base.commit, derived: report.derived?.commit ? report.derived.regenerated : [],
-        command: declared.declaration.select, env, selection, evidence: receiptContext,
+        command: selectCommand, env, selection, evidence: receiptContext,
         allowDelta: Boolean(declared.declaration.select_changed_path), candidateTree,
       }));
       if (delta.kind === 'fallback') {
@@ -1166,13 +1174,14 @@ export async function runGate({
     // What the run below measures: the whole selection, or the delta's part.
     const runFiles = rerun ? rerun.files : selection?.files;
     const runCommands = rerun ? rerun.commands : selection?.commands;
-    // A delta that reaches command gates and no test file: the files half is
-    // the recorded green, not an empty run (which reports no tests and stops).
-    const greenFiles = rerun && !rerun.files.length ? {
+    // No test process is needed for a delta with only command work, or for
+    // a positively classified empty change. Neither claims a test execution.
+    const greenFiles = ((rerun && !rerun.files.length) || classifiedEmptyChange(selection)) ? {
       ok: true,
       result: {
         commit: trim((await askGit(['rev-parse', 'HEAD'], { cwd: headDir })).stdout) || null, is, exit_code: 0, totals: null,
         red: [], red_files: [], red_tests: [], selected: 0,
+        ...(classifiedEmptyChange(selection) ? { empty_change: true } : {}),
         killed_files: [], killed_red: [], cancelled_files: [], cancelled_red: [],
       },
     } : null;
@@ -1201,6 +1210,7 @@ export async function runGate({
     // The suite and every selected gate have now finished; a process bound is stalled.
     if (!after.ok) return finish(after.stalled ? 'stalled' : 'suite', `the run ${after.reason}${after.stalled ? `; files in flight: ${nameSome(pendingFiles()) || 'none named'}; load ${loadavg()[0]}` : ''}`);
     report.candidate = after.result;
+    if (classifiedEmptyChange(selection)) report.candidate.empty_change = true;
     if (!facts.pr) recordMainRed({ root, repo: repoPath, commit: report.base.commit, result: after.result, covered: after.result.covered, from: 'full' });
     // The measured tree's own hash, so a landing can later prove — not
     // assume — that main became exactly what was measured (track 3's
@@ -1290,7 +1300,7 @@ export async function runGate({
     // pipe (measured 2026-08-24 — `# tests` never appears), so without this
     // the red names silently degrade to exit codes on every gate that is a
     // node test. A command that is not node ignores the variable.
-    const gates = declared.declaration.extra_gates || [];
+    const gates = wholeSuite || !declared.declaration.select_full ? declared.declaration.extra_gates || [] : [];
     const gateEnv = { ...env, MC_GATE_ROUND: gateMode };
     delete gateEnv.NODE_TEST_CONTEXT;
     gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
@@ -1560,6 +1570,9 @@ export async function selectFiles({ command, cwd, env, say, signal, mainOnly = [
   // measurement — "measured over the 258 files this change reaches" is true and
   // reads as a saving when 258 is the entire suite.
   const full = parsed?.why?.reason === 'full-suite';
+  if (parsed?.why?.reason === 'change' && parsed.why.unexplained?.length) {
+    say(`unclassified paths (not widened to the suite): ${parsed.why.unexplained.join(', ')}`);
+  }
 
   // The gates the selector named. A repository that reports none has none —
   // that is memoro-cli's own selector, and an absent field is not a fault. A

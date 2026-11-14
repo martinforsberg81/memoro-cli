@@ -4,49 +4,25 @@
  *   mc gate <files…> [--test-name-pattern <p>]
  *                             the named test files, with the node --test flags the repository declares
  *                             (pr_tests_flags), else those of its test script
- *   mc gate                   affected tests and command gates against origin/main
+ *   mc gate                   the change's own tests against origin/main
  *   mc gate --base <ref>      … against another base
- *   mc gate --whole-selection run the complete affected selection without cost deferral
+ *   mc gate --whole-selection run the optional wide selection with command gates
  *   mc gate --fresh           run the whole request again, reusing nothing from earlier attempts
- *   mc gate --command <id>    one command gate of this change's selection, alone, reusing nothing
+ *   mc gate --command <id>    one declared command gate, alone, reusing nothing
  *   mc gate --json            the summary as one object
  *   mc gate --budget <s>      answer after at most s seconds (default 540); the tests keep running
  *   mc gate --wait            wait for the gate running here and print its verdict
  *
  * With no files named, the repository selector maps the complete branch and
- * local changes to tests and command gates. Named files run explicitly, with
+ * local changes to the change's own tests, without command gates. Named files run explicitly, with
  * the selector's resource classes when available. There is no file-count cap:
  * the shared runner bounds concurrency and test duration. The final merge
  * still verifies the candidate with the current base.
  *
  * No lane and no queue: the detached worker starts at once, at low priority,
  * beside any merge round (only a deploy or iOS build of memoro goes first).
- * A bare gate may defer costly selected files by measured time (test-times.js);
- * they are unmeasured until the merge round or --whole-selection measures them. Use
- * --whole-selection to run every selected check without cost deferral.
- *
- * Each test the change adds or changes (the tests the diff against the base
- * reaches: a test whose lines it touches, or every test of a new file) is timed
- * in the verdict, one line each, `test <file> › <name> — 0.xyz s`, as node
- * reports it. Information only: the verdict does not read it.
- *
- * The output goes to a file — under `$MC_SCRATCH` in a runner session, the
- * system temp directory otherwise — as it is written; when the tests end the
- * worker writes their exit code beside the log. This verb answers within the
- * budget: GREEN or RED, the counts, the failing lines with their locations,
- * and the file's path, at most 2 KB. Past the budget it answers `RUNNING` and
- * exits 3; the tests run on, and `mc gate --wait` prints the verdict from the
- * same log.
- *
- * A rerun on content identical to an earlier measured attempt (same tree and
- * bytes, version, configuration and flags, no name pattern) reuses each selected
- * file and command gate that already passed there and runs only the rest; it
- * prints `reused N files and M commands from <runs>; running K` first, and its
- * verdict says it was resumed. Any content change reuses nothing. --fresh
- * reuses nothing either (session-gate-evidence.js, `findResumable`).
- *
- * One gate per worktree: a lock beside the git directory names the running
- * gate's pid and log, and a second `mc gate` there refuses while that pid lives.
+ * A bare gate and a merge round measure the same change scope, without cost
+ * deferral or command gates. --whole-selection opts into wide regression.
  */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -177,7 +153,7 @@ export async function run(argv, deps = {}) {
   const changed = mergeBase ? changedAgainst(io, root, mergeBase) : null;
   if (!files.length) {
     if (changed === null) { stderr.write(`mc: git cannot say what this branch changes against ${baseRef} — name the test files: mc gate <files…>\n`); return 2; }
-    if (!changed.length) {
+    if (!changed.length && commandId == null) {
       stdout.write(`NOTHING CHANGED — no changes against ${baseRef}\n`);
       return 0;
     }
@@ -196,7 +172,13 @@ export async function run(argv, deps = {}) {
       stderr.write('mc: no repository test selector declared — name the tests explicitly; nothing was verified\n');
       return 2;
     }
-    select = selectorCommand(declared.declaration.select, { base, changed });
+    const wide = scanned.flags['whole-selection'] || commandId != null;
+    // An explicit command can repair a daily-only red, including a full-only
+    // counterpart. It needs the complete command inventory, not a diff that
+    // may not select the failing command on an otherwise clean main.
+    const selector = commandId != null && declaration.select_full
+      ? declaration.select_full : wide ? (declaration.select_whole || declaration.select) : declaration.select;
+    select = selectorCommand(selector, { base, changed });
     addedTests = changed.filter((file) => TEST_FILE.test(file) && io.exists(join(root, file)));
   }
   const missing = files.find((file) => !io.exists(join(root, file)));
@@ -218,7 +200,7 @@ export async function run(argv, deps = {}) {
   }
   const configuration = gateConfiguration(declaration, effectiveFlags, executionIdentity(plan));
   const command = commandId != null ? { run: `command gate ${commandId} against ${baseRef}`, source: 'selection' } : files.length ? namedCommand(manifest, files, { pattern, flags })
-    : { run: `affected tests and command gates against ${baseRef}`, source: 'selection' };
+    : { run: `${scanned.flags['whole-selection'] ? 'wide tests and command gates' : "the change's own tests"} against ${baseRef}`, source: 'selection' };
   // The test files this change adds or changes, with the changed lines of each: the tests
   // among them are timed in the verdict (`touchedTests`). Nothing here decides the verdict.
   const timed = {};
@@ -255,9 +237,9 @@ export async function run(argv, deps = {}) {
     let child;
     try {
       io.mkdir(dir);
-      io.write(requestPath, JSON.stringify({ cwd: root, files: commandId != null ? null : files.length ? files : null, commands: commandId != null ? [commandId] : undefined, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: declaration?.main_only ?? [],
+      io.write(requestPath, JSON.stringify({ cwd: root, files: commandId != null ? null : files.length ? files : null, commands: commandId != null ? [commandId] : undefined, addedTests, timed, flags: effectiveFlags, declared: flags ?? [], pattern, select, base, mainOnly: scanned.flags['whole-selection'] ? declaration?.main_only ?? [] : [],
         round_timeout_ms: declaration?.round_timeout_ms ?? null,
-        log: logPath, fresh: commandId != null || Boolean(scanned.flags.fresh), defer: commandId == null && !files.length && !scanned.flags['whole-selection'] && !deps.measurementBinding && !deps.wholeSelection && !declaration?.session_whole,
+        log: logPath, fresh: commandId != null || Boolean(scanned.flags.fresh), defer: false,
         measurement: candidate && frozenBase ? { repo: gate.repo, run, base: frozenBase, candidate, configuration,
           session_run: deps.measurementBinding?.session_run ?? null, goal_revision: deps.measurementBinding?.goal_revision ?? null } : null, gate }));
       const fd = io.open(logPath);
