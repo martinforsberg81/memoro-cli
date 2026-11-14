@@ -63,14 +63,14 @@ test('mc ask without a goal asks jev, sends programme context and a confined doc
   assert.deepEqual([f.ledger.length, f.ledger[0].verb, f.ledger[0].programme, f.ledger[0].goal, f.ledger[0].model], [1, 'ask', 'jev', null, 'jev-1.14.0']);
 });
 
-test('a session mc ask decides technical questions that jev does not settle, including unavailable jev, without a goal', async () => {
-  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
-  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
-  for (const [response, keys, expectedReading] of [
-    [reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'inject (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)'],
-    [() => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)'],
-    [reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source'],
-  ]) {
+for (const [label, response, keys, expectedReading] of [
+  ['a missed jev reading', reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'inject (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)'],
+  ['a network error', () => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)'],
+  ['a missing key', reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source'],
+]) {
+  test(`a session mc ask decides a technical question on ${label} without a goal`, async () => {
+    const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+    const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
     const f = fixture({ env, response });
     if (keys) f.deps.readKeys = () => keys;
     assert.equal(await run(args, f.deps), 0, f.err());
@@ -79,7 +79,21 @@ test('a session mc ask decides technical questions that jev does not settle, inc
     assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome], ['technical', 'decided']);
     assert.equal(existsSync(join(programmeDir, 'goals')), false, 'no goal was created or changed');
     assert.ok(f.out().includes(expectedReading));
-  }
+  });
+}
+
+test('a session mc ask decides technical reading with high product score without a goal', async () => {
+  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const f = fixture({ env, response: reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.95 }) });
+  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
+  assert.equal(await run(args, f.deps), 0, f.err());
+  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
+  assert.equal(existsSync(join(programmeDir, 'goals')), false);
+});
+
+test('a session mc ask without a goal refuses malformed kinds without writes', async () => {
+  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
   for (const kind of [null, 'unknown']) {
     const malformed = fixture({ env });
     assert.equal(await run([...args.filter((value) => value !== '--kind' && value !== 'technical'), ...(kind ? ['--kind', kind] : [])], malformed.deps), 2);

@@ -1436,12 +1436,12 @@ test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >=
   assert.match(lines[0].state_sha256, /^[0-9a-f]{64}$/u);
 });
 
-test('technical questions not settled by jev are recorded as the session recommendation and keep the goal ready', async () => {
-  for (const [label, options, reading] of [
-    ['reading below product threshold', { replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.10 })] }, /settled 0\.30/u],
-    ['network unavailable', { replies: [() => { throw new Error('offline'); }] }, /network error \(offline\)/u],
-    ['missing key', { keys: {} }, /no TYPESAFE_API_KEY/u],
-  ]) {
+for (const [label, options, reading] of [
+  ['a missed jev reading', { replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.10 })] }, /settled 0\.30/u],
+  ['a network error', { replies: [() => { throw new Error('offline'); }] }, /network error \(offline\)/u],
+  ['a missing key', { keys: {} }, /no TYPESAFE_API_KEY/u],
+]) {
+  test(`mc goal martin decides technical question with ${label}`, async () => {
     const f = asking({ ...options, env: FINISH });
     const argv = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer', '--evidence', 'The contract is silent.'];
     assert.equal(await run(argv, f.deps), 0, `${label}: ${f.err()}`);
@@ -1452,8 +1452,8 @@ test('technical questions not settled by jev are recorded as the session recomme
     for (const evidence of ['Option fake_timer:', 'Option real_wait:', 'Recommended: fake_timer', 'Evidence: The contract is silent.']) assert.ok(entry.comment.includes(evidence), `${label}: ${evidence}`);
     assert.match(entry.comment, reading, label);
     assert.deepEqual(f.ledger().map(({ kind, outcome }) => [kind, outcome]), [['technical', 'decided']], label);
-  }
-});
+  });
+}
 
 test('technical questions are decided on any unsettled jev reading, while malformed session kinds write nothing', async () => {
   const f = asking({ replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.95 })] });
