@@ -244,6 +244,21 @@ test('a goal-bound technical mc ask records the recommendation and preserves sta
   assert.match(f.out(), /^mc: decided by the session: fake_timer .* continue with: inject a timer/u);
 });
 
+test('a goal-bound technical mc ask stays with the recommendation when jev product reading is high', async () => {
+  const goal = join(programmeHome, 'jev', 'goals', 'technical-product-reading');
+  mkdirSync(goal, { recursive: true });
+  const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
+  writeFileSync(file, goalJson({ stage: 'build', title: 'Technical product reading', goal: ['Ask once.'], repos: ['memoro-cli'] }));
+  writeFileSync(log, '');
+  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical-product-reading', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer'];
+  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
+  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 0, f.err());
+  assert.deepEqual([JSON.parse(readFileSync(file, 'utf8')).stage, JSON.parse(readFileSync(file, 'utf8')).status], ['build', 'ready']);
+  assert.match(parseLog(readFileSync(log, 'utf8')).at(-1).comment, /^Decided by the session \(technical\): Which timer\?/u);
+  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
+});
+
 test('jev product reading does not reroute an unsettled technical mc ask to Martin', async () => {
   const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_TOOL: 'claude', MC_ROLE: 'build-session:goal' } });
   const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer'];
