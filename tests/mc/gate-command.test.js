@@ -111,14 +111,28 @@ describe('mc gate <test files…>', () => {
     assert.deepEqual(out.removed, [LOCK]);
   });
 
-  it('an unnamed gate may leave costly files to the merge round; a goal\'s measurement may not', async () => {
+  it('a bare gate and a goal measurement both run without cost deferral', async () => {
     const plain = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     assert.equal(await run([], plain.deps), 0);
-    assert.equal(JSON.parse(plain.files.get(`${LOG}.request.json`)).defer, true);
+    assert.equal(JSON.parse(plain.files.get(`${LOG}.request.json`)).defer, false);
     const whole = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
     whole.deps.wholeSelection = true;
     assert.equal(await run([], whole.deps), 0);
     assert.equal(JSON.parse(whole.files.get(`${LOG}.request.json`)).defer, false);
+  });
+
+  it('bare and whole-selection requests choose the declared change and wide commands', async () => {
+    for (const whole of [false, true]) {
+      const h = harness({ changed: ['implementation.js'], finishAfter: 1, output: GREEN });
+      h.deps.declaration = () => ({ ok: true, declaration: {
+        select: 'node select-change.js', select_whole: 'node select-wide.js',
+      } });
+      assert.equal(await run(whole ? ['--whole-selection'] : [], h.deps), 0);
+      const request = JSON.parse(h.files.get(`${LOG}.request.json`));
+      assert.match(request.select, whole ? /^node select-wide\.js/u : /^node select-change\.js/u);
+      assert.equal(request.defer, false);
+      assert.deepEqual(request.mainOnly, []);
+    }
   });
 
   it('--whole-selection is a public bare-gate option and retains the selector request', async () => {

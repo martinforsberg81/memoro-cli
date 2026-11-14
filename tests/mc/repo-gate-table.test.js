@@ -577,6 +577,8 @@ describe('a repository that declares itself in .mc/test.json', () => {
         prepare: SHIPPED['memoro-cli'].prepare,
         prepare_why: SHIPPED['memoro-cli'].prepare_why,
         select: SHIPPED['memoro-cli'].select,
+        select_whole: SHIPPED['memoro-cli'].select_whole,
+        select_full: SHIPPED['memoro-cli'].select_full,
         select_why: SHIPPED['memoro-cli'].select_why,
         select_changed_path: SHIPPED['memoro-cli'].select_changed_path,
         select_changed_path_why: SHIPPED['memoro-cli'].select_changed_path_why,

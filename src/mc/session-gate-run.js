@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** The local gate's detached worker. Selection and test execution use the
  * merge gate's implementations. It takes no lane and waits for nobody but a
- * build (await-deploy.js): it runs at low priority. Ordinary requests may
- * defer costly selected files; --whole-selection runs the full affected scope. */
+ * build (await-deploy.js): it runs at low priority. Bare requests run
+ * the change scope without cost deferral; --whole-selection is optional wide scope. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { resolve } from 'node:path';

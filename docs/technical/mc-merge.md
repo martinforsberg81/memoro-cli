@@ -20,11 +20,11 @@ The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
 - **the gate round** — lease, the pull request's **existing** checkout holding its head
-  with main merged into it, the test files the change reaches run there, the
-  command gates the same selection named run after them, squash. This is what
+  with main merged into it, the change's own tests run there without command
+  gates, squash. This is what
   `mc repo merge` was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
-  after the repository selector's document tests and command gates pass. A script is not a document,
+  after the repository's change-scope tests pass. A script is not a document,
   under `docs/` or not: one is refused here and goes through the gate. The flag
   is not needed: `mc merge <repo> <pr>` reads GitHub's file list first
   (`prFiles`, `docsOnly` in [`src/mc/docs-merge.js`](../../src/mc/docs-merge.js)),
@@ -103,7 +103,7 @@ file in the parent TAP explains that file's output cut in suite, selected,
 own-test and alone runs. Other cut files still refuse measurement, even beside
 a named kill; nonempty completed TAP totals remain required.
 
-After the suite, command gates and PR's own tests, the round measures each
+After tests (and command gates in a full run), the round measures each
 unmeasured file alone, one at a time with `MC_TEST_LANES=1`. Declared loaders
 and flags remain, but mc replaces `--test-timeout` with `600000`
 (`TEST_TIMEOUT_MS`). The declaration timeout floor governs the suite, not this
@@ -111,7 +111,7 @@ execution override. A passing file is green; passed tests over the declared
 limit are kept under the PR in the too-slow file. An assertion or thrown error
 is red through the ordinary attribution rules. A test cut at 600 s is red,
 "never ends", by name. Another external kill is retried; the third kill
-stalls. Unmeasured command gates follow the files, serially through
+stalls. In full runs, unmeasured command gates follow the files through
 `runSelectedCommands`. Every round command receives `MC_GATE_ROUND=<mode>`;
 memoro's contract gates disable their hand/CI wall under it. `report.alone`
 records `files: [{ file, outcome, seconds, argv }]` and
@@ -240,7 +240,7 @@ origin does not have (ruling 43).
 **A session decides when a goal merges.** Before a review, finish or mend session
 authorizes goal landing with `mc goal stage merge`, the canonical
 [`publish-and-merge` task](../../canon/tasks/publish-and-merge.md) requires a
-completed `mc gate --whole-selection` on the final judged worktree: green,
+completed bare `mc gate` on the final judged worktree: green,
 or with only adjudicated `SETTLED` failures on the untouched frozen base
 (Martin, 2026-11-11). A baseline-only settled result permits handoff without
 waiting for the owning repair; it does not make an incomplete receipt green.
@@ -256,7 +256,7 @@ requirements, not merger enforcement.
 
 `mc goal stage merge` records that decision and queues every PR registered on
 the goal. `landJob` sends goal jobs through the ordinary `runMergeRound`: a
-candidate with the current base, exact reuse of the session's whole-selection
+candidate with the current base, exact reuse of the session's change-scope
 receipt when tree and selection match, delta reuse when the selector can measure
 main's movement, and measurement of the rest. The squash is pinned with
 `--match-head-commit` to the head the round measured. Every round is recorded.
@@ -359,8 +359,8 @@ whole of it. It takes a repository path and a number and:
 4. measures the documents before anything is squashed. It heals the standing
    measurement checkout, detaches at the branch head and merges `origin/<base>` there,
    prepares it as a round does, asks the repository's selector (`selectFiles`,
-   the gate round's own) which tests read the files, runs those files and the
-   command gates it names, and refuses on any red: `red`, with the names. A
+   the gate round's own) for the change scope, runs those files without command
+   gates, and refuses on any red: `red`, with the names. A
    measurement that could not run is `measure-<stage>` — `measure-candidate`,
    `measure-worktree`, `measure-merge`, `measure-prepare`, `measure-selection` or `measure-suite` —
    and is not merged either. The head is read again after the tests, and a head
@@ -547,19 +547,37 @@ UTC): 72 hits at 6.8 s median (7.4 s mean), 2 misses at 22.7 s median.
 
 ## What the round measures
 
-Not "the suite", necessarily. A repository may declare `select` in the gate
-table ([`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js)): a command
-printing JSON with a `files` array, run in the candidate worktree. With one, the
-round measures the test files the change reaches; without one, the whole suite,
-exactly as it always did.
+Main is where work meets; production is what users have. A merge checks four
+things: a clean merge onto current main; the change's own tests; no command
+gates; and the review's verdict on the judged head. Review judges whether the
+change is well written, free of bugs and works as intended.
 
-**A repository may declare what only main measures** (`main_only`; memoro: eleven
-ratchets and snapshots, Martin 2026-11-01). `selectFiles` takes those files out of
-a pull request's selection, in the merge round and in `mc gate` alike, so both
-hash the same selection. They still run in the whole suite on main, in a pull
-request that edits the test itself, and when nothing else was selected. A change
-that moves a pinned number therefore lands, and turns main red until it is
-re-pinned.
+The change's own tests are every added or modified test file, every test that
+directly imports an added or modified source (one hop, read at head), and, for
+a deleted or renamed source, its direct importer tests at the base. Memoro
+also runs the eight-file mandatory core in `config/testing-registry.mjs`.
+No transitive import closure, pin, scan, area blanket or registry target widens
+this set. Bare `mc gate` and the merge round use the same scope without cost
+deferral or command gates.
+
+The daily full run retains every test, including deferred tests and main-only
+ratchets, every CI binding command and all three contract suites, including
+`test:browser-contracts`. The wide selection remains available through
+`mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
+optional tools, never landing requirements. Wide regression protection belongs
+to the daily full run and before a deploy, not to a merge. Main may carry a
+red this merge did not look for: the daily run finds it within a day and sends
+it to a main-red mend; the deploy gate keeps it from production. Until the
+separate deploy-gate goal lands, the person deploying must read that full run.
+
+The shipped declarations' `select` commands serve the change scope;
+`select_whole` serves the optional wide diff scope and `select_full` the daily
+full plan. All print JSON with `files` and optional `commands`. The full plan
+keeps command-suite membership beside the commands; it never filters the
+seven `main_only` ratchets in `repo-gate-table.js`. Wide selection retains its
+legacy main-only filtering; changed tests and direct importers are not filtered
+out of the change scope. Repositories without full-plan declarations retain
+their declared `suite` fallback.
 
 **A suite finds the toolchain's git first** (`directGitDir` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)). macOS's `/usr/bin/git` is a
@@ -581,8 +599,8 @@ batch took 178 s at the median (p90 377 s) over 159 suite runs from 2026-10-20 t
 24. The floor is four and not seven because seven lanes beside the sessions are
 what went red under load on 2026-10-19; the sessions' load cannot take the round's
 lanes away. Martin, 2026-11-09: the round never takes all cores — at any
-moment its test processes are at most cores − 1. Command gates follow the
-suite; an alone member takes one lane, never beside another phase.
+moment its test processes are at most cores − 1. In full runs command gates
+follow the suite; an alone member takes one lane, never beside another phase.
 A whole-suite round hands the same count to its own runner as `MC_TEST_LANES`,
 which still overrides all of it. The round record names the `lanes` and the
 `load` it ran at, so a round's speed is read against the lanes it had. And the
@@ -594,25 +612,17 @@ against 770 s at one) — as memoro's own runner runs them — and the batches' 
 is read as one run. A session's
 `mc gate` takes no lane and waits for nobody (ruling 61): its detached worker
 starts at once at low priority beside any merge round, and only a deploy or an
-iOS build of memoro goes first (`await-deploy.js`). A session's gate uses affected selection or explicitly named files, with
+iOS build of memoro goes first (`await-deploy.js`). A session's gate uses the change scope or explicitly named files, with
 resource-class batching, bounded concurrency and timeouts. Completed local
 measurements now leave [immutable evidence](mc-gate-evidence.md): exact content,
-frozen base and check scope. Only complete, unchanged, unfiltered affected
+frozen base and check scope. Only complete, unchanged, unfiltered change or wide
 selections populate the existing green cache; named runs remain limited.
 
-**An ordinary session gate may defer costly selected files.** Every run
-records each test file's estimated seconds in `~/mc/test-times/<repo>.json`:
-the sum of the file's top-level test durations, an estimate that excludes import
-and process startup (`test-times.js`, a second reporter beside TAP; half the new
-measurement, half the old). An unnamed ordinary `mc gate` runs the test files the change touches,
-then others cheapest first while the estimate fits 180 s, and exposes the
-exact files it deferred as unmeasured. Its coverage is `partial`, never
-reusable evidence; it cannot replace the session’s required acceptance. The public
-`mc gate --whole-selection` uses the same affected selector, tests and command
-gates, but runs every selected check without cost deferral. Named files and a
-bound gate (`measurementBinding`, `wholeSelection`) also defer nothing, as does
-a repository that declares `session_whole` (memoro-cli, whose whole suite took
-128 s in a session's gate on 2026-11-01).
+**A bare session gate does not defer selected files.** It measures the same
+change scope as a merge round on the same tree. `mc gate --whole-selection`
+selects the wider diff scope and its command gates, not merely a cost-deferral
+switch. Named gates remain focused. None of these optional wider measurements
+is a landing requirement.
 
 **A session's gate times the tests the change touches.** Every test the run
 reports, at any nesting, comes back from `realTests` with its name, line and
@@ -753,7 +763,7 @@ the first lines kept for display: a deep-equality diff that differs only below
 that cut is a new failure. Evidence recorded without the digest never
 qualifies. Matching standing failures
 are named in `main_red_files` and excluded from the candidate's red, while
-command gates and the PR's own tests still run. This is a standing-assertion
+the PR's own tests still run; merge rounds run no command gates. This is a standing-assertion
 exemption, not proof that unchanged failing assertions cannot hide another
 cause. Unknown, stale or malformed evidence never becomes green by assumption.
 
@@ -808,7 +818,7 @@ Missing or incompatible evidence means measuring the relevant selection. Named
 or filtered runs never enter this full-selection cache. Receipt-bound
 callers additionally require the matching repository/run/revision and current
 gate configuration; legacy v1 callers retain their existing admission path.
-Required merge gates and the PR's own tests still run. `reused` in the round log
+The PR's own tests still run; merge rounds run no command gates. `reused` in the round log
 records the evidence taken, not a new measurement. Beside that unchanged field,
 `reuse` records every decision: `mode: exact | delta` carries the existing reused
 fields; `mode: none` carries `why`: `no-affected-green-for-head` (no cache entry
@@ -850,63 +860,23 @@ directory; an old cleanup cannot remove a successor's claim. A failed
 reservation stops the operation. During rollout, let already-running old
 workers finish: old code cannot enforce the new reservation protocol.
 
-**The command gates the selection names run after the suite.** They run one
-at a time in selector order, through asynchronous `commandShell`, with the
-frozen base commit rather than a moving ref. Every gate is measured even
-when the suite has red, and every failed gate is named in `extra_gates`.
-`timings['selected gates']` remains; the overlap timing is retired.
+**The full run executes every test and command.** `mc test <repo> --full`
+and the scheduled `runGate({ full: true })` ask `select_full` for the complete
+plan. memoro's plan runs all registered files, including deferred and
+main-only tests, every `ciBindings` command and all files in all three contract
+suites. Contract members run through their command, not twice as plain files.
+memoro-cli's full plan lists every tracked test. Command gates run serially
+through `commandShell`, after tests, with the frozen base when requested;
+every command is attempted even after another fails. Legacy repositories
+without `select_full` use the declared `suite` (`suite_why`), never an assumed
+`npm test` when a selector says it narrows the repository.
 
-The old beside policy was measured on 2026-10-10 with light gates (161 s
-beside against 36 s alone). Since the heavy contract gates of November 4/7,
-a gate beside the four-lane suite was cut at its wall: memoro#15171 on
-November 9 measured gates at 286–477 s beside suites of 238–377 s.
-Martin ruled on 2026-11-09 that the round never takes all cores. Sequential
-phases preserve that bound rather than adding command concurrency to the
-suite's lanes.
-
-**`mc test <repo> --full`** is the other reading, and the only one that is about
-the code rather than about a change: the repository's declared suite command,
-run once on the default branch as `origin` fetched it, reporting its red names.
-It is asked for, never scheduled. Measured 2026-08-31 on memoro-cli at `8a34a0d`
-— 2468 tests, 23 failures, 28 red names, 107.4 s. Every round used to compute
-that on the way past and report it as `standing_red`, which is how it came to be
-believed and never checked.
-
-*Declared*, since 2026-09-02, and it was not before. `--full` read the suite off
-`package.json` — `npm test`, verbatim — on the argument that mc must not keep a
-second definition of somebody else's suite. The argument holds; the assumption
-under it did not. memoro's `npm test` is `node scripts/testing/ci.mjs`, a
-diff-selector, and a `--full` round has no pull request: it checked out
-`origin/main` detached and diffed it against itself. 0 changed paths, 6 selected
-files, reported as the whole suite. Measured at `58db0f5`, the same tree gives 6
-files from `npm test` and 2,021 from `npm run test:full`.
-
-So the gate table carries `suite` and `suite_why` beside `select`, through the
-same three layers, and one rule closes the guess: **a declaration with `select`
-and no `suite` may not answer a `--full`.** It stops, naming both fields — a
-repository that declared a selector has already said that its `npm test`
-narrows, so there is nothing honest left to fall back to. A repository with no
-`select` keeps `npm test` and needs no declaration. Measured after the change:
-`mc test memoro --full` is 17,982 tests in 288.3 s, six failures, eight red
-names; `mc test memoro-cli --full` is the same 2,440 tests and the same 47 red
-names it was before, byte for byte.
-
-A whole-suite round records which command produced it — `full_suite` in `--json`
-and on the `--full` clause of the verdict — because "it was full" and "this is
-what full means here" stopped being the same claim, and the round that ran six
-files said `full: true` while it did it.
-
-**And the commands the same selection named.** memoro's selector reports a
-`commands` array beside `files` — `css:lint`, `css:tokens`, `i18n:contract` and
-their kind — and until 2026-08-31 the round read the files and dropped them, so
-no gate round had ever run one. They run now, on the **candidate only**: these
-are contracts about the diff rather than measurements of a tree, and several of
-them take `--base-ref` and are differential in themselves, so a baseline run
-would measure main against main. Every one runs even after another fails, and
-one that fails makes the round red. Measured on memoro #11185 (2026-08-31), a
-css-only diff: `css:lint` 15.1 s, `css:tokens` 1.6 s — against 7 s a side for
-its tests, because `css:lint` is stylelint over the whole of `public/css/**` and
-does not shrink when the selection does.
+`mc gate --whole-selection` remains the optional wide per-diff selection with
+command gates. A merge round and a bare gate ask for the change scope and run
+none of those commands. The generic execution and command-failure paragraphs
+on this page describe full/wide runs where commands actually occur, not a
+requirement to run them on a merge. The runner's full run and the deploy retain
+wide regression protection; main is not production.
 
 ### What the second side cost, while it existed
 
@@ -937,7 +907,7 @@ and turns a yes/no into a judgement call.
 
 ```
 mc: memoro #11185 (css-fix) → main — GREEN — the test gate passes
-mc: ran 17 test files (1876 tests) and 2 command gates on a1b2c3d (the head with main merged in)
+mc: ran 17 test files (1876 tests) and 0 command gates on a1b2c3d (the head with main merged in)
 mc: 54s — --json for timings, gate output and the file list
 ```
 
@@ -1044,7 +1014,8 @@ the `.mc/test.json` read is the measured tree's, never the common directory's.
 
 1. **Reference.** The `--test-timeout` in the measured tree's `.mc/test.json`
    `pr_tests_flags`, else a parseable one in its `package.json` `test` script
-   (memoro declares 1000 ms in `.mc/test.json`).
+   (memoro declares 30000 ms in `.mc/test.json`; memoro-cli declares the same
+   stall guard in `repo-gate-table.js`, not a repository `.mc/test.json`).
 2. **Floor.** The winning `pr_tests_flags` (shipped < repository < operator,
    field by field) keeps its loaders. If it states no `--test-timeout`, the
    reference is appended and the gate prints one line,
@@ -1465,7 +1436,7 @@ stops, so a reader of the report's top finds them.
 **Previous red first** (ruling 44 § 2). When a pull request's last
 `gate-rounds.jsonl` line ended `red` with `red_files`, the next single round
 runs those files alone on the prepared candidate in a timed phase
-`previous red` before the selection: still red stops it `red` there, with the
+`previous red` after selection has restricted that list to the current scope: still red stops it `red` there, with the
 standing-evidence lookup as for any red, and all green says `previous red files green —
 measuring the selection` and goes on as before (`previousRedFiles` in
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js)); a batch skips it.
@@ -1498,7 +1469,12 @@ nothing ever looked at the whole.
 
 The landing chain supplies PR rounds' evidence; the full run remains the
 whole-suite meter and writes `from: full` with every file it ran and no
-inheritance when it completes.
+inheritance when it completes. Its complete `select_full` plan includes every
+test (deferred tests and seven main-only ratchets included), every CI binding
+command and all three contract suites, including `test:browser-contracts`.
+No command gate removed from merge protection is left unrun. The full run
+finished on 2026-11-14: memoro 1,444 s, memoro-cli 111 s; earlier reports that
+nightly never finishes are no longer current.
 
 It is a **meter**, and the word is load-bearing (ruled by Martin, 2026-09-02):
 nothing it finds refuses a merge, delays a round or changes a verdict. It never

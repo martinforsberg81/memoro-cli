@@ -78,14 +78,35 @@ setup, file startup and selected-round cost alongside individual test times.
 Record resource prerequisites; unavailable evidence is not a passing result.
 Do not split cases or hoist heavy setup merely to evade a timeout.
 
-Fast deterministic checks belong in the affected-change lane. Browser journeys,
-live integrations, AI evaluations and performance measurements belong in the
-existing appropriate lanes when commissioned. A one-second unit-test limit
-must not be used to claim an inherently slower end-to-end flow was verified by
-a mocked substitute. Instead choose the correct evidence and record its cost.
-Nightly detection supplements selection; it does not make duplicate or brittle
-checks worth keeping. No new lane, timeout increase or threshold weakening is
-part of adopting this strategy.
+### What runs where
+
+Main is where work meets; production is what users have. A merge checks four
+things: a clean merge onto current main; the change's own tests; no command
+gates; and the review's verdict on the judged head. Review judges whether the
+change is well written, free of bugs and works as intended.
+
+The change's own tests are every added or modified test file, every test that
+directly imports an added or modified source (one hop, read at head), and, for
+a deleted or renamed source, its direct importer tests at the base. Memoro
+also runs the eight-file mandatory core in `config/testing-registry.mjs`.
+No transitive import closure, pin, scan, area blanket or registry target widens
+this set. Bare `mc gate` and the merge round use the same scope without cost
+deferral or command gates.
+
+The daily full run retains every test, including deferred tests and main-only
+ratchets, every CI binding command and all three contract suites, including
+`test:browser-contracts`. The wide selection remains available through
+`mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
+optional tools, never landing requirements. Wide regression protection belongs
+to the daily full run and before a deploy, not to a merge. Main may carry a
+red this merge did not look for: the daily run finds it within a day and sends
+it to a main-red mend; the deploy gate keeps it from production. Until the
+separate deploy-gate goal lands, the person deploying must read that full run.
+
+Browser journeys, live integrations, AI evaluations and performance evidence
+still use their commissioned existing levels and environments. No suite is
+retired by changing merge selection; the full run keeps its protection. No new
+lane, timeout increase or threshold weakening is part of this strategy.
 
 ## Apply the strategy to the existing estate
 

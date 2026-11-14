@@ -2667,7 +2667,7 @@ describe('a repository that selects by diff', () => {
       return { ran, tests };
     }
 
-    it('a previous red file still red stops the round red, and the selection never runs (ruling 44 § 2)', async () => {
+    it('a selected previous red still stops the round before the suite (ruling 44 § 2)', async () => {
       const fx = selecting({ files: [own, scanner] });
       const { ran, tests } = recording([own]);
       const said = [];
@@ -2680,7 +2680,7 @@ describe('a repository that selects by diff', () => {
         assert.equal(report.verdict, 'red');
         assert.equal(report.reason, `1 test red: a test in ${own}`);
         assert.deepEqual(ran, [[own]], 'the previous red file alone, and nothing of the selection');
-        assert.equal(report.selection, null, 'the selector was never asked');
+        assert.deepEqual(report.selection.selected, [own, scanner], 'previous red runs only inside the current scope');
         assert.deepEqual(report.candidate.red_files, [own], 'what the merger keeps in merge-red/');
         assert.deepEqual(report.previous_red, { files: [own], red: [own] });
         assert.deepEqual(report.head_alone, { red: [own] }, 'the run was alone already; it is not run a third time');
@@ -3941,4 +3941,70 @@ it('a selection keeps the selector output exactly, whole, independently of its n
   const unreadable = await selectFiles({ command: 'selector', cwd: tmpdir(), env: process.env, say: () => {}, run: async () => ({ status: 0, stdout: '{"files":', stderr: '' }) });
   assert.equal(unreadable.ok, false);
   assert.equal(unreadable.raw, undefined);
+});
+
+// Both routes consume the repository's same change-scope answer. The fixture
+// models Git; selectors and command execution are recorded at their boundaries.
+describe('a merge checks the change, while the full run keeps everything', () => {
+  for (const repo of ['memoro', 'memoro-cli']) {
+    it(`${repo}: merge, bare and whole-selection ask for the right scope`, async () => {
+      const fx = fixture({ changed: ['src/route.js'] });
+      try {
+        const declaration = declarationFor(`/repos/${repo}`, { root: fx.mcHome, env: { MC_WORK_ROOT: fx.workRoot } }).declaration;
+        writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { ...declaration, prepare: null, derived: [],
+          pr_tests_flags: [], extra_gates: [{ name: 'legacy', command: 'must-not-run' }] } });
+        const commands = [];
+        const asked = [];
+        const change = ['tests/route.test.js', ...(repo === 'memoro' ? ['tests/core.test.js'] : [])];
+        const wide = [...change, 'tests/pin.test.js'];
+        const select = request => {
+          asked.push(request.command);
+          return selectFiles({ ...request, run: async command => ({ status: 0, stdout: JSON.stringify({
+            files: command.includes('--whole-selection') ? wide : change,
+            commands: command.includes('--whole-selection') ? [{ packageScript: 'test:contract-audits' }, { packageScript: 'test:contract-d1-audits' }, { packageScript: 'test:browser-contracts' }, { packageScript: 'ci-binding' }] : [],
+          }) }) });
+        };
+        const shell = async command => { commands.push(command); return { status: 0, stdout: '', stderr: '' }; };
+        const round = await fx.run({ select, shell });
+        assert.equal(round.ok, true, round.reason);
+        assert.deepEqual(round.selection.selected, change);
+        assert.equal(asked[0], declaration.select);
+        assert.deepEqual(commands, []);
+        for (const whole of [false, true]) {
+          const files = [];
+          const result = await runSessionGate({ cwd: fx.repoPath, select: whole ? declaration.select_whole : declaration.select, defer: false,
+            flags: [], base: 'base1111' }, {
+            snapshot: () => null, write: () => {}, select, shell,
+            tests: async request => { files.push(...request.files); return { code: 0, tap: tapWith([], { tests: request.files.length }) }; },
+          });
+          assert.equal(result.ok, true, JSON.stringify(result));
+          assert.deepEqual(files, whole ? wide : change);
+        }
+        assert.deepEqual(asked, [declaration.select, declaration.select, declaration.select_whole]);
+        assert.deepEqual(commands, ["npm run 'test:contract-audits'", "npm run 'test:contract-d1-audits'", "npm run 'test:browser-contracts'", "npm run 'ci-binding'"]);
+      } finally { fx.cleanup(); }
+    });
+  }
+  it('the full plan retains ordinary, deferred and main-only tests plus every command suite', async () => {
+    const fx = fixture();
+    try {
+      const all = ['tests/unit.test.js', 'tests/deferred.test.js', 'tests/main-only.test.js'];
+      const commands = ['ci-binding', 'test:contract-audits', 'test:contract-d1-audits', 'test:browser-contracts'];
+      writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { prepare: null, prepare_why: 'fixture',
+        select: 'record change', select_full: 'record full', main_only: ['tests/main-only.test.js'], extra_gates: [] } });
+      const asked = [];
+      const ran = [];
+      const report = await fx.run({ pr: null, full: true,
+        select: request => { asked.push(request); return selectFiles({ ...request,
+          run: async () => ({ status: 0, stdout: JSON.stringify({ files: all, commands: commands.map(packageScript => ({ packageScript })) }) }) }); },
+        shell: async command => { ran.push(command); return { status: 0, stdout: '', stderr: '' }; },
+      });
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(asked.map(({ command, mainOnly }) => ({ command, mainOnly })), [{ command: 'record full', mainOnly: [] }]);
+      assert.deepEqual(report.selection.selected, all);
+      assert.deepEqual(fx.ran('tests').flatMap(call => call.files), all);
+      assert.deepEqual(ran, commands.map(name => `npm run ${name}`));
+      assert.deepEqual(fx.ran('suite'), []);
+    } finally { fx.cleanup(); }
+  });
 });

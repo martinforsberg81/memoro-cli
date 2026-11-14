@@ -513,7 +513,7 @@ it('real repository delta selection follows transitive dependencies, not just ch
     const base = git(fx.cwd, 'rev-parse', 'HEAD');
     git(fx.cwd, 'switch', '-qc', 'feature');
     writeFileSync(join(fx.cwd, 'src/wrapper.js'), "export { value } from './shared.js';\n// feature\n");
-    const command = 'node scripts/affected-tests.js';
+    const command = 'node scripts/affected-tests.js --whole-selection';
     const configuration = gateConfiguration({ select: command });
     const req = { ...fx.request(), files: null, select: selectorCommand(command, { base }),
       measurement: { ...fx.request().measurement, base, configuration } };

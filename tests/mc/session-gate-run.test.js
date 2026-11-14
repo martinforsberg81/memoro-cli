@@ -484,7 +484,7 @@ it('test-name filters reach node as flags, before the test paths', async () => {
   assert.deepEqual(args.flags, ['--import', './loader.mjs', '--test-name-pattern=one|two']);
 });
 
-it('the real gate request and worker preserve whole affected selection, costly failures, and default partial mode', async () => {
+it('the real gate request and worker preserve wide commands and complete bare change selection', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mc-whole-selection-'));
   const cwd = join(root, 'repo');
   const state = join(root, 'state');
@@ -516,7 +516,7 @@ it('the real gate request and worker preserve whole affected selection, costly f
         if (args.includes('--git-common-dir')) return '/repo/memoro/.git';
         return ({ '--show-toplevel': cwd, '--absolute-git-dir': join(cwd, '.git') })[args[1]] ?? null;
       },
-      declaration: () => ({ ok: true, declaration: { select: 'node select.js --base-ref origin/main' } }),
+      declaration: () => ({ ok: true, declaration: { select: 'node select.js --base-ref origin/main', select_whole: 'node select.js --whole-selection --base-ref origin/main' } }),
       read: (path) => {
         if (path === join(cwd, 'package.json')) return JSON.stringify({ scripts: { test: 'node --test' } });
         if (files.has(path)) return files.get(path);
@@ -543,7 +543,7 @@ it('the real gate request and worker preserve whole affected selection, costly f
     const actual = { files: [], commands: [] };
     const result = await runSessionGate(request, {
       snapshot: () => candidate, persist: () => '/scratch/no-reusable-receipt.json', record: () => {}, write: () => {},
-      select: async () => ({ ok: true, files: selectedFiles, commands: selectedCommands,
+      select: async () => ({ ok: true, files: selectedFiles, commands: request.select.includes('--whole-selection') ? selectedCommands : [],
         classes: { 'tests/selected.test.js': 'standard', 'tests/costly.test.js': 'sqlite' } }),
       tests: async ({ files: chosen }) => {
         actual.files = [...chosen];
@@ -574,13 +574,13 @@ it('the real gate request and worker preserve whole affected selection, costly f
     assert.equal(failed.result.code, 1);
 
     const ordinaryRequest = await requestFor(false);
-    assert.equal(ordinaryRequest.defer, true);
+    assert.equal(ordinaryRequest.defer, false);
     const ordinary = await execute(ordinaryRequest);
-    assert.deepEqual(ordinary.actual.files, ['tests/selected.test.js']);
-    assert.deepEqual(ordinary.result.files, ['tests/selected.test.js']);
-    assert.deepEqual(ordinary.result.deferred, ['tests/costly.test.js']);
-    assert.deepEqual(ordinary.actual.commands, ["npm run 'lint:selected' -- --base-ref '" + base + "'"]);
-    assert.equal(ordinary.result.coverage.kind, 'partial');
+    assert.deepEqual(ordinary.actual.files, selectedFiles);
+    assert.deepEqual(ordinary.result.files, selectedFiles);
+    assert.deepEqual(ordinary.result.deferred, []);
+    assert.deepEqual(ordinary.actual.commands, []);
+    assert.equal(ordinary.result.coverage.kind, 'affected');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
