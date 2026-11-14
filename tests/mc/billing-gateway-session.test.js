@@ -16,9 +16,11 @@ test('tool settings carry only a bounded gateway grant, never a provider key', (
   assert.equal(claude.env.GH_TOKEN, undefined);
   assert.equal(claude.env.ANTHROPIC_AUTH_TOKEN, 'session-grant');
   assert.equal(claude.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:1234/claude');
+  assert.equal(JSON.stringify(claude.args).includes('session-grant'), false, 'the grant is never on Claude argv');
   const codex = gatewayToolConfig({ provider: 'codex', base: 'http://127.0.0.1:1234', grant: 'session-grant', args: ['exec', '--json'], env });
   assert.equal(codex.env.OPENAI_API_KEY, undefined);
   assert.equal(codex.env.MC_GATEWAY_GRANT, 'session-grant');
+  assert.equal(JSON.stringify(codex.args).includes('session-grant'), false, 'the grant is never on Codex argv');
   assert.ok(codex.args.includes('model_providers.mc_api.supports_websockets=true'));
   assert.equal(codex.args.at(-2), 'exec');
 });
