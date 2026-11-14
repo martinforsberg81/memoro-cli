@@ -36,9 +36,9 @@ for every programme. What is being built — decisions, findings and design whil
 the work is under way — is in `~/mc/programs/<programme>/`: its README and
 goals. When a goal lands, its work writes the functionality into
 `docs/technical/`, and the programme README drops what `docs/technical/` now
-describes. No session writes `docs/project/`; it is history. A goal's contract
-narrows these for its own work and never contradicts them. Where one of them
-answers a question, apply it without asking.
+describes. No session writes `docs/project/`; it is history. A goal narrows
+these for its own work and never contradicts them. Where one of them answers a
+question, apply it without asking.
 
 Where no standard answers, established practice does, before Martin does:
 first a pattern the app already uses for the same problem, then the documented

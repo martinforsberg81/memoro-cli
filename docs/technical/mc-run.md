@@ -274,7 +274,7 @@ synchronization; necessary dependency, acceptance or conflict integration is
 owned by the working session under mc-goals.md, *Integrating main into a goal*.
 A missing worktree is recreated on its goal branch when possible. A missing
 role or tool skips launch; a worktree failure is recorded in LOG.md. The
-prompt includes the rendered goal (goal, contract, boundaries, documents and criteria), and the
+prompt includes the rendered goal (its numbered parts, its documents and criteria), and the
 role tells the session to read LOG.md first.
 
 - A build uses `build-session:goal` and the goal's `fast`, `medium` or `large` class.

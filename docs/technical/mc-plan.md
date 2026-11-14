@@ -10,7 +10,7 @@ mc plan <programme> --archive
 This is the person's entrance, not a command for a session already planning.
 `src/mc/commands/plan.js` refuses recognised session identity or coding-agent
 markers before choosing a programme or creating anything. Inside a session,
-goals change through `mc goal new`, `mc goal set` and `mc goal criterion add`.
+goals change through `mc goal new`, `mc goal set`, `mc goal item`, `mc goal obligation` and `mc goal criterion add`.
 Help remains available.
 
 ## A programme, and why it is not a workarea
@@ -140,7 +140,7 @@ See [mc-goals.md](mc-goals.md).
 ## Writing goals
 
 `goal-verb.md`, included by the role, describes the verbs. The goal carries
-the goal, contract, boundaries, documents and criteria with their checks.
+the goal's numbered parts, its documents and its criteria with their checks.
 Stages move forward; `ready` or `blocked` is a separate status. Phases order
 work across the programme: all goals of a lower phase finish or are dropped
 before any goal in a higher phase starts. Build sessions neither rewrite the

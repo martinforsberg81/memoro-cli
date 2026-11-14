@@ -166,8 +166,9 @@ written, and a write that would make one is refused with the field named.
   and it cannot go to review.
 - `documents` — `[{ label, path }]` (`validateDocuments`).
 
-**Version 2.** A GOAL.json of `"version": 2` is made only on request, with
-`mc goal new --structure 2`; nothing that exists changes version, and version 1
+**Version 2.** A GOAL.json of `"version": 2` is what `mc goal new` writes;
+version 1 is what `mc goal new --structure 1` and the converters write, and what
+a file without a `version` is. Nothing that exists changes version, and version 1
 is read, written and shown exactly as above. Version 2 has the same header
 (`stage` to `prs`, `title`) and `success_criteria` and `documents`, and replaces
 `goal` and `contract` with numbered parts, in the order `renderGoal` writes them:
@@ -195,7 +196,7 @@ is read, written and shown exactly as above. Version 2 has the same header
 ```
 
 - `aim`, `outcome`, `latitude`, `protection` — arrays of paragraphs, possibly
-  empty. `mc goal new --structure 2` writes them empty.
+  empty. `mc goal new` writes them empty.
 - `problem` (B), `premises` (P), `decisions` (D), `change` (C), `preserve` (V),
   `risks` (R), `out_of_scope` (X) — items. Each has an `id` (its part's letter
   and a number, shown `B1`, `C2`), a text (`claim` for a premise, `what` for a
@@ -235,7 +236,9 @@ check. A version 2 goal is shown in its part order — AIM, OUTCOME, PROBLEM,
 PREMISES, DECISIONS, CHANGE, LATITUDE, PRESERVE, OBLIGATIONS, RISKS,
 CRITERIA, PROTECTION, OUT OF SCOPE, DOCUMENTS — each item with its id; OUTCOME,
 CHANGE, OBLIGATIONS and CRITERIA say `none yet` when empty and any other empty
-part is left out. That text is the brief the runner gives a goal's build, review and plan
+part is left out. An item's fields are shown with the spelling of the flags that
+write them (`upheld-by`, `settled-by`), as the log entries of `item set` and
+`item remove` give them, not as the JSON keys (`upheld_by`, `settled_by`). That text is the brief the runner gives a goal's build, review and plan
 session, after the lines that say where the goal is (`goalPrompt`,
 `goalReviewPrompt`, `goalPlanPrompt` in `run-plan.js`). `mc goal list` and the
 goal rows on the page say `criteria <met>/<all>`; the page's is green when all
@@ -317,6 +320,9 @@ goal are main's.
   an error, never "declares none".
 - Nothing requires a stand for an area, and no brief or goal text carries the
   declarations: `mc goal show` does not render them.
+- `mc goal areas` may be run by plan, a person, the learning role and the
+  `desk-prepare` role (which only reads: its other goal verbs are refused), and
+  by a build, review, finish or mend session.
 
 **`mc goal areas`** prints each declared area as a block — `<repo>/<id>`, its
 name, what it covers, standards (`(missing)` after one that is not in the
@@ -334,7 +340,12 @@ area, only a declared `<repo>/<id>`: any other word is refused (exit 2, nothing
 written) with the declared areas listed. A goal none of whose repositories
 declares areas takes any word, and `<repo>/…` is accepted for a goal repository
 that declares none. A declaration that cannot be read or is invalid makes the
-write fail (exit 1); the declaration is read once per write.
+write fail (exit 1); the declaration is read once per write. When the goal's
+repositories declare any area, a refusal lists each repository's areas, and
+names one that declares none as `<repo>: declares none, any <repo>/… is taken`.
+After a `set` the verb ends with `no stand yet: <areas>` for the declared areas
+that have no obligation, or `every declared area has a stand` when none lacks
+one; for a goal whose repositories declare no area it prints neither.
 
 ## The verbs
 
@@ -366,7 +377,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   so may a build, review, finish or mend session, which only reads.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build] [--structure 1|2]`** — makes a
-  goal, refused unless its flags are valid and its names are new. It is in
+  goal, refused unless its flags are valid and its names are new. It writes
+  version 2 (numbered parts) unless given `--structure 1`, which writes version 1
+  (goal and contract prose); it prints one hint for the version it wrote. It is in
   stage `draft` (awaiting planning; see *Next draft planning*), or
   `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's
   highest is refused (`phase 4 would leave a hole — mc's phases run to 2, so 3
@@ -404,7 +417,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   have no obligation.
   The item and obligation verbs write the brief like `set`: a build, review,
   finish or mend session is refused (exit 2, nothing written), and so is the
-  learning role (it may not make a goal with `--structure 2` either); plan,
+  learning role on a goal it did not create; it may use them on a goal it
+  created in its session, as it may `set` and `criterion add`. Plan,
   interactive Martin, decision and a person may. A version 1 goal is refused
   them.
 - **`document add <p>/<g> --label "…" --path "…"`** — appends a document;
@@ -1021,9 +1035,10 @@ the trigger before spawning. The plan uses that draft's goal worktrees and branc
 role `plan`, kind `plan`, MC_GOAL and MC_HEADLESS=1, with existing routing, lane
 and reserved-act rules. Interactive planning checkouts remain separate.
 
-Complete exactly the selected draft's goal, contract, exclusions, documents,
-protection scope and executable criteria, reconcile the programme README and
-phases, and move it to build immediately when ready. Resolve a remaining policy
+Complete exactly the selected draft's parts as `mc goal show` names them, its
+stand on every rule area, its documents and executable success checks,
+reconcile the programme README and phases, and move it to build immediately
+when ready. Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
 `draft · ready` waits on Martin with an incomplete-session diagnostic; provider

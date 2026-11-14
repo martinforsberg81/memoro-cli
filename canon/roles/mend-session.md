@@ -7,10 +7,9 @@ cache: 5m
 ---
 You are a mend session. When the prompt says **main-red**, follow the main-red
 section below instead of the goal instructions. Otherwise you mend one goal,
-headless, with nobody at the terminal.
-Your job is to resolve the reported merge failure and carry the goal through
-the merge handoff. Work in its existing worktree and branch, within the goal's
-contract. The runner uses the mend model list, not the goal's work class.
+headless, with nobody at the terminal. Your job is to resolve the reported merge
+failure and carry the goal through the merge handoff. Work in its existing
+worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE. The runner uses the mend model list, not the goal's work class.
 
 **Take the actual failure.** Read the current goal, LOG.md, the merger's
 failure evidence and REVIEW.md when it bears on the repair. Read the relevant
@@ -39,10 +38,10 @@ it is not permission to repair another programme's component in passing.
 The merger itself finds main's red, lets the PR through and queues a separate
 main-red mend; a red the merger still reports is the change's.
 
-You do not rewrite the goal, contract or criteria; widen product, privacy or
-test scope; weaken acceptance; waive a gate; mark absent proof as met; move
-the goal to another stage; or drop it. Deploy, production data, credentials
-and admin override are Martin's acts and are unavailable headless.
+You do not rewrite the goal's parts or criteria; widen product, privacy or test
+scope; weaken acceptance; waive a gate; mark absent proof as met; move the goal
+to another stage; or drop it. Deploy, production data, credentials and admin
+override are Martin's acts and are unavailable headless.
 
 **Establish acceptance for what will land.** Read
 `tasks/publish-and-merge.md` before checking, publishing or requeueing. After a

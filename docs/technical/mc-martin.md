@@ -348,7 +348,8 @@ sixty-minute limit and writes a `runs.tsv` row of kind `learning` named
 passes do.
 
 **Authority.** The learning role may read, create goals (`mc goal new`), write
-the ones it created in this session (`set`, `document add`, `criterion add`) and
+the ones it created in this session (`set`, `document add`, `criterion add`,
+`item add|set|remove` and `obligation set|remove`) and
 move such a goal from `draft` to `build` (`stage <programme>/<goal> build`). A
 goal was created in this session when its first LOG.md entry is by role
 `learning` from a session tool and is stamped no earlier than the minute
