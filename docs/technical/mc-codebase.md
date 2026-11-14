@@ -35,8 +35,8 @@ its last row should read `0%`.
 
 ## Code conventions
 
-- A new subcommand is `src/mc/commands/<name>.js`, added to the `modules` map in
-  `src/mc-cli.js` — not `src/bin-mc.js`.
+- A new subcommand is `src/mc/commands/<name>.js`, added to `VERB_MODULES` in
+  `src/mc-verbs.js` (the dispatcher called by `src/mc-cli.js`) — not `src/bin-mc.js`.
 - `src/mc/` holds mc's subsystems; `src/vault/` is the vault engine, the one
   subsystem kept without a verb reaching all of it.
 - Cold start matters: `mc` is typed constantly, so a verb's module is imported

@@ -47,7 +47,7 @@ export function usage() {
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
 export const ROUTES = {
   '': {
-    booleans: ['--intake', '--collect', '--new', '--resume'],
+    booleans: ['--local', '--intake', '--collect', '--new', '--resume'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
     check: ({ flags, positional }) => {

@@ -11,6 +11,7 @@ THE PAGE
   mc --json [--fresh]              The same page as data; --fresh asks GitHub
 
 PLAN AND FOLLOW
+  mc server set <dest>|clear      Set server; entrances accept --local
   mc manager                      Person: manage work across all programmes
   mc martin                       Person: resolve goals waiting on Martin
   mc martin get [--json]             Read the live decision queue
@@ -21,7 +22,6 @@ PLAN AND FOLLOW
   mc programs priority <p>... --set <n>  Set programme priorities
   mc proposals [--json]           Waiting proposals by programme and total
   mc goal show <programme>/<goal>  One goal, its log and its worktrees
-
 RUN AND LAND
   mc run                          The headless runner
   mc run start|stop               Start or stop the runner
@@ -116,6 +116,10 @@ ${commandReference('language')}
 ${commandReference('deps')}
 
 ${commandReference('log')}
+
+${commandReference('server')}
+
+${commandReference('session')}
 
 ${commandReference('manager')}
 
