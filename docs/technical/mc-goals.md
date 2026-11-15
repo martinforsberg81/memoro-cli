@@ -432,14 +432,20 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   not met. `--criterion` and `--check` are required: a criterion without a check is refused. `--evidence` is a version 2 goal's.
   Build, review and mend sessions cannot add acceptance criteria;
   plan, interactive Martin, decision and a person may.
-- **`criterion met|unmet [<p>/<g>] <n>`** — records criterion `<n>` (1-based)
-  as holding, after its check was run, or takes it back. A number the goal
-  has no criterion for is refused.
+- **`criterion met [<p>/<g>] <n> [--evidence "…" | --evidence-file <path|->]`** — records criterion `<n>` (1-based)
+  as holding, after its check was run at the current head, with the evidence of that run
+  (*Evidence and heads*). A number the goal has no criterion for is refused.
+- **`criterion unmet [<p>/<g>] <n>`** — takes the mark back and drops the criterion's evidence record.
+- **`evidence [<p>/<g>] <id> --text "…" | --file <path|->`** — records evidence for a preserve id or
+  the area of a touched obligation (*Evidence and heads*). An unknown id is refused, listing the ids.
+  Build, person, plan, decision and interactive Martin may; review, mend, plan-review, desk-prepare and
+  learning are refused. It writes no LOG.md entry.
 - **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]`** — rewrites
   the criterion's text, check or evidence (kept when not given) and leaves it unmet, logging the old and new
   text. A build, review or mend role is refused, from `MC_ROLE` alone.
 - **`criterion remove [<p>/<g>] <n> --reason "…"`** — removes the criterion and
-  renumbers those after it, logging its text, check, met state and reason.
+  renumbers those after it, logging its text, check, met state and reason. Its evidence record is dropped and
+  the later records follow their criteria down one number.
   The same goal-session roles are refused; the only criterion cannot be removed.
   A criterion verb's refusal of its arguments exits 2 and writes nothing;
   a missing or unparsable GOAL.json remains exit 1.
@@ -525,7 +531,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for an unresolved design choice/reserved act. Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
-  criterion met mc/g 2` (`unmetGoalWords`). The session decides when to merge.
+  criterion met mc/g 2` (`unmetGoalWords`). A build session's move to review is also refused without
+  evidence at the head it publishes (*Evidence and heads*). The session decides when to merge.
   Interactive Martin and unattended decision also have validated goal-field and criterion set/remove,
   drop and any-stage authority. Neither can make a criterion met administratively
   or bypass review, acceptance, publication or merge evidence. `MC_HEADLESS=1`
@@ -821,8 +828,9 @@ landed prerequisite or demonstrated upstream acceptance obstacle follows
 after item until the criteria hold, and ends at a boundary between two only when the work is
 done, when it is blocked, or when its turns cost more than a fresh session
 reading the log would — a finished part that reads well is not a reason to
-stop. It runs each criterion's check and records the ones that hold with
-`mc goal criterion met <n>`. It runs `mc gate`, commits, and publishes with
+stop. It runs each criterion's check at a committed head and records the ones that hold with
+`mc goal criterion met <n> --evidence "…"`, and a preserve item or touched obligation with
+`mc goal evidence <id> --text "…"`. It runs `mc gate`, commits, and publishes with
 `mc publish --no-merge` (without the flag mc still queues nothing for a goal
 before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
@@ -941,6 +949,50 @@ and the rejections before the goal's latest move into draft, are not counted
 person after a rejection is not a repair (`isRepair`: the latest rejection, or the
 runner's move of an old `finish` record to build, must be later than the latest move
 to `merge`), nor is one the runner returned to build for want of a pull request.
+
+## Evidence and heads
+
+A goal goes to review only with evidence for every item, run at the head it
+publishes (`src/mc/goal-evidence.js`). The records are in `.evidence.json` in
+the goal's directory, beside GOAL.json and LOG.md, not in the goal's text: the
+brief (`renderGoalText`) and the plan review's hash (`goalHash`) never hold
+them, and no LOG.md entry is written for one (the runner reads LOG.md to tell
+whether a session spoke). A record is kept under the id the review's verdict
+uses — `criterion <n>`, a preserve id (`V1`) or `obligation <area>` — and holds
+`{ at, tool, model, role, heads, text }`: the head of every worktree of the
+goal, the time, the writer's tool and model, and the evidence text. A
+criterion's record also holds the criterion's text; a record whose text is not
+the criterion's now counts as none.
+
+- **Marks.** `mc goal criterion met <n> --evidence "…" | --evidence-file <path|->`
+  (`-` is stdin, read verbatim) records the mark and the evidence. A build
+  session's mark is refused when a worktree is dirty (`<repo> has uncommitted
+  changes — commit them, run the check at that head, then record it`) or
+  absent, and, for a version 2 goal, when no evidence is given; a version 1
+  goal needs none. A person, plan, decision or interactive Martin is accepted
+  without worktrees and records the heads that exist.
+- **Other items.** `mc goal evidence <p>/<g> <id> --text "…" | --file <path|->`
+  records a preserve id or the area of a touched obligation. An unknown id is
+  refused, listing the ids. Build, person, plan, decision and interactive
+  Martin may; review, mend, plan-review, desk-prepare and learning are refused.
+- **Dropping.** `criterion unmet` and `criterion set` drop the criterion's
+  record; `criterion remove` drops it and renumbers the later ones.
+- **The move to review.** A build session's `mc goal stage review` and
+  `mc goal log --stage review` are refused, each item named, unless every
+  criterion has a record at the current head of every worktree; every worktree's
+  HEAD is `refs/remotes/origin/<its branch>` (the refusal names `mc publish
+  --no-merge`); every repository has a worktree; and, for a version 2 goal,
+  every preserve item and every `touched` obligation has a record (an
+  `untouched` one is not asked). Martin, decision, a person and plan keep the
+  check on criteria and parts only. mc judges presence and head, never whether
+  the evidence is good: that is the review's.
+- **Rejection.** A review's move back to build removes the records of the items
+  its REVIEW.md marks NOT OK (`criterion <n>`, a preserve id,
+  `obligation <area>`), so the repair records them again at its own head. A
+  person's move back and the third rejection remove none.
+- **Reading.** `mc goal show` prints an EVIDENCE part, one entry per record with
+  its heads, time, tool, model and text, and marks `stale` beside a met
+  criterion whose record is at another head. A review reads the evidence there.
 
 ## Done when its work has landed
 

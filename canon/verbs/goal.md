@@ -19,8 +19,11 @@ its check, and each worktree's state.
   <p>/<g> --criterion "…" --check "…"`, and `--evidence "…"`
   on `criterion add|set`. A build, review or mend
   session cannot write the parts. A session that ran a criterion's check
-  and saw it hold records `mc goal criterion met [<p>/<g>] <n>`; `unmet` takes
-  it back. Every write is validated; an invalid one is refused and not written.
+  at a committed head and saw it hold records `mc goal criterion met [<p>/<g>] <n>
+  --evidence "…"` (or `--evidence-file <path|->`); `unmet` takes it back. A preserve
+  item or touched obligation is recorded with `mc goal evidence [<p>/<g>] <id> --text "…"`
+  (or `--file <path|->`). The records are in `.evidence.json` in the goal's directory and
+  are read with `mc goal show`. Every write is validated; an invalid one is refused and not written.
   `mc goal criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"]`
   rewrites a criterion's text or check and leaves it unmet, logged with the old
   and new text; a goal session (build, review, mend) cannot, but interactive Martin or unattended decision may.
