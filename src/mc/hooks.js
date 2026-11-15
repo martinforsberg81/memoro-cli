@@ -713,6 +713,15 @@ export const HEADLESS_RULES = [
     reason: 'credentials (mc test token)',
     test: (command) => begins(command, 'mc', 'test', 'token') && command.words.some((word) => word === '--set' || word === '--rm'),
   },
+  {
+    // The check after a deploy holds the seeded account's token and the admin
+    // token the error survey finds (docs/technical/mc-deploy.md, *The check
+    // after a deploy*). Only the runner starts it; no session runs it.
+    id: 'headless-deploy-check',
+    act: 'production-data',
+    reason: 'the check after a deploy (deploy-check-run.js; it holds production tokens, and only the runner starts it)',
+    test: (command) => command.words.some((word) => basename(word) === 'deploy-check-run.js'),
+  },
 ];
 
 /**
@@ -724,6 +733,7 @@ const UNPARSED_LINE_PATTERNS = [
   ['headless-admin', /(^|[;&|(]\s*|\s)(mc\s+merge|gh\s+pr\s+merge)\b[^\n;&|]*--admin\b/u],
   ['headless-production-data', /\bCLAUDE_ALLOW_PROD_WRANGLER\s*=/u],
   ['headless-credentials', /(^|[;&|(]\s*|\s)mc\s+test\s+token\s+--(set|rm)\b/u],
+  ['headless-deploy-check', /deploy-check-run\.js/u],
 ];
 
 /** The first headless rule the line runs, or `null`. */

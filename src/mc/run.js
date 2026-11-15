@@ -96,6 +96,7 @@ import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
+import { deployCheckTick } from './deploy-check.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
@@ -603,6 +604,10 @@ export function realDeps(env = process.env) {
     // the merge lane — with its narration in `~/.memoro/mc/nightly/nightly.log`.
     // A dependency so a test can drive the chore without a suite behind it.
     nightlyTick: (options) => loggedTick({ env, ...options }),
+    // The check after a deploy (`deploy-check.js`): started detached for a
+    // deployed row without a verdict. A dependency so a test drives the chore
+    // without a process behind it and without writing under the real home.
+    deployCheckTick: (options) => deployCheckTick({ env, ...options }),
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
@@ -1229,6 +1234,31 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       });
     }
     return outcome;
+  }
+
+  /**
+   * The check after a deploy (`deploy-check.js`, docs/technical/mc-deploy.md,
+   * *The check after a deploy*): one pass of the chore that starts it, detached,
+   * for the oldest deployed row that has none, and settles what it left. It
+   * starts nothing while a deploy runs, STOP or UPDATE is asked, or a check is
+   * alive. A failure here is said and never stops the pass.
+   */
+  async function runDeployCheck() {
+    if (!deps.deployCheckTick || stopRequested() || updateRequested()) return null;
+    try {
+      const tick = await deps.deployCheckTick({
+        now: () => deps.now().getTime(),
+        alive: deps.alive || pidAlive,
+        stopRequested,
+        updateRequested,
+        say: (message) => say(message),
+      });
+      for (const note of tick?.notes || []) say(`deploy check: ${note}`);
+      return tick;
+    } catch (error) {
+      say(`deploy check: the pass failed — ${error?.message || error}. Asked again on the next chore pass.`);
+      return null;
+    }
   }
 
   /**
@@ -3270,6 +3300,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // for. The deps reading goes first: a minute a repository.
     await runDepsDaily();
     await runNightly();
+    await runDeployCheck();
   }
 
   /**
@@ -3421,7 +3452,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
