@@ -244,7 +244,7 @@ the deploy, so it is refused.
 | **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | the worktree stands on another commit than the pick, at the deployer's placing, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
-| **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — nobody typed this deploy"* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
+| **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a suite failed or could not run** | 1 | names the suite and its last lines; refused row |

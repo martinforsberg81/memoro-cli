@@ -30,7 +30,7 @@ import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
-import { startRun } from '../../../src/mc/language-runs.js';
+import { endRun, startRun } from '../../../src/mc/language-runs.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
 import { realLock } from '../../../src/mc/runner-lock.js';
 
@@ -288,6 +288,27 @@ function lockWithRace(race) {
     return realLock(root, fn, options);
   };
   return { lock, raced };
+}
+
+/**
+ * A refusing admission: the stop for a test that has to end after the gate
+ * passed and before anything ships (where such a test once answered no at the
+ * question). A language run, by this test process, starts at the admission
+ * under the lock, so the admission refuses with exit 1 and no deployer starts;
+ * `end()` ends that run again, so a later run in the same test is not refused
+ * before it reads the preparation. `raced.ran` counts the admissions reached.
+ */
+function refusingAdmission() {
+  const env = { MC_WORK_ROOT: work };
+  let current = null;
+  const { lock, raced } = lockWithRace(() => {
+    current = startRun({ manifest: 'stop-at-admission', lang: 'sv', pid: process.pid }, env);
+  });
+  const end = () => {
+    if (current) endRun(current, { outcome: 'done' }, env);
+    current = null;
+  };
+  return { lock, raced, end };
 }
 
 function deps(extra = {}) {
@@ -1998,8 +2019,8 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
   });
 });
 
-describe('mc deploy — the app, used, before the question', () => {
-  it('all suites passing reaches the question, each listed, on a server of the commit that would ship', async () => {
+describe('mc deploy — the app, used, before the deployer starts', () => {
+  it('all suites passing starts the deployer, each listed, on a server of the commit that would ship', async () => {
     const { code, out, started, spawned, calls, row } = await attempt([], { suites: ['smoke', 'journeys'] });
     assert.equal(code, 0);
     assert.equal(started.length, 1);
@@ -2191,9 +2212,14 @@ function detachedPreparer(fake, { prepareWith = {} } = {}) {
 }
 
 describe('mc deploy — the preparation, in a process of its own', () => {
-  it('a cut follow leaves the preparation running; the next mc deploy joins it, measures nothing twice and ships once', async () => {
+  it('a cut follow leaves the preparation running; the next mc deploy joins it, measures nothing twice and reaches the admission', async () => {
     const fake = gateFake({ runs: [] });
     const { state, extra } = detachedPreparer(fake);
+    // The second and third runs stop at a refusing admission (refusingAdmission):
+    // what is asserted is the join and the one measurement, not the shipping.
+    const stop = refusingAdmission();
+    let deployers = 0;
+    const startDeployer = () => { deployers += 1; return { pid: 1 }; };
     const signals = new EventEmitter();
     const first = io();
     const cut = await run([], {
@@ -2212,29 +2238,34 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     // A new terminal, the same commit: joins; the process finishes while it watches.
     const second = io();
     const joined = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
+      ...deps({ ...extra, lock: stop.lock, startDeployer, sleep: async () => { await state.pending(); } }),
       stdout: second.stdout,
       stderr: second.stderr,
     });
-    assert.equal(joined, 0, second.out.stderr);
+    stop.end();
+    assert.equal(joined, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 1, 'the joined preparation passed its gate and reached the admission');
     assert.equal(state.starts, 1, 'no second preparation was started');
     assert.deepEqual(fake.calls.fullRun, [{ name: 'memoro', path: PATH }], 'the full run was called once, in the preparer');
     assert.match(second.out.stdout, /1a2b3c4 is already being prepared \(.*pid 31337.*\) — following it, not starting a second/u);
-    assert.match(second.out.stdout, /mc: deploying 1a2b3c4 to production in its own process/u, 'the one line');
-    assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 1, 'one deploy row');
-    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
+    assert.match(second.out.stderr, /a language run of stop-at-admission is running since/u);
+    assert.equal(deployers, 0, 'the refusing admission started no deployer');
 
     // And once it is done, deploying goes straight to the admission.
     const third = io();
     const again = await run([], {
-      ...deps({ ...extra }),
+      ...deps({ ...extra, lock: stop.lock, startDeployer }),
       stdout: third.stdout,
       stderr: third.stderr,
     });
-    assert.ok([0, 1].includes(again), 'it reaches the admission, which decides');
+    stop.end();
+    assert.equal(again, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 2, 'the third run reached the admission too');
     assert.equal(state.starts, 1);
     assert.equal(fake.calls.fullRun.length, 1, 'nothing was measured again');
     assert.match(third.out.stdout, /1a2b3c4 was prepared .* — the gate's answer is read from that, nothing is measured again/u);
+    assert.equal(deployers, 0);
+    assert.deepEqual(readDeploys({ MC_WORK_ROOT: work }).map((row) => row.outcome), ['refused', 'refused'], 'two refused rows, nothing shipped');
   });
 
   it('while it measures, the log — and so mc deploy, --follow and the page — has a line at least each minute', async () => {
@@ -2264,12 +2295,16 @@ describe('mc deploy — the preparation, in a process of its own', () => {
       },
     });
     const watched = io();
+    // Stopped at a refusing admission (refusingAdmission): the log is asserted, not the shipping.
+    const stop = refusingAdmission();
     const code = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
+      ...deps({ ...extra, lock: stop.lock, sleep: async () => { await state.pending(); } }),
       stdout: watched.stdout,
       stderr: watched.stderr,
     });
-    assert.equal(code, 0, watched.out.stderr);
+    stop.end();
+    assert.equal(code, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 1, 'the preparation passed its gate and reached the admission');
     const said = lines.filter((line) => /progress —|still preparing —/u.test(line.text));
     assert.deepEqual(said.map((line) => line.at / 60_000), [1, 2, 3, 4, 5], 'a line in each of the five minutes');
     assert.match(said[0].text, /^mc:   progress — 40 of ~250 test files done, 3 running, 0 red so far, 1 min 0 s elapsed$/u);
@@ -2359,11 +2394,15 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     const { state, extra } = detachedPreparer(fake);
     writePreparation(work, { sha: OLDER, pid: 31337, started: new Date().toISOString(), stage: 'full-run', log: join(work, 'runner', 'log', 'old.log') });
     const { out, stdout, stderr } = io();
+    // Stopped at a refusing admission (refusingAdmission): the new preparation is asserted, not the shipping.
+    const stop = refusingAdmission();
     const code = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
+      ...deps({ ...extra, lock: stop.lock, sleep: async () => { await state.pending(); } }),
       stdout, stderr,
     });
-    assert.equal(code, 0, out.stderr);
+    stop.end();
+    assert.equal(code, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 1, 'the new preparation passed its gate and reached the admission');
     assert.equal(state.starts, 1);
     const said = out.stdout.match(/^mc: the last preparation was of .*$/gmu);
     assert.equal(said.length, 1, 'one line');
@@ -2378,11 +2417,16 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     writePreparation(work, { sha: SHA, pid: 4242, started: '2026-11-14T10:00:00Z', stage: 'suites', log: join(work, 'runner', 'log', 'x.log') });
     const { out, stdout, stderr } = io();
     state.up = true;
+    // Stopped at a refusing admission (refusingAdmission), whose language run is
+    // this test process's: alive, where the old preparation's pid 4242 is gone.
+    const stop = refusingAdmission();
     const code = await run([], {
-      ...deps({ ...extra, alive: (pid) => (pid === 31337 ? state.up : false), sleep: async () => { await state.pending(); } }),
+      ...deps({ ...extra, lock: stop.lock, alive: (pid) => (pid === 31337 ? state.up : pid === process.pid), sleep: async () => { await state.pending(); } }),
       stdout, stderr,
     });
-    assert.equal(code, 0, out.stderr);
+    stop.end();
+    assert.equal(code, 1, 'stopped at the refusing admission');
+    assert.equal(stop.raced.ran, 1, 'the new preparation passed its gate and reached the admission');
     assert.match(out.stdout, /the preparation of 1a2b3c4 started 2026-11-14 10:00 was interrupted at the suites against a local server — starting a new one/u);
     assert.equal(state.starts, 1);
     assert.equal(fake.calls.fullRun.length, 1);
@@ -2985,7 +3029,7 @@ describe('mc deploy — the deployer puts mc\'s own worktree at the pick, and no
     assert.match(out.stderr, /git reset --keep 5b2d000 failed in .* — nothing was deployed/u);
   });
 
-  it('the script is always started with the remote preflight skipped: the question, not the script, chose the commit', async () => {
+  it('the script is always started with the remote preflight skipped: the reading and the gate of mc deploy, not the script, chose the commit', async () => {
     let seen = null;
     const { stdout, stderr } = io();
     await spawnDeployDefault({
