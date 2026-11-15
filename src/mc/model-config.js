@@ -34,7 +34,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { implementedTools, providerPriorities } from '../adapters/index.js';
+import { declared, implementedTools, providerPriorities } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runnerDir } from './paths.js';
 import { EFFORT_LEVELS, MODEL_RE } from './plan-schema.js';
@@ -72,7 +72,7 @@ export const DEFAULT_CATALOG = Object.freeze({
   fast: Object.freeze([candidate('claude', 'haiku', 'high'), candidate('codex', 'gpt-6-luna', 'high')]),
   medium: Object.freeze([candidate('claude', 'sonnet', 'high'), candidate('codex', 'gpt-6.1-terra', 'high')]),
   large: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'high')]),
-  review: Object.freeze([candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
+  review: Object.freeze([candidate('agy', 'gemini-4-argon-high', 'high'), candidate('claude', 'opus', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
   finish: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
   mend: Object.freeze([candidate('claude', 'sonnet', 'medium'), candidate('codex', 'gpt-6.1-sol', 'medium')]),
   plan: Object.freeze([candidate('claude', 'opus', 'high'), candidate('codex', 'gpt-6.1-sol', 'high')]),
@@ -107,7 +107,24 @@ function candidateProblems(value) {
   const problems = Object.keys(value).filter((key) => !CANDIDATE_KEYS.includes(key)).map((key) => `${key}: unknown key`);
   problems.push(...identityProblems(value.tool, value.model));
   if (!EFFORT_LEVELS.includes(value.effort)) problems.push(`effort: one of ${EFFORT_LEVELS.join(', ')}`);
+  // A tool that carries the effort in the model's name says whether the two agree (agy: `-high` is the high level).
+  else if (!problems.length) {
+    const own = declared(value.tool, 'candidateProblem')?.(value);
+    if (own) problems.push(own);
+  }
   return problems;
+}
+
+/**
+ * What the tool's adapter says is wrong between a typed candidate's model and effort (agy: the effort contradicts the
+ * level its model's name ends in), or null. A usage error for the command line; the other spelling problems are
+ * `parseCandidate`'s.
+ */
+export function effortContradiction(text) {
+  const parts = String(text).split(':');
+  if (parts.length !== 3) return null;
+  const problem = declared(parts[0], 'candidateProblem')?.({ tool: parts[0], model: parts[1], effort: parts[2] });
+  return problem ? `"${text}": ${problem}` : null;
 }
 
 /** A candidate typed on the command line, `tool:model:effort`, checked whole. */

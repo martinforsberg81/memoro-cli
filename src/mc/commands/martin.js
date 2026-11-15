@@ -8,6 +8,7 @@ import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
@@ -75,6 +76,9 @@ export async function run(argv, deps = {}) {
   }
   const role = (deps.role || (() => readCanonRole('martin')))();
   if (!role?.overlay) { stderr.write('mc: the martin role is missing from this install — expected canon/roles/martin.md with an overlay body\n'); return 1; }
+  const tool = flags.tool || role.tools?.[0] || 'claude';
+  const notInteractive = interactiveToolRefusal(tool);
+  if (notInteractive) { stderr.write(`mc: ${notInteractive}\n`); return 2; }
   const now = (deps.now || (() => new Date()))();
   const home = deps.home || programsHome(env);
   let last;
@@ -87,7 +91,7 @@ export async function run(argv, deps = {}) {
   const launch = { overlay: role.overlay, prompt: opening, model: role.model || null };
   const opened = await (deps.open || openInWorkArea)({
     env, areaRoot: root, conversationRoots: [root],
-    worktree: { repo: null, path: root, is_git: false }, tool: flags.tool || role.tools?.[0] || 'claude',
+    worktree: { repo: null, path: root, is_git: false }, tool,
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin', bg: flags.bg,
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,

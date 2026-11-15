@@ -1,0 +1,32 @@
+agy fixtures: documented, not recorded.
+
+The fixtures are synthesised from the documentation of 2026-11-15.
+
+No live agy ran for the antigravity programme's unattended goal. Every agy
+text in the tests is synthesised from Google's Antigravity CLI documentation
+and the numbers it prints, so what the tests prove is mc's reading of the
+documented shapes, not agy's behaviour. A recorded output, when one exists,
+replaces the synthesis here and the parse below is judged against it.
+
+Output (tests/mc/run-plan.test.js, the agy-stream reader; stream-success.ndjson and json-success.json here)
+  stream-json   NDJSON events `init`, `step_update` and `result`, each payload
+                under its own name: `result.status`, `.response`,
+                `.num_turns`, `.usage`, `.error`; the conversation id on the
+                event or in `init`.
+  json          the one terminal object, unwrapped, with the same fields.
+  Tokens        the documented example: input 10415, output 657 (thinking 616
+                is inside it), cache reads 8113; the two-turn example's second
+                step: input 278 beside cache reads 30214. `input_tokens` is the
+                uncached input and is never reduced by cache reads.
+  Failure       a status other than SUCCESS, an `error`, a non-zero exit and an
+                empty stdout at exit 0 are each a failed session. A sign-in or
+                locked-keyring message is a login interruption.
+
+Plan quota (tests/mc/agy-capacity.test.js, `agy -p /usage --output-format text`)
+  ASSUMED format (R3): per model group a heading line, then
+      Five Hour Limit Remaining: 72% (resets 2026-11-15T16:00:00Z)
+      Weekly Limit Remaining: 40% (resets 2026-11-20T00:00:00Z)
+  The reset may also read "resets in 2h 30m", or sit on the line below; it may
+  be absent. The parse takes only a percentage 0-100 beside those two names. A
+  window with no printed reset is not stored; one at its limit with none is a
+  refusal for QUOTA_SLEEP_MS. Output with no such line is a failed read.

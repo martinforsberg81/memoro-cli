@@ -20,6 +20,7 @@ import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
+import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
@@ -3493,8 +3494,28 @@ test('an available plan launches directly and removes ambient provider keys', as
   const [{ call, current }] = calls;
   assert.equal(call.bin, '/bin/claude');
   assert.equal('ANTHROPIC_API_KEY' in call.env, false);
-  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY']);
+  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY']);
   assert.equal(current.billing, 'plan');
+});
+
+test('an agy goal session launches without the Gemini keys or its own dropped variable, and a Claude one keeps AGY_ADC_AUTH out of its drop list', async () => {
+  const { f, calls } = onBilling('plan');
+  f.deps.env = { ...f.deps.env, GEMINI_API_KEY: 'g-from-the-runner', GOOGLE_API_KEY: 'o-from-the-runner', AGY_ADC_AUTH: 'adc' };
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  const launch = f.deps.launch;
+  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
+  await createRunner({ deps: f.deps }).pass();
+  const [{ call }] = calls;
+  assert.equal(call.bin, '/bin/agy');
+  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'AGY_ADC_AUTH']) {
+    assert.equal(name in call.env, false, `${name} is not in the child's environment`);
+    assert.ok(call.unsetEnv.includes(name), `${name} is unset at the launch`);
+  }
+
+  const other = onBilling('plan');
+  other.f.deps.env = { ...other.f.deps.env, AGY_ADC_AUTH: 'adc' };
+  await createRunner({ deps: other.f.deps }).pass();
+  assert.equal(other.calls[0].call.unsetEnv.includes('AGY_ADC_AUTH'), false, 'another tool\'s launch drops only its own');
 });
 
 test('a full Codex plan uses the same gateway route', async () => {
@@ -4613,15 +4634,16 @@ test('a goal in review gets a review session: the goal-review role, the review m
 
 test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
+  const only = DEFAULT_CATALOG.review.find((candidate) => candidate.tool === 'claude');
+  const sameModel = builtBy(`claude ${only.model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [DEFAULT_CATALOG.review[0]] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [only] });
   f.answer = judges(f, 'merge');
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
-  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', DEFAULT_CATALOG.review[0].model]);
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', only.model]);
   assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
   assert.ok(f.log.some((line) => /review starting .*preferred \(review candidate 1 — claude opus built it, and no other candidate can run on its plan\)/u.test(line)));
 });
@@ -4678,10 +4700,10 @@ test('a goal built on the first review candidate is reviewed by the next one whe
   assert.ok(f.log.some((line) => /review starting .* review list: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
 });
 
-test('goal review rereads changed provider priority over headroom and build-model avoidance', async () => {
+test('goal review rereads the catalog: priority outranks headroom when the first candidate built it, and the first choice outranks priority', async () => {
   const f = reviewFixture({ log: builtBy('codex gpt-6-luna') });
   let priority = 'codex';
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [OPUS_REVIEW, LUNA_REVIEW] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [LUNA_REVIEW, OPUS_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
   f.answer = judges(f, 'review');
   const runner = createRunner({ deps: f.deps });
@@ -4692,7 +4714,9 @@ test('goal review rereads changed provider priority over headroom and build-mode
   priority = 'claude';
   f.answer = judges(f, 'merge');
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['claude', 'opus']]);
+  // The catalog's first candidate runs whenever it can: a changed priority no longer outranks it.
+  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['codex', 'gpt-6-luna']]);
+  assert.ok(f.log.some((line) => /review candidate 1, the first choice/u.test(line)));
 });
 
 test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
@@ -6277,6 +6301,28 @@ test('programme turn: a quota, an offline and a refused-login ending write no fa
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: written nothing`);
     assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/martin/items/')), [], kind);
   }
+});
+
+test('programme turn: on agy the turn asks the registry — no check-in, its own provider refused on a login ending, and no failure counted', async () => {
+  const f = programmeFixture();
+  wireDesk(f);
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  const launch = f.deps.launch;
+  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
+  let current = null;
+  f.answer = () => {
+    current = Object.entries(f.files).filter(([path]) => path.startsWith('/w/runner/current-')).map(([, text]) => JSON.parse(text))[0];
+    return { status: 1, stdout: '', stderr: 'authentication required: please sign in', timedOut: false };
+  };
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const [call, ...rest] = turnSessions(f);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([call.env.MC_TOOL, call.args[0], call.prompt, call.checkInMs], ['agy', '-p', undefined, undefined], 'agy\'s own arguments, and no check-in or stall guard');
+  assert.deepEqual([current.tool, current.check_in_minutes], ['agy', null]);
+  const providers = f.deps.capacity.read().providers;
+  assert.ok(providers.agy.refusal_until, 'the login ending refuses agy until the quota sleep');
+  assert.equal(providers.claude.refusal_until, null, 'and no other provider');
+  assert.equal(f.files[TURN_STATE], undefined, 'a login ending counts for nothing against the programme');
 });
 
 test('programme turn: an unreadable state file starts no turn and is said once', async () => {

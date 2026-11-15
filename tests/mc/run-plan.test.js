@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -6,7 +7,7 @@ import {
   describeSettings, describeWatch, headlessArgs, helperDue,
   intakeNote, nightlyDue, intakeQueue, landingNote,
   quotaResetAt, quotaSeen, apiInterruption, creditsResetAt,
-  readSessionOutput, streamRateLimit, streamSummary, sessionResult, sessionSettings,
+  readSessionOutput, sessionAnswer, streamRateLimit, streamSummary, sessionResult, sessionSettings,
   tsvHeader, tsvRow, routedSettings, goalRepairPrompt, goalReviewPrompt,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
@@ -801,4 +802,50 @@ test('programmePlanPrompt names the programme directory, its README, the checkou
   assert.ok(horizon.includes('`mc martin horizon show h`'));
   assert.ok(horizonLessCheckIn().includes('Programme planning check-in after 20 minutes (2)'));
   function horizonLessCheckIn() { return programmePlanCheckInPrompt({ minutes: 20, count: 2 }); }
+});
+
+describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {
+  const NOW = new Date('2026-11-15T12:00:00Z');
+  const usage = { input_tokens: 10415, output_tokens: 657, thinking_tokens: 616, cache_read_tokens: 8113 };
+  const ndjson = (...events) => `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
+  const result = (extra = {}) => ({ status: 'SUCCESS', response: 'All done', num_turns: 3, usage, ...extra });
+  const FIXTURES = new URL('../fixtures/agy/', import.meta.url);
+  const STREAM = readFileSync(new URL('stream-success.ndjson', FIXTURES), 'utf8');
+  const JSON_MODE = readFileSync(new URL('json-success.json', FIXTURES), 'utf8');
+  const read = (stdout, extra = {}) => readSessionOutput({ toolId: 'antigravity-cli', stdout, stderr: '', exitCode: 0, now: NOW, model: 'gemini-4-argon-high', ...extra });
+  // 10415 uncached input at $2, 8113 cache reads at $0.10 and 657 output (thinking included) at $10 per million.
+  const COST = 0.0282113;
+
+  it('stream-json and the json mode each record the tokens as reported and the cost of the model launched; thinking is inside the output, never added', () => {
+    for (const [label, stdout] of [['stream-json', STREAM], ['json', JSON_MODE]]) {
+      const got = read(stdout);
+      assert.deepEqual([got.turns, got.session, got.input, got.output, got.cacheRead, got.cacheWrite, got.note, got.quota], ['3', 'conv-1', '10415', '657', '8113', '0', 'success', false], label);
+      assert.ok(Math.abs(got.cost - COST) < 1e-9, `${label}: ${got.cost}`);
+      assert.equal(sessionAnswer('antigravity-cli', stdout), 'All done', `${label}: the answer`);
+    }
+    assert.equal(read(JSON_MODE, { model: undefined }).cost, null, 'a json result names no model, so with none handed to the reader it is unpriced');
+  });
+
+  it('the two-turn example\'s second step records input 278 beside cache reads 30214 as reported, nothing subtracted or clipped', () => {
+    const got = read(ndjson({ event: 'result', conversation_id: 'c2', result: result({ usage: { input_tokens: 278, output_tokens: 40, cache_read_tokens: 30214 } }) }));
+    assert.deepEqual([got.input, got.cacheRead, got.output], ['278', '30214', '40']);
+  });
+
+  it('a non-SUCCESS result, a non-zero exit, an empty stdout at exit 0 and an error in the result are each failed; a stream with no result is no-json', () => {
+    assert.equal(read(ndjson({ event: 'result', result: result({ status: 'ERROR' }) })).note, 'failed');
+    assert.equal(read(ndjson({ event: 'result', result: result({ error: 'the model stopped' }) })).note, 'failed');
+    assert.equal(read(STREAM, { exitCode: 1 }).note, 'failed');
+    assert.equal(read('').note, 'failed');
+    assert.equal(read(ndjson({ event: 'init', init: { conversation_id: 'conv-9' } })).note, 'no-json');
+    assert.equal(read(ndjson({ event: 'init', init: { conversation_id: 'conv-9' } })).session, 'conv-9');
+  });
+
+  it('a quota error is quota with the reset it names; a sign-in or locked-keyring error is a login interruption, not quota', () => {
+    const quota = read(ndjson({ event: 'result', result: result({ status: 'ERROR', error: 'Quota exceeded: you have hit your weekly limit' }) }), { exitCode: 1 });
+    assert.deepEqual([quota.note, quota.quota, quota.interrupted], ['quota', true, 'quota']);
+    for (const said of ['Error: authentication required', 'Please sign in to continue', 'The secret keyring is locked']) {
+      const got = read('', { stderr: said, exitCode: 1 });
+      assert.deepEqual([got.note, got.quota, got.interrupted], ['interrupted', false, 'login'], said);
+    }
+  });
 });

@@ -54,6 +54,7 @@ export const RUNTIME_SECRET_ENV_NAMES = Object.freeze([
 export const PROVIDER_API_ENV_NAMES = Object.freeze([
   'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY',
   'OPENAI_API_KEY', 'MC_CODEX_API_KEY',
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY',
 ]);
 
 export function scrubProviderApiKeysFromEnv(env = process.env) {
