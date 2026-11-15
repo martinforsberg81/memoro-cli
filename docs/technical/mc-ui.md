@@ -644,7 +644,7 @@ checks that routing without opening a coding tool.
 - `src/mc/commands/home.js`: page, arguments, menu, freshness and restart on new code.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
 - `src/mc/page-desk.js`: the DESK section — `readPageDesk`, `deskLines` and `deskKey`.
-- `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost, the ask ledger and `last-open.json`), shared by `mc martin` and the page; it has no sync, lock or writer.
+- `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost and `last-open.json`), shared by `mc martin` and the page, and the page's own reader of the ask ledger (`ledgerAsks`), which the opening does not use; it has no sync, lock or writer.
 - `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
