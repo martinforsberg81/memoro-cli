@@ -340,8 +340,12 @@ the deploy panel — never a round that is "running" forever.
 started the way `mc test dev` starts one (`ensureAppServer`). The server is the
 shared checkout's, `~/mc/self/memoro` (`sharedWorktree`) — not the worktree with
 main that the script runs in, which can be another checkout. That checkout must
-be clean and on main at the sha: `ensureDevServer` fast-forwards it when it is
-clean and on main, and otherwise serves what it holds. So the gate refuses, as
+be clean and at the sha: `ensureDevServer` fast-forwards it (`followMain`) when
+it is clean and on main or on no branch, and otherwise serves what it holds.
+On no branch is the server's layout: the repository is bare, the deploy's
+worktree holds the branch `main`, and git gives a branch to one worktree, so
+the shared checkout stands detached at a commit of main and is fast-forwarded
+from there. So the gate refuses, as
 suites that cannot run, when the checkout has uncommitted changes
 (`git status --porcelain`, read before any server is asked for), when the
 server was started on uncommitted changes (`built_from.dirty`), or when the

@@ -1051,10 +1051,14 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
     const dirty = checkout({ dirty: ' M src/app.js\n' });
     assert.deepEqual(followMain('/co', { git: dirty.git }), { moved: false, refused: true, why: 'uncommitted changes' });
     const off = checkout({ branch: 'feature/x' });
-    assert.deepEqual(followMain('/co', { git: off.git }), { moved: false, refused: true, why: 'on feature/x, not main' });
+    assert.deepEqual(followMain('/co', { git: off.git }), { moved: false, refused: true, why: 'on feature/x, not main or a detached commit of it' });
     assert.deepEqual([dirty.merges, off.merges], [0, 0], 'and no merge was asked for');
     const clean = checkout();
     assert.deepEqual(followMain('/co', { git: clean.git }), { moved: true, from: 'aaaaaaaaaa', to: 'bbbbbbbbbb' });
+    // Where another worktree holds the branch main, the checkout stands on no branch and follows all the same.
+    const detached = checkout({ branch: '' });
+    assert.deepEqual(followMain('/co', { git: detached.git }), { moved: true, from: 'aaaaaaaaaa', to: 'bbbbbbbbbb' });
+    assert.equal(detached.merges, 1);
     // Ensured, an idle main server on a dirty checkout is not moved, and the answer says why.
     const run = await ensureMain(checkout({ dirty: ' M src/app.js\n' }), { usedSecondsAgo: 600 });
     try {
