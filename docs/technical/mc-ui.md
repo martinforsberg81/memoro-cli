@@ -72,8 +72,9 @@ Each live runner session is matched by its explicit programme/goal identity
 (`goal`, or the legacy `goal:` name) and shown beneath that goal, before its
 PRs. The activity row carries kind, elapsed time, tool/model and credits when
 used. A tight rounded frame encloses just this live session data, with green
-borders for build, magenta for review, blue for finish (and for the
-interactive plan session) and yellow for mend. Long activity wraps
+borders for build, magenta for review, blue for repair (and for `finish` in
+lane files from before, and for the interactive plan session) and yellow for
+mend. Long activity wraps
 inside the frame within the terminal width. Positive check-in counts appear
 at the end of the activity inside the frame, in yellow, and its yellow clock
 remains visible without expansion; repository, advisor, pid and zero check-ins
@@ -256,6 +257,7 @@ that every word has a row on today's page.
 |---|---|
 | `build` | green |
 | `review` | magenta |
+| `repair` | blue |
 | `triage` | blue |
 | `manager` | cyan |
 | `brief` | cyan |
@@ -635,7 +637,9 @@ by ` ▶ `; otherwise three and three on two rows, each keeping its arrows with
 The count is the waiting proposals (programmes and the root) for proposals, and
 the goals in the stage otherwise, followed by `⚑n` for goals waiting on Martin
 and `⊘n` for blocked goals there. The marks are one per session working in the
-stage, in the stage's colour: build, review and finish sessions on their stage; on draft,
+stage, in the stage's colour: build and repair sessions on build (a repair in its own
+blue, `KIND_TONE`'s `repair`), review sessions on review, and finish sessions on finish
+(none is started now; the box stays for goals from before); on draft,
 every plan session, interactive (`data.sessions.planning_sessions`) and headless
 (runner `plan` sessions); proposals carries none; on merge `◎` per gate round in
 flight and `↺` per mend session, in mend's yellow. A box shows at most eight
