@@ -494,11 +494,13 @@ function logEntry(args, fields, ctx) {
 /**
  * `mc goal martin` is gone: a question goes through `mc ask` (docs/technical/mc-jev.md). The refusal reads no goal,
  * no keys source and no jev, writes nothing, and prints the call to make with flag names only — a value the caller
- * gave never comes back, and neither does the retired `--kind`.
+ * gave never comes back (the goal id is the one exception, when it is a goal id), and neither does the retired `--kind`.
  */
 function retiredMartin(argv, stderr) {
   const reserved = argv.includes('--reserved');
-  stderr.write(`mc: mc goal martin is gone — ask with: mc ask <p>/<g> --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>${reserved ? ' --reserved <act>' : ''}\n`);
+  // The goal argument comes back only when it is a goal id (two short lowercase slugs); any other value is not echoed.
+  const goal = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/u.test(argv[1] || '') ? argv[1] : '<p>/<g>';
+  stderr.write(`mc: mc goal martin is gone — ask with: mc ask ${goal} --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>${reserved ? ' --reserved <act>' : ''}\n`);
   return 2;
 }
 

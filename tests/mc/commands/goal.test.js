@@ -3348,8 +3348,12 @@ test('one way to ask: mc goal martin is gone — exit 2, the mc ask call to make
   f.deps.readKeys = () => assert.fail('the retired verb read a keys source');
   const argv = ['martin', 'mc/plain', '--kind', 'product', '--reason', `q ${secret}`, '--option', `a: ${secret}`, '--option', 'b: B', '--recommend', 'a', '--evidence', secret];
   assert.equal(await run(argv, f.deps), 2);
-  assert.equal(f.err(), 'mc: mc goal martin is gone — ask with: mc ask <p>/<g> --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>\n');
+  assert.equal(f.err(), 'mc: mc goal martin is gone — ask with: mc ask mc/plain --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>\n');
   assert.doesNotMatch(f.err(), /--kind|SECRETVALUE/u);
+  const odd = fixture({ files: inStage('build'), env: BUILD, keys: KEYS });
+  assert.equal(await run(['martin', secret, '--reason', 'r'], odd.deps), 2);
+  assert.match(odd.err(), /mc ask <p>\/<g> --reason/u, 'a value that is not a goal id is not echoed');
+  assert.doesNotMatch(odd.err(), /SECRETVALUE/u);
   assert.deepEqual(f.store, before, 'no goal file, LOG.md or ledger line');
   assert.deepEqual([f.calls, f.requests, f.ledger()], [[], [], []]);
   assert.equal(stateOf(f), 'build · ready');
