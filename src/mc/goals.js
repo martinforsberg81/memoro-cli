@@ -380,7 +380,7 @@ export function programsGoals({ home = programsHome(), list = listDirsOf, read =
       if (text === null) continue;
       const log = parseLog(read(join(dir, LOG_FILE)) ?? '');
       const parsed = parseGoal(text);
-      const base = { programme, goal, dir, log };
+      const base = { programme, goal, dir, log, verdict: read(join(dir, REVIEW_FILE)) };
       if (parsed.problems) {
         goals.push({ ...base, stage: null, status: null, phase: null, repos: [], class: null, created: null, prs: [], title: null, goal_text: [], contract: [], out_of_scope: [], success_criteria: [], documents: [], problems: parsed.problems });
       } else {
@@ -545,18 +545,53 @@ export function waitsOnPerson(goal) {
 
 /** Interactive planning and the runner's next-draft assignment use canon/roles/plan-session.md. */
 export const PLAN_ROLE = 'plan';
-/** The role a goal's finish session runs with: `canon/roles/finish-session.md`. It takes a goal in `finish · ready` to `merge`. */
+/** The role a finish session ran with. No session runs with it now (a rejected goal is repaired by a build session); old logs, run rows and goals keep the name. */
 export const FINISH_ROLE = 'finish-session';
 /** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
 
+/** Whether `entry` moved the goal from review to build: a review session's rejection (`prior` is the entry before it). */
+function rejection(entry, prior) {
+  return entry.role === 'review' && entry.stage === 'build' && prior?.stage === 'review';
+}
+
+/** The index of the latest entry that moved the goal into draft, or 0: the start of the goal's current count. */
+function countStart(log) {
+  let from = 0;
+  log.forEach((entry, index) => { if (index > 0 && entry.stage === 'draft' && log[index - 1].stage !== 'draft') from = index; });
+  return from;
+}
+
+/**
+ * How many times a review session has rejected the goal: its entries that moved it from review to build, since the
+ * latest move into draft or, with none, the goal's creation. A move to `finish` made before finish went is not one. At
+ * two the next NOT OK is the third, which moves nothing (`mc goal stage build`, commands/goal.js).
+ */
+export function rejections(log) {
+  const from = countStart(log);
+  return log.reduce((count, entry, index) => (index >= from && rejection(entry, log[index - 1]) ? count + 1 : count), 0);
+}
+
+/**
+ * Whether the goal's build session is a repair: REVIEW.md exists, and the latest of a review session's move from review
+ * to build and the runner's move from finish to build is later than the latest move to merge. A goal a person moved to
+ * merge and back is not one, nor is a goal the runner returned to build for want of a pull request.
+ */
+export function isRepair(log, hasVerdict) {
+  if (!hasVerdict) return false;
+  const event = log.findLastIndex((entry, index) => rejection(entry, log[index - 1])
+    || (entry.tool === 'runner' && entry.stage === 'build' && log[index - 1]?.stage === 'finish'));
+  return event >= 0 && event > log.findLastIndex((entry) => entry.stage === 'merge');
+}
+
 /**
  * The session the runner starts on `goal`, or null: a build session on
- * `build · ready` (with a criterion), a review session on `review · ready`, a
- * finish session on `finish · ready`, and a mend session only on an unqueued
- * blocked merge or `merge · ready` after a red
- * (`mergeRetryDue`). Never on `draft · ready`, on `Martin` or on a goal that
- * does not parse. `inLine` is the merger's line.
+ * `build · ready` (with a criterion) — a `repair` when the goal was
+ * rejected (`isRepair`) — a review session on `review · ready`, and a mend
+ * session only on an unqueued blocked merge or `merge · ready` after a red
+ * (`mergeRetryDue`). Never on `draft · ready`, on `Martin`, on `finish` (the
+ * runner moves such a goal to build first) or on a goal that does not parse.
+ * `inLine` is the merger's line.
  */
 export function goalSession(goal, inLine = []) {
   if (goal.problems?.length || FINISHED.includes(goal.stage) || goal.status === 'Martin') return null;
@@ -566,9 +601,11 @@ export function goalSession(goal, inLine = []) {
     return queued ? null : 'mend';
   }
   if (goal.status !== 'ready') return null;
-  if (goal.stage === 'build') return noCriteria(goal) ? null : 'build';
+  if (goal.stage === 'build') {
+    if (noCriteria(goal)) return null;
+    return isRepair(goal.log ?? [], typeof goal.verdict === 'string') ? 'repair' : 'build';
+  }
   if (goal.stage === 'review') return 'review';
-  if (goal.stage === 'finish') return 'finish';
   if (mergeRetryDue(goal, inLine)) return 'mend';
   return null;
 }

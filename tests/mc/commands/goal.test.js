@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { goalHash, RECORDS_FILE } from '../../../src/mc/plan-review.js';
 import { runModule } from '../../../src/mc-verbs.js';
@@ -450,14 +450,41 @@ const inStage = (stage, status = 'ready', extra = {}) => seededGoal({ [`${DIR}/G
 const stateOf = (f) => ['stage', 'status'].map((key) => goalField(f.store[`${DIR}/GOAL.json`], key)).join(' · ');
 
 /** A fixture whose `gh pr list --head` answers `pr` (null: none) and whose queue is recorded. */
-function reviewed({ files, env = REVIEW, pr = { number: 31, headRefOid: 'fff0000' }, queue = null } = {}) {
-  const f = fixture({ files, env });
+function reviewed({ files, env = REVIEW, pr = { number: 31, headRefOid: 'fff0000' }, queue = null, git = allOk } = {}) {
+  const f = fixture({ files, env, git });
   f.queued = [];
   f.gh = [];
   f.deps.gh = (cwd, args) => { f.gh.push({ cwd, args }); return ok(JSON.stringify(pr ? [pr] : [])); };
   f.deps.queue = queue ?? ((options) => { f.queued.push(options); return { place: 0 }; });
   return f;
 }
+
+/** The head the review judged: MC_REVIEW_HEAD of `REVIEW`. */
+const HEAD = 'abc1234def';
+/** The ids of the verdict on the version 1 goal `GOAL_TEXT` (criteria only) and on `GOAL_BASE_V2` with its touched obligation. */
+const V1_IDS = ['criterion 1'];
+const V2_IDS = ['criterion 1', 'V1', 'obligation Documentation', 'change', 'out-of-scope', 'protection', 'bugs'];
+/**
+ * REVIEW.md in its fixed form: a `head:` line per repository, then a line per id — OK, `OK — carried from round 1` (those in
+ * `carried`), or NOT OK with its reason (those in `notOk`). `without` drops lines; `tail` is free text after them.
+ */
+function verdictText({ ids = V1_IDS, repos = ['memoro-cli'], head = HEAD, notOk = {}, carried = [], without = [], tail = '' } = {}) {
+  const lines = ids.filter((id) => !without.includes(id)).map((id) => {
+    if (id in notOk) return `${id}: NOT OK — ${notOk[id]}`;
+    return carried.includes(id) ? `${id}: OK — carried from round 1` : `${id}: OK`;
+  });
+  return `${[...repos.map((repo) => `head: ${repo} ${head}`), ...lines].join('\n')}\n${tail}`;
+}
+const REVIEW_FILE = `${DIR}/REVIEW.md`;
+/** A goal in review whose REVIEW.md is `text` (`extra` files, and the goal's own text, may be added). */
+const inReview = (text, extra = {}) => inStage('review', 'ready', { [REVIEW_FILE]: text, ...extra });
+/** A review's log entries before this one: `n` rejections (review → build by a review session), each followed by a build session's move back to review. */
+const rejectedLog = (n, { from = 2 } = {}) => Array.from({ length: n }, (_, index) => [
+  `## 2026-11-0${from + index}T10:00Z · claude · build · ready · by review`, '', 'Done: rejected', '',
+  `## 2026-11-0${from + index}T11:00Z · claude · review · ready · by build`, '', 'Done: repaired', '',
+].join('\n')).join('\n');
+/** The LOG.md of `inReview` with `before` appended; the goal's entries `LOG_TEXT` come first. */
+const withLog = (before) => ({ [`${DIR}/LOG.md`]: `${LOG_TEXT}\n## 2026-11-01T23:30Z · claude · review · ready · by build\n\nDone: built\n\n${before}` });
 
 test('stage moves by their owners, including recovery from historical finish', async () => {
   const moves = [
@@ -466,7 +493,7 @@ test('stage moves by their owners, including recovery from historical finish', a
   ];
   for (const [from, to, env] of moves) {
     const reading = from === 'draft' ? { [`${DIR}/${RECORDS_FILE}`]: okReading(withGoal(GOAL_TEXT, { stage: 'draft', success_criteria: MET })) } : {};
-    let f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n', ...reading }), env });
+    let f = reviewed({ files: inStage(from, 'ready', { [REVIEW_FILE]: verdictText(), ...reading }), env });
     if (to === 'dropped') f = dropFixture(f);
     assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), to], f.deps), 0, `${from} → ${to}: ${f.err()}`);
     if (to === 'dropped') assert.equal(goalField(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped');
@@ -587,9 +614,9 @@ test('a build session cannot move to review while a criterion is not met: the re
   }
 });
 
-test('review and plan execute merge for every registered PR without head or criteria checks, reading only each PR\'s state', async () => {
-  for (const env of [{ ...REVIEW, MC_REVIEW_HEAD: undefined }, PLAN]) {
-    const files = inStage(env.MC_ROLE === PLAN_ROLE ? 'finish' : 'review');
+test('review and plan execute merge for every registered PR, reading only each PR\'s state; plan from historical finish needs no REVIEW.md', async () => {
+  for (const env of [REVIEW, PLAN]) {
+    const files = env.MC_ROLE === PLAN_ROLE ? inStage('finish') : inReview(verdictText({ ids: [], repos: ['memoro-cli', 'memoro'] }));
     files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], {
       repos: ['memoro-cli', 'memoro'], prs: ['memoro-cli#31', 'memoro#14804'], success_criteria: [],
     });
@@ -605,7 +632,7 @@ test('review and plan execute merge for every registered PR without head or crit
 });
 
 test('a queue failure preserves the merge decision so it can be retried', async () => {
-  const files = inStage('review');
+  const files = inReview(verdictText());
   files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31'] });
   const f = reviewed({ files, queue: () => { throw new Error('register locked'); } });
   assert.equal(await run(['stage', 'merge'], f.deps), 1);
@@ -617,7 +644,7 @@ test('a queue failure preserves the merge decision so it can be retried', async 
 });
 
 test('mc goal stage merge queues the pull request GitHub says is open, and names the one it says is closed without queueing it, and the one already merged', async () => {
-  const files = inStage('review');
+  const files = inReview(verdictText({ repos: ['memoro-cli', 'memoro'] }));
   files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32', 'memoro-cli#33'] });
   const f = reviewed({ files });
   f.deps.gh = (cwd, args) => { f.gh.push({ cwd, args }); return ok(JSON.stringify({ state: { 31: 'OPEN', 32: 'CLOSED', 33: 'MERGED' }[args[2]] })); };
@@ -629,7 +656,7 @@ test('mc goal stage merge queues the pull request GitHub says is open, and names
 
 test('a partial merge enqueue does not release its session before all PRs are handed off', async () => {
   const env = { ...REVIEW, MC_HEADLESS: '1', MC_SCRATCH: '/scratch' };
-  const files = inStage('review');
+  const files = inReview(verdictText());
   files[`${DIR}/GOAL.json`] = withGoal(files[`${DIR}/GOAL.json`], { prs: ['memoro-cli#31', 'memoro#32'] });
   const f = reviewed({ files, env, queue: (job) => {
     if (job.pr === 32) throw new Error('queue locked');
@@ -725,8 +752,8 @@ test('a failed fetch before review is a warning: the goal moves, and its merge i
 
 test('a review sets no status and moves only a goal in review', async () => {
   for (const [from, argv, said] of [
-    ['review', ['ready', '--reason', 'x'], /a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge \(OK to land\) or finish/u],
-    ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
+    ['review', ['ready', '--reason', 'x'], /a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge \(every item OK\) or mc goal stage build \(a NOT OK item, with REVIEW\.md\)/u],
+    ['review', ['stage', 'done'], /a review ends in merge or build, not done/u],
     ['build', ['stage', 'merge'], /a review moves only a goal in review, and this one is build/u],
   ]) {
     const g = reviewed({ files: inStage(from), env: REVIEW });
@@ -741,7 +768,240 @@ test('refusedMove: a person may make other moves; a plan session other forward o
   assert.equal(refusedMove({ from: 'build', status: 'blocked', env: PLAN }), null);
   assert.equal(refusedMove({ from: 'build', to: 'review', env: BUILD }), null);
   assert.equal(refusedMove({ from: 'review', to: 'merge', env: REVIEW }), null);
+  assert.equal(refusedMove({ from: 'review', to: 'build', env: REVIEW }), null, 'a review rejects: review → build is its move');
+  assert.match(refusedMove({ from: 'review', to: 'build', env: BUILD }), /does not move a goal back/u, 'a build session does not');
+  assert.match(refusedMove({ from: 'merge', to: 'build', env: REVIEW }), /does not move a goal back/u, 'a review moves nothing back from merge');
   assert.equal(refusedMove({ from: 'build', env: BUILD }), null, 'an entry alone');
+});
+
+/* ------------------------------------------------- the review's verdict: REVIEW.md in its fixed form (D4, D5) */
+
+/** A goal in review with the PR registered, REVIEW.md `text` (null: none) and `log` (null: LOG_TEXT); `v2` makes it a version 2 goal. */
+function reviewFiles(text, { v2 = false, goal = {}, log = null, extra = {} } = {}) {
+  const goalText = v2
+    ? goalJsonV2({ stage: 'review', success_criteria: [{ criterion: 'it works', check: 'a test', evidence: 'the log', met: true }], prs: ['memoro-cli#31'], ...goal })
+    : withGoal(GOAL_TEXT, { stage: 'review', success_criteria: MET, prs: ['memoro-cli#31'], ...goal });
+  return seededGoal({ [`${DIR}/GOAL.json`]: goalText, [REVIEW_FILE]: text, ...(log ? { [`${DIR}/LOG.md`]: log } : {}), ...extra });
+}
+/** The review's `mc goal stage <to>` on `files`: the fixture, with its exit code as `code`. */
+async function moveOut(to, files, env = REVIEW, git = allOk) {
+  const f = reviewed({ files, env, git });
+  f.code = await run(['stage', to], f.deps);
+  return f;
+}
+/** What a refused move leaves: exit 2, the goal in review and ready, nothing queued, no round copy, the log as it was. */
+function assertRefused(f, said, label, log = LOG_TEXT) {
+  assert.equal(f.code, 2, `${label}: ${f.err()}`);
+  assert.match(f.err(), said, label);
+  assert.equal(stateOf(f), 'review · ready', label);
+  assert.deepEqual(f.queued, [], `${label}: nothing queued`);
+  assert.equal(f.store[`${DIR}/LOG.md`], log, `${label}: no entry`);
+  assert.equal(Object.keys(f.store).some((key) => /REVIEW-\d+\.md$/u.test(key)), false, `${label}: no round copy`);
+}
+
+test('a review session moves a goal out of review to neither merge nor build without REVIEW.md', async () => {
+  for (const to of ['merge', 'build']) {
+    assertRefused(await moveOut(to, reviewFiles(null)), /REVIEW\.md/u, `to ${to}`);
+  }
+});
+
+test('a REVIEW.md whose head line is not MC_REVIEW_HEAD, or has none, is refused for merge and for build, and a missing MC_REVIEW_HEAD too', async () => {
+  for (const [to, notOk] of [['merge', {}], ['build', { 'criterion 1': 'the page does not say it' }]]) {
+    const wrong = await moveOut(to, reviewFiles(verdictText({ head: 'fff0000aaa', notOk })));
+    assertRefused(wrong, /`head: memoro-cli fff0000aaa` is not the head judged, abc1234def/u, `${to}: another head`);
+    const none = await moveOut(to, reviewFiles(verdictText({ notOk }).replace(/^head:.*\n/u, '')));
+    assertRefused(none, /no `head: memoro-cli <sha>` line/u, `${to}: no head line`);
+    const unnamed = await moveOut(to, reviewFiles(verdictText({ notOk })), { ...REVIEW, MC_REVIEW_HEAD: undefined });
+    assertRefused(unnamed, /MC_REVIEW_HEAD is not set/u, `${to}: the runner named no head`);
+  }
+});
+
+test('a goal of two repositories needs a head line for the second as well', async () => {
+  const goal = { repos: ['memoro-cli', 'memoro'] };
+  for (const [to, notOk] of [['merge', {}], ['build', { 'criterion 1': 'x' }]]) {
+    assertRefused(await moveOut(to, reviewFiles(verdictText({ notOk }), { goal })), /no `head: memoro <sha>` line/u, to);
+  }
+  const both = await moveOut('merge', reviewFiles(verdictText({ repos: ['memoro-cli', 'memoro'] }), { goal }));
+  assert.equal(both.code, 0, both.err());
+  assert.equal(stateOf(both), 'merge · ready');
+});
+
+test('a missing line for a criterion, a preserve item or a touched obligation is refused naming every missing id; a version 1 goal needs the criteria lines only', async () => {
+  const missing = ['criterion 1', 'V1', 'obligation Documentation', 'bugs'];
+  for (const to of ['merge', 'build']) {
+    const f = await moveOut(to, reviewFiles(verdictText({ ids: V2_IDS, without: missing, notOk: to === 'build' ? { change: 'x' } : {} }), { v2: true }));
+    assert.equal(f.code, 2, f.err());
+    for (const id of missing) assert.match(f.err(), new RegExp(`no line for ${id}\\b`, 'u'), `${to}: ${id} is named`);
+    assert.doesNotMatch(f.err(), /no line for (change|out-of-scope|protection)/u, 'only the missing ones');
+    assert.equal(stateOf(f), 'review · ready');
+    assert.deepEqual(f.queued, []);
+  }
+  const whole = await moveOut('merge', reviewFiles(verdictText({ ids: V2_IDS }), { v2: true }));
+  assert.equal(whole.code, 0, whole.err());
+  assert.equal((await moveOut('merge', reviewFiles(verdictText({ ids: ['criterion 1'] })))).code, 0, 'a version 1 goal: the criteria lines');
+  assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: V2_IDS }))), /V1 is not an item of this goal's verdict/u, 'a version 1 goal has no preserve line');
+  assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: [] }))), /no line for criterion 1/u, 'a version 1 goal without its criteria line');
+});
+
+test('a malformed line is refused with the line, and so is a NOT OK with no reason, a repeated line and an id the goal does not have', async () => {
+  for (const [line, said] of [
+    ['criterion 1: fine', /not in form: "criterion 1: fine"/u],
+    ['criterion 1: NOT OK', /not in form: "criterion 1: NOT OK"/u],
+    ['criterion 1: NOT OK — ', /not in form: "criterion 1: NOT OK —/u],
+    ['criterion 1: OK, I think', /not in form: "criterion 1: OK, I think"/u],
+    ['head: memoro-cli', /not in form: "head: memoro-cli"/u],
+    ['criterion 1: OK', /more than one line for criterion 1/u],
+    ['criterion 2: OK', /criterion 2 is not an item of this goal's verdict/u],
+  ]) {
+    const text = line.startsWith('criterion 1: OK') || line === 'criterion 2: OK' || line.startsWith('head:')
+      ? `${verdictText()}${line}\n`
+      : `${verdictText({ without: ['criterion 1'] })}${line}\n`;
+    const f = await moveOut('merge', reviewFiles(text));
+    assertRefused(f, said, line);
+  }
+});
+
+test('every item OK: merge moves and the PR is queued; build is refused; REVIEW.md stays and REVIEW-1.md is its copy', async () => {
+  const text = verdictText({ ids: V2_IDS });
+  const merged = await moveOut('merge', reviewFiles(text, { v2: true }));
+  assert.equal(merged.code, 0, merged.err());
+  assert.equal(stateOf(merged), 'merge · ready');
+  assert.deepEqual(merged.queued.map((job) => [job.repo, job.pr]), [['memoro-cli', 31]]);
+  assert.equal(merged.store[REVIEW_FILE], text, 'REVIEW.md is still there');
+  assert.equal(merged.store[`${DIR}/REVIEW-1.md`], text, 'the copy under its round');
+  const last = parseLog(merged.store[`${DIR}/LOG.md`]).at(-1);
+  assert.deepEqual([last.stage, last.role], ['merge', 'review']);
+  const build = await moveOut('build', reviewFiles(text, { v2: true }));
+  assertRefused(build, /REVIEW\.md has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge/u, 'build on all OK');
+});
+
+test('a NOT OK line cannot move to merge: the refusal names the failed ids, the goal stays in review and nothing is queued', async () => {
+  const text = verdictText({ ids: V2_IDS, notOk: { 'criterion 1': 'tests/x.test.js is not green', bugs: 'goal.js:12 drops the entry' } });
+  const f = await moveOut('merge', reviewFiles(text, { v2: true }));
+  assertRefused(f, /REVIEW\.md has NOT OK lines \(criterion 1, bugs\) — a goal with a rejected item does not merge: mc goal stage build/u, 'merge with NOT OK');
+});
+
+test('one NOT OK line moves the goal to build with nothing queued; REVIEW.md stays, REVIEW-1.md is its copy, and merge is refused', async () => {
+  const text = verdictText({ ids: V2_IDS, notOk: { V1: 'goal.js:40 changes the version 1 reader' } });
+  const f = await moveOut('build', reviewFiles(text, { v2: true }));
+  assert.equal(f.code, 0, f.err());
+  assert.equal(stateOf(f), 'build · ready');
+  assert.deepEqual(f.queued, [], 'nothing queued');
+  assert.equal(f.gh.length, 0, 'GitHub is not asked');
+  assert.equal(f.store[REVIEW_FILE], text);
+  assert.equal(f.store[`${DIR}/REVIEW-1.md`], text);
+  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+  assert.deepEqual([last.stage, last.role, last.status], ['build', 'review', 'ready']);
+  assert.match(f.out(), /mc: mc\/plain · build · ready/u);
+});
+
+test('`OK — carried from round 1` counts as OK, a NOT OK among carried lines still rejects, and free text after the lines is accepted', async () => {
+  const carried = await moveOut('merge', reviewFiles(verdictText({ ids: V2_IDS, carried: ['V1', 'obligation Documentation', 'change'] }), { v2: true }));
+  assert.equal(carried.code, 0, carried.err());
+  assert.equal(stateOf(carried), 'merge · ready');
+  const rejected = await moveOut('build', reviewFiles(verdictText({ ids: V2_IDS, carried: ['V1', 'change'], notOk: { bugs: 'goal.js:12 drops it' } }), { v2: true }));
+  assert.equal(rejected.code, 0, rejected.err());
+  assert.equal(stateOf(rejected), 'build · ready');
+  const tail = '\nWhat I read: the page and the tests.\n\nOK is the verdict.\nbugs are listed above.\n';
+  const free = await moveOut('merge', reviewFiles(verdictText({ ids: V2_IDS, tail }), { v2: true }));
+  assert.equal(free.code, 0, free.err());
+  assert.equal(free.store[`${DIR}/REVIEW-1.md`], verdictText({ ids: V2_IDS, tail }), 'the copy keeps the free text');
+});
+
+test('the first and second rejection move review to build, each leaving REVIEW.md and a copy of its round', async () => {
+  for (const [prior, round] of [[0, 1], [1, 2]]) {
+    const text = verdictText({ notOk: { 'criterion 1': `round ${round} failed` } });
+    const log = withLog(rejectedLog(prior))[`${DIR}/LOG.md`];
+    const f = await moveOut('build', reviewFiles(text, { log }));
+    assert.equal(f.code, 0, f.err());
+    assert.equal(stateOf(f), 'build · ready', `rejection ${round}`);
+    assert.equal(f.store[REVIEW_FILE], text);
+    assert.equal(f.store[`${DIR}/REVIEW-${round}.md`], text, `REVIEW-${round}.md`);
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).stage, 'build');
+    assert.deepEqual(f.queued, []);
+  }
+});
+
+test('the third rejection moves nothing: exit 0, the goal stays in review with status Martin and a comment saying it was rejected a third time, and nothing is queued', async () => {
+  const text = verdictText({ ids: V2_IDS, notOk: { 'criterion 1': 'still red', bugs: 'goal.js:12' } });
+  const log = withLog(rejectedLog(2))[`${DIR}/LOG.md`];
+  const f = await moveOut('build', reviewFiles(text, { v2: true, log }));
+  assert.equal(f.code, 0, f.err());
+  assert.equal(stateOf(f), 'review · Martin');
+  assert.deepEqual(f.queued, []);
+  const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
+  assert.deepEqual([last.stage, last.status, last.role], ['review', 'Martin', 'review']);
+  assert.match(last.comment, /rejected a third time/u);
+  assert.match(last.comment, /criterion 1, bugs/u, 'the failed ids');
+  assert.equal(f.store[REVIEW_FILE], text);
+  assert.equal(f.store[`${DIR}/REVIEW-3.md`], text, 'the third round is kept too');
+  assert.equal(goalSession(parseGoal(f.store[`${DIR}/GOAL.json`])), null, 'the runner starts nothing on it');
+});
+
+test('a move to finish in the log from before, and rejections before the goal\'s latest move into draft, are not counted', async () => {
+  const oldFinish = ['2026-11-02T10:00Z', '2026-11-03T10:00Z'].map((at) => `## ${at} · claude · finish · ready · by review\n\nDone: sent to finish\n\n## ${at.replace('10:00', '11:00')} · claude · review · ready · by build\n\nDone: back\n`).join('\n');
+  const redraft = `${rejectedLog(2)}\n## 2026-11-05T09:00Z · person · draft · ready\n\nDone: redrafted\n\n## 2026-11-05T10:00Z · person · build · ready\n\nDone: planned\n\n## 2026-11-05T11:00Z · claude · review · ready · by build\n\nDone: built\n`;
+  for (const [label, log] of [['old finish', `${withLog(oldFinish)[`${DIR}/LOG.md`]}`], ['before the latest draft', `${LOG_TEXT}\n## 2026-11-01T23:30Z · claude · review · ready · by build\n\nDone: built\n\n${redraft}`]]) {
+    const f = await moveOut('build', reviewFiles(verdictText({ notOk: { 'criterion 1': 'x' } }), { log }));
+    assert.equal(f.code, 0, `${label}: ${f.err()}`);
+    assert.equal(stateOf(f), 'build · ready', `${label}: a first rejection, which moves`);
+    assert.ok(f.store[`${DIR}/REVIEW-1.md`], `${label}: round 1`);
+  }
+});
+
+/** The goal's worktree: where the review's tripwire reads the repository's areas and the branch's diff. */
+const WORKTREE = `${DIR}/memoro-cli`;
+const TRIPWIRE = { obligations: [
+  { area: 'memoro-cli/documentation', stand: 'touched', text: 'mc-goals.md says it.', standard: 'memoro-cli/docs/technical/mc-goals.md#GOAL.json' },
+  { area: 'memoro-cli/operations', stand: 'untouched', text: 'Nothing deploys.' },
+] };
+const TRIPWIRE_IDS = ['criterion 1', 'V1', 'obligation memoro-cli/documentation', 'untouched memoro-cli/operations', 'change', 'out-of-scope', 'protection', 'bugs'];
+/** A git that declares the areas `documentation` and `operations` at origin/main in the worktree and diffs `changed` against it. */
+const branchGit = (changed) => (cwd, args = []) => (args[0] === 'diff' ? ok(changed.join('\n')) : areasGit({ [WORKTREE]: DECLARATION('documentation', 'operations') })(cwd, args));
+
+test('an untouched area the branch changed needs its `untouched <area>` line: without it merge and build are refused naming it; with it the move is made', async () => {
+  const git = branchGit(['src/operations/deploy.js', 'src/documentation.js']);
+  const without = (notOk) => verdictText({ ids: TRIPWIRE_IDS, without: ['untouched memoro-cli/operations'], notOk });
+  for (const [to, notOk] of [['merge', {}], ['build', { bugs: 'x' }]]) {
+    const f = await moveOut(to, reviewFiles(without(notOk), { v2: true, goal: TRIPWIRE }), REVIEW, git);
+    assertRefused(f, /no line for untouched memoro-cli\/operations/u, to);
+  }
+  const merged = await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, git);
+  assert.equal(merged.code, 0, merged.err());
+  const rejected = await moveOut('build', reviewFiles(verdictText({ ids: TRIPWIRE_IDS, notOk: { 'untouched memoro-cli/operations': 'src/operations/deploy.js changes what the goal said it would not' } }), { v2: true, goal: TRIPWIRE }), REVIEW, git);
+  assert.equal(rejected.code, 0, rejected.err());
+  assert.equal(stateOf(rejected), 'build · ready');
+});
+
+test('an untouched area the branch did not change has no line: a diff of other paths, and a file only under a touched area\'s paths, trip nothing', async () => {
+  for (const changed of [['src/other.js', 'README.md'], ['src/documentation.js'], []]) {
+    const ids = TRIPWIRE_IDS.filter((id) => id !== 'untouched memoro-cli/operations');
+    const f = await moveOut('merge', reviewFiles(verdictText({ ids }), { v2: true, goal: TRIPWIRE }), REVIEW, branchGit(changed));
+    assert.equal(f.code, 0, `${JSON.stringify(changed)}: ${f.err()}`);
+    const extra = await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, branchGit(changed));
+    assertRefused(extra, /untouched memoro-cli\/operations is not an item of this goal's verdict/u, `a line for an area not tripped: ${JSON.stringify(changed)}`);
+  }
+});
+
+test('the diff is read against origin/main at the head judged, and a git that cannot read the areas or the diff refuses the move with the reason', async () => {
+  const seen = [];
+  const git = (cwd, args = []) => { seen.push({ cwd, args }); return branchGit(['src/operations.js'])(cwd, args); };
+  const f = await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, git);
+  assert.equal(f.code, 0, f.err());
+  assert.deepEqual(seen.filter((call) => call.args[0] === 'diff'), [{ cwd: WORKTREE, args: ['diff', '--name-only', `origin/main...${HEAD}`] }]);
+  const noDiff = (cwd, args = []) => (args[0] === 'diff' ? failed('fatal: bad revision') : branchGit([])(cwd, args));
+  assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, noDiff), /could not list what memoro-cli changed against origin\/main — fatal: bad revision/u, 'a diff git cannot make');
+  const noAreas = (cwd, args = []) => (args[0] === 'show' ? failed('fatal: bad object') : ok(''));
+  assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, noAreas), /could not read memoro-cli's \.mc\/areas\.json/u, 'areas git cannot read');
+});
+
+test('only a review session in review is held to REVIEW.md: plan and a person move merge without one', async () => {
+  for (const env of [PLAN, {}]) {
+    const f = reviewed({ files: reviewFiles(null), env });
+    assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), 'merge'], f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'merge · ready');
+    assert.equal(f.store[`${DIR}/REVIEW-1.md`], undefined, 'no round copy: no review wrote it');
+  }
 });
 
 test('no caller can move a goal to finish', async () => {
@@ -1417,39 +1677,13 @@ test('plan without MC_GOAL has session authority: it retries merge but cannot mo
 });
 
 /**
- * The two headless roles that took over what headless plan did (Martin,
- * 2026-11-07): a finish session moves `finish` to `merge` and sets `blocked`
- * or `Martin`, nothing else; a mend session sets a status and requeues a goal
- * in `merge`, and moves no stage. Neither writes the goal's acceptance.
+ * The headless mend role (Martin, 2026-11-07): a mend session sets a status and
+ * requeues a goal in `merge`, and moves no stage; it writes no goal acceptance.
+ * The finish session it was once paired with is gone: a rejected review returns
+ * the goal to build (retired case `a finish session moves finish to merge…` →
+ * the review verdict cases below, `a repair build session…` in run.test.js).
  */
-const FINISH = { ...SESSION, MC_ROLE: FINISH_ROLE };
 const MEND = { ...SESSION, MC_ROLE: MEND_ROLE };
-
-test('a finish session moves finish to merge, sets blocked or Martin, and is refused every other move and the goal\'s text', async () => {
-  const merged = reviewed({ files: inStage('finish'), env: FINISH });
-  assert.equal(await run(['stage', 'merge'], merged.deps), 0, merged.err());
-  assert.equal(stateOf(merged), 'merge · ready');
-  assert.equal(parseLog(merged.store[`${DIR}/LOG.md`]).at(-1).role, 'finish', 'the entry names its writer');
-  for (const [status, argv] of [['blocked', ['blocked', '--reason', 'the fixture is broken']], ['Martin', martinCall('the contract forbids the fix; recommend widening it')]]) {
-    const f = fixture({ files: inStage('finish'), env: FINISH });
-    assert.equal(await run(argv, f.deps), status === 'Martin' ? 1 : 0, f.err());
-    assert.equal(stateOf(f), `finish · ${status}`);
-  }
-  for (const [from, argv, said] of [
-    ['finish', ['stage', 'done'], /a finish session ends in merge, not done/u],
-    ['finish', ['drop', '--reason', 'x'], /a finish session ends in merge, not dropped/u],
-    ['finish', ['stage', 'review'], /a session does not move a goal back — finish → review/u],
-    ['build', ['stage', 'merge'], /a finish session moves only a goal in finish, and this one is build/u],
-    ['finish', ['ready'], /a finish session sets blocked or Martin, not ready/u],
-    ['finish', ['criterion', 'set', '1', '--check', 'y'], /a finish session does not rewrite a criterion/u],
-    ['finish', ['criterion', 'remove', '1', '--reason', 'x'], /a finish session does not remove a criterion/u],
-  ]) {
-    const f = fixture({ files: inStage(from), env: FINISH });
-    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
-    assert.match(f.err(), said);
-    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
-  }
-});
 
 test('a mend session repairs and requeues only a merge failure, and is refused every other stage and the goal\'s text', async () => {
   const red = inStage('merge', 'blocked');
@@ -1482,8 +1716,8 @@ test('a mend session repairs and requeues only a merge failure, and is refused e
 const DEFECT = ['defect', '--part', 'criterion 2', '--found', 'its check names tests/x.test.js, which is not on main'];
 const DEFECT_LINE = 'goal defect: criterion 2 — its check names tests/x.test.js, which is not on main';
 
-test('goal defect: a build, a review and a finish session report the goal in their own stage, which then stops and gets no session', async () => {
-  for (const [stage, env, role] of [['build', BUILD, 'build'], ['review', REVIEW, 'review'], ['finish', FINISH, 'finish']]) {
+test('goal defect: a build and a review session report the goal in their own stage, which then stops and gets no session', async () => {
+  for (const [stage, env, role] of [['build', BUILD, 'build'], ['review', REVIEW, 'review']]) {
     const f = fixture({ files: inStage(stage), env, keys: KEYS });
     assert.equal(await run([...DEFECT, '--evidence', 'tests/x.test.js: no such file, key ts-key-0123456789abcdef', '--next', 'amend criterion 2 with its real check'], f.deps), 0, f.err());
     assert.equal(stateOf(f), `${stage} · Martin`, `${role}: the stage is kept, the status is Martin`);
@@ -1514,11 +1748,10 @@ test('goal defect: a person, and the plan role, may report any unfinished goal b
 test('goal defect is refused for a finished goal, a build session on a goal not in build, and a mend session, and writes nothing', async () => {
   for (const [from, env, status, code, said] of [
     ['done', BUILD, 'ready', 1, /is done — a finished goal has no defect to report/u],
-    ['dropped', FINISH, 'ready', 1, /is dropped — a finished goal has no defect to report/u],
+    ['dropped', REVIEW, 'ready', 1, /is dropped — a finished goal has no defect to report/u],
     ['review', BUILD, 'ready', 2, /build-session:goal cannot set Martin for a goal in review/u],
     ['finish', BUILD, 'ready', 2, /build-session:goal cannot set Martin for a goal in finish/u],
     ['build', REVIEW, 'ready', 2, /review-session:goal cannot set Martin for a goal in build/u],
-    ['build', FINISH, 'ready', 2, /a finish session reports a goal defect only for a goal in finish, and this one is build/u],
     ['merge', MEND, 'blocked', 2, /a mend session does not report a goal defect/u],
     ['build', MEND, 'blocked', 2, /a mend session is only for merge failures, and this goal is in build/u],
   ]) {
@@ -1556,12 +1789,6 @@ test('goal defect is in the usage and in mc goal --help', async () => {
   assert.match(printed.join(''), /mc goal defect /u);
 });
 
-test('a finish session told to end elsewhere than merge is pointed at mc goal defect', async () => {
-  const f = fixture({ files: inStage('finish'), env: FINISH });
-  assert.equal(await run(['stage', 'done'], f.deps), 2);
-  assert.match(f.err(), /a wrong goal is reported with mc goal defect --part "…" --found "…", and the session ends/u);
-});
-
 /*
  * `mc goal martin` asks jev before Martin (docs/technical/mc-jev.md). The
  * call carries its options; a session's question goes to jev through the
@@ -1591,8 +1818,8 @@ const jevSays = ({ choice = 'fake_timer', p = 0.99, fits = 0.95, settled = 0.95,
   },
   usage: { input_tokens: 539, output_tokens: 70 },
 });
-/** A finish session's fixture on a goal in finish, with the key in the keys source. */
-const asking = (options = {}) => fixture({ files: inStage('finish'), env: FINISH, keys: KEYS, ...options });
+/** A build session's fixture on a goal in build, with the key in the keys source. */
+const asking = (options = {}) => fixture({ files: inStage('build'), env: BUILD, keys: KEYS, ...options });
 const lastComment = (f) => parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment;
 
 for (const [refusal, argv, said] of [
@@ -1642,10 +1869,10 @@ test('mc goal martin accepts a well-formed call: a person\'s goes to Martin with
 test('jev answering the recommendation at p >= 0.90, fits >= 0.70 and settled >= 0.70 keeps the status, prints its answer and logs it with one ledger line', async () => {
   const f = asking({ replies: [jevSays({ p: 0.90, fits: 0.70, settled: 0.70 })] });
   assert.equal(await run(ASK, f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'finish · ready', 'the status is unchanged');
+  assert.equal(stateOf(f), 'build · ready', 'the status is unchanged');
   assert.equal(f.out(), 'mc: jev answered fake_timer (p 0.90, fits 0.70, settled 0.70, jev-1.14.0) — continue with: inject a timer that fires at once\n');
   const last = parseLog(f.store[`${DIR}/LOG.md`]).at(-1);
-  assert.deepEqual([last.stage, last.status, last.role], ['finish', 'ready', 'finish']);
+  assert.deepEqual([last.stage, last.status, last.role], ['build', 'ready', 'build']);
   assert.match(last.comment, /^jev was asked: Which timer should the timeout test use\?\nOption fake_timer: inject a timer that fires at once\nOption real_wait: wait the full 15 seconds\nRecommended: fake_timer\nEvidence: none supplied\njev answered fake_timer \(p 0\.90, fits 0\.70, settled 0\.70, jev-1\.14\.0\) — continue with: inject a timer that fires at once$/u);
   const lines = f.ledger();
   assert.equal(lines.length, 1);
@@ -1661,19 +1888,19 @@ for (const [label, options, reading] of [
   ['a missing key', { keys: {} }, /no TYPESAFE_API_KEY/u],
 ]) {
   test(`mc goal martin decides technical question with ${label}`, async () => {
-    const f = asking({ ...options, env: FINISH });
+    const f = asking({ ...options, env: BUILD });
     const argv = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer', '--evidence', 'The contract is silent.'];
     const beforeGoal = f.store[`${DIR}/GOAL.json`];
     const beforeEntries = parseLog(f.store[`${DIR}/LOG.md`]);
     assert.equal(await run(argv, f.deps), 0, `${label}: ${f.err()}`);
     assert.equal(f.store[`${DIR}/GOAL.json`], beforeGoal);
-    assert.equal(stateOf(f), 'finish · ready', label);
+    assert.equal(stateOf(f), 'build · ready', label);
     assert.match(f.out(), /^mc: decided by the session: fake_timer — jev did not settle it \(/u, label);
     const entries = parseLog(f.store[`${DIR}/LOG.md`]);
     assert.equal(entries.length, beforeEntries.length + 1);
     assert.deepEqual(entries.slice(0, -1), beforeEntries);
     const entry = entries.at(-1);
-    assert.deepEqual([entry.stage, entry.status], ['finish', 'ready']);
+    assert.deepEqual([entry.stage, entry.status], ['build', 'ready']);
     assert.match(entry.comment, /^Decided by the session \(technical\): Which timer should the timeout test use\?/u, label);
     for (const evidence of ['Option fake_timer:', 'Option real_wait:', 'Recommended: fake_timer', 'Evidence: The contract is silent.']) assert.ok(entry.comment.includes(evidence), `${label}: ${evidence}`);
     assert.match(entry.comment, reading, label);
@@ -1690,7 +1917,7 @@ test('technical questions are decided on any unsettled jev reading, while malfor
   const f = asking({ replies: [jevSays({ p: 0.60, fits: 0.88, settled: 0.30, product: 0.95 })] });
   const argv = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
   assert.equal(await run(argv, f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'finish · ready');
+  assert.equal(stateOf(f), 'build · ready');
   assert.match(f.out(), /^mc: decided by the session: fake_timer/u);
   assert.match(lastComment(f), /^Decided by the session \(technical\): Which timer should the timeout test use\?/u);
   assert.deepEqual(f.ledger().map(({ kind, outcome, answers }) => [kind, outcome, answers.product]), [['technical', 'decided', 0.95]]);
@@ -1698,7 +1925,7 @@ test('technical questions are decided on any unsettled jev reading, while malfor
   const answered = asking({ replies: [jevSays({ p: 0.99, fits: 0.95, settled: 0.95, product: 0.10 })] });
   const answerCall = ['martin', 'mc/plain', '--kind', 'technical', '--reason', 'Which timer should the timeout test use?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
   assert.equal(await run(answerCall, answered.deps), 0, answered.err());
-  assert.equal(stateOf(answered), 'finish · ready');
+  assert.equal(stateOf(answered), 'build · ready');
   assert.equal(answered.ledger()[0].outcome, 'answered');
 
   const reserved = asking();
@@ -1711,7 +1938,7 @@ test('technical questions are decided on any unsettled jev reading, while malfor
     const before = bad.store[`${DIR}/LOG.md`];
     const malformed = ['martin', 'mc/plain', ...(kind ? ['--kind', kind] : []), '--reason', 'question?', ...FAKE, ...REAL, '--recommend', 'fake_timer'];
     assert.equal(await run(malformed, bad.deps), 2);
-    assert.equal(stateOf(bad), 'finish · ready');
+    assert.equal(stateOf(bad), 'build · ready');
     assert.equal(bad.store[`${DIR}/LOG.md`], before);
     assert.deepEqual([bad.requests.length, bad.ledger().length], [0, 0]);
     assert.match(bad.err(), /technical.*product/u);
@@ -1728,7 +1955,7 @@ for (const [miss, says, reading] of [
   test(`jev's ${miss} sets Martin, its reading in the entry`, async () => {
     const f = asking({ replies: [jevSays(says)] });
     assert.equal(await run(ASK, f.deps), 1, f.err());
-    assert.equal(stateOf(f), 'finish · Martin');
+    assert.equal(stateOf(f), 'build · Martin');
     assert.match(lastComment(f), /^Martin is asked: Which timer should the timeout test use\?\n[\s\S]*Recommended: fake_timer\n/u);
     assert.match(lastComment(f), reading);
     assert.doesNotMatch(f.out(), /jev answered/u);
@@ -1738,13 +1965,13 @@ for (const [miss, says, reading] of [
 
 for (const [route, options, argv, reason] of [
   ['--reserved', {}, [...ASK, '--reserved', 'deploy'], 'jev not asked: reserved act deploy'],
-  ['MC_TOOL=person', { env: { ...FINISH, MC_TOOL: 'person' } }, ASK, 'jev not asked: person'],
-  ['MC_TOOL unset', { env: { MC_GOAL: 'mc/plain', MC_ROLE: FINISH_ROLE } }, ASK, 'jev not asked: person'],
+  ['MC_TOOL=person', { env: { ...BUILD, MC_TOOL: 'person' } }, ASK, 'jev not asked: person'],
+  ['MC_TOOL unset', { env: { MC_GOAL: 'mc/plain', MC_ROLE: BUILD_ROLES.goal } }, ASK, 'jev not asked: person'],
 ]) {
   test(`${route} sets Martin with no jev request, the reason in the entry`, async () => {
     const f = asking({ replies: [jevSays()], ...options });
     assert.equal(await run(argv, f.deps), 0, f.err());
-    assert.equal(stateOf(f), 'finish · Martin');
+    assert.equal(stateOf(f), 'build · Martin');
     assert.equal(f.requests.length, 0, 'no request made');
     assert.match(lastComment(f), new RegExp(`\\n${reason}$`, 'u'));
     assert.deepEqual(f.ledger().map((line) => [line.outcome, line.reason, line.state_length]), [['martin', reason, null]]);
@@ -1768,7 +1995,7 @@ for (const [failure, options, reason, requests] of [
     const f = asking(options);
     if (options.readKeys) f.deps.readKeys = options.readKeys;
     assert.equal(await run(ASK, f.deps), 1, f.err());
-    assert.equal(stateOf(f), 'finish · Martin');
+    assert.equal(stateOf(f), 'build · Martin');
     assert.match(lastComment(f), new RegExp(`\\n${reason.replace(/[()]/gu, '\\$&')}$`, 'u'));
     assert.equal(f.requests.length, requests);
     assert.deepEqual(f.ledger().map((line) => [line.outcome, line.reason]), [['martin', reason]]);
@@ -1778,7 +2005,7 @@ for (const [failure, options, reason, requests] of [
 test('429 then 200 retries once, after the retry-after it names, and answers', async () => {
   const f = asking({ replies: [reply(429, { detail: 'slow down' }, { 'retry-after': '2' }), jevSays()] });
   assert.equal(await run(ASK, f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'finish · ready');
+  assert.equal(stateOf(f), 'build · ready');
   assert.equal(f.requests.length, 2);
   assert.deepEqual(f.sleeps, [2000], 'retry-after honoured, through the injected sleep');
   assert.match(f.out(), /^mc: jev answered fake_timer /u);
@@ -1791,11 +2018,11 @@ test('a stalled 2xx response body times out and the goal asks Martin with that r
   const f = asking({ replies: [() => ({ status: 200, text: () => new Promise(() => {}) })], timer: async () => {} });
   assert.equal(await run(ASK, f.deps), 1, f.err());
   assert.match(lastComment(f), /jev unavailable: no answer in 15 seconds/u);
-  assert.equal(stateOf(f), 'finish · Martin');
+  assert.equal(stateOf(f), 'build · Martin');
 });
 
 test('mc goal martin omits absolute and symlink-escaping --document paths, while sending in-repository paths', async () => {
-  const f = asking({ files: { ...inStage('finish'), '/outside.md': 'outside secret', [`${DIR}/memoro-cli/docs/extra.md`]: 'inside', [`${DIR}/memoro-cli/docs/link.md`]: 'linked outside' } });
+  const f = asking({ files: { ...inStage('build'), '/outside.md': 'outside secret', [`${DIR}/memoro-cli/docs/extra.md`]: 'inside', [`${DIR}/memoro-cli/docs/link.md`]: 'linked outside' } });
   f.deps.realpath = (path) => path === `${DIR}/memoro-cli/docs/link.md` ? '/outside.md' : path;
   const argv = [...ASK, '--document', 'memoro-cli/docs/extra.md', '--document', '/outside.md', '--document', '~/outside.md', '--document', 'memoro-cli/docs/link.md'];
   assert.equal(await run(argv, f.deps), 1, f.err());
@@ -1844,7 +2071,7 @@ for (const [name, args] of [
 
 test('decision alone gains unattended desk moves, acceptance rewrites and attribution, never done', async () => {
   const env = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
-  const f = fixture({ files: inStage('finish'), env });
+  const f = fixture({ files: inStage('merge'), env });
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
   assert.equal(await run(['ready','mc/plain'], f.deps), 0, f.err());
   assert.equal(await run(['criterion','set','mc/plain','1','--criterion','A truthful check'], f.deps), 0, f.err());
@@ -1865,9 +2092,9 @@ test('decision alone gains unattended desk moves, acceptance rewrites and attrib
 test('headless Martin still cannot move, rewrite criteria, drop or ask', async () => {
   const env = { MC_ROLE:'martin', MC_HEADLESS:'1', MC_TOOL:'codex', MC_GOAL:'mc/plain' };
   for (const args of [['stage','build'],['ready'],['criterion','set','1','--criterion','Changed'],['drop','--reason','Obsolete'],['martin','--kind','technical','--reason','Why?','--option','a: A','--option','b: B','--recommend','a']]) {
-    const f = fixture({ files:inStage('finish'), env });
+    const f = fixture({ files:inStage('merge'), env });
     assert.equal(await run(args,f.deps),2,args.join(' '));
-    assert.equal(stateOf(f),'finish · ready');
+    assert.equal(stateOf(f),'merge · ready');
     assert.match(f.err(),/interactive-only/u);
   }
 });
@@ -2095,8 +2322,8 @@ test('the version 2 verbs refuse a version 1 goal and bad flags with exit 2, wri
   assert.equal(snapshot(f), kept, 'nothing written');
 });
 
-test('every new writing verb is refused a build, review, finish and mend session, and writes nothing', async () => {
-  const roles = { build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE };
+test('every new writing verb is refused a build, review and mend session, and writes nothing', async () => {
+  const roles = { build: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE };
   for (const [word, role] of Object.entries(roles)) {
     const f = fixture({ files: V2_FILES(), env: { ...SESSION, MC_ROLE: role, MC_REVIEW_HEAD: 'abc1234def' } });
     const before = snapshot(f);
@@ -2353,8 +2580,8 @@ test('mc goal obligation set exits 1 and writes nothing on a git failure, on a d
   }
 });
 
-test('obligation set stays refused for a build, review, finish and mend session and for the learning role, before any declaration is read; obligation remove is unchanged', async () => {
-  for (const env of [{ ...SESSION, MC_ROLE: BUILD_ROLES.goal }, { ...SESSION, MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: 'abc1234def' }, { ...SESSION, MC_ROLE: FINISH_ROLE }, { ...SESSION, MC_ROLE: MEND_ROLE }, LEARNING]) {
+test('obligation set stays refused for a build, review and mend session and for the learning role, before any declaration is read; obligation remove is unchanged', async () => {
+  for (const env of [{ ...SESSION, MC_ROLE: BUILD_ROLES.goal }, { ...SESSION, MC_ROLE: REVIEW_ROLE, MC_REVIEW_HEAD: 'abc1234def' }, { ...SESSION, MC_ROLE: MEND_ROLE }, LEARNING]) {
     const f = fixture({ git: areasGit(BOTH), files: TWO_REPOS([]), env });
     const before = snapshot(f);
     assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro/security', '--stand', 'touched', '--text', 'x'], f.deps), 2, env.MC_ROLE);
