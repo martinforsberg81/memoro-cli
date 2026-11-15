@@ -27,7 +27,7 @@ export const turnReference = turnName;
 export const turnStatePath = (root, programme) => join(root, 'runner', 'programme-turn', `${programme}.json`);
 
 /** `runner/work/programme-turn-<programme>`: the directory holding the turn's read checkouts, one per served repository. */
-export const readCheckoutsDir = (root, programme) => join(root, 'runner', 'work', `programme-turn-${programme}`);
+export const readCheckoutsDir = (root, programme, prefix = 'programme-turn') => join(root, 'runner', 'work', `${prefix}-${programme}`);
 
 const lastLine = (text) => String(text ?? '').trim().split('\n').at(-1) || '';
 
@@ -180,11 +180,11 @@ function briefText({ programme, failures }) {
  * reason, retained? }` — `retained` is the path of a leftover kept. A fetch
  * that fails is `{ ok: false, fetch: true }`: nothing counts against the turn.
  */
-export function setUpReadCheckouts({ git, root, programme, repos, exists }) {
-  const base = readCheckoutsDir(root, programme);
+export function setUpReadCheckouts({ git, root, programme, repos, exists, prefix }) {
+  const base = readCheckoutsDir(root, programme, prefix);
   const paths = {};
   const made = [];
-  const undo = () => removeReadCheckouts({ git, root, programme, repos: repos.filter((repo) => made.includes(repo.name)), exists });
+  const undo = () => removeReadCheckouts({ git, root, programme, prefix, repos: repos.filter((repo) => made.includes(repo.name)), exists });
   for (const repo of repos) {
     const fetched = git(repo.path, ['fetch', '--quiet', 'origin']);
     if (!fetched.ok) { undo(); return { ok: false, fetch: true, reason: `fetch ${repo.name}: ${lastLine(fetched.stderr) || 'git failed'}` }; }
@@ -214,10 +214,10 @@ function checkoutState({ git, path }) {
 }
 
 /** The turn's read checkouts removed after it: each one clean and reachable, the others left. Returns the paths left. */
-export function removeReadCheckouts({ git, root, programme, repos, exists }) {
+export function removeReadCheckouts({ git, root, programme, repos, exists, prefix }) {
   const kept = [];
   for (const repo of repos) {
-    const path = join(readCheckoutsDir(root, programme), repo.name);
+    const path = join(readCheckoutsDir(root, programme, prefix), repo.name);
     if (!exists(path)) continue;
     const state = checkoutState({ git, path });
     if (!state.removable || !git(repo.path, ['worktree', 'remove', path]).ok) kept.push(path);

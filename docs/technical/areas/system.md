@@ -30,6 +30,7 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - A deviation from an area text is repaired without a horizon, inside a ceiling that is a structure and not a figure: at most one such repair in flight per area, the rest wait in order; a figure is set when a month of use shows one is needed (Martin, 2026-11-15; programme `horizon`).
 - Sessions have one way to ask for advice, `mc ask`, not several (Martin, 2026-11-15; programme `reach`).
 - The only questions directed to Martin are those about a reformulation of an aim, and about strategy and design at that level (Martin, 2026-11-15; programme `mc`).
+- A programme with a record is bounded: it is done when its goals are done and its write-back reads OK, and the system then archives it (Martin, 2026-11-15; programme `horizon`).
 
 ## Store
 

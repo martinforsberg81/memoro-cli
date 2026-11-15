@@ -49,7 +49,7 @@ without a record keeps [the programme page](references/programme-readme.md) and 
 ## When a goal lands
 
 The plan session (or session that takes the landing) rereads measures, rewrites the dated Gap largest-first, and writes a new horizon when reached.
-Landed work is in `mc goal list` and `docs/technical/`, not Gap. Archive only when Martin says the aim is over or has moved to another programme, never because its goals are done.
+Landed work is in `mc goal list` and `docs/technical/`, not Gap. A programme without a record is archived only when Martin says the aim is over or has moved to another programme, never because its goals are done; a programme with a record is bounded, and the system archives it once its goals are done and its write-back reads OK.
 
 ## Faithful scope correction and handoff
 

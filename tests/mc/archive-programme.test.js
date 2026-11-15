@@ -397,6 +397,74 @@ describe('archiveProgramme', () => {
   });
 });
 
+describe('archiveProgramme with the runner\'s fence', () => {
+  /** A layout 2 programme directory with a rulings file, and the fixture that holds it. */
+  function layout2() {
+    const fx = fixture();
+    const area = join(fx.root, 'work', 'programs', 'gone');
+    mkdirSync(area, { recursive: true });
+    writeFileSync(join(area, 'rulings.md'), '# rulings\n');
+    return { fx, area };
+  }
+
+  it('with a fence that says nothing the archive runs as the person\'s does, never clears restricted data, and tells where the directory went', async () => {
+    const { fx, area } = layout2();
+    const { deps, calls } = stubs();
+    const asked = [];
+    const shelved = [];
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => { asked.push(calls.release.length); return null; }, onShelved: (to) => shelved.push(to) });
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    const moved = join(fx.root, 'work', 'archive', 'programs', 'gone');
+    assert.deepEqual(shelved, [moved]);
+    assert.ok(existsSync(join(moved, 'rulings.md')));
+    assert.deepEqual(asked, [1, 1, 2], 'asked after the docs PR, before the release (the dry run only so far) and before the shelving (after it)');
+    assert.deepEqual(calls.release, [true, false]);
+  });
+
+  it('a fence that fires after the docs PR landed stops before any release: the planning session, the directory and restricted data are as they were, and the landed PR stays', async () => {
+    const { fx, area } = layout2();
+    const entry = join(fx.root, 'work', 'restricted', 'gone', 'capture');
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'README.md'), '# capture\n');
+    const before = snapshot(area);
+    const { deps, calls } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => 'restricted data appeared' });
+    assert.equal(await archiveProgramme('gone', a), 1);
+    assert.match(a.stderr.out.text, /restricted data appeared; nothing local was released, deleted or moved/u);
+    assert.deepEqual(calls.merges, [42], 'the docs PR had landed');
+    assert.deepEqual(calls.release.filter((dryRun) => !dryRun), [], 'nothing released');
+    assert.deepEqual(snapshot(area), before);
+    assert.ok(existsSync(join(entry, 'README.md')), 'restricted data kept');
+    assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false);
+  });
+
+  it('a fence that fires only before the shelving leaves the directory and the restricted data in place and clears nothing', async () => {
+    const { fx, area } = layout2();
+    const entry = join(fx.root, 'work', 'restricted', 'gone', 'capture');
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'README.md'), '# capture\n');
+    const { deps, calls } = stubs();
+    let asks = 0;
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => (++asks === 3 ? 'a goal is live' : null) });
+    assert.equal(await archiveProgramme('gone', a), 1);
+    assert.ok(existsSync(area), 'the directory did not move');
+    assert.ok(existsSync(join(entry, 'README.md')), 'restricted data was not cleared');
+    assert.equal(existsSync(join(fx.root, 'work', 'archive', 'programs', 'gone')), false);
+    assert.deepEqual(calls.release, [true, false], 'release is the planning session\'s, already asked for before the last fence');
+  });
+
+  it('a call with a fence never clears restricted data even when the fence allows it', async () => {
+    const { fx, area } = layout2();
+    const entry = join(fx.root, 'work', 'restricted', 'gone', 'capture');
+    mkdirSync(entry, { recursive: true });
+    writeFileSync(join(entry, 'README.md'), '# capture\n');
+    const { deps } = stubs();
+    const a = args(fx, deps, { areaName: 'programs/gone', areaPath: area, fence: () => null });
+    assert.equal(await archiveProgramme('gone', a), 0, a.stderr.out.text);
+    assert.ok(existsSync(join(entry, 'README.md')), 'a fence is the runner\'s; deleting restricted data stays a person\'s act');
+  });
+});
+
 describe('mc plan --archive arguments', () => {
   it('needs a name and takes none of the session flags', async () => {
     for (const [argv, message] of [

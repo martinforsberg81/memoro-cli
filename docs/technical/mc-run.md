@@ -202,7 +202,7 @@ order without a model call:
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build, and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build, then the programme archive turn ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -932,6 +932,110 @@ by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
 file that cannot be read starts no turn and counts nothing; the runner says it
 once in `runner.log`, the desk sync reports it and the item stays open.
 
+## Programme archive turn
+
+Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
+done or dropped, the runner checks that what the programme made true is written
+into `docs/technical/` and the area pages, archives the programme and sets its
+record to `done`, with nobody present; the manager's horizon turn then follows
+the horizon without it. Only a programme **with a valid record** is touched: one
+without a record, or with an invalid one, is never read or archived by the
+runner, and `mc plan <p> --archive` stays that programme's person's act
+([mc-plan.md](mc-plan.md#archiving-a-programme)). The write-back is also judged in
+each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdict)).
+
+`archiveDue` (`archive-turn.js`) is model-free and reads at every pick. A programme
+is due when all hold:
+
+- the record is valid and `open`;
+- `goals/` holds no live goal (a dot-entry is none), and `goals/.archive/` holds at
+  least one done goal: a programme whose goals were all dropped made nothing true
+  and is never read or archived;
+- no desk item of kind `archive` with the reference `archive:<p>` is open;
+- no reading of it runs (the claim `archive:<p>`);
+- no OK reading is kept for exactly the current done goals (then only the archive
+  is retried, below).
+
+**The reading.** One headless read-only session per programme, role
+`archive-reader` ([mc-roles.md](mc-roles.md)), kind `plan`, class large, with a
+`runs.tsv` row, the programme directory as its cwd, `MC_HEADLESS=1`,
+`MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, offline holds, STOP and
+UPDATE are those of every session. It commits nothing. The served repositories of
+the done goals and every repository that declares areas are given as read
+checkouts at `runner/work/archive-turn-<p>/<repo>`, detached at origin/main (the
+rules of the *Read checkouts* of the planning turn: fetch failure counts
+nothing, a dirty or unreachable leftover is never touched). The session writes
+`WRITE-BACK.md` in the programme directory: one `read: <repo> <sha>` line per
+checkout (the sha the runner read at the checkout, so a reading is of a known
+tree), one line per done goal (`<goal>: OK — <repo>/docs/technical/<page>.md §
+<section>[, …]`, `<goal>: OK — none — <reason>` or `<goal>: NOT OK — <what is true
+that no page says>`) and a last `verdict: OK` or `verdict: NOT OK`. A line is
+parsed without a model (`parseWriteBack`); a missing or malformed file, a done
+goal with no line, a wrong sha or `verdict: OK` beside a NOT OK line is a failed
+reading.
+
+**What follows a reading.**
+
+- *OK:* the reading is kept in `runner/archive-turn/<p>.json` for the done goals it
+  judged, and the archive follows in the same pass.
+- *NOT OK:* a finding, not a counted failure. It opens one desk item of kind
+  `archive`, reference `archive:<p>`, `prepared`, sort `mechanical`, with a
+  model-free `prepared.md` carrying the NOT OK lines: a decision session writes
+  the missing statement and closes it by decision, and the programme is read
+  again. A NOT OK reading after an item was closed by decision opens it
+  `for-martin` (sort `mechanical`, `reversible: false`, with a Swedish `brief.md`).
+- *A failed reading* (malformed file, no file, a session that ended without
+  one) is a failure counted in the state file with its reason and log. The first
+  retries on the next pick; the second since the last item opens the `for-martin`
+  item. Provider endings (quota, offline, refused login), a refusal at admission
+  and a fetch failure count nothing.
+
+No reading, archive or record write starts while an item is open. The item closes
+by source only when the programme directory is gone from the programmes home (and
+no destination named in the state still has a record that does not read `done`)
+or `goals/` holds a live goal, and by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)).
+
+**The archive.** After an OK reading, and again on the next pick when the state
+keeps one (no new reading, no session), the runner:
+
+1. refuses when `~/mc/restricted/<p>/` holds entries: deleting data is a person's
+   act. It opens one `for-martin` item at once, sort `reserved`, with a Swedish
+   brief naming `mc plan <p> --archive`; the programme stays as it was;
+2. moves the top-level `proposals/*.md` to `~/mc/proposals/`, each with a first
+   line naming the programme, never over a file already there;
+3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
+   and a `fence`, the same function `mc plan <p> --archive` calls. The fence
+   re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
+   release and before shelving; a live goal or a restricted entry that has
+   appeared stops the archive with nothing local released, deleted or moved
+   (a landed docs PR stays). With a fence, `clearRestricted` is never called;
+4. records the destination it returns in the state file at once, then sets the
+   record there to `done` (`setRecordState`) and clears the state.
+
+A state that names a destination whose record still reads `open` (the move
+happened and the write did not) is due that write alone on the next pick: no
+reading, no session, no second archive. A write that throws (a filesystem
+error) is a refusal like any other: the destination stays, the failure is
+counted, and the second opens the `for-martin` item. While that item is open the
+write is not tried, and sync keeps it open although the directory has left the
+programmes home, so a write that keeps failing opens no further item; a record
+that already reads `done` is only cleared from the state. An archive that fails is a counted
+failure like a failed reading, and a retry is made with the kept reading while
+the done goals are the same; a goal that has appeared stops the retry.
+
+**State and mixed versions.** `runner/archive-turn/<p>.json` holds
+`{schema: 'mc-archive-turn', version, programme, failures, items, reading,
+destination}`. A missing file, and an older version of this schema, read as no
+failures and no kept reading, so a runner of this version reads a programme an
+older one left alone; a file that cannot be read starts no turn, counts nothing
+and is said once in `runner.log`, the desk sync reports it and the item stays
+open. An older runner, which knows no archive turn, starts none, and its decision
+lane may take a prepared `archive` item with its generic prompt: that is safe,
+since it holds no reserved act and closing the item makes the new runner read
+again. A programme an older runner or `mc plan --archive` has already moved is no
+longer in the programmes home and is no candidate. The cases are in
+`tests/mc/run.test.js` (*programme archive: mixed versions*) and
+`tests/mc/archive-turn.test.js`.
 
 ## The manager's turns
 

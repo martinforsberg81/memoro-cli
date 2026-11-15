@@ -29,9 +29,12 @@ import { isSourceArea, readAreas } from './areas.js';
 /** The items every version 2 verdict holds, besides criteria, preserve ids and areas. */
 export const FIXED_IDS = Object.freeze(['change', 'out-of-scope', 'protection', 'bugs']);
 
+/** The id of the write-back line: held only by a review the runner launched with `MC_REVIEW_WRITE_BACK=1`. */
+export const WRITE_BACK_ID = 'write-back';
+
 const HEAD_LINE = /^head: (\S+) (\S+)\s*$/u;
-const ID = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|change|out-of-scope|protection|bugs)(?=:)/u;
-const ITEM = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|change|out-of-scope|protection|bugs): (OK|NOT OK)(?: — (.+?))?\s*$/u;
+const ID = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|write-back|change|out-of-scope|protection|bugs)(?=:)/u;
+const ITEM = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|write-back|change|out-of-scope|protection|bugs): (OK|NOT OK)(?: — (.+?))?\s*$/u;
 
 /**
  * REVIEW.md's `text` read into `{ heads: [{ repo, sha }], items: [{ id, ok, reason }], malformed: [line] }`.
@@ -55,7 +58,7 @@ export function parseVerdict(text) {
 }
 
 /** The ids a verdict on `goal` holds, in the order they are written; `tripped` is `trippedAreas`' list, `seen` `seenAreas`'. */
-export function requiredIds(goal, tripped = [], seen = []) {
+export function requiredIds(goal, tripped = [], seen = [], writeBack = false) {
   const criteria = (goal.success_criteria ?? []).map((_, index) => `criterion ${index + 1}`);
   if (goal.version !== 2) return criteria;
   return [
@@ -64,6 +67,7 @@ export function requiredIds(goal, tripped = [], seen = []) {
     ...(goal.obligations ?? []).filter((one) => one.stand === 'touched').map((one) => `obligation ${one.area}`),
     ...tripped.map((one) => `untouched ${one.area}`),
     ...seen.map((area) => `seen ${area}`),
+    ...(writeBack ? [WRITE_BACK_ID] : []),
     ...FIXED_IDS,
   ];
 }
@@ -77,6 +81,26 @@ export function sameHead(a, b) {
 }
 
 const SEEN_FORM = '`seen <area>: OK — shots/<name>.png[, …][ — <words>]` or `seen <area>: NOT OK — shots/<name>.png[, …] — <what and where>`, with `none — <reason>` in place of the screenshots';
+
+const WRITE_BACK_FORM = '`write-back: OK — <repo>/docs/technical/<page>.md § <section>[, …]`, `write-back: OK — none — <reason>` or `write-back: NOT OK — <what the goal made true that no page says>`';
+
+/** One page a `write-back` line names: `<repo>/docs/technical/<page>.md § <section>`. */
+const WRITE_BACK_PAGE = /^[^\s/,]+\/docs\/technical\/\S+\.md § \S.*$/u;
+
+/**
+ * What is wrong with a `write-back` line, or null when it is in form: an OK line names one or more pages and a section of
+ * each (a comma inside a section name is kept: the entries split where the next one starts with a repository's
+ * `docs/technical/` path), or says `none — <reason>`; a NOT OK line has its reason already (`parseVerdict`). Never carried.
+ */
+export function writeBackFault(item) {
+  const reason = item.reason ?? '';
+  if (/^carried from round \d+$/u.test(reason)) return `a \`write-back\` line is not carried from an earlier round — judge it again: ${WRITE_BACK_FORM}`;
+  if (!item.ok) return null;
+  if (!reason) return `an OK line names the pages or says why none: ${WRITE_BACK_FORM}`;
+  if (reason === 'none' || reason.startsWith('none — ')) return reason.slice('none'.length).replace(/^ — /u, '').trim() ? null : `\`none\` needs its reason: ${WRITE_BACK_FORM}`;
+  const entries = reason.split(/, (?=[^\s/,]+\/docs\/technical\/)/u);
+  return entries.every((entry) => WRITE_BACK_PAGE.test(entry)) ? null : WRITE_BACK_FORM;
+}
 
 /** A path a `seen` line may name: under `shots/`, a `.png`, no space, comma or `..`. */
 const SHOT = /^shots\/[^\s,]+\.png$/u;
@@ -101,10 +125,11 @@ function seenReason(item) {
  * What is wrong with REVIEW.md's `text` for `goal`, as `{ problems: [string], failed: [{ id, reason }] }`. Checked: a head
  * line for each repository of the goal, each head the one in `heads` (`[{ repo, sha }]`, where a sha is null the
  * line only has to be there), every id of `requiredIds` once, no line that is not in form, no id the goal does not have.
- * For each area in `seen` the line's form and that each screenshot it names is a file (`isFile(path)`, the path as written,
+ * With `writeBack` the verdict holds one `write-back` line in form (`writeBackFault`); without it a `write-back` line is not an
+ * item of the verdict. For each area in `seen` the line's form and that each screenshot it names is a file (`isFile(path)`, the path as written,
  * read from the goal's directory). `failed` lists the NOT OK items.
  */
-export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], isFile = () => false }) {
+export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], writeBack = false, isFile = () => false }) {
   const read = parseVerdict(text);
   const problems = [];
   for (const line of read.malformed) problems.push(`not in form: "${line}" — ${'`<id>: OK` or `<id>: NOT OK — <what and where>`, and `head: <repo> <sha>`'}`);
@@ -115,7 +140,7 @@ export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], 
     if (lines.length > 1) problems.push(`more than one \`head: ${repo}\` line`);
     if (expected && !sameHead(lines[0].sha, expected)) problems.push(`\`head: ${repo} ${lines[0].sha}\` is not the head judged, ${expected}`);
   }
-  const required = requiredIds(goal, tripped, seen);
+  const required = requiredIds(goal, tripped, seen, writeBack);
   for (const id of required) {
     const count = read.items.filter((one) => one.id === id).length;
     if (count === 0) problems.push(`no line for ${id}`);
@@ -127,6 +152,11 @@ export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], 
     const { fault, shots } = seenReason(item);
     if (fault) { problems.push(`${item.id}: not in form — ${fault}`); continue; }
     for (const path of shots) if (!isFile(path)) problems.push(`${item.id}: ${path} is not a file in the goal's directory — save it there with \`mc shot … --out <goal directory>/${path}\``);
+  }
+  for (const item of read.items) {
+    if (item.id !== WRITE_BACK_ID || !required.includes(item.id)) continue;
+    const fault = writeBackFault(item);
+    if (fault) problems.push(`${item.id}: not in form — ${fault}`);
   }
   return { problems, failed: read.items.filter((one) => !one.ok).map((one) => ({ id: one.id, reason: one.reason })) };
 }
