@@ -3832,7 +3832,7 @@ const plans = (f, name, stage, status = 'ready', inner = okSession()) => (call) 
 const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one mend session takes it and queues it again\n`;
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
-test('only a build routes on the goal\'s class: a repair, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
+test('only a build routes on the goal\'s class: finish, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
   const HAIKU_ONLY = { ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
   // repair (the finish list): opus high / sol high; mend: sonnet medium / sol medium (DEFAULT_CATALOG), whichever has room.
   for (const [stage, role, claudeModel] of [['repair', 'build-session:goal', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
@@ -3949,7 +3949,7 @@ test('a goal in finish · ready returns to build with a log entry before any ses
   assert.equal(runRows(without.files)[0].kind, 'build-goal', 'an ordinary goal build, not a repair');
 });
 
-test('one runner applies changed provider priority to repair and mend launches', async () => {
+test('one runner applies changed provider priority to finish and mend launches', async () => {
   const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   let priority = 'codex';
   f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
