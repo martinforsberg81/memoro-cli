@@ -3081,6 +3081,76 @@ test('obligation set stays refused for a build, review and mend session and for 
   assert.equal(f.out(), 'mc: mc/plain · obligation "Whatever" removed\n');
 });
 
+// ---- Source areas: an area with no question asks no stand, and an area may name its page ----
+
+const SOURCE_AREA = (id, extra = {}) => AREA(id, { standards: [], questions: [], page: `docs/areas/${id}.md`, ...extra });
+const SOURCE_DECLARATION = (...areas) => JSON.stringify({ schema_version: 1, areas });
+const PAGED_DECL = SOURCE_DECLARATION(AREA('documentation', { page: 'docs/areas/documentation.md' }), SOURCE_AREA('games'));
+const SOURCES_ONLY = SOURCE_DECLARATION(SOURCE_AREA('games'));
+const stand = (area, kind = 'untouched', text = 'x') => ({ area, stand: kind, text });
+
+test('mc goal areas <repo> shows a rule area\'s page and questions, and a source area as a source that asks no stand with its page marked (missing) and no questions', async () => {
+  const f = fixture({ git: areasGit({ [CLI_PATH]: PAGED_DECL }, { missing: ['docs/areas/games.md'] }) });
+  assert.equal(await run(['areas', 'memoro-cli'], f.deps), 0, f.err());
+  const [rule, source] = f.out().split('\n\n');
+  assert.match(rule, /^memoro-cli\/documentation — The documentation\n  covers: What documentation covers\.\n  page: docs\/areas\/documentation\.md\n  standards: docs\/technical\/documentation\.md\n  paths: .*\n  questions:\n    when documentation changes\n      ask Is documentation still true\?$/u);
+  assert.match(source, /^memoro-cli\/games — The games\n  source area: it asks no stand of a goal\n  covers: What games covers\.\n  page: docs\/areas\/games\.md \(missing\)\n  standards: none\n/u);
+  assert.doesNotMatch(source, /questions|when |ask /u);
+});
+
+test('mc goal obligation set refuses a source area with exit 2 and nothing written, naming its page; the closing line and the refusal list count rule areas alone', async () => {
+  const f = fixture({ git: areasGit({ [CLI_PATH]: PAGED_DECL }), files: V2_FILES(), env: V2_PERSON });
+  const before = snapshot(f);
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/games', '--stand', 'untouched', '--text', 'x'], f.deps), 2);
+  assert.match(f.err(), /memoro-cli\/games" is a source area that asks no stand — read its page docs\/areas\/games\.md/u);
+  assert.equal(snapshot(f), before, 'nothing written');
+  assert.equal(f.out(), '');
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Elsewhere', '--stand', 'untouched', '--text', 'x'], f.deps), 2);
+  assert.match(f.err(), /memoro-cli: memoro-cli\/documentation\n/u);
+  assert.doesNotMatch(f.err(), /memoro-cli\/documentation, memoro-cli\/games/u, 'the list names rule areas alone');
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/documentation', '--stand', 'untouched', '--text', 'x'], f.deps), 0, f.err());
+  assert.match(f.out(), /\n  every declared area has a stand\n$/u, 'the source area is not one that lacks a stand');
+});
+
+test('mc goal obligation set on a repository that declares source areas alone takes any other word without a closing line, and refuses the source area\'s id', async () => {
+  const f = fixture({ git: areasGit({ [CLI_PATH]: SOURCES_ONLY }), files: V2_FILES(), env: V2_PERSON });
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/anything', '--stand', 'untouched', '--text', 'x'], f.deps), 0, f.err());
+  assert.doesNotMatch(f.out(), /no stand yet|every declared/u, 'no closing line where no repository declares a rule area');
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'Anything', '--stand', 'untouched', '--text', 'x'], f.deps), 0, f.err());
+  const before = snapshot(f);
+  assert.equal(await run(['obligation', 'set', 'mc/plain', 'memoro-cli/games', '--stand', 'untouched', '--text', 'x'], f.deps), 2);
+  assert.match(f.err(), /is a source area that asks no stand/u);
+  assert.equal(snapshot(f), before);
+});
+
+test('mc goal areas <programme>/<goal> shows a source area with neither no stand nor a proposed stand, shows a stand the goal already holds on one, and counts rule areas alone', async () => {
+  const bare = fixture({ git: areasGit({ [CLI_PATH]: PAGED_DECL }), files: V2_FILES() });
+  assert.equal(await run(['areas', 'mc/plain'], bare.deps), 0, bare.err());
+  const games = bare.out().split('\n\n').find((block) => block.startsWith('memoro-cli/games'));
+  assert.doesNotMatch(games, /^  no stand$|proposed/mu);
+  assert.match(bare.out(), /memoro-cli\/documentation — The documentation\n  no stand\n/u);
+  assert.match(bare.out(), /\n0 of 1 areas have a stand\n$/u);
+  const held = fixture({ git: areasGit({ [CLI_PATH]: PAGED_DECL }), files: V2_FILES(goalJsonV2({ obligations: [stand('memoro-cli/games', 'untouched', 'An older stand.'), stand('memoro-cli/documentation')] })) });
+  assert.equal(await run(['areas', 'mc/plain'], held.deps), 0, held.err());
+  assert.match(held.out().split('\n\n').find((block) => block.startsWith('memoro-cli/games')), /^memoro-cli\/games — The games\n  source area: it asks no stand of a goal\n  stand: untouched — An older stand\.\n/u);
+  assert.doesNotMatch(held.out(), /Obligations whose area no repository declares/u);
+  assert.match(held.out(), /\n1 of 1 areas have a stand\n$/u, 'the stand on the source area is not counted');
+});
+
+test('a goal without a stand on a declared source area is moved out of draft, and one whose source area\'s page is not on main is refused with exit 1 and nothing written', async () => {
+  const text = DRAFT_V2({ obligations: [{ area: 'memoro-cli/documentation', stand: 'touched', text: 'The page says it.', standard: 'memoro-cli/docs/technical/mc-goals.md#Rule areas' }] });
+  const declared = { [CLI_PATH]: PAGED_DECL };
+  const moved = gateFixture({ text, git: areasGit(declared) });
+  assert.equal(await run(['stage', 'mc/plain', 'build'], moved.deps), 0, moved.err());
+  for (const page of ['docs/areas/games.md', 'docs/areas/documentation.md']) {
+    const f = gateFixture({ text, git: areasGit(declared, { missing: [page] }) });
+    const before = filesOf(f);
+    assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1, page);
+    assert.match(f.err(), new RegExp(`${page.replace(/[./]/gu, '\\$&')}.*origin/main of memoro-cli`, 'u'));
+    assert.deepEqual(filesOf(f), before, 'nothing written');
+  }
+});
+
 // ---- The plan review's gate: a goal leaves draft only when it is complete and has been read (D3, D5, D6) ----
 
 const READ = (goalText, ...verdicts) => JSON.stringify({

@@ -9,16 +9,19 @@ not edit it.
 
 What the verb adds is everything around the script:
 
-- **the reading**, so the person deciding sees what would ship before they say
-  yes: the sha, what is live now, the gap between them, whether the nightly
+- **the reading**, so the person who typed it sees what ships: the sha, what is live now, the gap between them, whether the nightly
   ever measured that tree whole, and which worktree it would run in;
 - **a `main` to run it in**, found where `main` is already checked out or made
   and kept by mc, so nobody checks `main` out by hand to deploy;
 - **the gate**, so the commit that ships is one that was measured whole and
   exercised: a completed full run of exactly that commit, and the app's own
   suites run against a local server of it (below);
-- **one question**, always, with no flag that skips it — and it is Martin's act:
-  a headless session is refused before anything is read;
+- **no question, and no terminal needed** — typing `mc deploy` is the decision
+  (Martin, 2026-11-15: *"without me and without a question; whoever types
+  deploy wants it"*): once the reading is printed and the gate has passed the
+  deployer starts, from a terminal or from a session's shell. `--dry-run` is the
+  reading and ships nothing. An unattended session (`MC_HEADLESS=1`) is refused
+  before anything is read: nobody typed that deploy;
 - **its own process**, the deployer, so the deploy runs beside the merger and
   neither waits for the other, and a ^C at the terminal stops only the
   watching (ruling 30);
@@ -81,24 +84,28 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    reading a person weighs, and the gate (step 6) is what decides.
 6. **The gate**, on the pick, ([`src/mc/deploy-gate.js`](../../src/mc/deploy-gate.js)), after
    every refusal that costs nothing — a deploy running, a dirty or diverged
-   `main`, no terminal — so none of them is found out after a full run. See
+   `main` — so none of them is found out after a full run. See
    *The gate* below. It prints its two readings beside the nightly line, and
    refuses when either is red.
-7. **The question**, at a terminal: `deploy <short sha> to production? [y/N]`,
-   and with `--accept-red` `deploy <short sha> to production, accepting red
-   (<reason>)? [y/N]`. Anything but `y`/`yes` ends it.
+7. **Nothing is asked.** A passed gate goes straight to the deployer; the one
+   line that says so is printed under the register's lock once the deployer has
+   started (step 8): `mc: deploying <short sha> to production in its own process
+   (pid …)`, and with `--accept-red` `mc: deploying <short sha> to production,
+   accepting red (<reason>) in its own process (pid …)`. No such line is printed
+   before a refusal. A follow cut with ^C before the admission ships nothing: the
+   preparation goes on in its own process and the next `mc deploy` joins it.
 8. **The deployer.** Under the register's lock — milliseconds, and held by no
    merge round — the record is read once more for a deploy in progress, an
    abandoned `running` row is closed, the deployer is started detached
    (`deploy-run.js`, `ship` in `commands/deploy.js`, its output in
    `~/mc/runner/log/deploy.log`), and its row is written naming its pid. The
-   terminal that asked then follows that log (`followDeploy`) until the
+   terminal that typed it then follows that log (`followDeploy`) until the
    deployer is gone and answers with the row's outcome. ^C there stops the
    watching, not the deploy; `mc deploy --follow` watches the deploy going on
    again. No repository lease is taken: until ruling 30 the deploy waited up to
    eight minutes for a merge round to give it back, and gave up with exit 3.
-9. **Placing the worktree at the pick**, in the deployer, after the yes — at the
-   sha the gate measured and the question named, never at `origin/main` as it is
+9. **Placing the worktree at the pick**, in the deployer, after the admission — at the
+   sha the gate measured, never at `origin/main` as it is
    by then. When the worktree is behind: `git merge --ff-only <sha>`, on a tree
    already proved clean and not ahead — the one movement of somebody else's
    checkout this verb makes. When the pick is *behind* the worktree's HEAD (main's
@@ -107,14 +114,15 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    `origin/main` and the tracked tree is clean; in any other worktree, or when one
    of those fails, nothing moves and the row is `moved`. A failed fast-forward or
    reset is the row's `stopped_at: 'fast-forward'`. mc then reads `rev-parse HEAD` in that worktree: when it
-   is the sha the question showed, that is what the success line names, the
+   is the sha the gate measured, that is what the success line names, the
    script is handed and the row records. When it is not — main moved on by
-   somebody else between the question and the yes — the commit that stands there
+   somebody else between the gate's end and the placing — the commit that stands there
    has been neither measured nor exercised, so nothing runs: the row is completed
    `failed`, stopped at `moved`, naming the sha that stood, and the verb says to
    run it again. (Until 2026-11-14 it deployed whatever stood there and said so in
    one line, *"main moved to `<y>` since the question; deploying `<y>`"*; before
-   2026-10-03 the row recorded the question's sha whatever went out.)
+   2026-10-03 the row recorded the measured sha whatever went out. The question
+   itself was removed on 2026-11-15.)
 10. **The script.** `npm run deploy` in that worktree, the process's environment
    passed through with one addition, `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`,
    always. The script's own remote step (`ensureUpToDateWithOrigin`) would
@@ -219,9 +227,10 @@ slower, never less than the deploy asked for.
 
 ## What it refuses, and with what code
 
-Deploying to production is Martin's word every time (his letter: *"Deploy till
-produktion"* is one of the things to ask about first), so the verb refuses
-rather than assumes wherever there is nobody to ask.
+Deploying to production is Martin's act, and typing `mc deploy` is his word
+(2026-11-15), so the verb asks nothing: every refusal below is made before the
+deployer starts and ships nothing. An unattended session has nobody who typed
+the deploy, so it is refused.
 
 | situation | code | what happens |
 |---|---|---|
@@ -234,13 +243,11 @@ rather than assumes wherever there is nobody to ask.
 | `git worktree add` for mc's own `main` failed | 1 | says so; refused row. There is no checkout of `main` to run the script in |
 | **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
-| the worktree stands on another commit than the pick, after the yes, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
-| **a headless session** (`MC_HEADLESS=1`) | 1 | *"mc deploy is Martin's act"* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
+| the worktree stands on another commit than the pick, at the deployer's placing, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
+| **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a suite failed or could not run** | 1 | names the suite and its last lines; refused row |
-| **no TTY** | 2 | *"mc deploy asks before it deploys, and there is no terminal here to ask"* |
-| the question answered `no` | 1 | *"nothing was deployed"* |
 | another deploy is running | 1 | names its sha, start and pid; refused row. There is no queue |
 | **a language run is running** | 1 | names its manifest, start and pid; refused row *"a language run of `<manifest>` is running"*. A language run writes to the same production ([`mc-language.md`](mc-language.md)) |
 | the deployer could not be started | 1 | row completed `failed`, stopped at `start` |
@@ -252,13 +259,14 @@ its own worktree and deploys from that. A `main` merely *behind* `origin/main` i
 not one either — it is fast-forwarded in step 9, and one that stands past the
 pick is reset back there in mc's own worktree.
 
-The decisions among them — `no`, no terminal, a deploy or a language run already running, and the three
+The decisions among them — a deploy or a language run already running, and the three
 worktree refusals — are each written to the record as `outcome: refused` with
 the reason. They are deploys somebody meant to make, and the page and the brief can only see
 them if they exist.
 
-A deliberate `no` is exit **1** rather than 0 on purpose, so `mc deploy && …`
-does not carry on as though it had shipped.
+A refusal is exit **1** rather than 0 on purpose, so `mc deploy && …`
+does not carry on as though it had shipped. There is no exit for a missing
+terminal: the verb does not look for one.
 
 `--dry-run` writes no row at all. Nothing was attempted, and a row per person
 checking what would ship would drown the ones that matter.
@@ -300,7 +308,7 @@ passed over. What is left says:
 **The preparation, in a process of its own (2026-11-14).** The full run is
 tens of minutes, and a deploy started from the page over SSH ran it in the
 page's own process: the connection closed, the process died, and the round had
-a start and no end. Everything the verb does before its one question — the
+a start and no end. Everything the verb does before its deployer — the
 measuring above and the suites below — is therefore a *preparation*, run by a
 detached process ([`src/mc/deploy-prepare-run.js`](../../src/mc/deploy-prepare-run.js),
 [`src/mc/deploy-prepare.js`](../../src/mc/deploy-prepare.js), started with
@@ -319,8 +327,8 @@ two terminals cannot both start one (`prepareStage`):
 
 | the record says | `mc deploy` |
 |---|---|
-| running, same sha | follows it — *"already being prepared … following it, not starting a second"* — and reaches the question when it is green |
-| done, same sha, green | goes straight to the question; nothing is measured again |
+| running, same sha | follows it — *"already being prepared … following it, not starting a second"* — and goes on to the deployer when it is green |
+| done, same sha, green | goes straight to the deployer; nothing is measured again |
 | done, same sha, red | the refusal as if it had run here; `--accept-red` reads the same result. The main-red mends that hold the red are read as they stand now (`withMendsNow`): one landed or dropped since is not named |
 | another sha (main moved) | a new preparation, said in one line: *"the last preparation was of `<x>`, main is `<y>` now — starting a new one"* |
 | its process gone before it ended | *"interrupted at `<stage>`"*, and a new one |
@@ -420,18 +428,18 @@ names the suite and its last lines. A suite that exits with the declared skip
 code (78) is named as skipped with its reason and does not refuse.
 
 **The reading** shows both results beside the nightly line, and each suite on
-a line of its own; then the question.
+a line of its own; then, with no refusal, the admission and the deployer.
 
 **The red, accepted.** `--accept-red "<reason>"` is the only way past a red
 full run or a failed suite. The reason is required (a blank one is a usage
-error, exit 2); the flag does not skip the question, which names the reason;
+error, exit 2); the deployer's line names the reason and the row keeps it;
 and the reading lists every red and failed suite. A `red` or `stalled` run
 without the flag refuses before the suites run; with the flag, and in
 `--dry-run`, the suites run too so that the whole reading is in front of
 whoever decides. `unmeasured` and `moved` are not red: they are not accepted.
 
 **Headless.** `MC_HEADLESS=1` refuses a deploy before any fetch, full run or
-suite. A headless session is told the deploy is Martin's act. `--dry-run` and
+suite. An unattended session is told it does not deploy, because nobody typed that deploy, and that `--dry-run` is the reading. `--dry-run` and
 `--follow` stay allowed — they change nothing. The Claude hook rule
 `headless-deploy` ([`src/mc/hooks.js`](../../src/mc/hooks.js)) is kept as the
 first line; the verb's own refusal is the second, and the only one under Codex,
@@ -453,8 +461,8 @@ the fast-forward changes nothing the build sees.
 
 What keeps two deploys apart is the record: a `running` row whose pid is alive
 is a deploy in progress (`runningDeploy`,
-[`src/mc/deploys.js`](../../src/mc/deploys.js)). It is read before the question
-— nobody answers one that has no yes — and again under the register's lock,
+[`src/mc/deploys.js`](../../src/mc/deploys.js)). It is read before the preparation
+— nobody prepares for a deploy that cannot start — and again under the register's lock,
 where the new row is written. There is no queue (Martin, 2026-10-09: *"Vi skulle
 kunna låta deploy vara utan kö."*): a second `mc deploy` is refused and run again
 when the first is done.
@@ -665,7 +673,7 @@ The boundary is a rule, not a judgement call:
   the remote main, is skipped under `mc deploy` by
   `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`: the commit was chosen here. What mc adds
   is a `cwd` that is always a `main`, and one placement at the sha that was
-  measured after the yes, by the deployer: `git merge --ff-only <sha>` when
+  measured after the admission, by the deployer: `git merge --ff-only <sha>` when
   behind, and `git reset --keep <sha>` in mc's own worktree only, when the pick
   is an ancestor of HEAD, HEAD is an ancestor of `origin/main` and the tracked
   tree is clean. Anything else in that worktree is
@@ -701,7 +709,7 @@ one day call this verb; whether it should is a question for after this change.
 
 [`tests/mc/commands/deploy.test.js`](../../tests/mc/commands/deploy.test.js)
 drives the whole verb with every process boundary faked — git, the spawn, the
-prompt, the version fetch, the nightly, the deployer (`startDeployer` runs
+version fetch, the nightly, the deployer (`startDeployer` runs
 `ship` in the test's own process) — because they are all on `deps`. The record
 is the exception, and deliberately so: it is what this verb exists to leave
 behind, `env` already points it at a throwaway directory, and a faked writer
@@ -710,9 +718,9 @@ starts a real `npm run deploy` against a `package.json` whose script only prints
 and asserts both the echo and the capture.
 The gate has one test per case in the same file, its boundaries — the history,
 the full run, the mends, the servers and the suites — on `deps` too: a green run
-reaches the question; an older commit, a red run and a stalled run each refuse; no
+reaches the deployer, asked nothing; an older commit, a red run and a stalled run each refuse; no
 run starts one and follows it; `--dry-run` starts nothing; `--accept-red` reaches
-the question with the reason and the record; every refused case asserts that
+the deployer with the reason in its line and the record; every refused case asserts that
 `deploy.mjs` was not started. The suites have a modelled runner (all pass, one
 fails, one cannot start, one exits with the skip code) and assert the commit the
 server was started on. The pick has a case per decision (newest green after the live
@@ -741,7 +749,7 @@ space and a branch merely *starting* with `main`.
 **The reading half has been run for real**; the deploying half has not.
 `mc deploy --dry-run` was run on 2026-09-07 (both outputs above: once with the
 repository checkout on `main` and once with it on a feature branch), and on
-2026-09-04 (at `c061d74` and `e30fd83`). Everything from the question onwards —
+2026-09-04 (at `c061d74` and `e30fd83`). Everything from the gate's end onwards —
 the fast-forward, the deployer, the spawn, the completed row — has only ever run
 against a faked script; mc's own worktree at `~/.memoro/mc/deploy/memoro` has
 therefore never been made on this machine, because `main` has always been

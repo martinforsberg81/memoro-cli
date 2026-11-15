@@ -183,10 +183,10 @@ function sameCommit(a, b) {
  */
 /**
  * The deploy's preparation as the page shows it: the commit, the stage in
- * words, and whether it runs, is done (waiting for `mc deploy` to ask), failed
+ * words, and whether it runs, is done (waiting for `mc deploy` to ship it), failed
  * or was interrupted. Null when there is none, or when it is done and old news
  * is not worth a line — a finished one stays, because `mc deploy` goes straight
- * to its question.
+ * to the deployer.
  */
 /** The last non-empty line of a log, its `mc:` lead cut, and when the log was last written. */
 export function lastLogLine(path) {
@@ -1595,7 +1595,7 @@ export async function collectPage({
     attempt: deployAttempt,
     progress: readDeployProgress(deployAttempt, env),
     live: readLiveVersion(env, now),
-    // A preparation in flight (or finished, waiting for its question), and the
+    // A preparation in flight (or finished, waiting for `mc deploy`), and the
     // gate rounds whose process died without an end — settled as interrupted
     // here, so the log says so too.
     preparation: readPreparation(root),

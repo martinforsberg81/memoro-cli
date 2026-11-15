@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { AREAS_PATH, checkAreas, readAreas } from '../../src/mc/areas.js';
+import { AREAS_PATH, checkAreas, isSourceArea, readAreas } from '../../src/mc/areas.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const AREA = { id: 'data', name: 'Data', covers: 'Schemas.', standards: ['docs/technical/data.md'], paths: ['src/db/'], questions: [{ when: 'A table changes.', ask: 'Is there a migration?' }] };
@@ -15,6 +15,39 @@ const withArea = (fields) => ({ ...FILE, areas: [{ ...AREA, ...fields }] });
 test('checkAreas accepts a valid file, with an empty paths list, and returns its areas', () => {
   const r = check(FILE);
   assert.deepEqual([r.ok, r.declared, r.areas.map((a) => a.id)], [true, true, ['data', 'ops-2']]);
+});
+
+const SOURCE = { ...AREA, questions: [], page: 'docs/areas/data.md' };
+
+test('checkAreas accepts a rule area with a page and a source area with a page, with and without standards, and isSourceArea is true for the source areas alone', () => {
+  const kinds = [[AREA, false], [{ ...AREA, page: 'docs/areas/data.md' }, false], [SOURCE, true], [{ ...SOURCE, standards: [] }, true]];
+  for (const [area, source] of kinds) {
+    const r = check({ schema_version: 1, areas: [area] });
+    assert.equal(r.ok, true, r.reason);
+    assert.deepEqual(r.areas, [area], 'the areas are returned as the file gives them');
+    assert.equal(isSourceArea(r.areas[0]), source, JSON.stringify(area));
+  }
+});
+
+test('checkAreas refuses a source area without a page, a blank or non-text page, a rule area with empty standards and an area without the questions key, naming the field', () => {
+  const { questions, ...noQuestions } = AREA;
+  const cases = [
+    [withArea({ questions: [] }), /^x\.json at main: areas\[0\]\.questions .*source area needs a page/u],
+    [withArea({ standards: [], questions: [] }), /^x\.json at main: areas\[0\]\.questions .*source area needs a page/u],
+    [withArea({ page: ' ' }), /^x\.json at main: areas\[0\]\.page must be a non-blank/u],
+    [withArea({ page: 7 }), /^x\.json at main: areas\[0\]\.page must be a non-blank/u],
+    [withArea({ page: null }), /^x\.json at main: areas\[0\]\.page must be a non-blank/u],
+    [withArea({ ...SOURCE, standards: 'x' }), /^x\.json at main: areas\[0\]\.standards must be an array/u],
+    [withArea({ standards: [], page: 'docs/areas/data.md' }), /^x\.json at main: areas\[0\]\.standards must be a non-empty array/u],
+    [{ ...FILE, areas: [{ ...noQuestions, page: 'docs/areas/data.md' }] }, /^x\.json at main: areas\[0\]\.questions must be an array/u],
+    [withArea({ questions: 'x' }), /areas\[0\]\.questions must be an array/u],
+  ];
+  for (const [value, reason] of cases) {
+    const r = check(value);
+    assert.equal(r.ok, false, JSON.stringify(value));
+    assert.match(r.reason, reason, JSON.stringify(value));
+  }
+  assert.equal(isSourceArea(undefined), false);
 });
 
 test('checkAreas names the field and where the file was read for each kind of invalid file', () => {
@@ -37,7 +70,7 @@ test('checkAreas names the field and where the file was read for each kind of in
     [withArea({ standards: [''] }), /areas\[0\]\.standards must be a non-empty array/u],
     [withArea({ paths: [' '] }), /areas\[0\]\.paths must be an array of non-blank/u],
     [withArea({ paths: undefined }), /areas\[0\]\.paths must be an array of non-blank/u],
-    [withArea({ questions: [] }), /areas\[0\]\.questions must be a non-empty array/u],
+    [withArea({ questions: [] }), /areas\[0\]\.questions is empty, which makes a source area, and a source area needs a page/u],
     [withArea({ questions: [{ ask: 'a' }] }), /areas\[0\]\.questions\[0\]\.when must be a non-blank text/u],
     [withArea({ questions: [{ when: 'w', ask: '' }] }), /areas\[0\]\.questions\[0\]\.ask must be a non-blank text/u],
     [withArea({ questions: [{ when: 'w', ask: 'a', why: 'b' }] }), /areas\[0\]\.questions\[0\]\.why is an unknown key/u],
@@ -84,4 +117,6 @@ test('this repository\'s own .mc/areas.json validates, and every standard and pa
   assert.deepEqual(r.areas.map((area) => area.id), ['reserved-acts', 'session-roles', 'command-contract', 'tests-gate', 'operations', 'documentation']);
   const missing = r.areas.flatMap((area) => [...area.standards, ...area.paths].filter((path) => !existsSync(join(ROOT, path))).map((path) => `${area.id}: ${path}`));
   assert.deepEqual(missing, []);
+  const pages = r.areas.filter((area) => area.page && !existsSync(join(ROOT, area.page))).map((area) => `${area.id}: ${area.page}`);
+  assert.deepEqual(pages, [], 'a page this declaration names exists');
 });

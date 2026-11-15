@@ -2,9 +2,9 @@
 /**
  * The deployer process itself (`ship` in `commands/deploy.js`).
  *
- * Started detached by `mc deploy` after the yes, never by hand. Its one
+ * Started detached by `mc deploy` once the gate has passed, never by hand. Its one
  * argument is the job as JSON; its stdout and stderr are `deploy.log`, which
- * the terminal that asked reads as it grows. SIGINT and SIGTERM are passed on
+ * the terminal that typed it reads as it grows. SIGINT and SIGTERM are passed on
  * to the script by `spawnDeployDefault` — it restores its stamps and says
  * what production runs — and the row is completed after.
  */

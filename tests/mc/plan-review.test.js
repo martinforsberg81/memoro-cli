@@ -20,7 +20,7 @@ import { readRunRows } from '../../src/mc/landed.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import {
-  authorOf, chooseReader, goalHash, LAUNCH_FILE, LIMIT_MS, markerRecord, planReviewCall, readerPrompt, readingState, RECORDS_FILE,
+  authorOf, chooseReader, goalHash, LAUNCH_FILE, LIMIT_MS, markerRecord, partsLacks, planReviewCall, readerPrompt, readingState, RECORDS_FILE,
   REVIEW_TEXT_FILE, unsupportedClaims, verdictVerb,
 } from '../../src/mc/plan-review.js';
 import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
@@ -462,6 +462,38 @@ test('mc ask is refused from a plan-review session and writes nothing', async ()
   assert.equal(code, 2);
   assert.match(stderr.text(), /a plan-review session cannot ask or decide/u);
   assert.equal(stdout.text(), '');
+});
+
+const PAGED = { id: 'rule', name: 'Rule', covers: 'What rule covers.', standards: ['docs/rule.md'], paths: ['src/rule/'], questions: [{ when: 'rule changes', ask: 'Is rule still true?' }], page: 'docs/areas/rule.md' };
+const SOURCE = { id: 'games', name: 'The games', covers: 'What the games are for.', standards: [], paths: ['src/games/'], questions: [], page: 'docs/areas/games.md' };
+
+test('the prompt gives a rule area\'s page as a path under the checkout before its questions, and the source areas apart, with what they cover and their page and no question', () => {
+  const goal = parseGoal(goalJsonV2({ stage: 'draft' }));
+  const prompt = readerPrompt({ name: 'p/g', goal, declared: [{ repo: 'r', path: '/r', areas: [PAGED, SOURCE] }], dir: '/g', checkout: '/c' });
+  const areas = prompt.slice(prompt.indexOf('THE DECLARED RULE AREAS'));
+  assert.match(areas, /^THE DECLARED RULE AREAS OF ITS REPOSITORIES, with their questions\n  r\/rule — Rule\n    page \/c\/r\/docs\/areas\/rule\.md\n    when rule changes\n      ask Is rule still true\?\n\nTHE SOURCE AREAS/u);
+  assert.match(areas, /\n  r\/games — The games\n    covers What the games are for\.\n    page \/c\/r\/docs\/areas\/games\.md\n\nSTATEMENTS THAT SAY/u);
+  assert.equal(areas.indexOf('r/games'), areas.indexOf('THE SOURCE AREAS') + areas.slice(areas.indexOf('THE SOURCE AREAS')).indexOf('r/games'), 'r/games is listed under the source section alone');
+  assert.doesNotMatch(areas.slice(areas.indexOf('r/games')), /when |ask /u);
+  const plain = readerPrompt({ name: 'p/g', goal, declared: [{ repo: 'r', path: '/r', areas: [{ ...PAGED, page: undefined }] }], dir: '/g', checkout: '/c' });
+  assert.doesNotMatch(plain, /page |SOURCE AREAS/u, 'no page and no source area give no line and no section');
+});
+
+const GOAL_OF_RULE = { version: 2, repos: ['r'], outcome: ['x'], change: [{ id: 'C1', where: 'src/rule/b.js', what: 'y' }], success_criteria: [{ criterion: 'c', check: 'k', met: false }], obligations: [{ area: 'r/rule', stand: 'untouched', text: 't' }] };
+const lacksWith = (answers = {}, areas = [PAGED, SOURCE]) => partsLacks(GOAL_OF_RULE, 'p/g', { declarations: () => ({ declared: [{ repo: 'r', path: '/r', areas }] }), onMain: (repo, path) => answers[path] ?? { state: 'present' } });
+
+test('the parts check asks no stand of a source area and names a page that is not on origin/main, or cannot be asked, with the area, the page and the repository', () => {
+  assert.deepEqual(lacksWith(), [], 'no stand on the source area, both pages present');
+  const noPage = lacksWith({ 'docs/areas/games.md': { state: 'absent' } });
+  assert.equal(noPage.length, 1);
+  assert.match(noPage[0], /r\/games.*docs\/areas\/games\.md.*origin\/main of r/u);
+  const rule = lacksWith({ 'docs/areas/rule.md': { state: 'absent' } });
+  assert.equal(rule.length, 1);
+  assert.match(rule[0], /r\/rule.*docs\/areas\/rule\.md/u);
+  const unknown = lacksWith({ 'docs/areas/games.md': { state: 'unknown', why: 'git gave no answer' } });
+  assert.equal(unknown.length, 1);
+  assert.match(unknown[0], /docs\/areas\/games\.md.*git gave no answer/u);
+  assert.equal(lacksWith({}, [PAGED, { ...SOURCE, id: 'other' }]).some((line) => /no stand/u.test(line)), false);
 });
 
 test('the prompt names every claim that says every, only or no other and cites no premise, and each declared area with its questions', () => {

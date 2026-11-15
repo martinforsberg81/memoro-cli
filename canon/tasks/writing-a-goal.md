@@ -15,8 +15,8 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
 2. `mc goal set <p>/<g> aim|outcome|latitude|protection --text "…"` — why it is done, what is true when it is done, what the build chooses, what is tested.
 3. `mc goal item add <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope --text "…"` with the part's flags (`mc goal --help`). It
    prints the item's id (`P3`, `C1`); `item set <id>` changes one and `item remove <id> --reason "…"` takes it out. Cite the id, never a position.
-4. `mc goal areas <p>/<g>` shows the rule areas of the goal's repositories with their questions and the goal's stand on each. Take one on every
-   area: `mc goal obligation set <p>/<g> <repo>/<id> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`.
+4. `mc goal areas <p>/<g>` shows the areas of the goal's repositories with each page, the questions of a rule area and the goal's stand on it; a
+   source area asks no stand. Read the page of each area the goal touches. Take a stand on every rule area: `mc goal obligation set <p>/<g> <repo>/<id> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`.
 5. `mc goal criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]` per success criterion; the runner starts no goal without one.
    `mc goal document add <p>/<g> --label "…" --path "…"` for each document the build session must read.
 6. `mc goal show <p>/<g>` renders it as the build session will read it. Then `mc goal plan-review <p>/<g>`: a fresh session reads the goal in
@@ -33,7 +33,7 @@ may be renumbered; a `draft` goal holds later phases back too. The cut into goal
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others
   waits in `build` in a later phase, not in `draft`; policy and acceptance come first.
-- **Required:** `outcome`, at least one `change`, a stand on every declared area, and the criteria. Every other part when it has content.
+- **Required:** `outcome`, at least one `change`, a stand on every rule area, and the criteria. Every other part when it has content.
 - **Premises:** a premise is a claim the goal would be wrong without, with its source (file and line, or the command that produced it), its basis
   and the revision it held at. "Every", "only" and "no other" in a criterion, a preserve item or a change point to the premise that holds the
   inventory. Investigate yourself — read the code, measure, try it — and name only files you opened. Leave out the case for the goal, history, and what code shows.

@@ -4641,15 +4641,15 @@ test('a goal a person moved to merge and back after a rejection is not a repair:
 });
 
 /* The untouched areas the branch changed, listed in the review prompt by the function the move out of review checks with. */
-const OPS_AREAS = (paths) => JSON.stringify({ schema_version: 1, areas: [{ id: 'ops', name: 'Operations', covers: 'deploys', standards: ['docs/technical/ops.md'], paths, questions: [{ when: 'always', ask: 'Does anything deploy?' }] }] });
-function trippedReview({ repos = ['memoro'], obligations, paths = { memoro: ['src/ops'] }, diffs = {} }) {
+const OPS_AREAS = (paths, more = []) => JSON.stringify({ schema_version: 1, areas: [{ id: 'ops', name: 'Operations', covers: 'deploys', standards: ['docs/technical/ops.md'], paths, questions: [{ when: 'always', ask: 'Does anything deploy?' }] }, ...more] });
+function trippedReview({ repos = ['memoro'], obligations, paths = { memoro: ['src/ops'] }, diffs = {}, sources = [] }) {
   const f = reviewFixture();
   f.files[`${GOALS}/judged/GOAL.json`] = goalJsonV2({ stage: 'review', repos, obligations });
   for (const repo of repos.slice(1)) f.dirs.add(`${GOALS}/judged/${repo}`);
   const base = f.deps.git;
   f.deps.git = (cwd, args) => {
     const repo = repos.find((one) => cwd === `${GOALS}/judged/${one}`);
-    if (repo && args[0] === 'show' && args[1] === 'origin/main:.mc/areas.json') return { ok: true, stdout: OPS_AREAS(paths[repo] ?? []) };
+    if (repo && args[0] === 'show' && args[1] === 'origin/main:.mc/areas.json') return { ok: true, stdout: OPS_AREAS(paths[repo] ?? [], sources) };
     if (repo && args[0] === 'diff') return { ok: true, stdout: (diffs[repo] ?? []).join('\n') };
     if (repo && repo !== repos[0] && args[0] === 'rev-parse' && args[1] === 'HEAD') return { ok: true, stdout: 'second0head\n' };
     return base(cwd, args);
@@ -4668,6 +4668,16 @@ test('the review prompt lists an untouched area a diff file is under, with the f
   assert.match(hit, /write an `untouched <area>` line for each:\nmemoro\/ops: src\/ops\/deploy\.js\b(?!, src\/other)/u);
   const miss = await reviewPrompt(trippedReview({ obligations: [untouchedOps('memoro')], diffs: { memoro: ['src/other.js', 'README.md'] } }));
   assert.doesNotMatch(miss, /write an `untouched <area>` line/u);
+});
+
+test('a source area with a diff file under its paths is not in the review prompt\'s list, also when the goal holds an older untouched stand on it', async () => {
+  const games = { id: 'games', name: 'Games', covers: 'the games', standards: [], paths: ['src/games'], questions: [], page: 'docs/areas/games.md' };
+  const prompt = await reviewPrompt(trippedReview({
+    obligations: [untouchedOps('memoro'), { area: 'memoro/games', stand: 'untouched', text: 'An older stand.' }], sources: [games],
+    diffs: { memoro: ['src/ops/deploy.js', 'src/games/play.js'] },
+  }));
+  assert.match(prompt, /write an `untouched <area>` line for each:\nmemoro\/ops: src\/ops\/deploy\.js\n/u);
+  assert.doesNotMatch(prompt, /memoro\/games: /u);
 });
 
 test('a file under a touched area\'s paths is not listed; a second repository\'s file under an untouched area is', async () => {
