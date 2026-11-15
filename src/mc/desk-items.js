@@ -1,11 +1,11 @@
 /** Model-free durable store behind the Martin desk. */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { collectMartinQueue, currentQuestion } from './martin-collect.js';
 import { mainMendPath, readMainMends } from './main-repair.js';
-import { parseGoal, parseLog, GOAL_FILE, LOG_FILE } from './goals.js';
+import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE } from './goals.js';
 import { mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath } from './jev.js';
 import { realLock } from './runner-lock.js';
@@ -29,7 +29,7 @@ export function syncDeskItems({ env = process.env, lock = realLock, reportIssue 
   return items;
 }
 
-function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic }) {
+function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, exists = existsSync, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic }) {
   const dir = join(martinDir(env), 'items');
   mkdirSync(dir, { recursive: true });
   const marker = join(dir, '.store.json');
@@ -100,21 +100,27 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
     if (item.kind === 'goal') {
       const [programme, goal] = item.reference.split('/'); const gd = join(home, programme, 'goals', goal);
       const path = join(gd, GOAL_FILE);
-      const parsed = parseGoal(read(path) || '');
-      if (parsed.problems) {
-        issues.set(path, { path, error: parsed.problems.join('; ') });
-        continue;
-      }
-      if (parsed.stage === 'done' || parsed.stage === 'dropped' || parsed.status !== 'Martin') summary = `The goal now reads ${parsed.stage} · ${parsed.status}.`;
+      // A goal whose live file is absent may have left goals/ for the archive, which then decides. A live file that
+      // exists is judged as it is, whatever the archive holds.
+      const archived = exists(path) ? null : archivedFinish({ home, programme, goal, read });
+      if (archived) summary = archived;
       else {
-        const logPath = join(gd, LOG_FILE), text = read(logPath);
-        const log = parseLog(text || '');
-        if (text == null || (text.match(/^## /gmu) || []).length !== log.length) {
-          issues.set(logPath, { path: logPath, error: 'missing, unreadable or malformed LOG.md' });
+        const parsed = parseGoal(read(path) || '');
+        if (parsed.problems) {
+          issues.set(path, { path, error: parsed.problems.join('; ') });
           continue;
         }
-        const question = currentQuestion(log, parsed.status);
-        if (Date.parse(question?.at) > Date.parse(item.source_at)) summary = `A later question now waits at ${question.at}.`;
+        if (parsed.stage === 'done' || parsed.stage === 'dropped' || parsed.status !== 'Martin') summary = `The goal now reads ${parsed.stage} · ${parsed.status}.`;
+        else {
+          const logPath = join(gd, LOG_FILE), text = read(logPath);
+          const log = parseLog(text || '');
+          if (text == null || (text.match(/^## /gmu) || []).length !== log.length) {
+            issues.set(logPath, { path: logPath, error: 'missing, unreadable or malformed LOG.md' });
+            continue;
+          }
+          const question = currentQuestion(log, parsed.status);
+          if (Date.parse(question?.at) > Date.parse(item.source_at)) summary = `A later question now waits at ${question.at}.`;
+        }
       }
     } else {
       const [, repoAndId] = item.reference.split(':'); const slash = repoAndId.indexOf('/'); const repo = repoAndId.slice(0, slash); const id = repoAndId.slice(slash + 1);
@@ -179,6 +185,30 @@ export function listDeskItems({ env = process.env, state = null } = {}) {
   const dir = itemStore(env); const items = [];
   for (const name of listDirs(dir)) try { const item = JSON.parse(readText(join(dir, name, 'item.json'))); if (!state || item.state === state) items.push(item); } catch { /* unreadable entry omitted */ }
   return items.sort((a,b) => Number(!open(a))-Number(!open(b)) || String(a.source_at).localeCompare(String(b.source_at)) || a.id.localeCompare(b.id));
+}
+/**
+ * The summary that closes a goal item whose goal has left `goals/`: the last archived directory of exactly that goal's
+ * name, or of its name with the stamp `archiveGoal` adds, read as a finished goal. Null when there is none, or when its
+ * goal file does not parse or is neither done nor dropped: the item then stays open and the live path is reported.
+ */
+function archivedFinish({ home, programme, goal, read }) {
+  const archive = archiveDirIn(home, programme);
+  const name = listDirsOf(archive).filter(n => n === goal || (n.startsWith(`${goal}-`) && /^-\d{8}T\d{4}$/u.test(n.slice(goal.length)))).at(-1);
+  if (!name) return null;
+  const parsed = parseGoal(read(join(archive, name, GOAL_FILE)) || '');
+  if (parsed.problems) return null;
+  if (parsed.stage === 'done') return 'The goal is done and archived.';
+  if (parsed.stage !== 'dropped') return null;
+  const reason = dropReason(parseLog(read(join(archive, name, LOG_FILE)) || ''));
+  return `The goal is dropped and archived.${reason ? ` Reason: ${reason}` : ''}`;
+}
+/** The first line of the comment of the entry at which the goal became dropped: the first of the log's last run of `dropped` entries. */
+function dropReason(log) {
+  let i = log.length - 1;
+  while (i >= 0 && log[i].stage !== 'dropped') i -= 1;
+  if (i < 0) return null;
+  while (i > 0 && log[i - 1].stage === 'dropped') i -= 1;
+  return log[i].comment ? firstLine(log[i].comment) : null;
 }
 function ledgerRows(text) { return String(text || '').split(/\n/u).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); }
 function firstLine(value) { return String(value).split(/\r?\n/u)[0].trim(); }

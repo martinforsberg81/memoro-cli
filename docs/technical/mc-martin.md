@@ -128,7 +128,7 @@ whose source no longer waits and, apart from the runner lock it holds, writes on
 beneath the item store. It never
 changes a source record. Missing, malformed or unreadable goal/main-red files
 are reported and preserve the item: absence from the live queue alone is not
-resolution. A goal closes only on a readable finished/non-Martin state or an
+resolution. One absence is resolution: a goal whose directory has left `goals/` and stands in the programme's `goals/.archive/` with a readable `done` or `dropped` state closes its item by source, with that state and the drop's reason as the outcome. A goal otherwise closes only on a readable finished/non-Martin state or an
 established later question; a main-red closes only on readable state showing
 that its entry no longer waits. Chores syncs once each round.
 
@@ -142,7 +142,7 @@ its `created`, so an answered entry that reaches Martin again opens a new item
 with a different id and an unanswered one keeps its own.
 
 `mc martin items [--state <state>] [--json]` syncs then lists open items before
-closed ones, by oldest source time. Each label is recovered using the item's
+closed ones, by oldest source time. For the learning role it lists without syncing, takes no lock and writes nothing. Each label is recovered using the item's
 source time and source history, including closed questions and runner reasons;
 it is never borrowed from a later question on the same goal. Unavailable
 history is shown explicitly. `mc martin item <id>` shows the complete
@@ -172,7 +172,7 @@ required files are refused with exit 2 and no write. Every write of an item and
 of the store marker is a read-modify-write under the strict runner lock: a
 transition is judged on the state read under the lock and refused when that
 state no longer allows it. When the lock cannot be had nothing is written, and
-an item verb, `mc martin items` and the opening (`mc martin brief`, `mc martin`)
+an item verb, `mc martin items` for a desk writer and the opening (`mc martin brief`, `mc martin`)
 end with exit 1 and the lock's message. Sync runs in one hold. `mc martin` launches the desk on the opening above;
 `mc martin brief [--json]` prints it; the read-only `mc martin get` remains
 unchanged.

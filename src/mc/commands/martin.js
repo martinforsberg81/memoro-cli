@@ -92,14 +92,18 @@ function items(argv, deps) {
   const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const role = writerRole(env);
-  if (!DESK_WRITERS.includes(role)) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
+  // The learning pass reads the store: it lists without syncing, takes no lock and writes nothing.
+  const reader = role === 'learning';
+  if (!DESK_WRITERS.includes(role) && !reader) { stderr.write(`mc: role ${role} cannot sync desk items\n`); return 2; }
   const parsed = scanArgs(argv, ROUTES.items);
   const error = parsed.error || ROUTES.items.check(parsed);
   if (error) { stderr.write(`mc: ${error}\n`); return 2; }
   if (parsed.flags.state && !['new','prepared','for-martin','closed'].includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
   const home = deps.home || programsHome(env);
-  try { syncDeskItems({ env, home, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) }); }
-  catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  if (!reader) {
+    try { syncDeskItems({ env, home, reportIssue: issue => stderr.write(`mc: source issue ${issue.path}: ${issue.error}\n`), ...(deps.syncDeps || {}) }); }
+    catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  }
   const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
   const shown = result.map((x) => ({ ...x, question: deskItemQuestion(x, { env, home }) }));
   if (parsed.flags.json) stdout.write(`${JSON.stringify(shown, null, 2)}\n`);
