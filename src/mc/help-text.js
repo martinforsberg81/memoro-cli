@@ -12,7 +12,7 @@ THE PAGE
 
 PLAN AND FOLLOW
   mc server set <dest>|clear      Set server; entrances accept --local, --bg
-  mc manager                      Person: manage work across all programmes
+  mc manager --headless --prompt <text>  One manual manager task
   mc martin [brief [--json]]       Person: the desk; brief prints its opening
   mc martin get [--json]             Read the live decision queue
   mc plan [<programme>]            Person: open or resume a plan session
@@ -46,7 +46,7 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan, mc manager, mc helper, mc martin open interactive sessions;
+  Person: mc plan, mc helper, mc martin open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc goal new / set / criterion add writes goals; mc goal log

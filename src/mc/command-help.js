@@ -4,7 +4,7 @@
  * Every routed verb's usage lives here, and IN FULL prints the same text.
  */
 export const COMMAND_USAGE = Object.freeze({
-  server: "usage — mc server\n        mc server set <ssh-destination>\n        mc server clear\n\nCheck or configure this computer's interactive mc server through your OpenSSH.\nThe setting is under the work root's runner/. Use mc plan --local to stay here; manager, martin and helper accept the same override.\n",
+  server: "usage — mc server\n        mc server set <ssh-destination>\n        mc server clear\n\nCheck or configure this computer's interactive mc server through your OpenSSH.\nThe setting is under the work root's runner/. Use mc plan --local to stay here; martin and helper accept the same override. The interactive manager is gone, so mc manager and mc brief never go to a server.\n",
   session: "usage — mc session version|list|start|join <entrance> [--json]\nInternal server protocol; use mc server on the client.\n",
 
   run: [
@@ -588,7 +588,8 @@ export const COMMAND_USAGE = Object.freeze({
     "                                    repositories, projects with their states, goals, proposals\n",
     "                                    and open plan sessions, with programme priority\n",
     "        mc programs priority <programme>... --set <n>   set one or several priorities\n",
-    "        mc programs create <programme> --end \"…\" [--horizon <slug>]   a new programme with its record\n",
+    "        mc programs create <programme> --end \"…\" [--horizon <slug>] [--purpose \"…\"]   a new programme with its record\n",
+    "        mc programs create <programme> --end \"…\" --area <repo>/<id> [--purpose \"…\"] [--from-proposal <path>]   a repair programme for an area, no horizon\n",
     "        mc programs record <programme> --end \"…\" [--horizon <slug>]   the record of a directory without one\n",
     "        mc programs after <programme> <phase> <phase>…   the first phase waits for the phases after it, replacing what it waited for\n",
     "        mc programs after <programme> <phase> --none   the phase waits for no phase\n",
@@ -600,6 +601,12 @@ export const COMMAND_USAGE = Object.freeze({
     "and nothing else. Only a person, the interactive Martin role and the manager role may call them; both refuse\n",
     "an existing name or record, and a call refused writes nothing. The horizon slug is not checked against the\n",
     "desk's horizons. A programme with a record is in list before its first goal, its line ends with the record.\n",
+    "--area <repo>/<id> makes a repair programme without a horizon: its record has \"area\" and horizon null, and create\n",
+    "refuses (exit 1) while a valid open record already names that area; mc goal new refuses a second goal in it while one\n",
+    "is neither done nor dropped. --purpose writes What it is for on the page. --from-proposal <path> (a file in ~/mc/proposals/\n",
+    "or a programme's proposals/, with --area) moves that proposal into the new programme's proposals/ under a first line\n",
+    "naming where it came from; a refused create moves nothing. The manager role names --purpose and exactly one of --horizon\n",
+    "and --area; its --horizon must be open with no valid open record naming it (exit 1), and record is refused to it.\n",
     "\n",
     "A programme made by create states its phases: its record has \"phases\": {\"order\": \"stated\"}, a phase with no\n",
     "stated dependency is open, and after names what a phase waits for (replacing what it waited for; a phase is\n",
@@ -630,17 +637,13 @@ export const COMMAND_USAGE = Object.freeze({
     "Reads only: nothing is closed, merged or moved.\n",
   ].join(''),
   manager: [
-    "usage — mc manager [--local] [--new] [--codex|--claude] [--model <model>] [--bg]\n",
-    "        mc manager --resume [<id>] [--codex|--claude] [--model <model>]\n",
+    "usage — mc manager --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n",
     "\n",
-    "        mc manager --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n",
-    "Person: opens or resumes Manager, the session across all programmes: prioritise work,\n",
-    "resolve blockers and review proposals. --new starts a fresh conversation.\n",
-    "--bg leaves a Claude session running for the Claude app and returns at once; without it the terminal attaches.\n",
-    "--resume lists compatible conversations; --resume <id> selects an ID or unique prefix.\n",
-    "Uses ~/mc/manager/; older ~/mc/brief/ conversations remain resumable. mc brief is an alias.\n",
-    "Headless runs one explicit task in a fresh conversation, always; --new is implicit.\n",
-    "Default limit: 30 minutes. Prints outcome and result log path. No automatic trigger.\n",
+    "Runs one explicit manager task in a fresh conversation, always; --new is implicit. Default limit: 30 minutes.\n",
+    "Prints outcome and result log path. This manual run neither holds nor is held by the runner's own manager turns.\n",
+    "The interactive manager is gone: mc manager without --headless, in every form (--new, --resume, --bg, --local), and\n",
+    "mc brief exit 2; talk to the desk with mc martin. The runner starts the manager by itself in two turns: one while an\n",
+    "open horizon has no open programme, and a daily curation of the area texts (docs/technical/mc-manager.md).\n",
   ].join(''),
   martin: [
     "usage — mc martin [--local] [--new] [--resume [<id>]] [--codex|--claude] [--model <model>] [--bg]\n",
@@ -703,7 +706,7 @@ export const COMMAND_USAGE = Object.freeze({
     "opening, with the first lines of what is now true, and the open ones in order. horizons and horizon\n",
     "show only read.\n",
   ].join(''),
-  brief: "usage — mc brief [--new] [--codex|--claude] [--model <model>]\n        mc brief --resume [<id>] [--codex|--claude] [--model <model>]\n        mc brief --headless --prompt <text> [--minutes <min>] [--new] [--codex|--claude] [--model <model>]\n\nCompatibility alias for mc manager.\n",
+  brief: "usage — mc brief\n\nRefused, exit 2: the interactive manager it was an alias of is gone. Talk to the desk with mc martin; give the manager one task with mc manager --headless --prompt <text>.\n",
   plan: [
     "usage — mc plan [<programme>] [--local] [--new] [--codex|--claude] [--model <model>] [--bg]\n",
     "        mc plan <programme> --resume [<id>] [--codex|--claude] [--model <model>]\n",

@@ -42,7 +42,7 @@ import { publishMainMend } from '../main-repair.js';
 import { BRANCH_PREFIX as DEPLOY_MEND_PREFIX, publishDeployMend } from '../deploy-repair.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { programsHome, workRoot } from '../paths.js';
-import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
+import { describedBody, managerGuard, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
 import { scanArgs } from './flags.js';
 import { run as merge } from './merge.js';
 import { writerRole } from './goal.js';
@@ -90,6 +90,12 @@ export async function run(argv, deps = {}) {
   if (!checked.fetch.ok) stderr.write(`mc: warning: git fetch origin failed (${checked.fetch.text}) — checked against the origin/${base} already held\n`);
   if (checked.paths.length) { stderr.write(`mc: ${conflictReason(checked.paths, base)}\n`); return 1; }
   const env = deps.env || process.env;
+  // The manager's curation is texts under docs/technical/ and none of Martin's (D6): what its branch changes is read against
+  // origin/<base> here, before anything is pushed.
+  if (env.MC_ROLE === 'manager') {
+    const guarded = managerDiff(git, base);
+    if (guarded) { stderr.write(`mc: ${guarded}\n`); return 2; }
+  }
   const goal = goalOfPublish({ given: flags.goal, env, cwd, branch, home: deps.home || programsHome(env), read: deps.readGoal || readTextOrNull, list: deps.listGoals });
   if (goal?.error) { stderr.write(`mc: ${goal.error}\n`); return 2; }
 
@@ -178,6 +184,18 @@ export async function run(argv, deps = {}) {
   for (const line of publishLines({ pr, localHead, branch, pushed, created, repo, after, described, queued: queue, handOff: before ? `${beforeMergeLine(before)} — not queued` : null })) stdout.write(`${line}\n`);
   if (!queue) return 0;
   return (deps.merge || merge)([repo, String(pr.number)], { stdout, stderr });
+}
+
+/**
+ * The manager's guard over what the branch changes against origin/<base> since they diverged: the refusal text, or null.
+ * A diff that cannot be read refuses too — the guard never lets through what it did not see.
+ */
+function managerDiff(git, base) {
+  const point = git(['merge-base', `origin/${base}`, 'HEAD']);
+  const names = point ? git(['diff', '--name-only', '--no-renames', point, 'HEAD']) : null;
+  if (!point || names === null) return `the manager's publish cannot read what the branch changes against origin/${base}`;
+  const files = names.split('\n').filter(Boolean).map((path) => ({ path, before: git(['show', `${point}:${path}`]), after: git(['show', `HEAD:${path}`]) }));
+  return managerGuard(files);
 }
 
 /**

@@ -15,7 +15,7 @@ const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc 
   started: '2026-11-14T10:00:00Z', socket: '/server/socket', access: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request'], ...fields }, 'codex', 'codex 0.168.0');
 const sink = () => { let value = ''; return { write: s => { value += s; }, get value() { return value; } }; };
 
-for (const entrance of ['plan', 'manager', 'brief', 'martin', 'helper']) {
+for (const entrance of ['plan', 'martin', 'helper']) {
   const cases = [
     ['interactive configured', {}, [], true, 'tc', true],
     ['--local', {}, ['--local'], true, 'tc', false],
@@ -33,6 +33,22 @@ for (const entrance of ['plan', 'manager', 'brief', 'martin', 'helper']) {
       } }) });
     assert.deepEqual(calls, remote ? ['tc'] : []);
     assert.equal(result, remote ? 1 : 17);
+  });
+}
+// The interactive manager is gone: `mc manager` without --headless and `mc brief` are refused before any server routing,
+// so a configured server is never asked, and neither verb is an entrance.
+for (const [verb, args, env] of [['manager', [], {}], ['manager', ['--new'], {}], ['manager', ['--local'], {}], ['manager', [], { MC_HEADLESS: '1' }], ['brief', [], {}], ['brief', ['--headless', '--prompt', 'x'], {}]]) {
+  test(`${verb} ${args.join(' ')}${env.MC_HEADLESS ? ' (MC_HEADLESS)' : ''} is refused before routing, exit 2, the server never asked`, async () => {
+    const errors = sink(); let ran = 0; let routed = 0;
+    const result = await runModule(VERB_MODULES[verb], args, { stderr: errors, load: async () => ({ run: () => { ran += 1; return 17; } }),
+      routeEntrance: () => { routed += 1; return 17; } });
+    assert.equal(result, 2);
+    assert.equal(ran, 0);
+    assert.equal(routed, 0);
+    assert.match(errors.value, /^mc: the interactive manager is gone/u);
+    assert.match(errors.value, /mc martin/u);
+    assert.match(errors.value, /mc manager --headless --prompt/u);
+    assert.equal(errors.value.trim().split('\n').length, 1);
   });
 }
 for (const [verb, args] of [['run', []], ['goal', []], ['gate', []], ['server', []], ['manager', ['--headless']],

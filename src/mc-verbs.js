@@ -118,7 +118,7 @@ export function quietOnClosedReader(stream = process.stdout) {
 }
 
 /** Import the module and run it, or print its usage on stdout and exit 0. */
-export async function runModule(path, argv, { stdout = process.stdout, load = path => import(path), routeEntrance } = {}) {
+export async function runModule(path, argv, { stdout = process.stdout, stderr = process.stderr, load = path => import(path), routeEntrance } = {}) {
   // The guard is on process.stdout even when a caller passes its own stdout:
   // the verbs write to process.stdout themselves.
   quietOnClosedReader(process.stdout);
@@ -128,7 +128,14 @@ export async function runModule(path, argv, { stdout = process.stdout, load = pa
     stdout.write(text.endsWith('\n') ? text : `${text}\n`);
     return 0;
   }
-  if (['plan', 'manager', 'brief', 'martin', 'helper'].some(verb => path.endsWith(`/commands/${verb}.js`))) {
+  // The interactive manager is gone (D10): `mc brief` and every form of `mc manager` without --headless are refused here,
+  // before server routing, so no configured or older server opens one.
+  if (path.endsWith('/commands/brief.js') || (path.endsWith('/commands/manager.js') && !argv.includes('--headless'))) {
+    const { MANAGER_GONE } = await import('./mc/commands/manager.js');
+    stderr.write(`${MANAGER_GONE}\n`);
+    return 2;
+  }
+  if (['plan', 'martin', 'helper'].some(verb => path.endsWith(`/commands/${verb}.js`))) {
     const route = routeEntrance || (await import('./mc/server-client.js')).routeServerEntrance;
     const remote = await route(path.split('/').at(-1).slice(0, -3), argv);
     if (remote !== null) return remote;
