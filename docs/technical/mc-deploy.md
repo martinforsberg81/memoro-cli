@@ -162,6 +162,18 @@ mc: the nightly measured eb592c4, 131 commits ago; this tree was not measured wh
 mc: --dry-run — nothing was deployed
 ```
 
+The same reading when main's tip has no green full run (the shas are from the
+test's fixture, not a day's run) — the commit that ships is behind the tip, and
+the reading says how far and why:
+
+```
+mc: would deploy memoro 5b2d0000a1b2c3d4e5f60718293a4b5c6d7e8f90 — the change that would ship
+mc: live now 9f8e7d6 (build 812) — api/version, 2026-09-01 10:00
+mc: 2 commits would ship
+mc: 1 commit behind main's tip 1a2b3c4 — its full run is RED (2): tests/lib/money.test.js, command:lint
+mc: the nightly has measured nothing here — this tree was not measured whole
+```
+
 The same reading with the repository checkout on a feature branch and `main`
 elsewhere (`MC_REPOS_HOME=~/mc/msr-core`, whose `memoro` stands on
 `programme-map-surface-persistence`) names the same worktree, and `--json`
