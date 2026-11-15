@@ -105,6 +105,13 @@ Unreleased section; `node scripts/changelog-fold.js` folds them at release.
 Another shared document (`docs/mc-command-matrix.md`) changes in a final
 commit that touches nothing else.
 
+The exception: a pull request whose every file is under `docs/` adds no
+fragment. `changelog.d` records changes to mc, and a fact written into a page
+under `docs/` (the manager's curation of the area pages, for one) is not one;
+the merger's docs form takes only such a pull request
+(`src/mc/commands/merge.js`, [mc-merge.md](mc-merge.md)). A pull request that
+changes anything outside `docs/` still adds its fragment.
+
 ## The door to main
 
 Ordinary `mc merge <repo> <pr>` jobs run `runMergeRound` in

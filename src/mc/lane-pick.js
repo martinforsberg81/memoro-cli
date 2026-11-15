@@ -8,7 +8,8 @@
  * - `repair` for a repair build (a goal a review rejected; `finish` in rows from before);
  * - `review` for a goal in review;
  * - `build` for a goal in build;
- * - `plan` for one next draft in a programme with no delivery left.
+ * - `plan` for one next draft in a programme with no delivery left;
+ * - `manager` for the unattended manager's horizon or curation turn, last of all.
  *
  * Goals are gated before picking: `goalWork` uses `goalSession`, the goal's
  * first repository, and `phaseOpen` (goals in the lowest unfinished valid
@@ -18,7 +19,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
+ * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then planning, then the manager's turns. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -36,6 +37,7 @@ function rankOf(item) {
   if (item.kind === 'repair' || item.kind === 'finish') return 2;
   if (item.kind === 'review') return 3;
   if (item.kind === 'plan') return 6;
+  if (item.kind === 'manager') return 7;
   return item.variant === 'goal' ? 5 : 4;
 }
 

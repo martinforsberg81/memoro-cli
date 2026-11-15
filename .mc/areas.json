@@ -98,6 +98,15 @@
           "ask": "Which pages and sections must say what landed, and is a changelog.d entry due?"
         }
       ]
+    },
+    {
+      "id": "system",
+      "name": "The system (mc)",
+      "covers": "mc itself as a source area: what is striven for, the decisions that hold for the system and where its assets are. It asks no stand of a goal.",
+      "standards": [],
+      "paths": ["canon/", ".mc/areas.json"],
+      "questions": [],
+      "page": "docs/technical/areas/system.md"
     }
   ]
 }

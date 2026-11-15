@@ -1,118 +1,62 @@
 /**
- * `mc manager` — the session: the manager role ships with mc, the verb opens the
- * foreground conversation in the ~/mc/manager desk with the overlay and no opening
- * words — Martin types the first message; nothing is gathered for it.
+ * `mc manager` — only the manual headless task is left: the interactive manager is
+ * gone, so every other form is refused with exit 2 and one `mc:` line, and `mc brief`
+ * is refused whatever it is given. The manual headless run is unchanged (V1).
  */
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { managerLaunch, run } from '../../../src/mc/commands/manager.js';
-import { interactiveToolRefusal } from '../../../src/mc/interactive-tool.js';
-import { readCanonRole } from '../../../src/mc/roles.js';
+import { MANAGER_GONE, run } from '../../../src/mc/commands/manager.js';
+import { run as brief } from '../../../src/mc/commands/brief.js';
+import { runModule, VERB_MODULES } from '../../../src/mc-verbs.js';
+import { commandUsage } from '../../../src/mc/command-help.js';
 
 function io() {
   const out = { stdout: '', stderr: '' };
   return { out, stdout: { write: (s) => { out.stdout += s; } }, stderr: { write: (s) => { out.stderr += s; } } };
 }
 
-describe('the manager launch', () => {
-  it('opens with the role and no words of its own', () => {
-    const launch = managerLaunch({ role: readCanonRole('manager') });
-    assert.equal(launch.prompt, null);
-    assert.equal(launch.model, 'opus');
-  });
-});
-
-describe('an interactive entrance on a tool that has no interactive form', () => {
-  it('refuses --agy with exit 2 naming --claude and --codex, before the desk directory is made or a session is opened', async () => {
-    const { out, stdout, stderr } = io();
-    const root = process.env.MC_WORK_ROOT;
-    const before = existsSync(root) ? readdirSync(root) : null;
-    let opened = 0;
-    const code = await run(['--agy'], { stdout, stderr, open: async () => { opened += 1; return { ok: true, code: 0 }; }, mkdir: () => assert.fail('no directory is made') });
-    assert.equal(code, 2);
-    assert.equal(out.stderr, 'mc: agy runs unattended sessions only; an interactive session takes --claude or --codex\n');
-    assert.equal(out.stdout, '');
-    assert.equal(opened, 0);
-    assert.equal(existsSync(join(root, 'manager')), false);
-    assert.deepEqual(existsSync(root) ? readdirSync(root) : null, before, 'the state directory is as it was');
-  });
-
-  it('is one registry-read check: a tool with a persistent driver and a name the registry does not know pass, agy does not', () => {
-    assert.equal(interactiveToolRefusal('claude'), null);
-    assert.equal(interactiveToolRefusal('codex'), null);
-    assert.equal(interactiveToolRefusal('antigravity-cli'), 'agy runs unattended sessions only; an interactive session takes --claude or --codex');
-    assert.equal(interactiveToolRefusal('no-such-tool'), null, 'an unknown name is another check\'s to refuse');
-  });
-});
-
-describe('mc manager', () => {
-  it('opens the conversation in the ~/mc/manager desk, foreground, with the overlay and no gathered document', async () => {
-    const { stdout, stderr } = io();
-    let seen = null;
-    const code = await run(['--model', 'fable'], {
-      stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; },
-    });
-    assert.equal(code, 0);
-    // Its own room, not the work root every other session is launched below.
-    assert.equal(seen.areaRoot, join(process.env.MC_WORK_ROOT, 'manager'));
-    assert.equal(seen.worktree.path, join(process.env.MC_WORK_ROOT, 'manager'));
-    assert.deepEqual(seen.conversationRoots, [join(process.env.MC_WORK_ROOT, 'manager'), join(process.env.MC_WORK_ROOT, 'brief')]);
-    assert.equal(seen.verb, 'manager');
-    assert.equal(seen.roleName, 'manager');
-    // The manager session there is resumed; `--new` is the only fresh start.
-    assert.equal(seen.pick, null);
-    assert.equal(seen.tool, 'claude');
-    assert.equal(seen.model, 'fable');
-    assert.equal(seen.defaultModel, 'opus');
-    assert.match(seen.overlay, /^You are the manager session/u);
-    assert.equal(seen.prompt, null);
-  });
-
-  it('resumes with no prompt of its own — it is where it was', async () => {
-    const { stdout, stderr } = io();
-    let seen = null;
-    await run([], { stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; } });
-    assert.equal(seen.resumePrompt, undefined);
-  });
-
-  it('prints nothing of its own before the session opens', async () => {
-    const { out, stdout, stderr } = io();
-    await run([], { stdout, stderr, open: async () => ({ ok: true, code: 0 }) });
-    assert.equal(out.stdout, '');
-    assert.equal(out.stderr, '');
-  });
-
-  it('--new starts a fresh conversation', async () => {
-    const { stdout, stderr } = io();
-    let seen = null;
-    await run(['--new'], { stdout, stderr, open: async (o) => { seen = o; return { ok: true, code: 0 }; } });
-    assert.equal(seen.pick, 'new');
-  });
-
-  it('--collect and --offline are unknown flags', async () => {
-    for (const flag of ['--collect', '--offline']) {
+describe('the interactive manager is gone', () => {
+  it('refuses every form of mc manager without --headless: exit 2, one mc: line naming mc martin and the headless form, nothing opened', async () => {
+    for (const argv of [[], ['--new'], ['--model', 'fable'], ['--resume', 'x'], ['--codex'], ['--collect'], ['--offline'], ['now'], ['--prompt', 'task'], ['--minutes', '2']]) {
       const { out, stdout, stderr } = io();
-      let opened = 0;
-      assert.equal(await run([flag], { stdout, stderr, open: async () => { opened += 1; return { ok: true }; } }), 2);
-      assert.equal(opened, 0);
-      assert.match(out.stderr, new RegExp(`unknown flag ${flag}|${flag}`, 'u'));
+      assert.equal(await run(argv, { stdout, stderr, open: () => assert.fail('interactive launch'), turn: () => assert.fail('model started') }), 2, argv.join(' '));
+      assert.equal(out.stdout, '');
+      assert.equal(out.stderr, `${MANAGER_GONE}\n`);
+      assert.equal(out.stderr.trim().split('\n').length, 1);
+      assert.match(out.stderr, /^mc: the interactive manager is gone/u);
+      assert.match(out.stderr, /mc martin/u);
+      assert.match(out.stderr, /mc manager --headless --prompt/u);
     }
   });
 
-  it('refuses a stray word', async () => {
-    const { out, stdout, stderr } = io();
-    assert.equal(await run(['now'], { stdout, stderr }), 2);
-    assert.match(out.stderr, /unknown argument now/u);
+  it('refuses mc brief whatever it is given, with the same line', async () => {
+    for (const argv of [[], ['--new'], ['--headless', '--prompt', 'task'], ['--json']]) {
+      const { out, stdout, stderr } = io();
+      assert.equal(await brief(argv, { stdout, stderr, open: () => assert.fail('interactive launch'), turn: () => assert.fail('model started') }), 2, argv.join(' '));
+      assert.equal(out.stderr, `${MANAGER_GONE}\n`);
+      assert.equal(out.stdout, '');
+    }
+  });
+
+  it('is refused in runModule before the module runs, and help still prints the usage', async () => {
+    for (const verb of ['manager', 'brief']) {
+      const { out, stderr } = io();
+      let ran = 0;
+      assert.equal(await runModule(VERB_MODULES[verb], [], { stderr, load: async () => ({ run: () => { ran += 1; return 0; }, usage: () => 'usage' }) }), 2);
+      assert.equal(ran, 0);
+      assert.equal(out.stderr, `${MANAGER_GONE}\n`);
+      const help = io();
+      assert.equal(await runModule(VERB_MODULES[verb], ['--help'], { stdout: help.stdout, stderr: help.stderr }), 0);
+      assert.match(help.out.stdout, new RegExp(`mc ${verb}`, 'u'));
+      assert.equal(help.out.stdout.includes(commandUsage(verb).split('\n')[0]), true);
+    }
   });
 });
 
 describe('manual headless manager', () => {
-  it('dispatches an explicit task without opening an interactive conversation, including through brief', async () => {
-    const { run: brief } = await import('../../../src/mc/commands/brief.js');
-    for (const command of [run, brief]) {
+  it('dispatches an explicit task without opening an interactive conversation', async () => {
+    for (const command of [run]) {
       const { out, stdout, stderr } = io();
       let seen;
       assert.equal(await command(['--headless', '--new', '--prompt', 'Resolve the blocked merge', '--codex', '--model', 'gpt-6.1-sol', '--minutes', '12'], {

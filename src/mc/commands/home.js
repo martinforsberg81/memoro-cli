@@ -267,7 +267,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  all / collapse   ·   d  desk   ·   m  manager',
+  '  <n>  show that goal   ·   a  all / collapse   ·   d  desk',
   `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
@@ -388,9 +388,12 @@ export async function menu(first, {
     }
     // The desk: `mc martin`, whose own opening is what the DESK panel above summarises.
     if (answer === 'd' || answer === 'desk') return (deskOrder || deskVerb)([], { stdout, stderr, env });
+    // The interactive manager is gone (D10): its old letters say what remains, and the page stays.
     if (['m', 'manager', 'b', 'brief'].includes(answer)) {
-      const manager = await import('./manager.js');
-      return manager.run([], { stdout, stderr });
+      const { MANAGER_GONE } = await import('./manager.js');
+      stderr.write(`\n${MANAGER_GONE}\n`);
+      data = await redraw();
+      continue;
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);

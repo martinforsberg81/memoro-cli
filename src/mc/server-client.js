@@ -4,7 +4,7 @@ import { readServer } from './server-settings.js';
 import { declared } from '../adapters/index.js';
 import { interactiveToolRefusal } from './interactive-tool.js';
 
-const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
+const ENTRANCES = new Set(['plan', 'martin', 'helper']);
 
 export async function routeServerEntrance(entrance, args, {
   env = process.env, isInteractive = interactive, read = readServer, link,

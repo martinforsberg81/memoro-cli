@@ -202,7 +202,7 @@ order without a model call:
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build, and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -492,7 +492,7 @@ The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
 wrapper process. The coding tool receives an expiring, request-limited loopback
 grant, and requests only the chosen model through the provider-specific route.
-An interactive session (`mc plan`, `mc manager`, `mc helper`) is the exception: its grant names
+An interactive session (`mc plan`, `mc martin`, `mc helper`) is the exception: its grant names
 no model, because `/model` inside the session changes it, and a grant on the
 launch model refused every request after the switch.
 Linux SSH Claude background sessions use a detached gateway holder rather than
@@ -570,7 +570,7 @@ own catalog list, whatever the goal's class: `review`, `finish` (a repair build)
 (the runner's next-draft planning), `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
 candidates: with none of its own usable and its API off, the session waits
-(Martin, 2026-11-09). Interactive `mc plan` and `mc manager` keep their own
+(Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
 selection. The route
 is decided locally, before a tool is launched, from the catalog
 (`~/mc/runner/models.json`) and the capacity snapshot
@@ -912,6 +912,78 @@ by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
 file that cannot be read starts no turn and counts nothing; the runner says it
 once in `runner.log`, the desk sync reports it and the item stays open.
 
+
+## The manager's turns
+
+The runner starts the headless manager ([mc-manager.md](mc-manager.md)) for two
+turns, with nobody present. Both are one session of the `manager` role, class
+large, named `manager:<slug>` (a horizon turn) or `manager:curation` in the
+claim, the current record and `runs.tsv`; routing, admission, provider refusals,
+offline holds, STOP and UPDATE are those of every session. They share the one
+claim `manager`, so only one runs at a time, and they come last in the pick,
+after the programme planning turn (`rank 7` in `lane-pick.js`). The session has
+`MC_HEADLESS=1` and `MC_ROLE=manager`; a horizon turn also has `MC_HORIZON=<slug>`,
+which a curation turn leaves unset. Its note in `runs.tsv` ends `,programme`,
+`,reached` or `,text` for a horizon turn that ended in that way, and `,curated`
+for a curation turn. `manager-pulse.js` holds the model-free parts.
+
+**The horizon turn is due** when an open horizon has no valid open programme
+record that names it. The horizons are taken in the desk's order; the first one
+that is due and not held is the turn's. A horizon is held by any of: an open
+text item `horizon:<slug>`; an open desk item `manager:<slug>`; a state file
+`runner/manager-turn/horizon/<slug>.json` that cannot be read; and, for every
+horizon, a programme record that is invalid (said once in `runner.log`). The
+record is the trigger and a horizon is never made by the runner. The turn goes
+before curation and is checked again after admission: when the horizon has
+changed (reached, dropped, named by a record, held), the turn is deferred
+(`skipped:horizon-changed`) and counts nothing.
+
+**Read checkouts.** Before the launch the runner fetches every repository that
+declares areas (`.mc/areas.json` at origin/main), then makes
+`runner/work/manager-horizon-<slug>/<repo>` for each, detached at origin/main,
+with the rules of the programme planning turn's read checkouts: a clean leftover
+that is reachable from origin/main is replaced, a dirty or unreachable one is
+kept and the turn fails with `read checkout retained: <path>`, and another add
+failure is `setup: <git's last line>`. A fetch failure ends the pick and counts
+nothing. The checkouts are removed afterwards; the session changes nothing in
+them.
+
+**A horizon turn ends** in one of three ways, judged without a model after the
+session: a valid open record naming the horizon (`mc programs create`), the
+horizon no longer open (`mc martin horizon reached`) or an open text item
+`horizon:<slug>` (`mc martin propose`). Anything else is a failure with its
+reason and log in the state file. Provider endings (quota, offline, refused
+login) and the admission and fetch skips count nothing. The first failure
+retries on the next pick. The second since the last item opens a desk item of
+kind `manager`, reference `manager:<slug>`: the first such item is `prepared`,
+with a model-free `prepared.md` of the failures and their logs, so a decision
+session repairs it; a later one is `for-martin`, sort `mechanical`,
+`reversible: false`, `due_at: null`, with a `brief.md` in Swedish. No turn starts
+for that horizon while an item is open, and a failure is counted again only after
+it closed. The item closes by source ([mc-martin.md](mc-martin.md#durable-desk-items)).
+
+**The curation turn is due** at most once in 24 hours from the start of the last
+one, and then only when the origin/main of a repository that declares areas has
+moved past the commit the last successful curation read; the first turn is due
+at once. Inside the 24 hours a tick reads no git. `runner/manager-turn/curation.json`
+holds `{ started, bases }`: `started` is written when a turn starts (so a failed
+turn waits the 24 hours too) and restored when a provider ending stopped it, and
+`bases` is each repository's origin/main commit at the setup of the last turn
+that succeeded. A state file that cannot be read starts no turn; it is said once
+and the desk sync reports it.
+
+**Worktrees.** The runner fetches, then makes for each repository that declares
+areas a branch `manager/curation-<stamp>` from origin/main in
+`runner/work/manager-curation/<stamp>/<repo>`. The prompt names them and lists the
+proposals. The session publishes what it changed with plain `mc publish`, which
+opens the pull request and queues it for the merger, where the docs form lands a
+pull request whose every file is under `docs/` (never `--no-merge`: nothing
+would queue a `manager/curation-*` branch);
+its refusals are the manager's guard ([mc-manager.md](mc-manager.md#what-the-manager-may-write)).
+After the session a worktree that holds nothing, or whose branch is published
+and clean, is removed with its branch; any other is kept and named in
+`runner.log`. A turn that ends with nothing to change succeeds. A failed
+curation turn is said in `runner.log` and opens no desk item.
 
 ## Goal-less main-red mend
 

@@ -7,4 +7,4 @@ section: Added
   then claude, then codex, and review takes its first candidate whenever it
   can run. Every unattended caller now records a plan refusal it reads, and the
   helper turn is not ok when its session failed. Interactive `mc plan`,
-  `manager` and the rest refuse agy with exit 2.
+  `mc martin` and the rest refuse agy with exit 2.
