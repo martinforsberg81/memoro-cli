@@ -318,13 +318,30 @@ export function goalPrompt({ name, dir, worktree, branch, brief = null }) {
   return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`, brief);
 }
 
+/** The fixed-form lines relevant to a repair and its next review; old free-form reviews have no heads. */
+function priorVerdict(verdict) {
+  const lines = String(verdict ?? '').split('\n');
+  return {
+    heads: lines.filter((line) => /^head: \S+ \S+\s*$/u.test(line)),
+    failed: lines.filter((line) => /^[^:]+: NOT OK(?:\s|$)/u.test(line)),
+  };
+}
+
+export function goalRepairPrompt({ verdict, ...args }) {
+  const { failed } = priorVerdict(verdict);
+  const items = failed.length ? `The NOT OK items are:\n${failed.join('\n')}` : 'REVIEW.md is in the old form or holds no item ids.';
+  return `${goalPrompt(args)}\n\nThis is a repair build. Read ${args.dir}/REVIEW.md. ${items}`;
+}
+
 /**
  * What a goal's review session is told: the goal, its worktree, and the pull
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null }) {
-  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`, brief);
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, verdict = null }) {
+  const { heads, failed } = priorVerdict(verdict);
+  const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}`, brief);
 }
 
 /** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */

@@ -7,13 +7,27 @@ import {
   intakeNote, nightlyDue, intakeQueue, landingNote,
   quotaResetAt, quotaSeen, apiInterruption, creditsResetAt,
   readSessionOutput, streamRateLimit, streamSummary, sessionResult, sessionSettings,
-  tsvHeader, tsvRow, routedSettings,
+  tsvHeader, tsvRow, routedSettings, goalRepairPrompt, goalReviewPrompt,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
+
+test('repair and narrow review prompts carry the rejected items and judged heads', () => {
+  const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
+  const verdict = 'head: repo abc123\ncriterion 1: OK\ncriterion 2: NOT OK — broken in file\n';
+  const repair = goalRepairPrompt({ ...args, verdict });
+  assert.match(repair, /REVIEW\.md/u);
+  assert.match(repair, /criterion 2/u);
+  const review = goalReviewPrompt({ ...args, pr: 1, head: 'def456', verdict });
+  assert.match(review, /repo abc123/u);
+  assert.match(review, /criterion 2/u);
+  assert.doesNotMatch(goalReviewPrompt({ ...args, pr: 1, head: 'abc123' }), /previous review/u);
+  assert.doesNotMatch(goalReviewPrompt({ ...args, pr: 1, head: 'abc123', verdict: 'old free form' }), /previous review/u);
+  assert.match(goalRepairPrompt({ ...args, verdict: 'old free form' }), /no item ids/u);
+});
 
 test('SESSION_DEFAULTS: the review session runs on opus at high effort, with no advisor', () => {
   assert.deepEqual(SESSION_DEFAULTS.review, { model: 'opus', effort: 'high', advisor: null });
