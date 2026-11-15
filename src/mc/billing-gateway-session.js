@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { isatty } from 'node:tty';
 import { fileURLToPath } from 'node:url';
 
+import { adapterOfProvider, apiProviders } from '../adapters/index.js';
 import { readBillingApiKey } from '../vault/engine/step-credit-key.js';
 import { readBillingApi } from './billing.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
@@ -18,31 +19,11 @@ export const GATEWAY_SESSION_REQUEST_LIMIT = 500;
 export const GATEWAY_SESSION_MS = 12 * 60 * 60 * 1000;
 let activeChild = null;
 
-/** Tool-facing settings, with no provider secret. */
+/** Tool-facing settings, with no provider secret: the adapter declares what its tool is started with. */
 export function gatewayToolConfig({ provider, base, grant, args, env = process.env }) {
-  const clean = scrubRuntimeSecretsFromEnv(env);
-  if (provider === 'claude') {
-    return {
-      args,
-      env: { ...clean, ANTHROPIC_BASE_URL: `${base}/claude`, ANTHROPIC_AUTH_TOKEN: grant },
-    };
-  }
-  if (provider === 'codex') {
-    return {
-      args: [
-        '-c', 'model_provider="mc_api"',
-        '-c', 'model_providers.mc_api.name="MC API gateway"',
-        '-c', `model_providers.mc_api.base_url="${base}/codex/v1"`,
-        '-c', 'model_providers.mc_api.env_key="MC_GATEWAY_GRANT"',
-        '-c', 'model_providers.mc_api.wire_api="responses"',
-        '-c', 'model_providers.mc_api.requires_openai_auth=false',
-        '-c', 'model_providers.mc_api.supports_websockets=true',
-        ...args,
-      ],
-      env: { ...clean, MC_GATEWAY_GRANT: grant },
-    };
-  }
-  throw new Error('unsupported billing provider');
+  const route = apiProviders().includes(provider) ? adapterOfProvider(provider).API_ROUTE : null;
+  if (!route) throw new Error(`${provider} declares no API_ROUTE: unsupported billing provider`);
+  return route.toolConfig({ base, grant, args, env: scrubRuntimeSecretsFromEnv(env) });
 }
 
 /** The trusted key-opening boundary shared by foreground wrappers and detached holders. */
@@ -87,7 +68,7 @@ export async function openGatewayGrant({ provider, model = '*', readKey = readBi
 export async function runGatewaySession({ provider, model, bin, args, env = process.env, readKey = readBillingApiKey, readApi = () => readBillingApi(), spawnTool = spawn, createGateway = createBillingGateway, terminal = isatty(1),
   sessionDirectory = null, openGrant = openGatewayGrant, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
 } = {}) {
-  if (!['claude', 'codex'].includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
+  if (!apiProviders().includes(provider) || !bin || !Array.isArray(args) || !model) return 2;
   const session = await openGrant({ provider, model, readKey, readApi, createGateway, now });
   if (!session.ok) return 1;
   let child;

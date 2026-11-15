@@ -594,3 +594,56 @@ export const OUTPUT_READER = 'codex-events';
 
 /** Codex gets neither a check-in nor a stall guard: its stdin is not a pipe. */
 export const WATCH = null;
+
+/** The name billing state, plan windows and the API gateway know this tool by. */
+export const BILLING_PROVIDER = 'codex';
+
+/** The plan windows a usage snapshot carries for this tool, in order. */
+export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
+
+/** A login interruption is not a plan refusal for this tool. */
+export const LOGIN_REFUSES_PLAN = false;
+
+/** No plan refusal or stream window is recorded for this tool. */
+export const PLAN_STATE = null;
+
+/**
+ * The standing rule for choosing a model of this tool (`model-choice.js`): an
+ * unknown capacity reading never bootstraps a choice, and candidates are
+ * judged per model.
+ */
+export const MODEL_CHOICE = Object.freeze({ bootstrapsOnUnknown: false, perModel: true });
+
+/**
+ * The API-credit route: where the gateway forwards, how it authenticates, and
+ * the settings the tool is started with so it talks to the gateway. Codex with
+ * websockets upgrades on its HTTP path and then sends only what is new since
+ * the previous response on the open connection. No key or grant is held here.
+ */
+export const API_ROUTE = Object.freeze({
+  upstream: 'https://api.openai.com',
+  auth: Object.freeze({ header: 'authorization', scheme: 'Bearer' }),
+  routes: Object.freeze([
+    Object.freeze({ path: '/v1/responses', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/responses/compact', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/models', methods: Object.freeze(['GET']) }),
+  ]),
+  websocket: Object.freeze({ path: '/v1/responses', upstream: 'wss://api.openai.com/v1/responses', forwardHeaders: Object.freeze(['openai-beta']) }),
+  modelAliases: null,
+  creditsByMode: false,
+  toolConfig({ base, grant, args, env }) {
+    return {
+      args: [
+        '-c', 'model_provider="mc_api"',
+        '-c', 'model_providers.mc_api.name="MC API gateway"',
+        '-c', `model_providers.mc_api.base_url="${base}/codex/v1"`,
+        '-c', 'model_providers.mc_api.env_key="MC_GATEWAY_GRANT"',
+        '-c', 'model_providers.mc_api.wire_api="responses"',
+        '-c', 'model_providers.mc_api.requires_openai_auth=false',
+        '-c', 'model_providers.mc_api.supports_websockets=true',
+        ...args,
+      ],
+      env: { ...env, MC_GATEWAY_GRANT: grant },
+    };
+  },
+});

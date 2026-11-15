@@ -536,3 +536,48 @@ export const SESSION_DEFAULTS = Object.freeze({
 
 /** A named advisor model is kept (`--advisor`). */
 export const ADVISOR_SUPPORT = true;
+
+/** The name billing state, plan windows and the API gateway know this tool by. */
+export const BILLING_PROVIDER = 'claude';
+
+/** The plan windows a usage snapshot carries for this tool, in order. */
+export const PLAN_WINDOWS = Object.freeze(['five_hour', 'seven_day']);
+
+/** A login interruption means the plan refused the session. */
+export const LOGIN_REFUSES_PLAN = true;
+
+/**
+ * The plan's refusal is recorded in billing state (`plan.refused_until`) and
+ * its windows are read from the session's stream: the mechanism `src/mc/run.js`
+ * reads them with.
+ */
+export const PLAN_STATE = 'claude-stream';
+
+/**
+ * The standing rule for choosing a model of this tool (`model-choice.js`): an
+ * unknown capacity reading may bootstrap a choice, and candidates are not
+ * judged per model.
+ */
+export const MODEL_CHOICE = Object.freeze({ bootstrapsOnUnknown: true, perModel: false });
+
+/**
+ * The API-credit route: where the gateway forwards, how it authenticates, which
+ * model names a grant's aliases cover, and the settings the tool is started
+ * with so it talks to the gateway. No key or grant is held here: the gateway
+ * attaches the key, and `toolConfig` receives the session's grant.
+ */
+export const API_ROUTE = Object.freeze({
+  upstream: 'https://api.anthropic.com',
+  auth: Object.freeze({ header: 'x-api-key', scheme: null }),
+  routes: Object.freeze([
+    Object.freeze({ path: '/v1/messages', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/messages/count_tokens', methods: Object.freeze(['POST']) }),
+  ]),
+  websocket: null,
+  modelAliases: Object.freeze({ names: Object.freeze(['opus', 'fable', 'sonnet', 'haiku']), prefix: 'claude-' }),
+  // An explicit `credits` billing mode moves this tool's sessions to the API.
+  creditsByMode: true,
+  toolConfig({ base, grant, args, env }) {
+    return { args, env: { ...env, ANTHROPIC_BASE_URL: `${base}/claude`, ANTHROPIC_AUTH_TOKEN: grant } };
+  },
+});

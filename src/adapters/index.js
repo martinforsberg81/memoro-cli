@@ -282,3 +282,22 @@ export function toolsWith(capability) {
 export function processNames() {
   return toolsWith('PROCESS_NAME').map((tool) => adapterFor(tool).PROCESS_NAME);
 }
+
+/**
+ * The names tools are billed under, in registry order: the tools that declare
+ * `BILLING_PROVIDER` (a plan with windows). A tool on a plan with no API
+ * reserve is in this list and not in `apiProviders()`.
+ */
+export function billingProviders() {
+  return toolsWith('BILLING_PROVIDER').map((tool) => adapterFor(tool).BILLING_PROVIDER);
+}
+
+/** The billing provider names of the tools that declare an API-credit route (`API_ROUTE`), in registry order. */
+export function apiProviders() {
+  return toolsWith('API_ROUTE').filter((tool) => adapterFor(tool).BILLING_PROVIDER).map((tool) => adapterFor(tool).BILLING_PROVIDER);
+}
+
+/** The implemented adapter billed under `provider`, or null. */
+export function adapterOfProvider(provider) {
+  return Object.values(ADAPTERS).find((adapter) => adapter.BILLING_PROVIDER === provider) || null;
+}

@@ -25,14 +25,15 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { planWindows } from './billing.js';
+import { adapterOfProvider, billingProviders } from '../adapters/index.js';
 import { runnerDir } from './paths.js';
 
 export const CAPACITY_SCHEMA = 'mc-model-capacity';
 export const CAPACITY_VERSION = 1;
 export const CAPACITY_FILE = 'model-capacity.json';
-export const PROVIDERS = Object.freeze(['claude', 'codex']);
+export const PROVIDERS = Object.freeze(billingProviders());
 /** The windows each provider reports: Claude's five-hour and seven-day, Codex's primary and secondary. */
-export const WINDOWS = Object.freeze({ claude: Object.freeze(['five_hour', 'seven_day']), codex: Object.freeze(['primary', 'secondary']) });
+export const WINDOWS = Object.freeze(Object.fromEntries(PROVIDERS.map((provider) => [provider, adapterOfProvider(provider).PLAN_WINDOWS])));
 /** An observation older than this is stale: still shown, but never read as current. Codex is polled hourly. */
 export const STALE_MS = 3 * 60 * 60 * 1000;
 /** How often the runner reads each provider's capacity, both collectors alike. */
@@ -150,7 +151,7 @@ export function applyCollectedCapacity(state, provider, answer, now = new Date()
   const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
   if (answer?.ok && changed) return current;
   if (answer?.ok) return applyObservation(current, provider, {
-    windows: provider === 'claude' ? claudeWindowsOf(current.providers.claude.windows, answer.windows) : answer.windows,
+    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? claudeWindowsOf(current.providers.claude.windows, answer.windows) : answer.windows,
     models: answer.models ?? null,
   }, now);
   return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
