@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { removeReadCheckouts, setUpReadCheckouts } from '../../src/mc/programme-turn.js';
@@ -5408,6 +5409,253 @@ test('a build session on a version 2 goal is handed the goal as `mc goal show` r
   assert.match(call.prompt, /\nOBLIGATIONS\n  Documentation · touched — mc-goals\.md says both versions\.\n      standard: memoro-cli\/docs\/technical\/mc-goals\.md#GOAL\.json\n/u);
   assert.match(call.prompt, /\nCRITERIA 0\/1\n  1 ✗ it works\n      check: a test\n      evidence: the gate log\n/u);
 });
+
+
+/**
+ * A stopped deploy's repair on the runner's fakes: the request is the real file, the session, GitHub, git and the
+ * deploy command are the fixture's. `retries` is every call of the deploy command the runner made, `rows` the
+ * deploy record it reads, `pick` what the pick is, `contains` whether the pick holds the landed memoro merge.
+ */
+const DEPLOY_STARTED = '2026-08-29T09:00:00.000Z';
+function deployMendFixture({ started = DEPLOY_STARTED, acceptRed = false } = {}) {
+  const f = goalFixture({});
+  f.deployState = { root: '/w', read: f.deps.read, write: f.deps.writeJson, lock: f.deps.lock };
+  requestDeployRepair({ ...f.deployState, row: { started, sha: 'a'.repeat(40), stopped_at: 'deployer', note: 'wrangler fell over' }, holder: 'martin@laptop', acceptRed, now: f.deps.now, mkdir: () => {}, copy: () => {} });
+  f.entries = () => readDeployMends(f.deployState);
+  f.rows = []; f.retries = []; f.pick = 'pickoid'; f.contains = true; f.prStates = {};
+  f.deps.deploys = () => f.rows;
+  f.deps.pickOf = async () => f.pick;
+  f.retryAnswer = (options) => { f.rows.push({ holder: options.holder.name, outcome: 'deployed', started: '2026-08-29T10:00:00.000Z', ended: '2026-08-29T10:05:00.000Z' }); return 0; };
+  f.deps.deployRun = async (argv, options) => { f.retries.push({ argv, options }); return f.retryAnswer(options); };
+  const git = f.deps.git; const gh = f.deps.gh; const branches = new Set();
+  f.deps.git = (cwd, args) => {
+    if (args[0] === 'show-ref') return { ok: branches.has(args.at(-1)), stdout: '' };
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { ok: f.contains, stdout: '' };
+    if (args[0] === 'worktree' && args[1] === 'add') { f.dirs.add(args.at(-2)); if (args.includes('-b')) branches.add(`refs/heads/${args[4]}`); }
+    return git(cwd, args);
+  };
+  f.deps.gh = (cwd, args) => {
+    if (args[0] === 'pr' && args[1] === 'view' && args.includes('state')) return { ok: true, stdout: JSON.stringify({ state: f.prStates[args[2]] || 'MERGED' }) };
+    if (args[0] === 'pr' && args[1] === 'view' && args.includes('mergeCommit')) return { ok: true, stdout: JSON.stringify({ mergeCommit: { oid: `merge${args[2]}0000000000` } }) };
+    return gh(cwd, args);
+  };
+  f.runner = createRunner({ deps: f.deps });
+  f.publishes = (...prs) => (call) => { for (const [repo, pr] of prs) publishDeployMend({ ...f.deployState, repo, branch: f.entries()[0].branch, pr }); return okSession()(call); };
+  return f;
+}
+
+test('a queued deploy repair is offered at the main-red mend\'s rank and launches a goal-less mend session in both worktrees', async () => {
+  const f = deployMendFixture();
+  const pick = f.runner.nextWork();
+  assert.equal(pick.kind, 'mend');
+  assert.equal(pick.deployMend.id, f.entries()[0].id);
+  assert.match(pick.branch, /^mend\/deploy-[a-f0-9]{12}$/u);
+  f.answer = (call) => {
+    assert.equal(call.env.MC_ROLE, 'mend-session');
+    assert.equal(call.env.MC_HEADLESS, '1');
+    assert.equal(call.env.MC_DEPLOY_MEND, pick.deployMend.id);
+    assert.equal(call.env.MC_GOAL, undefined);
+    assert.equal(call.env.MC_MODEL, 'sonnet', 'class fast');
+    assert.match(call.prompt, /wrangler fell over/u);
+    assert.match(call.prompt, /Never run mc deploy/u);
+    assert.equal(f.entries()[0].state, 'running');
+    assert.equal(f.runner.nextWork()?.name === pick.name, false, 'a second lane cannot take it');
+    return okSession()(call);
+  };
+  assert.equal((await f.runner.pass()).ran, 1);
+  const added = f.calls.git.filter((call) => call[1] === 'worktree' && call[2] === 'add');
+  assert.deepEqual(added.map((call) => call[0]).sort(), ['/home/memoro', '/home/memoro-cli']);
+  assert.ok(added.every((call) => call.includes(pick.branch)), 'both trees are on the repair branch');
+});
+
+test('two attempts that publish nothing put a deploy repair on Martin, and no third session starts', async () => {
+  const f = deployMendFixture();
+  assert.equal((await f.runner.pass()).ran, 1);
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures], ['queued', 1]);
+  assert.equal((await f.runner.pass()).ran, 1);
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures], ['Martin', 2]);
+  assert.match(f.entries()[0].reason, /without a published PR or repaired/u);
+  assert.equal(f.runner.nextWork(), null);
+  assert.equal(f.calls.sessions.length, 2);
+  assert.equal(f.retries.length, 0, 'nothing was repaired, so nothing is retried');
+});
+
+test('a repair whose memoro pull request landed is retried once, as the runner, with no --accept-red, through the deploy command', async () => {
+  const f = deployMendFixture();
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  assert.equal(f.entries()[0].state, 'published');
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'deployed');
+  assert.equal(f.retries.length, 1);
+  const [{ argv, options }] = f.retries;
+  assert.deepEqual(argv, []);
+  assert.equal(options.holder.name, `runner for martin@laptop, ${DEPLOY_STARTED}`);
+  assert.equal(options.retry, true);
+  assert.equal(options.env.MC_HEADLESS, undefined, 'the runner is the deployer of the retry');
+  assert.equal(typeof options.onStop, 'function');
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 1, 'once');
+});
+
+test('the session saying repaired is a repair too, and the retry follows', async () => {
+  const f = deployMendFixture();
+  f.answer = (call) => {
+    const done = recordRepaired({ ...f.deployState, id: call.env.MC_DEPLOY_MEND, reason: 'removed a stale lock', role: call.env.MC_ROLE, named: call.env.MC_DEPLOY_MEND });
+    assert.equal(done.ok, true, done.error);
+    return okSession()(call);
+  };
+  await f.runner.pass();
+  assert.equal(f.entries()[0].state, 'repaired');
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'deployed');
+  assert.equal(f.retries.length, 1);
+});
+
+test('the retry waits until the pick holds the landed memoro merge, and starts when it does', async () => {
+  const f = deployMendFixture();
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  f.contains = false;
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 0, 'the pick does not hold the repair: no retry');
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].waiting], ['repaired', 'green']);
+  f.contains = true;
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 1);
+  assert.equal(f.entries()[0].state, 'deployed');
+});
+
+test('a landed repair of the runner\'s own code waits for the handover, and the retry is not started before it', async () => {
+  const f = deployMendFixture();
+  f.answer = f.publishes(['memoro-cli', 8]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 0);
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].waiting], ['repaired', 'handover']);
+});
+
+test('a request that carried --accept-red is repaired and not retried', async () => {
+  const f = deployMendFixture({ acceptRed: true });
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 0);
+  assert.equal(f.entries()[0].state, 'not-retried');
+  assert.match(f.entries()[0].reason, /accept-red/u);
+});
+
+test('a request whose newest stop is older than 24 hours is repaired and not retried', async () => {
+  const f = deployMendFixture({ started: '2026-08-27T09:00:00.000Z' });
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 0);
+  assert.equal(f.entries()[0].state, 'not-retried');
+  assert.match(f.entries()[0].reason, /24 hours/u);
+});
+
+test('a deploy that shipped since the stop ends the request unretried', async () => {
+  const f = deployMendFixture();
+  f.rows.push({ holder: 'someone', outcome: 'deployed', started: '2026-08-29T09:30:00.000Z', ended: '2026-08-29T09:40:00.000Z' });
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.retries.length, 0);
+  assert.match(f.entries()[0].reason, /shipped since/u);
+});
+
+test('a pull request closed without merging is a failed attempt: the request is offered again', async () => {
+  const f = deployMendFixture();
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  f.prStates['7'] = 'CLOSED';
+  await f.runner.settleDeployMends();
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures], ['queued', 1]);
+  assert.equal(f.retries.length, 0);
+});
+
+test('a retry that stops technically is never a new request and never a second retry: the request waits on Martin', async () => {
+  const f = deployMendFixture();
+  f.retryAnswer = (options) => {
+    options.onStop({ row: { note: 'wrangler fell over again' }, code: '', technical: true });
+    f.rows.push({ holder: options.holder.name, outcome: 'failed', started: '2026-08-29T10:00:00.000Z', note: 'wrangler fell over again' });
+    return 1;
+  };
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries().length, 1, 'no new request from a retry\'s stop');
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures, f.entries()[0].retried], ['Martin', 1, true]);
+  assert.match(f.entries()[0].reason, /the retry stopped: wrangler fell over again/u);
+  assert.equal(f.runner.nextWork(), null, 'no second mend session');
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.retries.length, 1, 'one retry, and then nothing more');
+});
+
+test('a request the desk requeues after its spent retry is mended again but never retried again', async () => {
+  const f = deployMendFixture();
+  f.retryAnswer = (options) => {
+    options.onStop({ row: { note: 'wrangler fell over again' }, code: '', technical: true });
+    f.rows.push({ holder: options.holder.name, outcome: 'failed', started: '2026-08-29T10:00:00.000Z', note: 'wrangler fell over again' });
+    return 1;
+  };
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'Martin');
+  assert.equal(answerHeldDeployMend({ ...f.deployState, id: f.entries()[0].id, verb: 'requeue', reason: 'the cause is known now', role: 'person' }).ok, true);
+  f.answer = f.publishes(['memoro', 9]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'not-retried');
+  assert.match(f.entries()[0].reason, /one retry/u);
+  assert.equal(f.retries.length, 1);
+});
+
+test('a retry that stops for a reason that is not technical ends the request', async () => {
+  const f = deployMendFixture();
+  f.retryAnswer = (options) => {
+    options.onStop({ row: { note: 'the gate is red' }, code: 'red', technical: false });
+    f.rows.push({ holder: options.holder.name, outcome: 'refused', started: '2026-08-29T10:00:00.000Z', note: 'the gate is red' });
+    return 1;
+  };
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].reason], ['stopped', 'the gate is red']);
+  assert.equal(f.retries.length, 1);
+});
+
+test('a retry the runner died in the middle of is settled from the deploy record, not repeated', async () => {
+  const f = deployMendFixture();
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  updateDeployMendsFor(f, (entry) => Object.assign(entry, { state: 'retrying', retry_owner: 999999 }));
+  f.rows.push({ holder: `runner for martin@laptop, ${DEPLOY_STARTED}`, outcome: 'deployed', started: '2026-08-29T10:00:00.000Z', ended: '2026-08-29T10:05:00.000Z' });
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'deployed');
+  assert.equal(f.retries.length, 0, 'not started a second time');
+});
+
+for (const [name, row] of [['a failed row', { outcome: 'failed', note: 'wrangler fell over again' }], ['no row at all', null]]) {
+  test(`a retry the runner died in the middle of, with ${name}, waits on Martin and is never started again`, async () => {
+    const f = deployMendFixture();
+    f.answer = f.publishes(['memoro', 7]);
+    await f.runner.pass();
+    updateDeployMendsFor(f, (entry) => Object.assign(entry, { state: 'retrying', retried: true, retry_owner: 999999 }));
+    if (row) f.rows.push({ holder: `runner for martin@laptop, ${DEPLOY_STARTED}`, started: '2026-08-29T10:00:00.000Z', ended: '2026-08-29T10:05:00.000Z', ...row });
+    await f.runner.settleDeployMends();
+    assert.equal(f.entries()[0].state, 'Martin');
+    assert.match(f.entries()[0].reason, new RegExp(`runner ended during the retry; its deploy row reads ${row ? 'failed' : 'nothing'}`, 'u'));
+    await f.runner.settleDeployMends();
+    assert.equal(f.retries.length, 0, 'not started again');
+    assert.equal(f.runner.nextWork(), null);
+  });
+}
+function updateDeployMendsFor(f, change) { const entries = f.entries(); change(entries[0]); f.deps.writeJson('/w/runner/deploy-mend.json', { version: 1, entries }); }
 
 /* ------------------------------------- a programme whose record states its phases */
 

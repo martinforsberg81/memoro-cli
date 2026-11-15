@@ -639,6 +639,17 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
     }
   });
 
+  it('gives no refusal to the mend session\'s repaired form: it is not a deploy', () => {
+    const repaired = 'mc repo mend deploy 3 repaired --reason "x"';
+    for (const command of [repaired, 'mc repo mend deploy 3 requeue --reason "x"', 'mc repo mend deploy 3 drop --reason "mc deploy shipped by hand"']) {
+      for (const env of [{ MC_HEADLESS: '1', MC_ROLE: 'mend-session', MC_DEPLOY_MEND: '3' }, { MC_HEADLESS: '1' }]) {
+        const decision = preToolDecision(bash(command), { env });
+        assert.ok(!decision || !decision.id.startsWith('headless-'), `${command} ${JSON.stringify(env)}`);
+      }
+    }
+    assert.equal(preToolDecision(bash('mc deploy'), { env: { MC_HEADLESS: '1', MC_ROLE: 'mend-session', MC_DEPLOY_MEND: '3' } })?.id, 'headless-deploy', 'the mend session is refused mc deploy as any headless session');
+  });
+
   it('names one rule per act', () => {
     assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials']);
   });

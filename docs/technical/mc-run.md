@@ -874,6 +874,22 @@ names.
 The full run's cadence (it follows main) and existing repair goals are unchanged.
 
 
+## Deploy mend
+
+A technical deploy stop ([`mc-deploy.md`](mc-deploy.md), *A stop that is repaired*) queues one request in
+`runner/deploy-mend.json`, offered at the main-red mend's rank by `deployMendWork` (an idle lane notices it on the control
+poll through `deployMendTicket`). `runDeployMend` is `runMainMend`'s machinery for both repositories: worktrees of memoro-cli
+and memoro on `mend/deploy-<digest>` from each `origin/main`, the session in memoro-cli's, `MC_ROLE=mend-session`,
+`MC_DEPLOY_MEND=<id>`, class fast. Two attempts; a dead runner's `running` request is a failed attempt. `settleDeployMends`
+(every `SETTLE_EVERY_MS`, with `settleMainMends`) restores a published handoff, reads each landed pull request's merge commit,
+marks the request repaired, and runs the **one retry** in the runner's own process through `run` of `commands/deploy.js`
+(holder `runner for …`, `retry: true`, no `MC_HEADLESS`), only when the runner's code (`runner.json` `commit`) and the pick
+contain the landed merge commits; the retry's stop is reported by `onStop`, never queued. The retry is marked `retried` when
+it starts and is never made twice: its technical stop is `retryFailed`, the request on Martin. A request whose retry owner is
+gone is settled from `deploys.tsv` first: deployed ends it, still running waits, anything else is `retryFailed`, never started
+again. Finished requests' worktrees are removed
+unless git refuses (files that are not mc's stay, and the line says so).
+
 ## Decision lane
 
 Prepared desk items and overdue reversible product/judgement briefs share the

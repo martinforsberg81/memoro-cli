@@ -71,6 +71,24 @@ describe('mc martin get', () => {
     assert.equal(get([], { home: f.home, ...text }), 0);
     assert.ok(text.out.stdout.includes(item.goal_markdown.trimEnd()), 'the desk shows the goal whole');
   });
+  it('lists a deploy repair that reads Martin, with its reason and session log, and no other state', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-root-'));
+    roots.push(root);
+    const f = { home: join(root, 'programs') };
+    mkdirSync(f.home, { recursive: true });
+    const file = join(root, 'runner', 'deploy-mend.json');
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    const entry = (state) => ({ id: 'dm-1', state, rows: [], failures: 2, reason: 'two repairs failed', session_log: '/logs/dm-1.log', worktrees: [] });
+    writeFileSync(file, JSON.stringify({ version: 1, entries: [entry('queued')] }));
+    assert.deepEqual(collectMartinQueue({ home: f.home }).items, []);
+    writeFileSync(file, JSON.stringify({ version: 1, entries: [entry('Martin')] }));
+    const [item] = collectMartinQueue({ home: f.home }).items;
+    assert.equal(item.kind, 'deploy-mend');
+    assert.equal(item.reference, 'deploy-mend:dm-1');
+    assert.equal(item.reason, 'two repairs failed');
+    const text = renderMartinQueue(collectMartinQueue({ home: f.home }));
+    assert.match(text, /deploy-mend:dm-1 · Martin\nRepair a stopped deploy \(mc repo mend deploy <id> requeue\|drop --reason "…"\)\ntwo repairs failed\nSession log: \/logs\/dm-1\.log/u);
+  });
   it('does not queue a decided technical entry, and reads an unresolved question and its options whole', () => {
     const f = fixture();
     f.make('alpha', 'decided', { status: 'ready' }, [log('2026-01-02T00:00Z', 'ready', 'Decided by the session (technical): Which timer?\nOption inject: inject a timer\nOption wait: wait 15 seconds\nRecommended: inject\nEvidence: criterion 1\njev reading: a (p 0.50, fits 0.88, settled 0.30)')]);

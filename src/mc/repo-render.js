@@ -30,6 +30,8 @@ export function renderRepoLines(report, {
     lines.push(`  ${c(`no repository called "${name}"`, 'yellow')}`);
   }
   if ((report.unknown || []).length) lines.push('');
+  if (report.deploy_mend?.error) lines.push(`  ${c(`deploy repair: ${report.deploy_mend.error}`, 'red')}`, '');
+  else if (report.deploy_mend?.line) lines.push(`  ${c(report.deploy_mend.line.replace(/^mc: /u, ''), report.deploy_mend.state === 'Martin' ? 'red' : 'yellow')}`, '');
 
   // "no repository here" under a name that matched nothing reads as an answer
   // to the wrong question; the line above already said what happened.

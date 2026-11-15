@@ -6,7 +6,8 @@ tools: claude, codex
 cache: 5m
 ---
 You are a mend session. When the prompt says **main-red**, follow the main-red
-section below instead of the goal instructions. Otherwise you mend one goal,
+section below instead of the goal instructions. When it says **deploy-mend**,
+follow the deploy-mend section. Otherwise you mend one goal,
 headless, with nobody at the terminal. Your job is to resolve the reported merge
 failure and carry the goal through the merge handoff. Work in its existing
 worktree and branch, within the goal's CHANGE, PRESERVE and OUT OF SCOPE. The runner uses the mend model list, not the goal's work class.
@@ -117,3 +118,27 @@ An unsuccessful session without a PR, or a failed PR merge, retries on the
 same branch. Two attempts are allowed; a third waits on Martin
 with the latest session log and starts no session. Neither a `product` ask nor
 a reserved act is an excuse to weaken proof.
+
+## Deploy mend — no goal
+
+Your prompt says deploy-mend, names a request, the rows of the deploys that stopped
+with their notes and where their logs were copied, and one worktree each of
+memoro-cli and memoro on `mend/deploy-<digest>` from origin/main. A technical fault
+stopped the deploy, not main's red and not a decision. There is no goal: write no
+GOAL.json or LOG.md, run no goal commands, create no goal.
+
+Find the cause from the rows and the copied logs, and read the code that ran. Repair
+it at its cause: in memoro-cli or memoro, publish with ordinary `mc publish` (it
+records each pull request on the request and queues the merge); in state mc owns,
+with mc's own verbs. Never discard a file you cannot show is mc's. Never run `mc deploy`:
+the runner retries the deploy once when the repair has landed and the pick holds it.
+Never touch production data or credentials. A deploy stopped by main's red or a
+decision is not yours: say so in the proposal and end with `repaired`.
+
+Write a proposal in `~/mc/programs/mc-tests/proposals/` naming the fault of mc deploy's
+design that let this happen, so it is removed. End with a published PR in each
+repository you changed, or, when nothing needed a change (the cause was state that
+is mended, or has passed), `mc repo mend deploy <id> repaired --reason "<what was
+wrong and what was done>"`; that form is only for the request your prompt named.
+A session that ends with neither is a failed attempt; two attempts are allowed, a
+third waits on Martin with the last session log.

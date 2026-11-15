@@ -280,6 +280,15 @@ worktree refusals — are each written to the record as `outcome: refused` with
 the reason. They are deploys somebody meant to make, and the page and the brief can only see
 them if they exist.
 
+Which of these stops is **technical** is one function (`classifyStop`, `src/mc/deploy-repair.js`), and it is read from the
+stop, not from a list of notes: a row `failed` at any `stopped_at`, and a refusal because mc's machinery could not do its part
+(the deploy worktree could not be made or placed, `git status` failed where `main` is, mc's own deploy worktree is dirty or
+ahead of `origin/main` — state mc owns, which a repair may mend — the preparation could not run, a gate suite *cannot run* or
+the suites could not start). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
+in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite, a
+replaced preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
+stop nobody has classified is technical. Only a technical stop queues a repair ([A stop that is repaired](#a-stop-that-is-repaired)).
+
 A refusal is exit **1** rather than 0 on purpose, so `mc deploy && …`
 does not carry on as though it had shipped. There is no exit for a missing
 terminal: the verb does not look for one.
@@ -560,6 +569,50 @@ verb, started, token }`), written and read under a lock, by `takeHolder` in
 The deploy worktree has several users, and the holder is what keeps them apart. It is not a lease on the
 repository — none of this touches the merge lane.
 
+## A stop that is repaired
+
+*Martin, 2026-11-15: "Ja. Omstart ok."* A typed `mc deploy` that stops on a technical fault is repaired by a mend session
+and shipped by the runner once more, without Martin. Each use of that session counts as a fault of mc deploy's design to
+remove: the session writes a proposal naming it.
+
+**The request.** One file, `runner/deploy-mend.json`, written under the runner's lock like `runner/main-mend/`. A request
+has an `id`, `rows[]` (each: `started`, `sha`, `stopped_at`, `note`, `holder`, `accept_red`, `copies`), a state (`queued`,
+`running`, `published`, `repaired`, `retrying`, `Martin`; finished: `deployed`, `stopped`, `not-retried`, `dropped`),
+`failures`, `created`. The deploy log and the preparation log are one file each, emptied by the next deploy, so each stop copies
+them to `runner/deploy-mend/<id>/<row started>/` and the settlement removes the directory. At most one request is unfinished:
+a later technical stop joins it with its own copies. A joined request carries `--accept-red` if any row did, takes the first
+row's holder and counts its age from the newest row's `started`. Queueing is done by the typed deploy (or its deployer) after
+the row is written and outside the deploy lock; a failed write or copy changes neither the exit code, the row nor the output.
+
+**The repair.** The runner offers a queued request at the main-red mend's rank, with its machinery: `mend-session`, class
+fast, a worktree each of memoro-cli and memoro on `mend/deploy-<digest>` from each `origin/main`, no goal identity, two
+attempts (a failed one returns the request to the queue; the second waits on Martin with the last session log). The
+session's role page has a *Deploy mend* section: find the cause from the rows and logs; fix it at its cause (memoro-cli or
+memoro through `mc publish` and the merger, or state mc owns through mc's verbs); never discard a file it cannot show is mc's;
+never run `mc deploy`; never touch production data or credentials; write a proposal. `mc publish` on a `mend/deploy-` branch
+records the pull request per repository before it queues the merge. It ends with a published pull request, or `mc repo mend
+deploy <id> repaired --reason "…"`, accepted only from a mend session for the request its prompt named (`MC_DEPLOY_MEND`),
+while it is running with no pull request recorded. A session that ends with neither is a failed attempt, and so is a
+closed or red pull request. The request is **repaired** when every recorded pull request landed, or the session said so.
+
+**The retry.** Once, through the same path as a typed deploy — the same pick, the same gate, the same admission, the same
+never-backwards guard — with the holder `runner for <holder>, <newest row's started>`. It never carries `--accept-red` and
+the headless refusal does not apply to it: it is not a session, the runner is. It starts only when the runner's own code has
+every landed memoro-cli merge commit as an ancestor and the pick descends from every landed memoro merge commit; until then
+the request stays `repaired` and the reading says what it waits for. It is not made ("repaired, not retried", with its
+reason) when the request carries `--accept-red` (a red accepted by a person is not accepted again by the runner), when it is
+older than 24 hours — also after waiting — or when a deploy has shipped since its newest row. A retry that ships ends the
+request `deployed`; a stop that is not technical ends it `stopped` with the reason. The one retry is then spent: a technical
+stop of it, or a retry the runner ended in the middle of that did not ship, puts the request on Martin with the reason and
+**queues no new request**, and the request is never retried again — a desk `requeue` gives it two mend attempts, and a repair
+after that ends "repaired, not retried". At most, then, a stop costs two mend sessions and one retry. Nothing loops.
+
+**What is shown.** An open request is one line in `mc deploy`'s reading: *a repair of the deploy of `<time>` is
+queued|running|repaired, waiting for `<the handover|a green commit with the fix>`|waiting on Martin*, or the reason of a
+request repaired and not retried, until a deploy ships after that request ended. It is on the page and, when it waits on Martin, in `mc martin
+get`. A person ends or requeues one with `mc repo mend deploy <id> requeue|drop --reason "<text>"`. No form of `mc deploy` is
+added: the decision stays typed.
+
 ## Grammar is not promoted here
 
 The deploy no longer promotes curated grammar: that is
@@ -589,7 +642,7 @@ header the file actually carries rather than the one this module knows.
 | `ended` | when the script exited — empty on a deploy that never came back |
 | `sha` | what was shipped: the deploy worktree's `HEAD` after the fast-forward (a refused row: `origin/main` as the reading saw it) |
 | `build` | the build number from the script's success banner |
-| `holder` | who typed it (`currentHolder()`) |
+| `holder` | who typed it (`currentHolder()`); the runner's one retry of a repaired stop writes `runner for <holder>, <started>` |
 | `outcome` | `running`, `deployed`, `failed` or `refused` |
 | `live_commit`, `live_build` | what production answered when the script verified it |
 | `stopped_at` | the last `▸ <step>` header before a non-zero exit |

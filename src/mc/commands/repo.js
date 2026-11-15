@@ -45,6 +45,7 @@ import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 import { repoNameOf } from '../repos.js';
 import { answerHeldMend, requestMainRepair } from '../main-repair.js';
+import { answerHeldDeployMend, recordRepaired } from '../deploy-repair.js';
 import { knownRepositories } from '../work-area.js';
 import { writerRole } from './martin.js';
 import { commandUsage } from '../command-help.js';
@@ -108,6 +109,7 @@ const MEND_ANSWERERS = ['person', 'martin', 'decision'];
  */
 function mend(opts, { stdout, stderr, env, mend: injected }) {
   const role = writerRole(env);
+  if (opts.repo === 'deploy') return mendDeploy(opts, { stdout, stderr, env, injected, role });
   if (!MEND_ANSWERERS.includes(role)) { stderr.write(`mc: role ${role} cannot answer a held main-red repair; the desk and a person can\n`); return 2; }
   if (role === 'martin' && env.MC_HEADLESS === '1') { stderr.write('mc: the Martin role is interactive-only; an unattended session cannot answer a held main-red repair\n'); return 2; }
   const known = () => (injected.known || (() => knownRepositories(env)))();
@@ -118,6 +120,27 @@ function mend(opts, { stdout, stderr, env, mend: injected }) {
     gh: injected.gh || ghIn,
     ...Object.fromEntries(['now', 'read', 'write', 'lock', 'readQueue', 'writeQueue'].filter((key) => injected[key]).map((key) => [key, injected[key]])),
   });
+  if (!answered.ok) { stderr.write(`mc: ${answered.error}\n`); return answered.code; }
+  stdout.write(`mc: ${answered.line}\n`);
+  return 0;
+}
+
+/**
+ * `mc repo mend deploy <id> requeue|drop|repaired --reason "<text>"` — the repair of a deploy stopped by a
+ * technical fault (deploy-repair.js). `requeue` and `drop` are the desk's, as for a main-red repair;
+ * `repaired` is the mend session's, for the one request its prompt named (`MC_DEPLOY_MEND`).
+ */
+function mendDeploy(opts, { stdout, stderr, env, injected, role }) {
+  const state = { root: injected.root || workRoot(env),
+    ...Object.fromEntries(['now', 'read', 'write', 'lock'].filter((key) => injected[key]).map((key) => [key, injected[key]])) };
+  let answered;
+  if (opts.answer === 'repaired') {
+    answered = recordRepaired({ id: opts.id, reason: opts.reason, role: env.MC_ROLE || role, named: env.MC_DEPLOY_MEND || null, ...state });
+  } else {
+    if (!MEND_ANSWERERS.includes(role)) { stderr.write(`mc: role ${role} cannot answer a held deploy repair; the desk and a person can\n`); return 2; }
+    if (role === 'martin' && env.MC_HEADLESS === '1') { stderr.write('mc: the Martin role is interactive-only; an unattended session cannot answer a held deploy repair\n'); return 2; }
+    answered = answerHeldDeployMend({ id: opts.id, verb: opts.answer, reason: opts.reason, role, ...state });
+  }
   if (!answered.ok) { stderr.write(`mc: ${answered.error}\n`); return answered.code; }
   stdout.write(`mc: ${answered.line}\n`);
   return 0;
@@ -934,7 +957,13 @@ export function parseArgs(argv) {
     opts.repo = positional.shift() || null;
     opts.id = positional.shift() || null;
     opts.answer = positional.shift() || null;
-    if (!opts.repo || !opts.id || !opts.answer) return { ...opts, error: 'mc repo mend <repo> <id> requeue|drop --reason "<text>"' };
+    if (!opts.repo || !opts.id || !opts.answer) return { ...opts, error: 'mc repo mend <repo> <id> requeue|drop --reason "<text>" — or mc repo mend deploy <id> requeue|drop|repaired --reason "<text>"' };
+    if (opts.repo === 'deploy') {
+      if (!['requeue', 'drop', 'repaired'].includes(opts.answer)) return { ...opts, error: `mc repo mend deploy ${opts.answer}? — requeue, drop or repaired` };
+      if (positional.length) return { ...opts, error: `mc repo mend deploy takes <id> requeue|drop|repaired (${positional[0]})` };
+      if (opts.reason === null) return { ...opts, error: `${opts.answer} needs --reason "<text>"` };
+      return opts;
+    }
     if (!['requeue', 'drop'].includes(opts.answer)) return { ...opts, error: `mc repo mend ${opts.answer}? — requeue or drop` };
     if (positional.length) return { ...opts, error: `mc repo mend takes <repo> <id> requeue|drop (${positional[0]})` };
     if (opts.reason === null) return { ...opts, error: `${opts.answer} needs --reason "<text>"` };

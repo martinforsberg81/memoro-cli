@@ -209,6 +209,9 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc repo rounds [--json]             every gate round, by where it ended\n",
     "        mc repo mend <repo> <id> requeue|drop --reason \"<text>\"\n",
     "                                    answer a main-red repair held on Martin: requeue starts its two attempts again, drop ends it\n",
+    "        mc repo mend deploy <id> requeue|drop|repaired --reason \"<text>\"\n",
+    "                                    the repair of a deploy a technical fault stopped: requeue and drop answer one held on\n",
+    "                                    Martin; repaired is the mend session's, for the request its prompt named\n",
     "\n",
     "status: main, what the last full run found on it and since when, the open pull requests\n",
     "and how far behind main each is, the work areas on it, and whether this machine's\n",
@@ -225,6 +228,8 @@ export const COMMAND_USAGE = Object.freeze({
     "after the slash); a person, the Martin desk and the decision role may. requeue keeps its branch and\n",
     "worktree and puts it in the runner's queue with the reason in the next session's prompt; drop ends it,\n",
     "closing its pull request when no other repair carries it. It never starts a session.\n",
+    "mend deploy: a deploy that stopped on a fault of mc's own queues one repair; the runner gives it a mend session\n",
+    "and ships once more, through the same gate, when the fix has landed. repaired ends the session with no pull request.\n",
   ].join(''),
   merge: [
     "usage — mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash\n",

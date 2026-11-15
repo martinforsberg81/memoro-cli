@@ -493,6 +493,19 @@ describe('every name in the help is routed', () => {
     assert.notDeepEqual(unknownFlags('publish', 'not with --no-merge, --json or --branch.'), [], '--branch went with the mend');
   });
 
+  it('mc repo --help names the three mend deploy forms, and the repo parser takes each and no other', () => {
+    const usage = commandUsage('repo');
+    assert.match(usage, /mc repo mend deploy <id> requeue\|drop\|repaired --reason "<text>"/u);
+    for (const answer of ['requeue', 'drop', 'repaired']) {
+      const parsed = parseRepo(['mend', 'deploy', 'abc', answer, '--reason', 'x']);
+      assert.equal(parsed.error, undefined, answer);
+      assert.deepEqual([parsed.repo, parsed.id, parsed.answer], ['deploy', 'abc', answer]);
+    }
+    for (const argv of [['mend', 'deploy', 'abc', 'launch', '--reason', 'x'], ['mend', 'deploy', 'abc', 'repaired'], ['mend', 'deploy', 'abc', 'drop', 'extra', '--reason', 'x']]) {
+      assert.ok(parseRepo(argv).error, argv.join(' '));
+    }
+  });
+
   it('expands placeholders, alternatives and optional parts into command lines', () => {
     assert.deepEqual(expand('<repo> <pr> [<pr>...] [--check] [--json]'), [['x', '7'], ['x', '7', '8'], ['x', '7', '--check'], ['x', '7', '--json']]);
     assert.deepEqual(expand('start|stop [--force]'), [['start'], ['stop'], ['start', '--force'], ['stop', '--force']]);

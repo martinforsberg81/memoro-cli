@@ -22,6 +22,7 @@ import { promisify } from 'node:util';
 import { run as runGit, runAsync as runGitAsync } from './git.js';
 import { nightlyReading } from './nightly-history.js';
 import { selectorMissReading } from './selector-miss.js';
+import { deployMendLine, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { mcHome, workRoot } from './paths.js';
 import { readLease } from './repo-lease.js';
@@ -128,6 +129,7 @@ export async function repoStatus({
     // The one-shot answer. `mc repo watch` gives this field a second value.
     mode: 'computed',
     repos: repos.map((repo) => ({ ...repo, main_mend: mainMendReading({ root: workRoot(env), repo: repo.name }) })).sort((a, b) => a.name.localeCompare(b.name)),
+    deploy_mend: deployMendSummary(workRoot(env)),
     unknown,
   };
 }
@@ -185,6 +187,7 @@ export async function repoView({
         main_mend: mainMendReading({ root: workRoot(env), repo: repo.name }),
         selector_misses: selectorMissReading(repo.path, { root, now }),
       })),
+      deploy_mend: deployMendSummary(workRoot(env)),
       unknown: fromSnapshot.unknown,
     }, { env, now });
   }
@@ -432,4 +435,10 @@ function topLevel(cwd) {
     if (r.error || r.status !== 0) return null;
     return String(r.stdout || '').trim() || null;
   } catch { return null; }
+}
+
+/** The open deploy repair as `mc repo status` shows it: one reading line, or the unreadable state said. */
+function deployMendSummary(root) {
+  const reading = deployMendReading({ root });
+  return { error: reading.error, state: reading.entry?.state || null, line: deployMendLine(reading.entry), reason: reading.entry?.reason || null };
 }
