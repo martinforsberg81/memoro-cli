@@ -706,6 +706,9 @@ header the file actually carries rather than the one this module knows.
 | `accepted_red` | the reason given to `--accept-red`, when a red was accepted |
 | `take_back` | `yes` when the release could be taken back, `no` when it could not — or when the reading could not be made; empty when no reading was made (a refusal before the plan was known or for a backwards pick) and in rows written before the column |
 | `take_back_why` | for `no`, the reasons on one line — `<kind>: <what> (<sha>, …)`, joined by `; `, at most five and `and N more` — or `reading not made: <why>`; empty for `yes` |
+| `versions_before` | the Cloudflare Worker version each Worker served before the deploy, `<worker>:<id>` joined by commas, `<worker>:missing` for one that is not known — `memoro:<id>,memoro-tail:<id>`; empty on a row written before the script ran and before the column |
+| `versions_made` | the version the deploy made, in the same form; a Worker the deploy did not change has no entry, and `<worker>:missing` is a change whose id is not known; empty as above |
+| `versions_why` | why a version is missing, `<worker> before\|made: <why>` joined by `; `; `not reported by the deploy script` when the script printed no version line; empty when none is missing and on a row written before the script ran |
 
 Two properties are the point of it:
 
@@ -720,10 +723,21 @@ Two properties are the point of it:
   written by an older mc keeps its columns, and a column this mc sets that the
   file has no room for is dropped rather than shifting every cell after it. One
   `writeFileAtomic`, so a reader sees the file before or after and never
-  half-way. `take_back` and `take_back_why` are the last two columns: a refusal
-  made after the reading carries them as the started row does, and a file with
-  the header of the version before them is given the new header on its next row,
-  its old rows' cells empty.
+  half-way. `take_back` and `take_back_why` came before the three version
+  columns, which are the last: a refusal made after the reading carries the
+  take-back's as the started row does, and a file with the header of any version
+  before them is given the new header on its next row, its old rows' cells empty.
+
+The version columns are what taking a release back needs: rolling a Worker back
+is returning it to the version it served before the deploy, so the row names
+that version and the one the deploy made. They are written when the script
+ends, from the script's own lines (below), and a script that printed none leaves
+`versions_why` saying so rather than three empty cells that read as a deploy that
+changed nothing. **Documentation rule for the phase that takes a release back:**
+a take-back reads `versions_before` and rolls each Worker to that version only
+when every Worker it must return is present there; a `missing` or an empty cell
+is a take-back that is not made, with the cell's `versions_why` as the reason,
+and never a guess from the latest deployment.
 
 `build` and `live_commit` are deliberately different claims: the banner is what
 mc stamped, the verified line is what production answered. A deploy run with
@@ -744,7 +758,8 @@ The spawn pipes stdout and stderr and echoes every chunk straight on, rather tha
 inheriting them, so the row can say what happened while the person still watches
 the steps as they happen. Four lines are matched, after the colours are
 stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04 (a fifth,
-`Deploy branch: <branch>`, since 2026-11-09, below the table):
+`Deploy branch: <branch>`, since 2026-11-09, and the Worker version lines, since
+2026-11-15, below the table):
 
 | line | where | what it fills |
 |---|---|---|
@@ -756,6 +771,18 @@ stripped, from `~/memoro/scripts/deploy.mjs` as it stood on 2026-09-04 (a fifth,
 The fifth line is the script's last: `Deploy branch: <branch>`, matched exactly,
 anywhere in the kept output, the last one winning. It is the only thing mc reads
 of a change the script made on its own; it fills no cell, and step 11 acts on it.
+
+The Worker version lines are `Worker version before: <worker> <id>` and `Worker
+version made: <worker> <id>`, or `<worker> missing — <why>` for either, one for
+each of `memoro` and `memoro-tail`. The script prints a before line right before
+its first upload and a made line after each Worker's upload, and repeats all of
+them in its closing block, after the summary and before `Deploy branch:`, so
+they survive the 256 KB tail. The last line for a kind and a Worker wins. They
+fill `versions_before`, `versions_made` and `versions_why`, and `--json` carries
+them as `versions: { before: { <worker>: <id>|null }, made: { … }, why: […] }`.
+A Worker with no made line is a Worker the deploy did not change. They are
+written for a deploy that failed or was interrupted too, since a take-back after
+a half-made deploy needs the same two versions.
 
 The parsing is tolerant on purpose, and only the last 256 KB of output is kept —
 a container build prints megabytes before any of these. **A deploy that worked
@@ -775,7 +802,7 @@ The progress bar groups the current script's steps by phase:
 |---|---|
 | Prepare `[●···]` | Source, dependency, Wrangler auth/API and pending-migration preflights; container image pins |
 | Build `[━●··]` | Ajv validators, CSS, assistant 3D avatar runtime, public-page pre-rendering, app bundle/shell and retaining the previous generation |
-| Publish `[━━●·]` | Post-build git preflight, version and service-worker stamps, reviewed language grammar, main Worker deployment, optional after-build migrations and tail-worker deployment |
+| Publish `[━━●·]` | Post-build git preflight, version and service-worker stamps, reviewed language grammar, reading the live Worker versions, main Worker deployment, optional after-build migrations and tail-worker deployment |
 | Verify `[━━━●]` | Verify live version |
 
 Before the script starts, the same snapshot shows waiting for the deployment
@@ -869,6 +896,11 @@ The boundary is a rule, not a judgement call:
   deploy needs are the environment's, passed through untouched. A stale
   container image is the script's to build, push and pin; what reaches mc is
   only a branch.
+- **mc reads the Worker versions the script prints, and reads none from
+  Cloudflare.** `deploy.mjs` runs `wrangler deployments status` and reads
+  wrangler's output file; mc matches the lines the script prints from them and
+  writes them into the row. A read that failed is a `missing` in the script's
+  line, and never a deploy that failed.
 - **mc handles a branch the deploy produced, not what is on it.** The script
   must leave the checkout clean on `main` (mc refuses anything else there and
   never resets it), so a change it made — the pin lines of an image it built —

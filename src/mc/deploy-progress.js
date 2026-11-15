@@ -13,7 +13,7 @@ const STAGES = {
   build: ['Build Ajv validators', 'Build CSS bundle', 'Build assistant 3D avatar runtime',
     'Pre-render public pages', 'Build the app bundle and shell', 'Keep the previous generation'],
   publish: ['Post-build git preflight', 'Stamp src/version.js', 'Stamp public/sw.js CACHE_VERSION',
-    'Check reviewed language grammar', 'wrangler deploy', 'Apply migrations after the build', 'wrangler deploy (tail-worker)'],
+    'Check reviewed language grammar', 'Read live Worker versions', 'wrangler deploy', 'Apply migrations after the build', 'wrangler deploy (tail-worker)'],
   verify: ['Verify live version'],
 };
 const stageOf = (step) => Object.entries(STAGES).find(([, steps]) => steps.includes(step))?.[0] || null;

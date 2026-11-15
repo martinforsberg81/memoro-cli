@@ -42,6 +42,7 @@ import { workRoot } from './paths.js';
 export const DEPLOYS_HEADER = [
   'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note', 'pid',
   'full_commit', 'full_verdict', 'suites', 'accepted_red', 'take_back', 'take_back_why',
+  'versions_before', 'versions_made', 'versions_why',
 ];
 
 /**
@@ -65,9 +66,36 @@ export const GATE_COLUMNS = ['full_commit', 'full_verdict', 'suites', 'accepted_
 export const TAKE_BACK_COLUMNS = ['take_back', 'take_back_why'];
 
 /**
+ * The Worker versions of a deploy (2026-11-15), the two a take-back needs:
+ * `versions_before`, the version each Worker served before the deploy, and
+ * `versions_made`, the one the deploy made, each as `<worker>:<id>` joined by
+ * commas, a Worker whose version is not known as `<worker>:missing`. A Worker
+ * the deploy did not change has no entry in `versions_made`. `versions_why`
+ * says why a version is missing, `<worker> before|made: <why>` joined by `; `,
+ * or `not reported by the deploy script` when the script printed no version
+ * line at all. All three are empty on a row written before the script ran and
+ * on a row written before the columns existed.
+ */
+export const VERSION_COLUMNS = ['versions_before', 'versions_made', 'versions_why'];
+
+/**
+ * The three cells for what `readScriptOutput` read of the script's version
+ * lines (`{ before, made, why }`): `{ memoro: '<id>', 'memoro-tail': null }`
+ * is `memoro:<id>,memoro-tail:missing`.
+ */
+export function versionCells(versions) {
+  const list = (found) => Object.entries(found || {}).map(([worker, id]) => `${worker}:${id ?? 'missing'}`).join(',');
+  return {
+    versions_before: list(versions?.before),
+    versions_made: list(versions?.made),
+    versions_why: (versions?.why || []).join('; '),
+  };
+}
+
+/**
  * The headers earlier mc versions wrote, oldest first: before `pid`
- * (2026-10-07), before the gate's columns (2026-11-14) and before the
- * take-back reading's (2026-11-15). A file with exactly
+ * (2026-10-07), before the gate's columns (2026-11-14), before the
+ * take-back reading's and before the Worker versions' (both 2026-11-15). A file with exactly
  * one of them is given the current header the next time a row is written, its
  * old rows with the new cells empty: without `pid`, a deploy in progress could
  * never be told from one that died, which is the one thing that column is for.
@@ -75,7 +103,8 @@ export const TAKE_BACK_COLUMNS = ['take_back', 'take_back_why'];
  */
 const PID_COLUMNS = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('pid') + 1);
 const GATE_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red') + 1);
-const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER].map((header) => header.join('\t'));
+const TAKE_BACK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('take_back_why') + 1);
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
