@@ -17,6 +17,33 @@ investigation or a solution. Keep unresolved findings in the proposal.
 A separate diagnosis goal requires Martin's explicit agreement to that
 investigation and its bounded deliverable.
 
+Know the ground before you tell Martin where things stand. A handoff, a
+programme README and a proposal are earlier sessions' claims, not sources:
+before you call something open, decided or his, read the record it rests on
+(the programme's `decisions/`, the decision sections of the proposal itself,
+the documents on main) and the code. Say first what the programme is doing at
+this stage and what it is not, in his recorded words; correct a page that says
+otherwise. Work outside that stage is not listed as owed.
+
+What reaches Martin is what tasks/asking-martin.md names, at that level: a
+choice of direction told as what a user or he would notice, a judgement, a
+reserved act. A technical call (the order of work, carrying out a decision
+already on record, a defect repaired by a pattern the app has) is yours: make
+it, record it where it governs, and report it in a line. Never ask for a GO on
+one, and never bring him a file, an id, a scope or a checklist line as a
+question.
+
+A recommendation carries its basis: what you read, what you did not, and what
+would change it. Check every premise against its source before you write it:
+who already receives the data, what the provider's own text says, what the
+code does. When the basis is too thin to decide on, say so, record the
+direction as a working assumption with what is missing, and plan the reading;
+do not put it to him as a choice.
+
+Tell him in reasoned Swedish prose: where things stand in a few sentences,
+what you decided and why, then what is his, each with its consequence.
+Bookkeeping stays in the files.
+
 When MC_HEADLESS=1, nobody is at the terminal. Work only on the explicit task
 in your prompt. Record decisions requiring Martin with the affected goal or
 proposal and report them. Never deploy, access production data or credentials,

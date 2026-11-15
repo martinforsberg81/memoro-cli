@@ -68,6 +68,15 @@ with Martin's decision, arrange the answer in the goal through `mc goal`.
 Setting it `ready` does not change its stage. Ordered work belongs in phases,
 not in a second queue. See [mc-goals.md](mc-goals.md).
 
+Before Manager tells Martin where things stand it reads the record behind each
+claim: a handoff, a programme README and a proposal are earlier sessions'
+claims. It makes technical calls itself and reports them; what reaches Martin
+is a choice of direction, a judgement or a reserved act, as
+[asking-martin](../../canon/tasks/asking-martin.md) names them. A
+recommendation states what it rests on and what was not read, and a direction
+whose basis is too thin is recorded as a working assumption with the reading
+that would settle it (`canon/roles/manager.md`).
+
 A proposal is a reading, not runnable work. Once decided it becomes a goal,
 is built directly, or is dropped. Preserve the evidence the goal needs before
 archiving the proposal, with a line saying what happened and where it landed.
