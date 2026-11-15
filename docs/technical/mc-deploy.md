@@ -391,9 +391,14 @@ be clean, on main or on no branch, and its HEAD an ancestor of `origin/main`;
 then `git checkout --detach <pick>` places it (the repository is bare, the
 deploy's worktree holds the branch `main`, and git gives a branch to one
 worktree, so the shared checkout stands detached). Otherwise every suite is
-*cannot run* with the reason and nothing is moved. A server another session
-holds busy is waited out within a bound (`HOLD_MARGIN_MS`); a kept browser's hold
-refuses and names it — both asked before the checkout is detached. Every ensure —
+*cannot run* with the reason and nothing is moved. The holds are asked before the
+checkout is detached, and a hold of either kind — busy (mc used the main server
+within its idle window) or a kept browser's (one stepped on it within
+`KEPT_HOLD_SECONDS`) — is waited out and asked again, with the checkout
+untouched: both end by themselves, so the deploy says what it waits for and asks
+nobody to close anything. The wait has one bound for the whole hold check,
+`HOLD_WAIT_MS` (ten minutes); a server still held when it has passed refuses,
+names the hold and leaves the checkout where it stood. Every ensure —
 the static server, the app server and each revive after a server left mid-run —
 **pins** the commit and never follows main, and the commit the server serves is
 checked against the pick after every ensure: a server of another commit makes the
@@ -404,7 +409,7 @@ server is asked for), when the server was started on uncommitted changes
 the commit the server was started on.
 
 **A suite that does not gate a deploy.** A suite in `.mc/test.json` declared
-`"gate": false` with a required `"gate_why"` (more than 20 characters) is not run
+`"gate": false` with a required, non-empty `"gate_why"` is not run
 by `mc deploy`, is never a refusal, and is named once with its reason in the
 reading. `mc test dev` and `mc test prod` run it as before. A declaration with
 `gate: false` and no `gate_why` is invalid.

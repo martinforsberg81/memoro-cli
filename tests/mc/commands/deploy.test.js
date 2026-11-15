@@ -23,7 +23,7 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
-import { exerciseApp, HOLD_MARGIN_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
+import { exerciseApp, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
 import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
@@ -2762,38 +2762,61 @@ describe('mc deploy — a busy or kept main server is asked before the checkout 
   };
   const checkoutIndex = (calls) => calls.order.indexOf('git:checkout');
 
-  it('a busy server is waited out, and only then is the checkout detached', async () => {
+  // The git calls on the shared checkout while it is held: only the read of the
+  // pick's declaration; after the hold has passed, the placement and the detach.
+  const gitWhileHeld = (calls) => {
+    const moved = calls.git.findIndex((call) => call.args[0] !== 'show');
+    return calls.git.slice(0, moved === -1 ? calls.git.length : moved).map((call) => call.args.join(' '));
+  };
+  const placed = (calls) => calls.git.filter((call) => call.args[0] !== 'show').map((call) => call.args[0]);
+
+  it('a busy hold that passes is waited out, the checkout untouched until then, and the suites run at the pick', async () => {
     const { result, calls, said } = await exercise({ held: { app: { instance_id: 'main-1', hold: (now) => (now < 20_000 ? 'busy' : null) } } });
     assert.equal(result.error, null);
+    assert.deepEqual(result.suites.map((suite) => `${suite.name}:${suite.state}`), ['smoke:ok'], 'the suites ran');
+    assert.equal(result.commit, MID, 'against the pick');
     assert.deepEqual(calls.sleeps, [5000, 5000, 5000, 5000], 'polled until idle, on the injected clock');
     assert.ok(calls.holds.length >= 5);
     assert.ok(checkoutIndex(calls) > calls.order.lastIndexOf('hold'), 'the detach is after the last time the hold was asked');
     assert.ok(calls.order.indexOf('git:show') < calls.order.indexOf('hold'), 'the pick\'s declaration names the service whose hold is read');
-    assert.equal(said.filter((line) => /in use; waiting for it to be idle/u.test(line)).length, 1, 'said once');
+    assert.deepEqual(gitWhileHeld(calls), [`show ${MID}:.mc/test.json`], 'while held, the checkout was only read');
+    assert.deepEqual(placed(calls), ['branch', 'merge-base', 'checkout'], 'then placed: branch, ancestor check, detach');
+    assert.deepEqual(said.filter((line) => /is held/u.test(line)), [
+      'mc: suites — the main server main-1 is held (mc used it within the last 60 s); waiting up to 10 min for the hold to end before the checkout is moved',
+    ], 'said once, and nobody is asked to do anything');
   });
 
-  it('a server that stays busy beyond the idle window and its margin refuses, and the checkout is untouched', async () => {
-    const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: () => 'busy' } } });
-    assert.match(result.error, /the main server main-1 is in use \(mc used it within 60 s\) and stayed in use for 90 s — the checkout is not moved under it/u);
-    assert.deepEqual(result.suites, []);
-    assert.ok(calls.clock >= 60_000 + HOLD_MARGIN_MS - 5000 && calls.clock <= 60_000 + HOLD_MARGIN_MS + 5000, `waited ${calls.clock} ms`);
-    assert.deepEqual(calls.git.filter((call) => ['checkout', 'branch', 'merge-base'].includes(call.args[0])), [], 'the shared checkout was not touched');
-    assert.deepEqual(calls.ensures, []);
+  it('a kept browser\'s hold that passes is waited out like a busy one, nobody is asked to close it, and the suites run at the pick', async () => {
+    const { result, calls, said } = await exercise({ held: { app: { instance_id: 'main-1', hold: (now) => (now < 45_000 ? 'kept' : null) } } });
+    assert.equal(result.error, null);
+    assert.deepEqual(result.suites.map((suite) => `${suite.name}:${suite.state}`), ['smoke:ok'], 'the suites ran');
+    assert.equal(result.commit, MID, 'against the pick');
+    assert.equal(calls.clock, 45_000, 'waited on the injected clock until the kept hold ended');
+    assert.ok(checkoutIndex(calls) > calls.order.lastIndexOf('hold'), 'the detach is after the last time the hold was asked');
+    assert.deepEqual(gitWhileHeld(calls), [`show ${MID}:.mc/test.json`], 'while held, the checkout was only read');
+    assert.deepEqual(placed(calls), ['branch', 'merge-base', 'checkout'], 'then placed: branch, ancestor check, detach');
+    assert.deepEqual(said.filter((line) => /is held/u.test(line)), [
+      'mc: suites — the main server main-1 is held (a kept browser stepped on it within the last 60 s); waiting up to 10 min for the hold to end before the checkout is moved',
+    ]);
+    assert.equal(said.some((line) => /close|mc shot/u.test(line)), false, 'nobody is asked to close anything');
   });
 
-  it('a kept browser\'s hold refuses at once, names it, and the checkout is untouched', async () => {
-    const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: 'kept' } } });
-    assert.match(result.error, /a kept browser stepped on the main server main-1 within the last minute — mc does not move the checkout under it; close it \(mc shot close\)/u);
-    assert.deepEqual(calls.sleeps, [], 'not waited for');
-    assert.equal(checkoutIndex(calls), -1);
-    assert.deepEqual(calls.git.map((call) => call.args[0]), ['show'], 'the only git call is the read of the pick\'s declaration');
-    assert.deepEqual(calls.ensures, []);
+  it('a hold of either kind that outlasts the ten-minute bound refuses, names the hold, and the checkout is untouched', async () => {
+    assert.ok(HOLD_WAIT_MS >= 10 * 60_000, 'the bound is not under ten minutes');
+    for (const [kind, words] of [['busy', 'mc used it within the last 60 s'], ['kept', 'a kept browser stepped on it within the last 60 s']]) {
+      const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: () => kind } } });
+      assert.equal(result.error, `the main server main-1 is still held (${words}) after 10 min of waiting — the checkout is not moved under it`, kind);
+      assert.deepEqual(result.suites, [], kind);
+      assert.equal(calls.clock, HOLD_WAIT_MS, `${kind}: waited the whole bound on the injected clock, no more`);
+      assert.deepEqual(calls.git.map((call) => call.args.join(' ')), [`show ${MID}:.mc/test.json`], `${kind}: the shared checkout was only read`);
+      assert.deepEqual(calls.ensures, [], kind);
+    }
   });
 
   it('the static service\'s main server is asked as well as the app\'s', async () => {
     const declared = { suites: [{ name: 'smoke' }], environments: { dev: { service: 'app', static_service: 'static' } } };
     const { result, calls } = await exercise({ declared, held: { static: { instance_id: 'static-9', hold: 'kept' } } });
-    assert.match(result.error, /kept browser stepped on the main server static-9/u);
+    assert.match(result.error, /the main server static-9 is still held \(a kept browser stepped on it/u);
     assert.equal(checkoutIndex(calls), -1);
   });
 

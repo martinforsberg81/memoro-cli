@@ -27,7 +27,7 @@
  * the mends, the servers, the suites — is on `deps`, so the whole gate runs in
  * a test with nothing real behind it.
  */
-import { mainIdleSecondsOf } from './dev-servers.js';
+import { KEPT_HOLD_SECONDS, mainIdleSecondsOf } from './dev-servers.js';
 import { run as runGit } from './git.js';
 import { readMainMends } from './main-repair.js';
 import { fullRun, RETRY_LATER, RETRY_NOW } from './nightly-loop.js';
@@ -304,11 +304,13 @@ function pathsWords(paths) {
 }
 
 /**
- * How long a busy main server is waited out beyond its idle window before the
- * exercise gives up on it: the server was used less than the window ago, so
- * once the window has passed it is idle unless somebody keeps using it.
+ * How long the hold check waits, in all, for the main servers to be free before
+ * the exercise gives up. Both holds end by themselves — a busy one when mc has
+ * not used the server for the idle window, a kept browser's KEPT_HOLD_SECONDS
+ * after its last step — so the deploy waits rather than asking anybody to close
+ * anything; only a server somebody keeps using for this long refuses.
  */
-export const HOLD_MARGIN_MS = 30_000;
+export const HOLD_WAIT_MS = 10 * 60_000;
 const HOLD_POLL_MS = 5_000;
 
 function gitIn(worktree, args) {
@@ -330,9 +332,10 @@ function gitIn(worktree, args) {
  *    and each server's `built_from.dirty`);
  * 2. the declaration of the commit, `git show <sha>:.mc/test.json`, names the
  *    app service;
- * 3. that service's main server is not held: a busy one (mc used it within the
- *    idle window) is waited out within the window plus `HOLD_MARGIN_MS` and
- *    asked again, a kept browser's hold refuses and names it;
+ * 3. that service's main server is not held: a hold of either kind — busy (mc
+ *    used it within the idle window) or a kept browser's — is waited out and
+ *    asked again, within one bound for the whole check (`HOLD_WAIT_MS`); a hold
+ *    that outlasts it refuses and names the hold;
  * 4. the checkout is on main or on no branch and its HEAD an ancestor of
  *    origin/main, then `git checkout --detach <sha>`. Otherwise every suite is
  *    cannot-run with the reason and nothing is moved;
@@ -475,29 +478,35 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
 }
 
 /**
- * Wait out a busy main server and refuse a kept one, with the checkout untouched
- * either way: `null` when none of the declared services' main servers is held
- * (or running), else why the exercise cannot go on.
+ * Wait out a held main server — busy or a kept browser's, both end by
+ * themselves — with the checkout untouched: `null` when none of the declared
+ * services' main servers is held (or running), else, once the one bound of the
+ * whole check has passed, why the exercise cannot go on. Each new hold waited
+ * for is said once; nobody is asked to do anything.
  */
 async function awaitHold({ d, worktree, services, env, say }) {
   const idleMs = mainIdleSecondsOf(env) * 1000;
-  const until = d.now() + idleMs + HOLD_MARGIN_MS;
-  let said = false;
+  const until = d.now() + HOLD_WAIT_MS;
+  const why = (hold) => (hold === 'kept'
+    ? `a kept browser stepped on it within the last ${KEPT_HOLD_SECONDS} s`
+    : `mc used it within the last ${Math.round(idleMs / 1000)} s`);
+  let saidFor = null;
   for (;;) {
-    let busy = null;
+    let held = null;
     for (const service of services.filter(Boolean)) {
       const running = d.servingWorktree(worktree, { root: d.root, service });
       const hold = running ? d.mainHold(running, { now: d.now(), idleMs, dir: d.sessionsDir }) : null;
-      if (hold === 'kept') {
-        return `a kept browser stepped on the main server ${running.instance_id} within the last minute — mc does not move the checkout under it; close it (mc shot close) or deploy again in a minute`;
-      }
-      if (hold === 'busy' && !busy) busy = running;
+      if (hold) { held = { running, hold }; break; }
     }
-    if (!busy) return null;
+    if (!held) return null;
     if (d.now() >= until) {
-      return `the main server ${busy.instance_id} is in use (mc used it within ${Math.round(idleMs / 1000)} s) and stayed in use for ${Math.round((idleMs + HOLD_MARGIN_MS) / 1000)} s — the checkout is not moved under it`;
+      return `the main server ${held.running.instance_id} is still held (${why(held.hold)}) after ${Math.round(HOLD_WAIT_MS / 60_000)} min of waiting — the checkout is not moved under it`;
     }
-    if (!said) { say(`mc: suites — the main server ${busy.instance_id} is in use; waiting for it to be idle before the checkout is moved`); said = true; }
+    const key = `${held.running.instance_id}:${held.hold}`;
+    if (key !== saidFor) {
+      say(`mc: suites — the main server ${held.running.instance_id} is held (${why(held.hold)}); waiting up to ${Math.round(HOLD_WAIT_MS / 60_000)} min for the hold to end before the checkout is moved`);
+      saidFor = key;
+    }
     await d.sleep(Math.min(HOLD_POLL_MS, Math.max(1, until - d.now())));
   }
 }
