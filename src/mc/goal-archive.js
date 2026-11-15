@@ -7,8 +7,8 @@
  * the goal's branch deleted, its directory moved to `goals/.archive/`, and one
  * row written to `goals/goal_log.md`; the programme's phases are then
  * renumbered (`renumberPhases`), so when the last goal of the lowest phase
- * leaves, the next phase is phase 1. The runner calls it once a goal has been
- * finished for `ARCHIVE_HOLD_MS`. A programme is never archived by the runner.
+ * leaves, the next phase is phase 1. The runner calls it at its next pass for
+ * every finished goal, with no wait. A programme is never archived by the runner.
  *
  * The rules take what they need as arguments: `git`, `gh`, `known`, `move`,
  * `appendText`, `read`, `list`, `write` and `now` come from the caller, as goal.js and run.js
@@ -17,29 +17,19 @@
 import { renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { appendLog, archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalBranch, goalLogRow, listDirsOf, LOG_FILE, logStamp, parseLog, prRef, renumberPhases, stageSince, updateGoal } from './goals.js';
+import { appendLog, archiveDirIn, FINISHED, GOAL_FILE, GOAL_LOG_FILE, GOAL_LOG_HEAD, GOALS_DIR, goalBranch, goalLogRow, listDirsOf, LOG_FILE, logStamp, parseLog, prRef, renumberPhases, updateGoal } from './goals.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { repoNameOf } from './repos.js';
 import { dequeue, mergesPath, parseQueue } from './merge-queue.js';
 
-/** How long a finished goal stays listed before the runner archives it. */
-export const ARCHIVE_HOLD_MS = 24 * 60 * 60 * 1000;
-
-const HOUR_MS = 60 * 60 * 1000;
-
 /**
- * Whether the runner archives this goal now: dropped work is due immediately;
- * done retains its configured hold, counted from the stage-setting log entry.
+ * Whether the runner archives this goal at its next pass: every finished goal,
+ * done or dropped, with or without a stage timestamp in its log. What makes
+ * archiving safe is `archiveGoal`'s checks, not a wait.
  */
-export function goalArchiveDue({ goal, nowMs, holdMs = ARCHIVE_HOLD_MS }) {
+export function goalArchiveDue({ goal }) {
   if (!FINISHED.includes(goal.stage)) return { due: false, why: `the goal is in ${goal.stage}` };
-  if (goal.stage === 'dropped') return { due: true, why: 'dropped — abandoned work is finalized immediately' };
-  const at = stageSince(goal);
-  if (!at || Number.isNaN(Date.parse(at))) return { due: false, why: `the log does not say when it was ${goal.stage}` };
-  const since = nowMs - Date.parse(at);
-  const hours = Math.max(0, Math.floor(since / HOUR_MS));
-  if (since < holdMs) return { due: false, why: `${goal.stage} ${hours}h ago — archived after ${Math.round(holdMs / HOUR_MS)}h` };
-  return { due: true, why: `${goal.stage} ${hours}h ago` };
+  return { due: true, why: goal.stage === 'dropped' ? 'dropped — abandoned work is finalized at once' : 'done' };
 }
 
 /**

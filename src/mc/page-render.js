@@ -540,7 +540,9 @@ export function statusRollup(statuses = {}) {
 
 function programmeLine(c, wide, group, expand) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
-  const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${group.record_invalid ? ' · record invalid' : ''}${metadata}`, wide - 8);
+  // The goals done or dropped and still under `goals/`: the count `a` shows.
+  const done = group.finished ?? (group.goals || []).filter((goal) => ['done', 'dropped'].includes(goal.stage)).length;
+  const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${done ? ` · ${done} done` : ''}${group.record_invalid ? ' · record invalid' : ''}${metadata}`, wide - 8);
   return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - width(label) - 7))}┐`, 'cyan')}`;
 }
 
@@ -576,15 +578,25 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     if (hidden.length) say(lines, c, wide, 2, `▸ ${hidden.length} dormant`);
   }
 
+  let alone = false;
   for (const group of groups) {
     if (group.dormant && !expand && !(group.planning_sessions?.length || group.sessions?.length)) continue;
-    if (lines.at(-1) !== '') lines.push('');
+    const body = [
+      ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
+      ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
+      ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }),
+    ];
+    // A programme with nothing to draw — nothing unfinished, nothing to attend to — is its heading row alone.
+    if (lines.at(-1) !== '' && !(alone && !body.length)) lines.push('');
     lines.push(programmeLine(c, wide, group, expand));
-    for (const session of group.planning_sessions || []) lines.push(...activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand }));
-    for (const session of group.sessions || []) lines.push(...activityLines(c, wide, session, { indent: 4, expand }));
-    lines.push(...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }));
+    alone = !body.length;
+    if (alone) continue;
+    lines.push(...body);
     lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
   }
+  // A last programme drawn as its heading alone has no border under it: a blank
+  // line keeps what follows (unassigned activity, strays) from reading as its rows.
+  if (alone) lines.push('');
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
   // Match identities rather than object references: cached JSON copies sessions.
   const identity = (session) => JSON.stringify([session.name, session.pid, session.started]);

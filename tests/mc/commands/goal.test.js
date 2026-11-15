@@ -2141,6 +2141,72 @@ test('mc goal archive of the last goal in phase 1 makes phase 2 phase 1 and phas
   assert.match(f.out(), /mc: mc\/one · archived — .*\n {2}mc\/three {2}phase 3 → 2\n {2}mc\/two {2}phase 2 → 1\n/u);
 });
 
+/** An archive fixture: `[name, stage, phase]` goals of `mc`, and the moves the archive makes recorded in the store. */
+function archiveFixture(goals, { files = {}, ...options } = {}) {
+  const f = fixture({ files: Object.assign({}, ...goals.map(([name, stage, phase]) => goalAt(name, stage, phase)), files), ...options });
+  f.deps.gh = () => ok('[]');
+  f.deps.appendText = (path, text) => { f.store[path] = `${f.store[path] ?? ''}${text}`; };
+  f.deps.move = (from, to) => {
+    for (const key of Object.keys(f.store)) if (key.startsWith(`${from}/`)) { f.store[`${to}${key.slice(from.length)}`] = f.store[key]; delete f.store[key]; }
+  };
+  return f;
+}
+const inStore = (f, name, programme = 'mc') => `${HOME}/${programme}/goals/${name}/${GOAL_FILE}` in f.store;
+
+test('mc goal archive --all archives every done and dropped goal of every programme and nothing else', async () => {
+  const f = archiveFixture([['one', 'done', 1], ['two', 'dropped', 1], ['three', 'build', 2]]);
+  f.store[`${HOME}/other/PLAN.json`] = '{}';
+  for (const [path, text] of Object.entries(goalAt('four', 'done'))) f.store[path.replace('/mc/', '/other/')] = text;
+  assert.equal(await run(['archive', '--all'], f.deps), 0, f.err());
+  assert.deepEqual(['one', 'two', 'three'].map((name) => inStore(f, name)), [false, false, true], 'only the finished ones moved');
+  assert.equal(inStore(f, 'four', 'other'), false, "another programme's too");
+  assert.equal(goalField(f.store[`${HOME}/mc/goals/.archive/two/${GOAL_FILE}`], 'stage'), 'dropped');
+  assert.match(f.out(), /mc: mc\/one · archived — /u);
+  assert.match(f.out(), /mc: mc\/two · archived — /u);
+  assert.match(f.out(), /mc: other\/four · archived — /u);
+  assert.doesNotMatch(f.out(), /three · archived/u);
+  assert.doesNotMatch(f.err(), /three/u);
+});
+
+test('mc goal archive --all names each refusal and exits 1, archiving the rest', async () => {
+  const f = archiveFixture([['clean', 'done', 1], ['dirty', 'done', 1]], {
+    git: (cwd, args) => (args.includes('status') && cwd.includes('/dirty/') ? ok(' M a.js\n') : allOk(cwd, args)),
+  });
+  const code = await run(['archive', '--all'], f.deps);
+  assert.equal(code, 1, f.err());
+  assert.equal(inStore(f, 'clean'), false, 'the safe one is archived');
+  assert.equal(inStore(f, 'dirty'), true, 'the refused one stays');
+  assert.match(f.err(), /mc: mc\/dirty is not archived — /u);
+  assert.match(f.out(), /mc: mc\/clean · archived — /u);
+});
+
+test('mc goal archive refuses a goal a live session owns in every form, --all included, and archives the others', async () => {
+  const root = '/work';
+  const live = { [`${root}/runner/current-memoro.json`]: JSON.stringify({ name: 'goal:mc/busy', pid: 777, lane: 0 }) };
+  const make = (alive) => archiveFixture([['busy', 'done', 1], ['idle', 'done', 1]], { files: live, env: { MC_WORK_ROOT: root }, alive });
+  for (const argv of [['archive', 'mc/busy'], ['archive', 'mc'], ['archive', '--all']]) {
+    const f = make((pid) => pid === 777);
+    const code = await run(argv, f.deps);
+    assert.equal(code, 1, `${argv.join(' ')}: ${f.err()}`);
+    assert.equal(inStore(f, 'busy'), true, `${argv.join(' ')}: the owned goal stays`);
+    assert.match(f.err(), /mc\/busy is not archived — .*live session/u, argv.join(' '));
+    assert.equal(inStore(f, 'idle'), argv[1] === 'mc/busy', `${argv.join(' ')}: the other goal is archived unless it was not asked for`);
+  }
+  const dead = make(() => false);
+  assert.equal(await run(['archive', '--all'], dead.deps), 0, dead.err());
+  assert.equal(inStore(dead, 'busy'), false, 'a session that is no longer alive owns nothing');
+});
+
+test('mc goal archive --all says so when nothing is finished, and takes no name', async () => {
+  const f = archiveFixture([['work', 'build', 1]]);
+  assert.equal(await run(['archive', '--all'], f.deps), 0);
+  assert.equal(f.out(), 'mc: no done or dropped goal\n');
+  assert.equal(await run(['archive', '--all', 'mc/work'], f.deps), 2);
+  assert.match(f.err(), /archive --all takes no name/u);
+  assert.equal(await run(['archive'], f.deps), 2, 'no name and no --all is usage');
+  assert.equal(await run(['status', '--all'], f.deps), 2, '--all belongs to archive alone');
+});
+
 /* ------------------------------------------------------------- convert */
 
 test('mc goal convert turns a programme\'s GOAL.md files into GOAL.json with the right met, removes each, and leaves .archive/ alone', async () => {

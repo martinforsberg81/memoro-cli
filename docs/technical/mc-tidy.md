@@ -25,10 +25,11 @@ goal directory moved to `goals/.archive/`. One row is appended to
 `goals/goal_log.md`; phases are renumbered so there are no gaps. Nothing is
 written into a repository. Dropped goals are finalized and archived as soon as
 safe, including on the next ordinary runner reconciliation even when their log
-has no stage timestamp. Done goals retain the 24-hour hold, counted from their
-stage-setting log entry; disk pressure may still archive done goals without the
-hold (§ Disk pressure). A refusal is recorded once in LOG.md, not every chore
-pass.
+has no stage timestamp. Done goals are archived the same way at the runner's next pass, with no hold,
+whether or not the log says when they were done; a goal a live session owns is
+left for the next pass without a log entry. The disk-pressure pass runs the
+same archive (§ Disk pressure). A refusal is recorded once in LOG.md, not every
+chore pass, and the page shows it under NEEDS ATTENTION.
 
 Projects went on 2026-11-03; their migration is described in
 [mc-goals.md § From a project](mc-goals.md#from-a-project). Old execution
@@ -472,9 +473,9 @@ and refuses admission; cleanup and `mc tidy` still work.
 **The pass.** Below 30 GB a pass runs at once, unless a cooldown holds. Its
 steps, each measured after it, stop at 40 GB:
 
-1. (runner only) finished goals archived through `archiveGoal` without the 24
-   hours, with every refusal kept and logged as before; no goal is set done to
-   free space;
+1. (runner only) finished goals archived through `archiveGoal`, as at every
+   chore pass, with every refusal kept and logged as before; no goal is set
+   done to free space;
 2. tidy's file rules (`runTidy --apply`): the same rules, rule S among them;
 3. Docker's images unused for three days, on a runtime that is already up
    (`tidyDocker` without `start`). A failed prune fails the pass. A runtime

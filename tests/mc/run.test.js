@@ -1309,15 +1309,14 @@ test('the monitor reads the disk every minute on its own timer and relieves pres
 
 const doneAnHourAgo = '## 2026-09-01T09:00Z · claude opus · done · ready\n\nDone: arbete\n';
 
-test('under pressure a goal done an hour ago is archived without the 24 hours, and a refused one stays with its reason', async () => {
+test('the pressure pass archives a goal done an hour ago, and a refused one stays with its reason', async () => {
   const f = goalFixture({
     fresh: { stage: 'done', log: doneAnHourAgo },
     held: { stage: 'done', log: doneAnHourAgo },
     work: {},
   }, { now: '2026-09-01T10:00:00Z', dirty: ['held'] });
   onDisk(f, 15 * GBYTES);
-  await createRunner({ deps: f.deps }).chores();
-  assert.ok(f.files[`${GOALS}/fresh/GOAL.json`], 'the chores keep the 24 hours');
+  assert.ok(f.files[`${GOALS}/fresh/GOAL.json`], 'nothing has run yet');
   await createRunner({ deps: f.deps }).pass();
   assert.equal(f.files[`${GOALS}/fresh/GOAL.json`], undefined, 'archived by the pressure pass');
   assert.equal(goalField(f.files['/w/programs/prog/goals/.archive/fresh/GOAL.json'], 'stage'), 'done');
@@ -1326,7 +1325,7 @@ test('under pressure a goal done an hour ago is archived without the 24 hours, a
   const [archive] = pressureEvents(f)[0].steps;
   assert.deepEqual([archive.name, archive.removed], ['archive', 1]);
   assert.match(archive.kept[0].why, /^not archived — memoro's worktree has uncommitted changes/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /fresh: done — archived to .* \(disk pressure: without the 24 hours\)/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /fresh: done — archived to \/w\/programs\/prog\/goals\/\.archive\/fresh$/mu);
 });
 
 /**
@@ -3765,10 +3764,12 @@ test('a session that started before the offline hold ends without clearing it; o
 const finishedLog = (at, stage) => `## ${at} · claude opus · ${stage} · ready\n\nDone: arbete\n`;
 const ARCHIVE_NOW = '2026-09-01T10:00:00Z';
 
-test('the chores archive done goals after 24 hours and dropped goals immediately, including without a stage timestamp', async (t) => {
+test('the chores archive every finished goal at their pass, however recent, and a goal without a stage timestamp too', async (t) => {
   const f = goalFixture({
     late: { stage: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
-    early: { stage: 'done', log: finishedLog('2026-08-31T11:00Z', 'done') },
+    early: { stage: 'done', log: finishedLog('2026-09-01T09:59Z', 'done') },
+    'hand-set': { stage: 'done', log: '' },
+    open: {},
     'dropped-one': { stage: 'dropped', log: '' },
   }, { now: ARCHIVE_NOW });
   let at = performance.now();
@@ -3792,8 +3793,9 @@ test('the chores archive done goals after 24 hours and dropped goals immediately
   assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| late \| done \|/mu, 'one row in goal_log.md');
   assert.match(f.files['/w/programs/prog/goals/goal_log.md'], /^\| 2026-09-01 \| dropped-one \| dropped \|/mu, 'a dropped goal the same');
   assert.equal((f.files['/w/programs/prog/goals/goal_log.md'].match(/dropped-one/gu) ?? []).length, 1, 'repeat reconciliation does not duplicate archive history');
-  assert.equal(goalField(f.files[`${GOALS}/early/GOAL.json`], 'stage'), 'done', 'done 23 hours: it stays');
-  assert.equal(f.files[`${GOALS}/early/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
+  assert.equal(f.files[`${GOALS}/early/GOAL.json`], undefined, 'done a minute ago: archived at the same pass, no hold');
+  assert.equal(f.files[`${GOALS}/hand-set/GOAL.json`], undefined, 'a done goal whose log does not say when: archived too');
+  assert.equal(goalField(f.files[`${GOALS}/open/GOAL.json`], 'stage'), 'build', 'a goal not finished stays');
 });
 
 test('when the runner archives the last goal of phase 1, phase 2 is phase 1 and phase 3 phase 2', async () => {
@@ -3820,6 +3822,26 @@ test('a goal the archive refuses stays, and the refusal is written into its log 
   assert.equal(runnerLines.length, 1, 'said once, though two passes ran');
   assert.deepEqual([runnerLines[0].stage, runnerLines[0].done], ['done', null]);
   assert.match(runnerLines[0].comment, /^not archived — memoro's worktree has uncommitted changes \(/u);
+});
+
+test('a finished goal a live session owns is left at the pass with no log entry, and archived at the pass after the session ends', async () => {
+  const f = goalFixture({
+    owned: { stage: 'done', log: finishedLog('2026-09-01T09:59Z', 'done') },
+    free: { stage: 'done', log: finishedLog('2026-09-01T09:59Z', 'done') },
+  }, { now: ARCHIVE_NOW });
+  f.deps.alive = (pid) => pid === 4242;
+  f.files['/w/runner/current-memoro.json'] = JSON.stringify({ name: 'goal:prog/owned', pid: 4242, lane: 0 });
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  assert.equal(f.files[`${GOALS}/free/GOAL.json`], undefined, 'the goal no session owns is archived');
+  assert.equal(goalField(f.files[`${GOALS}/owned/GOAL.json`], 'stage'), 'done', 'the owned one stays');
+  assert.equal(f.files[`${GOALS}/owned/LOG.md`].match(/runner/gu), null, 'and nothing is written into its log');
+  assert.ok(!/owned: .*not archived/u.test(f.files['/w/runner/log/runner.log'] ?? ''), 'nor said in the runner log');
+  assert.ok(f.calls.git.every((call) => !call.join(' ').includes('goal/owned')), 'its branch and worktrees are not touched');
+  delete f.files['/w/runner/current-memoro.json'];
+  await runner.chores();
+  assert.equal(f.files[`${GOALS}/owned/GOAL.json`], undefined, 'the session ended: archived at the next pass');
+  assert.equal(goalField(f.files['/w/programs/prog/goals/.archive/owned/GOAL.json'], 'stage'), 'done');
 });
 
 /* ------------------------------------------------------- finish on finish, mend on blocked and on a red in merge */

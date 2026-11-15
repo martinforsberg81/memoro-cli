@@ -417,8 +417,10 @@ Dropped goals are finalized and archived immediately through the shared drop
 operation on ordinary reconciliation, even without a stage timestamp. It
 closes exclusively owned PRs, cancels their queue rows, preserves PRs with an
 unfinished co-owner, and retains failed/unsafe cleanup for retry without
-starting a recovery session. Done goals retain the 24-hour archive hold, with
-one row in `goals/goal_log.md`; archive refusals are recorded once. Every five
+starting a recovery session. Done goals are archived the same way at the next pass, with no hold, each with
+one row in `goals/goal_log.md`; a goal a live session owns is left for the pass
+after the session ends, with no log entry, and any other archive refusal is
+recorded once. Every five
 minutes at most, `settleLanded` checks carried PRs and sets done once all are
 merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 
