@@ -86,8 +86,8 @@ moves forward. You do one of two things to it, nothing else:
 - **The goal itself is wrong:** a criterion that cannot hold, a check that
   does not test what the criterion says, a check a headless session cannot run
   because it passes through a reserved act or needs someone at a terminal, a
-  premise the code contradicts, two parts of the goal that cannot both be met. That is a goal defect, not an
-  obstacle and not a choice. Verify it against the code, then report it, once,
+  premise the code contradicts, two parts of the goal that cannot both be met.
+  That is a goal defect, not an obstacle and not a choice. Verify it against the code, then report it, once,
   as the session's last act: `mc goal defect --part "<the part or criterion
   that is wrong>" --found "<what is wrong, with the file and line or the
   command and output>"`. mc writes one entry, sets the goal `Martin`, and the

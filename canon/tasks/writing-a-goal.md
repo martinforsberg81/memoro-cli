@@ -42,9 +42,10 @@ may be renumbered; a `draft` goal holds later phases back too. The cut into goal
 - **Risks:** how this change can go wrong; each is settled by a criterion, by the protection, or is accepted with its reason.
 - **Criteria:** each states an observable outcome and pass/fail boundary; its `check` gives runnable commands, working directory, prerequisites
   and expected results, and can run now, on the runner's host, before merge. For branch comparisons, use `git diff origin/main...HEAD`. A file,
-  keyword or green gate alone does not prove content. No check waits for anyone or passes through a reserved act: it exercises the
-  mechanism below the reserved command and stops short of the act. Put policy
-  choices in planning, not acceptance.
+  keyword or green gate alone does not prove content. No check waits for
+  anyone or passes through a reserved act: it exercises the mechanism below the
+  reserved command and stops short of the act. Put policy choices in planning,
+  not acceptance.
   [Goal design](references/goal-design.md#success-criteria) holds the rules for evidence and for a live check.
 - **What users see:** a UI goal states the intended result per viewport and checks it with `mc shot` there. Plan several build iterations:
   compare screenshots with the intent until they agree.
