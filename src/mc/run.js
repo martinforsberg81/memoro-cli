@@ -2218,11 +2218,18 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return 'skipped:disk';
     }
     try {
+      // A hold written since the pick (or during admission) starts nothing and writes nothing on the goal (C5a).
+      if (heldBy(goal)) return 'skipped:held';
       const lost = placeGoalWorktrees(goal, name);
-      if (lost) { goalWithoutWord(goal, name, `no session started: ${lost}`); return 'skipped:worktree'; }
+      if (lost) {
+        if (heldBy(goal)) return 'skipped:held';
+        goalWithoutWord(goal, name, `no session started: ${lost}`);
+        return 'skipped:worktree';
+      }
       // A review starts on a clean tree only: a dirty one holds a fault or work nobody has judged (a dead review's fault replay was left there, 2026-11-06).
       const dirty = review ? dirtyWorktrees(goal) : [];
       if (dirty.length) {
+        if (heldBy(goal)) return 'skipped:held';
         goalState(goal, name, { status: 'Martin' }, { comment: `the review did not start: ${dirtySentence(dirty)} — nothing is reset here; review recovery cannot safely continue` });
         return 'skipped:dirty';
       }
@@ -2239,6 +2246,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
         if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
         if (!pr) {
+          if (heldBy(goal)) return 'skipped:held';
           const log = parseLog(deps.read(logPath) ?? '');
           const review = log.findLastIndex((entry) => entry.role === 'review');
           const draft = log.findLastIndex((entry, index) => entry.stage === 'draft' && (index === 0 || log[index - 1].stage !== 'draft'));
@@ -2305,7 +2313,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       let result;
       try {
-        if (mend && goal.status === 'blocked') goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+        if (mend && goal.status === 'blocked') {
+          if (heldBy(goal)) return 'skipped:held';
+          goalState(goal, name, {}, { comment: 'starting blocked recovery' });
+        }
         const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
         const rechecked = await admission.recheck?.();
         if (rechecked && !rechecked.admitted) {
@@ -2313,10 +2324,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           writeJson(paths.disk, { at: stamp(), free_bytes: rechecked.available, line: rechecked.line });
           return 'skipped:disk';
         }
-        // Allocation can yield. A stop or handover during it cancels launch,
+        // Allocation can yield. A stop, a handover or a hold during it cancels launch,
         // and the existing finally blocks release admission and the slot.
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
+        if (heldBy(goal)) return 'skipped:held';
         if (planning && nextDraft(goals(), goal.programme)?.goal !== goal.goal) {
           say(`${name}: programme changed during admission — planning deferred`);
           return 'skipped:programme-changed';
@@ -2372,7 +2384,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const provider = launch.id === 'codex' ? 'codex' : 'claude';
       if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
+      // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
+      const holdAtEnd = readHold(goal.dir, deps.read);
       if (result.handedOff) { say(`${name}: handed to the merger — lane released`); }
+      else if (holdAtEnd) say(`${name}: held by ${holdAtEnd.by ?? '—'} since ${holdAtEnd.at ?? '—'} when its session ended — stage and status stay, nothing is written`);
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (planning) {
         const now = stateNow(goal);

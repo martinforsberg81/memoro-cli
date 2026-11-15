@@ -46,7 +46,7 @@ command. With Martin at the terminal you have full freedom toward the programme 
 When `MC_HEADLESS=1`, the runner assigns exactly one next draft, named by
 `MC_GOAL`. It starts only when the programme has at least one draft and all
 its goals are draft, done or dropped. The next draft is the lowest phase,
-then oldest creation time, then name. A first draft waiting on Martin, or
+then oldest creation time, then name. A first draft waiting on Martin or held, or
 unreadable goal data, holds automatic planning. A programme with no drafts
 starts no plan session.
 
@@ -180,6 +180,6 @@ Yours without asking:
 
 A person opens a plan session to write goals: `mc goal new …` makes the draft
 while the brief is being written, `mc goal plan-review <p>/<g>` reads it, and
-`mc goal stage <p>/<g> build` moves it once the reading is OK.
+`mc goal stage <p>/<g> build` moves it once the reading is OK. A draft made in an interactive session is held from creation, so the runner plans nothing on it while it is being written; moving it to `build` frees it, and `mc goal release` hands an unfinished draft to headless planning.
 
 @verb goal

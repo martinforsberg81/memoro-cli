@@ -733,11 +733,11 @@ Martin, 2026-11-09: a programme with at least one draft and every goal in
 `draft`, `done` or `dropped` may run one plan session to complete its next draft.
 Any unfinished delivery goal, including a goal waiting on Martin, holds this
 trigger. Unreadable goal data holds it too. Select lowest phase, oldest creation
-time, then goal name; a selected draft waiting on Martin cannot be bypassed.
+time, then goal name; a selected draft waiting on Martin or held (`.hold.json`, which a draft created without `MC_HEADLESS=1` carries from creation) cannot be bypassed.
 
 The runner offers this assignment after build in the existing lane picker.
 Claims and live current records prevent concurrent planning in one programme,
-including across runner handover. Recheck the programme after admission awaits
+including across runner handover. Recheck the programme and the hold after admission awaits
 before spawning. Use the selected goal's first repository worktree, role `plan`,
 kind `plan`, `MC_GOAL` and `MC_HEADLESS=1`; keep the normal routing, admission,
 provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
@@ -745,7 +745,7 @@ checkouts are not runner work areas. The assignment is to finish the brief and
 reconcile the README and phases, then move that draft to build. An unresolved
 choice goes through goal-bound mc ask. An ordinary completed plan session
 leaving draft ready waits on Martin with an incomplete-session diagnostic,
-preventing an unchanged-work launch loop. Provider refusals and offline endings
+preventing an unchanged-work launch loop. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
 retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing

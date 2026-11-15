@@ -4947,6 +4947,182 @@ test('next-draft planning launches one selected goal with PLAN identity and hand
   assert.equal(f.calls.sessions.length, 1);
 });
 
+/* ------------------------------------------- a hold written while a session runs, or between the pick and its start */
+
+/** A session that writes the hold `mc goal hold` writes while it runs, then answers as `inner` does. */
+const holdsMidSession = (f, name, inner = okSession()) => (call) => {
+  f.files[`${GOALS}/${name}/.hold.json`] = HOLD();
+  return inner(call);
+};
+
+test('a plan that ends on a held draft leaves it as it is: no runner entry, one line says so, and the next plan starts once released', async () => {
+  const f = goalFixture({ a: { stage: 'draft' } });
+  f.answer = holdsMidSession(f, 'a');
+  const runner = createRunner({ deps: f.deps });
+  const logBefore = f.files[`${GOALS}/a/LOG.md`];
+  assert.equal((await runner.pass()).ran, 1, 'the plan session ran');
+  assert.equal(where(f, 'a'), 'draft · ready', 'stage and status stay');
+  assert.equal(f.files[`${GOALS}/a/LOG.md`], logBefore, 'no runner entry, and no entry of its own');
+  assert.equal(f.log.filter((line) => /when its session ended — stage and status stay, nothing is written/u.test(line)).length, 1, 'said once');
+  assert.equal((await runner.pass()).ran, 0, 'held: the next pass starts nothing');
+  assert.equal(f.calls.sessions.length, 1);
+  delete f.files[`${GOALS}/a/.hold.json`];
+  f.answer = okSession();
+  assert.equal((await runner.pass()).ran, 1, 'released: a plan starts');
+  assert.equal(f.calls.sessions.length, 2);
+});
+
+test('a build that ends on a held goal without an entry of its own leaves it build · ready with no runner entry', async () => {
+  const bare = goalFixture({ a: {} });
+  bare.answer = holdsMidSession(bare, 'a');
+  const before = bare.files[`${GOALS}/a/LOG.md`];
+  assert.equal((await createRunner({ deps: bare.deps }).pass()).ran, 1);
+  assert.equal(where(bare, 'a'), 'build · ready');
+  assert.equal(bare.files[`${GOALS}/a/LOG.md`], before, 'no entry of its own, no runner entry');
+});
+
+test('a build that ends on a held goal with an entry of its own and no progress gets no no-progress entry', async () => {
+  // Unheld, a build that writes its own entry, meets nothing and commits nothing gets a no-progress entry (afterBuild).
+  const free = noProgressFixture();
+  await stuckPass(free, builds(free));
+  assert.equal(noProgressEntries(free).length, 1, 'unheld: the runner writes its no-progress entry');
+  const held = noProgressFixture();
+  const heldBefore = stuckEntries(held).length;
+  await stuckPass(held, (call) => { held.files[`${GOALS}/stuck/.hold.json`] = HOLD(); return builds(held)(call); });
+  assert.equal(stuckWhere(held), 'build · ready');
+  assert.equal(stuckEntries(held).length, heldBefore + 1, 'its own entry is the only new one');
+  assert.equal(stuckEntries(held).filter((entry) => entry.tool === 'runner').length, 0, 'no runner entry: no no-progress entry');
+});
+
+/** A rejected goal `stuck` in build whose worktree HEAD stays put, so a repair that commits nothing makes no progress. */
+function repairFixture() {
+  const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (cwd === `${GOALS}/stuck/memoro` && args.join(' ') === 'rev-parse HEAD' ? { ok: true, stdout: 'head-0\n' } : git(cwd, args));
+  return f;
+}
+
+test('a repair that ends on a held goal leaves it in build with no runner entry', async () => {
+  const free = repairFixture();
+  free.answer = logsItself(free, 'stuck');
+  assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.match(free.calls.sessions[0].prompt, /REVIEW\.md/u, 'a repair session');
+  assert.equal(goalEntries(free, 'stuck').at(-1).tool, 'runner', 'unheld: the runner writes its no-progress entry');
+  assert.match(goalEntries(free, 'stuck').at(-1).comment, /^no progress this session/u);
+
+  const f = repairFixture();
+  f.answer = (call) => { f.files[`${GOALS}/stuck/.hold.json`] = HOLD(); return logsItself(f, 'stuck')(call); };
+  const before = goalEntries(f, 'stuck').length;
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.match(f.calls.sessions[0].prompt, /REVIEW\.md/u, 'a repair session');
+  assert.equal(where(f, 'stuck'), 'build · ready', 'stage and status stay');
+  assert.equal(goalEntries(f, 'stuck').length, before + 1, 'its own entry, and no runner entry');
+  assert.notEqual(goalEntries(f, 'stuck').at(-1).tool, 'runner');
+});
+
+test('a review that ends on a held goal leaves it review · ready with no runner entry', async () => {
+  const f = reviewFixture();
+  f.answer = holdsMidSession(f, 'judged');
+  const before = goalEntries(f).length;
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(where(f, 'judged'), 'review · ready');
+  assert.equal(goalEntries(f).length, before, 'no runner entry');
+});
+
+/**
+ * A mend on the red goal `red`: its session puts the pull request in the merger's line again, sets the status
+ * `left` when given (`blocked`: the obstacle unresolved), and writes the hold when `hold`. Returns the fixture after one pass.
+ */
+async function mendPass({ hold = false, left = null } = {}) {
+  const f = goalFixture({ red: { stage: 'merge', log: redMerge } });
+  f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
+  let line = [{ repo: 'memoro', pr: 31, state: 'red' }];
+  f.deps.pendingMerges = () => line;
+  f.answer = (call) => {
+    line = [{ repo: 'memoro', pr: 31, state: 'queued' }];
+    if (left) f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { status: left });
+    if (hold) f.files[`${GOALS}/red/.hold.json`] = HOLD();
+    return okSession()(call);
+  };
+  f.logBefore = f.files[`${GOALS}/red/LOG.md`];
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(f.calls.sessions[0].env.MC_ROLE, 'mend-session');
+  return f;
+}
+
+test('a mend that ends on a held goal leaves it merge · ready and its log as it was', async () => {
+  // Unheld, a mend that leaves the goal as it was, its pull request queued again, gets the runner's entry (afterMend).
+  const free = await mendPass();
+  assert.equal(parseLog(free.files[`${GOALS}/red/LOG.md`]).at(-1).done, 'mend session took the red; the pull request is in the merger\'s line again');
+  const f = await mendPass({ hold: true });
+  assert.equal(where(f, 'red'), 'merge · ready');
+  assert.equal(f.files[`${GOALS}/red/LOG.md`], f.logBefore, 'no mend entry, no runner entry');
+
+  // Unheld, a mend that leaves the goal blocked is set Martin (B2's shape); held, its status stays as the session left it.
+  const freeBlocked = await mendPass({ left: 'blocked' });
+  assert.equal(where(freeBlocked, 'red'), 'merge · Martin', 'unheld: the runner sets Martin');
+  const blocked = await mendPass({ hold: true, left: 'blocked' });
+  assert.equal(where(blocked, 'red'), 'merge · blocked', 'no status change');
+  assert.equal(blocked.files[`${GOALS}/red/LOG.md`], blocked.logBefore, 'no runner entry');
+});
+
+test('a hold written while the dependencies attach starts no session: the goal stays as it was, with no entry, and the line says why', async () => {
+  const f = goalFixture({ a: {} });
+  f.deps.attachDeps = async () => { f.files[`${GOALS}/a/.hold.json`] = HOLD(); return { ok: true }; };
+  const before = f.files[`${GOALS}/a/LOG.md`];
+  assert.equal((await createRunner({ deps: f.deps }).pass()).ran, 0);
+  assert.equal(f.calls.sessions.length, 0, 'no session');
+  assert.equal(where(f, 'a'), 'build · ready');
+  assert.equal(f.files[`${GOALS}/a/LOG.md`], before, 'no new entry');
+  assert.ok(f.log.some((line) => line.includes('prog/a: held by plan') && line.includes('no session is started')), f.log.join('\n'));
+});
+
+test('a hold written during a review admission, after the pick, starts no session and writes no entry', async () => {
+  const f = reviewFixture();
+  const worktree = `${GOALS}/judged/memoro`;
+  dirtyTree(f, worktree, [' M src/x.js']);
+  const git = f.deps.git;
+  let statusReads = 0;
+  f.deps.git = (cwd, args) => {
+    if (cwd === worktree && args.join(' ') === 'status --porcelain') statusReads += 1;
+    return git(cwd, args);
+  };
+  // The first disk reading is the top of the pass, before the pick; the runner's own line for the pick comes next, so the first reading after it is the admission (run.js, before the start check).
+  let written = false;
+  f.deps.freeBytes = () => {
+    if (!written && f.log.some((line) => /next — goal:prog\/judged/u.test(line))) { written = true; f.files[`${GOALS}/judged/.hold.json`] = HOLD(); }
+    return 50e9;
+  };
+  const before = goalEntries(f).length;
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(written, true, 'the hold was written at the admission');
+  assert.equal(f.calls.sessions.length, 0, 'no review session');
+  assert.equal(where(f, 'judged'), 'review · ready');
+  assert.equal(goalEntries(f).length, before, 'no new entry');
+  assert.equal(statusReads, 0, 'the held goal\'s worktree status was not read after the hold');
+});
+
+test('a hold written while a review worktree is read starts no session and writes no entry', async () => {
+  const f = reviewFixture();
+  const worktree = `${GOALS}/judged/memoro`;
+  const git = f.deps.git;
+  let read = 0;
+  f.deps.git = (cwd, args) => {
+    if (cwd === worktree && args.join(' ') === 'status --porcelain') {
+      read += 1;
+      f.files[`${GOALS}/judged/.hold.json`] = HOLD();
+      return { ok: true, stdout: ' M src/x.js\n', stderr: '' };
+    }
+    return git(cwd, args);
+  };
+  const before = goalEntries(f).length;
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(read, 1, 'the worktree was read, after admission');
+  assert.equal(f.calls.sessions.length, 0, 'no review session');
+  assert.equal(where(f, 'judged'), 'review · ready');
+  assert.equal(goalEntries(f).length, before, 'no new entry');
+});
+
 test('an incomplete ordinary plan waits on Martin and holds later drafts without spinning', async () => {
   const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
   const runner = createRunner({ deps: f.deps });

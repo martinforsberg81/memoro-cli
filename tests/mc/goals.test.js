@@ -5,7 +5,7 @@ import { noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PR
 import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
-import { addPr, goalOfRecord } from '../../src/mc/goals.js';
+import { addPr, goalOfRecord, readHold } from '../../src/mc/goals.js';
 import { phaseGoals } from '../../src/mc/goal-convert.js';
 import { addItem, itemWords, removeItem } from '../../src/mc/goal-parts.js';
 
@@ -790,4 +790,15 @@ test('programsGoals and goalOfRecord carry a version 2 goal\'s version and parts
   assert.equal(record.version, 2);
   assert.deepEqual(record.decisions.map((item) => item.id), ['D1']);
   assert.equal(renderGoalText(record), V2_FULL_TEXT, 'the record shows as the goal does');
+});
+
+test('readHold says created only when the hold file says created: true; a takeover hold and an unreadable file are not creation holds', () => {
+  const dir = '/w/goals/g';
+  const hold = (text) => readHold(dir, (path) => (path === `${dir}/.hold.json` ? text : null));
+  const base = { by: 'person', tool: 'person', at: '2026-11-01T19:00Z', reason: 'r' };
+  assert.equal(hold(JSON.stringify({ ...base, created: true })).created, true);
+  assert.equal(hold(JSON.stringify(base)).created, false, 'a takeover hold has no created');
+  assert.equal(hold(JSON.stringify({ ...base, created: 'true' })).created, false, 'only exactly true');
+  assert.equal(hold('{ not json').created, false, 'an unreadable file is a hold, not a creation hold');
+  assert.equal(hold(null), null, 'no file, no hold');
 });
