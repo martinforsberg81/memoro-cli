@@ -1576,7 +1576,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function decisionWork(names, passed = new Set()) {
     const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
     const all = goals();
-    return (deps.deskItems?.list() || []).filter(item => decisionEligible(item, deps.now())).flatMap(item => {
+    return (deps.deskItems?.list() || []).filter(item => decisionEligible(item)).flatMap(item => {
       const goal = item.kind === 'goal' ? all.find(g => `${g.programme}/${g.goal}` === item.reference && !g.problems.length) : null;
       if (item.kind === 'goal' && !goal) return [];
       if (goal && heldBy(goal)) return [];
@@ -1585,7 +1585,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const claimName = goal ? goalName(goal) : name;
       const claimPath = join(goal?.dir || itemDirectory(item, deps.env), '.decision.json');
       if (!names.includes(repo) || passed.has(name) || held.has(claimName) || decisionClaimed(claimPath)) return [];
-      return [{ name, repo, kind: 'decision', variant: null, since: item.due_at || item.source_at,
+      return [{ name, repo, kind: 'decision', variant: null, since: item.source_at,
         decision: item, goal, claimName, claimPath, priority: 0 }];
     });
   }
@@ -1642,12 +1642,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'skipped:update';
       const currentItem = deps.deskItems.read(name);
-      if (!decisionEligible(currentItem, deps.now())) return 'skipped:changed';
+      if (!decisionEligible(currentItem)) return 'skipped:changed';
       try {
         const budget = deskBudget({ env: deps.env, now: deps.now(), read: deps.read });
         if (budget.held) { say(`${name}: desk ceiling reached ($${budget.spent} of $${budget.ceiling})`); return 'skipped:desk-ceiling'; }
       } catch (error) { say(`${name}: desk ceiling unreadable — ${error.message}`); return 'skipped:desk-ceiling'; }
-      const prompt = decisionPrompt(currentItem, { env: deps.env, goal, now: deps.now() });
+      const prompt = decisionPrompt(currentItem, { env: deps.env, goal });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `decision-${name}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
@@ -1681,8 +1681,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       recordRefusal({ name, launch, route }, read, picked.billing);
       if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
       const ended = deps.deskItems.read(name);
-      // A due item unchanged by the session is not a successful for-martin ending.
-      const unfinished = decisionUnfinished(ended, deps.now());
+      // An item the session left prepared is not a successful ending.
+      const unfinished = decisionUnfinished(ended);
       // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
       // It counts for nothing and writes nothing; the item is taken again when the provider answers.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
@@ -1691,7 +1691,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };
-        try { failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item, deps.now()) }); }
+        try { failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item) }); }
         catch (error) { say(`${name}: the failure was not counted — ${error.message || String(error)}`); }
         if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
         if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });

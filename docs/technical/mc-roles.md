@@ -98,6 +98,8 @@ move stages backward or forward, or drop. The goal verbs enforce it and log
 validation and acceptance, review, gate, publish and merge evidence. It cannot
 mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
+What the desk brings Martin is of two kinds: a proposed change to a text he holds, in a fixed form of three parts and with no options, and an act only he may do. No clock changes anything on the desk: a brief waits for him, and nothing carries out a recommendation after a time. Any role but `desk-prepare` may leave a proposal with `mc martin propose`; [mc-martin.md](mc-martin.md) holds the form and the rest.
+
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 
 `MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),

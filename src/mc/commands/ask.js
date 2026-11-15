@@ -118,7 +118,7 @@ export async function run(argv, deps = {}) {
   const said = answered
     ? `mc: jev answered ${asked.reading} — continue with: ${call.options[asked.answers.answer.choice]}`
     : decided ? `mc: decided by the session: ${call.recommend} — jev did not settle it (${asked.reading || asked.unavailable}) — continue with: ${call.options[call.recommend]}`
-      : `mc: jev did not settle it: ${asked.reading ? `${asked.reading} — not answered: ${asked.misses.join('; ')}` : asked.unavailable} — take it to Martin`;
+      : `mc: jev did not settle it: ${asked.reading ? `${asked.reading} — not answered: ${asked.misses.join('; ')}` : asked.unavailable} — ${target ? 'take it to Martin' : GOALLESS_PRODUCT}`;
   const ledger = redactValue({ at: now.toISOString(), goal: target?.name ?? null, verb: 'ask', programme: programme ?? null,
     tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend, kind: call.kind,
     reserved: null, documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
@@ -136,6 +136,9 @@ export async function run(argv, deps = {}) {
   stdout.write(`${clean(said)}\n`);
   return answered || decided ? 0 : 1;
 }
+
+/** What a goal-less product call that jev did not settle tells the session: no goal is set, so the change goes to the desk by its own verb. */
+const GOALLESS_PRODUCT = 'no goal is set; leave the change to his text at the desk with mc martin propose --text \'<the text>\' --file <path|-> (the file has three parts: ## Vad den säger, ## Vad som föreslås, ## Vad som hittades) and continue inside the wording that stands';
 
 /**
  * Logs a goal-bound ask in the goal's LOG.md and, when `toMartin`, sets the goal
