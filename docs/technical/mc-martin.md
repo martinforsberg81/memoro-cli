@@ -114,9 +114,10 @@ The role investigates each source question against relevant shared technical
 contracts and the programme README and design. Details answered there are
 resolved without escalation. What remains for Martin, either a proposed change to a text he holds or an act only he may do, as
 [canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md) names it and
-[mc-jev.md](mc-jev.md) routes it by kind, is presented only after synthesis. For an act, the brief's parts are what he would notice; the options as their consequences; one
-recommendation and its reason; what waits; whether it can be changed afterwards;
-the exact act for a `reserved` one). A change to a text he holds is not
+[mc-jev.md](mc-jev.md) routes it by kind, is presented only after synthesis. For a `reserved` act, and for the decision
+failure's mechanical brief, the brief's parts are what he would notice; the
+options as their consequences; one recommendation and its reason; what waits;
+whether it can be changed afterwards; the exact act. A change to a text he holds is not
 presented in those parts: it is brought in the form of *Durable desk items*
 (three parts, no options). When a standard
 changes, the brief names its exact `docs/technical/` destination. The

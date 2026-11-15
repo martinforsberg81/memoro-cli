@@ -98,8 +98,6 @@ move stages backward or forward, or drop. The goal verbs enforce it and log
 validation and acceptance, review, gate, publish and merge evidence. It cannot
 mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
-What the desk brings Martin is of two kinds: a proposed change to a text he holds, in a fixed form of three parts and with no options, and an act only he may do. No clock changes anything on the desk: a brief waits for him, and nothing carries out a recommendation after a time. Any role but `desk-prepare` may leave a proposal with `mc martin propose`; [mc-martin.md](mc-martin.md) holds the form and the rest.
-
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 
 `MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),
@@ -113,9 +111,14 @@ one.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.
-Any remaining choice is synthesized at design level with evidence,
-uncertainty, alternatives/tradeoffs, recommendation and proposed normative
-wording for an exact `docs/technical/` section. Original queue evidence remains
+A remaining choice that is a change to a text Martin holds is brought in the
+form of [mc-martin.md](mc-martin.md) (*Durable desk items*): what the text
+says, the proposed wording as its second part, and what was found, with no
+alternatives and no recommendation; any role but `desk-prepare` may leave one
+with `mc martin propose`. Alternatives/tradeoffs, one recommendation and the
+exact act stay for a reserved act. No clock changes anything on the desk: a
+brief waits for him, and nothing carries out a recommendation after a time.
+Original queue evidence remains
 unchanged. After a decision, the canonical standard and affected programme and
 goal contracts are reconciled before handoff. Get remains model-free and does
 not reinterpret historical questions.

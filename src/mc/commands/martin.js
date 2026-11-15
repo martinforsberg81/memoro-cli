@@ -509,6 +509,7 @@ function programmeOf(item) {
   if (item.kind === 'goal') return item.reference.split('/')[0];
   if (item.kind === 'main-red') return `main-red ${item.reference.slice('main-red:'.length).split('/')[0]}`;
   if (item.kind === 'lesson') return 'lessons';
+  if (item.kind === 'text') return item.goal ? item.goal.split('/')[0] : 'texts';
   return 'jev ledger';
 }
 
