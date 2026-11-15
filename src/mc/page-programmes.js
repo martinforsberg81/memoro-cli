@@ -81,6 +81,21 @@ function phaseWaits(phase, group) {
 }
 
 /**
+ * The goals under a programme's NEEDS ATTENTION, in the order the tree draws them: a malformed goal, a finished goal
+ * the runner refused to archive and a finished goal with an open pull request (one still at work is not). `sessions`
+ * are the runner's.
+ */
+export function attentionGoals(group, sessions = []) {
+  const atWork = (goal) => goal.running || sessions.some((s) => sessionGoal(s) === `${group.programme}/${goal.name}`);
+  const needing = [];
+  for (const phase of group.phases || []) {
+    if (phase.number == null) needing.push(...phase.goals);
+    else needing.push(...phase.goals.filter((goal) => finished(goal) && !atWork(goal) && notArchived(goal) !== null));
+  }
+  return needing;
+}
+
+/**
  * The goals of one programme, by phase. The default view draws every unfinished
  * goal and, of the finished ones, only a goal still at work (running, or owning
  * a live session), which stays in its phase until the session ends; `expand`
@@ -94,10 +109,9 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
   const owned = (goal) => sessions.filter((s) => sessionGoal(s) === `${group.programme}/${goal.name}`);
   const atWork = (goal) => goal.running || owned(goal).length > 0;
   const attention = (goal) => finished(goal) && !atWork(goal) && notArchived(goal) !== null;
-  const needing = [];
+  const needing = attentionGoals(group, sessions);
   for (const phase of group.phases || []) {
-    if (phase.number == null) { needing.push(...phase.goals); continue; }
-    needing.push(...phase.goals.filter(attention));
+    if (phase.number == null) continue;
     const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
     if (!visible.length) continue;
     if (lines.length) lines.push('');
