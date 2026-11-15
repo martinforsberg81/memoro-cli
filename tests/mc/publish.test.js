@@ -148,6 +148,27 @@ describe('mc publish', () => {
     assert.deepEqual(json.out.merged, []);
   });
 
+  it('a pull request from a mend/deploy- branch is recorded for the deploy repair, per repository, before it is queued', async () => {
+    const { out, deps } = fixture({ branch: 'mend/deploy-0123456789ab' });
+    const recorded = [];
+    deps.publishDeployMend = (entry) => { recorded.push(entry); assert.deepEqual(out.merged, [], 'recorded before the merger is asked'); };
+    deps.publishMainMend = () => assert.fail('a deploy repair is not a main-red mend');
+    assert.equal(await run([], deps), 0);
+    assert.deepEqual(recorded.map(({ repo, branch, pr }) => ({ repo, branch, pr })), [{ repo: 'memoro', branch: 'mend/deploy-0123456789ab', pr: 9 }]);
+    assert.deepEqual(out.merged, [['memoro', '9']]);
+  });
+
+  it('a branch that is not a deploy repair records nothing for one; a record that cannot be written stops the publish before the queue', async () => {
+    const plain = fixture();
+    plain.deps.publishDeployMend = () => assert.fail('only a mend/deploy- branch is a deploy repair');
+    assert.equal(await run([], plain.deps), 0);
+    const broken = fixture({ branch: 'mend/deploy-0123456789ab' });
+    broken.deps.publishDeployMend = () => { throw new Error('disk full'); };
+    assert.equal(await run([], broken.deps), 1);
+    assert.match(broken.out.stderr, /^mc: deploy-mend ownership not recorded: disk full\n$/u);
+    assert.deepEqual(broken.out.merged, []);
+  });
+
   it('a head GitHub does not hold yet is not queued', async () => {
     const { out, deps } = fixture();
     const gh = deps.gh;
