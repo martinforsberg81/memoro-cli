@@ -77,7 +77,7 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} is missing`);
       }
       // No WORK heading: every session is a programme's or a desk's, and the
@@ -95,7 +95,7 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'horizons', 'language', 'mc', 'caches', 'notes']);
       assert.equal(page.providerPriority, 'auto');
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
@@ -142,7 +142,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }

@@ -2216,7 +2216,7 @@ describe('collectPage', () => {
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW }), /HORIZONS/u);
   });
 
   it('collects repository pauses, merger liveness and landed PR history from the supplied homes', async (t) => {
@@ -2932,7 +2932,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
   });
 
   describe('drawn', () => {
-    const base = { ...DATA };
+    const base = { ...DATA, horizons: { open: [], none: [], unreadable: [], error: null } };
     const waiting = (over = {}) => ({
       since: LAST, last_opened: LAST, waiting: 3, error: null,
       texts: [
@@ -2955,7 +2955,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
       const lines = draw(waiting(), 100);
       const text = lines.join('\n');
       assert.ok(text.indexOf('┌─ DESK') > text.indexOf('MC'), 'under the header');
-      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('PROGRAMMES'), 'above PROGRAMMES');
+      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'above HORIZONS');
       assert.match(text, /┌─ DESK ─+ d {2}mc martin ┐/u);
       assert.match(text, /^ {4}3 waiting for you$/mu);
       assert.match(text, /d {2}mc martin {3}·   m {2}mc manager/u);
