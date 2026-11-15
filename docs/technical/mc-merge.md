@@ -926,7 +926,7 @@ command gates. A merge round and a bare gate ask for the change scope and run
 none of those commands. The generic execution and command-failure paragraphs
 on this page describe full/wide runs where commands actually occur, not a
 requirement to run them on a merge. The runner's full run and the deploy retain
-wide regression protection; main is not production. The deploy asks for a green
+wide regression protection; main is not production. The deploy requires a green
 full run of the exact commit and the exercised app before it ships
 (`mc-deploy.md`, *The gate*).
 
