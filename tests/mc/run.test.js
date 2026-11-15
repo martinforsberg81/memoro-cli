@@ -787,6 +787,9 @@ async function round(runner, { chores = true } = {}) {
 
 const GOALS = '/w/programs/prog/goals';
 const goalLog = (...stamps) => stamps.map((at) => `## ${at} · claude opus · build · ready\n\nDone: arbete\n`).join('\n');
+/** The log of a goal a review sent back to build: the build's word, then the review's move to build (a repair is next). */
+const rejectedLog = (built = '2026-08-28T09:00Z', rejected = '2026-08-28T10:00Z') => `## ${built} · claude opus · review · ready · by build\n\nDone: gjort\n\n## ${rejected} · claude opus · build · ready · by review\n\nComment: rejected, round 1\n`;
+const VERDICT = 'head: memoro abc1234\ncriterion 1: NOT OK — the case is missing\nchange: OK\n';
 const runnerEntry = (at) => `## ${at} · runner · build · ready\n\nComment: session ended without a log entry (exit 1, 3 s)\n`;
 
 /**
@@ -798,11 +801,12 @@ const runnerEntry = (at) => `## ${at} · runner · build · ready\n\nComment: se
 function goalFixture(goals, options = {}) {
   const f = fixture({ capacity: capacityWith({ claude: 0.1 }), session: (call) => f.answer(call), ...options });
   f.answer = okSession();
-  for (const [name, { stage = 'build', status = 'ready', legacy: old = null, log = '', repos = 'memoro', worktree = true, phase = 1, after = null, prs = [] }] of Object.entries(goals)) {
-    const text = goalJson({ stage, status, phase, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [], prs });
+  for (const [name, { stage = 'build', status = 'ready', legacy: old = null, log = '', repos = 'memoro', worktree = true, phase = 1, after = null, prs = [], verdict = null, goalFields = {} }] of Object.entries(goals)) {
+    const text = goalJson({ stage, status, phase, repos: repos.split(',').map((one) => one.trim()), title: name, goal: [], prs, ...goalFields });
     const { phase: _phase, stage: _stage, ...legacy } = JSON.parse(text);
     f.files[`${GOALS}/${name}/GOAL.json`] = after === null ? text : `${JSON.stringify({ ...legacy, status: old, after: after ? after.split(',').map((one) => one.trim()) : [] }, null, 2)}\n`;
     f.files[`${GOALS}/${name}/LOG.md`] = log;
+    if (verdict !== null) f.files[`${GOALS}/${name}/REVIEW.md`] = verdict;
     if (worktree) for (const repo of repos.split(',')) f.dirs.add(`${GOALS}/${name}/${repo.trim()}`);
   }
   return f;
@@ -3827,12 +3831,12 @@ const plans = (f, name, stage, status = 'ready', inner = okSession()) => (call) 
 const redMerge = `## 2026-08-28T10:00Z · runner · merge · ready\n\nDone: ${redMergeText(31)}\nComment: red: 2 tests red — one mend session takes it and queues it again\n`;
 const where = (f, name) => ['stage', 'status'].map((key) => goalField(f.files[`${GOALS}/${name}/GOAL.json`], key)).join(' · ');
 
-test('only a build routes on the goal\'s class: finish, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
+test('only a build routes on the goal\'s class: a repair, mend and plan run on their own lists, never on fast, in the goal\'s worktree', async () => {
   const HAIKU_ONLY = { ...structuredClone(DEFAULT_CATALOG), fast: [{ tool: 'claude', model: 'haiku', effort: 'high' }] };
-  // finish: opus high / sol high; mend: sonnet medium / sol medium (DEFAULT_CATALOG), whichever has room.
-  for (const [stage, role, claudeModel] of [['finish', 'finish-session', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
+  // repair (the finish list): opus high / sol high; mend: sonnet medium / sol medium (DEFAULT_CATALOG), whichever has room.
+  for (const [stage, role, claudeModel] of [['repair', 'build-session:goal', 'opus'], ['merge', 'mend-session', 'sonnet']]) {
     for (const tool of ['claude', 'codex']) {
-      const f = goalFixture({ stuck: { stage, ...(stage === 'merge' ? { log: redMerge } : {}) } });
+      const f = goalFixture({ stuck: stage === 'merge' ? { stage, log: redMerge } : { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
       f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
       f.deps.catalog = () => structuredClone(HAIKU_ONLY);
       let capacity = capacityWith({ claude: tool === 'claude' ? 0.1 : 0.9 });
@@ -3847,7 +3851,7 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
         if (tool === 'codex') selected.adapter.effortArgs = codexEffortArgs;
         return selected;
       };
-      f.answer = plans(f, 'stuck', stage, 'blocked');
+      f.answer = plans(f, 'stuck', stage === 'repair' ? 'review' : stage, 'blocked');
       const result = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
       assert.equal(result.ran, 1, `${stage} on ${tool}`);
       const [call] = f.calls.sessions;
@@ -3873,15 +3877,15 @@ test('only a build routes on the goal\'s class: finish, mend and plan run on the
   assert.equal(built.calls.sessions[0].env.MC_MODEL, 'haiku', 'a build still follows its class');
 });
 
-test('a finish whose list has no usable subscription never borrows a class: its own API reserve, or it waits', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
+test('a repair whose finish list has no usable subscription never borrows a class: its own API reserve, or it waits', async () => {
+  const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
   f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), finish: [{ tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' }] });
   f.deps.capacity.write(capacityWith({ claude: 0.1 }));
-  f.answer = plans(f, 'stuck', 'finish', 'Martin');
+  f.answer = plans(f, 'stuck', 'review');
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
-  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.1-sol'], 'the finish list\'s own reserve, though haiku has room');
-  const off = goalFixture({ stuck: { stage: 'finish' } });
+  assert.deepEqual([f.calls.sessions[0].env.MC_TOOL, f.calls.sessions[0].env.MC_MODEL], ['codex', 'gpt-6.1-sol'], 'the repair\'s own reserve, though haiku has room');
+  const off = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   off.files[`${GOALS}/stuck/GOAL.json`] = withGoal(off.files[`${GOALS}/stuck/GOAL.json`], { class: 'fast' });
   off.deps.catalog = f.deps.catalog;
   off.deps.capacity.write(capacityWith({ claude: 0.1 }));
@@ -3890,39 +3894,62 @@ test('a finish whose list has no usable subscription never borrows a class: its 
   assert.equal(off.calls.sessions.length, 0, 'with its API off it waits; no session on haiku');
 });
 
-test('a goal in finish starts one finish session: the finish role, in the goal\'s worktree, told to finish it', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: REVIEW.md\n' } });
-  const finish = plans(f, 'stuck', 'finish', 'Martin');
+test('a rejected goal in build starts one repair session: the build role, in the goal\'s worktree, told to read REVIEW.md and the NOT OK ids', async () => {
+  const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
+  const repair = plans(f, 'stuck', 'review');
   f.answer = (call) => {
     call.onSpawn?.(98765);
     assert.equal(JSON.parse(f.files['/w/runner/current-memoro-1.json']).session_pid, 98765);
-    return finish(call);
+    return repair(call);
   };
   const runner = createRunner({ deps: f.deps });
   const r = await runner.pass({ repo: 'memoro', lane: 1 });
   assert.equal(r.ran, 1);
   assert.equal(r.name, 'goal:prog/stuck');
   const [call] = f.calls.sessions;
-  assert.equal(call.env.MC_ROLE, 'finish-session');
-  assert.equal(call.env.MC_HEADLESS, '1', 'the runner\'s finish session is headless');
+  assert.equal(call.env.MC_ROLE, 'build-session:goal');
+  assert.equal(call.env.MC_HEADLESS, '1');
   assert.equal(call.env.MC_GOAL, 'prog/stuck');
   assert.equal(call.cwd, `${GOALS}/stuck/memoro`, 'in the goal\'s worktree');
   assert.equal(call.env.MC_WORKAREA, `${GOALS}/stuck/memoro`);
   assert.equal('MC_REVIEW_HEAD' in call.env, false);
-  assert.match(call.args.join('\n'), /ROLE finish-session/u);
-  assert.match(call.prompt, /^You finish the goal prog\/stuck, headless: it is in finish\. Read REVIEW\.md in its directory when there is one, and LOG\.md; fix what review found in its worktree, gate, publish, and move it to merge\. The last word on it: REVIEW\.md\./u);
-  assert.match(call.prompt, /its worktree is `\/w\/programs\/prog\/goals\/stuck\/memoro`/u);
+  assert.match(call.prompt, /This is a repair build\. Read \/w\/programs\/prog\/goals\/stuck\/REVIEW\.md\. The NOT OK items are:\ncriterion 1: NOT OK — the case is missing/u);
+  assert.doesNotMatch(call.prompt, /change: OK/u, 'only the NOT OK ids');
   const during = JSON.parse(f.duringSession[0]['/w/runner/current-memoro-1.json']);
-  assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'finish', null]);
-  assert.equal(runRows(f.files)[0].kind, 'finish');
-  // It set the goal Martin itself: the runner adds nothing, and no second session starts.
-  assert.equal(where(f, 'stuck'), 'finish · Martin');
-  assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude');
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.deepEqual([during.name, during.kind, during.variant], ['goal:prog/stuck', 'repair', null]);
+  assert.equal(runRows(f.files)[0].kind, 'repair');
+  assert.equal(where(f, 'stuck'), 'review · ready');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'the repair ended in review: nothing more starts for a build');
 });
 
-test('one runner applies changed provider priority to finish and mend launches', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
+test('a goal in finish · ready returns to build with a log entry before any session; REVIEW.md makes it a repair, its absence an ordinary build', async () => {
+  const withReview = goalFixture({ stuck: { stage: 'finish', verdict: VERDICT, log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: review\n' } });
+  withReview.answer = (call) => { withReview.seenWhere = where(withReview, 'stuck'); return plans(withReview, 'stuck', 'review')(call); };
+  await createRunner({ deps: withReview.deps }).pass({ repo: 'memoro' });
+  assert.equal(withReview.seenWhere, 'build · ready', 'already in build when the session starts');
+  const entries = goalEntries(withReview, 'stuck');
+  assert.deepEqual([entries.at(-2).tool, entries.at(-2).stage, entries.at(-2).status], ['runner', 'build', 'ready']);
+  assert.match(entries.at(-2).comment, /in finish, a stage no session is started on any more — returns to build to repair what REVIEW\.md names/u);
+  assert.equal(withReview.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
+  assert.match(withReview.calls.sessions[0].prompt, /This is a repair build/u);
+  assert.equal(runRows(withReview.files)[0].kind, 'repair');
+
+  const old = goalFixture({ stuck: { stage: 'finish', verdict: 'Found: it is slow.\n', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: review\n' } });
+  old.answer = plans(old, 'stuck', 'review');
+  await createRunner({ deps: old.deps }).pass({ repo: 'memoro' });
+  assert.match(old.calls.sessions[0].prompt, /REVIEW\.md is in the old form or holds no item ids\./u);
+
+  const without = goalFixture({ stuck: { stage: 'finish', log: '## 2026-08-28T10:00Z · codex sol · finish · ready\n\nDone: gone\n' } });
+  without.answer = plans(without, 'stuck', 'review');
+  await createRunner({ deps: without.deps }).pass({ repo: 'memoro' });
+  assert.equal(goalEntries(without, 'stuck').at(-2).comment, 'in finish, a stage no session is started on any more — returns to build');
+  assert.equal(without.calls.sessions[0].env.MC_ROLE, 'build-session:goal');
+  assert.doesNotMatch(without.calls.sessions[0].prompt, /repair build/u, 'no REVIEW.md: an ordinary build');
+  assert.equal(runRows(without.files)[0].kind, 'build-goal', 'an ordinary goal build, not a repair');
+});
+
+test('one runner applies changed provider priority to repair and mend launches', async () => {
+  const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
   let priority = 'codex';
   f.deps.catalog = () => ({ ...DEFAULT_CATALOG, providerPriority: priority });
   let capacity = capacityWith({ claude: 0.1 });
@@ -3930,7 +3957,7 @@ test('one runner applies changed provider priority to finish and mend launches',
   f.deps.capacity.write(capacity);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['finish-session', 'codex', 'gpt-6.1-sol']);
+  assert.deepEqual([f.calls.sessions.at(-1).env.MC_ROLE, f.calls.sessions.at(-1).env.MC_TOOL, f.calls.sessions.at(-1).env.MC_MODEL], ['build-session:goal', 'codex', 'gpt-6.1-sol']);
   f.files[`${GOALS}/stuck/GOAL.json`] = withGoal(f.files[`${GOALS}/stuck/GOAL.json`], { stage: 'build', status: 'blocked' });
   priority = 'claude';
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'legacy blocked work migrates without launching');
@@ -3938,14 +3965,14 @@ test('one runner applies changed provider priority to finish and mend launches',
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a finish session that moves the goal to merge hands it to the merger: no session starts after it', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish' } });
-  f.answer = plans(f, 'stuck', 'merge');
+test('a repair that moves the goal to review leaves it to the review: the runner adds no entry and starts no build after it', async () => {
+  const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
+  f.answer = plans(f, 'stuck', 'review');
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(where(f, 'stuck'), 'merge · ready');
+  assert.equal(where(f, 'stuck'), 'review · ready');
   assert.equal(parseLog(f.files[`${GOALS}/stuck/LOG.md`]).at(-1).tool, 'claude', 'no runner entry after it');
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'in merge the runner starts nothing');
+  assert.equal(f.calls.sessions.length, 1);
 });
 
 test('a red in merge starts mend; completed ready recovery stays ready even before queue restoration', async () => {
@@ -4248,8 +4275,8 @@ test('a build session on a goal with no worktree makes it on goal/<goal> before 
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a finish session on a goal with no worktree makes the goal\'s worktree before it starts, and no planning checkout', async () => {
-  const f = goalFixture({ stuck: { stage: 'finish', worktree: false } });
+test('a repair session on a goal with no worktree makes the goal\'s worktree before it starts, and no planning checkout', async () => {
+  const f = goalFixture({ stuck: { stage: 'build', worktree: false, verdict: VERDICT, log: rejectedLog() } });
   noBranches(f);
   f.dirs.add('/home/memoro');
   const adds = sessionsAtAdd(f);
@@ -4258,7 +4285,7 @@ test('a finish session on a goal with no worktree makes the goal\'s worktree bef
   assert.deepEqual(goalAdd?.args, ['worktree', 'add', '-q', '-b', 'goal/stuck', `${GOALS}/stuck/memoro`, 'origin/main']);
   assert.equal(goalAdd.sessionsBefore, 0);
   assert.equal(adds.some((add) => add.path === '/w/programs/prog/memoro'), false, 'the runner makes no plan/<programme> checkout: mc plan does');
-  assert.equal(f.calls.sessions[0].cwd, `${GOALS}/stuck/memoro`, 'the finish session stands in the goal\'s worktree');
+  assert.equal(f.calls.sessions[0].cwd, `${GOALS}/stuck/memoro`, 'the repair session stands in the goal\'s worktree');
 });
 
 test('a released goal worktree comes back on its own existing branch, as it was: added without -b, after a prune', async () => {
@@ -4329,19 +4356,21 @@ function reviewFixture({ log = builtBy('codex gpt-6.1-sol'), pr = 31, head = HEA
   return f;
 }
 
-/** A review session that decides, as `mc goal stage merge|finish` does: its one-line entry and the stage. */
+/** A review session that decides, as `mc goal stage merge|build` does: its one-line entry and the stage; a move to build is a rejection, with REVIEW.md left. */
 const judges = (f, stage, inner = okSession()) => (call) => {
   const path = `${GOALS}/judged/LOG.md`;
-  f.files[path] = `${f.files[path]}\n## 2026-08-29T10:00Z · claude opus · ${stage} · ready\n\nDone: ${stage}; proposals/2026-08-29-mc-x.md\n`;
+  f.files[path] = `${f.files[path]}\n## 2026-08-29T10:00Z · claude opus · ${stage} · ready${stage === 'build' ? ' · by review' : ''}\n\nDone: ${stage}; proposals/2026-08-29-mc-x.md\n`;
+  if (stage === 'build') f.files[`${GOALS}/judged/REVIEW.md`] = VERDICT;
   f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage, status: 'ready' });
   return inner(call);
 };
 const goalEntries = (f, name = 'judged') => parseLog(f.files[`${GOALS}/${name}/LOG.md`]);
 
-test('review and finish release their lane after merge handoff so the next assignment can start', async () => {
-  for (const stage of ['review', 'finish']) {
+test('a review releases its lane after merge handoff so the next assignment can start', async () => {
+  for (const stage of ['review']) {
     const f = reviewFixture({ goals: { next: {} } });
     f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage, prs: ['memoro#31'] });
+    f.files[`${GOALS}/judged/REVIEW.md`] = `head: memoro ${HEAD}\ncriterion 1: OK\n`;
     f.deps.laneCount = () => ({ lanes: 1 });
     let starts = 0;
     f.answer = async (call) => {
@@ -4492,16 +4521,20 @@ test('a review decides: merge is the merger\'s — the runner queues nothing and
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a review that sends the goal to finish hands it to one finish session, never back to a build', async () => {
+test('a review that sends the goal to build hands it to one repair session, never to a second review first', async () => {
   const f = reviewFixture();
-  f.answer = judges(f, 'finish');
+  f.answer = judges(f, 'build');
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
-  assert.equal(where(f, 'judged'), 'finish · ready');
-  f.answer = plans(f, 'judged', 'merge');
+  assert.equal(where(f, 'judged'), 'build · ready');
+  assert.ok(f.files[`${GOALS}/judged/REVIEW.md`], 'REVIEW.md is left');
+  f.answer = plans(f, 'judged', 'review');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'finish-session');
-  assert.equal(f.calls.sessions.some((call) => call.env.MC_ROLE === 'build-session:goal'), false, 'never back to a build session');
+  const repair = f.calls.sessions.at(-1);
+  assert.equal(repair.env.MC_ROLE, 'build-session:goal');
+  assert.match(repair.prompt, /This is a repair build/u);
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['review-session:goal', 'build-session:goal']);
+  assert.equal(runRows(f.files).at(-1).kind, 'repair');
 });
 
 test('a review that dies leaves review · ready and a review runs again; a second that dies waits on Martin', async () => {
@@ -4580,7 +4613,7 @@ test('a review without a pull request returns once to build, then stops for Mart
 
 /* ---------------------------------------------------------------- no loop */
 
-test('a goal driven through a red review, a red merge and a moved head reaches merge · blocked in five sessions, its stage never going back', async () => {
+test('a goal driven through a red review, a red merge and a moved head reaches merge · blocked in six sessions, its stage going back only by a review\'s rejection', async () => {
   const f = reviewFixture({ log: '' });
   f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'build', prs: ['memoro#31'] });
   let line = [];
@@ -4599,11 +4632,14 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
   // 1. The build session ends the task: review.
   f.answer = (call) => { f.files[`${GOALS}/judged/LOG.md`] += `\n${builtBy('codex gpt-6.1-sol')}`; f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'review' }); return okSession()(call); };
   await runner.pass({ repo: 'memoro' }); note();
-  // 2. The review is red: finish, with REVIEW.md.
-  f.answer = judges(f, 'finish');
+  // 2. The review is red: build, with REVIEW.md.
+  f.answer = judges(f, 'build');
   await runner.pass({ repo: 'memoro' }); note();
-  // 3. The finish session fixes, publishes and queues: merge.
-  f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return plans(f, 'judged', 'merge')(call); };
+  // 3. The repair build fixes and publishes: review again.
+  f.answer = plans(f, 'judged', 'review');
+  await runner.pass({ repo: 'memoro' }); note();
+  // 3b. The second review is green: merge, queued.
+  f.answer = (call) => { line = [{ repo: 'memoro', pr: 31, state: 'queued' }]; return judges(f, 'merge')(call); };
   await runner.pass({ repo: 'memoro' }); note();
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'in the merger\'s line, nothing starts');
   // 4. The merger answers red: one mend session takes it and queues again.
@@ -4618,10 +4654,10 @@ test('a goal driven through a red review, a red merge and a moved head reaches m
   assert.equal(where(f, 'judged'), 'merge · Martin');
   for (let i = 0; i < 5; i += 1) assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, `pass ${i + 1} after it starts nothing`);
 
-  assert.deepEqual(seen, ['review · ready', 'finish · ready', 'merge · ready', 'merge · ready', 'merge · ready', 'merge · blocked']);
+  assert.deepEqual(seen, ['review · ready', 'build · ready', 'review · ready', 'merge · ready', 'merge · ready', 'merge · ready', 'merge · blocked']);
   const stages = parseLog(f.files[`${GOALS}/judged/LOG.md`]).map((entry) => entry.stage).filter(Boolean);
-  for (let i = 1; i < stages.length; i += 1) assert.ok(rank(stages[i]) >= rank(stages[i - 1]), `${stages[i - 1]} → ${stages[i]} goes back`);
-  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'finish-session', 'mend-session', 'mend-session'], 'a finish and two mends, without moving a stage backward');
+  for (let i = 1; i < stages.length; i += 1) assert.ok(rank(stages[i]) >= rank(stages[i - 1]) || (stages[i - 1] === 'review' && stages[i] === 'build'), `${stages[i - 1]} → ${stages[i]} goes back`);
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE), ['build-session:goal', 'review-session:goal', 'build-session:goal', 'review-session:goal', 'mend-session', 'mend-session'], 'a repair and two mends; the one step back is the review\'s rejection');
 });
 
 test('legacy pre-merge blocks migrate to Martin; a queued merge block never relaunches', async () => {
@@ -4663,7 +4699,7 @@ test('legacy blocked build reconciles once and does not consume a session lane',
 /** The hold `mc goal hold` writes, as the runner reads it. */
 const HOLD = (at = '2026-11-01T19:00Z') => JSON.stringify({ by: 'plan', tool: 'claude', at, reason: 'the fix is taken over here' });
 
-test('a held goal gets no planning, build or finish session, and the runner says so once', async () => {
+test('a held goal gets no planning or build session, a held one left in finish stays there, and the runner says so once', async () => {
   for (const stage of ['draft', 'build', 'finish']) {
     const held = goalFixture({ held: { stage } });
     held.files[`${GOALS}/held/.hold.json`] = HOLD();
