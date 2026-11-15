@@ -136,7 +136,7 @@ export function parses(verb, argv) {
 /** Samples for placeholders a parser checks; any other is `x`. */
 const SAMPLE = {
   pr: '7', n: '3', m: '2', s: '5', seconds: '5', min: '5', h: '2', ms: '600', build: '12', sha: 'abc1234',
-  iso: '2026-01-01T00:00:00Z', lang: 'sv', verb: 'status', list: 'sv,fr', 't,r,b,l': '47,0,34,0', v: 'iphone',
+  phase: '2', iso: '2026-01-01T00:00:00Z', lang: 'sv', verb: 'status', list: 'sv,fr', 't,r,b,l': '47,0,34,0', v: 'iphone',
 };
 /** Words in brackets that describe rather than name: the forms they stand for are walked on their own rows. */
 const DESCRIPTIVE = new Set(['same flags', 'step flags']);

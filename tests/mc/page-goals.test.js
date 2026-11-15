@@ -7,6 +7,7 @@ import {
 } from '../../src/mc/page-collect.js';
 import { renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
+import { SEQUENTIAL, phaseOpen } from '../../src/mc/goals.js';
 
 const NOW = new Date('2026-11-01T12:00:00Z');
 
@@ -368,5 +369,53 @@ describe('programme pull requests', () => {
       assert.ok(lines.some((line) => /memoro-cli#5 · open +Change 5/u.test(line)), 'standalone PR has its own row');
       assert.ok(lines.every((line) => width(line) <= columns));
     }
+  });
+});
+
+describe('a programme whose record states its phases', () => {
+  const ROW = (goal, stage, phase) => ({ programme: 'prog', goal, repos: ['memoro-cli'], stage, status: 'ready', phase, log: [], problems: [] });
+  /** Phases 1 and 2 in build, 3 in build after 1 and 2, 4 done, 5 in build after 4. */
+  const goals = [ROW('one', 'build', 1), ROW('two', 'build', 2), ROW('three', 'build', 3), ROW('four', 'done', 4), ROW('five', 'build', 5)];
+  const STATED = { kind: 'stated', after: { 3: [1, 2], 5: [4] } };
+  const INVALID = { kind: 'invalid', problems: ['not JSON'] };
+  const sectionOf = (order) => programmesSection({ goalRows: goalsOf({ goals, order: () => order }), order: () => order, programmes: [] });
+  const groupOf = (order) => sectionOf(order).programmes.find((group) => group.programme === 'prog');
+
+  it('holds only the goal whose phase waits, and gives each phase its state and what it waits for', () => {
+    const rows = goalsOf({ goals, order: () => STATED });
+    assert.deepEqual(rows.map((row) => [row.name, row.held]), [['one', false], ['two', false], ['three', true], ['four', false], ['five', false]]);
+    const group = groupOf(STATED);
+    assert.equal(group.current_phase, 1);
+    assert.deepEqual(group.phases.map((phase) => [phase.number, phase.state, phase.after]), [
+      [1, 'current', []], [2, 'current', []], [3, 'waiting', [1, 2]], [4, 'finished', []], [5, 'current', [4]],
+    ]);
+    const json = JSON.parse(JSON.stringify(sectionOf(STATED)));
+    assert.deepEqual(json.programmes[0].phases.map((phase) => phase.after), [[], [], [1, 2], [], [4]]);
+  });
+
+  it('draws one heading for the waiting phase, with what it waits for, and none for the others', () => {
+    const lines = programmesOf(renderPageLines(pageData({ programmes: sectionOf(STATED) }), { columns: 160, now: NOW, expand: true }));
+    const headings = lines.map(plain).filter((line) => /Phase \d/u.test(line));
+    assert.ok(headings.some((line) => line.includes('Phase 3 · after phase 1, 2')), headings.join('\n'));
+    assert.equal(lines.map(plain).filter((line) => line.includes('after phase')).length, 1);
+  });
+
+  it('marks every goal held exactly when phaseOpen says its phase is not open', () => {
+    for (const order of [STATED, SEQUENTIAL, { kind: 'stated', after: {} }, INVALID]) {
+      const rows = goalsOf({ goals, order: () => order });
+      for (const goal of goals) {
+        const row = rows.find((each) => each.name === goal.goal);
+        assert.equal(row.held, goal.stage !== 'done' && !phaseOpen(goal, goals, order), `${order.kind}: ${goal.goal}`);
+      }
+    }
+  });
+
+  it('holds every unfinished goal of a programme whose record is invalid, and says so', () => {
+    const rows = goalsOf({ goals, order: () => INVALID });
+    assert.deepEqual(rows.map((row) => [row.name, row.held]), [['one', true], ['two', true], ['three', true], ['four', false], ['five', true]]);
+    const group = groupOf(INVALID);
+    assert.equal(group.record_invalid, true);
+    assert.equal(group.current_phase, 1, 'the lowest unfinished phase is named, though none is open');
+    assert.deepEqual(group.phases.map((phase) => phase.state), ['waiting', 'waiting', 'waiting', 'finished', 'waiting']);
   });
 });

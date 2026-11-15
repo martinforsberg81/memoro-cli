@@ -2590,3 +2590,38 @@ describe('(S) registered source exports (scratch.js) in the routine and pressure
   });
 
 });
+
+describe('(P) goal checkouts in a programme whose record states its phases', () => {
+  const RECORD = { schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated', after: { 3: [1, 2], 5: [4] } } };
+  /** Phases 1 and 2 in build, 3 in build after 1 and 2, 4 done, 5 in build after 4: a clean checkout of each unfinished goal, 30 days old. */
+  function arranged(m, record) {
+    m.write(join(m.work, 'programs', 'mc', 'PROGRAMME.json'), record ?? `${JSON.stringify(RECORD, null, 2)}\n`, OLD);
+    const trees = {};
+    for (const [name, phase] of [['one', 1], ['two', 2], ['three', 3], ['five', 5]]) {
+      trees[name] = planGoalTree(m, { name, metadata: goalJson({ stage: 'build', status: 'ready', phase, repos: ['memoro'] }) });
+    }
+    m.write(join(m.work, 'programs', 'mc', 'goals', 'four', 'GOAL.json'), goalJson({ stage: 'done', status: 'ready', phase: 4, repos: ['memoro'] }), OLD);
+    return trees;
+  }
+
+  it('keeps the checkout of a phase that is open beside a lower phase, and lists the one whose phase waits, saying for which phases', () => {
+    const m = machine();
+    try {
+      const trees = arranged(m);
+      const { list } = runTidy(trees.one.doors());
+      assert.deepEqual(paths(ruled(list, 'P')), [trees.three.path], 'only the phase-3 checkout is released');
+      assert.match(list.targets.find((item) => item.path === trees.three.path).why, /phase 3 waits for phase 1, 2 of its programme/u);
+      for (const name of ['one', 'two', 'five']) assert.equal(keptOf(list, trees[name].path).why, 'goal stage is build, not draft, and a session can start it', name);
+    } finally { m.cleanup(); }
+  });
+
+  it('gives no phase as a ground when the programme\'s record is invalid', () => {
+    const m = machine();
+    try {
+      const trees = arranged(m, '{ not json');
+      const { list } = runTidy(trees.one.doors());
+      assert.deepEqual(ruled(list, 'P'), [], 'nothing is released on the ground of the phase');
+      for (const name of ['one', 'two', 'three', 'five']) assert.ok(keptOf(list, trees[name].path), name);
+    } finally { m.cleanup(); }
+  });
+});

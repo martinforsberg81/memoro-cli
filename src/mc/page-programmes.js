@@ -59,13 +59,26 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   }
 }
 
+/**
+ * What follows a phase's number in its heading: a waiting phase of a programme
+ * whose phases run in sequence is `after phase <the current one>`; of one whose
+ * record states them, `after phase <every phase it is stated to wait for>`
+ * (the phase's `after`); an open or finished phase, and any phase of a
+ * programme whose record is invalid, says nothing.
+ */
+function phaseWaits(phase, group) {
+  if (phase.state !== 'waiting') return '';
+  if (phase.after === undefined) return ` · after phase ${group.current_phase}`;
+  return phase.after.length ? ` · after phase ${phase.after.join(', ')}` : '';
+}
+
 /** Every unfinished phase is explicit; only history is folded by default. */
 export function programmeTreeLines(c, wide, group, { expand = false, sessions = [] } = {}) {
   const lines = [];
   const owned = (goal) => sessions.filter((s) => sessionGoal(s) === `${group.programme}/${goal.name}`);
   for (const phase of group.phases || []) {
     if (lines.length) lines.push('');
-    const label = phase.number == null ? 'NEEDS ATTENTION' : `Phase ${phase.number}${phase.state === 'waiting' ? ` · after phase ${group.current_phase}` : ''}`;
+    const label = phase.number == null ? 'NEEDS ATTENTION' : `Phase ${phase.number}${phaseWaits(phase, group)}`;
     lines.push(line(c, wide, 4, label, phase.number == null ? ['red', 'bold'] : ['cyan', 'bold']));
     const visible = phase.goals.filter((goal) => expand || !finished(goal) || noteworthy(goal) || owned(goal).length);
     for (const [index, goal] of visible.entries()) {

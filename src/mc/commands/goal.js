@@ -83,7 +83,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
@@ -861,7 +861,10 @@ function phaseHole(phase, programme, self, ctx) {
  * `mc goal phase [<programme>/<goal>] <n>` — the goal moved to phase `n`, at
  * most one past the highest of its programme's other goals (`phaseHole`).
  * The programme's phases are then renumbered (`renumberPhases`), so a phase
- * the move left empty closes up. Logged as a person's (or session's) entry.
+ * the move left empty closes up. In a programme whose record states its
+ * phases the move is refused, writing nothing, when it would leave with no goal
+ * a phase another phase waits for, and says in a line each what a phase it
+ * emptied no longer waits for. Logged as a person's (or session's) entry.
  */
 function setPhase(args, ctx) {
   const { stdout, stderr, env, home, list, read, write } = ctx;
@@ -874,6 +877,15 @@ function setPhase(args, ctx) {
   if (read(join(target.dir, GOAL_FILE)) === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
   const holed = phaseHole(phase, target.programme, target.goal, ctx);
   if (holed) { stderr.write(`mc: ${holed}\n`); return 2; }
+  const order = programmeOrder(target.programme, { home, read });
+  const emptied = emptiedPhase(target, phase, order, ctx);
+  if (emptied !== null) {
+    const waiting = Object.entries(order.after).filter(([, list]) => list.includes(emptied)).map(([key]) => Number(key)).sort((a, b) => a - b);
+    if (waiting.length) {
+      stderr.write(`mc: phase ${emptied} would be left with no goal, and phase ${waiting.join(', ')} waits for it — state what ${waiting.length === 1 ? 'that phase waits' : 'those phases wait'} for first: mc programs after ${target.programme} ${waiting[0]} …\n`);
+      return 2;
+    }
+  }
   const outcome = updateGoal({ dir: target.dir, change: (goal) => ({ ...goal, phase }), read, write });
   if (outcome.problems) {
     for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
@@ -885,7 +897,22 @@ function setPhase(args, ctx) {
   const own = moved.find((move) => move.goal.goal === target.goal);
   stdout.write(`mc: ${target.name} · phase ${own ? own.to : phase}\n`);
   for (const move of moved.filter((item) => item !== own)) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
+  if (emptied !== null && order.kind === 'stated' && order.after[emptied]?.length) stdout.write(`  phase ${emptied} no longer waits for phase ${order.after[emptied].join(', ')} — it has no goal left\n`);
   return 0;
+}
+
+/**
+ * The phase that moving `target` to `phase` would leave with no goal that
+ * parses, or null: the goal's own phase when it is the only goal in it and
+ * goes elsewhere.
+ */
+function emptiedPhase(target, phase, order, ctx) {
+  if (order.kind !== 'stated') return null;
+  const own = programsGoals({ home: ctx.home, list: ctx.list, read: ctx.read })
+    .filter((goal) => goal.programme === target.programme && goal.problems.length === 0);
+  const mine = own.find((goal) => goal.goal === target.goal);
+  if (!mine || mine.phase === phase) return null;
+  return own.some((goal) => goal !== mine && goal.phase === mine.phase) ? null : mine.phase;
 }
 
 /**
@@ -1739,7 +1766,12 @@ function goalAreas(named, at, ctx) {
  * `mc goal list [<programme>]` — each programme's goals under a line per
  * phase: `<programme> · phase <n> · in progress` for the phase the programme
  * is in (`currentPhase`), `… · done` for one before it, `… · after phase <m>`
- * for one after it. Under it, one line per goal: `programme/goal · repos ·
+ * for one after it. A programme whose record states its phases says instead,
+ * by the stated rule (`phaseStanding`), `done`, `in progress` for an open phase
+ * or `waiting`, each ending ` · after phase <m>[, <m>…]` where the record
+ * states what the phase waits for; one whose record is invalid has the line
+ * `<programme> · record invalid — no phase is open` and every unfinished phase
+ * `waiting`. Under it, one line per goal: `programme/goal · repos ·
  * stage · status · criteria <met>/<all> · n sessions · the last entry's Next`. A
  * goal in build with no criterion reads `build · ready, no criteria — not started`; a
  * blocked one `<stage> · blocked, waits on a person`. Goals that do not parse
@@ -1760,8 +1792,16 @@ function listGoals(args, ctx) {
     const own = goals.filter((goal) => goal.programme === one);
     const current = currentPhase(all, one);
     const phases = [...new Set(own.filter((goal) => !goal.problems.length).map((goal) => goal.phase))].sort((a, b) => a - b);
+    const order = programmeOrder(one, { home, read });
+    const standing = order.kind === 'sequential' ? null : phaseStanding(own, order);
+    if (order.kind === 'invalid') stdout.write(`${one} · record invalid — no phase is open\n`);
     for (const phase of phases) {
-      const state = current === null || phase < current ? 'done' : phase === current ? 'in progress' : `after phase ${phase - 1}`;
+      let state = current === null || phase < current ? 'done' : phase === current ? 'in progress' : `after phase ${phase - 1}`;
+      if (standing) {
+        const at = standing.phases.find((item) => item.phase === phase);
+        state = at.state === 'finished' ? 'done' : at.state === 'current' ? 'in progress' : 'waiting';
+        if (at.after.length) state += ` · after phase ${at.after.join(', ')}`;
+      }
       stdout.write(`${one} · phase ${phase} · ${state}\n`);
       for (const goal of own.filter((item) => !item.problems.length && item.phase === phase)) stdout.write(`  ${goalLine(goal, read)}\n`);
     }

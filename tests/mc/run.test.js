@@ -5407,3 +5407,172 @@ test('a build session on a version 2 goal is handed the goal as `mc goal show` r
   assert.match(call.prompt, /\nOBLIGATIONS\n  Documentation · touched — mc-goals\.md says both versions\.\n      standard: memoro-cli\/docs\/technical\/mc-goals\.md#GOAL\.json\n/u);
   assert.match(call.prompt, /\nCRITERIA 0\/1\n  1 ✗ it works\n      check: a test\n      evidence: the gate log\n/u);
 });
+
+/* ------------------------------------- a programme whose record states its phases */
+
+const RECORD_AT = '/w/programs/prog/PROGRAMME.json';
+const statedText = (after) => `${JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: after === undefined ? { order: 'stated' } : { order: 'stated', after } }, null, 2)}\n`;
+const plainText = () => `${JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }, null, 2)}\n`;
+/** Sessions that wait on `gate`, noting each goal they were started for. */
+function gated(f) {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const started = [];
+  f.answer = async (call) => { started.push(call.env.MC_GOAL); await gate; return okSession()(call); };
+  return { started, release };
+}
+const lanes = (runner, n) => Array.from({ length: n }, (_, i) => runner.pass({ repo: 'memoro', lane: i + 1, tag: `memoro#${i + 1}` }));
+
+test('a programme that states no dependency runs its phases side by side; a held goal and one on Martin stay out', async () => {
+  const f = goalFixture({ one: {}, two: { phase: 2 }, held: { phase: 3 }, asks: { phase: 3, status: 'Martin' } });
+  f.files[RECORD_AT] = statedText();
+  f.files[`${GOALS}/held/.hold.json`] = HOLD();
+  const { started, release } = gated(f);
+  const runner = createRunner({ deps: f.deps });
+  const both = lanes(runner, 2);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([...started].sort(), ['prog/one', 'prog/two'], 'phases 1 and 2 had a session each at once');
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 3, tag: 'memoro#3' })).ran, 0, 'the held goal and the one waiting on Martin get none');
+  release();
+  await both;
+  assert.deepEqual([...started].sort(), ['prog/one', 'prog/two']);
+  assert.equal(where(f, 'held'), 'build · ready');
+  assert.equal(where(f, 'asks'), 'build · Martin');
+});
+
+test('a dependency stated while a phase-1 session runs keeps the phase-2 goal back, with its stage and log as they were, until phase 1 is done', async () => {
+  const f = goalFixture({ one: {}, two: { phase: 2 } });
+  f.files[RECORD_AT] = statedText();
+  const { started, release } = gated(f);
+  const runner = createRunner({ deps: f.deps });
+  const first = runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#1' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ['prog/one'], 'a session on phase 1 is running');
+  f.files[RECORD_AT] = statedText({ 2: [1] });
+  const logBefore = f.files[`${GOALS}/two/LOG.md`];
+  const second = runner.pass({ repo: 'memoro', lane: 2, tag: 'memoro#2' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ['prog/one'], 'phase 2 waits now: no session starts on it');
+  assert.equal((await second).ran, 0);
+  assert.equal(where(f, 'two'), 'build · ready');
+  assert.equal(f.files[`${GOALS}/two/LOG.md`], logBefore);
+  release();
+  await first;
+  f.files[`${GOALS}/one/GOAL.json`] = withGoal(f.files[`${GOALS}/one/GOAL.json`], { stage: 'done' });
+  f.answer = okSession();
+  const next = await runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#1' });
+  assert.equal(next.name, 'goal:prog/two', 'phase 1 done: phase 2 starts');
+});
+
+test('a record that is not JSON, or states a cycle, starts no session in its programme, plan session included, and is said once; another programme goes on', async () => {
+  for (const [kind, text] of [['not JSON', '{ not json'], ['a cycle', statedText({ 2: [3], 3: [2] })]]) {
+    const f = goalFixture({ one: {}, two: { phase: 2 }, draft: { stage: 'draft', phase: 3 } });
+    f.files[RECORD_AT] = text;
+    f.files[`/w/programs/other/goals/go/GOAL.json`] = goalJson({ repos: ['memoro'], title: 'go', goal: [] });
+    f.files[`/w/programs/other/goals/go/LOG.md`] = '';
+    f.dirs.add('/w/programs/other/goals/go/memoro');
+    f.files[`${GOALS}/draft/GOAL.json`] = withGoal(f.files[`${GOALS}/draft/GOAL.json`], { success_criteria: [] });
+    const runner = createRunner({ deps: f.deps });
+    const otherFile = '/w/programs/other/goals/go/GOAL.json';
+    f.answer = (call) => { f.files[otherFile] = withGoal(f.files[otherFile], { stage: 'done' }); return okSession()(call); };
+    const results = [await runner.pass({ repo: 'memoro' }), await runner.pass({ repo: 'memoro' })];
+    assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_GOAL), ['other/go'], `${kind}: only the other programme's goal starts`);
+    assert.equal(results[0].name, 'goal:other/go', kind);
+    assert.equal(f.log.filter((line) => /prog: its record .* is invalid/u.test(line)).length, 1, `${kind}: said once`);
+    for (const name of ['one', 'two', 'draft']) assert.equal(f.files[`${GOALS}/${name}/LOG.md`], '', `${kind}: nothing is written into ${name}`);
+  }
+});
+
+test('a record without phases is today\'s order: the phase-2 goal gets no session while phase 1 is in build', async () => {
+  const f = goalFixture({ first: { repos: 'elsewhere' }, second: { phase: 2 } });
+  f.files[RECORD_AT] = plainText();
+  assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(f.files[`${GOALS}/second/LOG.md`], '');
+});
+
+test('when the runner archives the last goal of phase 1 in a stated programme, the goals and the stated dependency keep to their phases', async () => {
+  const f = goalFixture({
+    late: { stage: 'done', log: finishedLog('2026-08-31T10:00Z', 'done') },
+    next: { phase: 2 },
+    after: { phase: 3 },
+  }, { now: ARCHIVE_NOW });
+  f.files[RECORD_AT] = statedText({ 3: [2] });
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(f.files[`${GOALS}/late/GOAL.json`], undefined, 'archived');
+  assert.equal(goalField(f.files[`${GOALS}/next/GOAL.json`], 'phase'), 1);
+  assert.equal(goalField(f.files[`${GOALS}/after/GOAL.json`], 'phase'), 2);
+  assert.deepEqual(JSON.parse(f.files[RECORD_AT]).phases, { order: 'stated', after: { 2: [1] } });
+});
+
+/** A programme with a phase-1 goal in build and drafts in phases 2 and 3; `record` is what its record says. */
+function planFixture(record) {
+  const f = goalFixture({ building: {}, d2: { stage: 'draft', phase: 2 }, d3: { stage: 'draft', phase: 3 } });
+  if (record !== undefined) f.files[RECORD_AT] = record;
+  for (const name of ['d2', 'd3']) f.files[`${GOALS}/${name}/GOAL.json`] = withGoal(f.files[`${GOALS}/${name}/GOAL.json`], { success_criteria: [] });
+  return f;
+}
+const planned = (f) => f.calls.sessions.filter((call) => call.env.MC_ROLE === 'plan').map((call) => call.env.MC_GOAL);
+
+test('a stated programme plans a draft on a second lane while phase 1 builds, and only one plan session at a time, also once its draft is in build', async () => {
+  const f = planFixture(statedText());
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  f.answer = async (call) => {
+    if (call.env.MC_ROLE === 'plan') f.files[`${GOALS}/d2/GOAL.json`] = withGoal(f.files[`${GOALS}/d2/GOAL.json`], { stage: 'build', success_criteria: [{ criterion: 'c', check: 'k', met: false }] });
+    await gate;
+    return okSession()(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  const running = lanes(runner, 2);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.calls.sessions.map((call) => call.env.MC_ROLE).sort(), ['build-session:goal', 'plan'], 'the build and the plan session run together');
+  assert.deepEqual(planned(f), ['prog/d2']);
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 3, tag: 'memoro#3' })).ran, 0, 'no second plan session, though d2 is in build now');
+  assert.equal((await runner.pass({ repo: 'memoro', lane: 4, tag: 'memoro#4' })).ran, 0);
+  assert.deepEqual(planned(f), ['prog/d2']);
+  release();
+  await Promise.all(running);
+});
+
+test('without phases stated, a plan session is not started while a session of the programme runs', async () => {
+  for (const record of [undefined, plainText()]) {
+    const f = planFixture(record);
+    const { release } = gated(f);
+    const runner = createRunner({ deps: f.deps });
+    const running = lanes(runner, 2);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(planned(f), [], 'no plan session beside the build');
+    release();
+    await Promise.all(running);
+  }
+});
+
+test('a plan session goes to the first draft that is free: a held or decision-claimed one is passed over in a stated programme, and holds the programme otherwise', async () => {
+  const claim = JSON.stringify({ pid: 777 });
+  for (const [kind, block] of [['held', (f, name) => { f.files[`${GOALS}/${name}/.hold.json`] = HOLD(); }], ['decision-claimed', (f, name) => { f.files[`${GOALS}/${name}/.decision.json`] = claim; }]]) {
+    const make = (record) => {
+      const f = goalFixture({ d1: { stage: 'draft' }, d2: { stage: 'draft', phase: 2 } }, { livePids: [777] });
+      if (record !== undefined) f.files[RECORD_AT] = record;
+      for (const name of ['d1', 'd2']) f.files[`${GOALS}/${name}/GOAL.json`] = withGoal(f.files[`${GOALS}/${name}/GOAL.json`], { success_criteria: [] });
+      block(f, 'd1');
+      return f;
+    };
+    const stated = make(statedText());
+    await createRunner({ deps: stated.deps }).pass({ repo: 'memoro' });
+    assert.deepEqual(planned(stated), ['prog/d2'], `${kind}: the phase-2 draft is planned`);
+    const plain = make(undefined);
+    assert.equal((await createRunner({ deps: plain.deps }).pass({ repo: 'memoro' })).ran, 0, `${kind}: with no record the held first draft holds the programme`);
+    assert.deepEqual(planned(plain), []);
+  }
+  // Two drafts of one phase: the older is held, the younger is not offered.
+  for (const record of [statedText(), undefined]) {
+    const f = goalFixture({ older: { stage: 'draft' }, younger: { stage: 'draft' } });
+    if (record !== undefined) f.files[RECORD_AT] = record;
+    f.files[`${GOALS}/older/GOAL.json`] = withGoal(f.files[`${GOALS}/older/GOAL.json`], { success_criteria: [], created: '2026-11-01T10:00:00Z' });
+    f.files[`${GOALS}/younger/GOAL.json`] = withGoal(f.files[`${GOALS}/younger/GOAL.json`], { success_criteria: [], created: '2026-11-02T10:00:00Z' });
+    f.files[`${GOALS}/older/.hold.json`] = HOLD();
+    assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+    assert.deepEqual(planned(f), [], 'the younger draft is not planned past the older');
+  }
+});

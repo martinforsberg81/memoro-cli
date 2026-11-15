@@ -5,6 +5,7 @@
  *   mc programs priority <programme>... --set <n>    prefer work within a stage
  *   mc programs create <programme> --end "…" [--horizon <slug>]    a new programme with its record
  *   mc programs record <programme> --end "…" [--horizon <slug>]    the record of an existing one
+ *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
  *   mc programs show <programme> [--json]    one programme's record
  *
  * The page draws only the programmes with work on them and folds the dormant
@@ -18,8 +19,9 @@ import { join } from 'node:path';
 import { programsHome } from '../paths.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  RECORD_FILE, newRecord, readRecord, recordPage, recordPageTemplate, recordView, writeRecord,
+  RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, writeRecord,
 } from '../programme-record.js';
+import { PLAN_ROLE, listDirsOf, programsGoals } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { reservedRoleHint, reservedRoleName } from '../roles.js';
 import { normalizeSessionRole } from '../session-role.js';
@@ -43,6 +45,7 @@ export const ROUTES = {
   ) },
   create: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('create', scanned) },
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
+  after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
       : NAME_RE.test(positional[0]) ? null : `"${positional[0]}" is not a programme name: lower-case letters, digits and hyphens, at most 64, starting with a letter or digit`
@@ -50,7 +53,23 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'show'];
+const VERBS = ['list', 'priority', 'create', 'record', 'after', 'show'];
+
+const PHASE_RE = /^[1-9]\d{0,8}$/u;
+
+/** What `after` refuses after the scan, before it reads or writes anything: a malformed call. */
+function afterCheck({ positional, flags }) {
+  const [name, ...phases] = positional;
+  if (name === undefined) return 'mc programs after needs a programme, the phase that waits and the phases it waits for, or --none';
+  if (!NAME_RE.test(name)) return `"${name}" is not a programme name: lower-case letters, digits and hyphens, at most 64, starting with a letter or digit`;
+  const [waiting, ...named] = phases;
+  if (waiting === undefined) return 'mc programs after needs the phase that waits';
+  for (const word of phases) if (!PHASE_RE.test(word)) return `"${word}" is not a phase — a whole number from 1`;
+  if (flags.none && named.length) return 'mc programs after takes the phases it waits for or --none, not both';
+  if (!flags.none && !named.length) return 'mc programs after needs the phases the phase waits for, or --none';
+  if (named.includes(waiting)) return `phase ${waiting} cannot wait for itself`;
+  return null;
+}
 
 /** What `create` and `record` refuse after the scan, before they read or write anything. */
 function writeCheck(verb, { positional, flags }) {
@@ -82,6 +101,23 @@ export function recordWriter(env) {
   return { refusal: `the ${named} role cannot create a programme or write a record — the manager (mc manager) and the desk (mc martin) create programmes, and a person may` };
 }
 
+/**
+ * Who states what a phase waits for, from the environment alone, as the
+ * record's own verbs read it: a person, the interactive Martin role, the
+ * manager and the plan role (the order of work is the plan's), the last two
+ * also headless. Every other role is refused, and so is a caller with
+ * `MC_GOAL` and no `MC_ROLE`.
+ */
+export function afterWriter(env) {
+  const role = env.MC_ROLE ? normalizeSessionRole(env.MC_ROLE) : null;
+  if (role === 'manager' || role === PLAN_ROLE) return { by: role };
+  const writer = recordWriter(env);
+  if (!writer.refusal) return writer;
+  if (role === 'martin') return { refusal: 'the Martin role is interactive-only; unattended sessions cannot state what a phase waits for' };
+  const named = role || 'build-session:goal';
+  return { refusal: `the ${named} role cannot state what a phase waits for — the plan states it (mc plan), and the manager, interactive Martin and a person may` };
+}
+
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -93,6 +129,7 @@ export async function run(argv, deps = {}) {
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
   const env = deps.env || process.env;
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
   const read = deps.read || (() => readProgrammes({ env }));
@@ -199,10 +236,10 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon });
     mkdirSync(home, { recursive: true });
     mkdirSync(dir);
-    writeRecord(dir, newRecord({ horizon: flags.horizon, end: flags.end.trim(), createdBy: writer.by, now }));
+    writeRecord(dir, newRecord({ horizon: flags.horizon, end: flags.end.trim(), createdBy: writer.by, now, stated: true }));
     writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
     for (const sub of ['goals', join('proposals', 'archive'), 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
-    stdout.write(`${name}: programme made at ${dir} — record state open, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+    stdout.write(`${name}: programme made at ${dir} — record state open, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     return 0;
   } catch (error) {
     if (error.code === 'EEXIST' && verb === 'record') return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
@@ -224,7 +261,54 @@ function showVerb({ positional, flags }, { env, stdout, stderr }) {
     stderr.write(`mc: ${name} has an invalid record (${join(dir, RECORD_FILE)}):\n${found.problems.map((text) => `  ${text}\n`).join('')}`);
     return 1;
   }
-  const { horizon, end, state, created, created_by: by } = found.record;
+  const { horizon, end, state, created, created_by: by, phases } = found.record;
   stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n  end      ${end}\n  state    ${state}\n  created  ${created} by ${by}\n`);
+  if (phases) {
+    stdout.write('  phases: stated\n');
+    for (const [phase, waits] of Object.entries(phases.after ?? {})) stdout.write(`  phase ${phase} after ${phaseWords(waits)}\n`);
+  }
+  return 0;
+}
+
+const phaseWords = (phases) => `phase ${phases.join(', ')}`;
+
+/**
+ * `after`: the first phase waits for the phases after it, replacing what it
+ * waited for, or for none (`--none`). The caller is checked before anything is
+ * read; the whole statement is checked against the record and the programme's
+ * goals before the one write, a change of `phases` in the record
+ * (`changePhases`) that touches nothing else.
+ */
+function afterVerb({ positional, flags }, { env, stdout, stderr, read }) {
+  const writer = afterWriter(env);
+  if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
+  const [name, waitingWord, ...words] = positional;
+  const waiting = Number(waitingWord);
+  const named = [...new Set(words.map(Number))].sort((a, b) => a - b);
+  const home = programsHome(env);
+  const dir = join(home, name);
+  const refuse = (text) => { stderr.write(`mc: ${text}\n`); return 1; };
+  if (!existsSync(dir)) return refuse(`no programme ${name} — ${dir} does not exist`);
+  const found = readRecord(dir);
+  if (found.status === 'none') return refuse(`${name} has no record, so its phases run in sequence — mc goal phase orders its goals`);
+  if (found.status === 'invalid') return refuse(`${name} has an invalid record — mc programs show ${name} says what is wrong; nothing is changed`);
+  if (found.record.phases === undefined) return refuse(`${name}'s record does not state its phases, so they run in sequence — mc goal phase orders its goals`);
+  const goals = programsGoals({ home, list: (path) => (path === home ? [name] : listDirsOf(path)), ...(read ? { read } : {}) })
+    .filter((goal) => goal.programme === name && goal.problems.length === 0);
+  for (const phase of [waiting, ...named]) {
+    if (!goals.some((goal) => goal.phase === phase)) return refuse(`${name} has no goal in phase ${phase} — a phase waits and is waited for only where it has a goal`);
+  }
+  const stated = (phases) => {
+    const after = { ...(phases.after ?? {}) };
+    delete after[waiting];
+    if (named.length) after[waiting] = named;
+    const keys = Object.keys(after).sort((a, b) => Number(a) - Number(b));
+    return { ...phases, ...(keys.length || phases.after !== undefined ? { after: Object.fromEntries(keys.map((key) => [key, after[key]])) } : {}) };
+  };
+  const cycle = cycleOf(stated(found.record.phases).after);
+  if (cycle) return refuse(`phases ${cycle.join(', ')} would wait for one another in a cycle — nothing is changed`);
+  const outcome = changePhases(dir, stated);
+  if (!outcome.ok) return refuse(`could not change ${name}'s record: ${outcome.problems.join('; ')}`);
+  stdout.write(`mc: ${name} · phase ${waiting} · ${named.length ? `after ${phaseWords(named)}` : 'waits for no phase'}\n`);
   return 0;
 }

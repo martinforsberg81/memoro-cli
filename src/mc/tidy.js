@@ -97,7 +97,7 @@ import { run as runGit } from './git.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { repositoryDir } from './repos.js';
 import { SESSION_ID, claudeHome, readHead, treeBytes } from './conversations.js';
-import { currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, parseGoal, phaseOpen, programsGoals } from './goals.js';
+import { currentPhase, FINISHED, GOAL_FILE, GOALS_DIR, parseGoal, phaseOpen, programmeOrder, programsGoals } from './goals.js';
 import { log } from './logger.js';
 import {
   PLAN_HOME, PROGRAMS_HOME, RUNNER_DEPS, RUNNER_STEP, STEP_HOME, WORK_HOME, areaKindOf, areaOfPath, mcHome,
@@ -537,8 +537,12 @@ export function gatherTidyFacts({
 /**
  * A goal's place in its programme's phases, by the runner's own rule (`phaseOpen`,
  * over `programsGoals` as the runner reads them): `phase`, the programme's
- * `current_phase` (its lowest unfinished one) and `phase_open`. Reads GOAL.json
- * and LOG.md of the programme's goals; no git and no process.
+ * `current_phase` (its lowest unfinished one) and `phase_open`. For a
+ * programme whose record states its phases, `phase_open` is by that record and
+ * `waits_for` the phases the record states for it; for one whose record is
+ * invalid `phase_open` is null, which gives no ground to release. Reads
+ * GOAL.json and LOG.md of the programme's goals and the programme's record; no
+ * git and no process.
  */
 function phaseStanding(programs, programme, parsed, cache) {
   if (!cache.has(programme)) {
@@ -548,7 +552,14 @@ function phaseStanding(programs, programme, parsed, cache) {
   }
   const goals = cache.get(programme);
   const phase = parsed.phase ?? 1;
-  return { phase, current_phase: currentPhase(goals, programme), phase_open: phaseOpen({ programme, phase }, goals) };
+  const order = programmeOrder(programme, { home: programs, read: readUtf8OrNull });
+  if (order.kind === 'sequential') return { phase, current_phase: currentPhase(goals, programme), phase_open: phaseOpen({ programme, phase }, goals) };
+  return {
+    phase,
+    current_phase: currentPhase(goals, programme),
+    phase_open: order.kind === 'invalid' ? null : phaseOpen({ programme, phase }, goals, order),
+    ...(order.kind === 'stated' ? { waits_for: order.after[phase] ?? [] } : {}),
+  };
 }
 
 function readUtf8OrNull(path) {
@@ -1681,12 +1692,15 @@ export function planGoalWorktree(item, { now, pressure = false } = {}) {
 /**
  * Why a goal cannot start a build or review session now, or null. Martin's
  * goals wait on him; a goal in a phase above its programme's lowest unfinished
- * one waits for the phases below it (`phaseOpen`, the runner's own rule). A
+ * one waits for the phases below it, and in a programme whose record states its
+ * phases for the phases it is stated to wait for (`phaseOpen`, the runner's own
+ * rule). A programme whose record is invalid gives no phase as a ground. A
  * finished goal is not reached here.
  */
 function goalCannotStart(item) {
   if (FINISHED.includes(item.stage)) return null;
   if (item.status === 'Martin') return 'status Martin, which waits on a person';
+  if (item.phase_open === false && item.waits_for) return `phase ${item.phase} waits for phase ${item.waits_for.join(', ')} of its programme`;
   if (item.phase_open === false) return `phase ${item.phase} is above the programme's lowest unfinished phase ${item.current_phase}`;
   return null;
 }
