@@ -337,7 +337,7 @@ describe('the menu under the page', () => {
     assert.equal(DATA.programmes.programmes.some((g) => 'projects' in g), false);
   });
 
-  function drive(answers, extra = {}) {
+  function drive(answers, { data = DATA, ...extra } = {}) {
     const written = [];
     const opened = [];
     const programmes = [];
@@ -350,10 +350,10 @@ describe('the menu under the page', () => {
       opened,
       programmes,
       written,
-      run: () => menu(DATA, {
+      run: () => menu(data, {
         stdout,
         stderr: { write: (text) => written.push(text) },
-        page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
+        page: async () => ({ data, lines: ['  PROGRAMMES'] }),
         reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
         showGoal: async (argv) => { opened.push(argv[1]); return 0; },
         ...extra,
@@ -369,6 +369,59 @@ describe('the menu under the page', () => {
     const second = drive(['2', 'q']);
     assert.equal(await second.run(), 0);
     assert.deepEqual(second.opened, ['mc/mc-ui']);
+  });
+
+  /** A page's data with the programmes numbered after the goals, as the collector numbers them. */
+  const numbered = (rows) => {
+    const programmes = programmesSection({ goalRows: rows });
+    programmes.programmes.forEach((group, index) => { group.number = programmes.count + 1 + index; });
+    return { programmes };
+  };
+  const row = (name, programme) => ({ name, programme, repos: ['memoro-cli'], status: 'open', sessions: 0, last: null, running: false, problems: [] });
+
+  it('opens a programme alone by its number or its exact name, and h or home goes back to the overview', async () => {
+    const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface')]);
+    // Goals are 1 and 2; the programmes follow, by name: docx-editing-surface is 3 and mc is 4.
+    assert.deepEqual(data.programmes.programmes.map((group) => [group.programme, group.number]), [['docx-editing-surface', 3], ['mc', 4]]);
+    const shown = [];
+    const session = drive(['3', 'mc', 'h', 'home', 'q'], { data, show: (name) => shown.push(name) });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(shown, ['docx-editing-surface', 'mc', null, null]);
+    assert.deepEqual(session.opened, [], 'a programme is opened, not shown as a goal');
+    // A number or a name that is nothing is said out loud, and nothing opens.
+    const none = [];
+    const missed = drive(['9', 'nothing-here', 'q'], { data, show: (name) => none.push(name) });
+    assert.equal(await missed.run(), 0);
+    assert.deepEqual(none, []);
+    assert.match(missed.written.join(''), /nothing here called "nothing-here"/u);
+  });
+
+  it('a goal\'s number shows the goal from the overview and from a programme\'s view alike', async () => {
+    const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface')]);
+    const session = drive(['4', '2', 'h', '1', 'q'], { data, show: () => {} });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(session.opened, ['mc/mc-ui', 'docx-editing-surface/docx-editor']);
+  });
+
+  it('every word the menu answers stays the menu\'s: a programme named manager or 1 is opened by its number', async () => {
+    // Goals: 1 is in the programme `1`, 2 in `manager`; the programmes follow: `1` is 3 and `manager` is 4.
+    const data = numbered([row('first-goal', '1'), row('second-goal', 'manager')]);
+    assert.deepEqual(data.programmes.programmes.map((group) => [group.programme, group.number]), [['1', 3], ['manager', 4]]);
+    const shown = [];
+    const session = drive(['manager', '4', '1', '3', 'q'], { data, show: (name) => shown.push(name) });
+    assert.equal(await session.run(), 0);
+    // `manager` is the retired manager's letter (it says so and keeps the page), `1` is goal 1, and the numbers open the programmes.
+    assert.deepEqual(shown, ['manager', '1']);
+    assert.deepEqual(session.opened, ['1/first-goal']);
+    assert.match(session.written.join(''), /the interactive manager is gone/u);
+  });
+
+  it('`a` unfolds from the overview and from a programme\'s view, and folds again', async () => {
+    const data = numbered([row('mc-ui', 'mc')]);
+    const flags = [];
+    const session = drive(['a', '2', 'a', 'h', 'a', 'q'], { data, show: () => {}, expand: (on) => flags.push(on) });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(flags, [true, false, true]);
   });
 
   // `d` and `desk` are the desk: `mc martin`, which the page's DESK panel summarises. The order is injected, so no session opens.

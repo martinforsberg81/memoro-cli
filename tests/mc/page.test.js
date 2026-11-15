@@ -20,7 +20,7 @@ import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
 import { recordStart } from '../../src/mc/deploys.js';
 import {
-  attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
+  attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, horizonsSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
@@ -1711,6 +1711,95 @@ describe('the page', () => {
       assert.match(text, /BUILD.*mc-ui/u, 'live activity never collapses');
       assert.match(text, /stopping since an unknown time/u, 'runner stop remains visible');
     }
+  });
+
+  /**
+   * A programme's view lives in run()'s closure beside `expand`, because the live loop draws through it, and what the
+   * prompt resolves is the page the last frame drew. Here a "frame" is a call of run()'s own `page`, which the reader is
+   * handed (a test's reader may be a function of it); the collect is injected.
+   */
+  describe('a programme view and the numbers, across live frames', () => {
+    const horizonRoot = () => mkdtempSync(join(tmpdir(), 'mc-page-view-'));
+    const dataWith = (rows, root) => {
+      const programmes = programmesSection({ goalRows: rows });
+      horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } });
+      return { ...pageData({ programmes }), horizons: horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } }) };
+    };
+    const FIRST = [goalRow('mc-ui', 'mc'), goalRow('docx-editor', 'docx-editing-surface')];
+    const SECOND = [goalRow('new-goal', 'aaa-new'), ...FIRST];
+    const numberOf = (data, name) => data.programmes.programmes.find((group) => group.programme === name).number;
+
+    /** Run the page with `steps`: each is called with `{ page }` and returns the answer to give (a promise is awaited). */
+    async function drive(collect, steps) {
+      const frames = [];
+      const queue = [...steps];
+      const code = await page([], {
+        collect, stdout: { columns: 120, write: () => {} }, stderr: { write: () => {} }, env: {}, interactive: () => true,
+        reader: ({ page: frame }) => ({
+          ask: async () => { const step = queue.shift(); return step ? step({ frame, frames }) : null; },
+          show: (lines) => frames.push(lines.join('\n')),
+        }),
+        checkAndPrintFreshInstall: async () => {},
+      });
+      return { code, frames };
+    }
+
+    it('keeps the programme open through a live frame, and h goes home', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const data = dataWith(FIRST, root);
+      const live = [];
+      const { code, frames } = await drive(async () => data, [
+        () => String(numberOf(data, 'mc')),
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'a'; },
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'h'; },
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'q'; },
+      ]);
+      assert.equal(code, 0);
+      assert.match(frames[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'));
+      assert.doesNotMatch(frames[0], /HORIZONS/u);
+      assert.match(live[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'), 'a live frame keeps the programme open');
+      assert.doesNotMatch(live[0], /HORIZONS/u);
+      // `a` in the programme view expands that block; the frame after it keeps both.
+      assert.match(frames[1], /mc-ui · /u);
+      assert.match(live[1], /mc-ui · /u);
+      assert.match(frames[2], /HORIZONS/u, 'h is the overview again');
+      assert.match(live[2], /HORIZONS/u, 'and a live frame keeps it');
+    });
+
+    it('opens by the numbers of the frame on the screen after a frame added a goal', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const first = dataWith(FIRST, root);
+      const second = dataWith(SECOND, root);
+      let now = first;
+      const { frames } = await drive(async () => now, [
+        async ({ frame }) => { now = second; await frame(); return String(numberOf(second, 'aaa-new')); },
+        () => 'q',
+      ]);
+      // A number that named `mc` a frame ago is `aaa-new`'s now, and the prompt goes by the frame on the screen.
+      assert.notEqual(numberOf(first, 'mc'), numberOf(second, 'mc'));
+      assert.match(frames[0], new RegExp(`┌─ ${numberOf(second, 'aaa-new')} aaa-new`, 'u'));
+    });
+
+    it('does not let a collect that started before a redraw, and finished after it, replace the redraw\'s data', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const older = dataWith(FIRST, root);
+      const newer = dataWith(SECOND, root);
+      let release;
+      const slow = new Promise((resolve) => { release = resolve; });
+      const calls = [async () => older, () => slow, async () => newer, async () => newer]; // start, the live frame, `r`, then the redraw that opens a programme
+      let slowFrame;
+      const { frames } = await drive(() => calls.shift()(), [
+        // A live frame starts collecting, and before it is back the menu redraws on newer data.
+        ({ frame }) => { slowFrame = frame(); return 'r'; },
+        async () => { release(older); await slowFrame; return String(numberOf(newer, 'aaa-new')); },
+        () => 'q',
+      ]);
+      assert.equal(frames.length, 2);
+      assert.match(frames[1], new RegExp(`┌─ ${numberOf(newer, 'aaa-new')} aaa-new`, 'u'), 'the older collect did not replace the newer numbers');
+    });
   });
 
   it('the menu writes priority through mc model and redraws the effective setting', async () => {
