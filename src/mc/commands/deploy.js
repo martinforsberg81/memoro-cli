@@ -3,9 +3,12 @@
  *
  * The deploy itself is memoro's: `npm run deploy` (`scripts/deploy.mjs`, its
  * seventeen steps ending in *Verify live version*) is the whole of it, and
- * nothing here reimplements a step of it, passes it a flag or edits it. What
- * this verb adds is what is around it — the reading before, the one question
- * that makes it a thing a person did, and the process it runs in after.
+ * nothing here reimplements a step of it or edits it. What this verb adds is
+ * what is around it — the reading before, the one question that makes it a
+ * thing a person did, and the process it runs in after. It hands the script one
+ * thing: `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`, always, because the commit
+ * was chosen, measured and asked about here, and the script's own fast-forward
+ * to the remote main would ship another.
  *
  * The question is not a formality and no flag skips it. Deploying to
  * production is Martin's word every time, so `mc deploy` refuses outright
@@ -15,21 +18,32 @@
  * it refuses before it reads anything (the deploy is Martin's act), the reading
  * and `--follow` excepted.
  *
- * Before the question the commit that would ship is measured twice
- * (`deploy-gate.js`): a full run of exactly that commit from the history — one
- * is started and followed when there is none — and the suites memoro's
- * `.mc/test.json` declares, run against a local server of it. A red or stalled
+ * What ships is the newest first-parent commit of `origin/main` after the live
+ * one whose full run is green (`pickCommit`) — main's tip when it is green, an
+ * older commit when it is not, and then the reading says how far behind and
+ * why the tip was passed over. Production never moves backwards: a pick is a
+ * descendant of the live commit and not the live commit, or nothing ships.
+ *
+ * Before the question that commit is measured twice (`deploy-gate.js`): a full
+ * run of exactly it from the history — one is started and followed when there
+ * is none — and the suites memoro's `.mc/test.json` declares as gates, run
+ * against a local server of it: the shared checkout is placed at it, detached,
+ * and every ensure pins and never follows main. A red or stalled
  * run, a failed suite or one that cannot run refuses, naming what and the last
- * lines; only `--accept-red "<reason>"` goes past, with each red listed in the
- * reading, the reason in the question and the row. Both results are in the row
+ * lines; a suite declared `gate: false` is not run and is never a refusal.
+ * Only `--accept-red "<reason>"` goes past, and then main's tip is what is
+ * prepared and shipped, with each red listed in the reading, the reason in the
+ * question and the row. Both results are in the row
  * (`full_commit`, `full_verdict`, `suites`, `accepted_red`). The merge is never
  * held by any of it.
  *
  * Where the script runs is mc's to decide, and it is always a worktree that is
  * `main`: the one where `main` is checked out — git allows one — or one mc
  * makes and keeps under `~/.memoro/mc/deploy/memoro` when nobody has `main`
- * out. It is fast-forwarded to `origin/main` by the deployer before the
- * script runs, and the row names the sha that shipped; a dirty or diverged `main` is a refused row naming the path — except
+ * out. It is put at the commit that was measured by the deployer before the
+ * script runs — fast-forwarded to it when behind, and in mc's own worktree reset
+ * back to it (`git reset --keep`) when it stands past it — and the row names the
+ * sha that shipped; a dirty or diverged `main` is a refused row naming the path — except
  * that in mc's own worktree, where nobody works, files git does not know are
  * removed rather than refused (`strayPaths`). `~/memoro` stays what it always
  * was for the reads — only the spawn's cwd moved (ruling 16, 2026-09-06: two
