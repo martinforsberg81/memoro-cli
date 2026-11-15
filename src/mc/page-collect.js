@@ -56,6 +56,7 @@ import { SESSION_KINDS, sessionKind } from './session-kind.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
+import { recordedProgrammes } from './programme-record.js';
 import { readProgrammePriority } from './programme-priority.js';
 import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, readHold, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
@@ -1453,7 +1454,7 @@ export function readProgrammes({
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
     goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
-    programmes: Object.keys(homes),
+    programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
   });
@@ -1625,7 +1626,7 @@ export async function collectPage({
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
     goalRows: goalsOf({ goals, currents, alive }),
-    programmes: present.flatMap((repo) => listProgrammes(repo)),
+    programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
     proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
     strays: readStrays(root, { git }),

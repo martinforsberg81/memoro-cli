@@ -47,6 +47,9 @@ Scheduling first prefers blocked recovery, finish/merge, review, build, then
 next-step planning; programme priorities decide within a rank after repository
 shares. See [mc-run.md](mc-run.md#the-pick-in-order).
 
+A programme with a record (`PROGRAMME.json`, [mc-plan.md](mc-plan.md#a-programme-with-a-record)) is on the page, counted as dormant, before it has
+a goal; a programme without a record appears as before.
+
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
 → goal → PR. Each programme is a bounded block with a bold name and cyan
 opening/closing rules. Each phase has its own bold cyan heading. All unfinished
