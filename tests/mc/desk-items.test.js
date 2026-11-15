@@ -80,7 +80,7 @@ test('a goal stopped by the runner, briefed for Martin, keeps its item when a la
   writeFileSync(join(dir,'prepared.md'),'The goal stopped with no progress.\n'); writeFileSync(join(dir,'brief.md'),'The goal stopped with no progress; Martin decides whether it goes on.\n');
   const asDecision={env:{...f.env,MC_ROLE:'decision'},stdout:{write:()=>{}},stderr:{write:()=>{}}};
   assert.equal(await martin(['item',stop.id,'prepared','--sort','product'],asDecision),0);
-  assert.equal(await martin(['item',stop.id,'brief','--sort','product','--reversible','no'],asDecision),0);
+  assert.equal(await martin(['item',stop.id,'brief','--sort','reserved','--reversible','no'],asDecision),0);
   const [briefed]=syncDeskItems(dep);
   assert.equal(briefed.state,'for-martin');
   writeFileSync(join(f.dir,'LOG.md'),`${readFileSync(join(f.dir,'LOG.md'),'utf8')}\n## 2026-11-14T10:25:00Z · claude opus · build · Martin · by decision\n\nComment: decision account: the item is briefed and the stop still stands; its question is unchanged.\n`);
@@ -461,4 +461,18 @@ test('a programme item is labelled by the reason of the last failure in its turn
   assert.equal(ask(), 'read checkout retained: /w/runner/work/programme-turn-prog/memoro');
   writeTurnState(f, '{ not json');
   assert.equal(ask(), 'Source reason unavailable.', 'an unreadable state file gives none');
+});
+
+test('a text item is labelled by its text, a sync neither closes nor opens another for it, and an old-sort or due record still reads', () => {
+  const f = fixture();
+  const at = '2026-11-14T10:00:00.000Z';
+  const text = { schema: 'mc-desk-item', version: 1, id: deskItemId('text', 'text:canon/x.md#A', at), kind: 'text', reference: 'text:canon/x.md#A', text: 'canon/x.md#A', goal: null, source_at: at, opened_at: at, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
+  const old = { schema: 'mc-desk-item', version: 1, id: deskItemId('goal', 'alpha/one', stamp), kind: 'goal', reference: 'alpha/one', source_at: stamp, opened_at: stamp, state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-16T10:00:00Z', default_action: 'keep', outcome: null };
+  for (const item of [text, old]) { mkdirSync(join(f.env.MC_WORK_ROOT, 'martin', 'items', item.id), { recursive: true }); writeJsonAtomic(join(f.env.MC_WORK_ROOT, 'martin', 'items', item.id, 'item.json'), item); }
+  assert.equal(deskItemQuestion(text, { env: f.env, home: f.home, read: fixtureRead }), 'canon/x.md#A');
+  const dep = { env: f.env, home: f.home, now: () => new Date('2026-11-20T10:00:00Z'), read: fixtureRead, reportIssue: () => {} };
+  const synced = syncDeskItems(dep);
+  assert.equal(synced.find((item) => item.id === text.id).state, 'for-martin', 'a text item has no source: only a close ends it, whatever the date');
+  assert.deepEqual(synced.map((item) => item.id).sort(), [old.id, text.id].sort(), 'the sync opened nothing beside them');
+  assert.deepEqual([readDeskItem(old.id, { env: f.env }).sort, readDeskItem(old.id, { env: f.env }).due_at], ['product', '2026-11-16T10:00:00Z']);
 });

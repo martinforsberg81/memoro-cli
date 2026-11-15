@@ -91,6 +91,17 @@ test('a session mc ask decides technical reading with high product score without
   assert.equal(existsSync(join(programmeDir, 'goals')), false);
 });
 
+test('a goal-less product ask jev does not settle names mc martin propose, exits 1 and writes no goal', async () => {
+  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
+  const f = fixture({ env, response: reply(0.5, 'one') });
+  const args = ['--kind', 'product', '--reason', 'Which general rule?', '--option', 'one: keep local behavior', '--option', 'two: define a shared rule', '--recommend', 'one'];
+  assert.equal(await run(args, f.deps), 1, f.err());
+  assert.match(f.out(), /^mc: jev did not settle it: .* — no goal is set; leave the change to his text at the desk with mc martin propose --text '<the text>' --file <path\|-> .*## Vad den säger, ## Vad som föreslås, ## Vad som hittades/u);
+  assert.doesNotMatch(f.out(), /take it to Martin/u);
+  assert.deepEqual([f.ledger.length, f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].goal], [1, 'product', 'martin', null]);
+  assert.equal(existsSync(join(programmeDir, 'goals')), false, 'no goal was created or changed');
+});
+
 test('a session mc ask without a goal refuses malformed kinds without writes', async () => {
   const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
   const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];

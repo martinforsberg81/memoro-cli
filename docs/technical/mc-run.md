@@ -417,8 +417,10 @@ Dropped goals are finalized and archived immediately through the shared drop
 operation on ordinary reconciliation, even without a stage timestamp. It
 closes exclusively owned PRs, cancels their queue rows, preserves PRs with an
 unfinished co-owner, and retains failed/unsafe cleanup for retry without
-starting a recovery session. Done goals retain the 24-hour archive hold, with
-one row in `goals/goal_log.md`; archive refusals are recorded once. Every five
+starting a recovery session. Done goals are archived the same way at the next pass, with no hold, each with
+one row in `goals/goal_log.md`; a goal a live session owns is left for the pass
+after the session ends, with no log entry, and any other archive refusal is
+recorded once. Every five
 minutes at most, `settleLanded` checks carried PRs and sets done once all are
 merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 
@@ -892,7 +894,7 @@ unless git refuses (files that are not mc's stay, and the line says so).
 
 ## Decision lane
 
-Prepared desk items and overdue reversible product/judgement briefs share the
+Prepared desk items share the
 machine-wide lane total, behind mend and ahead of other delivery sessions.
 `decisionWork`, `decisionPass` and `runDecision` use the same slot, disk,
 capacity, billing, worktree, watch/check-in and log machinery as main-red mend.
@@ -906,6 +908,6 @@ as `mc decision [<id>]`; nesting it inside a session is refused.
 The shared daily desk ceiling is rechecked before launch; unset means no
 ceiling. One unfinished ending retries once; a second in the item's current
 state, not counting a quota, offline or provider-refusing login ending, makes a
-non-reversible mechanical brief that waits on Martin instead of looping. Future,
-irreversible and reserved briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+non-reversible mechanical brief that waits on Martin instead of looping. A
+for-martin brief is never lane work, and no clock carries one out. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.

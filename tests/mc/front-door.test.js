@@ -588,3 +588,23 @@ it('the page forwards programme priority settings and redraws after the command'
   assert.deepEqual(orders, [['priority', 'mc', 'inbox', '--set', '10']]);
   assert.equal(redraws, 1);
 });
+
+it('c and clear archive every finished goal through the verb and redraw, naming the key in the menu', async () => {
+  const data = { programmes: { programmes: [] } };
+  const answers = ['c', 'clear', 'q'];
+  const orders = [];
+  const prompts = [];
+  let redraws = 0;
+  const stdout = { write() {} };
+  const code = await menu(data, {
+    stdout, stderr: { write(text) { assert.fail(text); } },
+    reader: { ask: async (prompt) => { prompts.push(prompt); return answers.shift(); }, show: () => { redraws += 1; } },
+    page: async () => ({ data, lines: [], key: 'changed' }),
+    archiveOrder: async (io) => { orders.push(io); return 0; },
+  });
+  assert.equal(code, 0);
+  assert.equal(orders.length, 2, 'both spellings archive');
+  assert.ok(orders.every((io) => io.stdout === stdout), 'the verb writes to the page\'s output');
+  assert.equal(redraws, 2, 'the page is drawn again after each');
+  assert.match(prompts[0], /c {2}clear finished goals/u);
+});

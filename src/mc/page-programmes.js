@@ -6,9 +6,16 @@ import { width } from './status-render.js';
 
 const finished = (goal) => ['done', 'dropped'].includes(goal.stage);
 const one = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
-const plural = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
-const noteworthy = (goal) => goal.running || ['blocked', 'Martin'].includes(goal.status)
-  || goal.problems?.length || goal.prs?.length;
+/**
+ * Why a finished goal is still under `goals/` and needs a person's eye: the
+ * runner's refusal to archive it (`archive_refused`), or an open pull request
+ * the archive would refuse it for. Words the line under NEEDS ATTENTION.
+ */
+function notArchived(goal) {
+  if (goal.archive_refused) return `not archived — ${goal.archive_refused}`;
+  if (goal.prs?.length) return `not archived — ${goal.prs.map((pr) => `${pr.repo || 'unknown'}#${pr.number}`).join(', ')} ${goal.prs.length === 1 ? 'is' : 'are'} open — land or close ${goal.prs.length === 1 ? 'it' : 'them'} first`;
+  return null;
+}
 
 function line(c, wide, indent, text, styles = []) {
   const shown = clipCell(text, Math.max(0, wide - indent));
@@ -23,7 +30,7 @@ function prLine(c, wide, pr) {
   return `${prefix}${clipCell(pr.title || pr.branch || '', Math.max(0, wide - width(prefix)))}`.trimEnd();
 }
 
-function goalLines(lines, c, wide, goal, expand, sessions = []) {
+function goalLines(lines, c, wide, goal, expand, sessions = [], note = null) {
   const isFinished = finished(goal);
   const stage = goal.stage || '—';
   const status = goal.status || '—';
@@ -41,6 +48,7 @@ function goalLines(lines, c, wide, goal, expand, sessions = []) {
   }
   if (goal.hold) lines.push(line(c, wide, 10, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`, ['red']));
   if (goal.problems?.length) lines.push(line(c, wide, 10, `GOAL.json: ${goal.problems[0]}`, ['red']));
+  else if (note) lines.push(line(c, wide, 10, note, ['red']));
   else if (['blocked', 'Martin'].includes(goal.status)) {
     const reason = goal.question || goal.last?.comment || (goal.status === 'Martin' ? 'waits on Martin' : 'a mend session resolves the obstacle');
     lines.push(line(c, wide, 10, goal.stage === 'merge' && goal.status === 'blocked' ? mergeFailureSummary(reason) : reason, ['red']));
@@ -72,21 +80,40 @@ function phaseWaits(phase, group) {
   return phase.after.length ? ` · after phase ${phase.after.join(', ')}` : '';
 }
 
-/** Every unfinished phase is explicit; only history is folded by default. */
+/**
+ * The goals of one programme, by phase. The default view draws every unfinished
+ * goal and, of the finished ones, only a goal still at work (running, or owning
+ * a live session), which stays in its phase until the session ends; `expand`
+ * (`a`) draws them all. A phase none of whose goals is drawn is not drawn.
+ * Under NEEDS ATTENTION, in both views: a malformed goal, a finished goal the
+ * runner refused to archive (`archive_refused`) and a finished goal with an
+ * open pull request, each with its line and its pull requests as child rows.
+ */
 export function programmeTreeLines(c, wide, group, { expand = false, sessions = [] } = {}) {
   const lines = [];
   const owned = (goal) => sessions.filter((s) => sessionGoal(s) === `${group.programme}/${goal.name}`);
+  const atWork = (goal) => goal.running || owned(goal).length > 0;
+  const attention = (goal) => finished(goal) && !atWork(goal) && notArchived(goal) !== null;
+  const needing = [];
   for (const phase of group.phases || []) {
+    if (phase.number == null) { needing.push(...phase.goals); continue; }
+    needing.push(...phase.goals.filter(attention));
+    const visible = phase.goals.filter((goal) => !attention(goal) && (expand || !finished(goal) || atWork(goal)));
+    if (!visible.length) continue;
     if (lines.length) lines.push('');
-    const label = phase.number == null ? 'NEEDS ATTENTION' : `Phase ${phase.number}${phaseWaits(phase, group)}`;
-    lines.push(line(c, wide, 4, label, phase.number == null ? ['red', 'bold'] : ['cyan', 'bold']));
-    const visible = phase.goals.filter((goal) => expand || !finished(goal) || noteworthy(goal) || owned(goal).length);
+    lines.push(line(c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']));
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
       goalLines(lines, c, wide, goal, expand, owned(goal));
     }
-    const hidden = phase.goals.length - visible.length;
-    if (hidden) lines.push(line(c, wide, 6, `▸ Finished · ${plural(hidden, 'goal')}`, ['grey']));
+  }
+  if (needing.length) {
+    if (lines.length) lines.push('');
+    lines.push(line(c, wide, 4, 'NEEDS ATTENTION', ['red', 'bold']));
+    for (const [index, goal] of needing.entries()) {
+      if (index > 0) lines.push('');
+      goalLines(lines, c, wide, goal, expand, owned(goal), finished(goal) ? notArchived(goal) : null);
+    }
   }
   if (group.prs?.length) {
     lines.push(line(c, wide, 4, 'PRs without a goal', ['grey']));

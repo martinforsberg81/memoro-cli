@@ -103,7 +103,7 @@ for ordinary integration alone does not.
 ~/mc/programs/<programme>/goals/<goal>/REVIEW.md  the latest review's verdict, in the fixed form; REVIEW-<round>.md is each round's copy
 ~/mc/programs/<programme>/goals/<goal>/LOG.md     one entry per session, newest last
 ~/mc/programs/<programme>/goals/<goal>/<repo>/    a worktree on goal/<goal>, from origin/main
-~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive; dropped immediately when safe, done after 24 h), its worktrees gone
+~/mc/programs/<programme>/goals/.archive/<goal>/  an archived goal (mc goal archive, or the runner at its next pass once the goal is done or dropped and safe), its worktrees gone; `mc goal show` does not read it
 ~/mc/programs/<programme>/goals/goal_log.md       one row per archived goal
 ```
 
@@ -559,26 +559,35 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   is added to `prs` once, with an entry `Done: carries <repo>#<n>`. For work
   published before `mc publish` wrote `prs`, or from where it could not tell
   the goal.
-- **`archive <p>/<g>…`** or **`archive <p>`** (every done or dropped goal of the
-  programme) — a finished goal leaves `mc goal list` and the page. Refused, by
+- **`archive <p>/<g>…`**, **`archive <p>`** (every done or dropped goal of the
+  programme) or **`archive --all`** (every done or dropped goal of every
+  programme; it takes no name, and a name beside it is exit 2 with nothing
+  written) — a finished goal leaves `mc goal list` and the page. Every form
+  names each refusal and exits 1 when there is one, and 0 with
+  `mc: no done or dropped goal` when nothing is finished. The page's `c` key
+  runs `archive --all`. Refused, by
   name and reason and with nothing touched, for a goal that is not `done` or
-  `dropped`; whose worktree has
+  `dropped`; for a goal a live session owns (a runner `current-*.json` that
+  names it, with a live pid — the session's end resolves it); whose worktree has
   uncommitted changes; with an open pull request on `goal/<g>` or in `prs`;
   and, for a dropped one, whose branch has commits no remote holds. Otherwise
   each worktree is removed with `git worktree remove` and the local branch
   `goal/<g>` deleted, the directory moves to `goals/.archive/<g>/` (a
-  dot-directory, so no reader lists it), and `goals/goal_log.md` gets a row:
+  dot-directory, so no reader lists it; `mc goal show` does not read a goal
+  under `goals/.archive/<g>`, its files are read from that directory), and `goals/goal_log.md` gets a row:
   date, goal, status, pull requests, the last `Done:`. Then the programme's
   phases are renumbered (*Phases*): when the goal was the last of the lowest
   phase, every goal left moves one phase down, and the line names each; in a
   stated programme the record's dependencies move with their phases (*Stated
   order*). The runner does the same
-  by itself immediately for dropped goals during every ordinary reconciliation,
-  including old dropped goals without a stage timestamp. Done goals retain the
-  24-hour hold (`ARCHIVE_HOLD_MS`), counted from the log entry that set the
-  stage (`stageSince`). A refusal the runner gets is
+  by itself at its next pass for every done or dropped goal, by the same
+  checks and with no hold: a goal is due the moment it is finished, with or
+  without a stage timestamp in its log. A goal a live session owns is left
+  for the next pass, with no log entry; the session's end resolves it. Any
+  other refusal the runner gets is
   written once into the goal's LOG.md, as a runner entry, and not again at
-  every pass. A programme is never archived by the runner.
+  every pass; the page shows it under NEEDS ATTENTION (`archive_refused`).
+  A programme is never archived by the runner.
 - **A goal's branch is made when the goal can start.** A goal in a later phase
   got its branch at `new`, before the phases ahead of it landed. Before the
   runner starts its first build session (no build entry in its log yet), and

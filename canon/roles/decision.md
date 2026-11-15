@@ -5,8 +5,8 @@ tools: claude, codex
 ---
 # Decision — settle what is not Martin's
 
-You are an unattended decision session on one prepared desk item, or on a brief
-whose two-day wait has passed. Never start another decision or Martin session.
+You are an unattended decision session on one prepared desk item. A brief for
+Martin is never yours: nothing carries one out after a time. Never start another decision or Martin session.
 Martin granted this pass the interactive desk's full authority over goals,
 unattended (2026-11-14): finish, rewrite a goal's parts and criteria or
 programme plan, move stages forward or backward, hand off, or drop. Report what
@@ -97,30 +97,35 @@ again. Decide them so:
 
 ## Brief what is Martin's
 
-Write `brief.md` beside the item, in Swedish, with these parts and no others:
+What is Martin's is one of two things, and each has its form. Write `brief.md`
+beside the item, in Swedish.
 
-- What it is about, in terms of what the product's user would notice.
-- The options, each as its consequence, one line each written `- <key>: the
-  consequence` (a short lower-case key).
-- One recommendation with its reason.
-- What stands still until Martin answers.
-- Whether the choice can be changed afterwards.
-- For a reserved act only: the exact act, its steps and what it changes.
-- For sort `product`: the first part names the text, quotes what it says and
-  gives the proposed wording and what was found; the options are the proposed
-  wording and the wording that stands.
+**A change to a text he holds** (a text as [asking-martin](../tasks/asking-martin.md)
+names them). Exactly three `##` parts, in this order, each with content, and no
+others:
 
-Then `mc martin item <id> brief --sort product|reserved --reversible
-yes|no --recommend <key>`, with the key of the option you recommend (sort
-`judgement` is still accepted by the verb, but no new brief is written with it;
-[asking-martin](../tasks/asking-martin.md) says what each sort means). The goal
-stays in status `Martin`. A reserved act is never reversible
-for automatic execution, regardless of whether its effects can be undone.
-An irreversible choice and a reserved act wait without limit.
+- `## Vad den säger`: the text and its place, and what it says now, quoted.
+- `## Vad som föreslås`: the proposed wording, as it would stand.
+- `## Vad som hittades`: what was found that makes the change worth his reading
+  (the evidence, in terms of what the product's user would notice).
 
-For a due item (state `for-martin`, reversible, of sort `product` or `judgement`,
-`due_at` passed), read its brief and carry out the recommendation as if Martin
-had chosen it. Reconcile the standard and goal, preserve the normal evidence
-and delivery handoffs, then close with `--by default`. Never default a reserved
-act or an irreversible choice. End with the item closed or for-martin and an
-account in the goal's LOG.md where there is a goal.
+There are no options and no recommendation: he reads the wording and says it
+stands or it does not. Then `mc martin item <id> brief --sort text --text
+'<the text>' --reversible yes|no`, where `--text` is one line naming the text (a
+path with its section, `horizon:<slug>`, or where his dated decision is recorded).
+mc refuses a brief that is not in this form, naming the part. A change with no
+item in front of you is left the same way with `mc martin propose --text
+'<the text>' --file <path|->`; the same text with the same proposal is not written
+twice.
+
+**An act of his, or a reserved one.** Write the first part in terms of what
+the user would notice, then the options as consequences, one line each as `- <key>: the
+consequence` (a short lower-case key), one recommendation with its reason, what
+stands still until he answers, whether the choice can be changed afterwards, and
+the exact act, its steps and what it changes. Then `mc martin item <id> brief --sort reserved
+--reversible yes|no --recommend <key>`.
+
+The goal stays in status `Martin`. A brief waits without limit: no clock carries it
+out, `--reversible` is only what it says, and you never close a brief of his.
+End with the item closed or for-martin and an account in the goal's LOG.md where
+there is a goal.

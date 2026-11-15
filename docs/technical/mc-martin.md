@@ -21,35 +21,44 @@ launch changes `last-open.json`.
 
 The opening has these parts, in this order (Horizons only when the desk holds one):
 
-1. **Yours (n)** — every for-martin item, blocking work first: a goal item that
-   blocks goals of its programme that wait for it sorts before one that blocks none,
-   more blocking first; then oldest source time; then id. Each shows its
-   reference, sort, reversible or not, id, source time and, when it blocks,
-   how many goals of its programme wait on it (`blocks <n> later-phase goals of
-   <programme>`; for a programme whose record states its phases `blocks <n>
-   goals of <programme> whose phases wait for it`). A due time within
-   24 hours is shown with the closure it will cause by default. The brief is
-   printed as written; a missing `brief.md` is named as missing.
-2. **Horizons** — present only when the horizon store holds a horizon or a
+1. **Horizons** — present only when the horizon store holds a horizon or a
    record that cannot be read (*Horizons*, below); a desk that holds none opens
-   without the part, byte for byte as it did before horizons. It shows the
-   horizons reached in the interval, oldest first, each with its title, slug,
-   time, who marked it and the first three non-empty lines of what is now true,
-   then the open ones in order, numbered, each with title and slug (the line
-   `No horizon is open.` when none is), and in its last line the records that
-   cannot be read.
-3. **Decided without you** — decisions and defaults closed in the interval,
-   grouped by programme and ordered by time, each with its summary and
-   reference, then the count of items the source closed in the same interval.
-4. **Not ready** — items still new or prepared: their count, the oldest with
+   without the part. It shows the horizons reached in the interval, oldest first,
+   each with its title, slug, time, who marked it and the first three non-empty
+   lines of what is now true, then the open ones in order, numbered, each with
+   title and slug (the line `No horizon is open.` when none is), and in its last
+   line the records that cannot be read. It comes first, after the intro line:
+   what he works toward frames what he is asked.
+2. **Proposed changes to your texts (n)** — every for-martin item of sort `text`
+   (the old sorts `product` and `judgement` read as `text`), blocking work first:
+   one that blocks goals of its programme that wait for it sorts before one that
+   blocks none, more blocking first; then oldest source time; then id. Each shows
+   the text it changes, its id, the time it has waited, its goal or `no goal`
+   and, when it blocks, how many goals of its programme wait on it (`blocks <n>
+   later-phase goals of <programme>`; for a programme whose record states its
+   phases `blocks <n> goals of <programme> whose phases wait for it`). The brief
+   is printed as written, in the form below; a missing `brief.md` is named as
+   missing. No time is shown that a clock will act on: none does.
+3. **Your acts (n)** — every for-martin item of sort `reserved`, in the same order
+   and with the same lines: the act only he may do, and its effects.
+4. **Decided without you** — decisions closed in the interval (and, in a store
+   written before this change, defaults), grouped by programme and ordered by
+   time, each with its summary and reference, then the count of items the source
+   closed in the same interval.
+5. **Not ready** — items still new or prepared: their count, the oldest with
    its age in hours from its source time, and those with a preparation or
-   decision failure.
-5. **Cost** — the desk's spend on the UTC day and over the last seven days
+   decision failure; then the items the decision pass gave up on (a for-martin
+   item that is neither a text change nor an act), as a stuck list by reference.
+   They are the runner's, not his, and are not listed above.
+6. **Cost** — the desk's spend on the UTC day and over the last seven days
    (`desk-prepare`, `decision` and `learning` rows of `runs.tsv`; runs of unknown
    cost within those seven days are counted, not summed), and the daily ceiling
    or `off`.
-6. **What the system changed** — from the lessons and the item store only (see
+7. **What the system changed** — from the lessons and the item store only (see
    *Lessons and the learning pass*). It never lists lessons or prints their text.
+
+`brief --json` carries `texts`, `acts` and `not_ready.stuck` for these parts, and no
+`yours`.
 
 The interval is `(since, now]`, where `since` is the time of the last
 successful opening, or the store's `first_sync_at` before the first opening.
@@ -103,13 +112,14 @@ call `get` rather than starting another desk.
 
 The role investigates each source question against relevant shared technical
 contracts and the programme README and design. Details answered there are
-resolved without escalation. What remains for Martin, as
+resolved without escalation. What remains for Martin, either a proposed change to a text he holds or an act only he may do, as
 [canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md) names it and
-[mc-jev.md](mc-jev.md) routes it by kind, is presented only after synthesis, in
-the brief's parts (what he would notice; the options as their consequences; one
-recommendation and its reason; what waits; whether it can be changed afterwards;
-the material paths for a brief of sort `judgement`; the exact act for a `reserved`
-one). When a standard
+[mc-jev.md](mc-jev.md) routes it by kind, is presented only after synthesis. For a `reserved` act, and for the decision
+failure's mechanical brief, the brief's parts are what he would notice; the
+options as their consequences; one recommendation and its reason; what waits;
+whether it can be changed afterwards; the exact act. A change to a text he holds is not
+presented in those parts: it is brought in the form of *Durable desk items*
+(three parts, no options). When a standard
 changes, the brief names its exact `docs/technical/` destination. The
 original queue question/options/jev reading remain source evidence, distinct
 from the synthesis. After Martin decides, record the canonical standard and
@@ -125,16 +135,23 @@ lifecycle remain unchanged.
 preparation, decisions and the interactive desk. Its schema is
 `mc-desk-item` version 1; `id` is a stable digest of kind, reference and
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
-(`main-red:<repo>/<id>`), `decision` (`decision:<at>`) and `lesson`
-(`lesson:<name>`, written only by `mc martin lesson brief`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below). A goal's source time
+(`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
+(`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing.
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
-`opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`.
+`opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
+also has `text` (the text it changes) and `goal` (the goal it blocks, or null).
+`due_at` is always null in a record written now: no time acts on an item. A record
+written before this change that holds a due time or `default` as the closer still
+reads, lists and opens.
 
 States are `new` → `prepared` → `for-martin` → `closed`, with `prepared` also
-able to close directly. Sort is null or mechanical, technical, product,
-judgement or reserved; reversible and due time are nullable. Closing records
-`{by, at, summary}` where by is decision, martin, default or source, and, when a
+able to close directly. Sort is null or mechanical, technical, text or reserved
+(`product` and `judgement` are the old names of `text` and are read as such, never
+written); reversible and due time are nullable. Closing records
+`{by, at, summary}` where by is decision, martin or source (`default` only in a
+record written before this change), and, when a
 close replaced a source closure, `replaced`. Sync opens
 waiting goals and main-reds and flagged decided jev ledger rows once. A decided
 row is flagged when jev's chosen key differs from the session recommendation
@@ -142,7 +159,8 @@ or its product reading is at least 0.70. Sync skips ledger rows older than the
 store's first sync, closes open goal/main-red items
 whose source no longer waits and, apart from the runner lock it holds, writes only
 beneath the item store. It never
-changes a source record. Missing, malformed or unreadable goal/main-red files
+changes a source record, and it never opens, changes or closes a text item: that
+item has no source, and only a close ends it. Missing, malformed or unreadable goal/main-red files
 are reported and preserve the item: absence from the live queue alone is not
 resolution. One absence is resolution: a goal whose directory has left `goals/` and stands in the programme's `goals/.archive/` with a readable `done` or `dropped` state closes its item by source, with that state and the drop's reason as the outcome. A goal otherwise closes only on a readable finished/non-Martin state or an
 established later question; a main-red closes only on readable state showing
@@ -170,6 +188,38 @@ closes by source. A main-red item's source time is the entry's `answered.at`, el
 its `created`, so an answered entry that reaches Martin again opens a new item
 with a different id and an unanswered one keeps its own.
 
+**A proposed change to a text he holds.** A text is a file and its section
+(`canon/roles/martin.md#Authority`), a horizon (`horizon:<slug>`), or a place where
+a dated decision of his is recorded. Its brief is exactly three non-empty `##`
+parts, in this order, in Swedish, because what is written to him is:
+
+```
+## Vad den säger
+## Vad som föreslås
+## Vad som hittades
+```
+
+what the text says now, the wording proposed, and what was found that makes the
+change worth his reading. No part holds options, and none holds a recommendation:
+he answers a proposal by reading the wording and saying so, not by choosing a key.
+An extra part, a missing or repeated part, a part out of order and an empty part
+each refuse the brief, naming it. One function (`textForm`, `desk-texts.js`) judges
+the form for all three ways of bringing one.
+
+`mc martin propose --text '<the text>' --file <path|-> [--goal <programme>/<goal>]`
+writes an item of kind `text`, sort `text`, state `for-martin`, `reversible` and
+`due_at` null, with the brief as `brief.md`, in one hold of the strict runner lock,
+and prints its id. `--text` is one line. `--goal` names a readable goal whose later
+phases wait for the change; with none, the item blocks nothing. The same open text
+with the same "Vad som föreslås" part (whitespace aside) is not written again: the
+verb prints the existing id and exits 0. A brief not in the form, a missing or
+multi-line `--text`, an unreadable file, an unreadable `--goal` and a role that
+may not propose (`desk-prepare` only prepares) are refused with exit 2 and nothing
+written; a lock that cannot be had is exit 1 with its message. Every other role,
+a person included, may propose. The decision pass brings one with `brief --sort
+text --text '<the text>' --reversible yes|no`, and `mc martin lesson brief` (below)
+the third way.
+
 `mc martin items [--state <state>] [--json]` syncs then lists open items before
 closed ones, by oldest source time. For the learning role it lists without syncing, takes no lock and writes nothing. Each label is recovered using the item's
 source time and source history, including closed questions and runner reasons;
@@ -177,12 +227,15 @@ it is never borrowed from a later question on the same goal. Unavailable
 history is shown explicitly. `mc martin item <id>` shows the complete
 record, available live source and prepared/brief text. Writers are the person
 and roles `martin`, `desk-prepare` and `decision`; desk-prepare may only prepare.
-`prepared --sort <sort>` requires `prepared.md` and moves new to prepared.
-`brief --sort product|judgement|reserved --reversible yes|no` requires
-`brief.md`, moves prepared to for-martin and records a 48-hour due time only
-when reversible; `--recommend <key>` also records the recommended option's key
-as `recommend`, which must be an option of `brief.md` (a line `- <key>: its
-consequence`). Closing `--by martin` an item that has a `recommend` requires
+`propose` is open to every role but `desk-prepare`.
+`prepared --sort <sort>` requires `prepared.md` and moves new to prepared;
+`product` and `judgement` are accepted and recorded as `text`.
+`brief --sort text|reserved --reversible yes|no` requires
+`brief.md`, moves prepared to for-martin and records no due time. `brief --sort
+text` also requires `--text '<the text>'` and the form above and refuses
+`--recommend`; a `reserved` brief may name `--recommend <key>`, recorded as
+`recommend`, which must be an option of `brief.md` (a line `- <key>: its
+consequence`). A `brief --sort product|judgement` is read as `text`. Closing `--by martin` an item that has a `recommend` requires
 `--chose <key>`, an option of the brief, recorded as `chose`; `--chose` is
 refused with any other `--by`. When he chose none of the brief's options (no
 decision is needed, or the question is wrong), `close --by martin --no-option`
@@ -192,10 +245,11 @@ lesson. `--no-option` is a flag, not a reserved value of `--chose`, because
 but `martin` (exit 2, nothing written), is judged on the record read under the
 lock like `--chose`, applies to a close over a source closure too, and is
 accepted on an item with no `recommend` as a plain close. The close of an item
-that has a `recommend` with neither flag is refused naming both. `close --by decision|martin|default --summary <paragraph>`
-(or `--summary-file`) closes prepared/for-martin; an item the source closed
+that has a `recommend` with neither flag is refused naming both. `close --by decision|martin --summary <paragraph>`
+(or `--summary-file`) closes prepared/for-martin; `close --by default` is refused
+(exit 2, nothing written): no clock carries out a brief. An item the source closed
 after it was prepared or briefed (it has a sort) also takes
-`close --by decision|martin|default`, which replaces the source outcome and
+`close --by decision|martin`, which replaces the source outcome and
 keeps it as `outcome.replaced`. Invalid transitions, roles, ids and missing
 required files are refused with exit 2 and no write. Every write of an item and
 of the store marker is a read-modify-write under the strict runner lock: a
@@ -322,7 +376,7 @@ and anything not established. It makes no recommendation or decision, asks
 nobody, and changes no goal, log, ledger or repository file. Goal verbs refuse
 every write for this role (including criteria, PRs and creation); `mc ask` and
 `mc goal martin` refuse before consulting jev. Its only item mutation is
-`prepared --sort mechanical|technical|product|judgement|reserved`. A goal
+`prepared --sort mechanical|technical|text|reserved`. A goal
 defect is sorted `technical`, a no-progress stop `mechanical`.
 
 A completed turn that left the item `new` appends `{at, reason}` to the item's
@@ -357,11 +411,11 @@ than silently disabling a ceiling. Decision admission uses the same reading and 
 
 `mc decision [<id>]` is a person's one-session entrance, refused inside a
 session. No id takes the oldest prepared item; no prepared item prints that
-fact and exits 0. An explicit id may also name an eligible due brief. It uses
+fact and exits 0. An explicit id names a prepared item. It uses
 exactly the runner's decision launch and prints the outcome and new state.
 
-The runner supplies every `prepared` item and every overdue reversible
-`for-martin` product or judgement item as lane work, behind merge-failure and
+The runner supplies every `prepared` item, oldest source first, as lane work; no
+`for-martin` item is ever lane work, however long it has waited, behind merge-failure and
 main-red mend and ahead of finish, review, build and planning. The `decision`
 list defaults to `claude:fable:high`, then `codex:gpt-6.1-sol:high`; old catalogs
 without it read these defaults without rewriting the file. Its first usable
@@ -396,24 +450,22 @@ justify proceeding without it (Martin, 2026-11-14). One root cause across items
 is one decision applied to each, not repeated questions. No budget, allocation,
 exception or new rule is added without measured need.
 
-What the rule names and mc does not do yet, as of today and with no date
-promised: a horizon is recorded and shown in the opening (*Horizons*), but a
-change to a text Martin holds is briefed in the brief's existing parts, not in a
-form of its own; a change with no goal has no way to the desk, since a goal-less
-`product` ask exits 1 and opens no item; and a brief of sort `product` or
-`judgement` marked reversible is still carried out after two days.
+No clock changes anything on the desk. A brief waits for Martin without limit; nothing
+carries out its recommendation, closes it or moves it after a time, and the
+decision pass takes `prepared` items only. A horizon is recorded and shown in the opening
+(*Horizons*); a change to a text he holds is brought in the form above; and a
+change with no goal reaches the desk by `mc martin propose`, which a goal-less
+`product` ask that jev does not settle names ([mc-jev.md](mc-jev.md)).
 
 Settled work is carried out or handed to the appropriate goal stage, then
 closed `--by decision` with a two- or three-sentence Swedish summary; a sync that
 closed the item by source in between does not prevent that close. What is
-Martin's gets `brief.md` in Swedish, with only: what the user would notice;
-options as consequences; one recommendation and reason; what waits; whether
-it can be changed afterwards; for a brief of sort `judgement` that already
-waits, material paths; for a reserved act, the exact act and its effects. `brief --sort … --reversible yes|no` leaves
-the goal in `Martin`. Only reversible product/judgement briefs past `due_at`
-are picked for default execution: carry out the recommendation as if chosen
-and close `--by default`. Irreversible and reserved items never default,
-even if a reserved record erroneously says reversible and has a due date.
+Martin's is written to `brief.md` in Swedish: a change to a text he holds in the
+form above, marked `brief --sort text --text '<the text>' --reversible yes|no`
+(it carries no options and no recommendation), and a reserved act with what he
+would notice, the options as consequences, one recommendation and reason, what waits, whether it can be
+changed afterwards, and the exact act and its effects. `brief --sort … --reversible yes|no` leaves
+the goal in `Martin`.
 
 A goal defect (`goal defect: <part> — <found>`, reported by a build, review or
 finish session) is `technical`; a stop for no progress (`no progress: …`, the
@@ -432,13 +484,15 @@ A session ending without closing or briefing appends `{at, reason, state}` to
 `decision_failures`, `state` being the state the item was in when the session
 failed; an entry without `state` was written while prepared and counts as
 `prepared`. The entry is appended under the runner lock, and the list is never
-shortened. An unchanged overdue brief also counts as unfinished. The limit is
+shortened. The limit is
 two failures in the item's current state: after one, the item is eligible once
-more, and a failure in another state (a prepared item briefed reversible and
-then due) starts that state's own count. After the second in the current state,
+more, and a failure in another state starts that state's own count (an entry of a
+state the pass no longer works in, such as a for-martin brief that was once overdue,
+counts for that state only). After the second in the current state,
 the runner writes a Swedish failure brief with every reason and session log
 path, sets `for-martin`, sort `mechanical`, `reversible: false`, `due_at: null`,
-and keeps the goal waiting on Martin. A quota ending, an offline ending, and a
+and keeps the goal waiting on Martin. Such an item is the runner's stop, not a
+proposal: the opening lists it only as stuck, under *Not ready*. A quota ending, an offline ending, and a
 login ending that refused the provider (a launch that is not codex, on
 subscription billing) write no failure and no goal entry, and spend no attempt:
 the item is taken again when the provider answers. Admission refusals spend no
@@ -473,11 +527,11 @@ first part then says that change did not work, once).
 (`<name> · <kind> · <state> · <goal or "no goal"> [· <pr>] · <n> days`); `lesson carry <name>
 --goal <programme>/<goal>` moves an open lesson to `in-goal` and needs a live
 goal; `lesson dismiss <name> --reason "…"` moves an open lesson to `dismissed`
-and needs a reason from every role; `lesson brief <name> --file <path|->` is for
+and needs a reason from every role; `lesson brief <name> --text '<the text>' --file <path|->` is for
 a lesson that contradicts a dated decision of Martin's: it writes an item of
-kind `lesson`, sort `product`, not reversible (so it waits without limit and no
-default carries it out), with that Swedish brief, and dismisses the lesson with
-the item as its reason. Writers: a person and the roles `martin`, `decision` and
+kind `lesson`, sort `text`, with the brief in the form above (exactly the three
+Swedish parts; a brief not in it is refused with exit 2 and the lesson left open),
+and dismisses the lesson with the item as its reason. Writers: a person and the roles `martin`, `decision` and
 `learning` for every verb; `review-session:goal` for `add` only. Any other role
 is refused with exit 2 and nothing is written. **No verb sets `landed`.**
 `reconcileLessons` is the only way: each chores round the runner reads every
@@ -533,7 +587,7 @@ a lesson `open` or `in-goal` for more than fourteen days, named as late; the
 lessons dismissed since the last opening, with their reasons. Then four
 weeks, oldest first, each week `(now − 7(w+1) days, now − 7w days]` and each
 with five numbers: items opened (`opened_at` in the week); the share of them
-that reached Martin (state `for-martin`, or closed by `martin` or `default`); of
+that reached Martin (state `for-martin`, or closed by `martin`, or in an older store `default`); of
 those, the share with a `not-martins` or `wrong-question` lesson naming the item;
 the `overturned` lessons recorded in the week; and the lessons recorded in the
 week that repeat a lesson of the same kind and place that had already landed

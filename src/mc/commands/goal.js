@@ -43,9 +43,10 @@
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
  *   mc goal drop [<programme>/<goal>] --reason "…"   let go without landing: `dropped`, never `done`
  *   mc goal pr <programme>/<goal> <repo>#<n>…   the pull requests named carry the goal (`prs`)
- *   mc goal archive <programme>/<goal>… | <programme>   a done or dropped goal to goals/.archive/, its
- *                                  worktrees and branch gone, one row in goals/goal_log.md; the runner
- *                                  does the same 24 hours after a goal is done or dropped
+ *   mc goal archive <programme>/<goal>… | <programme> | --all   a done or dropped goal to goals/.archive/, its
+ *                                  worktrees and branch gone, one row in goals/goal_log.md; --all is every
+ *                                  programme's; a goal a live session owns is refused; the runner does
+ *                                  the same for every finished goal at its next pass
  *   mc goal show <programme>/<goal>      the goal as text (`renderGoalText`), the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each, under its programme's phases
  *   mc goal areas <repo>|<programme>/<goal> [--at <rev>]   a repository's areas (`.mc/areas.json` at origin/main) with each page, or a goal's: each rule area with its stand or `no stand`; a source area asks no stand
@@ -104,7 +105,7 @@ import { only, scanArgs } from './flags.js';
 const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
 /** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
 const REPEATABLE_FLAGS = ['--option', '--document'];
-const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
+const SCAN = { booleans: ['--all'], strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
 /** The flags the fields of the numbered parts are given by (`item add|set`); a part takes its own and refuses the others. */
 const ITEM_FLAGS = Object.freeze([...new Set(Object.values(ITEM_PARTS).flatMap((part) => part.fields.map((field) => `--${flagOf(field)}`)))]);
 /** The flags each verb takes; any other given is refused with exit 2. */
@@ -134,7 +135,7 @@ const VERB_FLAGS = {
   martin: ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'],
   defect: ['--part', '--found', '--evidence', '--evidence-file', '--next', '--next-file'],
   pr: [],
-  archive: [],
+  archive: ['--all'],
   show: [],
   list: [],
   areas: ['--at'],
@@ -196,7 +197,11 @@ export async function run(argv, deps = {}) {
       const currents = readCurrents(join(root, 'runner'), (path) => {
         try { return JSON.parse(read(path) ?? ''); } catch { return null; }
       }, deps.listFiles || readdirSync);
-      return currents.some((current) => current?.name === `${goal.programme}/${goal.goal}`
+      // The runner names a session `goal:<programme>/<goal>` (as the page reads `running`),
+      // or carries `goal_reference`; a bare `<programme>/<goal>` is read too.
+      const ref = `${goal.programme}/${goal.goal}`;
+      const named = (current) => [current?.name, current?.goal_reference, current?.goal_reference && `goal:${current.goal_reference}`].some((name) => name === ref || name === `goal:${ref}`);
+      return currents.some((current) => named(current)
         && Number.isInteger(Number(current.pid)) && (deps.alive || pidAlive)(Number(current.pid)));
     },
     read: deps.read || readTextOrNull,
@@ -264,7 +269,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
   if (verb === 'pr') return carryPrs(rest, ctx);
-  if (verb === 'archive') return archiveGoals(rest, ctx);
+  if (verb === 'archive') return archiveGoals(rest, ctx, flags.all);
   if (verb === 'show') return showGoal(rest, ctx);
   if (verb === 'areas') return areasVerb(rest, flags, ctx);
   if (verb === 'plan-review') return planReviewVerb(rest, flags, ctx);
@@ -1856,19 +1861,25 @@ function carryPrs(args, ctx) {
 }
 
 /**
- * `mc goal archive <programme>/<goal>…` or `mc goal archive <programme>` (its
- * every done or dropped goal) — a finished goal leaves the list, by
- * `archiveGoal` (goal-archive.js), which the runner also calls once a goal has
- * been finished for 24 hours. Each goal is answered on its own, and its refusal
- * is said with why; exit 1 if any refused.
+ * `mc goal archive <programme>/<goal>…`, `mc goal archive <programme>` (its
+ * every done or dropped goal) or `mc goal archive --all` (every programme's) —
+ * a finished goal leaves the list, by `archiveGoal` (goal-archive.js), which the
+ * runner also calls for every finished goal at its next pass. Each goal is
+ * answered on its own, and its refusal is said with why: a goal a live runner
+ * session owns is refused like any other (`ctx.active`). Exit 1 if any refused,
+ * 2 for bad arguments (`--all` beside a name writes nothing).
  */
-function archiveGoals(args, ctx) {
+function archiveGoals(args, ctx, all = false) {
   const { stdout, stderr, home, list, read } = ctx;
-  if (args.length < 1) { stderr.write(usage()); return 2; }
-  const all = programsGoals({ home, list, read });
+  if (all && args.length) { stderr.write('mc: archive --all takes no name — mc goal archive --all, or mc goal archive <programme>[/<goal>]…\n'); return 2; }
+  if (!all && args.length < 1) { stderr.write(usage()); return 2; }
+  const goals = programsGoals({ home, list, read });
   let names;
-  if (args.length === 1 && NAME_RE.test(args[0])) {
-    names = all.filter((goal) => goal.programme === args[0] && FINISHED.includes(goal.stage)).map((goal) => `${goal.programme}/${goal.goal}`);
+  if (all) {
+    names = goals.filter((goal) => FINISHED.includes(goal.stage)).map((goal) => `${goal.programme}/${goal.goal}`);
+    if (!names.length) { stdout.write('mc: no done or dropped goal\n'); return 0; }
+  } else if (args.length === 1 && NAME_RE.test(args[0])) {
+    names = goals.filter((goal) => goal.programme === args[0] && FINISHED.includes(goal.stage)).map((goal) => `${goal.programme}/${goal.goal}`);
     if (!names.length) { stdout.write(`mc: ${args[0]} has no done or dropped goal\n`); return 0; }
   } else {
     const bad = args.filter((name) => !isGoalRef(name));
@@ -1877,7 +1888,7 @@ function archiveGoals(args, ctx) {
   }
   let refused = 0;
   for (const name of names) {
-    const goal = all.find((item) => `${item.programme}/${item.goal}` === name);
+    const goal = goals.find((item) => `${item.programme}/${item.goal}` === name);
     const result = goal ? archiveGoal(goal, ctx) : { refused: 'no such goal — mc goal list names them' };
     if (result.refused) {
       refused += 1;
@@ -1888,6 +1899,15 @@ function archiveGoals(args, ctx) {
     for (const move of result.renumbered) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
   }
   return refused ? 1 : 0;
+}
+
+/**
+ * Every done and dropped goal of every programme archived, as `mc goal archive
+ * --all`: the one function the verb and the page's `c` key share. `deps` are
+ * `run`'s; its lines go to `deps.stdout` and `deps.stderr`. Returns the exit code.
+ */
+export function archiveAllFinished(deps = {}) {
+  return run(['archive', '--all'], deps);
 }
 
 /** Text appended to a file, made when it is not there. */

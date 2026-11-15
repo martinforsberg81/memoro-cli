@@ -22,7 +22,7 @@
  * `--once` is one session, for a person watching.
  *
  * The chores take away what is finished and keep the machine fit: a goal
- * done or dropped for 24 hours is archived (`archiveGoalsDue`, goal-archive.js),
+ * done or dropped is archived at the next pass (`archiveGoalsDue`, goal-archive.js),
  * every repository is fetched and asked what is open for the page
  * (`askGithub`), a merger that should be running is started (`wakeMerger`),
  * orphaned dev processes are reaped, Docker is swept. Beside them a timer
@@ -695,14 +695,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const alive = deps.alive || pidAlive;
 
   // The disk policy (disk-pressure.js), on this runner's doors. Its pressure
-  // pass is, in order: finished goals archived without the 24 hours, tidy's
+  // pass is, in order: finished goals archived, tidy's
   // file rules, Docker's images on a runtime that is already up. Only with a
   // reader: a deps object without `freeBytes` has no disk policy.
   const disk = deps.freeBytes ? createDiskPressure({
     path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
     now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true, name: 'disk-pressure' }), say,
     steps: [
-      { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
+      { name: 'archive', run: async () => archiveGoalsDue({ convert: false }) },
       ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
       ...(deps.pressureDocker ? [{ name: 'docker-images', run: async () => dockerStep(await deps.pressureDocker()) }] : []),
     ],
@@ -976,21 +976,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
-   * Dropped goals are finalized immediately; done goals retain the 24-hour
-   * hold (`goalArchiveDue`). Both use the archive safety checks (`mc goal
-   * archive` archives one (`archiveGoal`): the worktrees and the branch go
-   * through git, the directory moves to `goals/.archive/`, a row goes to
-   * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
-   * written into its LOG.md once, as a runner entry, not at every pass.
+   * Every finished goal is archived at the pass, a dropped one by
+   * `finalizeDroppedGoal` and a done one by `archiveGoal`, both through the
+   * archive safety checks (`mc goal archive` archives one): the worktrees and
+   * the branch go through git, the directory moves to `goals/.archive/`, a row
+   * goes to `goals/goal_log.md`. A goal a live session owns is left for the
+   * next pass, with no log entry: the session's end resolves it. Any other
+   * refusal stays with the goal and is written into its LOG.md once, as a
+   * runner entry, not at every pass. The disk-pressure step passes
+   * `convert: false` and so skips `convertAfter()`.
    */
-  function archiveGoalsDue({ holdMs } = {}) {
-    if (holdMs === undefined) convertAfter();
+  function archiveGoalsDue({ convert = true } = {}) {
+    if (convert) convertAfter();
     const all = goals();
     const now = deps.now();
     const answer = { ok: true, removed: 0, kept: [], errors: [] };
+    const owned = (candidate) => stepsHeld().some((held) => held.name === goalName(candidate));
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
-      if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
+      if (!goalArchiveDue({ goal }).due) continue;
+      if (owned(goal)) continue;
       const archive = {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
@@ -998,13 +1003,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       };
       const result = goal.stage === 'dropped' ? finalizeDroppedGoal(goal, {
         ...archive, allGoals: () => goalReferences({ home: programsHome(deps.env), list: deps.list, read: deps.read }),
-        active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)), root, lock,
+        active: owned, root, lock,
         readQueue: deps.read,
         writeQueue: (path, entries) => writeJson(path, entries),
-      }) : archiveGoal(goal, { ...archive, active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)) });
+      }) : archiveGoal(goal, { ...archive, active: owned });
       if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
       answer.removed += 1;
-      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
     return answer;
@@ -1586,7 +1591,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function decisionWork(names, passed = new Set()) {
     const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
     const all = goals();
-    return (deps.deskItems?.list() || []).filter(item => decisionEligible(item, deps.now())).flatMap(item => {
+    return (deps.deskItems?.list() || []).filter(item => decisionEligible(item)).flatMap(item => {
       const goal = item.kind === 'goal' ? all.find(g => `${g.programme}/${g.goal}` === item.reference && !g.problems.length) : null;
       if (item.kind === 'goal' && !goal) return [];
       if (goal && heldBy(goal)) return [];
@@ -1595,7 +1600,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const claimName = goal ? goalName(goal) : name;
       const claimPath = join(goal?.dir || itemDirectory(item, deps.env), '.decision.json');
       if (!names.includes(repo) || passed.has(name) || held.has(claimName) || decisionClaimed(claimPath)) return [];
-      return [{ name, repo, kind: 'decision', variant: null, since: item.due_at || item.source_at,
+      return [{ name, repo, kind: 'decision', variant: null, since: item.source_at,
         decision: item, goal, claimName, claimPath, priority: 0 }];
     });
   }
@@ -1652,12 +1657,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (stopRequested()) return 'stop';
       if (updateRequested()) return 'skipped:update';
       const currentItem = deps.deskItems.read(name);
-      if (!decisionEligible(currentItem, deps.now())) return 'skipped:changed';
+      if (!decisionEligible(currentItem)) return 'skipped:changed';
       try {
         const budget = deskBudget({ env: deps.env, now: deps.now(), read: deps.read });
         if (budget.held) { say(`${name}: desk ceiling reached ($${budget.spent} of $${budget.ceiling})`); return 'skipped:desk-ceiling'; }
       } catch (error) { say(`${name}: desk ceiling unreadable — ${error.message}`); return 'skipped:desk-ceiling'; }
-      const prompt = decisionPrompt(currentItem, { env: deps.env, goal, now: deps.now() });
+      const prompt = decisionPrompt(currentItem, { env: deps.env, goal });
       const instructions = instructionsFor(launch.id, role.overlay);
       const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, instructions, prompt, profileArgs, cache: role.cache });
       const stem = `decision-${name}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
@@ -1691,8 +1696,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       recordRefusal({ name, launch, route }, read, picked.billing);
       if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
       const ended = deps.deskItems.read(name);
-      // A due item unchanged by the session is not a successful for-martin ending.
-      const unfinished = decisionUnfinished(ended, deps.now());
+      // An item the session left prepared is not a successful ending.
+      const unfinished = decisionUnfinished(ended);
       // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
       // It counts for nothing and writes nothing; the item is taken again when the provider answers.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
@@ -1701,7 +1706,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
         // The turn ran and was paid for: a lock that cannot be had leaves the failure uncounted, never the run row below unwritten.
         let failed = { item: null, lessonError: null };
-        try { failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item, deps.now()) }); }
+        try { failed = decisionFailure(name, { reason, at: stamp(), env: deps.env, write: deps.write, writeJson, lock, read: deps.deskItems.read, unfinished: item => decisionUnfinished(item) }); }
         catch (error) { say(`${name}: the failure was not counted — ${error.message || String(error)}`); }
         if (failed.lessonError) say(`${name}: the unsettled lesson was not written — ${failed.lessonError}`);
         if (failed.item?.state === 'for-martin' && goal) goalState(goal, `goal:${currentItem.reference}`, { status: 'Martin' }, { comment: reason });
@@ -3238,7 +3243,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // `askGithub()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.
     noticeNewCode();
-    // A goal finished for 24 hours is archived (`goal-archive.js`); a programme never is.
+    // A finished goal is archived at once (`goal-archive.js`); a programme never is.
     archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();
