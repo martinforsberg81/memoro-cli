@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { AREAS_PATH, isSourceArea } from './areas.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { runTool } from './child-async.js';
@@ -136,7 +137,7 @@ export function partsLacks(goal, name, probe) {
   if (read.error) lacks.push(`the declared rule areas cannot be read, so the stands cannot be checked: ${read.error}`);
   else {
     const taken = new Set(obligations.map((one) => one.area));
-    const bare = read.declared.flatMap((one) => one.areas.map((area) => `${one.repo}/${area.id}`)).filter((id) => !taken.has(id));
+    const bare = read.declared.flatMap((one) => one.areas.filter((area) => !isSourceArea(area)).map((area) => `${one.repo}/${area.id}`)).filter((id) => !taken.has(id));
     if (bare.length) lacks.push(`no stand on ${bare.join(', ')} — mc goal obligation set ${name} <area> --stand touched|untouched --text "…" (mc goal areas ${name} lists them)`);
   }
   for (const one of obligations) {
@@ -145,6 +146,16 @@ export function partsLacks(goal, name, probe) {
     const found = probe.onMain(repo, path);
     if (found.state === 'absent') lacks.push(`the stand on ${one.area} names ${one.standard}, and ${path} is not on origin/main of ${repo}`);
     else if (found.state !== 'present') lacks.push(`cannot tell whether ${path} is on origin/main of ${repo} (the standard of ${one.area}): ${found.why ?? 'no answer'}`);
+  }
+  if (!read.error) {
+    for (const { repo, areas } of read.declared) {
+      for (const area of areas) {
+        if (!area.page) continue;
+        const found = probe.onMain(repo, area.page);
+        if (found.state === 'absent') lacks.push(`the page of ${repo}/${area.id}, ${area.page}, is not on origin/main of ${repo} — repair ${repo}'s main: its ${AREAS_PATH} or the page`);
+        else if (found.state !== 'present') lacks.push(`cannot tell whether the page of ${repo}/${area.id}, ${area.page}, is on origin/main of ${repo}: ${found.why ?? 'no answer'}`);
+      }
+    }
   }
   return lacks;
 }
@@ -222,9 +233,16 @@ export function readerPrompt({ name, goal, declared, dir, checkout }) {
   ];
   const areas = declared.flatMap((one) => one.areas.map((area) => ({ repo: one.repo, area })));
   if (!areas.length) lines.push('  none declared');
-  for (const { repo, area } of areas) {
+  const rules = areas.filter(({ area }) => !isSourceArea(area));
+  for (const { repo, area } of rules) {
     lines.push(`  ${repo}/${area.id} — ${area.name}`);
+    if (area.page) lines.push(`    page ${checkout}/${repo}/${area.page}`);
     for (const question of area.questions) lines.push(`    when ${question.when}`, `      ask ${question.ask}`);
+  }
+  const sources = areas.filter(({ area }) => isSourceArea(area));
+  if (sources.length) {
+    lines.push('', 'THE SOURCE AREAS OF ITS REPOSITORIES, which ask no stand — read the page of each the goal touches');
+    for (const { repo, area } of sources) lines.push(`  ${repo}/${area.id} — ${area.name}`, `    covers ${area.covers}`, `    page ${checkout}/${repo}/${area.page}`);
   }
   lines.push('', 'STATEMENTS THAT SAY every, only OR no other WITHOUT NAMING A PREMISE — judge whether each inventory is established');
   const claims = unsupportedClaims(goal);
@@ -241,9 +259,10 @@ const within = (inner, outer) => inner === outer || inner.startsWith(outer.endsW
 /**
  * The stand `mc goal areas` proposes for an area with none: `touched`, naming the change items, when a token of
  * a change item's `where` that holds a slash is a path under one of the area's paths or a directory above one;
- * otherwise `untouched`. Advisory: nothing reads it back.
+ * otherwise `untouched`; nothing for a source area, which asks no stand. Advisory: nothing reads it back.
  */
 export function proposedStand(goal, repo, area) {
+  if (isSourceArea(area)) return null;
   const items = [];
   for (const item of goal.change ?? []) {
     const hit = pathTokens(item.where ?? '').some((raw) => {

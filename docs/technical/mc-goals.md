@@ -288,11 +288,15 @@ Next: what the next session should do
 
 ## Rule areas
 
-A repository declares its rule areas in `.mc/areas.json` on `main`, so that an
+A repository declares its areas in `.mc/areas.json` on `main`, so that an
 obligation names an area both sides know. The declaration is read from the
 repository's `origin/main` (or the revision `--at` names), as `.mc/ios.json` is,
 because a goal is written before its worktree exists and the areas that bind a
-goal are main's.
+goal are main's. There are two kinds. A **rule area** has questions and asks a
+stand of each goal. A **source area** has no question: it names its page, asks no
+stand of a goal and is never a tripped area. An area may name a `page`: the
+repository-relative markdown page that states its aim, how one sees one is
+closer, the decisions that hold and where its assets are.
 
 ```json
 {
@@ -304,52 +308,90 @@ goal are main's.
       "covers": "What a change must say in the repository's own words.",
       "standards": ["docs/technical/mc-goals.md"],
       "paths": ["docs/", "canon/"],
-      "questions": [{ "when": "a behaviour changes", "ask": "Does docs/technical say what runs?" }]
+      "questions": [{ "when": "a behaviour changes", "ask": "Does docs/technical say what runs?" }],
+      "page": "docs/technical/mc-goals.md"
+    },
+    {
+      "id": "games",
+      "name": "The games",
+      "covers": "What the games are for and the decisions that hold for them.",
+      "standards": [],
+      "paths": ["src/games/"],
+      "questions": [],
+      "page": "docs/areas/games.md"
     }
   ]
 }
 ```
 
 - The file is `schema_version` 1 and a non-empty `areas`; no other key.
-- An area has exactly `id` (lower-case letters, digits and hyphens, starting
-  with a letter, unique in the file), `name`, `covers`, `standards` (a non-empty
+- An area has `id` (lower-case letters, digits and hyphens, starting
+  with a letter, unique in the file), `name`, `covers`, `standards` (an
   array of repository paths), `paths` (an array, possibly empty) and
-  `questions` (a non-empty array of `{ "when", "ask" }`). A blank text, a
-  missing field or an unknown key makes the file invalid.
+  `questions` (an array of `{ "when", "ask" }`), and optionally `page`. A blank
+  text, a missing field or an unknown key makes the file invalid.
+- `page` is optional: a non-blank text, the repository-relative path of a
+  markdown page; a present key that is blank or not a text makes the file
+  invalid. Several areas may name one page. Whether the page exists is never
+  asked when the declaration is read (a declaration is always readable): the move
+  out of draft asks it (*Plan review*) and `mc goal areas` marks `(missing)`.
+- An area with no question is a source area (`isSourceArea`, `areas.js`); one
+  with at least one is a rule area. `questions` stays required and an array. An
+  empty `questions` is valid only with a `page`, so a rule area does not become a
+  source by an emptied list alone. A rule area's `standards` is non-empty; a
+  source area's may be empty, its page listing its standards.
 - An obligation's `area` is `<repo>/<id>`, `<repo>` being the repository that
   declares it (`memoro-cli/documentation`).
 - A repository without the file declares no areas and behaves as it did.
   The file is absent when git says the path is not in the revision; any other
   git failure — a revision that does not exist, an unreadable repository — is
   an error, never "declares none".
-- Nothing requires a stand for an area, and no brief or goal text carries the
-  declarations: `mc goal show` does not render them.
+- A goal that leaves draft needs a stand on every declared rule area (the parts
+  check, *Plan review*) and none on a source area; no brief or goal text carries
+  the declarations: `mc goal show` does not render them.
+- An mc from before a declaration uses `page` or a source area refuses the file,
+  naming the key (`areas[0].page is an unknown key`) or the field (`questions`),
+  so `mc goal areas`, `obligation set` and the moves out of draft and review fail
+  for that repository. `schema_version` stays 1; a declaration in the new forms is
+  written to a main only after the mc that reads it runs.
+- A stand a goal holds on an area that later became a source stays in the goal's
+  text and is never rewritten: `obligation remove` takes it out; a `touched` one
+  keeps its `obligation <area>` line in the verdict; an `untouched` one is no
+  longer tripped; `mc goal areas <p>/<g>` shows it in the area's block and does
+  not count it.
 - `mc goal areas` may be run by plan, a person, the learning role and the
   `desk-prepare` role (which only reads: its other goal verbs are refused), and
   by a build, review or mend session.
 
 **`mc goal areas`** prints each declared area as a block — `<repo>/<id>`, its
-name, what it covers, standards (`(missing)` after one that is not in the
-revision), paths and questions. For a repository that declares none it prints
+name, what it covers, its page when it has one (`(missing)` after a page that is
+not in the revision), standards (`none` when empty; `(missing)` after one that is
+not in the revision), paths and questions. A source area's block says it is a
+source area that asks no stand, and has no `questions:` heading. For a repository that declares none it prints
 one line saying so (exit 0); an unknown repository name exits 2. For a goal it
 prints the blocks of every goal repository that declares areas, each with the
 goal's stand for it (`stand: touched — <text> [<standard>]`, or `no stand`),
 then the obligations whose area no repository declares, and ends
-`<n> of <m> areas have a stand`. A version 1 goal exits 2; a goal that cannot be
+`<n> of <m> areas have a stand`, counting rule areas alone: a source area shows
+neither `no stand` nor a proposed stand, and a stand the goal holds on one is
+shown and not counted. A version 1 goal exits 2; a goal that cannot be
 read, a repository that is not known and a declaration that cannot be read or
 is invalid exit 1.
 
 **`mc goal obligation set`** takes, for a goal whose repositories declare any
-area, only a declared `<repo>/<id>`: any other word is refused (exit 2, nothing
-written) with the declared areas listed. A goal none of whose repositories
-declares areas takes any word, and `<repo>/…` is accepted for a goal repository
-that declares none. A declaration that cannot be read or is invalid makes the
+rule area, only a declared rule area `<repo>/<id>`: any other word is refused
+(exit 2, nothing written) with the declared rule areas listed. A source area's id
+is refused (exit 2, nothing written), saying it is a source area that asks no
+stand and naming its page. A goal none of whose repositories declares a rule area
+takes any other word, and `<repo>/…` is accepted for a goal repository that
+declares none; a repository that declares source areas alone counts as declaring
+none. A declaration that cannot be read or is invalid makes the
 write fail (exit 1); the declaration is read once per write. When the goal's
 repositories declare any area, a refusal lists each repository's areas, and
 names one that declares none as `<repo>: declares none, any <repo>/… is taken`.
-After a `set` the verb ends with `no stand yet: <areas>` for the declared areas
-that have no obligation, or `every declared area has a stand` when none lacks
-one; for a goal whose repositories declare no area it prints neither.
+After a `set` the verb ends with `no stand yet: <areas>` for the declared rule
+areas that have no obligation, or `every declared area has a stand` when none
+lacks one; for a goal whose repositories declare no rule area it prints neither.
 
 ## The verbs
 
@@ -375,7 +417,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the entry's first line (`deskItemQuestion` takes the `Martin` entry of
   its minute, so another entry in the same minute does not hide it).
 
-- **`areas <repo> | <p>/<g> [--at <rev>]`** — shows rule areas (*Rule areas*).
+- **`areas <repo> | <p>/<g> [--at <rev>]`** — shows areas, with each page, and a source area as a source that asks no stand (*Rule areas*).
   Given a repository mc knows it prints that repository's declaration at `<rev>`
   (`origin/main` by default); given a goal, the declarations of the goal's
   repositories and, for each area, the goal's obligation for it. `MC_GOAL`
@@ -420,8 +462,8 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   and **`obligation remove <p>/<g> <area> --reason "…"`** — write or take out
   the goal's obligation for one rule area, logged. `set` checks the area
   against the goal's repositories' declarations (*Rule areas*); `remove` takes
-  any area the goal holds. After a `set` it names the declared areas that still
-  have no obligation.
+  any area the goal holds. `set` refuses a source area (exit 2). After a `set` it
+  names the declared rule areas that still have no obligation.
   The item and obligation verbs write the brief like `set`: a build, review
   or mend session is refused (exit 2, nothing written), and so is the
   learning role on a goal it did not create; it may use them on a goal it
@@ -881,7 +923,12 @@ checks, in order:
   `mc`, `mc shot`, the code) and answers red when one does not hold, whatever
   its `met` says. A builder's claim — `met` included — is not evidence.
 - **Structure** — the change fits where it sits, no duplication, the right
-  altitude, readable names, the documents the goal names updated.
+  altitude, readable names, the documents the goal names updated. The reviewer runs
+  `mc goal areas <p>/<g>` and reads, as files in the goal's worktree, the page of
+  each area the change touches (a `touched` stand, a tripped area, a source area
+  whose `covers` or `paths` the diff falls under); a change against an aim or a
+  decision a page states is a finding under `obligation <area>` when the goal
+  stands `touched` on the area and under `change` otherwise.
 - **Bugs** — edge cases, error paths and regressions in what the diff touches.
 
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
@@ -938,7 +985,8 @@ area is tripped, and the verdict needs an `untouched <area>` line. One function,
 `trippedAreas` (`review-verdict.js`), decides which areas are tripped; the review
 prompt lists them with their files and the move to merge or build requires their
 lines, so what the reviewer is told and what mc requires are the same list. A
-file under a touched area's paths is not listed.
+file under a touched area's paths is not listed. A source area is never tripped,
+also when the goal holds an older `untouched` stand on it.
 
 **Rounds.** A rejection moves the goal `review → build` with the reviewer's
 `--reason`; a repair build session (*Repair and mend*) fixes the NOT OK items
@@ -1080,8 +1128,12 @@ move exits 1 and writes nothing.
 
 - **Parts** (version 2 goals only). The refusal names every lack at once: an
   empty outcome, no change item, no criterion, a declared rule area without a
-  stand, a stand whose `--standard` path is not on origin/main of the repository
-  it names. A question mc cannot answer (a git failure, an unknown repository, a
+  stand (a source area is asked none), a stand whose `--standard` path is not on
+  origin/main of the repository it names, and a `page` a declaration names that
+  is not on origin/main of its repository (the lack names the area, the page and
+  that the repair is on that repository's main; an answer git does not give is a
+  line with the reason). Only the move out of draft asks; a page that is gone
+  never stops a review or `obligation set`. A question mc cannot answer (a git failure, an unknown repository, a
   failing declarations read) refuses with the reason. Items saying `every`,
   `only` or `no other` (whole words) without a premise id are not refused; they
   are listed for the reader.
@@ -1124,9 +1176,14 @@ move exits 1 and writes nothing.
   which GOAL.json, LOG.md or `.hold.json` changed is discarded. From this role
   `mc goal` accepts `show`, `list`, `areas` and the verdict only, and `mc ask` is
   refused.
+- **The prompt** gives each rule area with the path of its page (`<checkout>/<repo>/<page>`)
+  before its questions, and after the rule areas a section of the source areas,
+  each with what it covers and its page and no question. The role reads the page
+  of each area the goal touches, source areas included; the seven questions are
+  the same, question 4 widened to the pages.
 - **Show and areas.** `mc goal show` says where the review stands (none, OK for
   this text, OK for an earlier text, not OK with the round). `mc goal areas
-  <p>/<g>` proposes a stand for each area without one: touched, naming the change
+  <p>/<g>` proposes a stand for each rule area without one: touched, naming the change
   items whose `where` holds a path under the area's paths (or a directory above),
   otherwise untouched. The proposal is advisory.
 

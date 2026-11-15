@@ -48,7 +48,7 @@
  *                                  does the same 24 hours after a goal is done or dropped
  *   mc goal show <programme>/<goal>      the goal as text (`renderGoalText`), the last three entries, each worktree's state
  *   mc goal list [<programme>]           every goal, one line each, under its programme's phases
- *   mc goal areas <repo>|<programme>/<goal> [--at <rev>]   a repository's rule areas (`.mc/areas.json` at origin/main), or a goal's: each area with its stand or `no stand`
+ *   mc goal areas <repo>|<programme>/<goal> [--at <rev>]   a repository's areas (`.mc/areas.json` at origin/main) with each page, or a goal's: each rule area with its stand or `no stand`; a source area asks no stand
  *
  * The goal defaults to MC_GOAL's in a goal session. No verb here owns a goal:
  * the worktree is anyone's. GOAL.json is written by these verbs only, each write
@@ -73,7 +73,7 @@ import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, un
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
-import { readAreas } from '../areas.js';
+import { isSourceArea, readAreas } from '../areas.js';
 import { checkVerdict, trippedAreas } from '../review-verdict.js';
 import { dropItems, evidenceIds, readEvidence, evidenceLines, evidenceRefusal, itemKey, makeRecord, removeCriterionItem, setItem as setEvidence, worktreeHeads } from '../goal-evidence.js';
 import { appendRecord, markerRecord, moveGate, planReviewCall, proposedStand, proposedWords, readRecords, showLine, verdictVerb } from '../plan-review.js';
@@ -1256,7 +1256,7 @@ function setObligationVerb(args, flags, ctx) {
     if (refusal) return { problems: [refusal], code: 2 };
     const set = setObligation(goal, area, given);
     replaced = set.was;
-    after = read.declared.some((one) => one.areas.length) ? stillWithoutStand(read.declared, set.goal.obligations) : null;
+    after = read.declared.some((one) => ruleAreas(one).length) ? stillWithoutStand(read.declared, set.goal.obligations) : null;
     return set.goal;
   }, () => `obligation "${area}" ${replaced ? 'replaced' : 'set'}`, (goal, target) => {
     if (replaced) logChange(ctx, goal, target, `obligation "${area}" replaced — it was ${itemWords(replaced)}`);
@@ -1282,21 +1282,29 @@ function goalDeclarations(goal, at, ctx) {
   return { declared };
 }
 
-/** Why `area` is not one the goal may take a stand on (D7: any word where nothing is declared), or null. */
+/** A declaration's rule areas: the ones that ask a goal for a stand (a source area asks none). */
+const ruleAreas = (one) => one.areas.filter((area) => !isSourceArea(area));
+
+/**
+ * Why `area` is not one the goal may take a stand on (D7: any word where nothing is declared), or null. A source
+ * area's own id is refused first; a repository that declares source areas alone counts as one that declares none.
+ */
 function areaRefusal(area, declared) {
-  if (!declared.some((one) => one.areas.length)) return null;
   const slash = area.indexOf('/');
   const own = slash > 0 ? declared.find((one) => one.repo === area.slice(0, slash)) : null;
-  if (own && !own.areas.length && slash < area.length - 1) return null;
-  if (own?.areas.some((one) => `${own.repo}/${one.id}` === area)) return null;
-  const listed = declared.map((one) => (one.areas.length ? `${one.repo}: ${one.areas.map((a) => `${one.repo}/${a.id}`).join(', ')}` : `${one.repo}: declares none, any <${one.repo}/…> is taken`));
+  const source = own?.areas.find((one) => isSourceArea(one) && `${own.repo}/${one.id}` === area);
+  if (source) return `"${area}" is a source area that asks no stand — read its page ${source.page} instead`;
+  if (!declared.some((one) => ruleAreas(one).length)) return null;
+  if (own && !ruleAreas(own).length && slash < area.length - 1) return null;
+  if (own && ruleAreas(own).some((one) => `${own.repo}/${one.id}` === area)) return null;
+  const listed = declared.map((one) => (ruleAreas(one).length ? `${one.repo}: ${ruleAreas(one).map((a) => `${one.repo}/${a.id}`).join(', ')}` : `${one.repo}: declares none, any <${one.repo}/…> is taken`));
   return `"${area}" is not a rule area of the goal's repositories — an area is <repo>/<id>\n  ${listed.join('\n  ')}`;
 }
 
 /** The line `obligation set` ends with: the declared areas with no obligation, or that none lacks one. */
 function stillWithoutStand(declared, obligations) {
   const taken = new Set((obligations ?? []).map((one) => one.area));
-  const lacking = declared.flatMap((one) => one.areas.map((a) => `${one.repo}/${a.id}`)).filter((id) => !taken.has(id));
+  const lacking = declared.flatMap((one) => ruleAreas(one).map((a) => `${one.repo}/${a.id}`)).filter((id) => !taken.has(id));
   return lacking.length ? `  no stand yet: ${lacking.join(', ')}` : '  every declared area has a stand';
 }
 
@@ -1648,14 +1656,23 @@ function areasVerb(args, flags, ctx) {
   return given.includes('/') ? goalAreas(given, at, ctx) : repoAreas(given, at, ctx);
 }
 
-/** One area as text: `<repo>/<id> — <name>`, what it covers, its standards and paths (`(missing)` when not in `at`), its questions. */
+/**
+ * One area as text: `<repo>/<id> — <name>`, what it covers, its page, its standards and paths (`(missing)` when not
+ * in `at`), its questions. A source area says it is one, asks no stand and has no questions.
+ */
 function areaBlock(repo, path, area, at, ctx, stand = undefined, proposal = null) {
   const exists = (file) => ctx.git(path, ['cat-file', '-e', `${at}:${file}`]).ok;
   const marked = (files) => files.map((file) => `${file}${exists(file) ? '' : ' (missing)'}`).join(', ');
   const lines = [`${repo}/${area.id} — ${area.name}`];
-  if (stand !== undefined) lines.push(stand ? `  stand: ${stand.stand} — ${oneLine(stand.text)}${stand.standard ? ` [${stand.standard}]` : ''}` : '  no stand');
-  if (stand === null && proposal) lines.push(proposedWords(proposal));
-  lines.push(`  covers: ${area.covers}`, `  standards: ${marked(area.standards)}`, `  paths: ${area.paths.length ? marked(area.paths) : 'none'}`, '  questions:');
+  const source = isSourceArea(area);
+  if (source) lines.push('  source area: it asks no stand of a goal');
+  if (stand !== undefined && (stand || !source)) lines.push(stand ? `  stand: ${stand.stand} — ${oneLine(stand.text)}${stand.standard ? ` [${stand.standard}]` : ''}` : '  no stand');
+  if (stand === null && proposal && !source) lines.push(proposedWords(proposal));
+  lines.push(`  covers: ${area.covers}`);
+  if (area.page) lines.push(`  page: ${marked([area.page])}`);
+  lines.push(`  standards: ${area.standards.length ? marked(area.standards) : 'none'}`, `  paths: ${area.paths.length ? marked(area.paths) : 'none'}`);
+  if (source) return `${lines.join('\n')}\n`;
+  lines.push('  questions:');
   for (const question of area.questions) lines.push(`    when ${question.when}`, `      ask ${question.ask}`);
   return `${lines.join('\n')}\n`;
 }
@@ -1697,8 +1714,10 @@ function goalAreas(named, at, ctx) {
     return areas.map((area) => {
       const stand = obligations.find((one) => one.area === `${repo}/${area.id}`) ?? null;
       known.add(`${repo}/${area.id}`);
-      total += 1;
-      if (stand) stood += 1;
+      if (!isSourceArea(area)) {
+        total += 1;
+        if (stand) stood += 1;
+      }
       return areaBlock(repo, path, area, at, ctx, stand, stand ? null : proposedStand(goal, repo, area));
     }).join('\n');
   });

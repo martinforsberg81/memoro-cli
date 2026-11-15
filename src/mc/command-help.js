@@ -110,7 +110,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal archive <programme>/<goal>... | <programme>   safely archive done or dropped goals; dropped goals finalize immediately when safe, done goals after 24 hours\n",
     "        mc goal show <programme>/<goal>   the goal as text — each criterion with ✓/✗ and its check — its last three log entries, and each worktree's state\n",
     "        mc goal list [<programme>]   every goal, one line each, grouped by phase, with the phase in progress named\n",
-    "        mc goal areas <repo> | <programme>/<goal> [--at <rev>]   a repository's rule areas (.mc/areas.json at origin/main, or at <rev>), each with its questions; for a version 2 goal, every area of its repositories with the goal's stand or no stand; writes nothing\n",
+    "        mc goal areas <repo> | <programme>/<goal> [--at <rev>]   a repository's areas (.mc/areas.json at origin/main, or at <rev>), each with its page and, for a rule area, its questions; a source area is shown as a source that asks no stand; for a version 2 goal, every area of its repositories with the goal's stand or no stand (none for a source area); writes nothing\n",
     "\n",
     "Goals live under ~/mc/programs/<programme>/goals/<goal>/.\nnew fetches each repository first; a failed fetch leaves no goal behind.\n",
     "log tags each entry with MC_TOOL and MC_MODEL (person when neither is set).\n",
