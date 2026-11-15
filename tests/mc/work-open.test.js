@@ -342,7 +342,7 @@ describe('openInWorkArea and Remote Control', () => {
     const result = await openInWorkArea({ areaRoot, worktree, env: { ...env, SSH_CONNECTION: 'x', MC_HEADLESS: '' },
       platform: 'linux', isInteractive: () => true, ...options, bg: true });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, BACKGROUND_REFUSALS.codex);
+    assert.equal(result.reason, BACKGROUND_REFUSALS.tool('codex'));
     assert.equal(calls.length, 0);
   });
 

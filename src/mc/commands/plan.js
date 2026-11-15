@@ -204,7 +204,7 @@ export async function run(argv, deps = {}) {
   });
   if (!result.ok) {
     stderr.write(`mc: ${result.reason}${result.hint ? ` — ${result.hint}` : ''}\n`);
-    return 1;
+    return result.code ?? 1;
   }
   return result.code ?? 0;
 }

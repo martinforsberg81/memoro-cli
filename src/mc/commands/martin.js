@@ -98,7 +98,7 @@ export async function run(argv, deps = {}) {
     model: flags.model, overlay: launch.overlay, prompt: launch.prompt, resumePrompt: `Refresh from the desk now; what you remember of earlier openings is not current.\n\n${opening}`,
     defaultModel: role.model, defaultModelTool: role.tools?.[0] || null,
   });
-  if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return 1; }
+  if (!opened.ok) { stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`); return opened.code ?? 1; }
   (deps.writeLastOpen || writeJsonAtomic)(lastOpenPath(env), { at: now.toISOString() });
   return opened.code ?? 0;
 }

@@ -389,5 +389,5 @@ test('remote --bg on a Codex desk is refused before any start', async () => {
     connect: () => { started = true; return { session: session() }; }, codexClient: () => ({ status: 0 }) };
   assert.equal(await remoteEntrance('manager', ['--bg'], link, { stdout: sink(), stderr: errors }), 1);
   assert.equal(started, false);
-  assert.match(errors.value, /on tc: --bg is for Claude sessions/u);
+  assert.match(errors.value, /on tc: --bg is for tools whose session outlives the terminal \(claude\); a Codex CLI session has no client but the terminal/u);
 });

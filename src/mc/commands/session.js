@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { openInWorkArea } from '../work-open.js';
-import { deskSessions, readRegister, prepareSessionEntrance } from '../session-entrance.js';
+import { deskSessions, readRegister, prepareSessionEntrance, recordMatchesDesk, sessionName } from '../session-entrance.js';
 import { codexSessionDriver } from '../codex-sessions.js';
 import { claudeBackgroundDriver } from '../claude-background.js';
 import { descriptor, sessionDescriptor, ENTRANCES } from '../server-protocol.js';
@@ -71,8 +71,11 @@ export async function run(argv, {
     };
     const module = await load(request.entrance);
     let emitted = false;
+    let terminalExit = false;
     const opened = async options => {
-      const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture, host: request.host };
+      // Only a `start` selects a terminal tool's conversation, so only it takes the desk lock (work-open.js).
+      const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture, host: request.host,
+        ...(request.operation === 'start' ? {} : { lock: async () => async () => {} }) };
       const mechanics = launch => {
         const provider = launch.id;
         const notInteractive = interactiveToolRefusal(provider);
@@ -89,6 +92,29 @@ export async function run(argv, {
         // Only the internal entrance forces persistent mechanics on the server.
         background: async resolved => {
           const { provider, providerVersion, describe, wire, driverOf } = mechanics(resolved.launch);
+          if (driverOf === 'terminal') {
+            // A tool whose session lives in the terminal that started it: listed from the register, never joined,
+            // and started by the same path a local terminal takes (`openInWorkArea`, in the `ssh -t` terminal).
+            terminalExit = true;
+            if (request.operation === 'list') {
+              const names = [];
+              const sessions = records(env)
+                .filter(row => Number.isInteger(row.pid) && alive(row.pid) && recordMatchesDesk(resolved, row))
+                .map(row => {
+                  const name = sessionName(resolved, names);
+                  names.push({ name });
+                  return describe({ id: `pid-${row.pid}`, name, started: row.started || null,
+                    resume: row.conversation || (row.launch ? resolved.before.find(item => item.nonce === row.launch)?.id : null) || null });
+                });
+              emit(descriptor('snapshot', { provider, providerVersion, chosen: resolved.chosen?.id || null, sessions }));
+              emitted = true;
+              return { result: { ok: true, code: 0 } };
+            }
+            if (request.operation === 'join') {
+              return { result: { ok: false, code: 2, reason: `${resolved.launch.spec.label || provider} sessions run in the terminal that started them and cannot be joined; start a new one or resume its conversation` } };
+            }
+            return {};
+          }
           if (request.operation === 'list') {
             const rows = await drivers[driverOf]().list(resolved);
             const sessions = deskSessions(resolved, rows, records(env), alive).map(describe);
@@ -129,7 +155,9 @@ export async function run(argv, {
       choose: options => chooseProgramme({ ...options, choose, question: title => choose(title) }), open: opened });
     if (emitted && messages.length) stderr.write(messages.join(''));
     if (!emitted) {
-      if (status !== 0) throw new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`);
+      if (status !== 0) throw Object.assign(new Error(messages.join('').trim().replace(/^mc: /u, '') || `entrance exited ${status}`),
+        // A terminal tool's refusals (a held conversation, a join) carry the entrance's own exit code.
+        terminalExit ? { status } : {});
       // A `--bg` success has no protocol frame: its two app lines are the terminal's text. An attached
       // success prints nothing here; the client's own status line is the one the person reads.
       if (!request.json && request.args.includes('--bg') && messages.length) stdout.write(messages.join(''));
@@ -140,6 +168,6 @@ export async function run(argv, {
     if (error instanceof Question) { emit(error.value); return 0; }
     if (request?.json || argv.includes('--json')) emit(descriptor('refusal', { reason: error.message }));
     else stderr.write(`mc: ${request?.host ? `on ${request.host}: ` : ''}${error.message}\n`);
-    return 1;
+    return error.status ?? 1;
   }
 }
