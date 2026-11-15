@@ -56,6 +56,27 @@ describe('landed in the last 24 hours', () => {
   });
 });
 
+describe('a plan review is planning, not the goal\'s own work', () => {
+  const rows = (...extra) => readRunRows([
+    OLD_HEADER,
+    row('2026-11-09T10:00:00Z', 'goal:mc/a', 'build-goal', 1200, 'success'),
+    row('2026-11-09T11:00:00Z', 'goal:mc/a', 'merge', 10, 'merged', { pr: '1', model: '-' }),
+    ...extra,
+  ].join('\n'));
+
+  it('goes to plan_cost, and neither to the landed goal\'s sessions, its time nor its cost, nor to plan_sessions', () => {
+    const without = landedSection({ rows: rows(), now: NOW });
+    const withReading = landedSection({ rows: rows(row('2026-11-09T09:00:00Z', 'goal:mc/a', 'plan-review', 5000, 'OK', { model: 'gpt-6.1-sol' })), now: NOW });
+    assert.equal(withReading.sessions_per_goal, without.sessions_per_goal);
+    assert.deepEqual(withReading.time, without.time);
+    assert.equal(withReading.cost.total, without.cost.total);
+    assert.equal(withReading.first_pass, without.first_pass);
+    assert.equal(withReading.plan_sessions, 0);
+    assert.equal(without.plan_cost, 0);
+    assert.equal(withReading.plan_cost, 10, 'a million output tokens on gpt-6.1-sol: $10');
+  });
+});
+
 describe('the pipeline', () => {
   it('draws one bar per bucket, scaled to the largest, and a space for none', () => {
     assert.equal(sparkline([0, 1, 4, 8]), ' ▁▄█');
