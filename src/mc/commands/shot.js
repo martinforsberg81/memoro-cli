@@ -68,7 +68,7 @@ export const ROUTES = {
     booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep', '--compare', '--allow-unsettled'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
-      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout',
+      '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout', '--set', '--state',
     ],
     repeatable: ['--click', '--context-click', '--long-press', '--fill', '--eval', '--eval-file', '--upload', '--press'],
   },
@@ -81,7 +81,13 @@ export const ROUTES = {
 
 /** What a shot's arguments may not be, and whether the usage goes with saying so. */
 function refuseShot({ flags, positional }) {
-  const [where, , ...extra] = positional;
+  const [where, target, ...extra] = positional;
+  const setUsage = 'try mc shot dev <target> --set <dir> --state <name>';
+  if (flags.set !== null) {
+    if (!flags.set || !target || flags.state === null || !/^[a-z0-9][a-z0-9-]*$/u.test(flags.state)) return { error: `--set needs a target, directory and lowercase state name — ${setUsage}` };
+    const conflict = ['viewport', 'theme', 'out', 'keep', 'compare', 'list'].find((name) => flags[name]);
+    if (where !== 'dev' || conflict) return { error: `--set is for dev without ${conflict ? `--${conflict}` : 'prod'} — ${setUsage}` };
+  } else if (flags.state !== null) return { error: `--state needs --set — ${setUsage}` };
   if (!PLACES.includes(where)) return { error: `mc shot takes dev or prod first${where ? `, not ${where}` : ''}`, usage: true };
   if (extra.length) return { error: `one target at a time (${extra.join(' ')} is extra)` };
   if (flags.me && where === 'dev') return { error: '--me is for prod — a dev server has only the accounts /dev/login offers' };
@@ -201,6 +207,10 @@ export async function run(argv, deps = {}) {
     const flag = refusePublic(flags, entry);
     if (flag) { stderr.write(`mc: ${flag}\n`); return 2; }
   }
+  if (flags.set && !['desktop', 'iphone'].every((name) => Object.hasOwn(declared.viewports, name))) {
+    stderr.write('mc: --set needs the declared desktop and iphone viewports — try mc shot dev <target> --set <dir> --state <name>\n');
+    return 2;
+  }
   const viewport = parseViewport(flags.viewport ?? (isPublic ? entry.viewport : undefined), declared);
   if (!viewport.ok) { stderr.write(`mc: ${viewport.error}\n`); return 2; }
 
@@ -270,7 +280,7 @@ export async function run(argv, deps = {}) {
     }
   }
 
-  const out = flags.out
+  const out = flags.set ? join(resolve(cwd, flags.set), `${flags.state}-desktop-light.png`) : flags.out
     ? resolve(cwd, flags.out)
     : outPath({
       dir: join(mcHome(), 'shots'),
@@ -307,6 +317,9 @@ export async function run(argv, deps = {}) {
     public: isPublic,
   });
   const scrub = scrubber(secrets);
+  if (flags.set) {
+    return captureSet({ worktree, declared, request, env: withoutToken(env, declaration), flags, served, who, scrub, stdout, stderr, deps, clock, serverTiming });
+  }
   if (flags.keep) {
     return keep({
       worktree,
@@ -360,6 +373,47 @@ export async function run(argv, deps = {}) {
   });
   if (!flags.json) stderr.write(`mc: timing — ${timingText(timing)}\n`);
   return code;
+}
+
+/** Capture each rendering independently, retaining completed files on failure. */
+function captureSet({ worktree, declared, request, env, flags, served, who, scrub, stdout, stderr, deps, clock, serverTiming }) {
+  const renderings = [
+    ['desktop', 'desktop', 'light'], ['desktop', 'desktop', 'dark'],
+    ['phone', 'iphone', 'light'], ['phone', 'iphone', 'dark'],
+  ];
+  const files = [];
+  const results = [];
+  const start = clock();
+  let failed = null;
+  for (const [label, viewport, theme] of renderings) {
+    const rendering = `${label}-${theme}`;
+    const current = { ...request, viewport, theme, out: join(dirname(request.out), `${flags.state}-${rendering}.png`) };
+    const ran = (deps.runCapture || runCapture)({ worktree, declaration: declared, request: current, env, deps });
+    let diagnostic = '';
+    const sink = { write: (part) => { diagnostic += part; } };
+    let result = ran.ok ? ran.result : { ok: false, error: ran.error };
+    if (result?.ok === true && result.file !== current.out) {
+      result = { ok: false, error: 'the capture script did not name the requested output' };
+    }
+    const code = result && typeof result.ok === 'boolean' ? answer(result, {
+      request: current, served, who, scrub, stdout: sink, stderr: sink, deps,
+      worktree, script: declared.argv.join(' '),
+    }) : 1;
+    results.push({ rendering, result: result ?? null });
+    if (diagnostic && !flags.json) {
+      for (const line of diagnostic.trimEnd().split('\n')) {
+        if (line !== current.out) stderr.write(`${rendering}: ${line}\n`);
+      }
+    }
+    if (code !== 0) { failed = rendering; if (!flags.json) stderr.write(`mc: ${rendering} failed\n`); break; }
+    files.push(current.out);
+    if (!flags.json) stdout.write(`${current.out}\n`);
+    if (flags.open) openFile(current.out, deps);
+  }
+  const timing = timingOf(serverTiming, clock() - start);
+  if (flags.json) stdout.write(`${scrub(JSON.stringify({ ok: !failed, files, results, ...(failed ? { failed } : {}), timing }, null, 2))}\n`);
+  else stderr.write(`mc: timing — ${timingText(timing)}\n`);
+  return failed ? 1 : 0;
 }
 
 /**

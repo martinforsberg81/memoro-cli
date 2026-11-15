@@ -437,6 +437,88 @@ describe('mc shot — the pieces', () => {
   });
 });
 
+describe('mc shot — design sets', () => {
+  it('replays ordered actions in four independent requests and stops on a partial failure', async () => {
+    const fx = fixture();
+    const requests = [];
+    let ensures = 0;
+    const dir = join(fx.home, 'designs');
+    const deps = {
+      ensureAppServer: async () => { ensures += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: {}, timing: { slot_wait_ms: 0, server_ms: 0 } }; },
+      runCapture: ({ request }) => {
+        requests.push(request);
+        writeFileSync(request.out, 'picture');
+        if (requests.length === 3) return { ok: true, result: { ok: false, code: 'not-loaded', error: 'loading' } };
+        return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
+      },
+    };
+    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--click', '.x', '--fill', 'input=hello', '--press', 'Enter'], fx, deps);
+    assert.equal(result.code, 1);
+    assert.equal(ensures, 1);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out.split('/').at(-1)]), [
+      ['desktop', 'light', 'filled-desktop-light.png'], ['desktop', 'dark', 'filled-desktop-dark.png'], ['iphone', 'light', 'filled-phone-light.png'],
+    ]);
+    assert.deepEqual(requests.map((r) => r.actions), Array(3).fill([
+      { kind: 'click', selector: '.x' }, { kind: 'fill', selector: 'input', text: 'hello' }, { kind: 'press', key: 'Enter' },
+    ]));
+    assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out));
+    assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)));
+    assert.equal(existsSync(requests[2].out), false);
+    assert.match(result.stderr, /phone-light failed/u);
+    assert.match(result.stderr, /desktop-light: mc: warning — notice/u);
+    assert.match(result.stderr, /mc: timing — /u);
+  });
+
+  it('returns the complete ordered matrix in JSON and opens only successful files', async () => {
+    const fx = fixture();
+    const dir = join(fx.home, 'designs');
+    const requests = [];
+    const opened = [];
+    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--json', '--open', '--click', '.a'], fx, {
+      runCapture: ({ request }) => {
+        requests.push(request);
+        return { ok: true, result: { ok: true, file: request.out, acted: request.actions } };
+      },
+      platform: () => 'linux',
+      spawn: (_command, args) => { opened.push(args[0]); return { on() {}, unref() {} }; },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const aggregate = JSON.parse(result.stdout);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme]), [
+      ['desktop', 'light'], ['desktop', 'dark'], ['iphone', 'light'], ['iphone', 'dark'],
+    ]);
+    assert.deepEqual(aggregate.files, requests.map((r) => r.out));
+    assert.deepEqual(opened, aggregate.files);
+    assert.deepEqual(aggregate.results.map((r) => r.rendering), ['desktop-light', 'desktop-dark', 'phone-light', 'phone-dark']);
+    assert.equal(aggregate.ok, true);
+    assert.ok(aggregate.timing);
+    assert.doesNotMatch(result.stderr, /mc: timing/u);
+  });
+
+  it('refuses incompatible or incomplete sets before starting a server or making a directory', async () => {
+    const fx = fixture();
+    const dir = join(fx.home, 'never');
+    const calls = [
+      ['dev', 'home', '--set', dir, '--state', 'x', '--viewport', 'desktop'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--theme', 'dark'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--out', 'x.png'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--keep'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--compare'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--list'],
+      ['prod', 'home', '--set', dir, '--state', 'x'],
+      ['dev', 'home', '--state', 'x'], ['dev', 'home', '--set', dir],
+      ['dev', '--set', dir, '--state', 'x'],
+      ...['', '../x', 'Upper'].map((state) => ['dev', 'home', '--set', dir, '--state', state]),
+    ];
+    for (const argv of calls) {
+      const result = await shot(argv, fx, { ensureAppServer: async () => { throw new Error('unexpected server'); } });
+      assert.equal(result.code, 2, argv.join(' '));
+      assert.match(result.stderr, /mc shot dev <target> --set <dir> --state <name>/u);
+      assert.equal(existsSync(dir), false);
+    }
+  });
+});
+
 describe('mc shot — the run', () => {
   it('dev signs in through /dev/login as the seeded account, and prints the path first', async () => {
     const fx = fixture();
