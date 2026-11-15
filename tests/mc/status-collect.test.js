@@ -8,7 +8,10 @@ import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor, rowCost } from '../../src/mc/prices.js';
+import { declared } from '../../src/adapters/index.js';
+import { planProviders, planSessionWords } from '../../src/mc/page-render.js';
 import { nowBlock, pidAlive } from '../../src/mc/status-collect.js';
+import { agyTail } from '../../src/mc/work-status.js';
 
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -135,5 +138,43 @@ describe('NOW', () => {
     assert.equal(pidAlive(0), false);
     assert.equal(pidAlive(null), false);
     assert.equal(pidAlive('nope'), false);
+  });
+});
+
+describe('agy on the page: its tail, its model reader and its provider name', () => {
+  const asks = (text) => ({ type: 'USER_INPUT', content: text });
+  const says = (text, extra = {}) => ({ type: 'PLANNER_RESPONSE', content: text, ...extra });
+  const call = { name: 'run_command', args: {} };
+
+  it('is the tool\'s turn after a user message and the person\'s after words with no tool call', () => {
+    assert.deepEqual(agyTail([asks('go')]), { said: null, turn: 'working' });
+    assert.deepEqual(agyTail([asks('go'), says('Done. What next?')]), { said: 'Done. What next?', turn: 'waiting' });
+  });
+
+  it('a response that calls a tool is still working, and the words before it are what was said', () => {
+    assert.deepEqual(agyTail([asks('go'), says('Looking.'), says('', { tool_calls: [call] })]), { said: 'Looking.', turn: 'working' });
+    assert.deepEqual(agyTail([asks('go'), says('Running it.', { tool_calls: [call] })]), { said: 'Running it.', turn: 'working' });
+  });
+
+  it('a tool result agy injects, and a system message, do not decide whose turn it is', () => {
+    assert.deepEqual(agyTail([asks('go'), says('Done.'), { type: 'SYSTEM_MESSAGE', content: 'reminder' }]), { said: 'Done.', turn: 'waiting' });
+    assert.deepEqual(agyTail([asks('go'), says('Done.'), { type: 'GENERIC', content: 'tool output' }]), { said: 'Done.', turn: 'working' });
+  });
+
+  it('an empty or unreadable tail says nothing and has no turn', () => {
+    assert.deepEqual(agyTail([]), { said: null, turn: null });
+    assert.deepEqual(agyTail([{ type: 'SYSTEM_MESSAGE', content: 'x' }, {}]), { said: null, turn: null });
+    assert.deepEqual(agyTail([says('')]), { said: null, turn: 'working' });
+  });
+
+  it('the tail reader and the model reader are what the adapter declares, so the page never names the tool', () => {
+    assert.equal(declared('antigravity-cli', 'TAIL_READER'), 'agy-tail');
+    assert.equal(declared('antigravity-cli', 'MODEL_READER'), 'agy-step');
+  });
+
+  it('a programme\'s plan sessions are counted under the tool\'s short name, whichever id the item carries', () => {
+    const group = { planning_sessions: [{ tool: 'antigravity-cli' }, { tool: 'agy' }, { tool: 'claude-code' }, { tool: 'codex' }, { tool: 'codex' }] };
+    assert.deepEqual(planProviders(group), { agy: 2, claude: 1, codex: 2 });
+    assert.equal(planSessionWords(group), 'agy 2 · claude 1 · codex 2');
   });
 });
