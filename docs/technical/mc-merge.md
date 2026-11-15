@@ -927,7 +927,7 @@ none of those commands. The generic execution and command-failure paragraphs
 on this page describe full/wide runs where commands actually occur, not a
 requirement to run them on a merge. The runner's full run and the deploy retain
 wide regression protection; main is not production. The deploy asks for a green
-full run of the exact commit and the exercised app before its one question
+full run of the exact commit and the exercised app before it ships
 (`mc-deploy.md`, *The gate*).
 
 ### What the second side cost, while it existed

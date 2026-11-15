@@ -568,7 +568,7 @@ describe('DEPLOY', () => {
     assert.match(gone, /PREPARATION INTERRUPTED b3e65b6 · `mc deploy` starts a new one/u);
 
     const done = { ...record, stage: 'done', ended: NOW.toISOString(), result: { full: { state: 'green' } } };
-    assert.match(strip(line({ preparation: done, alive: () => false })), /PREPARED + b3e65b6 · done, `mc deploy` asks/u);
+    assert.match(strip(line({ preparation: done, alive: () => false })), /PREPARED + b3e65b6 · done, `mc deploy` ships it/u);
     assert.equal(section({ preparation: null }).preparation, null);
   });
 

@@ -1,9 +1,10 @@
 /**
- * `mc deploy` — the reading, the one question, the deployer that runs the
- * script beside the merges, and the row it leaves behind.
+ * `mc deploy` — the reading, the gate, the deployer that runs the script
+ * beside the merges, and the row it leaves behind. It asks nothing: `deps.ask`
+ * is a fake that throws, so a test in which the verb asks is red.
  *
  * Nothing real is behind any of it: git, the version endpoint, the nightly
- * history, the prompt and `npm run deploy` are all handed in. The lease and
+ * history and `npm run deploy` are all handed in. The lease and
  * the record are the exceptions and deliberately so — they are what this verb
  * exists to leave behind, and MC_HOME and MC_WORK_ROOT both point at throwaway
  * directories here, so the real `repo-lease.js` and the real `deploys.tsv` are
@@ -31,6 +32,7 @@ import { mainWorktree } from '../../../src/mc/git.js';
 import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
 import { startRun } from '../../../src/mc/language-runs.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
+import { realLock } from '../../../src/mc/runner-lock.js';
 
 const SHA = '1a2b3c4d5e6f70819293a4b5c6d7e8f900112233';
 const LIVE = '9f8e7d6c5b4a39281706f5e4d3c2b1a099887766';
@@ -272,6 +274,22 @@ function gateFake({
   return { gate, suites: suiteDeps, calls, checkout };
 }
 
+/**
+ * The register's lock with something that happens just before the deploy's
+ * admission takes it: after the gate has passed, before the admission. Once
+ * the verb stopped asking nobody stands between the two, so a test makes the
+ * race through this lock; `raced.ran` says that the racing step really ran. The
+ * preparation's own lock (`deploy-prepare`) is passed through untouched.
+ */
+function lockWithRace(race) {
+  const raced = { ran: 0 };
+  const lock = (root, fn, options) => {
+    if (options?.name === 'deploy') { raced.ran += 1; race(); }
+    return realLock(root, fn, options);
+  };
+  return { lock, raced };
+}
+
 function deps(extra = {}) {
   const fake = gateFake();
   return {
@@ -285,8 +303,8 @@ function deps(extra = {}) {
     fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
     lastDeploy: () => null,
     nightly: nightlyOn(SHA),
-    interactive: () => true,
-    ask: () => 'y',
+    // The verb asks nothing and needs no terminal; if it ever asks, the test is red.
+    ask: () => { throw new Error('mc deploy asked a question'); },
     spawnDeploy: async () => ({ code: 0 }),
     // The deployer, run in the test's own process once its row is written
     // (ruling 30): the same `ship` the detached `deploy-run.js` runs.
@@ -322,7 +340,7 @@ describe('mc deploy — the arguments', () => {
   });
 });
 
-describe('mc deploy — what it says before it asks', () => {
+describe('mc deploy — what it says before it ships', () => {
   it('names the sha, the last deployed sha and the gap', async () => {
     const plan = await deployPlan({
       path: PATH,
@@ -364,21 +382,18 @@ describe('mc deploy — what it says before it asks', () => {
   });
 
 
-  it('says plainly when the nightly measured another tree, and still asks', async () => {
+  it('says plainly when the nightly measured another tree, and still ships', async () => {
     const older = 'abc1234000000000000000000000000000000000';
     const { out, stdout, stderr } = io();
-    let asked = 0;
     const code = await run([], {
       ...deps({
         git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6, [`${older}..${SHA}`]: 6 } }),
         nightly: nightlyOn(older),
-        ask: () => { asked += 1; return 'y'; },
       }),
       stdout,
       stderr,
     });
     assert.equal(code, 0);
-    assert.equal(asked, 1);
     assert.match(out.stdout, /the nightly measured abc1234, 6 commits ago; this tree was not measured whole/u);
   });
 
@@ -388,17 +403,21 @@ describe('mc deploy — what it says before it asks', () => {
     assert.match(out.stdout, /the nightly measured this tree 1a2b3c4 — 0 red/u);
   });
 
-  it('--dry-run stops before the question, takes no lease and runs nothing', async () => {
+  it('--dry-run is the reading: it takes no lease, starts no deployer, writes no row and runs nothing', async () => {
     const { out, stdout, stderr } = io();
-    let asked = 0;
     let ran = 0;
+    let started = 0;
     const code = await run(['--dry-run'], {
-      ...deps({ ask: () => { asked += 1; return 'y'; }, spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
+      ...deps({
+        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+        startDeployer: () => { started += 1; return { pid: 1 }; },
+      }),
       stdout,
       stderr,
     });
     assert.equal(code, 0);
-    assert.equal(asked, 0);
+    assert.equal(started, 0, 'no deployer started');
+    assert.deepEqual(readDeploys({ MC_WORK_ROOT: work }), [], 'no row, not even a refused one');
     assert.equal(ran, 0);
     assert.equal(readLease(PATH).held, false);
     assert.match(out.stdout, /--dry-run — nothing was deployed/u);
@@ -578,7 +597,7 @@ describe('mc deploy — every case of where main is', () => {
 
   /**
    * A repository whose `origin/main` moves: the runner lands #11913 between the
-   * reading and the yes, as it did on 2026-09-19. HEAD is tracked per worktree
+   * reading and the admission, as it did on 2026-09-19. HEAD is tracked per worktree
    * and `merge --ff-only origin/main` moves it to whatever `origin/main` names
    * *now* — which is what ships, and so what the row has to say.
    */
@@ -606,9 +625,11 @@ describe('mc deploy — every case of where main is', () => {
     return git;
   }
 
-  it('origin/main moving after the question: main goes to the measured commit, not to origin/main, and that is what ships', async () => {
+  it('origin/main moving between the gate\'s end and the admission: main goes to the measured commit, not to origin/main, and that is what ships', async () => {
     const git = movingGit();
-    const { code, seen, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
+    const { lock, raced } = lockWithRace(() => git.land());
+    const { code, seen, out } = await ranIn({ git, lock });
+    assert.equal(raced.ran, 1, 'the race happened at the admission');
     assert.equal(code, 0);
     assert.deepEqual(git.calls.find((call) => call.args[0] === 'merge').args, ['merge', '--ff-only', SHA]);
     assert.equal(seen[0].sha, SHA, 'the script is handed the commit the full run and the suites measured');
@@ -621,7 +642,9 @@ describe('mc deploy — every case of where main is', () => {
 
   it('main already moved on by somebody else: the commit that was measured is not what stands there, so nothing runs', async () => {
     const git = movingGit({ head: LATER, behind: 0 });
-    const { code, seen, out } = await ranIn({ git, ask: () => { git.land(); return 'y'; } });
+    const { lock, raced } = lockWithRace(() => git.land());
+    const { code, seen, out } = await ranIn({ git, lock });
+    assert.equal(raced.ran, 1, 'the race happened at the admission');
     assert.equal(code, 1);
     assert.equal(seen.length, 0, 'a commit no full run and no suite has seen is not deployed');
     assert.equal(git.calls.some((call) => call.args[0] === 'merge'), false);
@@ -810,55 +833,6 @@ describe('mc deploy — every case of where main is', () => {
   });
 });
 
-describe('mc deploy — the question', () => {
-  it('asks once, naming the sha, and a no runs nothing', async () => {
-    const { out, stdout, stderr } = io();
-    const asks = [];
-    let ran = 0;
-    const code = await run([], {
-      ...deps({
-        ask: (prompt) => { asks.push(prompt); return 'n'; },
-        spawnDeploy: async () => { ran += 1; return { code: 0 }; },
-      }),
-      stdout,
-      stderr,
-    });
-    assert.equal(code, 1);
-    assert.deepEqual(asks, ['deploy 1a2b3c4 to production? [y/N]']);
-    assert.equal(ran, 0);
-    assert.equal(readLease(PATH).held, false);
-    assert.match(out.stdout, /nothing was deployed/u);
-  });
-
-  it('Enter is a no: only y or yes deploys', async () => {
-    let ran = 0;
-    for (const answer of [null, '', 'no', 'sure', 'Y']) {
-      const { stdout, stderr } = io();
-      // eslint-disable-next-line no-await-in-loop
-      const code = await run([], {
-        ...deps({ ask: () => answer, spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
-        stdout,
-        stderr,
-      });
-      assert.equal(code, answer === 'Y' ? 0 : 1, `answer ${JSON.stringify(answer)}`);
-    }
-    assert.equal(ran, 1);
-  });
-
-  it('without a terminal it deploys nothing and exits 2', async () => {
-    const { out, stdout, stderr } = io();
-    let ran = 0;
-    const code = await run([], {
-      ...deps({ interactive: () => false, spawnDeploy: async () => { ran += 1; return { code: 0 }; } }),
-      stdout,
-      stderr,
-    });
-    assert.equal(code, 2);
-    assert.equal(ran, 0);
-    assert.match(out.stderr, /no terminal here to ask/u);
-  });
-});
-
 describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
   it('publishes observed script steps while the deploy runs, retaining progress through noisy output', async () => {
     const env = { MC_WORK_ROOT: work };
@@ -1020,30 +994,25 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.equal(calls[0].options.stdio[0], 'ignore', 'the deployer asks nothing');
   });
 
-  it('the page can start a confirmed deploy without waiting, while a no still starts nothing', async () => {
-    const asks = [];
+  it('the page can start a deploy without waiting: typing it is the decision, nothing is asked', async () => {
     let starts = 0;
-    for (const answer of ['n', 'y']) {
-      const { out, stdout, stderr } = io();
-      const code = await run([], {
-        ...deps({
-          follow: false,
-          ask: (prompt) => { asks.push(prompt); return answer; },
-          startDeployer: () => { starts += 1; return { pid: 31337, log: deployLogPath(work) }; },
-          alive: () => false,
-          sleep: async () => assert.fail('the page must not wait for the deployer'),
-        }),
-        stdout, stderr,
-      });
-      assert.equal(code, answer === 'y' ? 0 : 1);
-      assert.equal(starts, answer === 'y' ? 1 : 0);
-      assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, answer === 'y' ? 'running' : 'refused');
-      assert.doesNotMatch(out.stdout, /\^C stops watching/u);
-    }
-    assert.deepEqual(asks, Array(2).fill('deploy 1a2b3c4 to production? [y/N]'));
+    const { out, stdout, stderr } = io();
+    const code = await run([], {
+      ...deps({
+        follow: false,
+        startDeployer: () => { starts += 1; return { pid: 31337, log: deployLogPath(work) }; },
+        alive: () => false,
+        sleep: async () => assert.fail('the page must not wait for the deployer'),
+      }),
+      stdout, stderr,
+    });
+    assert.equal(code, 0);
+    assert.equal(starts, 1);
+    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'running');
+    assert.doesNotMatch(out.stdout, /\^C stops watching/u);
   });
 
-  it('the terminal that asked follows the deployer\'s log, and answers with the row', async () => {
+  it('the terminal that typed it follows the deployer\'s log, and answers with the row', async () => {
     const env = { MC_WORK_ROOT: work };
     const log = deployLogPath(work);
     mkdirSync(join(work, 'runner', 'log'), { recursive: true });
@@ -1061,7 +1030,7 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
           if (polls === 2) {
             writeFileSync(log, '▸ Deploy source preflight\n▸ wrangler deploy\nmc: deployed — build 1 · 1a2b3c4 verified live\n');
             const [row] = readDeploys(env);
-            // Completed with the sha that shipped — main moved after the question.
+            // Completed with the sha that shipped — main moved after the admission.
             recordEnd({ started: row.started, sha: row.sha }, { outcome: 'deployed', sha: LIVE }, env);
           }
         },
@@ -1070,7 +1039,7 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
       stderr,
     });
     assert.equal(code, 0);
-    assert.match(out.stdout, /mc: deploying 1a2b3c4 in its own process \(pid 31337\) — after the gate round in flight, if any; the merge queue waits for it/u);
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 to production in its own process \(pid 31337\) — after the gate round in flight, if any; the merge queue waits for it/u);
     assert.match(out.stdout, /▸ Deploy source preflight\n▸ wrangler deploy\nmc: deployed/u);
     assert.equal(out.stdout.match(/Deploy source preflight/gu).length, 1, 'each line once');
   });
@@ -1179,6 +1148,12 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
     assert.match(out.stdout, /stopped watching — the deploy goes on \(pid 31337\); mc deploy --follow watches again/u);
   });
 
+  it('--follow with nothing running says so, headless too', async () => {
+    const { out, stdout, stderr } = io();
+    assert.equal(await run(['--follow'], { ...deps({ env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } }), stdout, stderr }), 0);
+    assert.match(out.stdout, /^mc: no deploy is running$/mu);
+  });
+
   it('--follow with nothing running says so', async () => {
     const { out, stdout, stderr } = io();
     assert.equal(await run(['--follow'], { ...deps(), stdout, stderr }), 0);
@@ -1188,7 +1163,7 @@ describe('mc deploy — the deployer, beside the merges (ruling 30)', () => {
 
 /**
  * The other deploy. What keeps two deploys apart is the record: a `running`
- * row whose process is alive, read once before the question and again under
+ * row whose process is alive, read once before the preparation and again under
  * the lock, where the deployer's own row is written.
  */
 describe('mc deploy — one deploy at a time', () => {
@@ -1197,19 +1172,19 @@ describe('mc deploy — one deploy at a time', () => {
     recordStart({ sha: LIVE, holder: 'martin@laptop', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env);
     const { out, stdout, stderr } = io();
     let ran = 0;
-    let asked = 0;
+    let started = 0;
     const code = await run([], {
       ...deps({
         alive: (pid) => pid === 4242,
-        ask: () => { asked += 1; return 'y'; },
         spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+        startDeployer: () => { started += 1; return { pid: 1 }; },
       }),
       stdout,
       stderr,
     });
     assert.equal(code, 1);
     assert.equal(ran, 0);
-    assert.equal(asked, 0, 'nobody is asked a question that has no yes');
+    assert.equal(started, 0, 'found before anything is prepared: no deployer');
     assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14 \(martin@laptop, pid 4242\) — one deploy at a time; nothing was deployed/u);
     const [running, refused] = readDeploys(env);
     assert.equal(running.outcome, 'running', 'the running deploy\'s row is left alone');
@@ -1217,22 +1192,29 @@ describe('mc deploy — one deploy at a time', () => {
     assert.match(refused.note, /a deploy of 9f8e7d6 is running — started 2026-10-07T19:14:22.167Z by martin@laptop/u);
   });
 
-  it('a deploy that started while this one was asking is refused under the lock', async () => {
+  it('a deploy that started between the gate\'s end and the admission is refused under the lock, and no second deployer starts', async () => {
     const env = { MC_WORK_ROOT: work };
     const { out, stdout, stderr } = io();
     let ran = 0;
+    let started = 0;
+    const { lock, raced } = lockWithRace(() => recordStart({ sha: LIVE, holder: 'other', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env));
     const code = await run([], {
       ...deps({
         alive: (pid) => pid === 4242,
-        ask: () => { recordStart({ sha: LIVE, holder: 'other', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, env); return 'y'; },
+        lock,
         spawnDeploy: async () => { ran += 1; return { code: 0 }; },
+        startDeployer: () => { started += 1; return { pid: 1 }; },
       }),
       stdout,
       stderr,
     });
+    assert.equal(raced.ran, 1, 'the other deploy started at the admission');
     assert.equal(code, 1);
     assert.equal(ran, 0);
+    assert.equal(started, 0, 'no second deployer');
+    assert.doesNotMatch(out.stdout, /mc: deploying /u, 'the start line is not said before a refusal');
     assert.match(out.stderr, /a deploy of 9f8e7d6 has been running since 2026-10-07 19:14/u);
+    assert.deepEqual(readDeploys(env).map((row) => row.outcome), ['running', 'refused'], 'the other deploy\'s row is left alone and a refusal is written');
   });
 
   it('refuses while a language run is alive, with a refusal row', async () => {
@@ -1240,11 +1222,9 @@ describe('mc deploy — one deploy at a time', () => {
     startRun({ manifest: 'sv-forms-cutover', lang: 'sv', sha: SHA, holder: 'martin@laptop', pid: 4242, started: '2026-10-10T08:00:00.000Z' }, env);
     const { out, stdout, stderr } = io();
     let ran = 0;
-    let asked = 0;
     const code = await run([], {
       ...deps({
         alive: (pid) => pid === 4242,
-        ask: () => { asked += 1; return 'y'; },
         spawnDeploy: async () => { ran += 1; return { code: 0 }; },
       }),
       stdout,
@@ -1252,26 +1232,27 @@ describe('mc deploy — one deploy at a time', () => {
     });
     assert.equal(code, 1);
     assert.equal(ran, 0);
-    assert.equal(asked, 0);
     assert.match(out.stderr, /mc: a language run of sv-forms-cutover is running since 2026-10-10 08:00 \(pid 4242\) — nothing was deployed/u);
     const [refused] = readDeploys(env);
     assert.equal(refused.outcome, 'refused');
     assert.match(refused.note, /a language run of sv-forms-cutover is running — started 2026-10-10T08:00:00.000Z by martin@laptop/u);
   });
 
-  it('a language run that started while this one was asking is refused under the lock', async () => {
+  it('a language run that started between the gate\'s end and the admission is refused under the lock', async () => {
     const env = { MC_WORK_ROOT: work };
     const { out, stdout, stderr } = io();
     let ran = 0;
+    const { lock, raced } = lockWithRace(() => startRun({ manifest: 'sv-forms-cutover', lang: 'sv', pid: 4242 }, env));
     const code = await run([], {
       ...deps({
         alive: (pid) => pid === 4242,
-        ask: () => { startRun({ manifest: 'sv-forms-cutover', lang: 'sv', pid: 4242 }, env); return 'y'; },
+        lock,
         spawnDeploy: async () => { ran += 1; return { code: 0 }; },
       }),
       stdout,
       stderr,
     });
+    assert.equal(raced.ran, 1, 'the language run started at the admission');
     assert.equal(code, 1);
     assert.equal(ran, 0);
     assert.match(out.stderr, /a language run of sv-forms-cutover is running since/u);
@@ -1498,23 +1479,6 @@ describe('mc deploy — the record', () => {
     assert.equal(row.build, '23533', 'the banner still says what shipped');
     assert.equal(row.live_commit, '', 'but nothing was verified against production');
     assert.match(row.note, /verified no live version/u);
-  });
-
-  it('a no at the question is a refused row, so the brief sees a deploy somebody meant', async () => {
-    const { stdout, stderr } = io();
-    await run([], { ...deps({ ask: () => 'n', holder: { name: 'martin', kind: 'shell' } }), stdout, stderr });
-    const row = lastAttempt({ MC_WORK_ROOT: work });
-    assert.equal(row.outcome, 'refused');
-    assert.equal(row.sha, SHA);
-    assert.equal(row.holder, 'martin');
-    assert.match(row.note, /answered no/u);
-    assert.equal(row.started, row.ended);
-  });
-
-  it('no terminal is a refused row too', async () => {
-    const { stdout, stderr } = io();
-    assert.equal(await run([], { ...deps({ interactive: () => false }), stdout, stderr }), 2);
-    assert.match(lastAttempt({ MC_WORK_ROOT: work }).note, /no terminal/u);
   });
 
   it('--dry-run deploys nothing and records nothing', async () => {
@@ -1857,13 +1821,13 @@ const OLDER = '0123456789abcdef0123456789abcdef01234567';
 async function attempt(argv, { extra = {}, ...fakeOptions } = {}) {
   const fake = gateFake(fakeOptions);
   const spawned = [];
-  const asked = [];
+  const started = [];
   const { out, stdout, stderr } = io();
   const code = await run(argv, {
     ...deps({
       gate: fake.gate,
       suites: fake.suites,
-      ask: (question) => { asked.push(question); return 'y'; },
+      startDeployer: (job, d) => { started.push(job); return { pid: process.pid, inline: () => ship(job, d) }; },
       spawnDeploy: async (options) => { spawned.push(options); return { code: 0 }; },
       ...extra,
     }),
@@ -1871,7 +1835,7 @@ async function attempt(argv, { extra = {}, ...fakeOptions } = {}) {
     stderr,
   });
   return {
-    code, out, spawned, asked, calls: fake.calls, checkout: fake.checkout, row: lastAttempt({ MC_WORK_ROOT: work }),
+    code, out, spawned, started, calls: fake.calls, checkout: fake.checkout, row: lastAttempt({ MC_WORK_ROOT: work }),
   };
 }
 
@@ -1883,10 +1847,14 @@ const MEND = (extra = {}) => ({
 });
 
 describe('mc deploy — the full run of exactly the commit that would ship', () => {
-  it('a green run of the commit reaches the question, and the reading names the run', async () => {
-    const { code, out, asked, spawned, calls, row } = await attempt([]);
+  it('a green run of the commit ships without a question or a terminal, with one line, and the reading names the run', async () => {
+    const { code, out, started, spawned, calls, row } = await attempt([]);
     assert.equal(code, 0);
-    assert.equal(asked.length, 1, 'the question is asked');
+    assert.equal(started.length, 1, 'the deployer started once, nothing asked');
+    assert.equal(out.stdout.match(/^mc: deploying /gmu).length, 1, 'one line says it starts');
+    assert.match(out.stdout, /^mc: deploying 1a2b3c4 to production in its own process \(pid \d+\)/mu);
+    assert.equal(row.outcome, 'deployed');
+    assert.equal(row.sha, SHA);
     assert.equal(spawned.length, 1);
     assert.equal(calls.fullRun.length, 0, 'a green run of the commit is not run again');
     assert.match(out.stdout, /mc: full run — 1a2b3c4 measured whole: green, 900 tests, 2026-11-14 02:00, took 25 min/u);
@@ -1898,19 +1866,19 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
   });
 
   it('a green run of an older commit is no answer: one is started for this commit, and followed', async () => {
-    const { code, out, calls, asked } = await attempt([], { runs: [fullRunOf(OLDER)] });
+    const { code, out, calls, started } = await attempt([], { runs: [fullRunOf(OLDER)] });
     assert.equal(code, 0);
     assert.deepEqual(calls.fullRun, [{ name: 'memoro', path: PATH }], 'the older commit\'s green was not accepted');
     assert.match(out.stdout, /full run — none of 1a2b3c4; starting one/u);
     assert.match(out.stdout, /measured whole just now: green/u);
-    assert.equal(asked.length, 1);
+    assert.equal(started.length, 1);
   });
 
   it('a run that measured another commit than the one that would ship refuses, naming both', async () => {
-    const { code, out, spawned, asked, row } = await attempt([], { runs: [], started: fullRunOf(OLDER) });
+    const { code, out, spawned, started, row } = await attempt([], { runs: [], started: fullRunOf(OLDER) });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
-    assert.equal(asked.length, 0, 'and nobody was asked');
+    assert.equal(started.length, 0, 'and no deployer started');
     assert.match(out.stderr, /measured 0123456, not 1a2b3c4: main moved while it ran/u);
     assert.equal(row.outcome, 'refused');
     assert.match(row.note, /the full run measured 0123456, not 1a2b3c4/u);
@@ -1918,10 +1886,11 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
   });
 
   it('a red run refuses, naming the commit, the red files and commands and the mend that holds them', async () => {
-    const { code, out, spawned, asked, row } = await attempt([], { runs: [RED_RUN()], mends: [MEND(), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
+    const { code, out, spawned, started, row } = await attempt([], { runs: [RED_RUN()], mends: [MEND(), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
+    assert.doesNotMatch(out.stdout, /mc: deploying /u, 'the start line is not said before a refusal');
     assert.match(out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
     assert.match(out.stderr, /red files and commands: tests\/lib\/money\.test\.js, command:lint/u);
     assert.match(out.stderr, /main-red mend: tests\/lib\/money\.test\.js \(queued\), command:lint \(running #77\)/u);
@@ -1947,10 +1916,10 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
 
   it('a stalled run refuses, naming the stalled file and its mend', async () => {
     const stalled = fullRunOf(SHA, { outcome: 'stalled', red: null, stopped_at: 'stalled', reason: 'tests/slow.test.js never ended' });
-    const { code, out, spawned, asked, row } = await attempt([], { runs: [stalled], mends: [MEND({ file: 'tests/slow.test.js', state: 'running' })] });
+    const { code, out, spawned, started, row } = await attempt([], { runs: [stalled], mends: [MEND({ file: 'tests/slow.test.js', state: 'running' })] });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.match(out.stderr, /1a2b3c4 STALLED: tests\/slow\.test\.js never ended/u);
     assert.match(out.stderr, /red files and commands: tests\/slow\.test\.js/u);
     assert.match(out.stderr, /main-red mend: tests\/slow\.test\.js \(running\)/u);
@@ -1977,23 +1946,23 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
   });
 
   it('--dry-run starts nothing and says a full run is needed', async () => {
-    const { code, out, calls, spawned, asked } = await attempt(['--dry-run'], { runs: [] });
+    const { code, out, calls, spawned, started } = await attempt(['--dry-run'], { runs: [] });
     assert.equal(code, 0);
     assert.equal(calls.fullRun.length, 0, 'no full run is started by a reading');
     assert.equal(spawned.length, 0);
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.match(out.stdout, /full run — none of 1a2b3c4: one is needed, and starts when you deploy/u);
     assert.match(out.stdout, /nothing was deployed/u);
   });
 
-  it('--accept-red reaches the question with every red listed and the reason in it, and the row keeps the reason', async () => {
+  it('--accept-red ships with every red listed, the reason in the one line, and the row keeps the reason', async () => {
     const reason = 'money rounding is tracked in #4412; the refund path is not in this release';
-    const { code, out, asked, spawned, row } = await attempt(['--accept-red', reason], {
+    const { code, out, started, spawned, row } = await attempt(['--accept-red', reason], {
       runs: [RED_RUN()], mends: [MEND()], outcomes: { smoke: 'red', 'smoke:tail': 'expected 200\ngot 500\n' },
     });
     assert.equal(code, 0);
-    assert.equal(asked.length, 1, 'the flag does not skip the question');
-    assert.match(asked[0], /accepting red \(money rounding is tracked in #4412/u, 'the question names the reason');
+    assert.equal(started.length, 1, 'the deployer started once, nothing asked');
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 to production, accepting red \(money rounding is tracked in #4412/u, 'the one line names the reason');
     assert.equal(spawned.length, 1);
     assert.match(out.stdout, /accepting 2 red:/u);
     assert.match(out.stdout, /the full run of 1a2b3c4 is red \(2\)/u);
@@ -2001,14 +1970,6 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
     assert.match(out.stdout, new RegExp(`reason: ${reason}`, 'u'));
     assert.deepEqual([row.full_verdict, row.suites, row.accepted_red], ['red', 'smoke:red', reason]);
     assert.equal(row.outcome, 'deployed');
-  });
-
-  it('--accept-red answered no is a refused row that still keeps the reason', async () => {
-    const { code, spawned, row } = await attempt(['--accept-red', 'known'], { runs: [RED_RUN()], extra: { ask: () => 'n' } });
-    assert.equal(code, 1);
-    assert.equal(spawned.length, 0);
-    assert.equal(row.outcome, 'refused');
-    assert.equal(row.accepted_red, 'known');
   });
 
   it('--accept-red without a reason is refused, and nothing is measured or started', async () => {
@@ -2035,9 +1996,9 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
 
 describe('mc deploy — the app, used, before the question', () => {
   it('all suites passing reaches the question, each listed, on a server of the commit that would ship', async () => {
-    const { code, out, asked, spawned, calls, row } = await attempt([], { suites: ['smoke', 'journeys'] });
+    const { code, out, started, spawned, calls, row } = await attempt([], { suites: ['smoke', 'journeys'] });
     assert.equal(code, 0);
-    assert.equal(asked.length, 1);
+    assert.equal(started.length, 1);
     assert.equal(spawned.length, 1);
     assert.deepEqual(calls.servers, [{ worktree: '/tmp/does-not-exist/shared/memoro', commit: SHA }], 'one server, started on the commit that would ship');
     assert.deepEqual(calls.suites[0].names, ['smoke', 'journeys']);
@@ -2048,12 +2009,12 @@ describe('mc deploy — the app, used, before the question', () => {
   });
 
   it('one failing suite refuses, naming it and its last lines', async () => {
-    const { code, out, spawned, asked, row } = await attempt([], {
+    const { code, out, spawned, started, row } = await attempt([], {
       suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'step 3 failed\nTypeError: x is not a function\n' },
     });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.match(out.stderr, /suite journeys failed \(exit 1\) — its last lines:\nmc: {5}step 3 failed\nmc: {5}TypeError: x is not a function/u);
     assert.doesNotMatch(out.stderr, /suite smoke failed/u);
     assert.equal(row.outcome, 'refused');
@@ -2078,11 +2039,11 @@ describe('mc deploy — the app, used, before the question', () => {
   });
 
   it('a suite exiting with the skip code is named as skipped, with its reason, and does not refuse', async () => {
-    const { code, out, asked, spawned, row } = await attempt([], {
+    const { code, out, started, spawned, row } = await attempt([], {
       suites: ['smoke', 'journeys'], outcomes: { journeys: 'skip', 'journeys:tail': 'skipped: no TC token in this environment\n' },
     });
     assert.equal(code, 0);
-    assert.equal(asked.length, 1);
+    assert.equal(started.length, 1);
     assert.equal(spawned.length, 1);
     assert.match(out.stdout, /mc: {3}skipped {2}journeys 3s — skipped: no TC token in this environment/u);
     assert.equal(row.suites, 'smoke:ok,journeys:skipped');
@@ -2098,10 +2059,10 @@ describe('mc deploy — the app, used, before the question', () => {
   });
 
   it('a shared checkout at the commit with uncommitted changes measures them, not the commit, and refuses', async () => {
-    const { code, out, spawned, asked, calls, row } = await attempt([], { dirtyNow: [' M src/app.js', '?? scratch.txt'] });
+    const { code, out, spawned, started, calls, row } = await attempt([], { dirtyNow: [' M src/app.js', '?? scratch.txt'] });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.deepEqual(calls.servers, [], 'no server was asked for on a dirty tree');
     assert.equal(calls.suites.length, 0, 'no suite ran against uncommitted changes');
     assert.match(out.stderr, /the suites could not run: \/tmp\/does-not-exist\/shared\/memoro has uncommitted changes \(M src\/app\.js, \?\? scratch\.txt\)/u);
@@ -2125,10 +2086,10 @@ describe('mc deploy — the app, used, before the question', () => {
   });
 
   it('--dry-run reads both results beside today\'s reading and asks nothing', async () => {
-    const { code, out, spawned, asked, calls } = await attempt(['--dry-run'], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red' } });
+    const { code, out, spawned, started, calls } = await attempt(['--dry-run'], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red' } });
     assert.equal(code, 0);
     assert.equal(spawned.length, 0);
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.match(out.stdout, /the nightly measured this tree 1a2b3c4/u);
     assert.match(out.stdout, /full run — 1a2b3c4 measured whole: green/u);
     assert.match(out.stdout, /RED {2}journeys/u);
@@ -2162,7 +2123,6 @@ describe('mc deploy — a headless session cannot deploy', () => {
           sharedWorktree: spy('sharedWorktree'), readDeclaration: spy('readDeclaration'), ensureAppServer: spy('ensureAppServer'), runSuites: spy('runSuites'),
         },
         spawnDeploy: spy('spawnDeploy'),
-        ask: spy('ask'),
         startDeployer: spy('startDeployer'),
       },
     };
@@ -2174,18 +2134,19 @@ describe('mc deploy — a headless session cannot deploy', () => {
       const { out, stdout, stderr } = io();
       const code = await run(argv, { ...deps(spies.extra), stdout, stderr });
       assert.equal(code, 1);
-      assert.deepEqual(spies.touched, [], 'no git, history, suite, prompt or deployer call was made');
-      assert.match(out.stderr, /Martin's act/u);
-      assert.match(out.stderr, /headless \(MC_HEADLESS=1\)/u);
+      assert.deepEqual(spies.touched, [], 'no git, history, suite or deployer call was made');
+      assert.match(out.stderr, /an unattended session does not deploy/u);
+      assert.match(out.stderr, /headless, MC_HEADLESS=1/u);
+      assert.match(out.stderr, /mc deploy --dry-run is the reading/u);
       assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'not even a refused row: nothing was read or recorded');
     });
   }
 
   it('--dry-run is still allowed headless: it is a reading', async () => {
-    const { code, out, spawned, asked, calls } = await attempt(['--dry-run'], { extra: { env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } } });
+    const { code, out, spawned, started, calls } = await attempt(['--dry-run'], { extra: { env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } } });
     assert.equal(code, 0);
     assert.equal(spawned.length, 0);
-    assert.equal(asked.length, 0);
+    assert.equal(started.length, 0);
     assert.ok(calls.history > 0, 'the reading did read the history');
     assert.match(out.stdout, /nothing was deployed/u);
   });
@@ -2193,7 +2154,7 @@ describe('mc deploy — a headless session cannot deploy', () => {
 
 // ---------------------------------------------------------------------------
 // The preparation (goal deploy-survives-lost-terminal): everything before the
-// one question runs in a process of its own, recorded, and a second `mc
+// admission runs in a process of its own, recorded, and a second `mc
 // deploy` of the same commit joins it. On 2026-11-14 it ran in the page's own
 // process and died with the SSH connection that carried it.
 // ---------------------------------------------------------------------------
@@ -2226,51 +2187,50 @@ function detachedPreparer(fake, { prepareWith = {} } = {}) {
 }
 
 describe('mc deploy — the preparation, in a process of its own', () => {
-  it('a cut follow leaves the preparation running; the next mc deploy joins it, measures nothing twice and asks once', async () => {
+  it('a cut follow leaves the preparation running; the next mc deploy joins it, measures nothing twice and ships once', async () => {
     const fake = gateFake({ runs: [] });
     const { state, extra } = detachedPreparer(fake);
     const signals = new EventEmitter();
     const first = io();
     const cut = await run([], {
-      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); }, ask: () => { throw new Error('asked while cut'); } }),
+      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); } }),
       stdout: first.stdout,
       stderr: first.stderr,
     });
     assert.equal(cut, 130);
     assert.match(first.out.stdout, /preparing 1a2b3c4 in its own process \(pid 31337\).*a lost terminal does not stop it/u);
-    assert.match(first.out.stdout, /stopped watching — the preparation goes on \(pid 31337\); mc deploy joins it and asks/u);
+    assert.match(first.out.stdout, /stopped watching — the preparation goes on \(pid 31337\); mc deploy joins it/u);
     assert.equal(fake.calls.fullRun.length, 0, 'the watcher measured nothing: the full run is the other process\'s');
     const record = readPreparation(work);
     assert.deepEqual([record.sha, record.pid, record.stage], [SHA, 31337, 'starting']);
-    assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'no deploy row: nothing was asked');
+    assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'no deploy row: the cut watcher shipped nothing');
 
     // A new terminal, the same commit: joins; the process finishes while it watches.
-    const asked = [];
     const second = io();
     const joined = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'n'; } }),
+      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
       stdout: second.stdout,
       stderr: second.stderr,
     });
-    assert.equal(joined, 1, 'a no at the one question');
+    assert.equal(joined, 0, second.out.stderr);
     assert.equal(state.starts, 1, 'no second preparation was started');
     assert.deepEqual(fake.calls.fullRun, [{ name: 'memoro', path: PATH }], 'the full run was called once, in the preparer');
     assert.match(second.out.stdout, /1a2b3c4 is already being prepared \(.*pid 31337.*\) — following it, not starting a second/u);
-    assert.equal(asked.length, 1);
-    assert.deepEqual(asked, ['deploy 1a2b3c4 to production? [y/N]']);
+    assert.match(second.out.stdout, /mc: deploying 1a2b3c4 to production in its own process/u, 'the one line');
+    assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 1, 'one deploy row');
+    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
 
-    // And once it is done, deploying goes straight to the question.
+    // And once it is done, deploying goes straight to the admission.
     const third = io();
     const again = await run([], {
-      ...deps({ ...extra, ask: (question) => { asked.push(question); return 'n'; } }),
+      ...deps({ ...extra }),
       stdout: third.stdout,
       stderr: third.stderr,
     });
-    assert.equal(again, 1);
+    assert.ok([0, 1].includes(again), 'it reaches the admission, which decides');
     assert.equal(state.starts, 1);
     assert.equal(fake.calls.fullRun.length, 1, 'nothing was measured again');
     assert.match(third.out.stdout, /1a2b3c4 was prepared .* — the gate's answer is read from that, nothing is measured again/u);
-    assert.equal(asked.length, 2);
   });
 
   it('while it measures, the log — and so mc deploy, --follow and the page — has a line at least each minute', async () => {
@@ -2301,11 +2261,11 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     });
     const watched = io();
     const code = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
       stdout: watched.stdout,
       stderr: watched.stderr,
     });
-    assert.equal(code, 1, 'a no at the one question');
+    assert.equal(code, 0, watched.out.stderr);
     const said = lines.filter((line) => /progress —|still preparing —/u.test(line.text));
     assert.deepEqual(said.map((line) => line.at / 60_000), [1, 2, 3, 4, 5], 'a line in each of the five minutes');
     assert.match(said[0].text, /^mc:   progress — 40 of ~250 test files done, 3 running, 0 red so far, 1 min 0 s elapsed$/u);
@@ -2322,21 +2282,21 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     const { state, extra } = detachedPreparer(fake);
     const attemptOnce = async (argv, over = {}) => {
       const { out, stdout, stderr } = io();
-      const asked = [];
+      const started = [];
       const code = await run(argv, {
-        ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; }, ...over }),
+        ...deps({ ...extra, startDeployer: (job) => { started.push(job); return { pid: 1 }; }, sleep: async () => { await state.pending(); }, ...over }),
         stdout, stderr,
       });
-      return { code, out, asked };
+      return { code, out, started };
     };
     const first = await attemptOnce([]);
     assert.equal(first.code, 1);
     assert.match(first.out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
-    assert.equal(first.asked.length, 0);
+    assert.equal(first.started.length, 0);
     const second = await attemptOnce([]);
     assert.equal(second.code, 1);
     assert.match(second.out.stderr, /1a2b3c4 measured whole: RED, 2 red/u);
-    assert.equal(second.asked.length, 0);
+    assert.equal(second.started.length, 0);
     assert.equal(state.starts, 1);
     assert.equal(fake.calls.fullRun.length, 1);
     assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'refused');
@@ -2345,11 +2305,11 @@ describe('mc deploy — the preparation, in a process of its own', () => {
   it('--accept-red after a red preparation that skipped the suites prepares again, and says so', async () => {
     const fake = gateFake({ runs: [], started: RED_RUN() });
     const { state, extra } = detachedPreparer(fake);
-    const asked = [];
+    const started = [];
     const attemptOnce = async (argv) => {
       const { out, stdout, stderr } = io();
       const code = await run(argv, {
-        ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+        ...deps({ ...extra, startDeployer: (job, d) => { started.push(job); return { pid: process.pid, inline: () => ship(job, d) }; }, sleep: async () => { await state.pending(); } }),
         stdout, stderr,
       });
       return { code, out };
@@ -2361,24 +2321,24 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.equal(state.starts, 2);
     assert.match(accepted.out.stdout, /the preparation of 1a2b3c4 skipped the suites, which --accept-red needs — preparing again/u);
     assert.equal(fake.calls.suites.length, 1);
-    assert.equal(asked.length, 1);
+    assert.equal(started.length, 1);
   });
 
-  it('--accept-red joining a running preparation that then skips the suites prepares again: no throw, the suites once, one question', async () => {
+  it('--accept-red joining a running preparation that then skips the suites prepares again: no throw, the suites once, one deployer', async () => {
     const fake = gateFake({ runs: [], started: RED_RUN() });
     const { state, extra } = detachedPreparer(fake);
     const signals = new EventEmitter();
     const first = io();
     const cut = await run([], {
-      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); }, ask: () => { throw new Error('asked while cut'); } }),
+      ...deps({ ...extra, signals, sleep: async () => { signals.emit('SIGINT'); } }),
       stdout: first.stdout,
       stderr: first.stderr,
     });
     assert.equal(cut, 130, 'the terminal is lost while the preparation runs');
-    const asked = [];
+    const started = [];
     const second = io();
     const accepted = await run(['--accept-red', 'known'], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+      ...deps({ ...extra, startDeployer: (job, d) => { started.push(job); return { pid: process.pid, inline: () => ship(job, d) }; }, sleep: async () => { await state.pending(); } }),
       stdout: second.stdout,
       stderr: second.stderr,
     });
@@ -2387,7 +2347,7 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.match(second.out.stdout, /the preparation of 1a2b3c4 skipped the suites, which --accept-red needs — preparing again/u);
     assert.equal(state.starts, 2, 'one preparation joined, one started with the suites');
     assert.equal(fake.calls.suites.length, 1, 'the suites ran once');
-    assert.equal(asked.length, 1, 'asked once');
+    assert.equal(started.length, 1, 'one deployer');
   });
 
   it('main moved: a new preparation of the new commit, in one line, and the old one is left to finish', async () => {
@@ -2396,10 +2356,10 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     writePreparation(work, { sha: OLDER, pid: 31337, started: new Date().toISOString(), stage: 'full-run', log: join(work, 'runner', 'log', 'old.log') });
     const { out, stdout, stderr } = io();
     const code = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      ...deps({ ...extra, sleep: async () => { await state.pending(); } }),
       stdout, stderr,
     });
-    assert.equal(code, 1);
+    assert.equal(code, 0, out.stderr);
     assert.equal(state.starts, 1);
     const said = out.stdout.match(/^mc: the last preparation was of .*$/gmu);
     assert.equal(said.length, 1, 'one line');
@@ -2415,10 +2375,10 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     const { out, stdout, stderr } = io();
     state.up = true;
     const code = await run([], {
-      ...deps({ ...extra, alive: (pid) => (pid === 31337 ? state.up : false), sleep: async () => { await state.pending(); }, ask: () => 'n' }),
+      ...deps({ ...extra, alive: (pid) => (pid === 31337 ? state.up : false), sleep: async () => { await state.pending(); } }),
       stdout, stderr,
     });
-    assert.equal(code, 1);
+    assert.equal(code, 0, out.stderr);
     assert.match(out.stdout, /the preparation of 1a2b3c4 started 2026-11-14 10:00 was interrupted at the suites against a local server — starting a new one/u);
     assert.equal(state.starts, 1);
     assert.equal(fake.calls.fullRun.length, 1);
@@ -3039,19 +2999,20 @@ describe('mc deploy — the deployer puts mc\'s own worktree at the pick, and no
   });
 });
 
-describe('mc deploy — through the verb: the older green commit is prepared, asked about and shipped', () => {
+describe('mc deploy — through the verb: the older green commit is prepared and shipped', () => {
   const OWN = deployWorktreePath(process.env);
   const own = (extra = {}) => walkingGit({
     chain: [TIP, MID, LOW], counts: COUNTS, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } }, ...extra,
   });
   const GATED = { head: TIP, served: 'checkout' };
 
-  it('a red tip with a green commit behind it: no full run starts, the question names the green commit, and it ships', async () => {
+  it('a red tip with a green commit behind it: no full run starts, the one line names the green commit, and it ships', async () => {
     const git = own();
-    const { code, out, asked, spawned, calls, row, checkout } = await attempt([], { extra: { git }, runs: [redRun(TIP), greenRun(MID)], ...GATED });
+    const { code, out, started, spawned, calls, row, checkout } = await attempt([], { extra: { git }, runs: [redRun(TIP), greenRun(MID)], ...GATED });
     assert.equal(code, 0);
     assert.equal(calls.fullRun.length, 0, 'no full run was started: the older commit has one');
-    assert.deepEqual(asked, ['deploy 5b2d000 to production? [y/N]']);
+    assert.equal(started.length, 1);
+    assert.match(out.stdout, /mc: deploying 5b2d000 to production in its own process/u);
     assert.match(out.stdout, /mc: 1 commit behind main's tip 1a2b3c4 — its full run is RED \(2\): tests\/lib\/money\.test\.js, command:lint/u);
     assert.match(out.stdout, /mc: full run — 5b2d000 measured whole: green/u);
     assert.equal(spawned.length, 1);
@@ -3065,11 +3026,12 @@ describe('mc deploy — through the verb: the older green commit is prepared, as
 
   it('--accept-red ships the tip itself, gated, with every red listed, and names the green commit it passes over', async () => {
     const git = own();
-    const { code, out, asked, spawned, calls, row } = await attempt(['--accept-red', 'known'], {
+    const { code, out, started, spawned, calls, row } = await attempt(['--accept-red', 'known'], {
       extra: { git }, runs: [redRun(TIP), greenRun(MID)], ...GATED, served: 'checkout',
     });
     assert.equal(code, 0);
-    assert.deepEqual(asked, ['deploy 1a2b3c4 to production, accepting red (known)? [y/N]']);
+    assert.equal(started.length, 1);
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 to production, accepting red \(known\) in its own process/u);
     assert.match(out.stdout, /mc: --accept-red ships main's tip 1a2b3c4; without it 5b2d000, 1 commit behind the tip, would ship/u);
     assert.match(out.stdout, /accepting 1 red:/u);
     assert.match(out.stdout, /tests\/lib\/money\.test\.js/u);
@@ -3083,9 +3045,10 @@ describe('mc deploy — through the verb: the older green commit is prepared, as
 
   it('a green tip ships the tip, and says nothing of the others', async () => {
     const git = own();
-    const { code, out, asked, spawned, row } = await attempt([], { extra: { git }, runs: [greenRun(TIP), greenRun(MID)], ...GATED });
+    const { code, out, started, spawned, row } = await attempt([], { extra: { git }, runs: [greenRun(TIP), greenRun(MID)], ...GATED });
     assert.equal(code, 0);
-    assert.deepEqual(asked, ['deploy 1a2b3c4 to production? [y/N]']);
+    assert.equal(started.length, 1);
+    assert.match(out.stdout, /mc: deploying 1a2b3c4 to production in its own process/u);
     assert.doesNotMatch(out.stdout, /behind main's tip|without it|has a green full run/u);
     assert.equal(spawned[0].sha, TIP);
     assert.equal(row.sha, TIP);
@@ -3126,12 +3089,12 @@ describe('mc deploy — production never moves backwards', () => {
   for (const accept of [[], ['--accept-red', 'known']]) {
     const how = accept.length ? 'under --accept-red too' : 'with a green tip';
     it(`the tip is live: nothing newer can ship, nothing is prepared or started — ${how}`, async () => {
-      const { code, out, spawned, asked, calls, row } = await attempt(accept, {
+      const { code, out, spawned, started, calls, row } = await attempt(accept, {
         extra: { git: walk({ chain: () => [] }), fetchVersion: async () => ({ commit: TIP, build: 900, build_time: '2026-11-14T10:00:00Z' }) },
         runs: [accept.length ? redRun(TIP) : greenRun(TIP)],
       });
       assert.equal(code, 1);
-      assert.deepEqual([spawned.length, asked.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.deepEqual([spawned.length, started.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
       assert.deepEqual(readPreparation(work), null, 'no preparation was started');
       assert.equal(row.outcome, 'refused');
       assert.match(row.note, /the live commit 1a2b3c4 is main's tip — nothing newer can ship/u);
@@ -3140,9 +3103,9 @@ describe('mc deploy — production never moves backwards', () => {
 
     it(`a tip that does not descend from the live commit is refused, naming the live commit — ${how}`, async () => {
       const git = walk({ ancestors: (older, newer) => !(older === LIVE && newer === TIP) });
-      const { code, spawned, asked, calls, row, out } = await attempt(accept, { extra: { git }, runs: [accept.length ? redRun(TIP) : greenRun(TIP), greenRun(MID)] });
+      const { code, spawned, started, calls, row, out } = await attempt(accept, { extra: { git }, runs: [accept.length ? redRun(TIP) : greenRun(TIP), greenRun(MID)] });
       assert.equal(code, 1);
-      assert.deepEqual([spawned.length, asked.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.deepEqual([spawned.length, started.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
       assert.equal(row.outcome, 'refused');
       assert.match(row.note, /main's tip 1a2b3c4 does not descend from the live commit 9f8e7d6 .* nothing newer can ship/u);
       assert.match(out.stderr, /nothing was deployed/u);
@@ -3168,19 +3131,21 @@ describe('mc deploy — production never moves backwards', () => {
     assert.match(row.note, /9f8e7d6 is not a commit this checkout has/u);
   });
 
-  it('a deploy that landed while the question was open refuses a pick that no longer comes after what is live', async () => {
-    let answered = false;
+  it('a deploy that landed between the gate\'s end and the admission refuses a pick that no longer comes after what is live', async () => {
+    let landed = false;
+    const { lock, raced } = lockWithRace(() => { landed = true; });
     const git = walk({ ancestors: (older, newer) => !(older === TIP && newer === MID) });
     const { code, spawned, row, out } = await attempt([], {
       extra: {
         git,
-        ask: () => { answered = true; return 'y'; },
-        lastDeploy: () => (answered ? { sha: TIP, live_commit: TIP, ended: '2026-11-15T09:00:00Z' } : null),
+        lock,
+        lastDeploy: () => (landed ? { sha: TIP, live_commit: TIP, ended: '2026-11-15T09:00:00Z' } : null),
       },
       runs: [redRun(TIP), greenRun(MID)],
       head: TIP,
       served: 'checkout',
     });
+    assert.equal(raced.ran, 1, 'the deploy landed at the admission');
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the script was not started');
     assert.equal(row.outcome, 'refused');
@@ -3189,17 +3154,19 @@ describe('mc deploy — production never moves backwards', () => {
   });
 
   it('the same recheck lets a pick through that does come after the standing row', async () => {
-    let answered = false;
+    let landed = false;
+    const { lock, raced } = lockWithRace(() => { landed = true; });
     const { code, spawned, row } = await attempt([], {
       extra: {
         git: walk(),
-        ask: () => { answered = true; return 'y'; },
-        lastDeploy: () => (answered ? { sha: LOW, live_commit: LOW, ended: '2026-11-15T09:00:00Z' } : null),
+        lock,
+        lastDeploy: () => (landed ? { sha: LOW, live_commit: LOW, ended: '2026-11-15T09:00:00Z' } : null),
       },
       runs: [redRun(TIP), greenRun(MID)],
       head: TIP,
       served: 'checkout',
     });
+    assert.equal(raced.ran, 1, 'the deploy landed at the admission');
     assert.equal(code, 0);
     assert.equal(spawned.length, 1);
     assert.equal(row.sha, MID);
@@ -3211,14 +3178,15 @@ describe('mc deploy — a preparation is reused only while the history still say
     const runs = [fullRunOf(SHA)];
     const fake = gateFake({ runs });
     const { state, extra } = detachedPreparer(fake);
-    const asked = [];
+    const started = [];
+    const startDeployer = (job, d) => { started.push(job); return { pid: process.pid, inline: () => ship(job, d) }; };
     const first = io();
     const one = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'n'; } }),
+      ...deps({ ...extra, startDeployer, sleep: async () => { await state.pending(); } }),
       stdout: first.stdout,
       stderr: first.stderr,
     });
-    assert.equal(one, 1, 'answered no');
+    assert.equal(one, 0, first.out.stderr);
     assert.equal(state.starts, 1);
     assert.equal(readPreparation(work).result.full.state, 'green');
 
@@ -3226,14 +3194,14 @@ describe('mc deploy — a preparation is reused only while the history still say
     runs.push(RED_RUN());
     const second = io();
     const two = await run([], {
-      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+      ...deps({ ...extra, startDeployer, sleep: async () => { await state.pending(); } }),
       stdout: second.stdout,
       stderr: second.stderr,
     });
     assert.match(second.out.stdout, /mc: the preparation of 1a2b3c4 read the full run as green, the history says red now — preparing again/u);
     assert.equal(state.starts, 2, 'it was prepared again, not reused');
     assert.equal(two, 1, 'and the red refuses');
-    assert.equal(asked.length, 1, 'nobody was asked the second time');
+    assert.equal(started.length, 1, 'no second deployer: the red refused');
   });
 
   it('while the history says what it recorded, it is reused', async () => {
@@ -3241,7 +3209,7 @@ describe('mc deploy — a preparation is reused only while the history still say
     const { state, extra } = detachedPreparer(fake);
     for (let round = 0; round < 2; round += 1) {
       const { stdout, stderr } = io();
-      await run([], { ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }), stdout, stderr });
+      await run([], { ...deps({ ...extra, sleep: async () => { await state.pending(); } }), stdout, stderr });
     }
     assert.equal(state.starts, 1);
   });

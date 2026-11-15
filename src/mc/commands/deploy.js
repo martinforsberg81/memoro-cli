@@ -4,19 +4,19 @@
  * The deploy itself is memoro's: `npm run deploy` (`scripts/deploy.mjs`, its
  * seventeen steps ending in *Verify live version*) is the whole of it, and
  * nothing here reimplements a step of it or edits it. What this verb adds is
- * what is around it — the reading before, the one question that makes it a
- * thing a person did, and the process it runs in after. It hands the script one
- * thing: `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`, always, because the commit
- * was chosen, measured and asked about here, and the script's own fast-forward
- * to the remote main would ship another.
+ * what is around it — the reading before, the gate that measures the commit,
+ * and the process it runs in after. It hands the script one thing:
+ * `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`, always, because the commit was
+ * chosen and measured here, and the script's own fast-forward to the remote
+ * main would ship another.
  *
- * The question is not a formality and no flag skips it. Deploying to
- * production is Martin's word every time, so `mc deploy` refuses outright
- * where there is nobody to ask: without a terminal it exits 2 rather than
- * assuming yes. `--dry-run` is the reading and stops before the question. The
- * runner never calls this and no role tells a session to: with `MC_HEADLESS=1`
- * it refuses before it reads anything (the deploy is Martin's act), the reading
- * and `--follow` excepted.
+ * Typing `mc deploy` is the decision (Martin, 2026-11-15: whoever types deploy
+ * wants it): it asks nothing and needs no terminal, so it runs from a session's
+ * shell as well as from a person's. Once the reading is printed and the gate
+ * has passed, the deployer starts. `--dry-run` is the reading and ships
+ * nothing. The runner never calls this and no role tells a session to: with
+ * `MC_HEADLESS=1` it refuses before it reads anything (an unattended session
+ * has nobody who typed the deploy), the reading and `--follow` excepted.
  *
  * What ships is the newest first-parent commit of `origin/main` after the live
  * one whose full run is green (`pickCommit`) — main's tip when it is green, an
@@ -24,7 +24,7 @@
  * why the tip was passed over. Production never moves backwards: a pick is a
  * descendant of the live commit and not the live commit, or nothing ships.
  *
- * Before the question that commit is measured twice (`deploy-gate.js`): a full
+ * Before it ships that commit is measured twice (`deploy-gate.js`): a full
  * run of exactly it from the history — one is started and followed when there
  * is none — and the suites memoro's `.mc/test.json` declares as gates, run
  * against a local server of it: the shared checkout is placed at it, detached,
@@ -33,7 +33,7 @@
  * lines; a suite declared `gate: false` is not run and is never a refusal.
  * Only `--accept-red "<reason>"` goes past, and then main's tip is what is
  * prepared and shipped, with each red listed in the reading, the reason in the
- * question and the row. Both results are in the row
+ * line that says the deployer started and in the row. Both results are in the row
  * (`full_commit`, `full_verdict`, `suites`, `accepted_red`). The merge is never
  * held by any of it.
  *
@@ -50,9 +50,9 @@
  * deploys had failed at *Deploy source preflight* because the verb spawned the
  * script in whatever branch `~/memoro` happened to be on).
  *
- * After the yes the deploy is its own process — the deployer, `ship` in
+ * Once admitted the deploy is its own process — the deployer, `ship` in
  * `deploy-run.js`, detached, its output in `~/mc/runner/log/deploy.log` — and
- * the terminal that asked only watches it (`followDeploy`): ^C stops the
+ * the terminal that typed it only watches it (`followDeploy`): ^C stops the
  * watching, not the deploy, and `mc deploy --follow` watches again (ruling 30,
  * 2026-10-09). It takes no repository lease. A merge round holds the lease for
  * its whole gate, and until then a deploy waited up to eight minutes for that
@@ -70,10 +70,10 @@
  * the row exists, saying `running`, before `npm run deploy` is started, and is
  * completed however it ends. A deploy that never came back is then a row that
  * says so instead of a silence somebody has to reconstruct from
- * `/admin/deploy/logs`. A refusal — no terminal, a `no`, a deploy already
+ * `/admin/deploy/logs`. A refusal — a red gate, a deploy already
  * running — is a row too: it is a deploy somebody meant to make.
  *
- * Every process boundary is on `deps` — git, the spawn, the prompt, the
+ * Every process boundary is on `deps` — git, the spawn, the
  * deployer, the version fetch — so the whole verb runs in a test with nothing
  * real behind it (`startDeployer` running `ship` in the test's own process).
  * The record is the exception, and deliberately so: it is what this verb
@@ -82,10 +82,9 @@
  * called.
  *
  * Exit codes: 0 for a deploy verified, `--dry-run`, or `--follow` with none
- * running; 1 for a deploy that failed, a `no`, a deploy already running or a
+ * running; 1 for a deploy that failed, a deploy already running or a
  * repository this machine has no checkout of, a refusal by the gate or a
- * headless session; 2 for a bad argument or no
- * terminal; 130 when the watching was stopped and the deploy goes on. Run in
+ * headless session; 2 for a bad argument; 130 when the watching was stopped and the deploy goes on. Run in
  * this process (a test), the script's own exit code.
  */
 import { spawn } from 'node:child_process';
@@ -117,7 +116,6 @@ import { languageState as readLanguageState, liveRun } from '../language-runs.js
 import { installedScript, readMerger } from '../merger.js';
 import { nightlyReading, readNightlyHistory } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
-import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { realLock } from '../runner-lock.js';
 import { currentHolder } from '../repo-lease.js';
 import { ghCommand } from './publish.js';
@@ -138,7 +136,7 @@ export function parseDeployArgs(argv) {
   if (scanned.positional.length) {
     return { ...opts, error: `mc deploy takes no arguments (${scanned.positional[0]}) — it deploys memoro's main, and nothing else` };
   }
-  // The reason is the point of the flag: it is read at the question and kept in
+  // The reason is the point of the flag: it is printed with the deploy and kept in
   // the record, so a blank one is no reason and the flag is refused with it.
   const accepted = scanned.flags['accept-red'];
   if (accepted !== null && !String(accepted).trim()) {
@@ -709,7 +707,7 @@ function failureLine(code, said, interrupted) {
  * The gate for the commit that would ship: the full run, then the app used.
  *
  * Returns `{ full, exercise, lines, refusal, accepted }`. `refusal` is null when
- * the deploy may go on to its question, else `{ note, lines }` — the row's note
+ * the deploy may go on to ship, else `{ note, lines }` — the row's note
  * and what stderr says. A full run that measured nothing about this tree
  * (`unmeasured`, `moved`) refuses whatever flag was given; a red or stalled
  * run and a failed or unrunnable suite are what `--accept-red` accepts, each
@@ -798,7 +796,7 @@ export async function run(argv, deps = {}) {
   // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
   // the watching (`--follow`) change nothing in production and stay allowed.
   if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
-    stderr.write('mc: mc deploy is Martin\'s act and happens only in an interactive session; this one is headless (MC_HEADLESS=1) — nothing was deployed. mc deploy --dry-run is the reading.\n');
+    stderr.write('mc: an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading.\n');
     return 1;
   }
   if (opts.follow) return follow({ env, stdout, deps });
@@ -857,8 +855,8 @@ export async function run(argv, deps = {}) {
   const say = (line) => { if (!opts.json) stdout.write(`${line}\n`); };
   const gateDeps = { gate: deps.gate || {}, suites: deps.suites || {} };
 
-  // `--dry-run` is the question answered with the plan: it starts nothing and
-  // deploys nothing, so it is the safe thing to type when you are not sure.
+  // `--dry-run` is the plan alone: it starts nothing and deploys nothing, so it
+  // is the safe thing to type when you are not sure.
   if (opts.dryRun) {
     if (!opts.json) for (const line of planLines(plan)) stdout.write(`${line}\n`);
     // Production never moves backwards: there is nothing to gate, and the reading has said why.
@@ -886,9 +884,8 @@ export async function run(argv, deps = {}) {
   let cells = {};
   const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note, gate: cells }, env);
 
-  // Another deploy going on is read from the record. Asked here so nobody
-  // answers a question for nothing, and again under the lock, where the
-  // answer is final.
+  // Another deploy going on is read from the record. Read here so nobody
+  // prepares for nothing, and again under the lock, where the answer is final.
   const alive = deps.alive || processAlive;
   const refuseRunning = () => {
     // A language run writes to the same production: the two never overlap
@@ -947,16 +944,9 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  const interactive = deps.interactive || realInteractive;
-  if (!interactive(env)) {
-    refuse('no terminal to ask at');
-    stderr.write('mc: mc deploy asks before it deploys, and there is no terminal here to ask — run it in one\n');
-    return 2;
-  }
-
-  // The commit is measured whole and the app used before anybody is asked
-  // anything — and after every refusal that costs nothing to make, so a deploy
-  // already running or a dirty main is not found out after a full run.
+  // The commit is measured whole and the app used before anything ships — and
+  // after every refusal that costs nothing to make, so a deploy already
+  // running or a dirty main is not found out after a full run.
   const root = deps.root || workRoot(env);
   const prepared = await prepareStage({
     plan, opts, env, root, holder, say, stdout, stderr, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
@@ -976,14 +966,9 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  const ask = deps.ask || realAsk;
-  const answer = ask(`deploy ${plan.short} to production${gate.accepted ? `, accepting red (${gate.accepted})` : ''}? [y/N]`, { stdout });
-  if (!/^y(es)?$/iu.test(String(answer || '').trim())) {
-    refuse('answered no at the question');
-    stdout.write('mc: nothing was deployed\n');
-    return 1;
-  }
-
+  // The gate has passed and typing `mc deploy` was the decision: nothing is
+  // asked. What happens next is the admission, and it is made now, under the
+  // lock.
   // One deploy at a time, decided under the register's lock — milliseconds,
   // and nothing a merge round ever holds — rather than under the
   // repository's lease, which a merge round holds for its whole gate
@@ -995,7 +980,7 @@ export async function run(argv, deps = {}) {
   const started = lock(root, () => {
     if (refuseRunning()) return null;
     // The ancestor rule once more, against the last deployed row as it stands now: a deploy that
-    // landed while the question was open may have moved production past this pick.
+    // landed since the reading may have moved production past this pick.
     const standing = (deps.lastDeploy || lastDeployRow)(env);
     const standingRef = standing ? (standing.live_commit || standing.sha) : null;
     if (standingRef) {
@@ -1023,6 +1008,11 @@ export async function run(argv, deps = {}) {
       key, sha: plan.sha, worktree: source.worktree, own, holder: holder.name, json: opts.json, root,
     };
     const deployer = startDeployer(job, { ...deps, stdout, stderr, env });
+    // The one line the verb says about the start (nobody is asked): under the
+    // lock, right after the deployer is started, and never before a refusal.
+    if (deployer.pid) {
+      stdout.write(`mc: deploying ${plan.short} to production${gate.accepted ? `, accepting red (${gate.accepted})` : ''} in its own process (pid ${deployer.pid}) — after the gate round in flight, if any; the merge queue waits for it\n`);
+    }
     recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells }, env);
     return { key, deployer };
   }, { name: 'deploy' });
@@ -1036,8 +1026,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: the deployer could not be started (${deployer.error || 'no pid'}) — nothing was deployed\n`);
     return 1;
   }
-  stdout.write(`mc: deploying ${plan.short} in its own process (pid ${deployer.pid}) — after the gate round in flight, if any; the merge queue waits for it\n`);
-  // The live page resumes as soon as the confirmed deploy has started. The
+  // The live page resumes as soon as the deploy has started. The
   // shell command still follows by default; explicit --follow stays available.
   if (deps.follow === false) return 0;
   stdout.write(`mc: ^C stops watching, not the deploy; mc deploy --follow watches again\n`);
@@ -1148,7 +1137,7 @@ export async function holdBuildLane(job, deps = {}) {
 }
 
 /**
- * Everything after the yes, in the deployer's own process: the round in
+ * Everything after the admission, in the deployer's own process: the round in
  * flight waited for (`waitForGate`), the worktree fast-forwarded to
  * `origin/main`, the script run there, the row completed with the sha that
  * shipped. No repository lease is held — the worktree is moved by nothing
@@ -1170,7 +1159,7 @@ export async function ship(job, deps = {}) {
     holding = await holdBuildLane(job, { ...deps, stdout });
     progress.report('prepare', 'Preparing deploy worktree');
     // The one movement of somebody else's checkout this verb may make: it is
-    // fast-forwarded to the sha the gate measured and the question named
+    // fast-forwarded to the sha the gate measured
     // (2026-11-14) — not to whatever `origin/main` is by now, which no full
     // run and no suite has seen. `--ff-only` on a tree already proved clean
     // and not ahead, so it either fast-forwards or does nothing.
@@ -1231,15 +1220,15 @@ export async function ship(job, deps = {}) {
     // What ships is what that worktree stands on now, read rather than
     // assumed — and it is the sha the gate measured, or nothing. The merger
     // lands and fetches all the time, and a main checkout moved between the
-    // question and the yes stands on a commit no full run and no suite has
+    // gate's end and the deployer's placing stands on a commit no full run and no suite has
     // seen: that is a refusal, never a deploy of "main as it is now" (which it
     // was until 2026-11-14, after two rows had named the wrong sha, 2026-09-14
     // and 2026-09-19). The row is completed with the sha that stood.
     const shipping = git(worktree, ['rev-parse', '--verify', 'HEAD']) || sha;
     if (behind) stdout.write(`mc: ${past ? 'moved' : 'fast-forwarded'} main in ${worktree} to ${short(shipping)}\n`);
     if (shipping !== sha) {
-      recordEnd(key, { sha: shipping, outcome: FAILED, stopped_at: 'moved', note: `mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)}, the commit that was measured and asked about` }, env);
-      stderr.write(`mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)} — the commit the full run and the suites measured and the question named; run the deploy again — nothing was deployed\n`);
+      recordEnd(key, { sha: shipping, outcome: FAILED, stopped_at: 'moved', note: `mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)}, the commit that was measured` }, env);
+      stderr.write(`mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)} — the commit the full run and the suites measured; run the deploy again — nothing was deployed\n`);
       return 1;
     }
 
@@ -1371,7 +1360,7 @@ function preparationInFlight({ root, plan, alive }) {
 }
 
 /**
- * Everything before the question, in a process of its own: the full run of
+ * Everything before the deployer, in a process of its own: the full run of
  * the commit that would ship and the app used (`deploy-prepare.js`).
  *
  * The record decides, under the register's lock, and exactly by sha: a
@@ -1457,7 +1446,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
   if (watch) {
     const stopped = await followLog({
       log: watch.log, pid: watch.pid, stdout, deps,
-      stopped: `the preparation goes on (pid ${watch.pid}); mc deploy joins it and asks`,
+      stopped: `the preparation goes on (pid ${watch.pid}); mc deploy joins it`,
     });
     if (stopped !== null) return { code: stopped };
   }
@@ -1498,7 +1487,7 @@ export function deployLogPath(root) {
 /**
  * The deployer, started detached: `deploy-run.js` with the job as its one
  * argument, its output in `deploy.log` (emptied for each deploy). Its own
- * process group, so a ^C at the terminal that asked reaches only the
+ * process group, so a ^C at the terminal that typed it reaches only the
  * watcher. `{ pid, log }`, or `{ pid: null, error }`.
  *
  * stdin is closed: the script asks nothing, and a wrangler that wants a
@@ -1552,7 +1541,7 @@ export async function followDeploy({ log, pid, key = null, env = process.env, st
   });
   if (stopped !== null) return stopped;
   // By its start alone: the deployer completes the row with the sha that
-  // shipped, which is not the key's when `main` moved after the question.
+  // shipped, which is not the key's when `main` moved after the gate.
   const rows = readDeploys(env);
   const row = key
     ? rows.findLast((r) => r.started === key.started)
@@ -1603,7 +1592,7 @@ async function follow({ env, stdout, deps }) {
     const root = deps.root || workRoot(env);
     const record = readPreparation(root);
     if (preparationState(record, { alive }) === 'running') {
-      stdout.write(`mc: following the preparation of ${short(record.sha)} (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, started ${String(record.started).slice(0, 16).replace('T', ' ')}) — mc deploy joins it and asks\n`);
+      stdout.write(`mc: following the preparation of ${short(record.sha)} (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, started ${String(record.started).slice(0, 16).replace('T', ' ')}) — mc deploy joins it\n`);
       const stopped = await followLog({
         log: record.log || preparationLogPath(root), pid: Number(record.pid), stdout, deps,
         stopped: `the preparation goes on (pid ${record.pid}); mc deploy joins it`,

@@ -110,7 +110,7 @@ export function worktreeOnBranch(porcelain, branch) {
   return null;
 }
 
-/** Where `main` is checked out, if anywhere. `mc deploy`'s one question. */
+/** Where `main` is checked out, if anywhere. `mc deploy` runs its script there. */
 export function mainWorktree(porcelain) {
   return worktreeOnBranch(porcelain, 'main');
 }

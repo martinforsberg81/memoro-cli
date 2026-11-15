@@ -1,6 +1,6 @@
 /**
- * The deploy's preparation: everything `mc deploy` does before its one
- * question, in a process of its own.
+ * The deploy's preparation: everything `mc deploy` does before its
+ * deployer, in a process of its own.
  *
  * The full run of the commit that would ship and the suites against a local
  * server of it take tens of minutes. They used to run in the process that was
@@ -16,8 +16,7 @@
  * `stage` is `starting`, `full-run`, `suites` or `done`. `result` is the gate's
  * two measurements, `{ full, exercise }`, exactly as `measureGate` made them;
  * the judging — the refusals, `--accept-red`, the lines — is the asker's, so a
- * preparation measures and decides nothing. Joining one asks the same single
- * question. A record whose pid is gone and which has no `ended` is a
+ * preparation measures and decides nothing. Joining one judges it the same way. A record whose pid is gone and which has no `ended` is a
  * preparation that was interrupted (its process was killed); the next
  * `mc deploy` of that commit starts a new one.
  *

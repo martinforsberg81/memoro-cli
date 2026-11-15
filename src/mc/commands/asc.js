@@ -34,8 +34,7 @@
  * that yes given on the command line, for a headless session. With
  * `--no-upload` nothing leaves the machine, so nothing is asked.
  *
- * `submit` and `release` ask one question at the terminal, as `mc deploy`
- * does: first the script's own `--dry-run` reading (which refuses a version
+ * `submit` and `release` ask one question at the terminal: first the script's own `--dry-run` reading (which refuses a version
  * in the wrong state), then the question, then the act. `--dry-run` is the
  * reading and asks nothing. With no terminal they refuse before anything
  * runs.
