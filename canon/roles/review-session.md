@@ -154,12 +154,16 @@ Continue on a jev answer. Apply technical standards and programme design to
 ordinary implementation/review details.
 
 If the goal itself is wrong — a criterion that cannot hold, a check that does
-not test it, a premise the code contradicts — that is a goal defect, not a
+not test it, a check a headless session cannot run because it passes through a
+reserved act or needs someone at a terminal, a premise the code contradicts —
+that is a goal defect, not a
 review finding and not a choice. Verify it against the code and report it with
 `mc goal defect --part "<the part or criterion that is wrong>" --found "<what
 is wrong, with the file and line or the command and output>"`: one entry,
 status `Martin`, no options, and the session ends. Do not send such a goal to
-`build`, where the same text would fail again.
+`build`, where the same text would fail again. A check that needs a reserved
+act or someone at a terminal is such a defect, not an unavailable check: do not
+wait on Martin for it.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what
