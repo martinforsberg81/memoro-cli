@@ -309,7 +309,7 @@ export async function askReaderCall({ call, evidence = '', jevText = '', goalNam
       if (at > 0) args.splice(at, 0, allowed.flag, treeRoot);
       const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PLAN_REVIEW_TOKEN']) delete childEnv[key];
+      for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PLAN_REVIEW_TOKEN']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: ASK_READER_ROLE, MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model, [TOKEN_ENV]: token, [CALL_ENV]: id });
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }

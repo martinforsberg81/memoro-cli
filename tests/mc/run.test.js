@@ -4788,6 +4788,35 @@ test('the prompt\'s seen areas, the session\'s MC_REVIEW_SEEN and the move out o
   assert.doesNotMatch((await move(without)).text, /seen memoro\/ops/u, 'a review started without the list is asked none');
 });
 
+/* The write-back line: asked of a version 2 goal's review when its programme has a record; the prompt and MC_REVIEW_WRITE_BACK say the same. */
+test('a review of a version 2 goal whose programme has a record is told to write the write-back line and carries MC_REVIEW_WRITE_BACK; the move out of review asks for it', async () => {
+  const f = trippedReview({ obligations: [touchedOps('memoro')], diffs: { memoro: ['src/ops/deploy.js'] } });
+  f.files[`${PROG}/PROGRAMME.json`] = plainText();
+  const prompt = await reviewPrompt(f);
+  assert.match(prompt, /holds one `write-back` line/u);
+  assert.match(prompt, /write-back: OK — <repo>\/docs\/technical\/<page>\.md § <section>/u);
+  assert.match(prompt, /write-back: OK — none — <reason>/u);
+  assert.match(prompt, /write-back: NOT OK — <what the goal made true that no page says>/u);
+  assert.equal(reviewSession(f).env.MC_REVIEW_WRITE_BACK, '1');
+  const verdict = `head: memoro ${HEAD}\ncriterion 1: OK\nV1: OK\nobligation memoro/ops: OK\nchange: OK\nout-of-scope: OK\nprotection: OK\nbugs: OK\n`;
+  f.files[`${GOALS}/judged/REVIEW.md`] = verdict;
+  const out = [];
+  const rc = await goalCommand(['stage', 'merge'], { ...f.deps, env: { ...reviewSession(f).env }, home: '/w/programs', known: () => ['/home/memoro'], stdout: { write() {} }, stderr: { write: (text) => out.push(text) }, queue: () => {} });
+  assert.equal(rc, 2, out.join(''));
+  assert.match(out.join(''), /no line for write-back/u, 'the move asks what the launch said');
+});
+
+test('a review of a goal whose programme has no record, or a version 1 goal is told nothing of write-back and has no MC_REVIEW_WRITE_BACK', async () => {
+  const none = trippedReview({ obligations: [touchedOps('memoro')], diffs: {} });
+  const v1 = reviewFixture();
+  v1.files[`${PROG}/PROGRAMME.json`] = plainText();
+  for (const f of [none, v1]) {
+    const prompt = await reviewPrompt(f);
+    assert.doesNotMatch(prompt, /write-back/u);
+    assert.equal('MC_REVIEW_WRITE_BACK' in reviewSession(f).env, false);
+  }
+});
+
 /* ---------------------------------------------------------------- no loop */
 
 test('a goal driven through a red review, a red merge and a moved head reaches merge · blocked in six sessions, its stage going back only by a review\'s rejection', async () => {

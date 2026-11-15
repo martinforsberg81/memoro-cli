@@ -337,7 +337,7 @@ export function goalRepairPrompt({ verdict, ...args }) {
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null }) {
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, verdict = null, tripped = [], trippedError = null, seen = [], seenError = null, writeBack = false }) {
   const { heads, failed } = priorVerdict(verdict);
   const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
   const areas = tripped.length
@@ -347,8 +347,11 @@ export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief 
   const shown = seen.length
     ? `\n\nWork on these areas is judged as the user sees it; write a \`seen <area>\` line for each, beside the others, with the screenshots you judged or \`none\` and the reason:\n${seen.map((area) => `seen ${area}: OK — shots/<name>.png[, …][ — <words>]   |   seen ${area}: NOT OK — shots/<name>.png[, …] — <what and where>   |   seen ${area}: OK — none — <reason>`).join('\n')}\nSave each screenshot with \`mc shot … --out ${dir}/shots/<name>.png\`, under a name not already there, and name it on the line as \`shots/<name>.png\`; mc checks that each file exists, not what it shows.`
     : '';
+  const written = writeBack
+    ? '\n\nThis goal\'s programme has a record, so REVIEW.md also holds one `write-back` line, beside the others: judge whether what the goal made true is written into the repository\'s `docs/technical/` pages (and the area pages), reading the pages at the head you judge. Write exactly one of:\n`write-back: OK — <repo>/docs/technical/<page>.md § <section>[, <repo>/docs/technical/<page>.md § <section>…]`   |   `write-back: OK — none — <reason>`   |   `write-back: NOT OK — <what the goal made true that no page says>`\nA NOT OK line sends the goal back to build; the line is judged anew each round, never carried.'
+    : '';
   const unseen = seenError ? `\n\nThe areas judged as the user sees it could not be checked (${seenError}); no \`seen\` line is asked of this review.` : '';
-  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}${shown}${unseen}`, brief);
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}${shown}${unseen}${written}`, brief);
 }
 
 /** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */

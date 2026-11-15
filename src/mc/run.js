@@ -80,6 +80,7 @@ import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
+import { readRecord } from './programme-record.js';
 import { RUNNER_DISK, RUNNER_MEMORY, archivedProgramsHome, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
@@ -1709,7 +1710,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
             ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
-          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
+          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1858,7 +1859,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -2055,7 +2056,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: managerCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). The manager role is what the publish guard reads.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, ...(horizonTurn ? { MC_HORIZON: turn.slug } : {}), MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -3014,6 +3015,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (review) found = trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
       // The areas judged as the user sees it, asked once here: the prompt names them and MC_REVIEW_SEEN holds the same list.
       const judged = review ? seenAreas({ goal, dir: goal.dir, tripped: found.tripped ?? [], git: deps.git, exists: deps.exists }) : { seen: [] };
+      // The write-back line: asked of a version 2 goal's review when its programme has a record, so what the programme
+      // made true is checked against docs/technical goal by goal (mc-goals.md, "The verdict"). The prompt and
+      // MC_REVIEW_WRITE_BACK carry the same fact.
+      const writeBack = review && goal.version === 2 && readRecord(join(programsHome(deps.env), goal.programme), { read: (path) => deps.read(path) }).status === 'valid';
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
@@ -3022,7 +3027,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const prompt = planning
         ? goalPlanPrompt(told)
         : review
-        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null })
+        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null, writeBack })
         : repair
         ? goalRepairPrompt({ ...told, verdict: goal.verdict })
         : mend
@@ -3121,6 +3126,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             // The review uses this head as context; the Stop hook reads when it began.
             ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
             ...(review && judged.seen?.length ? { MC_REVIEW_SEEN: judged.seen.join(' ') } : {}),
+            ...(writeBack ? { MC_REVIEW_WRITE_BACK: '1' } : {}),
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
             ...scratchEnv,
           },

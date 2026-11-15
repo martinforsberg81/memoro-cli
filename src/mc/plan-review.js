@@ -477,7 +477,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       if (at > 0) args.splice(at, 0, allowed.flag, checkout);
       const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
+      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: PLAN_REVIEW_ROLE, MC_HEADLESS: '1', MC_GOAL: target.name, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_PLAN_REVIEW_TOKEN: token });
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }

@@ -92,7 +92,7 @@ export async function runLearningPass({ env = process.env, now = () => new Date(
     instructions: instructionsFor(launch.id, role.overlay), prompt: learningPrompt({ env, reason: due }), profileArgs, stream: false, cache: role.cache });
   const processLaunch = gatewayLaunch({ provider: requireCapability(launch.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
   const childEnv = withoutSessionIdentity(env);
-  for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SCRATCH']) delete childEnv[key];
+  for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SCRATCH']) delete childEnv[key];
   // MC_SESSION_STARTED is what makes a goal "created in this session" (goal.js).
   Object.assign(childEnv, { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_SESSION_STARTED: started.toISOString() });
   (deps.writeMarker || writeJsonAtomic)(learningMarkerPath(env), { started_at: started.toISOString(), reason: due });

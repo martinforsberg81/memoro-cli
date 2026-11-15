@@ -1485,6 +1485,59 @@ test('the move asks seen lines for exactly the areas MC_REVIEW_SEEN names and ne
   assert.equal(seen.filter((one) => one === 'show').length, 0, 'the declarations are not read for the seen list (no untouched obligation either)');
 });
 
+/* ---- The write-back line: asked only of a review the runner launched with MC_REVIEW_WRITE_BACK=1 ---- */
+
+const WB_ENV = { ...REVIEW, MC_REVIEW_WRITE_BACK: '1' };
+/** The v2 verdict with `line` (null: none) as its write-back line, before `change`. */
+const wbVerdict = (line, notOk = {}) => verdictText({ ids: V2_IDS, notOk, tail: '' }).replace('change: ', `${line === null ? '' : `${line}\n`}change: `);
+const wbFiles = (text) => reviewFiles(text, { v2: true });
+
+test('a review launched with MC_REVIEW_WRITE_BACK is refused for merge and for build without its write-back line, naming the id, and moves with it in either form', async () => {
+  for (const to of ['merge', 'build']) {
+    const notOk = to === 'build' ? { bugs: 'x' } : {};
+    assertRefused(await moveOut(to, wbFiles(wbVerdict(null, notOk)), WB_ENV), /no line for write-back/u, `${to}: no line`);
+    for (const line of ['write-back: OK — memoro-cli/docs/technical/mc-run.md § Programme archive turn', 'write-back: OK — memoro-cli/docs/technical/mc-run.md § Programme archive turn, memoro-cli/docs/technical/areas/system.md § Decisions', 'write-back: OK — memoro-cli/docs/technical/mc-goals.md § The verdict, the line, and more', 'write-back: OK — none — the goal changed no behaviour a page describes']) {
+      const f = await moveOut(to, wbFiles(wbVerdict(line, notOk)), WB_ENV);
+      assert.equal(f.code, 0, `${to}: ${line}: ${f.err()}`);
+    }
+  }
+});
+
+test('a write-back line that says NOT OK sends the goal to build and keeps a move to merge from happening', async () => {
+  const line = 'write-back: NOT OK — the archive turn is true and no page in docs/technical says it';
+  const toBuild = await moveOut('build', wbFiles(wbVerdict(line)), WB_ENV);
+  assert.equal(toBuild.code, 0, toBuild.err());
+  assert.equal(stateOf(toBuild), 'build · ready');
+  assertRefused(await moveOut('merge', wbFiles(wbVerdict(line)), WB_ENV), /NOT OK lines \(write-back\)/u, 'merge with a NOT OK write-back');
+});
+
+test('a write-back line that is not in its form is refused naming the fault: a bare OK, none without a reason, carried, a page outside docs/technical, a missing section, and a line twice', async () => {
+  const cases = [
+    ['write-back: OK', /an OK line names the pages or says why none/u],
+    ['write-back: OK — none', /`none` needs its reason/u],
+    ['write-back: OK — none — ', /not in form|needs its reason/u],
+    ['write-back: OK — carried from round 1', /not carried from an earlier round/u],
+    ['write-back: OK — memoro-cli/src/mc/run.js § Review', /write-back: not in form/u],
+    ['write-back: OK — memoro-cli/docs/technical/mc-run.md', /write-back: not in form/u],
+    ['write-back: OK — the docs say it', /write-back: not in form/u],
+    ['write-back: OK — none — a\nwrite-back: OK — none — b', /more than one line for write-back/u],
+  ];
+  for (const [line, said] of cases) assertRefused(await moveOut('merge', wbFiles(wbVerdict(line)), WB_ENV), said, line);
+});
+
+test('a review launched without MC_REVIEW_WRITE_BACK is held to no write-back line, and a line written anyway is not an item of its verdict', async () => {
+  const bare = await moveOut('merge', wbFiles(wbVerdict(null)), REVIEW);
+  assert.equal(bare.code, 0, `a review started without the variable is asked none: ${bare.err()}`);
+  assertRefused(await moveOut('merge', wbFiles(wbVerdict('write-back: OK — none — a reason')), REVIEW), /write-back is not an item of this goal's verdict/u, 'a line nobody asked for');
+  const off = await moveOut('merge', wbFiles(wbVerdict(null)), { ...REVIEW, MC_REVIEW_WRITE_BACK: '0' });
+  assert.equal(off.code, 0, off.err());
+});
+
+test('a version 1 goal is held to no write-back line even when the variable is set', async () => {
+  const f = await moveOut('merge', reviewFiles(verdictText()), WB_ENV);
+  assert.equal(f.code, 0, f.err());
+});
+
 test('seenAreas lists the rule areas that declare seen which the goal stands touched on or trips, in the goal\'s order, and nothing for a version 1 goal, an untouched area not tripped or a source area', () => {
   const games = { ...AREA('games', { seen: true }), standards: [], questions: [], page: 'docs/areas/games.md' };
   const text = JSON.stringify({ schema_version: 1, areas: [AREA('ui', { seen: true }), AREA('ops', { seen: true }), AREA('data'), games] });
