@@ -366,6 +366,12 @@ them as `playback` with the keys `read`, `reached`, `first`, `not_built` and
 `strangest`, and the text of `reached.md` as `now_true`, which is `null` unless
 the state is `reached`.
 
+**Changing the wording.** The playback of an open horizon is changed by editing
+`playback.md` directly, on Martin's word at the desk, with the five headings
+kept; `show` reads the file as it is. There is no verb for it, by decision: it
+is a file, and a file is edited (Martin, 2026-11-15). `set` refuses an existing
+slug, and a horizon is not dropped and set again to change its wording.
+
 **States.** `set` makes an `open` horizon. `reached` takes an open one to
 `reached`, writes `reached.md` and sets `reached_at` and `reached_by`. `reopen`
 takes a reached one back to `open`: it sets `reopened_at`, `reopened_by` and
