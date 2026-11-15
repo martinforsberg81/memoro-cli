@@ -94,7 +94,7 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
-import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
+import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
@@ -2192,10 +2192,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
     if (entry.state === 'retrying' && !deployMendSettling.has(`retry:${id}`) && (entry.retry_owner === pid || !alive(Number(entry.retry_owner)))) {
       // The runner that started the retry is gone. The deploy it started may still be going, or may have finished.
+      // The one retry is spent either way: never started again (D5); what did not ship waits on Martin.
       const { outcome } = deployOutcomeOf(retryHolder(entry));
       if (outcome === 'running') return;
       if (outcome === 'deployed') patch((found) => { found.state = 'deployed'; });
-      else patch((found) => failDeployMend(found, 'runner ended during the retry'));
+      else patch((found) => retryFailed(found, `runner ended during the retry; its deploy row reads ${outcome || 'nothing'}`));
       entry = find();
     }
     if (entry.state === 'repaired' && !sessionBusy) {
@@ -2206,7 +2207,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const shippedSince = (at) => deps.deploys().some((row) => row.outcome === 'deployed' && Date.parse(row.ended || row.started) > Date.parse(at));
       const verdict = retryVerdict({ entry, now: deps.now(), shippedSince, contained: () => deployMendContained(entry, pick) });
       if (verdict.drop) {
-        patch((found) => { Object.assign(found, { state: 'not-retried', reason: verdict.drop }); delete found.waiting; });
+        patch((found) => { Object.assign(found, { state: 'not-retried', reason: verdict.drop, ended_at: deps.now().toISOString() }); delete found.waiting; });
         say(`deploy-mend ${id}: repaired, not retried — ${verdict.drop}`);
       } else if (verdict.wait) {
         patch((found) => { found.waiting = verdict.waiting; found.wait_reason = verdict.wait; });
@@ -2214,7 +2215,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       } else {
         const started = patch((found) => {
           if (found.state !== 'repaired') return null;
-          Object.assign(found, { state: 'retrying', retry_owner: pid, retry_started: stamp() });
+          Object.assign(found, { state: 'retrying', retried: true, retry_owner: pid, retry_started: stamp() });
           delete found.waiting;
           return found;
         });
@@ -2227,7 +2228,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           if (found.state !== 'retrying') return;
           if (ended.result === 'deployed') found.state = 'deployed';
           else if (ended.result === 'stopped') Object.assign(found, { state: 'stopped', reason: ended.reason });
-          else failDeployMend(found, ended.reason);
+          else retryFailed(found, ended.reason);
         });
         say(`deploy-mend ${id}: the retry ${ended.result}${ended.reason ? ` — ${ended.reason}` : ''}`);
       }

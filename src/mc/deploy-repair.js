@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
+import { readDeploys } from './deploys.js';
 import { readTextOrNull } from './goals.js';
 import { realLock } from './runner-lock.js';
 import { workRoot } from './paths.js';
@@ -27,10 +28,13 @@ export const REPOS = ['memoro-cli', 'memoro'];
 /**
  * The stops that are not technical: nothing in mc's machinery failed, so a mend session has nothing to mend.
  * Every other stop — a `failed` row with any `stopped_at`, a refusal whose code is not listed, a stop nobody
- * has classified — is technical (D2: an unknown stop is technical).
+ * has classified — is technical (D2: an unknown stop is technical). `dirty` and `ahead` are sent only for a
+ * worktree with main that is not mc's own; mc's own deploy worktree dirty or ahead is `own-dirty`/`own-ahead`,
+ * state mc owns, and technical (D4). `usage`, `headless` and `dry-run` write no row today; were one written,
+ * it is a decision.
  */
 export const NOT_TECHNICAL = Object.freeze([
-  'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced', 'foreign-worktree',
+  'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced',
 ]);
 
 /** `{ outcome, code }` → true when the stop is a technical fault. `deployed` and `running` are no stop. */
@@ -112,12 +116,21 @@ export function requestDeployRepair({ row, holder = '', acceptRed = false, logs 
 export const requestAcceptsRed = (entry) => entry.rows.some((row) => row.accept_red);
 export const requestHolder = (entry) => entry.rows[0]?.holder || '';
 
-/** Two failed repairs put the request on Martin; the first returns it to the queue. */
+/** Two failed repairs put the request on Martin; the first returns it to the queue. A spent retry is `retryFailed`'s. */
 export function failDeployMend(entry, reason) {
   entry.failures = (entry.failures || 0) + 1;
   entry.state = entry.failures >= 2 ? 'Martin' : 'queued';
   entry.reason = reason;
   entry.prs = [];
+  delete entry.waiting;
+}
+
+/** The one retry stopped technically or was interrupted: a failure, and the request waits on Martin. Never retried again. */
+export function retryFailed(entry, reason) {
+  entry.failures = (entry.failures || 0) + 1;
+  entry.state = 'Martin';
+  entry.retried = true;
+  entry.reason = reason;
   delete entry.waiting;
 }
 
@@ -218,6 +231,7 @@ export function removeCopies({ root = workRoot(), id, rm = rmSync }) {
  * repairs. The order is the order of the bounds: accept-red, age, a deploy since, then the wait.
  */
 export function retryVerdict({ entry, now = new Date(), shippedSince = () => false, contained = () => ({ ok: true }) }) {
+  if (entry.retried) return { drop: 'the one retry of this request was spent' };
   if (requestAcceptsRed(entry)) return { drop: 'the deploy carried --accept-red; a red accepted by a person is not accepted again by the runner' };
   const last = newest(entry);
   if (now.getTime() - Date.parse(last) > RETRY_WINDOW_MS) return { drop: `the stop is older than 24 hours (${last})` };
@@ -242,12 +256,24 @@ export function deployMendLine(entry, { now = new Date() } = {}) {
   return `mc: a repair of the deploy of ${at} is ${waits[entry.state] || entry.state}`;
 }
 
-/** The open request (or the last unretried one) as a reader shows it; unreadable state is said, never an empty queue. */
-export function deployMendReading({ root = workRoot(), read = readTextOrNull } = {}) {
+/**
+ * The open request (or the last unretried one, until the next deploy ships after it ended) as a reader shows it;
+ * unreadable state is said, never an empty queue. `deploys()` is the deploy record (`deploys.tsv` under `root`).
+ */
+export function deployMendReading({ root = workRoot(), read = readTextOrNull, deploys = () => readDeploys({ MC_WORK_ROOT: root }) } = {}) {
   try {
     const entries = readDeployMends({ root, read });
-    return { entry: openRequest(entries) || [...entries].reverse().find((entry) => entry.state === 'not-retried') || null, error: null };
+    const open = openRequest(entries);
+    if (open) return { entry: open, error: null };
+    const unretried = [...entries].reverse().find((entry) => entry.state === 'not-retried') || null;
+    return { entry: unretried && !shippedAfter(deploys, unretried.ended_at || newest(unretried)) ? unretried : null, error: null };
   } catch (error) { return { entry: null, error: error.message }; }
+}
+
+/** Whether a deploy shipped after `at`; a record that cannot be read hides nothing. */
+function shippedAfter(deploys, at) {
+  try { return deploys().some((row) => row.outcome === 'deployed' && Date.parse(row.ended || row.started) > Date.parse(at)); }
+  catch { return false; }
 }
 
 export function deployMendPrompt({ entry, branch, worktrees, root }) {

@@ -814,8 +814,10 @@ and memoro on `mend/deploy-<digest>` from each `origin/main`, the session in mem
 (every `SETTLE_EVERY_MS`, with `settleMainMends`) restores a published handoff, reads each landed pull request's merge commit,
 marks the request repaired, and runs the **one retry** in the runner's own process through `run` of `commands/deploy.js`
 (holder `runner for …`, `retry: true`, no `MC_HEADLESS`), only when the runner's code (`runner.json` `commit`) and the pick
-contain the landed merge commits; the retry's stop is reported by `onStop`, never queued. A request whose retry owner is
-gone is settled from `deploys.tsv` first (deployed, still running, or failed). Finished requests' worktrees are removed
+contain the landed merge commits; the retry's stop is reported by `onStop`, never queued. The retry is marked `retried` when
+it starts and is never made twice: its technical stop is `retryFailed`, the request on Martin. A request whose retry owner is
+gone is settled from `deploys.tsv` first: deployed ends it, still running waits, anything else is `retryFailed`, never started
+again. Finished requests' worktrees are removed
 unless git refuses (files that are not mc's stay, and the line says so).
 
 ## Decision lane

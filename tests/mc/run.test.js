@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
+import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
@@ -5574,7 +5574,7 @@ test('a pull request closed without merging is a failed attempt: the request is 
   assert.equal(f.retries.length, 0);
 });
 
-test('a retry that stops technically is a failure of the request, never a new request, and the second one is Martin\'s', async () => {
+test('a retry that stops technically is never a new request and never a second retry: the request waits on Martin', async () => {
   const f = deployMendFixture();
   f.retryAnswer = (options) => {
     options.onStop({ row: { note: 'wrangler fell over again' }, code: '', technical: true });
@@ -5585,15 +5585,33 @@ test('a retry that stops technically is a failure of the request, never a new re
   await f.runner.pass();
   await f.runner.settleDeployMends();
   assert.equal(f.entries().length, 1, 'no new request from a retry\'s stop');
-  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures], ['queued', 1]);
+  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures, f.entries()[0].retried], ['Martin', 1, true]);
   assert.match(f.entries()[0].reason, /the retry stopped: wrangler fell over again/u);
+  assert.equal(f.runner.nextWork(), null, 'no second mend session');
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.calls.sessions.length, 1);
+  assert.equal(f.retries.length, 1, 'one retry, and then nothing more');
+});
+
+test('a request the desk requeues after its spent retry is mended again but never retried again', async () => {
+  const f = deployMendFixture();
+  f.retryAnswer = (options) => {
+    options.onStop({ row: { note: 'wrangler fell over again' }, code: '', technical: true });
+    f.rows.push({ holder: options.holder.name, outcome: 'failed', started: '2026-08-29T10:00:00.000Z', note: 'wrangler fell over again' });
+    return 1;
+  };
+  f.answer = f.publishes(['memoro', 7]);
+  await f.runner.pass();
+  await f.runner.settleDeployMends();
+  assert.equal(f.entries()[0].state, 'Martin');
+  assert.equal(answerHeldDeployMend({ ...f.deployState, id: f.entries()[0].id, verb: 'requeue', reason: 'the cause is known now', role: 'person' }).ok, true);
   f.answer = f.publishes(['memoro', 9]);
   await f.runner.pass();
   await f.runner.settleDeployMends();
-  assert.equal(f.entries().length, 1);
-  assert.deepEqual([f.entries()[0].state, f.entries()[0].failures], ['Martin', 2]);
-  assert.equal(f.retries.length, 2, 'two repairs, two retries, and then nothing more');
-  assert.equal(f.runner.nextWork(), null);
+  assert.equal(f.entries()[0].state, 'not-retried');
+  assert.match(f.entries()[0].reason, /one retry/u);
+  assert.equal(f.retries.length, 1);
 });
 
 test('a retry that stops for a reason that is not technical ends the request', async () => {
@@ -5620,6 +5638,22 @@ test('a retry the runner died in the middle of is settled from the deploy record
   assert.equal(f.entries()[0].state, 'deployed');
   assert.equal(f.retries.length, 0, 'not started a second time');
 });
+
+for (const [name, row] of [['a failed row', { outcome: 'failed', note: 'wrangler fell over again' }], ['no row at all', null]]) {
+  test(`a retry the runner died in the middle of, with ${name}, waits on Martin and is never started again`, async () => {
+    const f = deployMendFixture();
+    f.answer = f.publishes(['memoro', 7]);
+    await f.runner.pass();
+    updateDeployMendsFor(f, (entry) => Object.assign(entry, { state: 'retrying', retried: true, retry_owner: 999999 }));
+    if (row) f.rows.push({ holder: `runner for martin@laptop, ${DEPLOY_STARTED}`, started: '2026-08-29T10:00:00.000Z', ended: '2026-08-29T10:05:00.000Z', ...row });
+    await f.runner.settleDeployMends();
+    assert.equal(f.entries()[0].state, 'Martin');
+    assert.match(f.entries()[0].reason, new RegExp(`runner ended during the retry; its deploy row reads ${row ? 'failed' : 'nothing'}`, 'u'));
+    await f.runner.settleDeployMends();
+    assert.equal(f.retries.length, 0, 'not started again');
+    assert.equal(f.runner.nextWork(), null);
+  });
+}
 function updateDeployMendsFor(f, change) { const entries = f.entries(); change(entries[0]); f.deps.writeJson('/w/runner/deploy-mend.json', { version: 1, entries }); }
 
 /* ------------------------------------- a programme whose record states its phases */

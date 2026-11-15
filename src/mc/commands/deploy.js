@@ -872,7 +872,8 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   if (state.dirty.length && !plan.stamps && !plan.strays.length) {
-    refuse(`main is dirty in ${source.worktree} — ${state.dirty.length} file(s)`, 'dirty');
+    // mc's own deploy worktree dirty or ahead is state mc owns: technical, a mend may repair it (D2, D4).
+    refuse(`main is dirty in ${source.worktree} — ${state.dirty.length} file(s)`, own ? 'own-dirty' : 'dirty');
     stderr.write(`mc: main in ${source.worktree} has ${state.dirty.length} uncommitted file${state.dirty.length === 1 ? '' : 's'}, and the deploy would ship that tree\n`);
     for (const line of state.dirty.slice(0, 5)) stderr.write(`mc:   ${line.trim()}\n`);
     if (state.dirty.length > 5) stderr.write(`mc:   … and ${state.dirty.length - 5} more\n`);
@@ -880,7 +881,7 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   if (state.ahead) {
-    refuse(`main in ${source.worktree} has ${state.ahead} commit(s) not on origin/main`, 'ahead');
+    refuse(`main in ${source.worktree} has ${state.ahead} commit(s) not on origin/main`, own ? 'own-ahead' : 'ahead');
     stderr.write(`mc: main in ${source.worktree} has ${state.ahead} commit${state.ahead === 1 ? '' : 's'} that origin/main does not — what would ship is ${plan.short}, which is not that tree\n`);
     stderr.write('mc: push them or reset that checkout yourself — nothing was deployed\n');
     return 1;

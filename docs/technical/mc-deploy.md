@@ -282,11 +282,12 @@ them if they exist.
 
 Which of these stops is **technical** is one function (`classifyStop`, `src/mc/deploy-repair.js`), and it is read from the
 stop, not from a list of notes: a row `failed` at any `stopped_at`, and a refusal because mc's machinery could not do its part
-(the deploy worktree could not be made or placed, the preparation could not run, a gate suite *cannot run* or the suites could
-not start). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run in progress, a
-pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite, a replaced
-preparation, and a worktree with `main` that is not mc's own (dirty, or ahead of `origin/main`). A stop nobody has classified is
-technical. Only a technical stop queues a repair ([A stop that is repaired](#a-stop-that-is-repaired)).
+(the deploy worktree could not be made or placed, `git status` failed where `main` is, mc's own deploy worktree is dirty or
+ahead of `origin/main` — state mc owns, which a repair may mend — the preparation could not run, a gate suite *cannot run* or
+the suites could not start). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
+in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite, a
+replaced preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
+stop nobody has classified is technical. Only a technical stop queues a repair ([A stop that is repaired](#a-stop-that-is-repaired)).
 
 A refusal is exit **1** rather than 0 on purpose, so `mc deploy && …`
 does not carry on as though it had shipped. There is no exit for a missing
@@ -601,12 +602,14 @@ every landed memoro-cli merge commit as an ancestor and the pick descends from e
 the request stays `repaired` and the reading says what it waits for. It is not made ("repaired, not retried", with its
 reason) when the request carries `--accept-red` (a red accepted by a person is not accepted again by the runner), when it is
 older than 24 hours — also after waiting — or when a deploy has shipped since its newest row. A retry that ships ends the
-request `deployed`; a stop that is not technical ends it `stopped` with the reason; a technical stop counts as a failure
-(the second failure, of repairs and retries together, is Martin's) and **queues no new request**. Nothing loops.
+request `deployed`; a stop that is not technical ends it `stopped` with the reason. The one retry is then spent: a technical
+stop of it, or a retry the runner ended in the middle of that did not ship, puts the request on Martin with the reason and
+**queues no new request**, and the request is never retried again — a desk `requeue` gives it two mend attempts, and a repair
+after that ends "repaired, not retried". At most, then, a stop costs two mend sessions and one retry. Nothing loops.
 
 **What is shown.** An open request is one line in `mc deploy`'s reading: *a repair of the deploy of `<time>` is
 queued|running|repaired, waiting for `<the handover|a green commit with the fix>`|waiting on Martin*, or the reason of a
-request repaired and not retried, until the next deploy ships. It is on the page and, when it waits on Martin, in `mc martin
+request repaired and not retried, until a deploy ships after that request ended. It is on the page and, when it waits on Martin, in `mc martin
 get`. A person ends or requeues one with `mc repo mend deploy <id> requeue|drop --reason "<text>"`. No form of `mc deploy` is
 added: the decision stays typed.
 

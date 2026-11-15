@@ -3800,6 +3800,16 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
     ['a failed deploy script', () => attempt([], { extra: failing })],
     ['a deployer that could not be started', () => attempt([], { extra: { startDeployer: () => ({ pid: null, error: 'spawn EACCES' }) } })],
     ['suites that could not run', () => attempt([], { appError: 'the dev server did not answer within 180s' })],
+    ['git worktree add of mc\'s own main failed', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(null), fails: ['worktree add'] }) } })],
+    ['git status failed where main is', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, fails: ['status'] }) } })],
+    ['mc\'s own deploy worktree that is dirty', () => {
+      const OWN = deployWorktreePath(process.env);
+      return attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [' M src/app.js'], ahead: 0, behind: 0 } } }) } });
+    }],
+    ['mc\'s own deploy worktree that is ahead of origin/main', () => {
+      const OWN = deployWorktreePath(process.env);
+      return attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 2, behind: 0 } } }) } });
+    }],
   ];
   const notTechnical = [
     ['a usage error', () => attempt(['memoro'])],
@@ -3815,13 +3825,30 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
       startRun({ manifest: 'sv-forms-cutover', lang: 'sv', sha: SHA, holder: 'martin@laptop', pid: 4242, started: '2026-10-10T08:00:00.000Z' }, { MC_WORK_ROOT: work });
       return attempt([], { extra: { alive: (pid) => pid === 4242 } });
     }],
-    ['a main that is dirty', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [' M src/app.js'], ahead: 0, behind: 0 } } }) } })],
+    ['a main that is dirty in a worktree that is not mc\'s own', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [' M src/app.js'], ahead: 0, behind: 0 } } }) } })],
+    ['a main that is ahead in a worktree that is not mc\'s own', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [], ahead: 2, behind: 0 } } }) } })],
+    ['a pick that would move production backwards', () => attempt([], {
+      extra: { git: walkingGit({ chain: () => [], counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)) }), fetchVersion: async () => ({ commit: TIP, build: 900, build_time: '2026-11-14T10:00:00Z' }) },
+      runs: [fullRunOf(TIP)],
+    })],
   ];
+
+  // The note each stop leaves, so a row stands for the stop it names and not another one.
+  const notes = {
+    'git worktree add of mc\'s own main failed': /could not make mc's own main worktree/u,
+    'git status failed where main is': /git status failed in/u,
+    'mc\'s own deploy worktree that is dirty': /main is dirty in .*\/deploy\/memoro — 1 file/u,
+    'mc\'s own deploy worktree that is ahead of origin/main': /\/deploy\/memoro has 2 commit\(s\) not on origin\/main/u,
+    'a main that is dirty in a worktree that is not mc\'s own': /main is dirty in \/tmp\/does-not-exist\/mc\/plan/u,
+    'a main that is ahead in a worktree that is not mc\'s own': /\/tmp\/does-not-exist\/mc\/plan\/msr-core\/memoro has 2 commit\(s\)/u,
+    'a pick that would move production backwards': /nothing newer can ship/u,
+  };
 
   for (const [name, stop] of technical) {
     it(`${name} queues one repair, with the row it left`, async () => {
       const { row } = await stop();
       assert.ok(['failed', 'refused'].includes(row.outcome), `the stop left a ${row.outcome} row`);
+      if (notes[name]) assert.match(row.note, notes[name]);
       const [request] = queued();
       assert.equal(queued().length, 1);
       assert.equal(request.state, 'queued');
@@ -3832,7 +3859,8 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
 
   for (const [name, stop] of notTechnical) {
     it(`${name} queues nothing`, async () => {
-      await stop();
+      const { row } = await stop();
+      if (notes[name]) assert.match(row?.note || '', notes[name]);
       assert.deepEqual(queued(), []);
     });
   }

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   answerDeployMend, answerHeldDeployMend, classifyStop, deployMendBranch, deployMendLine, deployMendPath, deployMendReading,
   failDeployMend, gateStopCode, publishDeployMend, readDeployMends, recordRepaired, requestAcceptsRed, requestDeployRepair,
-  requestHolder, retryHolder, retryVerdict, updateDeployMends,
+  requestHolder, retryFailed, retryHolder, retryVerdict, updateDeployMends,
 } from '../../src/mc/deploy-repair.js';
 
 let root;
@@ -27,21 +27,32 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'deploy-repair-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 describe('classifyStop: what a technical stop is', () => {
+  // One row per stop `mc deploy` writes (commands/deploy.js): the code a refusal sends, and the `failed` rows
+  // the deployer ends with (they carry no code; their `stopped_at` names the step). Plus what no code reads as.
   const table = [
-    ['a failed row, whatever stopped it', { outcome: 'failed', code: null }, true],
-    ['a failed row at the deployer', { outcome: 'failed', code: 'deployer' }, true],
-    ['a refusal whose machinery could not do its part', { outcome: 'refused', code: 'suites' }, true],
+    // failed: the deployer's own stops, whatever step stopped it.
+    ...['start', 'held', 'fast-forward', 'dirty', 'moved', 'disk', 'deployer'].map((step) => [`a failed row stopped at ${step}`, { outcome: 'failed', code: null }, true]),
+    // refused: mc's machinery could not do its part.
+    ['git worktree add failed for mc\'s own main (worktree)', { outcome: 'refused', code: 'worktree' }, true],
+    ['git status failed where main is (status)', { outcome: 'refused', code: 'status' }, true],
+    ['mc\'s own deploy worktree is dirty (own-dirty)', { outcome: 'refused', code: 'own-dirty' }, true],
+    ['mc\'s own deploy worktree is ahead of origin/main (own-ahead)', { outcome: 'refused', code: 'own-ahead' }, true],
+    ['the preparation failed (prepare)', { outcome: 'refused', code: 'prepare' }, true],
+    ['the gate\'s suites could not run (suites)', { outcome: 'refused', code: 'suites' }, true],
     ['a refusal nobody classified', { outcome: 'refused', code: 'something-new' }, true],
     ['a refusal with no code at all', { outcome: 'refused' }, true],
-    ['a usage error', { outcome: 'refused', code: 'usage' }, false],
-    ['--dry-run', { outcome: 'refused', code: 'dry-run' }, false],
-    ['the headless refusal', { outcome: 'refused', code: 'headless' }, false],
-    ['another deploy in progress', { outcome: 'refused', code: 'running' }, false],
-    ['a language run in progress', { outcome: 'refused', code: 'language' }, false],
-    ['a pick that would move production backwards', { outcome: 'refused', code: 'backwards' }, false],
-    ['a tip nobody measured', { outcome: 'refused', code: 'unmeasured' }, false],
-    ['a red gate suite', { outcome: 'refused', code: 'red' }, false],
-    ['a worktree with main that is not mc\'s own', { outcome: 'refused', code: 'foreign-worktree' }, false],
+    // refused: nothing in mc's machinery failed.
+    ['a usage error (writes no row)', { outcome: 'refused', code: 'usage' }, false],
+    ['--dry-run (writes no row)', { outcome: 'refused', code: 'dry-run' }, false],
+    ['the headless refusal (writes no row)', { outcome: 'refused', code: 'headless' }, false],
+    ['another deploy in progress (running)', { outcome: 'refused', code: 'running' }, false],
+    ['a language run in progress (language)', { outcome: 'refused', code: 'language' }, false],
+    ['a pick that would move production backwards (backwards)', { outcome: 'refused', code: 'backwards' }, false],
+    ['a preparation replaced by a newer one (replaced)', { outcome: 'refused', code: 'replaced' }, false],
+    ['a tip nobody measured (unmeasured)', { outcome: 'refused', code: 'unmeasured' }, false],
+    ['a red gate suite (red)', { outcome: 'refused', code: 'red' }, false],
+    ['main dirty in a worktree that is not mc\'s own (dirty)', { outcome: 'refused', code: 'dirty' }, false],
+    ['main ahead in a worktree that is not mc\'s own (ahead)', { outcome: 'refused', code: 'ahead' }, false],
     ['a deployed row', { outcome: 'deployed' }, false],
   ];
   for (const [name, input, technical] of table) {
@@ -123,6 +134,16 @@ describe('the attempts', () => {
     assert.equal(first.reason, 'again');
   });
 
+  it('a spent retry that did not ship is Martin\'s at once, and marked so it is never retried again', () => {
+    const spent = entry({ state: 'retrying', retried: true, waiting: 'green' });
+    retryFailed(spent, 'the deployer fell over again');
+    assert.equal(spent.state, 'Martin');
+    assert.equal(spent.failures, 1);
+    assert.equal(spent.retried, true);
+    assert.equal(spent.reason, 'the deployer fell over again');
+    assert.equal(spent.waiting, undefined);
+  });
+
   it('publish records a pull request per repository on the branch of a running request only', () => {
     const branch = deployMendBranch(entry());
     seed([entry({ state: 'running', branch })]);
@@ -160,6 +181,9 @@ describe('the one retry: its bounds', () => {
   it('a landed repair the runner or the pick does not yet hold makes it wait, naming what it waits for', () => {
     assert.deepEqual(retryVerdict({ entry: entry(), now, contained: () => ({ ok: false, why: 'the pick lacks abc', kind: 'green' }) }), { wait: 'the pick lacks abc', waiting: 'green' });
     assert.equal(retryVerdict({ entry: entry(), now, contained: () => ({ ok: false, why: 'runner code' }) }).waiting, 'handover');
+  });
+  it('a request whose one retry was spent is never retried again, also after the desk requeues it', () => {
+    assert.match(retryVerdict({ entry: entry({ state: 'repaired', retried: true }), now }).drop, /one retry/u);
   });
   it('otherwise it retries', () => assert.deepEqual(retryVerdict({ entry: entry(), now }), { retry: true }));
 });
@@ -236,6 +260,26 @@ describe('the reading line', () => {
     assert.equal(deployMendLine({ ...at, state: 'deployed' }), null);
     assert.equal(deployMendLine(null), null);
   });
+  describe('a not-retried line shows until the next deploy ships (D6)', () => {
+    const ended = '2026-11-15T12:00:00.000Z';
+    const notRetried = entry({ state: 'not-retried', reason: 'a deploy has shipped since the stop', ended_at: ended });
+    const shipped = (at) => [{ started: at, ended: at, outcome: 'deployed' }];
+    it('with no deploy shipped since it ended, it is shown', () => {
+      seed([notRetried]);
+      assert.equal(deployMendReading({ root, deploys: () => [] }).entry.state, 'not-retried');
+      assert.equal(deployMendReading({ root, deploys: () => [{ started: '2026-11-15T13:00:00.000Z', outcome: 'failed' }] }).entry.state, 'not-retried', 'a stop is no ship');
+      assert.equal(deployMendReading({ root, deploys: () => shipped('2026-11-15T11:00:00.000Z') }).entry.state, 'not-retried', 'a ship before it ended does not hide it');
+    });
+    it('after a deploy that shipped later, it says nothing', () => {
+      seed([notRetried]);
+      assert.equal(deployMendReading({ root, deploys: () => shipped('2026-11-15T13:00:00.000Z') }).entry, null);
+    });
+    it('an open request is shown whatever shipped', () => {
+      seed([notRetried, entry({ id: 'req-2', state: 'queued' })]);
+      assert.equal(deployMendReading({ root, deploys: () => shipped('2026-11-15T13:00:00.000Z') }).entry.id, 'req-2');
+    });
+  });
+
   it('updateDeployMends writes the whole file under the hold it is given', () => {
     let held = 0;
     updateDeployMends({ root, lock: (_r, fn, options) => { held += 1; assert.equal(options.name, 'deploy-mend'); return fn(); } }, (entries) => entries.push(entry()));
