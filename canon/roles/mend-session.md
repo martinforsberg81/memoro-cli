@@ -104,6 +104,13 @@ Never weaken, skip or delete a test, lower a threshold or substitute a runtime.
 A red met in a file you were not given is not yours; the merge round or the
 full run reports it independently. Existing repair goals finish as goals.
 
+A member keyed `check:<part>@<started>` is not a test red: production's check
+after a deploy was red for that part. Read the verdict file and the check log the
+member names, find the cause at base, and repair it in memoro; prove the repair
+with the gate on what you changed (it has no file of its own for the gate to
+run). Whether the red release was put back by its take-back or not, as the member says, never
+deploy: the next deploy of a later green commit ships the repair.
+
 Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` for
 file members and `mc gate --fresh --command <id>` for command members. Require
 GREEN, none of those checks SETTLED. Then complete the change's own

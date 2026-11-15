@@ -37,29 +37,35 @@ export function updateMainMends({ root = workRoot(), repo, read = readTextOrNull
 }
 
 /** Shared by merge rounds and the runner's full run; finder is stable across repeats. */
-export function requestMainRepair({ repo, base, files, tests = [], commands = [], pr = null, now = () => new Date(), ...state }) {
+export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], pr = null, now = () => new Date(), ...state }) {
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();
     const members = [...red.map(file => ({ file })), ...commands.map(command => ({
       file: `command:${command.packageScript}`, command,
-    }))];
+    })), ...checks.map(check => ({ file: check.key, check }))];
     if (!repo || !base || !members.length) return { skipped: 'nothing to repair' };
     return updateMainMends({ ...state, repo }, (entries) => {
-      const created = []; const open = [];
-      for (const { file, command } of members) {
-        const pending = entries.find((entry) => entry.file === file && !FINISHED.includes(entry.state));
-        if (pending) { open.push(pending.id); continue; }
+      const created = []; const open = []; const finished = [];
+      for (const { file, command, check } of members) {
+        // A check member is once-only on its key in any state: a finished one is returned, never made again.
+        const pending = entries.find((entry) => entry.file === file && (check || !FINISHED.includes(entry.state)));
+        if (pending) { (check && FINISHED.includes(pending.state) ? finished : open).push(pending.id); continue; }
         const id = randomUUID();
         entries.push({ id, file, tests: tests.filter((test) => test.file === file), base,
           ...(command ? { command } : {}),
-          finder: pr ? `round of ${repo}#${pr}` : 'the full run',
+          ...(check ? { check: { part: check.part, why: check.why, sha: check.sha, started: check.started, verdict: check.verdict, taken_back: Boolean(check.taken_back) } } : {}),
+          finder: check?.finder || (pr ? `round of ${repo}#${pr}` : 'the full run'),
           state: 'queued', failures: 0, created: now().toISOString() });
         created.push(id);
       }
-      return { created, open };
+      // `finished`: check members already made and since landed or dropped (a check member is once-only, in any state).
+      return checks.length ? { created, open, finished } : { created, open };
     });
   } catch (error) { return { skipped: error?.message || String(error) }; }
 }
+
+/** The key of a check member: one per red part of one release's check. */
+export const checkMemberKey = (part, started) => `check:${part}@${started}`;
 
 /** The batch identity survives retries, new requests never join a used branch. */
 export function mainMendBranch(repo, entries) {
@@ -102,18 +108,32 @@ function answersOf(entries) {
   return lines.length ? `The desk requeued this repair with what it found:\n${lines.join('\n')}\n` : '';
 }
 
+/** What a `check:` member asks of its session, in its own words (the mend role's main-red section says how it is proved). */
+function checkMemberText(entry) {
+  const { sha = '', why = '', verdict = '', started = '', taken_back: back } = entry.check;
+  return `${entry.file} at base ${entry.base}:\n` +
+    `production's check after the deploy of ${String(sha).slice(0, 7)} (started ${started}) was red with ${why || 'no reason given'}. ` +
+    `${back ? 'The release was taken back; production serves the version before it.' : 'The release was not taken back.'} ` +
+    `Read the verdict ${verdict || '(its file is gone)'} and the check log beside it, find the cause at base, repair it in ${entry.repo || 'the repository'}, and prove the repair with the gate on what you changed. Do not deploy: the next deploy of a later green commit ships it.`;
+}
+
 export function mainMendPrompt({ repo, entries, branch, worktree }) {
-  const files = entries.filter(entry => !entry.command).map(entry => entry.file);
+  const files = entries.filter(entry => !entry.command && !entry.check).map(entry => entry.file);
   const checks = [
     ...(files.length ? [`mc gate --fresh ${files.join(' ')}`] : []),
     ...entries.filter(entry => entry.command).map(entry => `mc gate --fresh --command ${entry.command.id || entry.command.packageScript}`),
   ];
+  const proof = checks.length
+    ? `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate.`
+    : 'Prove the repair with mc gate on the files you changed (none of these checks SETTLED), then bare mc gate.';
   return `You are a main-red mend session, headless, with no goal. Work in ${worktree} on ${branch}.\n` +
     `Repair main's red in ${repo}, found by ${entries[0].finder}. Read the main-red section of your mend role; write no GOAL.json, LOG.md or proposal.\n` +
-    entries.map((entry) => `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command || entry.tests, null, 2)}`).join('\n') +
+    entries.map((entry) => (entry.check
+      ? checkMemberText({ ...entry, repo })
+      : `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command || entry.tests, null, 2)}`)).join('\n') +
     `\nPrevious outcome: ${entries[0].reason || 'first attempt'}; session log: ${entries[0].session_log || 'none'}.\n` +
     answersOf(entries) +
-    `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate. No wide selection is required for landing. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;
+    `${proof} No wide selection is required for landing. Commit and mc publish --title "Repair main's red: ${entries.map((entry) => entry.file).join(', ')}" --body-file <file in MC_SCRATCH>. The body records cause and gate evidence. End after publication; the runner records the outcome. Another red member is not yours.`;
 }
 
 /** Status readers retain unreadable-state evidence instead of calling it an empty queue. */

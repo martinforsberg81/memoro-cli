@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
-  worktreeState, DISK_BUSY_WAIT_MS,
+  worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
 import { readDeployMends } from '../../../src/mc/deploy-repair.js';
@@ -3277,6 +3277,125 @@ describe('mc deploy — production never moves backwards', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The take-back floor (goal red-release-taken-back, D7): a commit a take-back row names, and
+// every commit before it, is no pick — a green run does not bring it back, and --accept-red
+// does not either. The next green commit after it ships as before.
+// ---------------------------------------------------------------------------
+
+describe('mc deploy — the take-back floor', () => {
+  const chain = [TIP, MID, LOW];
+  // MID was taken back: LOW comes before it, TIP comes after it.
+  const beforeMid = (older, newer) => !(older === TIP && newer === MID);
+  const walk = (extra = {}) => walkingGit({
+    chain, counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)), ancestors: beforeMid, ...extra,
+  });
+
+  it('pickCommit passes a commit the floor covers over with state taken-back, and the next green one ships', () => {
+    const found = pickCommit({
+      chain, live: LIVE, runs: [greenRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: (sha) => sha === TIP || sha === MID,
+    });
+    assert.equal(found.pick, LOW);
+    assert.deepEqual(found.passed.map((p) => [p.sha, p.state]), [[TIP, 'taken-back'], [MID, 'taken-back']]);
+  });
+
+  it('a green full run does not bring a taken-back commit back: nothing is picked', () => {
+    const found = pickCommit({ chain, live: LIVE, runs: [greenRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: () => true });
+    assert.equal(found.pick, null);
+    assert.equal(found.tip, TIP);
+    assert.deepEqual(found.passed.map((p) => p.state), ['taken-back', 'taken-back', 'taken-back']);
+  });
+
+  it('without a floor the pick is as it was (the default covers nothing)', () => {
+    assert.equal(pickCommit({ chain, live: LIVE, runs: [greenRun(TIP)] }).pick, TIP);
+  });
+
+  it('the plan: a tip the floor covers is taken_back, with the reason, and nothing is picked', async () => {
+    const plan = await planOf({ runs: [greenRun(TIP)], takenBack: () => [TIP] });
+    assert.equal(plan.sha, TIP);
+    assert.match(plan.taken_back, /main's tip 1a2b3c4 is a commit that was taken back from production after its check was red.* also with --accept-red/u);
+    assert.equal(plan.pick.green, null);
+  });
+
+  it('the plan: a tip after the taken-back commit is not covered, and a green tip ships', async () => {
+    const plan = await planOf({ git: walk(), runs: [greenRun(TIP)], takenBack: () => [MID] });
+    assert.equal(plan.taken_back, null);
+    assert.equal(plan.sha, TIP);
+  });
+
+  it('the plan: a red tip after the taken-back commit with only covered commits behind it has no pick, and no take-back reason either', async () => {
+    const plan = await planOf({ git: walk(), runs: [redRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: () => [MID] });
+    assert.equal(plan.taken_back, null);
+    assert.equal(plan.pick.green, null, 'MID and LOW are covered, TIP is red');
+    assert.equal(plan.sha, TIP);
+  });
+
+  it('the plan: a commit that comes before the taken-back one is named as such', async () => {
+    const plan = await planOf({
+      git: fakeGit({ sha: LOW, chain: [LOW], counts: COUNTS }), runs: [greenRun(LOW)], takenBack: () => [MID],
+    });
+    assert.match(plan.taken_back, /comes before 5b2d000, a commit that was taken back from production/u);
+  });
+
+  it('a commit this checkout does not have is no floor it can apply', () => {
+    const floor = takenBackFloor({ path: PATH, git: fakeGit({ unknown: [MID] }), shas: [MID] });
+    assert.equal(floor.covers(TIP), false);
+  });
+
+  for (const accept of [[], ['--accept-red', 'known']]) {
+    const how = accept.length ? 'under --accept-red too' : 'with a green tip';
+    it(`a tip that was taken back is refused with code taken-back, nothing is prepared or started, no deploy mend — ${how}`, async () => {
+      const queued = [];
+      const { code, out, spawned, started, calls, row } = await attempt(accept, {
+        extra: { git: walk({ chain: [TIP] }), takenBack: () => [TIP], queueRepair: (input) => { queued.push(input); } },
+        runs: [accept.length ? redRun(TIP) : greenRun(TIP)],
+      });
+      assert.equal(code, 1);
+      assert.deepEqual([spawned.length, started.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.deepEqual(readPreparation(work), null, 'no preparation was started');
+      assert.equal(row.outcome, 'refused');
+      assert.match(row.note, /1a2b3c4 is a commit that was taken back from production/u);
+      assert.match(out.stderr, /taken back from production .* nothing was deployed/u);
+      assert.deepEqual(queued, [], 'a decision, not a fault: no deploy mend');
+    });
+  }
+
+  it('a green commit after the taken-back one ships as before', async () => {
+    const { code, spawned, row } = await attempt([], {
+      extra: { git: walk(), takenBack: () => [MID] }, runs: [greenRun(TIP), greenRun(MID)], head: TIP, served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1);
+    assert.equal(row.sha, TIP);
+  });
+
+  it('--dry-run says the tip was taken back and writes nothing', async () => {
+    const { code, out, spawned, row } = await attempt(['--dry-run'], {
+      extra: { git: walk({ chain: [TIP] }), takenBack: () => [TIP] }, runs: [greenRun(TIP)],
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stdout, /a commit that was taken back from production/u);
+    assert.match(out.stdout, /mc: --dry-run — nothing would be deployed/u);
+    assert.equal(row, null, 'no row');
+  });
+
+  it('a take-back that landed between the reading and the admission refuses the pick', async () => {
+    let landed = false;
+    const { lock, raced } = lockWithRace(() => { landed = true; });
+    const { code, spawned, row, out } = await attempt([], {
+      extra: { git: walk({ chain: [TIP] }), lock, takenBack: () => (landed ? [TIP] : []) },
+      runs: [greenRun(TIP)], head: TIP, served: 'checkout',
+    });
+    assert.equal(raced.ran, 1, 'the take-back landed at the admission');
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.equal(row.outcome, 'refused');
+    assert.match(row.note, /1a2b3c4 is a commit that was taken back from production; nothing ships/u);
+    assert.match(out.stderr, /nothing was deployed/u);
+  });
+});
+
 describe('mc deploy — a preparation is reused only while the history still says what it recorded', () => {
   it('a full run written since — a red where it read green — makes it a measurement of an older state: prepared again, and refused on the red', async () => {
     const runs = [fullRunOf(SHA)];
@@ -4430,5 +4549,202 @@ describe('mc deploy — the check after a deploy: its verdict in the plan, the b
     assert.deepEqual(taken.filter((name) => name === 'deploy'), ['deploy'], 'one lock for the whole admission');
     // A writer inside the admission that waited for its own hold would wait out the lock's five seconds.
     assert.ok(Date.now() - began < 3000, `the admission took ${Date.now() - began} ms`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mc deploy take-back (goal red-release-taken-back, D11): the verb's own
+// parser, its refusals and exit codes, headless, and --end. The take-back
+// function is a fake here — its gate and its admission are take-back-run.test.js's.
+// ---------------------------------------------------------------------------
+describe('mc deploy take-back — the verb', () => {
+  const RELEASE = {
+    sha: SHA, started: '2026-11-15T10:00:00.000Z', take_back: 'yes', take_back_why: '', check: 'red',
+  };
+  const BEFORE = { sha: LIVE, build: '811' };
+  const WORKERS = [
+    { worker: 'memoro', from: 'new-1', to: 'old-1', state: 'taken-back', serving: 'old-1', why: '' },
+    { worker: 'memoro-tail', from: 'new-2', to: 'old-2', state: 'taken-back', serving: 'old-2', why: '' },
+  ];
+
+  function attemptTakeBack(argv, { result, env = { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '' }, ended = ['2026-11-15T10:00:00.000Z'], repos = REPOS } = {}) {
+    const calls = { takeBack: [], endDesk: [] };
+    const streams = io();
+    const verb = {
+      takeBack: async (args) => { calls.takeBack.push(args); return result; },
+      endDesk: (args) => { calls.endDesk.push(args); return ended; },
+    };
+    return run(['take-back', ...argv], { ...deps({ env, repos, takeBackVerb: verb }), stdout: streams.stdout, stderr: streams.stderr })
+      .then((code) => ({ code, out: streams.out, calls }));
+  }
+
+  it('parses its flags, and `mc deploy` itself gains none of them', () => {
+    const parsed = parseDeployArgs(['take-back', '--dry-run', '--json', '--despite', 'known']);
+    assert.deepEqual(parsed.takeBack, { dryRun: true, json: true, despite: 'known', end: null, reason: null });
+    assert.equal(parseDeployArgs(['take-back']).takeBack.dryRun, false);
+    for (const argv of [['--despite', 'x'], ['--end', 'x', '--reason', 'y'], ['--reason', 'y']]) {
+      assert.match(parseDeployArgs(argv).error, /unknown flag/u);
+    }
+  });
+
+  for (const [argv, error] of [
+    [['now'], /takes no arguments \(now\)/u],
+    [['--despite'], /--despite needs a value/u],
+    [['--despite', '  '], /--despite needs a reason/u],
+    [['--end', '2026-11-15T10:00:00.000Z'], /--end needs --reason/u],
+    [['--end', 'x', '--reason', ' '], /--end needs --reason/u],
+    [['--reason', 'because'], /--reason belongs to --end/u],
+    [['--end', 'x', '--reason', 'y', '--despite', 'z'], /takes no --despite or --dry-run/u],
+    [['--end', 'x', '--reason', 'y', '--dry-run'], /takes no --despite or --dry-run/u],
+    [['--bogus'], /unknown flag: --bogus/u],
+  ]) {
+    it(`refuses \`${argv.join(' ')}\` with exit 2 and takes nothing back`, async () => {
+      const { code, out, calls } = await attemptTakeBack(argv, { result: { status: 'taken-back' } });
+      assert.equal(code, 2);
+      assert.match(out.stderr, error);
+      assert.deepEqual([calls.takeBack.length, calls.endDesk.length], [0, 0]);
+    });
+  }
+
+  it('takes the last release back: exit 0, the function asked as a verb with the typed reason', async () => {
+    const row = { started: '2026-11-15T11:00:00.000Z', outcome: 'deployed', note: 'mc: taken back 1a2b3c4 → 9f8e7d6' };
+    const { code, out, calls } = await attemptTakeBack(['--despite', 'the reading is known'], {
+      result: { status: 'taken-back', row, workers: WORKERS, release: RELEASE, returnsTo: BEFORE, why: '' },
+    });
+    assert.equal(code, 0);
+    assert.equal(calls.takeBack.length, 1);
+    const [asked] = calls.takeBack;
+    assert.equal(asked.by, 'verb');
+    assert.equal(asked.despite, true);
+    assert.equal(asked.reason, 'the reading is known');
+    assert.equal(asked.dryRun, false);
+    assert.equal(asked.holder, 'mc deploy take-back');
+    assert.equal(asked.repoPath, PATH);
+    assert.match(out.stdout, /taken back — mc: taken back 1a2b3c4/u);
+    assert.match(out.stdout, /memoro: new-1 → old-1 \(taken-back, serving old-1\)/u);
+  });
+
+  it('without --despite it asks with despite false and no reason', async () => {
+    const { calls } = await attemptTakeBack([], { result: { status: 'taken-back', row: { note: 'n' }, workers: [], release: RELEASE, returnsTo: BEFORE } });
+    assert.equal(calls.takeBack[0].despite, false);
+    assert.equal(calls.takeBack[0].reason, '');
+  });
+
+  it('a take-back that ran and did not take every Worker back exits 1 and says how to finish it', async () => {
+    const { code, out } = await attemptTakeBack([], {
+      result: {
+        status: 'failed', row: { note: 'mc: the take-back of 1a2b3c4 did not take every Worker back' }, release: RELEASE, returnsTo: BEFORE,
+        workers: [WORKERS[0], { ...WORKERS[1], state: 'failed', serving: 'new-2', why: 'the call failed' }],
+        why: 'mc: the take-back of 1a2b3c4 did not take every Worker back — memoro-tail failed (the call failed)',
+      },
+    });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /did not take every Worker back/u);
+    assert.match(out.stderr, /memoro-tail: new-2 → old-2 \(failed, serving new-2 — the call failed\)/u);
+    assert.match(out.stderr, /mc deploy take-back again takes back what is still on the release/u);
+  });
+
+  it('a refusal exits 2 with its condition, and points to the hand-made take-back for a D5 failure only', async () => {
+    const d5 = await attemptTakeBack([], { result: { status: 'refused', code: 'no-script', why: 'abc1234 has no scripts/release/take-back.mjs' } });
+    assert.equal(d5.code, 2);
+    assert.match(d5.out.stderr, /nothing was taken back — abc1234 has no scripts\/release\/take-back\.mjs/u);
+    assert.match(d5.out.stderr, /docs\/runbooks\/deploy\.md/u);
+    assert.match(d5.out.stderr, /mc martin get/u);
+    const reading = await attemptTakeBack([], { result: { status: 'refused', code: 'reading-no', why: 'x is read as one that cannot be taken back; mc deploy take-back --despite "<reason>" takes it back anyway' } });
+    assert.equal(reading.code, 2);
+    assert.match(reading.out.stderr, /--despite "<reason>"/u);
+    assert.doesNotMatch(reading.out.stderr, /runbooks/u);
+  });
+
+  it('an admission lost (a busy holder, a deploy running) is exit 2 and no row', async () => {
+    const { code, out } = await attemptTakeBack([], { result: { status: 'not-made', code: 'held', why: 'the deploy worktree is held by a deploy' } });
+    assert.equal(code, 2);
+    assert.match(out.stderr, /nothing was taken back — the deploy worktree is held/u);
+  });
+
+  it('--dry-run says the row, the Workers and the reading, and writes nothing', async () => {
+    const { code, out, calls } = await attemptTakeBack(['--dry-run'], {
+      result: { status: 'dry-run', ok: true, workers: WORKERS, release: RELEASE, returnsTo: BEFORE, why: '' },
+    });
+    assert.equal(code, 0);
+    assert.equal(calls.takeBack[0].dryRun, true);
+    assert.match(out.stdout, /take-back \(dry run\) — 1a2b3c4 \(started 2026-11-15T10:00:00\.000Z\) back to 9f8e7d6/u);
+    assert.match(out.stdout, /reading: take_back yes; check red/u);
+    assert.match(out.stdout, /memoro-tail: new-2 → old-2/u);
+    assert.match(out.stdout, /nothing was taken back and no row was written/u);
+  });
+
+  it('--dry-run whose script dry run is not clean exits 2', async () => {
+    const { code, out } = await attemptTakeBack(['--dry-run'], { result: { status: 'dry-run', ok: false, workers: [], release: RELEASE, returnsTo: BEFORE, why: 'the script printed no JSON' } });
+    assert.equal(code, 2);
+    assert.match(out.stdout, /dry run is not clean — the script printed no JSON/u);
+  });
+
+  it('--json prints one object', async () => {
+    const row = { started: 'r', outcome: 'deployed', note: 'n' };
+    const { code, out } = await attemptTakeBack(['--json'], { result: { status: 'taken-back', row, workers: WORKERS, release: RELEASE, returnsTo: BEFORE, why: '' } });
+    assert.equal(code, 0);
+    const doc = JSON.parse(out.stdout);
+    assert.equal(doc.status, 'taken-back');
+    assert.equal(doc.row.outcome, 'deployed');
+    assert.equal(doc.workers.length, 2);
+    const refused = await attemptTakeBack(['--json'], { result: { status: 'refused', code: 'no-wrangler', why: 'no wrangler' } });
+    assert.equal(refused.code, 2);
+    assert.deepEqual(JSON.parse(refused.out.stdout), { status: 'refused', code: 'no-wrangler', why: 'no wrangler' });
+  });
+
+  it('with no checkout of memoro it refuses and calls nothing', async () => {
+    const { code, out, calls } = await attemptTakeBack([], { result: { status: 'taken-back' }, repos: [] });
+    assert.equal(code, 2);
+    assert.match(out.stderr, /no checkout of memoro/u);
+    assert.equal(calls.takeBack.length, 0);
+  });
+
+  describe('headless', () => {
+    const headless = () => ({ ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' });
+    for (const argv of [[], ['--despite', 'x'], ['--end', 'x', '--reason', 'y'], ['--json']]) {
+      it(`\`take-back ${argv.join(' ')}\` is refused before anything is read: exit 2, no call, no row`, async () => {
+        const { code, out, calls } = await attemptTakeBack(argv, { env: headless(), result: { status: 'taken-back' } });
+        assert.equal(code, 2);
+        assert.match(out.stderr, /an unattended session does not take a release back/u);
+        assert.match(out.stderr, /mc deploy take-back --dry-run is the reading/u);
+        assert.deepEqual([calls.takeBack.length, calls.endDesk.length], [0, 0]);
+        assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0);
+      });
+    }
+
+    it('--dry-run is allowed: it is a reading', async () => {
+      const { code, calls } = await attemptTakeBack(['--dry-run'], {
+        env: headless(), result: { status: 'dry-run', ok: true, workers: WORKERS, release: RELEASE, returnsTo: BEFORE, why: '' },
+      });
+      assert.equal(code, 0);
+      assert.equal(calls.takeBack[0].dryRun, true);
+    });
+  });
+
+  describe('--end', () => {
+    it('ends the desk entry with its reason', async () => {
+      const { code, out, calls } = await attemptTakeBack(['--end', '2026-11-15T10:00:00.000Z', '--reason', 'taken back by hand'], { result: null });
+      assert.equal(code, 0);
+      assert.deepEqual(calls.endDesk.map((one) => [one.started, one.reason]), [['2026-11-15T10:00:00.000Z', 'taken back by hand']]);
+      assert.equal(calls.takeBack.length, 0);
+      assert.match(out.stdout, /the desk entry 2026-11-15T10:00:00\.000Z is ended — taken back by hand/u);
+    });
+
+    it('an entry that is not open is refused with exit 2', async () => {
+      const { code, out } = await attemptTakeBack(['--end', 'nope', '--reason', 'x'], { result: null, ended: [] });
+      assert.equal(code, 2);
+      assert.match(out.stderr, /no open desk entry nope/u);
+    });
+
+    it('an unreadable ledger is refused in words, not thrown', async () => {
+      const { LedgerError } = await import('../../../src/mc/check-red-ledger.js');
+      const streams = io();
+      const code = await run(['take-back', '--end', 'x', '--reason', 'y'], {
+        ...deps({ takeBackVerb: { endDesk: () => { throw new LedgerError('the red ledger is not JSON'); } } }), stdout: streams.stdout, stderr: streams.stderr,
+      });
+      assert.equal(code, 2);
+      assert.match(streams.out.stderr, /the red ledger is not JSON/u);
+    });
   });
 });

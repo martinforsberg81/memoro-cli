@@ -34,7 +34,7 @@ export const REPOS = ['memoro-cli', 'memoro'];
  * it is a decision.
  */
 export const NOT_TECHNICAL = Object.freeze([
-  'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced',
+  'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'taken-back', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced',
 ]);
 
 /** `{ outcome, code }` → true when the stop is a technical fault. `deployed` and `running` are no stop. */

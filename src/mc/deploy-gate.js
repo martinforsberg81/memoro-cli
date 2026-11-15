@@ -102,17 +102,24 @@ function classify(run) {
  * with the live commit unknown, the tip alone. A commit that is the live one is
  * no candidate, and neither is a green one that does not descend from it
  * (`descends(sha)`, asked only of a green commit): production never goes
- * backwards. Every commit walked past is returned in `passed` with the verdict
+ * backwards. A commit that was taken back, or comes before one (`takenBack(sha)`,
+ * the floor), is no candidate either and is passed over with state `taken-back`:
+ * a green full run does not bring a commit back that production's check found
+ * red. Every commit walked past is returned in `passed` with the verdict
  * that passed it over, so the reading can say why the tip did not ship.
  *
  * Pure: the chain, the history and the ancestry are all handed in. `pick` is
  * null when no commit of the chain is green.
  */
-export function pickCommit({ chain = [], live = null, runs = [], descends = () => true }) {
+export function pickCommit({ chain = [], live = null, runs = [], descends = () => true, takenBack = () => false }) {
   const tip = chain[0] || null;
   const passed = [];
   for (const sha of chain) {
     if (sha === live) continue;
+    if (takenBack(sha)) {
+      passed.push({ sha, state: 'taken-back', run: null, descends: null });
+      continue;
+    }
     const verdict = fullRunVerdict(runs, sha);
     if (verdict.state === 'green' && descends(sha)) return { pick: sha, tip, passed };
     passed.push({ sha, state: verdict.state, run: verdict.run, descends: verdict.state === 'green' ? false : null });

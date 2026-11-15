@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { GOAL_FILE, LOG_FILE, parseGoal, parseLog, renderGoalText, waitsOnPerson } from './goals.js';
 import { deployMendPath, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
+import { deskEntries } from './take-back-run.js';
 import { programsHome } from './paths.js';
 
 const NAME = /^[a-z0-9][a-z0-9-]*$/u;
@@ -100,6 +101,17 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
       kind: 'deploy-mend', reference: `deploy-mend:${deploy.entry.id}`, status: 'Martin', reason: deploy.entry.reason,
       session_log: deploy.entry.session_log, worktrees: deploy.entry.worktrees || [],
     });
+    // A red release the runner did not take back (the red ledger, take-back-run.js): an act for the desk, from its own file.
+    const reds = deskEntries({ env: { ...process.env, MC_WORK_ROOT: root }, read: (path) => {
+      const text = read(path);
+      if (text === null) throw Object.assign(new Error('missing or unreadable'), { code: 'ENOENT' });
+      return text;
+    } });
+    if (reds.error) issues.push({ path: join(root, 'runner', 'check-red.json'), error: reds.error });
+    for (const entry of reds.items) items.push({
+      kind: 'take-back', reference: `take-back:${entry.started}`, status: 'Martin', sha: entry.sha, started: entry.started,
+      reason: entry.reason, parts: entry.parts || [], repair: entry.repair || [], steps: entry.steps || [],
+    });
   }
   // A pending structured question's timestamp is the ordering key. When a
   // runner blocked without one, retain its latest stage-entry time as evidence.
@@ -142,12 +154,17 @@ export function renderMartinQueue(result, { json = false } = {}) {
   if (json) return `${JSON.stringify({ ok: !result.error, ...result }, null, 2)}\n`;
   if (result.error) return `mc: ${result.error}\n`;
   if (!result.items.length) return `mc: no goals waiting on Martin${result.issues.length ? ` (${result.issues.length} unreadable/malformed source${result.issues.length === 1 ? '' : 's'} reported below)` : ''}\n${renderIssues(result.issues)}`;
-  const noun = result.items.some((item) => item.kind === 'main-red' || item.kind === 'deploy-mend') ? 'item' : 'goal';
+  const noun = result.items.some((item) => ['main-red', 'deploy-mend', 'take-back'].includes(item.kind)) ? 'item' : 'goal';
   const lines = [`mc: ${result.items.length} ${noun}${result.items.length === 1 ? '' : 's'} waiting on Martin`];
   const shownProgrammes = new Set();
   for (const item of result.items) {
     if (item.kind === 'deploy-mend') {
       lines.push('', `${item.reference} · Martin`, 'Repair a stopped deploy (mc repo mend deploy <id> requeue|drop --reason "…")', item.reason || 'Recovery exhausted', `Session log: ${item.session_log || 'not recorded'}`);
+      continue;
+    }
+    if (item.kind === 'take-back') {
+      lines.push('', `${item.reference} · Martin`, `A red release was not taken back: ${String(item.sha || '').slice(0, 7)}${item.reason ? ` — ${item.reason}` : ''}`, ...item.steps,
+        `It ends when a later release ships, or: mc deploy take-back --end ${item.started} --reason "…"`);
       continue;
     }
     if (item.kind === 'main-red') {

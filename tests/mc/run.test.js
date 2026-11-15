@@ -965,6 +965,44 @@ test('deploy check: nothing is asked under STOP or UPDATE, and a fixture without
   assert.equal(typeof realDeps({ MC_WORK_ROOT: '/nowhere', MC_HOME: '/nowhere' }).deployCheckTick, 'function', 'the real runner has the chore');
 });
 
+/* ------------------------------------------------ the take-back fallback (take-back-run.js) */
+
+test('take back: the chore pass starts with the fallback — before the log rotates, the helper day and the desk turns', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  const order = [];
+  f.deps.takeBackTick = (options) => { order.push('take-back'); return { notes: ['rows: reaction started (pid 9)'], started: ['x'], seen: options }; };
+  f.deps.rotate = () => { order.push('rotate'); };
+  f.deps.syncDeskItems = () => { order.push('desk'); };
+  f.deps.deployCheckTick = async () => { order.push('deploy-check'); return { notes: [] }; };
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(order[0], 'take-back', 'the reaction to a red is the first step');
+  assert.ok(order.indexOf('desk') > 0 && order.indexOf('rotate') > 0);
+  assert.ok(order.indexOf('take-back') < order.indexOf('rotate') && order.indexOf('take-back') < order.indexOf('desk'));
+  assert.match(f.files['/w/runner/log/runner.log'], /take back: rows: reaction started \(pid 9\)/u);
+});
+
+test('take back: the tick is asked once with the runner\'s liveness and STOP/UPDATE, a throw is said and never stops the pass, nothing is asked under STOP', async () => {
+  const f = fixture();
+  const asked = [];
+  f.deps.takeBackTick = (options) => { asked.push(options); throw new Error('the red ledger is unreadable'); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(asked.length, 2);
+  assert.equal(typeof asked[0].alive, 'function');
+  assert.equal(asked[0].stopRequested(), false);
+  assert.match(f.files['/w/runner/log/runner.log'], /take back: the pass failed — the red ledger is unreadable/u);
+  for (const order of ['STOP', 'UPDATE']) {
+    const g = fixture();
+    let calls = 0;
+    g.deps.takeBackTick = () => { calls += 1; return { notes: [] }; };
+    g.files[`/w/runner/${order}`] = '';
+    await createRunner({ deps: g.deps }).chores();
+    assert.equal(calls, 0, order);
+  }
+  assert.equal(typeof realDeps({ MC_WORK_ROOT: '/nowhere', MC_HOME: '/nowhere' }).takeBackTick, 'function', 'the real runner has the chore');
+});
+
 /**
  * The real tick through the runner's chore pass: its process boundaries are
  * faked (what it started, killed), its work root is a temporary directory and

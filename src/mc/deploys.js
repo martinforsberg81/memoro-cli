@@ -45,6 +45,7 @@ export const DEPLOYS_HEADER = [
   'full_commit', 'full_verdict', 'suites', 'accepted_red', 'take_back', 'take_back_why',
   'versions_before', 'versions_made', 'versions_why',
   'check', 'check_at', 'check_why',
+  'takes_back', 'takes_back_sha', 'takes_back_why',
 ];
 
 /**
@@ -105,10 +106,21 @@ export function versionCells(versions) {
 export const CHECK_COLUMNS = ['check', 'check_at', 'check_why'];
 
 /**
+ * The take-back's three cells (2026-11-15), written only on a take-back row — a
+ * row the runner's red reaction or `mc deploy take-back` wrote: `takes_back`, the
+ * `started` of the release row it took back; `takes_back_sha`, that release's
+ * commit; `takes_back_why`, what asked for it (the runner: the release's
+ * `check_why`; the verb: `typed: <reason>`). All three are empty on every other
+ * row, which is how a take-back row is told from a release: a row with a
+ * `takes_back` is one, whatever its outcome.
+ */
+export const TAKES_BACK_COLUMNS = ['takes_back', 'takes_back_sha', 'takes_back_why'];
+
+/**
  * The headers earlier mc versions wrote, oldest first: before `pid`
  * (2026-10-07), before the gate's columns (2026-11-14), before the
- * take-back reading's and before the Worker versions' (both 2026-11-15), and
- * before the check's (the header of 9a094dec). A file with exactly
+ * take-back reading's and before the Worker versions' (both 2026-11-15),
+ * before the check's (the header of 9a094dec) and before the take-back's. A file with exactly
  * one of them is given the current header the next time a row is written, its
  * old rows with the new cells empty: without `pid`, a deploy in progress could
  * never be told from one that died, which is the one thing that column is for.
@@ -118,7 +130,8 @@ const PID_COLUMNS = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('pid') + 1);
 const GATE_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red') + 1);
 const TAKE_BACK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('take_back_why') + 1);
 const VERSIONS_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('versions_why') + 1);
-const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER, VERSIONS_HEADER].map((header) => header.join('\t'));
+const CHECK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('check_why') + 1);
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER, VERSIONS_HEADER, CHECK_HEADER].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
@@ -181,6 +194,26 @@ export function readDeploys(env = process.env) {
  * helper mean by "what is live". A `running` row is not it: something is being
  * deployed, and until it verifies, the previous one is still what is serving.
  */
+/** Whether `row` is a take-back row: one the take-back wrote, whatever its outcome. */
+export function isTakeBackRow(row) {
+  return Boolean(row?.takes_back);
+}
+
+/**
+ * The commits that were taken back — each `takes_back_sha` in the record, of any
+ * outcome. A take-back that failed half-way may have moved production off that
+ * commit, and one that succeeded did: either way the commit is not picked again
+ * until a later commit is green (`pickCommit`'s floor).
+ */
+export function takenBackShas(rows) {
+  return [...new Set((rows || []).filter(isTakeBackRow).map((row) => row.takes_back_sha).filter(Boolean))];
+}
+
+/** The take-back rows that name the release started at `started`, of any outcome, oldest first. */
+export function takeBackRowsOf(rows, started) {
+  return (rows || []).filter((row) => isTakeBackRow(row) && row.takes_back === started);
+}
+
 export function lastDeploy(env = process.env) {
   return readDeploys(env).filter((row) => row.sha && row.outcome === DEPLOYED).at(-1) || null;
 }
@@ -263,11 +296,11 @@ function append(row, env) {
  * deploy runs in, so that reader can tell a deploy going on from one that died.
  */
 export function recordStart({
-  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '', gate = {}, takeBack = {},
+  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '', gate = {}, takeBack = {}, takesBack = {},
 }, env = process.env) {
   const row = {
     started, ended: '', sha, build, holder, outcome: RUNNING,
-    live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate), ...readingCells(takeBack),
+    live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate), ...readingCells(takeBack), ...takesBackCells(takesBack),
   };
   withDeploysLock(env, () => append(row, env));
   return { started, sha };
@@ -321,6 +354,11 @@ export function recordRefusal({
 /** The gate's cells of a row, from what the gate found; every one empty when it did not run. */
 function gateCells(gate) {
   return Object.fromEntries(GATE_COLUMNS.map((name) => [name, gate?.[name] ?? '']));
+}
+
+/** The take-back row's three cells; every one empty on a row that took nothing back. */
+function takesBackCells(takesBack) {
+  return Object.fromEntries(TAKES_BACK_COLUMNS.map((name) => [name, takesBack?.[name] ?? '']));
 }
 
 /** The take-back cells of a row, from the reading's cells; both empty when none was made. */

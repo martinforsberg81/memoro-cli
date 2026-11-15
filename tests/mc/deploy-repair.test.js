@@ -48,6 +48,7 @@ describe('classifyStop: what a technical stop is', () => {
     ['another deploy in progress (running)', { outcome: 'refused', code: 'running' }, false],
     ['a language run in progress (language)', { outcome: 'refused', code: 'language' }, false],
     ['a pick that would move production backwards (backwards)', { outcome: 'refused', code: 'backwards' }, false],
+    ['a tip that was taken back, or comes before one (taken-back)', { outcome: 'refused', code: 'taken-back' }, false],
     ['a preparation replaced by a newer one (replaced)', { outcome: 'refused', code: 'replaced' }, false],
     ['a tip nobody measured (unmeasured)', { outcome: 'refused', code: 'unmeasured' }, false],
     ['a red gate suite (red)', { outcome: 'refused', code: 'red' }, false],

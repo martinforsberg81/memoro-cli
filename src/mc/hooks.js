@@ -728,6 +728,21 @@ export const HEADLESS_RULES = [
       return ['node', 'nodejs', 'bun'].includes(basename(first)) && basename(rest.find((word) => !word.startsWith('-')) ?? '') === 'deploy-check-run.js';
     },
   },
+  {
+    // The red reaction (take-back-run.js) takes production back; only the runner starts it. The
+    // provider script of the take-back, run by hand without --dry-run, is the same act by another
+    // door. `mc deploy take-back` is `headless-deploy`'s.
+    id: 'headless-take-back',
+    act: 'deploy',
+    reason: 'a take-back of production (take-back-run.js, or memoro\'s scripts/release/take-back.mjs without --dry-run)',
+    test: (command) => {
+      const [first = '', ...rest] = command.words;
+      const runs = (name) => basename(first) === name
+        || (['node', 'nodejs', 'bun'].includes(basename(first)) && basename(rest.find((word) => !word.startsWith('-')) ?? '') === name);
+      if (runs('take-back-run.js')) return true;
+      return runs('take-back.mjs') && !command.words.includes('--dry-run');
+    },
+  },
 ];
 
 /**
@@ -740,6 +755,7 @@ const UNPARSED_LINE_PATTERNS = [
   ['headless-production-data', /\bCLAUDE_ALLOW_PROD_WRANGLER\s*=/u],
   ['headless-credentials', /(^|[;&|(]\s*|\s)mc\s+test\s+token\s+--(set|rm)\b/u],
   ['headless-deploy-check', /deploy-check-run\.js/u],
+  ['headless-take-back', /take-back-run\.js|take-back\.mjs(?![^\n;&|]*--dry-run)/u],
 ];
 
 /** The first headless rule the line runs, or `null`. */

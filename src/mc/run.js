@@ -100,6 +100,7 @@ import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainM
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
 import { deployCheckTick } from './deploy-check.js';
+import { takeBackTick } from './take-back-run.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
@@ -626,6 +627,9 @@ export function realDeps(env = process.env) {
     // deployed row without a verdict. A dependency so a test drives the chore
     // without a process behind it and without writing under the real home.
     deployCheckTick: (options) => deployCheckTick({ env, ...options }),
+    // The red reaction's fallback (`take-back-run.js`): started for a red row
+    // whose reaction is not done. A dependency for the same reason.
+    takeBackTick: (options) => takeBackTick({ env, ...options }),
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
@@ -1278,6 +1282,27 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return tick;
     } catch (error) {
       say(`deploy check: the pass failed — ${error?.message || error}. Asked again on the next chore pass.`);
+      return null;
+    }
+  }
+
+  /**
+   * The red reaction's fallback (`take-back-run.js`, docs/technical/mc-deploy.md,
+   * *The take-back*): the first step of the chore pass. A reaction is started,
+   * detached, for each red row whose ledger entry is not done and has no live
+   * reaction; the check process normally started it already. A failure here is
+   * said and never stops the pass.
+   */
+  function runTakeBackFallback() {
+    if (!deps.takeBackTick || stopRequested() || updateRequested()) return null;
+    try {
+      const tick = deps.takeBackTick({
+        alive: deps.alive || pidAlive, stopRequested, updateRequested, say: (message) => say(message), now: () => deps.now(),
+      });
+      for (const note of tick?.notes || []) say(`take back: ${note}`);
+      return tick;
+    } catch (error) {
+      say(`take back: the pass failed — ${error?.message || error}. Asked again on the next chore pass.`);
       return null;
     }
   }
@@ -3746,6 +3771,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   async function chores() {
     if (stopRequested()) return;
+    // First, before the helper day and the desk turns: a red check not yet reacted to (D8).
+    runTakeBackFallback();
     // runner.log to runner.log.1 past RUNNER_LOG_MAX_BYTES, before this pass says anything.
     try { deps.rotate?.(paths.runnerLog, RUNNER_LOG_MAX_BYTES); } catch { /* the log goes on growing */ }
     await dropPredecessor();
@@ -3920,7 +3947,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
