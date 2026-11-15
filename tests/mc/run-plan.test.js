@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -803,13 +804,14 @@ test('programmePlanPrompt names the programme directory, its README, the checkou
   function horizonLessCheckIn() { return programmePlanCheckInPrompt({ minutes: 20, count: 2 }); }
 });
 
-describe('the agy-stream reader (synthesised from the documented shapes, tests/fixtures/agy/README)', () => {
+describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {
   const NOW = new Date('2026-11-15T12:00:00Z');
   const usage = { input_tokens: 10415, output_tokens: 657, thinking_tokens: 616, cache_read_tokens: 8113 };
   const ndjson = (...events) => `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
   const result = (extra = {}) => ({ status: 'SUCCESS', response: 'All done', num_turns: 3, usage, ...extra });
-  const STREAM = ndjson({ event: 'init', init: { conversation_id: 'conv-1' } }, { event: 'step_update', step_update: { text: 'working' } }, { event: 'result', conversation_id: 'conv-1', result: result() });
-  const JSON_MODE = JSON.stringify({ conversation_id: 'conv-1', ...result() });
+  const FIXTURES = new URL('../fixtures/agy/', import.meta.url);
+  const STREAM = readFileSync(new URL('stream-success.ndjson', FIXTURES), 'utf8');
+  const JSON_MODE = readFileSync(new URL('json-success.json', FIXTURES), 'utf8');
   const read = (stdout, extra = {}) => readSessionOutput({ toolId: 'antigravity-cli', stdout, stderr: '', exitCode: 0, now: NOW, model: 'gemini-4-argon-high', ...extra });
   // 10415 uncached input at $2, 8113 cache reads at $0.10 and 657 output (thinking included) at $10 per million.
   const COST = 0.0282113;

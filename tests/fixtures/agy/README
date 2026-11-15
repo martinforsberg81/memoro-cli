@@ -6,7 +6,7 @@ and the numbers it prints, so what the tests prove is mc's reading of the
 documented shapes, not agy's behaviour. A recorded output, when one exists,
 replaces the synthesis here and the parse below is judged against it.
 
-Output (tests/mc/run-plan.test.js, the agy-stream reader)
+Output (tests/mc/run-plan.test.js, the agy-stream reader; stream-success.ndjson and json-success.json here)
   stream-json   NDJSON events `init`, `step_update` and `result`, each payload
                 under its own name: `result.status`, `.response`,
                 `.num_turns`, `.usage`, `.error`; the conversation id on the
