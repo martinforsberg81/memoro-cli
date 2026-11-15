@@ -50,7 +50,7 @@ import { listServers } from '../dev-servers.js';
 import { log } from '../logger.js';
 import {
   accountAvailable, answers, callerWorktree, ensureAppServer, ensureDevServer, forgetToken, isLoopback, notInDev, readDeclaration,
-  NO_SHARED_WORKTREE, runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
+  NO_SHARED_WORKTREE, productionRound, runSuites, serversFor, serviceFor, sharedWorktree, stopServer, storeToken, tierOf, tokenFor,
 } from '../test-environment.js';
 import { knownRepos } from '../nightly-loop.js';
 import { renderNightlyLines } from '../repo-render.js';
@@ -108,9 +108,12 @@ export async function run(argv, deps = {}) {
  * some of these answers are only true there: a Worker's real bindings, real
  * assets, real latency. The repository declares that URL; mc does not carry it.
  *
- * Neither runs by itself. No round calls this, no page starts it, nothing
- * schedules it (Martin, 2026-09-05) — it costs minutes and a browser, and it
- * is for planning, debugging and verifying, when a person or a session asks.
+ * `mc test dev` and `mc test prod` run only when a person or a session types
+ * them (Martin, 2026-09-05) — they cost minutes and a browser, and they are
+ * for planning, debugging and verifying. One thing runs the production round
+ * without being typed: the runner's check after a deploy (`deploy-check.js`)
+ * runs the gating suites against production through the same
+ * `productionRound` this verb uses.
  */
 async function environment(where, argv, { stdout, stderr, deps = {} }) {
   const opts = parseEnvironmentArgs(where, argv);
@@ -225,23 +228,18 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
 
   // The token may be in this shell, or in mc's keychain, or nowhere. Only the
   // suites that declared they need one ever see it, and it is never printed.
-  const held = await tokenFor(declaration, env);
-  const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
-  const account = accountAvailable(declaration, suiteEnvironment);
+  // For production the round itself reads it (`productionRound`, the one the
+  // runner's check after a deploy runs too) and says whom it signs in as
+  // through `sayAccount`; a dev round reads it here.
+  let held = null;
+  let account = null;
+  let suiteEnvironment = env;
+  const anyoneSignsIn = chosen.some((suite) => suite.needs_account);
   // Said only when a suite in this round signs in. A static-only round has
   // nobody to sign in as, and "signing in with the test account" above six
   // suites that never will is a line that misleads.
-  // Said once per dev round, before the verdicts, so a red that lands on one
-  // of these is read as the laptop's and not the app's.
-  if (where === 'dev' && !opts.json) {
-    const gaps = notInDev(declaration);
-    if (gaps.length) {
-      stdout.write(`mc: in dev, ${gaps.length === 1 ? 'one thing is' : `${gaps.length} things are`} known not to work:\n`);
-      for (const line of gaps) stdout.write(`mc:   ${line}\n`);
-    }
-  }
-  const anyoneSignsIn = chosen.some((suite) => suite.needs_account);
-  if (!opts.json && anyoneSignsIn) {
+  const sayAccount = () => {
+    if (opts.json || !anyoneSignsIn) return;
     if (isLoopback(baseUrl)) {
       // The token is a production login and is not handed to a local server;
       // memoro's suites sign in through /dev/login there, on their own.
@@ -251,6 +249,21 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     } else {
       stdout.write(`mc: ${account.why}\n`);
     }
+  };
+  if (where === 'dev') {
+    held = await tokenFor(declaration, env);
+    suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
+    account = accountAvailable(declaration, suiteEnvironment);
+    // Said once per dev round, before the verdicts, so a red that lands on one
+    // of these is read as the laptop's and not the app's.
+    if (!opts.json) {
+      const gaps = notInDev(declaration);
+      if (gaps.length) {
+        stdout.write(`mc: in dev, ${gaps.length === 1 ? 'one thing is' : `${gaps.length} things are`} known not to work:\n`);
+        for (const line of gaps) stdout.write(`mc:   ${line}\n`);
+      }
+    }
+    sayAccount();
   }
 
   const probeFor = (suite) => (tierOf(suite) === 'static' && staticServer
@@ -274,31 +287,44 @@ async function environment(where, argv, { stdout, stderr, deps = {} }) {
     log('dev-server-revived', { tier, instance_id: server.instance_id, worktree_path: worktree });
     return { ok: true, baseUrl };
   } : null;
-  const { results, gone, skipped: neverRan, revived } = await runSuites({
-    declaration,
-    worktree,
-    baseUrl,
-    staticBaseUrl,
-    only: opts.suite,
-    env: suiteEnvironment,
-    // A dev server can leave in the middle of a six-minute round, and the
-    // suites after it then all report red on a refused connection. Production
-    // is asked too: a deploy mid-round is the same shape of lie. Each suite
-    // asks after its own tier's server, because the other one leaving is not
-    // its news.
-    stillThere: (suite) => answers(probeFor(suite)),
-    revive,
-    onRevive: opts.json ? null : (tier, result) => stdout.write(
-      `mc: the ${tier} server left mid-round — started a fresh one, ${result.baseUrl}; carrying on\n`,
-    ),
-    // A suite is minutes long, so a terminal says which one is running and
-    // then overwrites that line with its verdict. A pipe gets the verdict
-    // only: a carriage return in a log file is a line nobody can read.
-    onStart: opts.json || !stdout.isTTY ? null : (suite) => stdout.write(`  …  ${suite.name}`),
-    onEnd: opts.json ? null : (result) => stdout.write(
-      `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${verdict(result)}  ${result.name}${tierMark(result)} ${result.seconds}s\n`,
-    ),
-  });
+  // A terminal says which suite is running and then overwrites that line with
+  // its verdict. A pipe gets the verdict only: a carriage return in a log file
+  // is a line nobody can read.
+  const onStart = opts.json || !stdout.isTTY ? null : (suite) => stdout.write(`  …  ${suite.name}`);
+  const onEnd = opts.json ? null : (result) => stdout.write(
+    `${stdout.isTTY ? '\r\u001b[2K' : ''}  ${verdict(result)}  ${result.name}${tierMark(result)} ${result.seconds}s\n`,
+  );
+  const round = where === 'prod'
+    ? await productionRound({
+      declaration,
+      worktree,
+      baseUrl,
+      only: opts.suite,
+      env,
+      onReady: (ready) => { held = ready.held; account = ready.account; sayAccount(); },
+      onStart,
+      onEnd,
+    })
+    : await runSuites({
+      declaration,
+      worktree,
+      baseUrl,
+      staticBaseUrl,
+      only: opts.suite,
+      env: suiteEnvironment,
+      // A dev server can leave in the middle of a six-minute round, and the
+      // suites after it then all report red on a refused connection. Each suite
+      // asks after its own tier's server, because the other one leaving is not
+      // its news.
+      stillThere: (suite) => answers(probeFor(suite)),
+      revive,
+      onRevive: opts.json ? null : (tier, result) => stdout.write(
+        `mc: the ${tier} server left mid-round — started a fresh one, ${result.baseUrl}; carrying on\n`,
+      ),
+      onStart,
+      onEnd,
+    });
+  const { results, gone, skipped: neverRan, revived } = round;
 
   const red = results.filter((result) => !result.ok && !result.unmeasured && !result.skipped);
   const unmeasured = results.filter((result) => result.unmeasured);

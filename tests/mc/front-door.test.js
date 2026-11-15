@@ -77,7 +77,7 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         assert.match(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} is missing`);
       }
       // No WORK heading: every session is a programme's or a desk's, and the
@@ -95,7 +95,7 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'horizons', 'language', 'mc', 'caches', 'notes']);
       assert.equal(page.providerPriority, 'auto');
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
@@ -142,7 +142,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
         const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
@@ -338,7 +338,7 @@ describe('the menu under the page', () => {
     assert.equal(DATA.programmes.programmes.some((g) => 'projects' in g), false);
   });
 
-  function drive(answers, extra = {}) {
+  function drive(answers, { data = DATA, ...extra } = {}) {
     const written = [];
     const opened = [];
     const programmes = [];
@@ -351,10 +351,10 @@ describe('the menu under the page', () => {
       opened,
       programmes,
       written,
-      run: () => menu(DATA, {
+      run: () => menu(data, {
         stdout,
         stderr: { write: (text) => written.push(text) },
-        page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
+        page: async () => ({ data, lines: ['  PROGRAMMES'] }),
         reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
         showGoal: async (argv) => { opened.push(argv[1]); return 0; },
         ...extra,
@@ -370,6 +370,59 @@ describe('the menu under the page', () => {
     const second = drive(['2', 'q']);
     assert.equal(await second.run(), 0);
     assert.deepEqual(second.opened, ['mc/mc-ui']);
+  });
+
+  /** A page's data with the programmes numbered after the goals, as the collector numbers them. */
+  const numbered = (rows) => {
+    const programmes = programmesSection({ goalRows: rows });
+    programmes.programmes.forEach((group, index) => { group.number = programmes.count + 1 + index; });
+    return { programmes };
+  };
+  const row = (name, programme) => ({ name, programme, repos: ['memoro-cli'], status: 'open', sessions: 0, last: null, running: false, problems: [] });
+
+  it('opens a programme alone by its number or its exact name, and h or home goes back to the overview', async () => {
+    const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface')]);
+    // Goals are 1 and 2; the programmes follow, by name: docx-editing-surface is 3 and mc is 4.
+    assert.deepEqual(data.programmes.programmes.map((group) => [group.programme, group.number]), [['docx-editing-surface', 3], ['mc', 4]]);
+    const shown = [];
+    const session = drive(['3', 'mc', 'h', 'home', 'q'], { data, show: (name) => shown.push(name) });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(shown, ['docx-editing-surface', 'mc', null, null]);
+    assert.deepEqual(session.opened, [], 'a programme is opened, not shown as a goal');
+    // A number or a name that is nothing is said out loud, and nothing opens.
+    const none = [];
+    const missed = drive(['9', 'nothing-here', 'q'], { data, show: (name) => none.push(name) });
+    assert.equal(await missed.run(), 0);
+    assert.deepEqual(none, []);
+    assert.match(missed.written.join(''), /nothing here called "nothing-here"/u);
+  });
+
+  it('a goal\'s number shows the goal from the overview and from a programme\'s view alike', async () => {
+    const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface')]);
+    const session = drive(['4', '2', 'h', '1', 'q'], { data, show: () => {} });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(session.opened, ['mc/mc-ui', 'docx-editing-surface/docx-editor']);
+  });
+
+  it('every word the menu answers stays the menu\'s: a programme named manager or 1 is opened by its number', async () => {
+    // Goals: 1 is in the programme `1`, 2 in `manager`; the programmes follow: `1` is 3 and `manager` is 4.
+    const data = numbered([row('first-goal', '1'), row('second-goal', 'manager')]);
+    assert.deepEqual(data.programmes.programmes.map((group) => [group.programme, group.number]), [['1', 3], ['manager', 4]]);
+    const shown = [];
+    const session = drive(['manager', '4', '1', '3', 'q'], { data, show: (name) => shown.push(name) });
+    assert.equal(await session.run(), 0);
+    // `manager` is the retired manager's letter (it says so and keeps the page), `1` is goal 1, and the numbers open the programmes.
+    assert.deepEqual(shown, ['manager', '1']);
+    assert.deepEqual(session.opened, ['1/first-goal']);
+    assert.match(session.written.join(''), /the interactive manager is gone/u);
+  });
+
+  it('`a` unfolds from the overview and from a programme\'s view, and folds again', async () => {
+    const data = numbered([row('mc-ui', 'mc')]);
+    const flags = [];
+    const session = drive(['a', '2', 'a', 'h', 'a', 'q'], { data, show: () => {}, expand: (on) => flags.push(on) });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(flags, [true, false, true]);
   });
 
   // `d` and `desk` are the desk: `mc martin`, which the page's DESK panel summarises. The order is injected, so no session opens.
@@ -403,7 +456,7 @@ describe('the menu under the page', () => {
     const session = drive(['q']);
     await session.run();
     const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
-    assert.ok(keys.some((line) => /^ {2}<n> {2}show that goal {3}· {3}a {2}all \/ collapse {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
+    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}h {2}home {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
     const longest = Math.max(...keys.filter((line) => !/<n>/u.test(line)).map((line) => line.length));
     assert.ok(keys.every((line) => line.length <= longest), keys.map((line) => line.length).join(','));
   });
@@ -440,7 +493,7 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show that goal', 'a  all / collapse', 'd  desk', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show a goal or open a programme', 'a  all / collapse', 'h  home', 'd  desk', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('m  manager'), 'the interactive manager is gone (D10)');

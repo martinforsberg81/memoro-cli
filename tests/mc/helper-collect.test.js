@@ -144,13 +144,10 @@ const OLD_VERSION = { ok: true, json: { ...VERSION, build_time: '2026-08-25T00:0
 
 /** A row of `deploys.tsv` as `mc deploy` writes one. */
 const DEPLOYED_SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
-function deploysTsv(root, { sha = DEPLOYED_SHA, ended = '2026-08-29T05:00:00.000Z', live = sha } = {}) {
+function deploysTsv(root, { sha = DEPLOYED_SHA, ended = '2026-08-29T05:00:00.000Z', live = sha, ...cells } = {}) {
   mkdirSync(join(root, 'runner', 'log'), { recursive: true });
-  writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), [
-    DEPLOYS_HEADER.join('\t'),
-    ['2026-08-29T04:50:00.000Z', ended, sha, '813', 'martin@laptop', 'deployed', live, '813', '', ''].join('\t'),
-    '',
-  ].join('\n'));
+  const row = { started: '2026-08-29T04:50:00.000Z', ended, sha, build: '813', holder: 'martin@laptop', outcome: 'deployed', live_commit: live, live_build: '813', ...cells };
+  writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), [DEPLOYS_HEADER.join('\t'), DEPLOYS_HEADER.map((name) => row[name] ?? '').join('\t'), ''].join('\n'));
 }
 
 /** A work root plus a memoro checkout with the two admin scripts present. */
@@ -521,6 +518,30 @@ describe('mc helper --collect — the deploy section', () => {
     assert.equal(state.age, 1, 'the freshest of the two is what production is');
     const section = result.text.split('## Deploy')[1];
     assert.match(section, /mc's own last deploy: `1a2b3c4` build 813 — 2026-08-29 05:00 by martin@laptop, verified live `1a2b3c4` \(1 h ago\)/u);
+  });
+
+  it('says in the digest what the check after the deploy found, and carries it in the data', async () => {
+    const rows = [
+      [{ check: 'green' }, /verified live `1a2b3c4`.* · checked green$/mu],
+      [{ check: 'red', check_why: 'suites: api red' }, / · check red: suites: api red$/mu],
+      [{ check: 'could-not-run', check_why: 'version: production is at fedcba9' }, / · check could not run: version: production is at fedcba9$/mu],
+      [{}, / · not checked$/mu],
+    ];
+    for (const [cells, line] of rows) {
+      const g = ground();
+      deploysTsv(g.root, cells);
+      const result = await collect(g);
+      assert.equal(result.data.deploy.mc.check, cells.check || '');
+      assert.equal(result.data.deploy.mc.check_why, cells.check_why || '');
+      assert.match(result.text.split('## Deploy')[1], line);
+    }
+  });
+
+  it('says "checking" for a row whose check is running now, and only for that row', () => {
+    const row = { sha: DEPLOYED_SHA, started: '2026-08-29T04:50:00.000Z', ended: '2026-08-29T05:00:00.000Z', outcome: 'deployed' };
+    assert.equal(deployState(row, { now: NOW, checking: { started: row.started } }).mc.checking, true);
+    assert.equal(deployState(row, { now: NOW, checking: { started: 'another' } }).mc.checking, false);
+    assert.equal(deployState({ ...row, check: 'green' }, { now: NOW, checking: { started: row.started } }).mc.checking, false, 'a verdict ends "checking"');
   });
 
   it('says mc has deployed nothing rather than nothing at all', async () => {

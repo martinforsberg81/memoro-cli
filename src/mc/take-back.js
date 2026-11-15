@@ -85,7 +85,7 @@ export function whyCell(reasons) {
 }
 
 /** Runs `argv` in `cwd`, bounded: `{ code, stdout, stderr, error, timedOut }`. */
-function runBounded(argv, { cwd, timeoutMs }) {
+export function runBounded(argv, { cwd, timeoutMs }) {
   return new Promise((resolve) => {
     let child;
     try {

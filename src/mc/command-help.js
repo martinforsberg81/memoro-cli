@@ -270,7 +270,8 @@ export const COMMAND_USAGE = Object.freeze({
     "Worker. --url prints the address and runs nothing; --list says what runs anywhere on the\n",
     "machine; --stop asks the project's own stop command, and mc signals nothing itself.\n",
     "prod runs the same suites against meetmemoro.app; those that sign in use the managed\n",
-    "test account and report skipped without it. Neither runs by itself; --here runs this\n",
+    "test account and report skipped without it. mc test prod still runs only when typed; the\n",
+    "runner's check after a deploy runs the gating suites against production. --here runs this\n",
     "worktree's copy of the suites.\n",
   ].join(''),
   gate: [

@@ -401,8 +401,8 @@ open: [{ slug, title, position }], unreadable: [<directory names>] }`, present
 only when the store holds a horizon or an unreadable record. Reached horizons are
 those with `reached_at` in `(since, now]`, oldest first.
 
-**What does not read horizons.** The runner's pick, `PRIORITY.json`, `mc programs`
-and the page do not read horizons: the order of the horizons does not change
+**What does not read horizons.** The page reads them to order its overview
+(HORIZONS, [mc-ui.md](mc-ui.md#horizons)); the runner's pick, `PRIORITY.json` and `mc programs` do not: the order of the horizons does not change
 which programme the runner works on. The one reader besides the desk is the
 manager's horizon turn, which takes the open horizons in position order and
 creates the next programme of the first that has none ([mc-run.md](mc-run.md#the-managers-turns)).

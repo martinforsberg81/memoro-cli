@@ -1,6 +1,7 @@
 /** Repository-specific operational views; a port is an address, never a PR cell. */
 import { mergeFailureSummary } from './merge-red.js';
 import { deployBar } from './deploy-progress.js';
+import { checkWords } from './deploy-check.js';
 import { width } from './status-render.js';
 import { ageWords } from './page-cache.js';
 import { clipCell, duration, stateTone } from './page-grid.js';
@@ -188,8 +189,8 @@ export function deployLines(lines, c, wide, production, expand) {
     ? `${p.live.short || p.live.commit || 'unknown'} · ${p.live.source === 'deploy' ? 'verified by deploy' : 'observed'} ${age(p.live.age_seconds)}`
     : 'unknown · no version reading', p.differs ? ['yellow'] : []);
   operation(lines, c, wide, 'RECORDED', p.sha
-    ? `${p.short} · deployed ${age(p.age_seconds)}`
-    : 'none');
+    ? `${p.short} · deployed ${age(p.age_seconds)} · ${checkWords(p, { checking: p.checking })}`
+    : 'none', p.check === 'red' ? ['red'] : p.check === 'could-not-run' ? ['yellow'] : []);
   const attempt = p.running || p.failed || (p.attempt?.outcome === 'deployed' ? null : p.attempt);
   if (attempt) {
     const state = p.running ? (p.running.late ? 'no end recorded' : 'running') : p.failed ? 'failed' : attempt.outcome || 'unknown';
