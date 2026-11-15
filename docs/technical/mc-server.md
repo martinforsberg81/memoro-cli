@@ -82,7 +82,9 @@ Envelope kinds are `handshake`; `refusal` (`reason`); `question` (`title`,
 (`provider`, `providerVersion`, `chosen`, `sessions`); `session`; and `result`
 (`status`, `signal`). Snapshot members are themselves validated sessions.
 
-A session contains exactly:
+A snapshot's provider is a tool that declares `SERVER_SESSION`; agy's
+mechanism is `tty` and has no session descriptor of its own, see
+[agy on a server](#agy-on-a-server). A session contains exactly:
 
 - `provider` (`codex` or `claude-code`), `providerVersion` (the server's exact
   `codex --version` or `claude --version` stdout), `id`, `name`, nullable
@@ -145,14 +147,37 @@ name. The server half prints the two `--bg` lines, naming the host, and returns
 0 without attaching; the client prints nothing of its own. Without `--bg` the
 server attaches over `ssh -t`, as the terminal entrance does. Every Claude
 session the server starts carries Remote Control (`--remote-control <name>`).
-A `--bg` on a Codex desk is refused by the client before any start, naming the
-host: `mc: on <host>: --bg is for Claude sessions: a Codex session has no client
-but the terminal`. A session is ended with `/exit` in the app or the terminal,
+A `--bg` on a desk whose tool declares no `BACKGROUND` is refused by the client before any start, naming the
+host: `mc: on <host>: --bg is for tools whose session outlives the terminal
+(claude); a Codex session has no client but the terminal` (the tool and the list
+come from the adapter registry's `BACKGROUND` declarations). A session is ended with `/exit` in the app or the terminal,
 or with `claude stop <id>` on the server. Refusals on the server also carry the forwarded
 host name. Claude versions are reported by the server, not compared with a
 nonexistent local Claude client. Claude's background persistence is unchanged by
 attachment or disconnection. `server-link.js` and `server-protocol.js` are
 unchanged by this: the flag travels as ordinary entrance arguments.
+
+## agy on a server
+
+agy (Antigravity CLI) declares `SERVER_SESSION { mechanism: 'tty', name:
+'Antigravity' }`: its session is the process in the terminal that starts it, so
+the server half is a plain driver over the live register, not a daemon or a
+socket. `mc session` takes it as follows.
+
+- `list` answers a `snapshot` from the desk's live register rows (rows whose
+  process is alive and which belong to this desk), each as a session with
+  `provider: 'antigravity-cli'` and its `conversation` as `sessionId`; no
+  `providerVersion` is measured beyond `agy --version`.
+- `start` runs the terminal path under the desk lock (pick, held check,
+  register row; see
+  [mc-interactive-sessions.md](mc-interactive-sessions.md#a-tool-that-lives-in-the-terminal-agy))
+  and the client passes the terminal through with `ssh -t`; the entrance's exit
+  code is the session's.
+- `join` is refused with exit 2: an agy session has no client to join. The
+  reason says to start a new one or resume its conversation.
+- `--bg` is refused by the client, before any start, with the tool-neutral text
+  above; the server never sets up Remote Control for agy (`REMOTE_CONTROL:
+  false`).
 
 ## What survives what
 

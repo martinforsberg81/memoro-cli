@@ -78,7 +78,17 @@ Two things are true about the number and both are printed with it:
 The number is only summed on the page.
 
 Interactive sessions are out of scope: `runs.tsv` is the runner's own
-accounting and nothing else is counted.
+accounting and nothing else is counted. The desk's own cost, from the tools'
+transcripts, is read by `desk-cost.js` and described in
+[mc-ui.md](mc-ui.md#manager-header); agy's is counted from its transcript's
+steps at `gemini-4-argon-high`'s list price ($2 input, $0.10 cached input, $10
+output per million tokens), for the conversations that carry mc's launch marker
+only.
+
+The page's tail, model and provider counts for a running session (the
+work-status rows) come from the tool's declarations, so an agy session shows
+its transcript's last step, the model of its last `PLANNER_RESPONSE`, and is
+counted under its own provider beside claude and codex.
 
 ## Current disk state
 

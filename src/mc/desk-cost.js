@@ -1,13 +1,16 @@
 /**
  * What the interactive sessions cost in the last 24 hours: every session a
- * person opened — plan, manager, Martin's desk, the helper — on claude or
- * codex. runs.tsv is the runner's own accounting and holds none of them, so
+ * person opened — plan, manager, Martin's desk, the helper — on claude, codex
+ * or agy. runs.tsv is the runner's own accounting and holds none of them, so
  * they are read from the tools' own transcripts (docs/technical/mc-ui.md,
  * "Manager header").
  *
  * Interactive is what the tool says about itself: a claude transcript's
  * `entrypoint` is `cli` (a runner session's is `sdk-cli`), a codex session's
- * `originator` is `codex-tui` (the runner's is `codex_exec`).
+ * `originator` is `codex-tui` (the runner's is `codex_exec`). agy says nothing
+ * of the kind, so mc says it: a conversation is interactive and counted when its
+ * opening message carries mc's launch marker, and the ones without it are left
+ * out and counted as left out (docs/technical/mc-ui.md).
  *
  * A day of transcripts is some 300 MB, so the page never reads one twice: a
  * cache (`~/mc/runner/desk-cost.json`) keeps each file's read offset and what
@@ -17,8 +20,9 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { adapterFor, toolsDeclaring } from '../adapters/index.js';
+import { adapterFor, toolShortName, toolsDeclaring } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { readLaunchMarker } from './launch-marker.js';
 import { estimateCost } from './prices.js';
 
 export const DESK_COST_FILE = 'desk-cost.json';
@@ -76,7 +80,7 @@ function claudeFiles(dir, since, files) {
 }
 
 /** Codex's sessions: `sessions/YYYY/MM/DD/*.jsonl`, for the days the window touches. */
-function codexFiles(dir, since, now) {
+function codexFiles(dir, since, _files, now) {
   const out = [];
   const days = new Set();
   for (let at = since - DAY_MS; at <= now.getTime(); at += DAY_MS / 2) {
@@ -91,6 +95,17 @@ function codexFiles(dir, since, now) {
       const file = recent(join(base, item.name), since);
       if (file) out.push(file);
     }
+  }
+  return out;
+}
+
+/** agy's transcripts: `<brain>/<conversation>/.system_generated/logs/transcript.jsonl`. */
+function agyFiles(dir, since) {
+  const out = [];
+  for (const item of entries(dir)) {
+    if (!item.isDirectory()) continue;
+    const file = recent(join(dir, item.name, '.system_generated', 'logs', 'transcript.jsonl'), since);
+    if (file) out.push(file);
   }
   return out;
 }
@@ -187,14 +202,50 @@ function readCodex(entry, lines) {
   }
 }
 
+/**
+ * New agy steps into a file's entry. Whether a conversation is interactive is
+ * mc's own mark on its opening message (`readLaunchMarker`); one without it is
+ * not counted. Each PLANNER_RESPONSE step reports its own tokens, fresh input
+ * and cache reads apart, so its cost is its own and is kept by step index.
+ */
+function readAgy(entry, lines) {
+  for (const line of lines) {
+    if (entry.interactive == null && line.includes('"USER_INPUT"')) {
+      const step = parse(line);
+      if (step?.type === 'USER_INPUT') entry.interactive = readLaunchMarker(step.content) !== null;
+    }
+    if (entry.interactive === false) return;
+    if (!line.includes('"PLANNER_RESPONSE"')) continue;
+    const step = parse(line);
+    if (step?.type !== 'PLANNER_RESPONSE' || typeof step.model !== 'string' || !step.model) continue;
+    const cost = estimateCost({
+      input: step.input_tokens || 0, cacheRead: step.cache_read_tokens || 0, output: step.output_tokens || 0,
+    }, step.model, { request: true });
+    if (cost == null) { entry.unpriced = (entry.unpriced || 0) + 1; continue; }
+    const at = Date.parse(step.created_at);
+    const key = String(step.step_index);
+    const seen = entry.messages[key];
+    if (!seen || cost > seen[1]) entry.messages[key] = [Number.isFinite(at) ? at : seen?.[0] ?? 0, cost];
+  }
+}
+
 /** Messages a later chunk may still raise; the rest are folded into buckets. */
 const OPEN_MESSAGES = 8;
 const BUCKET_MS = 10 * 60 * 1000;
 
-/** The reader of a tool's transcript lines, by the mechanism its adapter declares (`COST_SOURCE.reader`). */
-function readerOf(tool) {
-  return adapterFor(tool).COST_SOURCE.reader === 'claude-messages' ? readClaude : readCodex;
-}
+/**
+ * The two mechanisms a tool's `COST_SOURCE` names, each in a map of its own:
+ * where its transcripts are (`files`) and how their lines are priced (`reader`).
+ * A name in neither map reads nothing and is reported, never read as another
+ * tool's: a new tool must be added here, not fall through to Codex's reader.
+ */
+const FILE_SOURCES = { 'claude-projects': claudeFiles, 'codex-rollouts': codexFiles, 'agy-brain': agyFiles };
+const READERS = {
+  'claude-messages': { read: readClaude, start: () => ({ messages: {} }) },
+  'codex-readings': { read: readCodex, start: () => ({ readings: [], model: null }) },
+  // A conversation without mc's marker is left out, and says so (`left_out`).
+  'agy-steps': { read: readAgy, start: () => ({ messages: {} }), marked: true },
+};
 
 /** Drop what is older than the window, keeping a codex file's last reading before it. */
 function prune(entry, since) {
@@ -233,7 +284,9 @@ function costOf(entry, since) {
  * the cache is written back unless `write` is null.
  */
 export function deskCost({
-  cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET, ...directories
+  cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET,
+  // What a tool declares as its cost source; injectable so a mechanism mc does not know can be exercised.
+  sourceOf = (tool) => adapterFor(tool)?.COST_SOURCE, ...directories
 } = {}) {
   const since = now.getTime() - DAY_MS;
   const age = now.getTime() - Date.parse(cache?.at || '');
@@ -243,22 +296,27 @@ export function deskCost({
   let left = budget;
   let partial = false;
   // Each implemented tool that declares a cost source (`COST_SOURCE`) is read from the directory its option names.
+  const failed = [];
   const sources = toolsDeclaring('COST_SOURCE').flatMap((tool) => {
-    const { files: kind, option } = adapterFor(tool).COST_SOURCE;
+    const { files: kind, reader, option } = sourceOf(tool);
+    if (!Object.hasOwn(FILE_SOURCES, kind) || !Object.hasOwn(READERS, reader)) {
+      failed.push(`${toolShortName(tool)}: no cost reader for ${kind}/${reader}`);
+      return [];
+    }
     const dir = directories[option];
     if (!dir) return [];
-    const found = kind === 'claude-projects' ? claudeFiles(dir, since, files) : codexFiles(dir, since, now);
+    const found = FILE_SOURCES[kind](dir, since, files, now);
     return found.map((file) => ({ ...file, tool }));
   });
   for (const { path, size, tool } of sources) {
     seen.add(path);
+    const { read: reader, start } = READERS[sourceOf(tool).reader];
     let entry = files[path];
     if (!entry || entry.tool !== tool || size < entry.offset) {
-      entry = { tool, offset: 0, interactive: null, ...(readerOf(tool) === readClaude ? { messages: {} } : { readings: [], model: null }) };
+      entry = { tool, offset: 0, interactive: null, ...start() };
     }
     files[path] = entry;
     if (entry.interactive === false || size === entry.offset) continue;
-    const reader = readerOf(tool);
     try {
       // An unknown file: its head says whose it is, and a runner's is not read further.
       if (entry.interactive == null) {
@@ -279,9 +337,16 @@ export function deskCost({
   let cost = 0;
   let sessions = 0;
   let unpriced = 0;
+  const leftOut = {};
   for (const [path, entry] of Object.entries(files)) {
     if (!seen.has(path)) { delete files[path]; continue; }
-    if (!entry.interactive) continue;
+    if (!entry.interactive) {
+      if (entry.interactive === false && READERS[sourceOf(entry.tool)?.reader]?.marked) {
+        const name = toolShortName(entry.tool);
+        leftOut[name] = (leftOut[name] || 0) + 1;
+      }
+      continue;
+    }
     prune(entry, since);
     const own = costOf(entry, since);
     // A subagent's transcript is part of the session that started it.
@@ -290,7 +355,8 @@ export function deskCost({
     unpriced += entry.unpriced || 0;
   }
   // Partial while some transcript is not yet read to its end: the cost so far.
-  const answer = { cost: Math.round(cost * 100) / 100, sessions, unpriced, partial };
+  const answer = { cost: Math.round(cost * 100) / 100, sessions, unpriced, partial,
+    ...(Object.keys(leftOut).length ? { left_out: leftOut } : {}), ...(failed.length ? { failed } : {}) };
   const next = { at: now.toISOString(), answer, files };
   if (write) { try { write(next); } catch { /* a cache that cannot be written is still a page */ } }
   return { ...answer, cache: next };

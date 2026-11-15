@@ -94,7 +94,7 @@ import {
 } from './page-cache.js';
 import { RUNNER_DISK, RUNNER_MEMORY, mcHome, programsHome, runnerScratchDir, workRoot } from './paths.js';
 import { diskSummary } from './disk-pressure.js';
-import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
+import { claudeSettingsPath, hookDrift, hookRegistration, hookTargets, hookTargetsDrift, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
 import { gitDirOf } from './repos.js';
@@ -102,6 +102,7 @@ import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
+import { agyBrainDir } from './agy-brain.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import { sameCommit } from './same-commit.js';
@@ -1603,6 +1604,10 @@ export async function collectPage({
   checkout = mcCheckout(),
   // Injected so that no test reads the real file; an env without HOME means none is read.
   claudeSettings = () => (env.HOME ? readClaudeSettings(claudeSettingsPath(env.HOME)) : null),
+  // The drift of the other tools' hook files (those of an installed tool that declares `HOOKS`); injected for the same reason.
+  otherHooksDrift = () => (env.HOME
+    ? hookTargetsDrift(hookTargets({ env, home: env.HOME }).filter((target) => !target.spec.always), (path) => readClaudeSettings(path))
+    : null),
   // The current statfs measurement; injectable for the same real collection
   // path used by the page without depending on this machine's free space.
   diskFreeBytes = undefined,
@@ -1784,7 +1789,7 @@ export async function collectPage({
     // What landed in the last 24 hours and what each goal took (landed.js).
     landed: landedSection({ rows: readRunRows(tsv), now }),
     // The interactive sessions' cost, from the tools' own transcripts (desk-cost.js).
-    desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), now, read: readText }),
+    desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), agyDir: agyBrainDir(env), now, read: readText }),
     intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
     programmes,
     horizons,
@@ -1806,7 +1811,10 @@ export async function collectPage({
         (() => { const m = readMerger({ root }); return m ? { name: 'merger', pid: m.pid, commit: m.commit || null } : null; })(),
         (() => { const w = watcherState({ root: home }); return w.running ? { name: 'repo watch', pid: w.pid, commit: w.commit } : null; })(),
       ].filter(Boolean),
-      hooks: (() => { const settings = claudeSettings(); return settings ? hookDrift(hookRegistration(settings)) : null; })(),
+      hooks: (() => {
+        const settings = claudeSettings();
+        return [settings ? hookDrift(hookRegistration(settings)) : null, otherHooksDrift()].filter(Boolean).join('; ') || null;
+      })(),
       updateText: readText(join(root, 'runner', 'UPDATE')),
       drain: drainState({
         paths: controlPaths(root),

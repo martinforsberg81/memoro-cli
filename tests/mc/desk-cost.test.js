@@ -1,10 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, appendFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { adapterFor, canonicalToolId } from '../../src/adapters/index.js';
 import { deskCost } from '../../src/mc/desk-cost.js';
+import { agyStore } from './_helpers/agy-store.js';
 
 const NOW = new Date('2026-11-09T18:00:00Z');
 const at = (hoursAgo) => new Date(NOW.getTime() - hoursAgo * 3600_000).toISOString();
@@ -70,5 +72,86 @@ describe('the interactive sessions\' cost', () => {
     assert.equal(answer.cost, 80);
     // A finished reading is the answer for a minute.
     assert.equal(deskCost({ claudeDir: claude, cache, now: new Date(NOW.getTime() + 30_000) }).cost, 80);
+  });
+});
+
+describe('agy: only the conversations mc started are the desk\'s', () => {
+  const MARKED = '0a0b0c0d-1111-4222-8333-444455556666';
+  const ID = (n) => `${String(n).repeat(8)}-aaaa-bbbb-cccc-dddddddddddd`;
+  // A planner step as agy writes it: its own tokens, fresh input and cache reads apart. gemini-4-argon-high is $2 / $0.10 / $10 per million.
+  const step = (index, hoursAgo, { output = 0, input = 0, cache = 0, model = 'gemini-4-argon-high' } = {}) => ({
+    type: 'PLANNER_RESPONSE', step_index: index, model, content: 'ok', created_at: at(hoursAgo),
+    input_tokens: input, cache_read_tokens: cache, output_tokens: output });
+  const conversation = (store, id, { marked = true, steps }) => store.addConversation({ id, workspace: '/work/plan/x',
+    steps: [{ type: 'USER_INPUT', content: store.opening({ launch: marked ? MARKED : null }) }, ...steps] });
+
+  it('counts a marked conversation from its own steps, leaves unmarked ones out, and says how many', () => {
+    const store = agyStore();
+    conversation(store, ID(1), { steps: [step(1, 2, { output: 500_000 }), step(2, 1, { input: 1_000_000, cache: 1_000_000 })] });
+    conversation(store, ID(2), { marked: false, steps: [step(1, 2, { output: 9_000_000 })] });
+    conversation(store, ID(3), { marked: false, steps: [step(1, 2, { output: 9_000_000 })] });
+    const answer = deskCost({ agyDir: store.brain, now: NOW });
+    // 500k output $5 + 1M input $2 + 1M cache read $0.10.
+    assert.deepEqual([answer.cost, answer.sessions, answer.partial, answer.unpriced], [7.1, 1, false, 0]);
+    assert.deepEqual(answer.left_out, { agy: 2 });
+    assert.equal('failed' in answer, false);
+  });
+
+  it('a marker that is only quoted later in the opening message is not the mark', () => {
+    const store = agyStore();
+    store.addConversation({ id: ID(4), workspace: '/work/plan/x', steps: [
+      { type: 'USER_INPUT', content: `<USER_REQUEST>\nsee ${store.opening({ launch: MARKED })}\n</USER_REQUEST>` }, step(1, 1, { output: 1_000_000 })] });
+    const answer = deskCost({ agyDir: store.brain, now: NOW });
+    assert.deepEqual([answer.cost, answer.sessions, answer.left_out], [0, 0, { agy: 1 }]);
+  });
+
+  it('a step before the window and a step with no known model are not today\'s cost; the unknown one is counted as unpriced', () => {
+    const store = agyStore();
+    conversation(store, ID(5), { steps: [step(1, 30, { output: 1_000_000 }), step(2, 1, { output: 1_000_000, model: 'no-such-model' }), step(3, 1, { output: 100_000 })] });
+    const answer = deskCost({ agyDir: store.brain, now: NOW });
+    assert.deepEqual([answer.cost, answer.sessions, answer.unpriced], [1, 1, 1]);
+  });
+
+  it('a running conversation counts, and a later collect reads only the bytes appended since', () => {
+    const store = agyStore();
+    const { path } = conversation(store, ID(6), { steps: [step(1, 2, { output: 500_000 })] });
+    const first = deskCost({ agyDir: store.brain, now: NOW });
+    assert.deepEqual([first.cost, first.sessions], [5, 1]);
+    const entry = first.cache.files[path];
+    assert.equal(entry.offset, statSync(path).size);
+    // Same length, but a larger reading: were the head read again, the cost would rise.
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"output_tokens":500000', '"output_tokens":999999'));
+    appendFileSync(path, `${JSON.stringify(step(2, 0.5, { output: 100_000 }))}\n`);
+    const later = deskCost({ agyDir: store.brain, cache: { ...first.cache, at: '2000-01-01T00:00:00Z' }, now: NOW });
+    assert.deepEqual([later.cost, later.sessions], [6, 1]);
+    assert.equal(later.cache.files[path].offset, statSync(path).size);
+  });
+
+  it('a conversation not yet marked at its first read is read again once its opening message is there', () => {
+    const store = agyStore();
+    const dir = join(store.brain, ID(7), '.system_generated', 'logs');
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'transcript.jsonl');
+    writeFileSync(path, '');
+    const first = deskCost({ agyDir: store.brain, now: NOW });
+    assert.deepEqual([first.cost, first.sessions, first.left_out], [0, 0, undefined]);
+    writeFileSync(path, `${JSON.stringify({ type: 'USER_INPUT', content: store.opening({ launch: MARKED }) })}\n${JSON.stringify(step(1, 1, { output: 100_000 }))}\n`);
+    const later = deskCost({ agyDir: store.brain, cache: { ...first.cache, at: '2000-01-01T00:00:00Z' }, now: NOW });
+    assert.deepEqual([later.cost, later.sessions], [1, 1]);
+  });
+
+  it('a cost mechanism mc does not know reads nothing and is named in the failure', () => {
+    const store = agyStore();
+    conversation(store, ID(8), { steps: [step(1, 1, { output: 1_000_000 })] });
+    const answer = deskCost({ agyDir: store.brain, now: NOW,
+      sourceOf: (tool) => (canonicalToolId(tool) === 'antigravity-cli' ? { files: 'agy-brain', reader: 'agy-steps-v2', option: 'agyDir' } : adapterFor(tool).COST_SOURCE) });
+    assert.deepEqual([answer.cost, answer.sessions], [0, 0]);
+    assert.deepEqual(answer.failed, ['agy: no cost reader for agy-brain/agy-steps-v2']);
+    assert.deepEqual(Object.keys(answer.cache.files), []);
+  });
+
+  it('with no agy directory given, nothing of agy is read and nothing is reported', () => {
+    const answer = deskCost({ now: NOW });
+    assert.deepEqual([answer.cost, answer.sessions, 'left_out' in answer, 'failed' in answer], [0, 0, false, false]);
   });
 });

@@ -44,6 +44,32 @@ and `MultiEdit` are there so the goal-file refusal below sees them, and
 `mc hook install` rewrites mc's entry in place (no second entry), and
 `--check` reports the old matcher as drift until it has run.
 
+### agy's hooks
+
+agy (Antigravity CLI) has its own file and dialect: `~/.gemini/config/hooks.json`
+(the tool's `HOOKS` declaration), shared with whatever else lives there, of
+which mc keeps exactly one top-level entry, `mc`:
+
+```json
+"mc": {
+  "SessionStart": [{ "type": "command", "command": "mc hook session-start --tool agy 2>/dev/null || true" }],
+  "PreToolUse": [{ "matcher": "run_command|read_file|view_file|edit_file|write_to_file", "hooks": [{ "type": "command", "command": "mc hook pre-tool --tool agy 2>/dev/null || true" }] }],
+  "Stop": [{ "type": "command", "command": "mc hook stop --tool agy 2>/dev/null || true" }]
+}
+```
+
+`mc hook install` writes that entry, and no other key of the file, and the
+Claude file above in the same run; a foreign entry or a file that is not JSON is
+left as it is. `--tool agy` selects the dialect: agy's stdin carries
+`{ toolCall: { name, args }, cwd }`, which mc reads as the Claude-shaped input
+(`run_command` is Bash, the writers Write and Edit, the readers Read), so the
+same decisions below apply with the same answers, and a tool outside that
+mapping keeps its name and meets no rule of Claude's. The hooks act only in mc
+territory, as Claude's do. `--check` covers both files and exits 1 on drift in
+either, and the page's MC line names the file's tool (`agy: …`); agy's file is
+looked for only where agy is installed. The skills install with it
+([mc-skills.md](mc-skills.md)).
+
 `|| true` because a hook must never stand between a session and its work: an
 mc that does not know the verb yet, or any failure, is silence. The verbs
 themselves always exit 0 and print at most one JSON object.

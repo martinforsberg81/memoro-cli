@@ -42,7 +42,12 @@ import { interactiveWorkspaceDirectories } from './interactive-workspace.js';
 import { interactiveAccessOptions } from './interactive-access.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
-import { BACKGROUND_REFUSALS, entersPersistentSession, prepareSessionEntrance, sessionName, withRemoteControl } from './session-entrance.js';
+import { BACKGROUND_REFUSALS, entersPersistentSession, heldRefusal, lockDesk, prepareSessionEntrance, selectTerminal, sessionName, withRemoteControl } from './session-entrance.js';
+import { launchMarker } from './launch-marker.js';
+import { trustAgyFolder } from './agy-trust.js';
+
+/** Folder trust by the mechanism an adapter declares (`FOLDER_TRUST`). */
+const FOLDER_TRUSTS = { 'claude-trust': trustClaudeFolder, 'agy-trust': trustAgyFolder };
 
 /** Provider mechanics of a persistent entrance, by the mechanism an adapter declares (`PERSISTENT_DRIVER`); loaded only when one is used. */
 const PERSISTENT_DRIVERS = {
@@ -83,6 +88,8 @@ export async function interactiveLaunchPlan({
   stderr = process.stderr,
   onProvider = () => {},
   resolved = async () => ({}),
+  // A terminal tool's selection (`selectTerminal`): the desk lock and the conversations a running session holds.
+  selecting = async () => ({}),
   conversations = listConversations,
   identify = conversationIdentityReader(),
   resolve = resolveLaunch,
@@ -129,8 +136,27 @@ export async function interactiveLaunchPlan({
     return `requested role=${requestedRole || 'unknown'} programme=${requestedProgramme || 'none'}; `
       + `identified role=${identity?.role || 'unknown'} programme=${identity ? identity.programme || 'none' : 'unknown'}`;
   };
+  // A terminal tool's conversation is never run by two processes: its selection takes the desk lock
+  // and reads which conversations a running session holds, before anything is chosen. A tool whose
+  // session a provider keeps alive (or none) is not asked.
+  let selection = null;
+  const isTerminal = (id) => Boolean(id) && declared(id, 'PERSISTENT_DRIVER') === 'terminal';
+  const selectFor = async () => {
+    if (selection) return null;
+    selection = await selecting({ items: before });
+    return selection.result || null;
+  };
+  const mayBeTerminal = pick === true
+    ? (resumeTool ? [canonicalToolId(resumeTool)] : before.map((item) => item.tool))
+    : [chosen?.tool || (tool && canonicalToolId(tool)) || before[0]?.tool || canonicalToolId('codex')];
+  if (mayBeTerminal.some(isTerminal)) {
+    const refused = await selectFor();
+    if (refused) return refused;
+  }
+  const heldBy = (item) => selection?.held?.get(item.id) ?? null;
   if (pick === true) {
     const candidates = before.filter((item) => (!resumeTool || item.tool === (canonicalToolId(resumeTool) || resumeTool))
+      && !heldBy(item)
       && (!guarded || compatible(identify(item))));
     if (!candidates.length) return { ok: false, reason: 'no compatible conversation here to resume' };
     const items = candidates.map((item, index) => ({
@@ -169,13 +195,23 @@ export async function interactiveLaunchPlan({
   if (notInteractive) return { ok: false, reason: notInteractive };
   const toolId = launch.id;
   onProvider(launch.shortName);
+  if (isTerminal(toolId)) {
+    const refused = await selectFor();
+    if (refused) return refused;
+    const holder = chosen ? heldBy(chosen) : null;
+    if (holder) return heldRefusal(launch, holder);
+  } else if (selection) {
+    // The person picked a conversation of a tool a provider keeps alive: its own entrance takes the lock.
+    await selection.release?.();
+    selection = null;
+  }
   // Resolve a named conversation before choosing its transport. The callback
   // may join a live session, or exclude conversations already held by one.
   const entrance = await resolved({ launch, before, chosen });
   if (entrance.result) return entrance.result;
   const held = entrance.held || new Set();
   if (!chosen && pick !== 'new') {
-    for (const item of before.filter((candidate) => candidate.tool === toolId && !held.has(candidate.id))) {
+    for (const item of before.filter((candidate) => candidate.tool === toolId && !held.has(candidate.id) && !heldBy(candidate))) {
       if (!guarded) { chosen = item; break; }
       const identity = identify(item);
       if (compatible(identity)) {
@@ -215,7 +251,10 @@ export async function interactiveLaunchPlan({
   // Claude's append-system-prompt is launch configuration, not transcript
   // history: supply it on compatible resumes too. Codex uses its native
   // developer instruction setting (ordinary resume text cannot replace it).
-  const roleInstructions = resuming && !guarded ? null : instructionsFor(toolId, overlay);
+  // A tool that declares `INTERACTIVE_ARGS` builds its argv whole (agy: one `-i` argument with the
+  // launch marker, the instructions and the prompt); a resume of one hands over no instructions.
+  const buildArgs = declared(toolId, 'INTERACTIVE_ARGS');
+  const roleInstructions = (resuming && !guarded) || (buildArgs && resuming) ? null : instructionsFor(toolId, overlay);
   const channel = declared(toolId, 'INSTRUCTIONS');
   const guardedChannel = guarded ? channel?.guarded : null;
   const instructions = guardedChannel?.marker && roleInstructions
@@ -224,12 +263,17 @@ export async function interactiveLaunchPlan({
   const handed = guardedChannel && instructions
     ? guardedChannel.args(instructions)
     : (resuming && !channel?.onResume ? [] : profileArgs(toolId, instructions));
-  const launchedId = !resuming && guarded && handed.length && channel?.freshSessionId ? randomUUID() : null;
+  // The nonce a conversation's opening message carries, for a tool that mints its own conversation id.
+  const nonce = buildArgs && !resuming && (instructions || prompt) ? randomUUID() : null;
+  const launchedId = nonce || (!resuming && guarded && handed.length && channel?.freshSessionId ? randomUUID() : null);
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
   // including the role-aware instruction configuration.
   const session = [...sessionSwitches(launch, cache), ...(planning ? launch.adapter?.effortArgs?.('medium') ?? [] : [])];
   const resumed = resuming ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || [] : [];
-  const baseArgs = resuming
+  const baseArgs = buildArgs
+    ? buildArgs({ model: chosenModel, resume: resuming ? chosen.id : null, instructions, prompt,
+      marker: nonce ? launchMarker({ launch: nonce, role: requestedRole, programme: requestedProgramme }) : null })
+    : resuming
     ? [...resumeWith(toolId, resumed, [...handed, ...session]), ...(resumePrompt ? [resumePrompt] : [])]
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(launchedId ? launch.adapter.newSessionArgs({ sessionId: launchedId }) : []), ...(prompt ? [prompt] : [])];
 
@@ -286,38 +330,60 @@ export async function interactiveLaunchPlan({
 /** One provider decision; every start, persistent or not, uses interactiveLaunchPlan. */
 export async function openInWorkArea(options = {}) {
   const { env = process.env, platform = process.platform, isInteractive = interactive,
-    background, bg = false, spawn = spawnSync, register = registerForeground, onProvider, trust = trustClaudeFolder, ...rest } = options;
+    background, bg = false, spawn = spawnSync, register = registerForeground, onProvider, trust = null,
+    lock = lockDesk, ...rest } = options;
   const eligible = entersPersistentSession({ env, platform, isInteractive, verb: options.verb });
   // `--bg` leaves the session in the background, which only the persistent path can do: refused before any launch is planned.
   if (bg && !eligible) return { ok: false, reason: BACKGROUND_REFUSALS.terminal };
   let entrance;
+  let selection = null;
   try {
     const plan = await interactiveLaunchPlan({ ...rest, env, isInteractive, onProvider,
+      selecting: rest.selecting || (async ({ items }) => {
+        selection = await selectTerminal({ ...options, env, items }, { lock, ...(options.records ? { records: options.records } : {}), ...(options.alive ? { alive: options.alive } : {}) });
+        return selection;
+      }),
       liveConversation: rest.liveConversation || (async prefix => {
         if (!eligible) return null;
         const { findBackgroundConversation } = await import('./claude-background.js');
         return findBackgroundConversation({ ...options, env }, prefix);
       }),
       resolved: async ({ launch, before, chosen }) => {
-        if (bg && !declared(launch.id, 'BACKGROUND')) return { result: { ok: false, reason: BACKGROUND_REFUSALS.codex } };
+        if (bg && !declared(launch.id, 'BACKGROUND')) return { result: { ok: false, reason: BACKGROUND_REFUSALS.tool(launch.id) } };
         const driver = declared(launch.id, 'PERSISTENT_DRIVER');
-        if (!eligible || !(driver in PERSISTENT_DRIVERS)) return {};
         const settings = { ...options, env, launch, before, chosen, bg };
+        // A terminal tool has no provider session to keep: the server half still answers for it (list, join),
+        // and a start is the terminal path below.
+        if (background && driver === 'terminal') {
+          const answered = await background(settings);
+          if (answered.start) entrance = answered;
+          return answered;
+        }
+        if (!eligible || !(driver in PERSISTENT_DRIVERS)) return {};
         entrance = background ? await background(settings)
           : await prepareSessionEntrance(settings, await PERSISTENT_DRIVERS[driver]());
         return entrance;
       },
     });
     if (!plan.launch) return plan;
-    if (declared(plan.launch.id, 'FOLDER_TRUST') === 'claude-trust') {
-      // Every folder mc opens a tool that declares folder trust in is trusted first (claude-trust.js).
-      const trusted = trust(options.worktree.path, { env });
-      if (!trusted.ok || trusted.changed) log(trusted.ok ? 'work.claude-trusted' : 'work.claude-trust-failed', trusted);
+    const mechanism = declared(plan.launch.id, 'FOLDER_TRUST');
+    const trustFolder = mechanism ? (trust || FOLDER_TRUSTS[mechanism]) : null;
+    if (trustFolder) {
+      // Every folder mc opens a tool that declares folder trust in is trusted first (claude-trust.js, agy-trust.js).
+      const trusted = trustFolder(options.worktree.path, { env });
+      const name = String(mechanism).replace(/-trust$/u, '');
+      if (!trusted.ok || trusted.changed) log(trusted.ok ? `work.${name}-trusted` : `work.${name}-trust-failed`, trusted);
     }
     clearStopMark(options.areaRoot);
     if (entrance) return await entrance.start(plan);
     log('work.open', plan.openEvent);
-    const release = register(plan.record);
+    // A terminal tool's row says which conversation it holds, and the desk lock is kept until the row
+    // is written: a second selector then finds the row, never a conversation about to be run twice.
+    const holding = declared(plan.launch.id, 'PERSISTENT_DRIVER') === 'terminal';
+    const release = register({ ...plan.record,
+      ...(holding && plan.chosen ? { conversation: plan.chosen.id } : {}),
+      ...(holding && plan.openEvent.launched_id ? { launch: plan.openEvent.launched_id } : {}) });
+    await selection?.release?.();
     let result;
     try {
       result = spawn(plan.toolLaunch.bin, plan.toolLaunch.args, {
@@ -330,13 +396,21 @@ export async function openInWorkArea(options = {}) {
     }
     const after = listConversations(options.areaRoot, env);
     const seen = new Set(plan.before.map(item => item.id));
-    const started = after.find(item => !seen.has(item.id)) || null;
+    // A tool that mints its own id is attributed by the nonce its opening message carries: the one
+    // conversation that has it, else none. Another process's new conversation is never this launch's.
+    const nonced = declared(plan.tool, 'INTERACTIVE_ARGS') !== undefined;
+    const started = (nonced
+      ? (plan.openEvent.launched_id ? after.find(item => item.nonce === plan.openEvent.launched_id) : null)
+      : after.find(item => !seen.has(item.id))) || null;
     log('work.closed', { area: options.areaRoot, tool: plan.tool, exit_code: result?.status ?? 0,
       resumed: plan.chosen?.id || null, started: started?.id || null, kept_nothing: !plan.chosen && !started });
     return { ok: true, tool: plan.tool, conversation: plan.chosen?.id || started?.id || null,
       resumed: Boolean(plan.chosen), started: started?.id || null,
       kept_nothing: !plan.chosen && !started, code: result?.status ?? 0 };
-  } finally { await entrance?.release?.(); }
+  } finally {
+    await selection?.release?.();
+    await entrance?.release?.();
+  }
 }
 
 /**

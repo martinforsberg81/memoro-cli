@@ -389,5 +389,100 @@ test('remote --bg on a Codex desk is refused before any start', async () => {
     connect: () => { started = true; return { session: session() }; }, codexClient: () => ({ status: 0 }) };
   assert.equal(await remoteEntrance('manager', ['--bg'], link, { stdout: sink(), stderr: errors }), 1);
   assert.equal(started, false);
-  assert.match(errors.value, /on tc: --bg is for Claude sessions/u);
+  assert.match(errors.value, /on tc: --bg is for tools whose session outlives the terminal \(claude\); a Codex CLI session has no client but the terminal/u);
+});
+
+// agy runs in the terminal that started it: the server lists its register rows, starts it by the local terminal path, and never joins it.
+function terminalServer({ rows = [], before = [], chosen = null, operation = 'list', session = null } = {}) {
+  const output = sink(); const errors = sink(); const seen = [];
+  const resolved = { launch: { id: 'antigravity-cli', spec: { bin: '/provider/agy', label: 'Antigravity CLI' } },
+    roleName: 'manager', verb: 'manager', programme: null, areaName: null, before, chosen };
+  const deps = { env: { MC_WORK_ROOT: '/server', MC_HOME: '/server/home' }, stdin: new PassThrough(), stdout: output, stderr: errors,
+    realpath: path => path, records: () => rows, alive: pid => pid !== 99,
+    run: (bin, args) => { seen.push([bin, args]); return { status: 0, stdout: 'agy 1.2.3' }; },
+    load: async () => ({ run: async (_args, { open }) => {
+      const result = await open({ verb: 'manager', tool: 'agy' });
+      if (!result.ok) { errors.write(result.reason); return result.code ?? 1; }
+      return result.code ?? 0;
+    } }),
+    open: async options => {
+      seen.push(['open', { locked: options.lock === undefined }]);
+      const answered = await options.background(resolved);
+      return answered.result ?? { ok: true, code: 0 };
+    },
+  };
+  return { deps, output, errors, seen, args: [operation, 'manager', ...(session ? ['--session', session] : [])] };
+}
+const agyRow = (fields = {}) => ({ pid: 41, verb: 'manager', programme: null, area: null, tool: 'agy', started: '2026-11-15T10:00:00Z', ...fields });
+
+test('server list of agy: the live register rows of this desk, each with the conversation it holds', async () => {
+  const f = terminalServer({
+    rows: [agyRow({ conversation: 'conv-a' }), agyRow({ pid: 42, launch: 'nonce-b' }), agyRow({ pid: 43 }),
+      agyRow({ pid: 99, conversation: 'dead' }), agyRow({ pid: 44, verb: 'plan', programme: 'x', area: 'programs/x' }), agyRow({ pid: 45, tool: 'codex' })],
+    before: [{ id: 'conv-b', nonce: 'nonce-b', tool: 'antigravity-cli' }],
+  });
+  assert.equal(await serverSession(f.args, f.deps), 0, f.errors.value);
+  const value = validateDescriptor(JSON.parse(f.output.value));
+  assert.equal(value.kind, 'snapshot');
+  assert.equal(value.provider, 'antigravity-cli');
+  assert.deepEqual(value.sessions.map(item => [item.id, item.name, item.sessionId]),
+    [['pid-41', 'mc manager', 'conv-a'], ['pid-42', 'mc manager 2', 'conv-b'], ['pid-43', 'mc manager 3', null]]);
+  assert.ok(value.sessions.every(item => !('socket' in item) && !('access' in item)));
+  assert.deepEqual(f.seen.filter(item => item[0] === 'open'), [['open', { locked: false }]]);
+  assert.deepEqual(f.seen.find(item => item[0] === '/provider/agy'), ['/provider/agy', ['--version']]);
+});
+
+test('server join of agy is refused with exit 2 and names the way on, and nothing is started', async () => {
+  const f = terminalServer({ rows: [agyRow({ conversation: 'conv-a' })], operation: 'join', session: 'pid-41' });
+  assert.equal(await serverSession(f.args, f.deps), 2);
+  assert.match(f.errors.value, /Antigravity CLI sessions run in the terminal that started them and cannot be joined; start a new one or resume its conversation/u);
+  assert.equal(f.output.value, '');
+});
+
+test('server start of agy takes the desk lock like a local start, and the terminal does the rest', async () => {
+  const f = terminalServer({ operation: 'start' });
+  assert.equal(await serverSession(f.args, f.deps), 0, f.errors.value);
+  assert.deepEqual(f.seen.filter(item => item[0] === 'open'), [['open', { locked: true }]]);
+  assert.equal(f.output.value, '');
+});
+
+test('the server refuses a tool that declares no interactive form before it measures anything', async () => {
+  const f = terminalServer();
+  const open = f.deps.open;
+  f.deps.open = options => open({ ...options, background: resolved => options.background({ ...resolved, launch: { ...resolved.launch, id: 'cursor' } }) });
+  assert.equal(await serverSession(f.args, f.deps), 1);
+  assert.deepEqual(f.seen.filter(item => item[0] === '/provider/agy'), []);
+});
+
+// The client: a terminal tool has no connection to hold, so a start is passed through to the host's terminal.
+const agySnapshot = (fields = {}) => descriptor('snapshot', { provider: 'antigravity-cli', providerVersion: 'agy 1.2.3', chosen: null, sessions: [], ...fields });
+
+test('remote agy start is passed through to the host terminal, never connected', async () => {
+  const forwarded = []; const output = sink();
+  const link = { destination: 'tc', request: () => agySnapshot(),
+    connect: () => { throw new Error('a terminal start is passed through, not connected'); },
+    passthrough: (operation, entrance, args, answers) => { forwarded.push({ operation, entrance, args, answers }); return { status: 0 }; } };
+  assert.equal(await remoteEntrance('plan', ['example', '--agy'], link, { stdout: output, stderr: sink() }), 0);
+  assert.deepEqual(forwarded, [{ operation: 'start', entrance: 'plan', args: ['example', '--agy'], answers: [] }]);
+});
+
+test('remote agy: the host\'s exit code reaches the client, and a held conversation is not retried', async () => {
+  const link = { destination: 'tc', request: () => agySnapshot(),
+    connect: () => { throw new Error('not connected'); },
+    passthrough: () => ({ status: 2 }) };
+  assert.equal(await remoteEntrance('manager', [], link, { stdout: sink(), stderr: sink() }), 2);
+});
+
+test('remote --bg on an agy desk is refused before any start, in the tool-neutral text', async () => {
+  const errors = sink(); let started = false;
+  const link = { destination: 'tc', request: () => agySnapshot(),
+    connect: () => { started = true; return { session: session() }; }, passthrough: () => { started = true; return { status: 0 }; } };
+  assert.equal(await remoteEntrance('manager', ['--bg'], link, { stdout: sink(), stderr: errors }), 1);
+  assert.equal(started, false);
+  assert.match(errors.value, /on tc: --bg is for tools whose session outlives the terminal \(claude\); an? .* has no client but the terminal/u);
+});
+
+test('the wire carries a provider only where its adapter declares a server session', () => {
+  assert.throws(() => validateDescriptor(agySnapshot({ provider: 'cursor' })), /invalid snapshot descriptor/u);
+  assert.equal(validateDescriptor(agySnapshot()).provider, 'antigravity-cli');
 });

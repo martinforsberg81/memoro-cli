@@ -1,16 +1,16 @@
 /**
- * Antigravity CLI (`agy`) adapter — unattended sessions only.
+ * Antigravity CLI (`agy`) adapter — unattended and interactive sessions.
  *
- * agy is Google's coding CLI. This phase launches it headless: the build,
- * review, plan-review, finish, mend, plan, manager, intake and decision
- * sessions. The interactive declarations (a persistent driver, a server
- * session, conversation readers, a skills directory, …) are left undeclared
- * on purpose; an entrance that needs one refuses agy by asking the registry
- * (`declared(tool, 'PERSISTENT_DRIVER')`), and the next phase lifts the
- * refusal by declaring them.
+ * agy is Google's coding CLI. mc launches it headless (the build, review,
+ * plan-review, finish, mend, plan, manager, intake and decision sessions) and
+ * in a person's terminal (`mc plan`, `mc martin`, the server's `mc session`).
+ * An agy session lives in the terminal that started it: it has no daemon, no
+ * remote client and no socket, so `PERSISTENT_DRIVER` is `terminal`, a server
+ * start runs in the `ssh -t` terminal and `join` is refused.
  *
  * What agy takes (https://antigravity.google/docs/cli/headless/):
- *   -p <text>                       the prompt, as one argument
+ *   -p <text>                       the prompt, as one argument (headless)
+ *   -i <text>                       the opening message of an interactive session
  *   --output-format stream-json|json|text
  *   --model <slug>                  the slug carries the effort as a suffix
  *   --conversation <id>             resume
@@ -18,7 +18,10 @@
  *   --disable-slash-commands        a prompt that starts with "/" stays a prompt
  *   --add-dir <dir>                 repeatable
  * It has no system-prompt or instructions flag and no cwd flag, so a role's
- * instructions lead the prompt and the working directory is the process's.
+ * instructions lead the opening message and the working directory is the
+ * process's. It records its own conversation id, so mc puts a launch marker
+ * (a fresh nonce) at the head of the opening message and reads it back from
+ * the transcript (`src/mc/launch-marker.js`).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -50,7 +53,8 @@ export function launchSpec({ resolveBinary = defaultWhich } = {}) {
   return {
     bin,
     executionAccess: 'host',
-    args: (argv = []) => [...argv],
+    // Interactive launches name their writable directories; a headless launch passes none.
+    args: (argv = [], { writableDirectories = [] } = {}) => [...argv, ...writableDirectories.flatMap(dir => ['--add-dir', dir])],
     spawn: (argv = []) => ({ bin, args: [...argv] }),
     heartbeatSource: 'agy',
     label: LABEL,
@@ -156,8 +160,74 @@ export const INSTRUCTIONS = Object.freeze({
   channel: 'prompt',
   args: (markdown) => [markdown],
   onResume: false,
-  guarded: null,
+  // An interactive launch of a role's session ends its instructions with the launch identity marker.
+  guarded: Object.freeze({ channel: 'prompt', args: (markdown) => [markdown], marker: true }),
   freshSessionId: false,
+});
+
+/**
+ * The argv of an interactive launch, whole: a single `-i` argument leads with
+ * the launch marker on its own line, then the instructions, then
+ * `INSTRUCTIONS_SEPARATOR` and the prompt. A launch with neither is plain
+ * `agy`. A resume names the conversation and the model and hands over no
+ * instructions: the conversation already holds them.
+ */
+export function interactiveArgs({ model = null, resume = null, instructions = null, prompt = null, marker = null } = {}) {
+  if (resume) return ['--conversation', resume, ...modelArgs(model)];
+  const body = instructions && prompt ? `${instructions}${INSTRUCTIONS_SEPARATOR}${prompt}` : instructions || prompt || null;
+  return [...modelArgs(model), ...(body ? ['-i', marker ? `${marker}\n\n${body}` : body] : [])];
+}
+
+/** The declaration `src/mc/work-open.js` asks for: this tool builds its interactive argv whole. */
+export const INTERACTIVE_ARGS = interactiveArgs;
+
+/** The model a role's `mc plan` runs on. */
+export const PLAN_MODEL = 'gemini-4-argon-high';
+
+/** A session lives in the terminal that started it: no daemon, no join, no socket. */
+export const PERSISTENT_DRIVER = 'terminal';
+
+/** A server start runs in the `ssh -t` terminal (the tty mechanism) and is never joined. */
+export const SERVER_SESSION = Object.freeze({ mechanism: 'tty', name: 'Antigravity' });
+
+/** No session outlives the terminal and none is driven remotely. */
+export const BACKGROUND = false;
+export const REMOTE_CONTROL = false;
+
+/** The folder is recorded in agy's `trustedWorkspaces` before agy starts (`src/mc/agy-trust.js`). */
+export const FOLDER_TRUST = 'agy-trust';
+
+/** The conversation's launch is found by the nonce mc put in its opening message. */
+export const IDENTITY_READER = 'launch-log';
+
+/** The model comes from the last PLANNER_RESPONSE step. */
+export const MODEL_READER = 'agy-step';
+
+/** What the last step says about whose turn it is. */
+export const TAIL_READER = 'agy-tail';
+
+/** Conversations are found through agy's brain directory and its conversation database. */
+export const CONVERSATION_SOURCE = 'agy-brain';
+
+/** A conversation is removed by its own files. */
+export const CONVERSATION_DELETE = Object.freeze({ mechanism: 'agy-conversation', failed: 'conversation-delete-failed' });
+
+/** What a marked conversation cost, read from its steps. */
+export const COST_SOURCE = Object.freeze({ files: 'agy-brain', reader: 'agy-steps', option: 'agyDir' });
+
+/** Where this tool loads skills from. */
+export const SKILLS_DIR = (_env, home) => join(home, '.gemini', 'antigravity-cli', 'skills');
+
+/**
+ * Where and how mc registers its hooks: one top-level entry in the global hooks file,
+ * three events, each command ending in `|| true` so a failing mc never blocks agy.
+ */
+export const HOOKS = Object.freeze({
+  dialect: 'agy-hooks',
+  file: (_env, home) => join(home, '.gemini', 'config', 'hooks.json'),
+  entry: 'mc',
+  matcher: 'run_command|read_file|view_file|edit_file|write_to_file',
+  tool: 'agy',
 });
 
 /** Variables of this tool's own that are dropped at every unattended launch of it, beside the provider keys. */

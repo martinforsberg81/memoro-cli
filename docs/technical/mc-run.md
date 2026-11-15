@@ -418,9 +418,10 @@ D-Bus session bus, so mc adds nothing; an empty-password login keyring, or
 unlocking it at login, lets an unattended session reach it. Then add agy to
 the catalog with `mc model` (`mc model add review agy:gemini-4-argon-high:high`,
 `mc model priority agy`); the defaults already list it first in review. agy
-runs unattended sessions only: `mc plan`, `manager`, `martin`, `helper`,
-`mc session` and the work-area opener refuse it with exit 2, before writing
-anything, and name `--claude` and `--codex` instead.
+also runs the interactive entrances `mc plan`, `mc martin` and the server's
+`mc session`, in the terminal that starts it
+([mc-interactive-sessions.md](mc-interactive-sessions.md#a-tool-that-lives-in-the-terminal-agy)).
+The retired `mc helper` desk is not one of them.
 
 ## What the runner writes
 

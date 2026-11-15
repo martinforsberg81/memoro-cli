@@ -64,6 +64,11 @@ export function registerForeground({
   // launcher exits and takes its argv with it; this is the only place the
   // answer survives it (`mc roles check`).
   role = null,
+  // A terminal session of a tool that records its own conversation id: the conversation it
+  // resumed, or the launch nonce its opening message carries. They are how another entrance
+  // tells that this conversation is held (`heldConversations`); written only when given.
+  conversation = null,
+  launch = null,
   env = process.env,
   pid = process.pid,
   now = () => new Date(),
@@ -85,6 +90,8 @@ export function registerForeground({
       verb, area, programme, tool, model, pid,
       started: now().toISOString().replace(/\.\d{3}Z$/u, 'Z'),
       role,
+      ...(conversation ? { conversation } : {}),
+      ...(launch ? { launch } : {}),
     });
   } catch {
     return noop;

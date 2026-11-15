@@ -80,6 +80,11 @@
  *   - (C) Codex transcripts: see (S-whole) above; a date directory that its
  *     transcripts leave empty goes with them, and an empty one untouched for 7
  *     days goes too. Nothing else under the Codex home is read.
+ *   - (T) agy's generated files: `~/.gemini/antigravity-cli/brain/<UUID>/.system_generated/` goes whole, through `rmTree`, once
+ *     every entry in it is a regular file or directory (no link), its newest mtime is older than 7 days, and no process holds
+ *     anything in it open (one lsof batch over the old enough). It is the one thing here: the transcripts, the conversation
+ *     databases, the settings and every other file under `~/.gemini` are never read or removed, and what cannot be read keeps
+ *     the directory, with its why. A person deletes a conversation itself (`mc conversations`), not tidy.
  *   - (B) Exact rebuildable caches (tidy-caches.js): five native-phone output
  *     paths in ended runner scratch whose owning goal has finished, idle worker bundles, and four
  *     named per-user caches. Shared caches/bundles retain 72 hours. Every
@@ -119,7 +124,7 @@ import {
 } from './work-area.js';
 
 export const DEFAULT_DAYS = 14;
-export const RULES_VERSION = 13;
+export const RULES_VERSION = 14;
 export const GENERATED_KEEP_MS = 72 * 60 * 60 * 1000;
 /** List files kept in `~/mc/runner/tidy/`; older ones go in the next apply. */
 export const LIST_KEEP = 30;
@@ -174,6 +179,8 @@ export function tidyRoots(env = process.env) {
     codex_images: join(env.CODEX_HOME || join(homedir(), '.codex'), 'generated_images'),
     // Codex session transcripts (C): `sessions/YYYY/MM/DD/*.jsonl`, and nothing else under the Codex home.
     codex_sessions: join(env.CODEX_HOME || join(homedir(), '.codex'), 'sessions'),
+    // agy's per-conversation directories (T): `brain/<UUID>/.system_generated/`, and nothing else under `~/.gemini`.
+    agy_brain: join(env.HOME || homedir(), '.gemini', 'antigravity-cli', 'brain'),
   };
 }
 
@@ -200,6 +207,7 @@ const KIND_ROOT = {
   'scratch-session': 'scratch',
   'codex-transcript': 'codex_sessions',
   'codex-session-day': 'codex_sessions',
+  'agy-system-generated': 'agy_brain',
 };
 
 /** The roots whose directories are named by a repository's slug, and the kind of target each one holds (K). */
@@ -207,6 +215,11 @@ const SLUG_ROOTS = [['gate_cache', 'gate-cache-slug'], ['gate', 'gate-slug'], ['
 
 /** The kinds that are one approved regular file each (F, and C's transcripts): unlinked, identity-checked, shape-checked. */
 const APPROVED_FILE_KINDS = ['wrangler-log', 'mc-shot', 'codex-image', 'codex-transcript', 'codex-session-day'];
+/** The approved kinds that are a whole tree (T): shape-checked and identity-checked, removed through `rmTree`. */
+const APPROVED_TREE_KINDS = ['agy-system-generated'];
+/** (T) The directory agy keeps its generated files in, under `brain/<UUID>/`, and how long it must be untouched. */
+const AGY_GENERATED = '.system_generated';
+export const AGY_GENERATED_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The directories directly under `dir`: none when it cannot be read. */
 function listDirs(dir) {
@@ -280,6 +293,7 @@ export function gatherTidyFacts({
     work_areas: [], step_areas: [], foreign: [], transcripts: [], leftovers: [], cache_slugs: [], gate_cache_entries: [],
     scratch_items: [], scratch_exports: [], generated_files: [], cache_items: [],
     scratch_sessions: [], scratch_refs: null, codex_transcripts: [], codex_days: [], codex_other: [], codex_errors: [],
+    agy_generated: [], agy_errors: [],
   };
 
   // One lsof for every plan worktree. It always sees this process, so an
@@ -531,6 +545,7 @@ export function gatherTidyFacts({
   facts.cache_items = gatherCacheFacts({ roots, now, repos, git, running, openIn, servers: (wt) => servers(wt, { root: mcHome(env) }) });
   gatherGeneratedFiles(facts, { roots, now, running, openIn, filesOpen, readDir });
   gatherCodexSessions(facts, { roots, now, filesOpen });
+  gatherAgyGenerated(facts, { roots, now, filesOpen });
   return facts;
 }
 
@@ -1013,6 +1028,75 @@ function gatherCodexSessions(facts, { roots, now, filesOpen }) {
 }
 
 /**
+ * (T) What of each `brain/<UUID>/.system_generated/` can be said without reading a byte of it: whether every entry in it is a
+ * regular file or directory, the newest mtime, its size, and (one `filesOpen` batch over the old enough) who holds anything in
+ * it. Only that one directory of each conversation is looked at; nothing else under `~/.gemini` is.
+ */
+function gatherAgyGenerated(facts, { roots, now, filesOpen }) {
+  const base = roots.agy_brain;
+  const fail = (path, error) => facts.agy_errors.push({ path, error: message(error) });
+  let top;
+  try { top = lstatSync(base); } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return;
+    fail(base, error);
+    return;
+  }
+  if (!top.isDirectory() || top.isSymbolicLink()) { fail(base, new Error('brain root is not a regular directory')); return; }
+  let names;
+  try { names = readdirSync(base); } catch (error) { fail(base, error); return; }
+  const items = [];
+  const walked = new Map();
+  for (const id of names.sort()) {
+    if (!UUID_DIRECTORY.test(id)) continue;
+    const path = join(base, id, AGY_GENERATED);
+    let stat;
+    try { stat = lstatSync(path); } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue;
+      fail(path, error);
+      continue;
+    }
+    const item = { path, newest_ms: null, bytes: 0, identity: null, open: null, refused: null, error: null };
+    items.push(item);
+    if (stat.isSymbolicLink()) { item.refused = 'a symbolic link is not a target'; continue; }
+    if (!stat.isDirectory()) { item.refused = 'not a directory'; continue; }
+    try {
+      const entries = [path];
+      let newest = stat.mtimeMs;
+      let bytes = 0;
+      const stack = [path];
+      while (stack.length) {
+        const dir = stack.pop();
+        for (const entry of readdirSync(dir)) {
+          const child = join(dir, entry);
+          const inner = lstatSync(child);
+          if (inner.isSymbolicLink()) { item.refused = `holds a symbolic link (${child.slice(path.length + 1)})`; break; }
+          if (!inner.isFile() && !inner.isDirectory()) { item.refused = `holds something that is neither a file nor a directory (${child.slice(path.length + 1)})`; break; }
+          newest = Math.max(newest, inner.mtimeMs);
+          entries.push(child);
+          if (inner.isDirectory()) stack.push(child); else bytes += inner.size;
+        }
+        if (item.refused) break;
+      }
+      if (item.refused) continue;
+      item.newest_ms = newest;
+      item.bytes = bytes;
+      item.identity = { dev: stat.dev, ino: stat.ino, newest_ms: newest };
+      walked.set(item.path, entries);
+    } catch (error) { item.error = message(error); }
+  }
+  const old = items.filter((item) => !item.refused && !item.error && typeof item.newest_ms === 'number' && item.newest_ms <= now - AGY_GENERATED_KEEP_MS);
+  if (old.length) {
+    let opened = null;
+    try { opened = filesOpen(old.flatMap((item) => walked.get(item.path))); } catch { /* uncertainty keeps every candidate */ }
+    for (const item of old) {
+      const holders = walked.get(item.path).map((path) => (opened instanceof Map ? opened.get(path) : undefined));
+      item.open = holders.every(Array.isArray) ? [...new Set(holders.flat())] : null;
+    }
+  }
+  facts.agy_generated.push(...items);
+}
+
+/**
  * The planning sessions running now, by programme: a foreground `mc plan` whose
  * process lives (`runner/foreground/<pid>.json`). The runner starts no plan
  * session (2026-11-07), so a lane file never holds a planning checkout. A
@@ -1433,6 +1517,20 @@ export function codexTranscript(item, { now }) {
 }
 
 /**
+ * (T) agy's `.system_generated/` of one conversation: whole, once everything in it is a plain file or directory, the newest
+ * of them is older than seven days and nothing holds any of it open. What cannot be told keeps it (a throw is an error keep).
+ */
+export function agyGenerated(item, { now }) {
+  if (item.error) throw new Error(item.error);
+  if (item.refused) return { target: false, why: item.refused, rule: 'T' };
+  if (typeof item.newest_ms !== 'number') throw new Error('could not tell when it was last touched');
+  if (item.newest_ms > now - AGY_GENERATED_KEEP_MS) return { target: false, why: 'touched in the last 7 days', rule: 'recent' };
+  if (item.open === null || item.open === undefined) throw new Error('could not tell whether a process holds it open');
+  if (item.open.length) return { target: false, why: `process ${item.open.join(', ')} holds a file in it open`, rule: 'T' };
+  return { target: true, why: 'agy generated files, untouched for 7 days and not held open' };
+}
+
+/**
  * (C) A date directory, when every entry in it is a transcript this pass takes (`emptied`): it goes with them.
  * A date directory with no entry is removed only when it is itself untouched for seven days.
  */
@@ -1658,6 +1756,14 @@ export function tidyPlan(facts, { days = DEFAULT_DAYS, person = false, pressure 
   for (const item of facts.codex_errors || []) keep(item.path, 'C', `error: ${item.error}`);
   for (const path of facts.codex_other || []) keep(path, 'C-other', 'not a session transcript: rule C touches only sessions/YYYY/MM/DD/*.jsonl');
 
+  // (T) agy's generated files of a conversation, whole.
+  for (const item of facts.agy_generated || []) {
+    const verdict = judge(agyGenerated, item, { now: facts.now });
+    if (verdict.target) targets.push({ path: item.path, kind: 'agy-system-generated', rule: 'T', why: verdict.why, bytes: item.bytes || 0, identity: item.identity });
+    else keep(item.path, verdict.rule ?? 'T', verdict.why);
+  }
+  for (const item of facts.agy_errors || []) keep(item.path, 'T', `error: ${item.error}`);
+
   return { days, person, targets, kept };
 }
 
@@ -1730,12 +1836,13 @@ export function outsideRoots(target, roots) {
   const key = KIND_ROOT[target?.kind];
   if (!key || typeof target.path !== 'string') return `not a kind tidy removes: ${target?.kind}`;
   if (!roots[key]) return `no ${key} root in this layout`;
-  if (APPROVED_FILE_KINDS.includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
+  const approved = APPROVED_FILE_KINDS.includes(target.kind) || APPROVED_TREE_KINDS.includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind);
+  if (approved) {
     const rootStat = lstatSync(roots[key]);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return 'approved root is not a regular directory';
   }
   const base = realpathSync(roots[key]);
-  if (APPROVED_FILE_KINDS.includes(target.kind) || Object.hasOwn(CACHE_KIND_ROOT, target.kind)) {
+  if (approved) {
     const relative = target.path.startsWith(`${roots[key]}/`) ? target.path.slice(roots[key].length + 1) : null;
     if (relative === null) return `not under ${roots[key]}`;
     let cursor = roots[key];
@@ -1780,6 +1887,8 @@ export function outsideRoots(target, roots) {
     'scratch-session': parent === base && lstatSync(real).isDirectory() && !lstatSync(real).isSymbolicLink(),
     // `<codex>/sessions/YYYY/MM/DD/<name>.jsonl`, and `<codex>/sessions/YYYY/MM/DD` (C).
     'codex-transcript': (() => { const rel = codexRelative(real, base); return rel?.length === 4 && isCodexDay(rel) && name.endsWith('.jsonl') && lstatSync(real).isFile() && !lstatSync(real).isSymbolicLink(); })(),
+    // `<brain>/<UUID>/.system_generated`: exactly two levels, a real directory, nothing more of agy's home.
+    'agy-system-generated': (() => { const rel = codexRelative(real, base); return rel?.length === 2 && UUID_DIRECTORY.test(rel[0]) && rel[1] === AGY_GENERATED && lstatSync(real).isDirectory() && !lstatSync(real).isSymbolicLink(); })(),
     'codex-session-day': (() => { const rel = codexRelative(real, base); return rel?.length === 3 && isCodexDay(rel) && lstatSync(real).isDirectory() && !lstatSync(real).isSymbolicLink(); })(),
   }[target.kind];
   return shaped ? null : `not the shape a ${target.kind} has under ${roots[key]}`;
@@ -1876,6 +1985,10 @@ export function applyTidy({
         // Only when empty now: the transcripts it held were removed first in this apply.
         if (readdirSync(path).length) { applied.push({ path, ok: false, why: 're-check: it is not empty' }); continue; }
         rmdirSync(path);
+      } else if (target.kind === 'agy-system-generated') {
+        // The tree read again by the fresh plan: its identity and newest mtime must be the list's.
+        if (!target.identity || !sameEvidence(again.identity, target.identity)) { applied.push({ path, ok: false, why: 're-check: it changed since the list' }); continue; }
+        remove(path);
       } else if (APPROVED_FILE_KINDS.includes(target.kind)) {
         const stat = lstatSync(path);
         const identity = { dev: stat.dev, ino: stat.ino, size: stat.size, mtime_ms: stat.mtimeMs };

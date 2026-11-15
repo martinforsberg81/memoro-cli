@@ -1262,7 +1262,7 @@ describe('the list file and the apply', () => {
       assert.equal(listPath, join(m.work, 'runner', 'tidy', '20261012T120000Z.json'));
       const written = JSON.parse(readFileSync(listPath, 'utf8'));
       assert.deepEqual(written, list);
-      assert.equal(written.rules_version, 13, 'rules version 13: S-whole and C, on top of the scratch-export kind under rule S');
+      assert.equal(written.rules_version, 14, 'rules version 14: T (agy generated files), on top of S-whole and C and the scratch-export kind under rule S');
       assert.equal(written.person, false, 'the list says whose run it was');
       assert.equal(written.pressure, false);
       for (const item of written.targets) assert.deepEqual(Object.keys(item).sort(), ['bytes', 'kind', 'path', 'rule', 'why']);
@@ -2043,6 +2043,95 @@ describe('(C) Codex session transcripts older than seven days, not held open', (
       for (const kept of [youngBeside, open, linked, notes, sqlite, logs, emptyRecent, join(sessions, '2026/09/10'), join(sessions, '2026/09/20')]) {
         assert.ok(existsSync(kept), `${kept} stays`);
       }
+    } finally { m.cleanup(); }
+  });
+});
+
+/**
+ * (T) agy's `brain/<UUID>/.system_generated/`, on a temporary home: the whole directory goes once old and not held open;
+ * the transcripts under it, the conversation databases and every other file under `~/.gemini` are never read or removed.
+ */
+describe('(T) agy generated files older than seven days, not held open', () => {
+  it('an old directory goes whole; recent, open, off-shape and every other file under ~/.gemini stays', () => {
+    const m = machine();
+    try {
+      const agy = join(m.home, '.gemini', 'antigravity-cli');
+      const brain = join(agy, 'brain');
+      const tree = (n, at) => {
+        const generated = join(brain, ID(n), '.system_generated');
+        m.write(join(generated, 'logs', 'transcript.jsonl'), '{}\n', at);
+        m.write(join(generated, 'steps', '1.txt'), 'step', at);
+        ageEverything(generated, at);
+        return generated;
+      };
+      const old = tree(1, OLD);
+      const young = tree(2, NOW - 6 * DAY);
+      const open = tree(3, OLD);
+      const linked = tree(4, OLD);
+      m.write(join(m.home, 'outside'), 'outside', OLD);
+      symlinkSync(join(m.home, 'outside'), join(linked, 'link'));
+      const unreadable = tree(5, OLD);
+      const database = join(agy, 'conversations', `${ID(1)}.db`);
+      const settings = join(agy, 'settings.json');
+      const hooks = join(m.home, '.gemini', 'config', 'hooks.json');
+      const sibling = join(brain, ID(1), 'notes.txt');
+      for (const path of [database, settings, hooks, sibling]) m.write(path, 'keep', OLD);
+      const asked = [];
+      const doors = m.doors({ filesOpen: (paths) => {
+        asked.push(paths);
+        return new Map(paths.map((path) => [path, path.startsWith(open) ? [77] : []]));
+      } });
+
+      const dry = runTidy(doors);
+      const rule = dry.list.targets.filter((item) => item.rule === 'T');
+      assert.deepEqual(rule.map((item) => [item.kind, item.path]).sort(), [['agy-system-generated', old], ['agy-system-generated', unreadable]].sort());
+      assert.equal(keptOf(dry.list, young).why, 'touched in the last 7 days');
+      assert.equal(keptOf(dry.list, open).why, 'process 77 holds a file in it open');
+      assert.match(keptOf(dry.list, linked).why, /^holds a symbolic link \(link\)/u);
+      assert.equal(asked.length >= 1, true, 'the old enough are asked about in one batch');
+      assert.equal(asked.flat().every((path) => path.includes('.system_generated')), true, 'only paths inside .system_generated are asked about');
+
+      const { applied } = applyTidy({ listPath: dry.listPath, ...doors });
+      assert.ok(applied.filter((item) => item.path.includes('.system_generated')).every((item) => item.ok), JSON.stringify(applied.filter((item) => !item.ok)));
+      assert.equal(existsSync(old), false);
+      assert.equal(existsSync(unreadable), false);
+      for (const kept of [young, open, linked, database, settings, hooks, sibling, join(brain, ID(1))]) assert.ok(existsSync(kept), `${kept} stays`);
+    } finally { m.cleanup(); }
+  });
+
+  it('what cannot be told keeps the directory with its why, and a tree changed since the list is refused at apply', () => {
+    const m = machine();
+    try {
+      const brain = join(m.home, '.gemini', 'antigravity-cli', 'brain');
+      const generated = join(brain, ID(1), '.system_generated');
+      m.write(join(generated, 'logs', 'transcript.jsonl'), '{}\n', OLD);
+      ageEverything(generated, OLD);
+
+      const unsure = runTidy(m.doors({ filesOpen: () => null }));
+      assert.equal(unsure.list.targets.some((item) => item.rule === 'T'), false);
+      assert.match(keptOf(unsure.list, generated).why, /^error: could not tell whether a process holds it open/u);
+
+      const dry = runTidy(m.doors());
+      assert.deepEqual(dry.list.targets.filter((item) => item.rule === 'T').map((item) => item.path), [generated]);
+      m.write(join(generated, 'logs', 'late.jsonl'), 'new', NOW);
+      const { applied } = applyTidy({ listPath: dry.listPath, ...m.doors() });
+      assert.deepEqual(applied.map((item) => [item.path, item.ok]), [[generated, false]]);
+      assert.match(applied[0].why, /^re-check: /u);
+      assert.ok(existsSync(generated));
+    } finally { m.cleanup(); }
+  });
+
+  it('only a path of the exact shape is a target', () => {
+    const m = machine();
+    try {
+      const brain = join(m.home, '.gemini', 'antigravity-cli', 'brain');
+      const generated = join(brain, ID(1), '.system_generated');
+      m.write(join(generated, 'a.txt'), 'x', OLD);
+      const roots = gatherTidyFacts(m.doors()).roots;
+      assert.equal(outsideRoots({ kind: 'agy-system-generated', path: generated }, roots), null);
+      assert.match(outsideRoots({ kind: 'agy-system-generated', path: join(generated, 'a.txt') }, roots), /not the shape/u);
+      assert.match(outsideRoots({ kind: 'agy-system-generated', path: join(brain, ID(1)) }, roots), /not the shape/u);
+      assert.match(outsideRoots({ kind: 'agy-system-generated', path: join(m.home, '.gemini', 'antigravity-cli') }, roots), /not under/u);
     } finally { m.cleanup(); }
   });
 });

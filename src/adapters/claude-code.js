@@ -655,3 +655,10 @@ export const COST_SOURCE = Object.freeze({ files: 'claude-projects', reader: 'cl
 
 /** Where the tool reads skills from; Claude honours its config directory override. */
 export const SKILLS_DIR = (env, home) => join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'skills');
+
+/** The user settings file mc registers its hooks in; always handled, installed or not. */
+export const HOOKS = Object.freeze({
+  dialect: 'claude',
+  file: (_env, home) => join(home, '.claude', 'settings.json'),
+  always: true,
+});

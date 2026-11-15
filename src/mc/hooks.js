@@ -19,6 +19,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+
+import { adapterFor, declared, toolsDeclaring } from '../adapters/index.js';
 
 import { PLAN_ROLE, REVIEW_ROLE } from './goals.js';
 import { run as runGit } from './git.js';
@@ -1025,6 +1028,7 @@ export function hookDrift({ problems }) {
   return problems.map(({ which, have, want }) => {
     if (have === null) return `${which} not registered`;
     if (have === 'twice') return `${which} registered twice`;
+    if (have === 'other') return `${which} runs another command`;
     if (have.matcher !== want.matcher) return `${which} on ${have.matcher || 'every tool'}, want ${want.matcher || 'every tool'}`;
     return `${which} runs another command`;
   }).join(', ');
@@ -1057,4 +1061,106 @@ export function installHooks(settings) {
     });
   }
   return next;
+}
+
+/* ------------------------------------------------------------------
+ * Other tools' hook files. A tool declares `HOOKS` ({ dialect, file, … });
+ * the Claude dialect above is the one settings file with an array per event,
+ * the `agy-hooks` dialect is one top-level entry of mc's own in a shared file.
+ * Nothing here names a tool: it asks the declaration.
+ * ------------------------------------------------------------------ */
+
+/** The events of the `agy-hooks` dialect, and the `mc hook` word each runs. */
+const AGY_EVENTS = Object.freeze([
+  Object.freeze({ event: 'SessionStart', which: 'session-start' }),
+  Object.freeze({ event: 'PreToolUse', which: 'pre-tool' }),
+  Object.freeze({ event: 'Stop', which: 'stop' }),
+]);
+
+/** The one entry mc keeps in an `agy-hooks` file, as the declaration says it. */
+export function agyHooksEntry(spec) {
+  const command = (which) => `mc hook ${which} --tool ${spec.tool} 2>/dev/null || true`;
+  return {
+    SessionStart: [{ type: 'command', command: command('session-start') }],
+    PreToolUse: [{ matcher: spec.matcher, hooks: [{ type: 'command', command: command('pre-tool') }] }],
+    Stop: [{ type: 'command', command: command('stop') }],
+  };
+}
+
+/** Registration problems of an `agy-hooks` file, the shape `hookRegistration` gives. */
+function agyRegistration(settings, spec) {
+  const want = agyHooksEntry(spec);
+  const have = isPlainObject(settings?.[spec.entry]) ? settings[spec.entry] : {};
+  const problems = [];
+  for (const { event, which } of AGY_EVENTS) {
+    const wanted = { matcher: event === 'PreToolUse' ? spec.matcher : null, command: want[event] };
+    if (!Array.isArray(have[event]) || !have[event].length) problems.push({ which, have: null, want: wanted });
+    else if (!isDeepStrictEqual(have[event], want[event])) problems.push({ which, have: 'other', want: wanted });
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+function agyInstall(settings, spec) {
+  return { ...settings, [spec.entry]: agyHooksEntry(spec) };
+}
+
+/**
+ * Every hook file mc keeps: `{ tool, dialect, path, spec }` for each tool that
+ * declares `HOOKS` and either always has one (`always`) or is installed — its
+ * launch spec resolves a binary. `installed` is injectable for a test.
+ */
+export function hookTargets({ env = process.env, home = homedir(), installed = (tool) => Boolean(adapterFor(tool).launchSpec?.().bin) } = {}) {
+  const targets = [];
+  for (const tool of toolsDeclaring('HOOKS')) {
+    const spec = declared(tool, 'HOOKS');
+    if (!spec) continue;
+    let present = Boolean(spec.always);
+    if (!present) { try { present = Boolean(installed(tool)); } catch { present = false; } }
+    if (present) targets.push({ tool, dialect: spec.dialect, path: spec.file(env, home), spec });
+  }
+  return targets;
+}
+
+/** The registration state of one target's parsed file: `{ ok, problems }`. */
+export function targetRegistration(target, settings) {
+  return target.dialect === 'agy-hooks' ? agyRegistration(settings, target.spec) : hookRegistration(settings);
+}
+
+/** The target's file with mc's entry written, everything else as read. */
+export function targetInstall(target, settings) {
+  return target.dialect === 'agy-hooks' ? agyInstall(settings, target.spec) : installHooks(settings);
+}
+
+/** The file names for a target's drift, joined, or null when every installed tool's file is right. */
+export function hookTargetsDrift(targets, readSettings) {
+  const lines = [];
+  for (const target of targets) {
+    const settings = readSettings(target.path);
+    if (!settings && !target.spec.always) { lines.push(`${target.tool}: hooks not registered`); continue; }
+    if (!settings) continue;
+    const drift = hookDrift(targetRegistration(target, settings));
+    if (drift) lines.push(target.spec.always ? drift : `${target.tool}: ${drift}`);
+  }
+  return lines.length ? lines.join('; ') : null;
+}
+
+/** Candidate argument names an agy file tool carries its path under. */
+const AGY_PATH_KEYS = Object.freeze(['AbsolutePath', 'TargetFile', 'FilePath', 'file_path', 'Path', 'path']);
+
+/**
+ * An agy hook's stdin as the Claude-shaped input the decisions read:
+ * `{ tool_name, tool_input, cwd }`. `run_command` is `Bash`, the writers
+ * `Write`/`Edit`, the readers `Read`; any other tool keeps its name, so no rule
+ * of Claude's tools applies to it.
+ */
+export function agyHookInput(input) {
+  const call = isPlainObject(input?.toolCall) ? input.toolCall : {};
+  const args = isPlainObject(call.args) ? call.args : {};
+  const path = AGY_PATH_KEYS.map((key) => args[key]).find((value) => typeof value === 'string' && value) || '';
+  const cwd = typeof input?.cwd === 'string' && input.cwd ? input.cwd : null;
+  const named = { run_command: 'Bash', write_to_file: 'Write', edit_file: 'Edit', read_file: 'Read', view_file: 'Read' };
+  const tool_name = named[call.name] || String(call.name || '');
+  const tool_input = tool_name === 'Bash' ? { command: typeof args.CommandLine === 'string' ? args.CommandLine : '' }
+    : ['Write', 'Edit', 'Read'].includes(tool_name) ? { file_path: path } : args;
+  return { tool_name, tool_input, ...(cwd ? { cwd } : {}) };
 }

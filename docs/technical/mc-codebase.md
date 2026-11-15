@@ -80,7 +80,7 @@ its last row should read `0%`.
   modules (`claude-background.js`, `claude-capacity.js`, `claude-trust.js`,
   `codex-capacity.js`, `codex-rpc.js`, `codex-sessions.js`, `agy-capacity.js`,
   `hooks.js`),
-  `tidyRoots` in `tidy.js`, and the `BACKGROUND_REFUSALS.codex` text.
+  `tidyRoots` in `tidy.js`, and the `BACKGROUND_REFUSALS.tool` text, which names the tools from the registry.
 - Don't add a verb nothing reaches, or leave a module nothing reaches. Don't
   import a wrapper without checking that it loads (PR #28). Don't print to
   stdout in a way that breaks `--json` consumers. Don't add `--non-interactive`

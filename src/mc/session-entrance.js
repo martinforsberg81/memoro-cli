@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { isSameTool } from '../adapters/index.js';
+import { declared, isSameTool, toolsDeclaring } from '../adapters/index.js';
 import { foregroundDir, registerForeground } from './foreground.js';
 import { normalizeSessionRole } from './session-role.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
@@ -128,11 +128,61 @@ export function registerSession(record, session, { env = process.env, register =
   return register({ ...record, pid: session.pid, env, onExit: () => {} });
 }
 
-/** Why `--bg` is refused, named as the entrance says it: a Codex launch, or an entrance with no persistent path. */
+/**
+ * Why `--bg` is refused, named as the entrance says it: a tool whose session has no client but the
+ * terminal (`tool`, given the tool's id), or an entrance with no persistent path (`terminal`).
+ * The tools that can are the ones that declare `BACKGROUND`.
+ */
 export const BACKGROUND_REFUSALS = Object.freeze({
-  codex: '--bg is for Claude sessions: a Codex session has no client but the terminal',
+  tool: (id) => `--bg is for tools whose session outlives the terminal (${toolsDeclaring('BACKGROUND')
+    .filter((name) => declared(name, 'BACKGROUND') === true).join(', ')}); a ${declared(id, 'LABEL') || id} session has no client but the terminal`,
   terminal: '--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal',
 });
+
+/**
+ * The conversations a running terminal session holds, as a Map of conversation id to the pid of the
+ * session that holds it. A terminal session of a tool that records its own conversation id is held
+ * three ways, by what its register row says: the conversation it resumed (`conversation`); the
+ * launch nonce its opening message carries, matched to the conversation that has it (`launch`);
+ * and, for a row with neither or whose launch nonce no conversation carries yet, every conversation
+ * with no nonce created at or after the row's `started`. A row whose process is gone holds nothing.
+ */
+export function heldConversations({ env, areaName = null, items, records = readRegister, alive = pidAlive }) {
+  const held = new Map();
+  for (const row of records(env)) {
+    if (!Number.isInteger(row.pid) || declared(row.tool, 'PERSISTENT_DRIVER') !== 'terminal'
+      || (row.area || null) !== (areaName || null) || !alive(row.pid)) continue;
+    const mine = items.filter(item => isSameTool(item.tool, row.tool));
+    if (row.conversation) held.set(row.conversation, row.pid);
+    const launched = row.launch ? mine.filter(item => item.nonce === row.launch) : [];
+    for (const item of launched) held.set(item.id, row.pid);
+    if (row.conversation || launched.length) continue;
+    const since = Date.parse(row.started);
+    for (const item of mine) if (!item.nonce && Number.isFinite(since) && (item.created_ms ?? 0) >= since) held.set(item.id, row.pid);
+  }
+  return held;
+}
+
+/**
+ * A terminal tool's selection: the desk lock, held until the caller's register row is written, and
+ * the conversations already held. A concurrent selector is refused with the lock's own retry text.
+ */
+export async function selectTerminal(options, { lock = lockDesk, records = readRegister, alive = pidAlive } = {}) {
+  let release;
+  try { release = await lock(options); }
+  catch (error) { return { result: failure(error.message) }; }
+  try {
+    return { release, held: heldConversations({ env: options.env, areaName: options.areaName, items: options.items, records, alive }) };
+  } catch (error) {
+    await release();
+    return { result: failure(error.message) };
+  }
+}
+
+/** The refusal of a conversation a running terminal session holds; nothing was started. */
+export function heldRefusal(launch, pid) {
+  return { ok: false, code: 2, reason: `this conversation is held by a running ${declared(launch.id, 'LABEL') || launch.id} session (pid ${pid}); no second one was started` };
+}
 
 /**
  * `--bg` is the invocation's choice: the session keeps running for its app and the entrance returns

@@ -813,13 +813,19 @@ hours' outcome, from runs.tsv alone (`landed.js`, `data.landed`):
 - **Session time per goal:** the same sessions' time, as a histogram over
   `<15, <30, <60, <120, <240, ≥240` minutes, then median, p25–p75, p90 and max.
 - **Planning & desks 24 h:** the list cost of every interactive session in the
-  last 24 hours — plan, manager, Martin's desk, and the sessions of the helper desk that is gone, on claude or
-  codex — and how many, then the headless plan sessions' cost from runs.tsv.
+  last 24 hours — plan, manager, Martin's desk, and the sessions of the helper desk that is gone, on claude,
+  codex or agy — and how many, then the headless plan sessions' cost from runs.tsv.
   runs.tsv holds no interactive session, so these are read from the tools' own
   transcripts (`desk-cost.js`, `data.desk_cost`): a claude transcript whose
   `entrypoint` is `cli` (the runner's are `sdk-cli`), each message priced once
   at its last reading as one request; a codex session whose `originator` is
-  `codex-tui`, its running total less its last reading before the window. A
+  `codex-tui`, its running total less its last reading before the window; an
+  agy conversation (`agy-steps`) whose opening message leads with mc's launch
+  marker, its steps in the window priced at the model of each
+  (`agy` writes no entrypoint, so a conversation without the marker cannot be
+  told from one the runner made, and is left out: the line says how many it left
+  out, and a tool whose cost source mc has no reader for is named as failed, not
+  read as zero). A
   cache (`~/mc/runner/desk-cost.json`) keeps each file's read offset, so a
   collect reads only appended bytes, at most once a minute. The first reading
   of a day (some 300 MB) is spread over collects at 24 MB each, and the line

@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { canonicalToolId } from '../../../src/adapters/index.js';
 import {
   BRANCH_LINE, ensurePlanArea, openPlanAreas, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
@@ -350,6 +351,23 @@ describe('the launch', () => {
     });
     assert.equal(code, 0);
     assert.equal(opened[0].pick, 'new');
+  });
+
+  it('--agy opens agy at the programme directory like the other tools, with plan\'s role and programme', async () => {
+    const opened = [];
+    const code = await run(['msr-core', '--agy'], {
+      stdout: sink(),
+      stderr: sink(),
+      repos: REPOS,
+      ensure: () => ({ ok: true, path: '/work/plan/msr-core', repos: ['memoro', 'memoro-cli'] }),
+      open: (options) => { opened.push(options); return { ok: true, code: 0 }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(opened.length, 1);
+    assert.equal(canonicalToolId(opened[0].tool), 'antigravity-cli');
+    assert.equal(opened[0].verb, 'plan');
+    assert.equal(opened[0].programme, 'msr-core');
+    assert.equal(opened[0].roleName, 'plan');
   });
 });
 

@@ -7,6 +7,7 @@ import { after, describe, it } from 'node:test';
 import { run, get, usage, buildOpening, renderOpening } from '../../../src/mc/commands/martin.js';
 import { run as ask } from '../../../src/mc/commands/ask.js';
 import { interactiveToolRefusal } from '../../../src/mc/interactive-tool.js';
+import { canonicalToolId } from '../../../src/adapters/index.js';
 import { deskRunsPath, setDeskCeiling } from '../../../src/mc/desk-budget.js';
 import { tsvHeader, tsvRow } from '../../../src/mc/run-plan.js';
 import { appendEntry } from '../../../src/mc/goals.js';
@@ -348,18 +349,17 @@ describe('mc martin launch', () => {
     assert.equal(await run([], { stdout, stderr, env: { MC_HEADLESS: '1' }, interactive: () => true, mkdir: () => { made += 1; }, open: () => { opened += 1; } }), 2);
     assert.equal(opened, 0); assert.equal(made, 0); assert.match(out.stderr, /interactive-only/u);
   });
-  it('refuses --agy with exit 2 naming --claude and --codex, before the desk directory is made or a session is opened', async () => {
-    const d = openingStore(); const { out, stdout, stderr } = io(); let opened = 0, made = 0;
-    const code = await run(['--agy'], { stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(NOW), role: ROLE, mkdir: () => { made += 1; }, open: async () => { opened += 1; return { ok: true, code: 0 }; } });
-    assert.equal(code, 2);
-    assert.equal(out.stderr, 'mc: agy runs unattended sessions only; an interactive session takes --claude or --codex\n');
-    assert.equal(out.stdout, '');
-    assert.deepEqual([opened, made], [0, 0]);
+  it('--agy is not refused: agy declares a persistent driver, so the entrance goes on to open it', async () => {
+    const d = openingStore(); const { stdout, stderr } = io(); const opened = [];
+    const code = await run(['--agy'], { stdout, stderr, env: d.env, home: d.home, interactive: () => true, now: () => new Date(NOW), role: ROLE, open: async (options) => { opened.push(options.tool); return { ok: true, code: 0 }; } });
+    assert.equal(code, 0);
+    assert.equal(opened.length, 1); assert.equal(canonicalToolId(opened[0]), 'antigravity-cli');
   });
-  it('the refusal is one registry-read check: a tool with a persistent driver and a name the registry does not know pass, agy does not', () => {
+  it('the refusal is one registry-read check: a tool with a persistent driver and a name the registry does not know pass', () => {
     assert.equal(interactiveToolRefusal('claude'), null);
     assert.equal(interactiveToolRefusal('codex'), null);
-    assert.equal(interactiveToolRefusal('antigravity-cli'), 'agy runs unattended sessions only; an interactive session takes --claude or --codex');
+    assert.equal(interactiveToolRefusal('agy'), null);
+    assert.equal(interactiveToolRefusal('antigravity-cli'), null);
     assert.equal(interactiveToolRefusal('no-such-tool'), null, 'an unknown name is another check\'s to refuse');
   });
 });

@@ -33,7 +33,7 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
   choose = select, question = ask } = {}) {
   const { prepareSessionEntrance, BACKGROUND_REFUSALS } = await import('./session-entrance.js');
   const { flags, programme } = await readEntranceArgs(entrance, args);
-  // Refused before the server is asked for anything: an agy session has no interactive form.
+  // Refused before the server is asked for anything: a tool that declares no interactive form is never asked for one.
   const notInteractive = (flags.tool && interactiveToolRefusal(flags.tool)) || null;
   if (notInteractive) { stderr.write(`mc: ${notInteractive}\n`); return 2; }
   const answers = [];
@@ -50,7 +50,7 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
   if (providerRefusal) { stderr.write(`mc: on ${link.destination}: ${providerRefusal}\n`); return 2; }
   // Refused before any start: a Codex session has no client but the terminal, so there is nothing `--bg` could leave running.
   const terminal = declared(snapshot.provider, 'SERVER_SESSION')?.mechanism === 'tty';
-  if (flags.bg && !declared(snapshot.provider, 'BACKGROUND')) { stderr.write(`mc: on ${link.destination}: ${BACKGROUND_REFUSALS.codex}\n`); return 1; }
+  if (flags.bg && !declared(snapshot.provider, 'BACKGROUND')) { stderr.write(`mc: on ${link.destination}: ${BACKGROUND_REFUSALS.tool(snapshot.provider)}\n`); return 1; }
   let rows = snapshot.sessions;
   let pending = null;
   const driver = {

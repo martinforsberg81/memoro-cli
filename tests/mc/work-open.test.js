@@ -12,7 +12,7 @@
  * for real, including role/programme selection and fresh fallbacks.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -27,7 +27,9 @@ import { runnerDir } from '../../src/mc/paths.js';
 import { scrubProviderApiKeysFromEnv } from '../../src/mc/runtime-secrets.js';
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
 import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
-import { BACKGROUND_REFUSALS, entersPersistentSession, terminalEnvironment } from '../../src/mc/session-entrance.js';
+import { BACKGROUND_REFUSALS, entersPersistentSession, heldConversations, terminalEnvironment } from '../../src/mc/session-entrance.js';
+import { readLaunchMarker } from '../../src/mc/launch-marker.js';
+import { agyStore } from './_helpers/agy-store.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 
@@ -342,7 +344,7 @@ describe('openInWorkArea and Remote Control', () => {
     const result = await openInWorkArea({ areaRoot, worktree, env: { ...env, SSH_CONNECTION: 'x', MC_HEADLESS: '' },
       platform: 'linux', isInteractive: () => true, ...options, bg: true });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, BACKGROUND_REFUSALS.codex);
+    assert.equal(result.reason, BACKGROUND_REFUSALS.tool('codex'));
     assert.equal(calls.length, 0);
   });
 
@@ -831,5 +833,212 @@ describe('Linux SSH interactive continuity', () => {
     await openInWorkArea({ ...local, ...options, platform: 'darwin', env: sshEnv, isInteractive: () => true,
       background: () => { throw new Error('a Mac keeps its terminal launch'); } });
     assert.equal(spawned.length, 1);
+  });
+});
+
+/**
+ * agy runs in the terminal that starts it. Real discovery, real listing of an agy home built
+ * here, real attribution at close; only the binary is replaced (never run: `spawn` is the
+ * boundary) and the desk lock and register are injected so the order of their use is visible.
+ */
+describe('openInWorkArea with a terminal tool (agy)', () => {
+  const MODEL = 'gemini-4-argon-high';
+  const OLDER = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  let serial = 0;
+  const uuid = () => `44444444-4444-4444-8444-${String(++serial).padStart(12, '0')}`;
+
+  function agyFixture(t) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-agy-open-'));
+    const areaRoot = join(root, 'programs', 'mc');
+    mkdirSync(areaRoot, { recursive: true });
+    const store = agyStore(join(root, 'home'));
+    setLogPath(join(root, 'mc.log'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'agy'), '#!/bin/sh\nexit 99\n');
+    chmodSync(join(bin, 'agy'), 0o700);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath}`;
+    t.after(() => { process.env.PATH = oldPath; setLogPath(null); rmSync(root, { recursive: true, force: true }); });
+    const env = { ...scrubProviderApiKeysFromEnv(process.env), ...store.env, MC_HOME: join(root, 'mc'), MC_WORK_ROOT: root };
+    const events = [];
+    const calls = [];
+    const open = (extra = {}) => openInWorkArea({
+      areaRoot, worktree: { path: areaRoot }, tool: 'agy', verb: 'manager', areaName: 'desk', env,
+      trust: () => ({ ok: true, changed: false }),
+      // Like the real one, giving the lock back twice is the same as once.
+      lock: async () => { events.push('lock'); let held = true; return async () => { if (held) events.push('unlock'); held = false; }; },
+      register: (row) => { events.push(`register ${JSON.stringify({ conversation: row.conversation ?? null, launch: row.launch ?? null })}`); return () => events.push('release-row'); },
+      records: () => [], alive: () => true,
+      spawn: (binary, args, options) => { events.push('spawn'); calls.push({ binary, args, options }); return extra.during?.(args) ?? { status: 0 }; },
+      ...extra,
+    });
+    const logged = () => readFileSync(join(root, 'mc.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    return { root, areaRoot, store, env, events, calls, open, logged };
+  }
+  const markerIn = (args) => readLaunchMarker(args[args.indexOf('-i') + 1]);
+
+  it('a fresh plan launch is one -i argument: the marker, the role, the separator, the prompt; the model is plan\'s', async (t) => {
+    const f = agyFixture(t);
+    const result = await f.open({ verb: 'plan', roleName: 'plan', programme: 'mc', overlay: readCanonRole('plan').overlay, prompt: 'THE OPENING ASK', areaName: 'plan/mc' });
+    assert.equal(result.ok, true);
+    const [{ binary, args }] = f.calls;
+    assert.match(binary, /\/agy$/u);
+    assert.deepEqual(args.slice(0, 3), ['--model', MODEL, '-i']);
+    const body = args[3];
+    const marker = markerIn(args);
+    assert.deepEqual({ role: marker.role, programme: marker.programme }, { role: 'plan', programme: 'mc' });
+    assert.ok(body.startsWith('<!-- mc-launch-v1 '), 'the marker leads');
+    assert.ok(body.indexOf('--- TASK ---') > body.indexOf('-->'), 'the instructions sit between the marker and the separator');
+    assert.ok(body.endsWith('THE OPENING ASK'), 'the prompt follows the separator');
+    assert.equal(args.includes('--conversation'), false);
+    const open = f.logged().find((entry) => entry.event === 'work.open');
+    assert.equal(open.launched_id, marker.launch, 'the log names the same nonce the marker carries');
+    assert.equal(open.instructions, true);
+  });
+
+  it('a resume names the conversation and the model its transcript recorded, and hands over no instructions', async (t) => {
+    const f = agyFixture(t);
+    f.store.addConversation({ id: OLDER, workspace: f.areaRoot, model: 'gemini-4-argon-low' });
+    const result = await f.open({ pick: OLDER, overlay: 'ROLE TEXT', prompt: 'IGNORED ON RESUME' });
+    assert.equal(result.ok, true);
+    assert.equal(result.resumed, true);
+    const { args } = f.calls[0];
+    assert.deepEqual(args.slice(0, 4), ['--conversation', OLDER, '--model', 'gemini-4-argon-low']);
+    assert.equal(args.includes('-i'), false);
+    assert.equal(JSON.stringify(args).includes('ROLE TEXT'), false);
+    assert.ok(f.events.some((event) => event === `register ${JSON.stringify({ conversation: OLDER, launch: null })}`), 'the row names the conversation it holds');
+  });
+
+  it('the launch is attributed by its marker through the real close path: the marked conversation, never another process\'s', async (t) => {
+    const f = agyFixture(t);
+    const make = (args, extra) => {
+      const nonce = markerIn(args).launch;
+      f.store.addConversation({ id: uuid(), workspace: f.areaRoot, content: f.store.opening({ launch: nonce, words: 'mine' }) });
+      for (const other of extra) f.store.addConversation(other);
+      return { status: 0 };
+    };
+    // Overlapping launches: another process's marked and unmarked conversations appear in the same window.
+    const mine = await f.open({ prompt: 'ask', during: (args) => make(args, [
+      { id: OTHER, workspace: f.areaRoot, content: f.store.opening({ launch: uuid(), words: 'theirs' }) },
+      { id: uuid(), workspace: f.areaRoot, content: 'typed by hand, no marker' },
+    ]) });
+    assert.equal(mine.ok, true);
+    const created = readdirSync(f.store.brain).sort();
+    const marked = created.find((id) => readLaunchMarker(JSON.parse(readFileSync(f.store.transcriptPath(id), 'utf8').split('\n')[0]).content)?.launch === markerIn(f.calls[0].args).launch);
+    assert.equal(mine.started, marked);
+    assert.notEqual(mine.started, OTHER);
+    assert.equal(mine.kept_nothing, false);
+    const closed = f.logged().find((entry) => entry.event === 'work.closed');
+    assert.equal(closed.started, marked);
+  });
+
+  it('a conversation without the launch\'s marker is never `started`, and a launch that left none is attributed to none', async (t) => {
+    const f = agyFixture(t);
+    const unmarked = await f.open({ prompt: 'ask', during: () => { f.store.addConversation({ id: uuid(), workspace: f.areaRoot, content: 'no marker here' }); return { status: 0 }; } });
+    assert.equal(unmarked.started, null);
+    assert.equal(unmarked.kept_nothing, true);
+    assert.equal(unmarked.conversation, null);
+    const none = await f.open({ prompt: 'ask' });
+    assert.equal(none.started, null);
+    assert.equal(f.logged().filter((entry) => entry.event === 'work.closed').every((entry) => entry.started === null), true);
+  });
+
+  it('a launch that quotes a marker in its text, not at the head, does not take the conversation either', async (t) => {
+    const f = agyFixture(t);
+    const result = await f.open({ prompt: 'ask', during: (args) => {
+      const nonce = markerIn(args).launch;
+      f.store.addConversation({ id: uuid(), workspace: f.areaRoot, content: `<USER_REQUEST>\nlook at this: ${f.store.opening({ launch: nonce })}` });
+      return { status: 0 };
+    } });
+    assert.equal(result.started, null);
+  });
+
+  it('the desk lock is taken before anything is chosen, kept across the register row, and given back before the tool runs', async (t) => {
+    const f = agyFixture(t);
+    await f.open({ prompt: 'ask' });
+    assert.deepEqual(f.events.map((event) => event.split(' ')[0]), ['lock', 'register', 'unlock', 'spawn', 'release-row']);
+  });
+
+  it('a desk lock that is refused stops the launch before a row or a process', async (t) => {
+    const f = agyFixture(t);
+    const result = await f.open({ prompt: 'ask', lock: async () => { throw new Error('another mc is choosing; try again in a moment'); } });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /another mc is choosing/u);
+    assert.deepEqual(f.events, []);
+    assert.equal(f.calls.length, 0);
+  });
+
+  it('a conversation a running session holds is refused with exit 2, by the conversation it resumed, by its nonce, and after a marker-less start', async (t) => {
+    const f = agyFixture(t);
+    const nonce = uuid();
+    const NOW = Date.now();
+    f.store.addConversation({ id: OLDER, workspace: f.areaRoot, content: f.store.opening({ launch: nonce }) });
+    const rows = {
+      resumed: [{ pid: 7, tool: 'agy', area: 'desk', conversation: OLDER }],
+      marked: [{ pid: 7, tool: 'agy', area: 'desk', launch: nonce }],
+      unmarked: [{ pid: 7, tool: 'agy', area: 'desk', started: new Date(NOW - 60_000).toISOString() }],
+    };
+    f.store.addConversation({ id: OTHER, workspace: f.areaRoot, content: 'typed by hand, no marker' });
+    for (const [how, held] of Object.entries(rows)) {
+      const target = how === 'unmarked' ? OTHER : OLDER;
+      const refused = await f.open({ pick: target, records: () => held });
+      assert.equal(refused.ok, false, how);
+      assert.equal(refused.code, 2, how);
+      assert.match(refused.reason, /held by a running Antigravity CLI session \(pid 7\); no second one was started/u, how);
+    }
+    assert.equal(f.calls.length, 0, 'nothing was started');
+    assert.equal(f.events.filter((event) => event === 'unlock').length, 3, 'the lock was given back each time');
+  });
+
+  it('a row whose process is gone holds nothing, and the default pick passes over a held conversation', async (t) => {
+    const f = agyFixture(t);
+    f.store.addConversation({ id: OLDER, workspace: f.areaRoot, mtime: 1_000_000 });
+    f.store.addConversation({ id: OTHER, workspace: f.areaRoot, mtime: 2_000_000 });
+    const row = [{ pid: 7, tool: 'agy', area: 'desk', conversation: OTHER }];
+    const dead = await f.open({ records: () => row, alive: () => false });
+    assert.equal(dead.conversation, OTHER, 'the newest, its row is dead');
+    const skipped = await f.open({ records: () => row, alive: () => true });
+    assert.equal(skipped.conversation, OLDER, 'the newest is held, so the next one is taken');
+  });
+
+  it('the held set, by what a row says, for a row of another desk or tool or a conversation of another tool', () => {
+    const items = [
+      { tool: 'agy', id: 'a', nonce: 'n1', created_ms: 100 },
+      { tool: 'agy', id: 'b', nonce: null, created_ms: 5_000 },
+      { tool: 'agy', id: 'c', nonce: null, created_ms: 1_000 },
+      { tool: 'codex', id: 'd', nonce: null, created_ms: 9_000 },
+    ];
+    const held = (rows) => Object.fromEntries(heldConversations({ env: {}, areaName: 'desk', items, records: () => rows, alive: () => true }));
+    assert.deepEqual(held([{ pid: 1, tool: 'agy', area: 'desk', launch: 'n1', started: new Date(2_000).toISOString() }]), { a: 1 });
+    assert.deepEqual(held([{ pid: 2, tool: 'agy', area: 'desk', started: new Date(2_000).toISOString() }]), { b: 2 }, 'unmarked and created after the start; the marked and the older one are not');
+    assert.deepEqual(held([{ pid: 5, tool: 'agy', area: 'desk', launch: 'nX', started: new Date(2_000).toISOString() }]), { b: 5 }, 'until its launch nonce appears, the row holds unmarked conversations created after its start');
+    assert.deepEqual(held([{ pid: 3, tool: 'agy', area: 'other', conversation: 'a' }]), {}, 'another desk');
+    assert.deepEqual(held([{ pid: 4, tool: 'claude', area: 'desk', conversation: 'a' }]), {}, 'a tool that has no terminal driver');
+  });
+
+  it('--bg is refused before a launch is planned, with the tool-neutral text', async (t) => {
+    const f = agyFixture(t);
+    const result = await f.open({ env: { ...f.env, SSH_CONNECTION: 'x', MC_HEADLESS: '' }, platform: 'linux', isInteractive: () => true, bg: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, BACKGROUND_REFUSALS.tool('agy'));
+    assert.match(result.reason, /has no client but the terminal/u);
+    assert.equal(f.calls.length, 0);
+  });
+
+  it('a plan launch resumes its own earlier conversation by the identity its launch log proves, and not an unmarked one', async (t) => {
+    const f = agyFixture(t);
+    const plan = { verb: 'plan', roleName: 'plan', programme: 'mc', overlay: readCanonRole('plan').overlay, areaName: 'plan/mc' };
+    const first = await f.open({ ...plan, prompt: 'ask', during: (args) => {
+      f.store.addConversation({ id: OLDER, workspace: f.areaRoot, content: f.store.opening({ launch: markerIn(args).launch, role: 'plan', programme: 'mc' }) });
+      return { status: 0 };
+    } });
+    assert.equal(first.started, OLDER);
+    f.store.addConversation({ id: OTHER, workspace: f.areaRoot, content: 'typed by hand', mtime: Date.now() + 10_000 });
+    const again = await f.open({ ...plan, prompt: 'ask' });
+    assert.equal(again.resumed, true);
+    assert.equal(again.conversation, OLDER, 'identity comes from the launch log by the nonce, never from the conversation\'s own words');
+    assert.deepEqual(f.calls.at(-1).args.slice(0, 2), ['--conversation', OLDER]);
   });
 });
