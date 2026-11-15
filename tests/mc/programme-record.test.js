@@ -703,12 +703,14 @@ describe('programme document structure at sign-off', () => {
     return { start, end: next < 0 ? text.length : next + 1 };
   };
 
-  it('requires every ordered nonempty heading/entry and each part label before either sign-off file is written', async () => {
+  it('requires every ordered nonempty heading/entry and each part label before either sign-off file is written', async (t) => {
+    const setupStart = performance.now();
     const a = area();
     try {
       const dir = join(a.home, 'p'); mkdirSync(dir);
       const template = recordPageTemplate();
       assert.deepEqual(documentProblems(template), []);
+      t.diagnostic(`public sign structure fixture setup: ${(performance.now() - setupStart).toFixed(3)} ms`);
       const cases = [];
       for (const heading of headings) {
         const { start, end } = section(template, heading);

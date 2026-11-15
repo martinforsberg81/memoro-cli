@@ -608,7 +608,8 @@ for (const tool of ['codex', 'claude']) {
 
 
 describe('programme sign is Martin at the interactive desk only', () => {
-  it('refuses manager, plan, build, headless Martin and a bare shell with no effects', async () => {
+  it('refuses manager, plan, build, headless Martin and a bare shell with no effects', async (t) => {
+    const setupStart = performance.now();
     const root = mkdtempSync(join(tmpdir(), 'mc-sign-authority-'));
     try {
       const dir = join(root, 'programs', 'p');
@@ -621,6 +622,7 @@ describe('programme sign is Martin at the interactive desk only', () => {
       writeFileSync(join(dir, 'PROGRAMME-REVIEW.md'), report);
       writeFileSync(join(dir, '.programme-review.json'), JSON.stringify({ verdict: 'ok', hash: hash(page), at: '2026-11-15T10:00:00Z', findings: 0, report_sha256: hash(report) }));
       const before = readFileSync(join(dir, 'PROGRAMME.json'), 'utf8');
+      t.diagnostic(`sign authority fixture setup: ${(performance.now() - setupStart).toFixed(3)} ms`);
       for (const caller of [
         { MC_ROLE: 'manager' }, { MC_ROLE: 'plan' }, { MC_ROLE: 'build-session:goal', MC_GOAL: 'p/g' },
         { MC_ROLE: 'martin', MC_HEADLESS: '1' }, {}, { MC_ROLE: 'programme-review' },

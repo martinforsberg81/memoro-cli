@@ -31,6 +31,9 @@ import { QUOTA_SLEEP_MS, TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
 import { writeFileAtomic } from '../../src/mc/atomic-write.js';
 import { goalJsonV2 } from './_helpers/goal-file.js';
 
+const FILE_BOOT_MS = performance.now();
+let reportedBoot = false;
+
 const NOW = new Date('2026-11-15T10:00:00Z');
 const AFTER_START = NOW.getTime() + 60_000;
 const AHEAD = '2026-11-15T15:00:00.000Z';
@@ -566,6 +569,8 @@ test('a plan review whose agy session reads a login refusal writes agy\'s refusa
 
 /** Reuse the goal reader's provider/clock boundaries; the programme handlers and every owned file are real. */
 function programmeSetup(t) {
+  const setupStart = performance.now();
+  if (!reportedBoot) { t.diagnostic(`plan-review file process startup through imports: ${FILE_BOOT_MS.toFixed(3)} ms`); reportedBoot = true; }
   const shared = setup(t);
   const dir = join(shared.root, 'programs', 'p');
   mkdirSync(dir, { recursive: true });
@@ -599,6 +604,7 @@ function programmeSetup(t) {
     return DONE;
   };
   const meta = () => JSON.parse(readTextOrNull(join(dir, PROGRAMME_REVIEW_RECORD)) ?? 'null');
+  t.diagnostic(`programme fixture setup (including shared real-files fixture): ${(performance.now() - setupStart).toFixed(3)} ms`);
   return { ...shared, dir, page, env, checkout, deps, call, reads, files, meta, verdicts,
     martin: { ...env, MC_ROLE: 'martin', MC_HEADLESS: undefined, MC_GOAL: undefined } };
 }
@@ -763,7 +769,7 @@ test('programme sign: no or stale reading never signs, current NOT OK requires a
       assert.equal((await f.call(['review', 'p'], { extra: { session: f.reads(word) } })).code, word === 'ok' ? 0 : 1);
     }
     if (condition === 'stale') writeFileSync(join(f.dir, 'README.md'), f.page + '\nnew text\n');
-    if (condition === 'changed report') writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), 'OK\nfindings: 0\nnot the recorded reading\n');
+    if (condition === 'changed report') writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), 'OK\nfindings: 2\nnot the recorded reading\n');
     const before = f.files();
     const signed = await f.call(['sign', 'p'], { identity: f.martin });
     assert.equal(signed.code, condition === 'ok' ? 0 : 1, `${condition}: ${signed.err}`);
