@@ -77,14 +77,19 @@ describe('bare mc', () => {
     {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
-        assert.match(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} is missing`);
+      // The overview: its sections, and what it leaves to the operations view (`o`).
+      for (const section of ['HORIZONS', 'IN FLIGHT', 'NEEDS ATTENTION']) {
+        assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
+      for (const section of ['MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM']) {
+        assert.doesNotMatch(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} belongs to the operations view`);
+      }
+      assert.doesNotMatch(result.stdout, /┌─ proposals|^\s+┌─ MC\b/mu, 'no pipeline box, no hero frame');
       // No WORK heading: every session is a programme's or a desk's, and the
-      // two folders nothing explains are strays under PROGRAMMES.
+      // two folders nothing explains are strays under NEEDS ATTENTION.
       assert.doesNotMatch(result.stdout, /^\s+WORK\b/mu);
-      assert.match(result.stdout, /^ +not an area mc knows$/mu);
-      assert.match(result.stdout, /^ +alpha\s+checkout yes · 0 uncommitted$/mu);
+      assert.match(result.stdout, /^ +alpha +not an area mc knows · checkout yes · 0 uncommitted$/mu);
+      assert.match(result.stdout, /^ +beta +not an area mc knows · checkout yes · 0 uncommitted$/mu);
       assert.doesNotMatch(result.stdout, /unplanned-workareas/u);
     }
   });
@@ -142,7 +147,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['HORIZONS', 'MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM', 'MC']) {
+      for (const section of ['HORIZONS', 'IN FLIGHT', 'NEEDS ATTENTION']) {
         const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }
@@ -416,6 +421,27 @@ describe('the menu under the page', () => {
     assert.match(session.written.join(''), /the interactive manager is gone/u);
   });
 
+  it('opens the operations view on o or operations, from the overview and from a programme\'s view, and h or a number leaves it', async () => {
+    const data = numbered([row('mc-ui', 'mc'), row('docx-editor', 'docx-editing-surface')]);
+    const calls = [];
+    // `o` and `operations`, then a number (a programme), then `o` again, then `h`.
+    const session = drive(['o', 'operations', '3', 'o', 'h', 'q'], {
+      data, show: (name) => calls.push(`show ${name}`), operate: (on) => calls.push(`operate ${on}`),
+    });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(calls, ['operate true', 'operate true', 'show docx-editing-surface', 'operate true', 'show null']);
+    assert.deepEqual(session.opened, [], 'neither word opens a goal or a programme');
+  });
+
+  it('`o` and `operations` are the menu\'s own: no programme takes them, and the page draws once per answer', async () => {
+    // A programme named `o` or `operations` is reached by its number; the word is the view's.
+    const data = numbered([row('first-goal', 'o'), row('second-goal', 'operations')]);
+    const calls = [];
+    const session = drive(['o', 'operations', '3', '4', 'q'], { data, show: (name) => calls.push(`show ${name}`), operate: (on) => calls.push(`operate ${on}`) });
+    assert.equal(await session.run(), 0);
+    assert.deepEqual(calls, ['operate true', 'operate true', 'show o', 'show operations']);
+  });
+
   it('`a` unfolds from the overview and from a programme\'s view, and folds again', async () => {
     const data = numbered([row('mc-ui', 'mc')]);
     const flags = [];
@@ -451,13 +477,15 @@ describe('the menu under the page', () => {
     }
   });
 
-  it('names the desk in the first line of keys, and keeps every line of keys as short as the longest', async () => {
+  it('names the desk and the operations view in the first line of keys, and keeps every line of keys within it', async () => {
     const session = drive(['q']);
     await session.run();
     const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
-    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}h {2}home {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
-    const longest = Math.max(...keys.filter((line) => !/<n>/u.test(line)).map((line) => line.length));
-    assert.ok(keys.every((line) => line.length <= longest), keys.map((line) => line.length).join(','));
+    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}o {2}operations {3}· {3}h {2}home {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
+    // The first line is the widest: the other lines of keys are no wider than it, and it is no wider than 110 columns.
+    const first = keys.find((line) => /<n>/u.test(line));
+    assert.ok(first.length <= 110, `${first.length} columns`);
+    assert.ok(keys.every((line) => line.length <= first.length), keys.map((line) => line.length).join(','));
   });
 
   it('quits on q or on nothing', async () => {

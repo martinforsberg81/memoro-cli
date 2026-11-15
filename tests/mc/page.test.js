@@ -1855,6 +1855,37 @@ describe('the page', () => {
       assert.match(live[2], /HORIZONS/u, 'and a live frame keeps it');
     });
 
+    it('keeps the operations view through a live frame; h, a number or a programme view each leave it, and o opens it from a programme', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const data = dataWith(FIRST, root);
+      const live = [];
+      const seen = async (frame) => { live.push((await frame()).lines.join('\n')); };
+      const { code, frames } = await drive(async () => data, [
+        () => 'o',
+        async ({ frame }) => { await seen(frame); return 'a'; },
+        async ({ frame }) => { await seen(frame); return 'o'; },
+        async ({ frame }) => { await seen(frame); return 'h'; },
+        async ({ frame }) => { await seen(frame); return String(numberOf(data, 'mc')); },
+        async ({ frame }) => { await seen(frame); return 'operations'; },
+        async ({ frame }) => { await seen(frame); return String(numberOf(data, 'docx-editing-surface')); },
+        async ({ frame }) => { await seen(frame); return 'q'; },
+      ]);
+      assert.equal(code, 0);
+      const operations = (text) => /MERGE & DEPLOY/u.test(text) && /SYSTEM/u.test(text) && !/HORIZONS|IN FLIGHT|NEEDS ATTENTION|┌─ DESK/u.test(text);
+      assert.ok(operations(frames[0]), 'o draws the operations view');
+      assert.ok(operations(live[0]), 'a live frame keeps it');
+      assert.ok(operations(frames[1]) && operations(live[1]), 'a keeps it and expands its panels');
+      assert.ok(operations(frames[2]), 'o again keeps it');
+      assert.match(frames[3], /HORIZONS/u, 'h is the overview again');
+      assert.ok(/HORIZONS/u.test(live[3]) && !operations(live[3]), 'and a live frame keeps the overview');
+      assert.match(frames[4], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'), 'a number opens a programme');
+      assert.ok(operations(frames[5]), 'o from a programme\'s view opens the operations view');
+      assert.ok(operations(live[5]));
+      assert.match(frames[6], new RegExp(`┌─ ${numberOf(data, 'docx-editing-surface')} docx-editing-surface`, 'u'), 'a number from the operations view opens a programme');
+      assert.ok(!operations(live[6]), 'and the operations view is closed');
+    });
+
     it('opens by the numbers of the frame on the screen after a frame added a goal', async (t) => {
       const root = horizonRoot();
       t.after(() => rmSync(root, { recursive: true, force: true }));
