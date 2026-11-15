@@ -94,6 +94,8 @@ import { mergePrs } from './page-cache.js';
 import { profileArgs } from './portrait.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
+import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
+import { deployAlive, readDeploys } from './deploys.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
@@ -592,6 +594,11 @@ export function realDeps(env = process.env) {
     // same call `mc merge` makes, in process because the runner is mc.
     // Dependencies so a test drives them without a real merger, suite or remote.
     queueMerge: (options) => queueMerge({ env, ...options }),
+    // A deploy-mend's retry (deploy-repair.js): what the pick is, the deploy itself, and what was deployed — dependencies
+    // so a test drives the retry with no production, no gate and no checkout behind it.
+    pickOf: async (repoPath) => (await (await import('./commands/deploy.js')).deployPlan({ path: repoPath, env })).sha || null,
+    deployRun: async (argv, options) => (await import('./commands/deploy.js')).run(argv, options),
+    deploys: () => readDeploys(env),
     startMerger: (options) => startMerger({ env, ...options }),
     pendingMerges: (root) => { try { return parseQueue(readFileSync(mergesPath(root), 'utf8')); } catch { return []; } },
     // The session — `streamSession` below. The session's Bash tool gets a
@@ -1849,6 +1856,148 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
   }
 
+  // ----------------------------------------------------------- deploy-mend
+  // A deploy stopped by a technical fault is repaired by a goal-less mend session and shipped once more by
+  // the runner (deploy-repair.js; docs/technical/mc-deploy.md, "A stop that is repaired").
+  const deployMendState = () => ({ root, read: deps.read, write: writeJson, lock });
+  const deployMendTree = (branch, repoName) => join(root, 'runner', 'work', branch.replace('/', '-'), repoName);
+
+  /** The queued requests, so an idle lane notices a new one on the control poll. */
+  function deployMendTicket() {
+    try { return readDeployMends(deployMendState()).filter((entry) => entry.state === 'queued').map((entry) => entry.id).sort().join(','); }
+    catch { return ''; } // deployMendWork reports the unreadable state at the next pick.
+  }
+
+  function deployMendWork(names, passed) {
+    if (!names.includes('memoro-cli') || !DEPLOY_REPOS.every((name) => repos.some((repo) => repo.name === name))) return [];
+    const held = new Set(stepsHeld().map((item) => item.name));
+    const busy = (entry) => claims.has(entry.owner) || held.has(entry.owner);
+    let entries;
+    try { entries = readDeployMends(deployMendState()); }
+    catch (error) { say(`deploy-mend state unreadable — ${error.message}`); return []; }
+    // A dead runner's launch is an unsuccessful attempt, never a permanent running row.
+    if (entries.some((entry) => entry.state === 'running' && !busy(entry))) {
+      updateDeployMends(deployMendState(), (current) => {
+        for (const entry of current) if (entry.state === 'running' && !busy(entry)) failDeployMend(entry, 'runner ended during the deploy-mend session');
+      });
+      entries = readDeployMends(deployMendState());
+    }
+    return entries.filter((entry) => entry.state === 'queued' && !busy(entry)).map((entry) => {
+      const branch = deployMendBranch(entry);
+      return { name: `deploy-mend:${branch}`, repo: 'memoro-cli', kind: 'mend', variant: null, since: entry.created, deployMend: entry, branch, priority: 0 };
+    }).filter((item) => !passed.has(item.name) && !claims.has(item.name) && !held.has(item.name));
+  }
+
+  async function deployMendPass(item, { lane }) {
+    const { name, repo: repoName } = item;
+    claims.add(name); claimRepos.set(name, repoName);
+    try {
+      const outcome = await runDeployMend(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, step: null, goal: false } : { ran: 0 };
+    } finally { claims.delete(name); claimRepos.delete(name); }
+  }
+
+  async function runDeployMend(item, { lane }) {
+    const { name, repo: repoName, branch } = item;
+    const request = item.deployMend;
+    const role = deps.role(MEND_ROLE);
+    if (!role?.overlay) return 'skipped:role-missing';
+    const route = routeClass('mend');
+    if (!route.ok) return 'skipped:no-capacity';
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) return 'skipped:tool-missing';
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot !== 'ok') return slot === 'stop' ? 'stop' : 'skipped:update';
+    let admission;
+    const currentPath = paths.currentFor(repoName, lane);
+    let scratch; let marker; let out; let claimed = false; let result;
+    const state = deployMendState();
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') return 'skipped:no-capacity';
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) return 'skipped:offline';
+      // Both repositories, each on the request's branch from its origin/main.
+      const worktrees = DEPLOY_REPOS.map((repoNameOf) => ({ repo: repoNameOf, path: deployMendTree(branch, repoNameOf) }));
+      for (const tree of worktrees) {
+        const repo = repos.find((item) => item.name === tree.repo);
+        if (deps.exists(tree.path)) continue;
+        const fetched = deps.git(repo.path, ['fetch', '--quiet', 'origin']);
+        if (!fetched.ok) return 'skipped:fetch';
+        const added = addBranchWorktree({ git: deps.git, bare: repo.path, path: tree.path, branch });
+        if (!added.ok) { say(`${name}: ${tree.repo} worktree not made — ${added.stderr || 'git failed'}`); return 'skipped:worktree'; }
+      }
+      for (const tree of worktrees) await deps.attachDeps(tree.path);
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      const cwd = worktrees.find((tree) => tree.repo === repoName).path;
+      const ts = stamp().replace(/[-:]/gu, '');
+      const stem = `deploy-mend-${branch.split('-').at(-1)}-${ts}-${randomUUID().slice(0, 8)}`;
+      out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'mend', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const claimedNow = updateDeployMends(state, (all) => {
+        const entry = all.find((found) => found.id === request.id);
+        if (entry?.state !== 'queued') return null;
+        Object.assign(entry, { state: 'running', branch, worktrees: Object.fromEntries(worktrees.map((tree) => [tree.repo, tree.path])), owner: name, session_log: `${out}.jsonl`, prs: [] });
+        return entry;
+      });
+      if (!claimedNow) return 'skipped:claimed';
+      claimed = true;
+      const prompt = deployMendPrompt({ entry: request, branch, worktrees, root });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const current = { name, kind: 'mend', variant: null, repo: repoName, lane, pid, worktree: cwd, started: stamp(), tool: settings.tool, model: settings.model,
+        effort: settings.effort, class: 'fast', billing: picked.billing,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: MEND_ROLE, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${name}: deploy-mend starting (${settings.tool} ${settings.model})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+        onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
+        ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the deploy-mend in these worktrees. No goal or LOG.md. Publish with mc publish, or end with mc repo mend deploy <id> repaired.' }),
+        env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_DEPLOY_MEND: request.id, MC_WORKAREA: cwd, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+      admission.release?.();
+      result = await pending;
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout);
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(launch.id === 'codex' ? 'codex' : 'claude', read.quotaReset);
+      logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
+      return 'ran';
+    } finally {
+      try {
+        // mc publish, the merger and the session's own `repaired` may already have advanced the row. Never overwrite them.
+        if (claimed) updateDeployMends(state, (all) => {
+          const entry = all.find((found) => found.id === request.id);
+          if (entry?.state !== 'running' || entry.session_log !== `${out}.jsonl`) return;
+          if ((entry.prs || []).length) entry.state = 'published';
+          else failDeployMend(entry, `session ended without a published PR or repaired (exit ${result?.status ?? 'unknown'}); inspect ${entry.session_log}`);
+        });
+      } finally {
+        remove(currentPath);
+        try {
+          if (scratch) {
+            writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null });
+            await reclaimSessionExports(scratch, name);
+          }
+        } finally { admission?.release?.(); dropSlot(); }
+      }
+    }
+  }
+
   /** The reason each goal's review last waited on, so it is said once. */
   const reviewWaits = new Map();
   /** The problems each programme's invalid record was last said with, so they are said once. */
@@ -1946,6 +2095,173 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
   }
 
+  /** The repository's checkout by name, or null. */
+  const repoOf = (name) => repos.find((repo) => repo.name === name) || null;
+  /** Requests being settled now: a retry is one await long, and the next five-minute pass never starts a second. */
+  const deployMendSettling = new Set();
+
+  /** The merge commit of a landed pull request, or null when GitHub cannot say yet. */
+  function mergeCommitOf(repo, pr) {
+    const asked = deps.gh(repo.path, ['pr', 'view', String(pr), '--json', 'mergeCommit']);
+    if (!asked.ok) return null;
+    try { return JSON.parse(asked.stdout || 'null')?.mergeCommit?.oid || null; } catch { return null; }
+  }
+
+  /**
+   * The repaired request's two conditions (D5): the runner's own code has every landed memoro-cli merge commit
+   * as an ancestor, and the pick descends from every landed memoro merge commit. `pick` is read by the caller.
+   */
+  function deployMendContained(entry, pick) {
+    const merged = (repoName) => (entry.prs || []).filter((item) => item.repo === repoName && item.state === 'landed' && item.merge).map((item) => item.merge);
+    const own = merged('memoro-cli');
+    if (own.length) {
+      const dir = mcCheckout({ exists: deps.exists });
+      if (!dir || !marked?.commit) return { ok: false, kind: 'handover', why: 'the runner does not know its own code' };
+      deps.git(dir, ['fetch', '-q', 'origin']);
+      for (const oid of own) if (!deps.git(dir, ['merge-base', '--is-ancestor', oid, marked.commit]).ok) return { ok: false, kind: 'handover', why: `the runner's code does not hold ${oid.slice(0, 8)} yet` };
+    }
+    const picked = merged('memoro');
+    if (picked.length) {
+      const repo = repoOf('memoro');
+      if (!pick || !repo) return { ok: false, kind: 'green', why: 'the pick cannot be read' };
+      for (const oid of picked) if (!deps.git(repo.path, ['merge-base', '--is-ancestor', oid, pick]).ok) return { ok: false, kind: 'green', why: `the pick ${pick.slice(0, 8)} does not hold ${oid.slice(0, 8)} yet` };
+    }
+    return { ok: true };
+  }
+
+  /** What a deploy under `holder` came to, from the record: `deployed`, `running`, `failed`, `refused`, or null. */
+  function deployOutcomeOf(holder) {
+    const row = deps.deploys().filter((item) => item.holder === holder).at(-1);
+    return row ? { row, outcome: row.outcome === 'running' && !deployAlive(row, { alive }) ? 'failed' : row.outcome } : { row: null, outcome: null };
+  }
+
+  /** The one retry: the same deploy, through the same pick, gate and admission, under the runner's holder and with no `--accept-red`. */
+  async function retryDeploy(entry) {
+    const holder = retryHolder(entry);
+    let stop = null;
+    const text = [];
+    const sink = { write: (chunk) => { text.push(String(chunk)); return true; } };
+    const env = { ...deps.env }; delete env.MC_HEADLESS;
+    try {
+      await deps.deployRun([], { env, stdout: sink, stderr: sink, repos, root, holder: { name: holder }, retry: true, onStop: (found) => { stop = found; } });
+    } catch (error) { text.push(error.message); }
+    const tail = text.join('').trim().split('\n').slice(-6).join(' | ').slice(0, 600);
+    const { row, outcome } = deployOutcomeOf(holder);
+    if (outcome === 'deployed') return { result: 'deployed' };
+    if (stop && !stop.technical) return { result: 'stopped', reason: stop.row?.note || tail || 'the deploy stopped' };
+    return { result: 'technical', reason: `the retry stopped: ${stop?.row?.note || row?.note || tail || 'no record of why'}` };
+  }
+
+  /** Settle one request: pull requests to landed, landed to repaired, repaired to the one retry, the retry to its end. */
+  async function settleDeployMend(id) {
+    const find = () => readDeployMends(deployMendState()).find((entry) => entry.id === id);
+    let entry = find();
+    if (!entry) return;
+    const held = new Set(stepsHeld().map((item) => item.name));
+    const sessionBusy = claims.has(entry.owner) || held.has(entry.owner);
+    const patch = (change) => updateDeployMends(deployMendState(), (all) => { const found = all.find((item) => item.id === id); return found ? change(found) : null; });
+    if (entry.state === 'published' && !sessionBusy) {
+      const pending = deps.pendingMerges ? deps.pendingMerges(root) : [];
+      const answers = [];
+      for (const item of entry.prs || []) {
+        const repo = repoOf(item.repo);
+        if (!repo) continue;
+        if (item.state === 'open') {
+          const job = pending.find((found) => found.repo === item.repo && Number(found.pr) === item.number);
+          if (job && job.state !== 'red') continue;
+          const status = prState(deps.gh, repo.path, item.number);
+          if (status === 'CLOSED') answers.push({ item, landed: false });
+          else if (status === 'MERGED') answers.push({ item, landed: true });
+          else if (status === 'OPEN') {
+            try { deps.queueMerge({ root, repo: item.repo, repoPath: repo.path, pr: item.number, branch: entry.branch, holder: { name: entry.owner }, now: deps.now() }); }
+            catch (error) { say(`${item.repo}#${item.number}: deploy-mend delivery could not be restored — ${error.message}`); }
+          }
+        }
+      }
+      for (const { item, landed } of answers) answerDeployMend({ ...deployMendState(), repo: item.repo, pr: item.number, landed, reason: 'pull request closed without merging' });
+      entry = find();
+      if (entry.state !== 'published') return;
+      // The merge commit each landed pull request left, which the retry's two conditions are read from.
+      const merges = new Map();
+      for (const item of entry.prs || []) if (item.state === 'landed' && !item.merge) { const oid = mergeCommitOf(repoOf(item.repo), item.number); if (oid) merges.set(`${item.repo}#${item.number}`, oid); }
+      patch((found) => {
+        for (const item of found.prs || []) if (merges.has(`${item.repo}#${item.number}`)) item.merge = merges.get(`${item.repo}#${item.number}`);
+        if (found.state === 'published' && found.prs?.length && found.prs.every((item) => item.state === 'landed' && item.merge)) Object.assign(found, { state: 'repaired', repaired_by: 'merge' });
+      });
+      entry = find();
+    }
+    if (entry.state === 'retrying' && !deployMendSettling.has(`retry:${id}`) && (entry.retry_owner === pid || !alive(Number(entry.retry_owner)))) {
+      // The runner that started the retry is gone. The deploy it started may still be going, or may have finished.
+      // The one retry is spent either way: never started again (D5); what did not ship waits on Martin.
+      const { outcome } = deployOutcomeOf(retryHolder(entry));
+      if (outcome === 'running') return;
+      if (outcome === 'deployed') patch((found) => { found.state = 'deployed'; });
+      else patch((found) => retryFailed(found, `runner ended during the retry; its deploy row reads ${outcome || 'nothing'}`));
+      entry = find();
+    }
+    if (entry.state === 'repaired' && !sessionBusy) {
+      const needsPick = (entry.prs || []).some((item) => item.repo === 'memoro' && item.state === 'landed');
+      const repo = repoOf('memoro');
+      let pick = null;
+      if (needsPick && repo) { try { pick = await deps.pickOf(repo.path); } catch { pick = null; } }
+      const shippedSince = (at) => deps.deploys().some((row) => row.outcome === 'deployed' && Date.parse(row.ended || row.started) > Date.parse(at));
+      const verdict = retryVerdict({ entry, now: deps.now(), shippedSince, contained: () => deployMendContained(entry, pick) });
+      if (verdict.drop) {
+        patch((found) => { Object.assign(found, { state: 'not-retried', reason: verdict.drop, ended_at: deps.now().toISOString() }); delete found.waiting; });
+        say(`deploy-mend ${id}: repaired, not retried — ${verdict.drop}`);
+      } else if (verdict.wait) {
+        patch((found) => { found.waiting = verdict.waiting; found.wait_reason = verdict.wait; });
+        return;
+      } else {
+        const started = patch((found) => {
+          if (found.state !== 'repaired') return null;
+          Object.assign(found, { state: 'retrying', retried: true, retry_owner: pid, retry_started: stamp() });
+          delete found.waiting;
+          return found;
+        });
+        if (!started) return;
+        say(`deploy-mend ${id}: retrying the deploy once as ${retryHolder(entry)}`);
+        deployMendSettling.add(`retry:${id}`);
+        let ended;
+        try { ended = await retryDeploy(entry); } finally { deployMendSettling.delete(`retry:${id}`); }
+        patch((found) => {
+          if (found.state !== 'retrying') return;
+          if (ended.result === 'deployed') found.state = 'deployed';
+          else if (ended.result === 'stopped') Object.assign(found, { state: 'stopped', reason: ended.reason });
+          else retryFailed(found, ended.reason);
+        });
+        say(`deploy-mend ${id}: the retry ${ended.result}${ended.reason ? ` — ${ended.reason}` : ''}`);
+      }
+      entry = find();
+    }
+    if (DEPLOY_MEND_FINISHED.includes(entry.state) && entry.state !== 'dropped') removeCopies({ root, id });
+  }
+
+  /** Every unfinished request's next step, and the finished requests' worktrees removed (never one with files that are not mc's). */
+  async function settleDeployMends() {
+    let entries;
+    try { entries = readDeployMends(deployMendState()); }
+    catch (error) { say(`deploy-mend state unreadable — ${error.message}`); return; }
+    for (const { id } of entries) {
+      if (deployMendSettling.has(id)) continue;
+      deployMendSettling.add(id);
+      try { await settleDeployMend(id); }
+      catch (error) { say(`deploy-mend ${id}: not settled — ${error.message}`); }
+      finally { deployMendSettling.delete(id); }
+    }
+    const held = new Set(stepsHeld().map((item) => item.name));
+    const currents = paths.currents().map((path) => { try { return JSON.parse(deps.read(path))?.worktree ?? null; } catch { return null; } });
+    for (const entry of readDeployMends(deployMendState())) {
+      if (!DEPLOY_MEND_FINISHED.includes(entry.state) || !entry.worktrees || claims.has(entry.owner) || held.has(entry.owner)) continue;
+      for (const [repoName, path] of Object.entries(entry.worktrees)) {
+        const repo = repoOf(repoName);
+        if (!repo || !deps.exists(path) || currents.includes(path)) continue;
+        const removed = deps.git(repo.path, ['worktree', 'remove', path]);
+        if (!removed.ok) say(`${repoName}: finished deploy-mend worktree retained at ${path} — ${removed.stderr?.trim() || 'git refused cleanup'}`);
+      }
+    }
+  }
+
   /**
    * Goals whose every pull request (`prs`) has landed or been closed without
    * merging, with one landed, set `done` — however each landed: the merger,
@@ -1960,6 +2276,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (at - lastSettle < SETTLE_EVERY_MS) return;
     lastSettle = at;
     settleMainMends();
+    void settleDeployMends().catch((error) => say(`deploy-mend: not settled — ${error.message}`));
     /** GitHub's `state` of a goal's pull request — `OPEN`, `MERGED`, `CLOSED` — or null when it cannot say. */
     const readState = ({ repo: repoName, pr }) => {
       const repo = repos.find((item) => item.name === repoName);
@@ -2560,11 +2877,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...decisionWork(names, passed)];
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision) continue;
+      if (item.mainMend || item.decision || item.deployMend) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -2673,6 +2990,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ? await decisionPass(pick, { lane })
         : pick.mainMend
         ? await mainMendPass(pick, { lane })
+        : pick.deployMend
+        ? await deployMendPass(pick, { lane })
         : await goalPass(pick.goal, { lane, label });
       if (ran.ran || ran.stop || ran.waited) return ran;
       passed.add(pick.name);
@@ -2921,7 +3240,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
@@ -3217,9 +3536,10 @@ export async function runLoop({
       // loop of their own. `until` ends the wait early for a lane that a
       // lowered total has retired.
       const nap = async (ms, { until = () => false, mainRed = false } = {}) => {
-        const ticket = mainRed ? runner.mainMendTicket() : null;
+        const tickets = () => `${runner.mainMendTicket()}|${runner.deployMendTicket()}`;
+        const ticket = mainRed ? tickets() : null;
         for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
-          if (runner.stopRequested() || runner.updateRequested() || until() || (mainRed && runner.mainMendTicket() !== ticket)) return;
+          if (runner.stopRequested() || runner.updateRequested() || until() || (mainRed && tickets() !== ticket)) return;
           reconcile();
           await deps.sleep(Math.min(left, UPDATE_POLL_MS));
         }
