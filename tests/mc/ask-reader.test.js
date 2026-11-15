@@ -16,7 +16,7 @@ import { test } from 'node:test';
 
 import * as claude from '../../src/adapters/claude-code.js';
 import {
-  answerVerb, askDir, askReaderCall, askReaderPrompt, ASK_READER_ROLE, callDirOf, CALL_ENV, chooseAskReader, LAUNCH_FILE, LIMIT_MS, snapshotTree, TOKEN_ENV,
+  answerVerb, areaStandards, askDir, askReaderCall, askReaderPrompt, ASK_READER_ROLE, sectionOf, callDirOf, CALL_ENV, chooseAskReader, LAUNCH_FILE, LIMIT_MS, snapshotTree, TOKEN_ENV,
 } from '../../src/mc/ask-reader.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
@@ -177,6 +177,39 @@ test('one way to ask: the prompt holds the question, the options with the recomm
   assert.doesNotMatch(bare, /THE GOAL|THE PROGRAMME PAGE/u);
 });
 
+test('one way to ask: the prompt carries the standards of the rule areas the goal has a stand on, read from the goal\'s worktree', (t) => {
+  const root = tmpRoot(t);
+  const goalDir = join(root, 'goals', 'g');
+  const repo = join(goalDir, 'memoro-cli');
+  mkdirSync(join(repo, '.mc'), { recursive: true });
+  mkdirSync(join(repo, 'docs', 'technical'), { recursive: true });
+  writeFileSync(join(repo, '.mc', 'areas.json'), JSON.stringify({ schema_version: 1, areas: [
+    { id: 'reserved-acts', name: 'Reserved acts', covers: 'what headless may not do', standards: ['docs/technical/hooks.md', 'docs/technical/keys.md'], paths: ['src'], questions: [{ when: 'always', ask: 'which act?' }] },
+    { id: 'ops', name: 'Operations', covers: 'the runner', standards: ['docs/technical/run.md'], paths: [], questions: [{ when: 'always', ask: 'which row?' }] },
+  ] }));
+  writeFileSync(join(repo, 'docs', 'technical', 'hooks.md'), '# Hooks\n\nIntro.\n\n## mc hook pre-tool\n\nThe pre-tool rule: a deploy is refused.\n\n### A sub part\n\nStill this section.\n\n## Another section\n\nNot this one.\n');
+  const goal = { obligations: [
+    { area: 'memoro-cli/reserved-acts', stand: 'touched', text: 'The reader can do less.', standard: 'memoro-cli/docs/technical/hooks.md#mc hook pre-tool' },
+    { area: 'memoro-cli/ops', stand: 'untouched', text: 'No runner change.' },
+    { area: 'memoro-cli/nowhere', stand: 'touched', text: 'An area no one declares.' },
+  ] };
+  const standards = areaStandards({ goal, goalDir });
+  assert.deepEqual(standards.map((one) => [one.area, one.stand, one.pages]), [
+    ['memoro-cli/reserved-acts', 'touched', ['docs/technical/hooks.md', 'docs/technical/keys.md']],
+    ['memoro-cli/ops', 'untouched', ['docs/technical/run.md']],
+    ['memoro-cli/nowhere', 'touched', []],
+  ]);
+  const prompt = askReaderPrompt({ id: ID, question: 'q', options: OPTIONS, recommend: 'a', evidence: '', jevText: '', goalName: 'p/g', standards, trees: [{ repo: 'memoro-cli' }], treeRoot: '/t/tree' });
+  assert.match(prompt, /THE STANDARDS OF THE RULE AREAS THE GOAL HAS A STAND ON/u);
+  assert.match(prompt, /AREA memoro-cli\/reserved-acts — touched: The reader can do less\.\n {2}its standards: \/t\/tree\/memoro-cli\/docs\/technical\/hooks\.md, \/t\/tree\/memoro-cli\/docs\/technical\/keys\.md\n/u);
+  assert.match(prompt, /STANDARD memoro-cli\/docs\/technical\/hooks\.md#mc hook pre-tool \(the standard this stand names\)\n\n## mc hook pre-tool\n\nThe pre-tool rule: a deploy is refused\.\n\n### A sub part\n\nStill this section\.\n/u, 'the named section, with its sub-sections, is in the prompt');
+  assert.doesNotMatch(prompt, /Not this one|Intro\./u, 'the rest of the page is not');
+  assert.match(prompt, /AREA memoro-cli\/ops — untouched: No runner change\.\n {2}its standards: \/t\/tree\/memoro-cli\/docs\/technical\/run\.md\n/u);
+  assert.match(prompt, /AREA memoro-cli\/nowhere — touched: An area no one declares\.\n {2}not read: memoro-cli declares no rule area nowhere/u);
+  assert.equal(sectionOf('# A\n\n## B\n\nb\n', 'C'), null);
+  assert.doesNotMatch(askReaderPrompt({ id: ID, question: 'q', options: OPTIONS, recommend: 'a', trees: [], treeRoot: '/t/tree' }), /THE STANDARDS OF THE RULE AREAS/u);
+});
+
 // ---------------------------------------------------------------------- the launch
 
 test('one way to ask: the reader is launched in the copy as the ask-reader role, headless, with the token only in its environment and its hash in the launch file', async (t) => {
@@ -311,6 +344,16 @@ test('one way to ask: answer records one verdict — continue with the recommend
   const j = inFlight(t);
   assert.equal(j.verb([ID, 'text', '--none', '--text', 'docs/x.md "Aim"', '--file', '-']).code, 0);
   assert.equal(j.recorded().inside, null);
+});
+
+test('one way to ask: answer redacts a key-source value in the reader\'s own words before it writes the launch file', (t) => {
+  const f = inFlight(t);
+  const out = sink(), err = sink();
+  const code = answerVerb({ argv: [ID, 'text', '--none', '--text', `docs/x.md ${SECRET}`, '--file', '-'], ctx: { stdout: out, stderr: err, env: f.env, now: NOW, readFile: () => BRIEF.replace('B.', `B ${SECRET}.`), secrets: [SECRET] }, deps: { alive: () => true } });
+  assert.equal(code, 0, err.text());
+  const written = readFileSync(join(f.dir, LAUNCH_FILE), 'utf8');
+  assert.equal(written.includes(SECRET), false, 'neither the text nor the brief carries the key value');
+  assert.match(f.recorded().brief, /B \S*REDACTED/iu, 'the brief is kept with the value replaced');
 });
 
 test('one way to ask: answer is refused, and writes nothing, for another role, call, token, a dead or old call, a second answer or a malformed form', (t) => {

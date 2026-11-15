@@ -33,6 +33,7 @@ import { withoutSessionIdentity } from './session-role.js';
 import { pidAlive } from './status-collect.js';
 import { renderGoalText } from './goals.js';
 import { textForm, textName } from './desk-texts.js';
+import { AREAS_PATH, checkAreas, isSourceArea } from './areas.js';
 import { scanArgs } from './commands/flags.js';
 
 export const ASK_READER_ROLE = 'ask-reader';
@@ -110,8 +111,70 @@ export function snapshotTree({ source, into, secrets = [], git = realGit, maxByt
 
 const oneLine = (value) => String(value ?? '').replace(/\s*\n\s*/gu, ' ').trim();
 
-/** What the reader is given: the question and its options, what the asker and jev said, the goal and the pages. */
-export function askReaderPrompt({ id, question, options, recommend, evidence, jevText, goalName, goal, readme, documents = [], trees = [], treeRoot }) {
+/** The text of the section a heading names in a markdown page — from the heading to the next of its level or above — or null. */
+export function sectionOf(page, heading) {
+  if (!heading) return null;
+  const lines = String(page).split('\n');
+  const at = lines.findIndex((line) => { const m = /^(#{1,6})\s+(.*?)\s*#*\s*$/u.exec(line); return m && m[2] === heading; });
+  if (at < 0) return null;
+  const level = /^#+/u.exec(lines[at])[0].length;
+  let end = lines.findIndex((line, index) => index > at && /^(#{1,6})\s/u.test(line) && /^#+/u.exec(line)[0].length <= level);
+  if (end < 0) end = lines.length;
+  return lines.slice(at, end).join('\n').trimEnd();
+}
+
+/**
+ * The standards of the rule areas a goal has a stand on, read from the asking worktree as it stands (the programme's
+ * checkout of the repository when the goal has no worktree of it): for each obligation its area, stand and text, the
+ * area's declared standards and page (`.mc/areas.json`), and the text of the section its own `standard` names.
+ * `[{ area, stand, text, standard, section, pages, problem }]` — `section` is `{ path, heading, text }` or null,
+ * `pages` the declared paths, `problem` why the declaration or the section could not be read. Reads only.
+ */
+export function areaStandards({ goal, goalDir, home = null, programme = null, read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }, exists = existsSync }) {
+  const out = [];
+  const declarations = new Map();
+  const rootOf = (repo) => {
+    const own = goalDir ? join(goalDir, repo) : null;
+    if (own && exists(own)) return own;
+    const planning = home && programme ? join(home, programme, repo) : null;
+    return planning && exists(planning) ? planning : null;
+  };
+  const declared = (repo, root) => {
+    if (!declarations.has(repo)) {
+      const text = root ? read(join(root, AREAS_PATH)) : null;
+      declarations.set(repo, text === null ? { ok: false, reason: `${repo}'s ${AREAS_PATH} cannot be read` } : checkAreas(text, `${repo}'s ${AREAS_PATH}`));
+    }
+    return declarations.get(repo);
+  };
+  for (const one of goal?.obligations ?? []) {
+    const slash = String(one.area).indexOf('/');
+    const repo = slash > 0 ? one.area.slice(0, slash) : one.area;
+    const id = slash > 0 ? one.area.slice(slash + 1) : '';
+    const root = rootOf(repo);
+    const problems = [];
+    const read_ = declared(repo, root);
+    const area = read_.ok ? read_.areas.find((each) => each.id === id && !isSourceArea(each)) : null;
+    if (!read_.ok) problems.push(read_.reason);
+    else if (!area) problems.push(`${repo} declares no rule area ${id}`);
+    const pages = area ? [...(area.page ? [area.page] : []), ...area.standards] : [];
+    let section = null;
+    if (one.standard) {
+      const [file, heading = null] = String(one.standard).split('#');
+      const fileSlash = file.indexOf('/');
+      const [sRepo, sPath] = fileSlash > 0 ? [file.slice(0, fileSlash), file.slice(fileSlash + 1)] : [file, ''];
+      const sRoot = sRepo === repo ? root : rootOf(sRepo);
+      const page = sRoot && sPath ? read(join(sRoot, sPath)) : null;
+      const text = page === null ? null : sectionOf(page, heading);
+      if (text === null) problems.push(page === null ? `${file} cannot be read` : `${file} has no section ${heading}`);
+      else section = { path: file, heading, text };
+    }
+    out.push({ area: one.area, stand: one.stand, text: one.text, standard: one.standard ?? null, repo, section, pages, problem: problems.join('; ') || null });
+  }
+  return out;
+}
+
+/** What the reader is given: the question and its options, what the asker and jev said, the goal, its area standards and the pages. */
+export function askReaderPrompt({ id, question, options, recommend, evidence, jevText, goalName, goal, readme, standards = [], documents = [], trees = [], treeRoot }) {
   const lines = [
     `Answer one question a working session asked with mc ask${goalName ? ` for goal ${goalName}` : ''}. You are the ask-reader role: follow your role page and end with exactly one verb, mc ask answer ${id} …`,
     trees.length
@@ -124,6 +187,18 @@ export function askReaderPrompt({ id, question, options, recommend, evidence, je
   ];
   if (goal) lines.push('THE GOAL, as mc goal show renders it', '', renderGoalText(goal).trimEnd(), '');
   if (readme) lines.push('THE PROGRAMME PAGE', '', String(readme).trimEnd(), '');
+  if (standards.length) {
+    const copied = new Set(trees.map((one) => one.repo));
+    const where = (repo, path) => (copied.has(repo) ? `${treeRoot}/${repo}/${path}` : `${repo}/${path} (not in the copy)`);
+    lines.push('THE STANDARDS OF THE RULE AREAS THE GOAL HAS A STAND ON — the section each stand names is below; read the area\'s other pages in the copy', '');
+    for (const one of standards) {
+      lines.push(`AREA ${one.area} — ${one.stand}: ${oneLine(one.text)}`);
+      if (one.pages.length) lines.push(`  its standards: ${one.pages.map((path) => where(one.repo, path)).join(', ')}`);
+      if (one.problem) lines.push(`  not read: ${one.problem}`);
+      if (one.section) lines.push('', `STANDARD ${one.section.path}${one.section.heading ? `#${one.section.heading}` : ''} (the standard this stand names)`, '', one.section.text, '');
+      else lines.push('');
+    }
+  }
   for (const item of documents) lines.push(`DOCUMENT ${item.path}${item.label ? ` (${item.label})` : ''}`, '', String(item.text).trimEnd(), '');
   return lines.join('\n');
 }
@@ -148,7 +223,7 @@ function liveCall(launch, now, alive) {
  * key, why }`, `{ kind: 'defect', part, found }` or `{ kind: 'text', inside, text, brief }` — or `{ read: false,
  * reason, tool?, model? }`: the reader could not be started, did not answer in ten minutes or ended without a verdict.
  */
-export async function askReaderCall({ call, evidence = '', jevText = '', goalName = null, goal = null, programme = null, readme = null, documents = [], trees = [], asker = null, env, secrets = [], stderr = { write() {} }, deps = {} }) {
+export async function askReaderCall({ call, evidence = '', jevText = '', goalName = null, goal = null, programme = null, readme = null, standards = [], documents = [], trees = [], asker = null, env, secrets = [], stderr = { write() {} }, deps = {} }) {
   const now = deps.now ?? (() => new Date());
   const alive = deps.alive ?? pidAlive;
   const clean = (value) => redactText(value, secrets);
@@ -204,7 +279,7 @@ export async function askReaderCall({ call, evidence = '', jevText = '', goalNam
     }
     if (!note) {
       const cwd = trees.length ? join(treeRoot, trees[0].repo) : treeRoot;
-      const prompt = clean(askReaderPrompt({ id, question: call.question, options: call.options, recommend: call.recommend, evidence, jevText, goalName, goal, readme, documents, trees, treeRoot }));
+      const prompt = clean(askReaderPrompt({ id, question: call.question, options: call.options, recommend: call.recommend, evidence, jevText, goalName, goal, readme, standards, documents, trees, treeRoot }));
       const args = headlessArgs({ toolId: launched.id, adapter: launched.adapter, model: candidate.model, effort: candidate.effort,
         instructions: instructionsFor(launched.id, role.overlay), prompt, profileArgs, stream: false, cache: role.cache });
       const allowed = requireCapability(launched.id, 'ALLOWED_DIR');
@@ -218,13 +293,12 @@ export async function askReaderCall({ call, evidence = '', jevText = '', goalNam
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
       const recorded = readLaunch(dir)?.verdict;
-      verdict = recorded && typeof recorded === 'object' ? recorded : null;
+      verdict = recorded && typeof recorded === 'object' ? redactValue(recorded, secrets) : null;
     }
   } finally {
     if (made) {
       try { discard(dir, identity); }
       catch (error) {
-        note ??= null;
         stderr.write(clean(`mc: the ask reader's call directory ${dir} is left in place — ${error.message}\n`));
       }
     }
@@ -307,7 +381,8 @@ export function answerVerb({ argv, ctx, deps = {} }) {
     if (form_.error) return refuse(form_.error);
     verdict = { kind: 'text', inside: flags.inside, text: named.text, brief: String(brief).trim() };
   } else return refuse('the second word is continue, defect or text');
-  writeFileAtomic(join(dir, LAUNCH_FILE), `${JSON.stringify({ ...launch, verdict }, null, 2)}\n`);
+  // The reader's own words are redacted before they are written, as everything else the call writes is.
+  writeFileAtomic(join(dir, LAUNCH_FILE), `${JSON.stringify({ ...launch, verdict: redactValue(verdict, ctx.secrets ?? []) }, null, 2)}\n`);
   stdout.write(`mc: answer ${verdict.kind} recorded for call ${id}\n`);
   return 0;
 }

@@ -11,7 +11,8 @@ You judge it; you change nothing.
 The prompt holds the question, its two to four options, the asker's
 recommendation and evidence, what jev read, the goal as `mc goal show` renders it
 (when the call has one), the programme page, the goal's documents and the
-standards its rule areas name. The asker's worktree is copied, read-only and with
+standards of the rule areas the goal has a stand on: the section each stand
+names, and the area's other pages by their path in the copy. The asker's worktree is copied, read-only and with
 its uncommitted changes, under the path the prompt names; your working directory
 is in it. Read what the question touches there and in `docs/technical/` before
 you answer: the standards decide, then the app's pattern for the same problem,

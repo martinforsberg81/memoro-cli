@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/ask.js';
+import { itemStore } from '../../../src/mc/desk-items.js';
 import { parseLog } from '../../../src/mc/goals.js';
-import { goalJson } from '../_helpers/goal-file.js';
+import { goalJson, goalJsonV2 } from '../_helpers/goal-file.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'mc-ask-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -323,6 +324,22 @@ test('one way to ask: a reader continues with its option, says why when it diffe
   assert.equal(jevOnly.out(), 'mc: the reader answered fake_timer — continue with: inject a timer\n', 'the recommendation needs no why line');
 });
 
+test('one way to ask: the reader is given the standards of the rule areas the goal has a stand on, from its obligations and the area declaration', async () => {
+  const g = goalStore('areas');
+  g.store[g.file] = goalJsonV2({ repos: ['memoro-cli'], obligations: [
+    { area: 'memoro-cli/reserved-acts', stand: 'touched', text: 'The reader can do less.', standard: 'memoro-cli/docs/technical/hooks.md#mc hook pre-tool' },
+  ] });
+  g.store[join(repoDir, '.mc', 'areas.json')] = JSON.stringify({ schema_version: 1, areas: [
+    { id: 'reserved-acts', name: 'Reserved acts', covers: 'headless acts', standards: ['docs/technical/hooks.md'], paths: [], questions: [{ when: 'always', ask: 'which?' }] },
+  ] });
+  g.store[join(repoDir, 'docs', 'technical', 'hooks.md')] = '# Hooks\n\n## mc hook pre-tool\n\nA deploy is refused.\n\n## Other\n\nNo.\n';
+  const f = fixture({ response: missed(), env: sessionEnv('areas'), reader: verdictOf({ kind: 'continue', key: 'fake_timer', why: null }) });
+  assert.equal(await run(goalArgs('areas'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.equal(f.readers.length, 1);
+  const [one] = f.readers[0].standards;
+  assert.deepEqual([one.area, one.stand, one.pages, one.section.path, one.section.text], ['memoro-cli/reserved-acts', 'touched', ['docs/technical/hooks.md'], 'memoro-cli/docs/technical/hooks.md', '## mc hook pre-tool\n\nA deploy is refused.']);
+});
+
 test('one way to ask: jev answers first and no reader is read', async () => {
   const g = goalStore('jevfirst');
   const f = fixture({ env: sessionEnv('jevfirst') });
@@ -335,7 +352,7 @@ test('one way to ask: jev answers first and no reader is read', async () => {
 test('one way to ask: a reader that finds a goal defect writes the entry mc goal defect writes, and the goal waits for the desk', async () => {
   const g = goalStore('defect');
   const f = fixture({ response: missed(), env: sessionEnv('defect'), reader: verdictOf({ kind: 'defect', part: 'criterion 3', found: 'its check names a command that does not exist (src/x.js:4)' }) });
-  assert.equal(await run(goalArgs('defect'), { ...f.deps, read: g.read, write: g.write }), 0, `${f.err()}${f.out()}`);
+  assert.equal(await run(goalArgs('defect'), { ...f.deps, read: g.read, write: g.write }), 1, `the session ends as after mc goal defect: ${f.err()}${f.out()}`);
   const parsed = JSON.parse(g.store[g.file]);
   assert.deepEqual([parsed.stage, parsed.status], ['build', 'Martin']);
   const entry = parseLog(g.store[g.log]).at(-1);
@@ -495,5 +512,21 @@ test('one way to ask: the record — no key-source value reaches the ledger, LOG
   f.deps.readKeys = () => ({ TYPESAFE_API_KEY: secret });
   const argv = ['jev/secret', '--reason', `Which, with ${secret}?`, '--option', `fake_timer: inject ${secret}`, '--option', 'real_wait: wait', '--recommend', 'fake_timer', '--evidence', `evidence ${secret}`];
   assert.equal(await run(argv, { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  for (const text of [f.out(), f.err(), JSON.stringify(f.ledger), g.store[g.log]]) assert.ok(!text.includes(secret));
+});
+
+test('one way to ask: the record — a key-source value in the reader’s text and brief reaches neither the desk item, the ledger nor LOG.md', async () => {
+  const secret = 'sk-live-SECRETBRIEF456';
+  const g = goalStore('secretbrief');
+  const brief = `## Vad den säger\nIt says ${secret}.\n\n## Vad som föreslås\nB.\n\n## Vad som hittades\nC ${secret}.\n`;
+  const env = sessionEnv('secretbrief');
+  const f = fixture({ response: missed(), env, reader: verdictOf({ kind: 'text', inside: null, text: `docs/technical/mc-s.md — ${secret}`, brief }) });
+  f.deps.readKeys = () => ({ TYPESAFE_API_KEY: secret });
+  assert.equal(await run(goalArgs('secretbrief'), { ...f.deps, read: g.read, write: g.write }), 1, f.err());
+  const itemDir = join(itemStore(env), f.ledger[0].desk_item);
+  const written = readdirSync(itemDir).map((name) => join(itemDir, name));
+  assert.ok(written.some((path) => path.endsWith('item.json')) && written.some((path) => path.endsWith('brief.md')), `the desk item and its brief are written (${written.join(', ')})`);
+  for (const path of written) assert.ok(!readFileSync(path, 'utf8').includes(secret), `${path} carries no key value`);
+  assert.match(readFileSync(written.find((path) => path.endsWith('brief.md')), 'utf8'), /It says \S*REDACTED/iu, 'the brief is kept, its key value replaced');
   for (const text of [f.out(), f.err(), JSON.stringify(f.ledger), g.store[g.log]]) assert.ok(!text.includes(secret));
 });

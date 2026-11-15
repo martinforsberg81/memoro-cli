@@ -163,7 +163,15 @@ fresh session that reads and does not edit.
   `<runner>/ask/<id>` (`callDirOf`), and is removed when the call ends; one that
   cannot be removed is left and said.
 - **The prompt.** The question, the options with the recommendation, the
-  evidence, what jev read, the goal's repositories and where the copy is.
+  evidence, what jev read, the goal, the programme page, the goal's documents,
+  the goal's repositories and where the copy is, and the standards of the rule
+  areas the goal has a stand on (`areaStandards`): for each obligation its area,
+  stand and text, the text of the section its `standard` names (read from the
+  goal's worktree, else the programme's checkout), and the area's other pages
+  (`page` and `standards` in the repository's `.mc/areas.json`) by their path in
+  the copy. An area or section that cannot be read is said in the prompt. The
+  pages are listed, not inlined: a goal's areas hold hundreds of kilobytes of
+  standards, and the reader reads them in the copy as the plan review does.
   Nothing in it holds a key-source value.
 - **The token.** Each call has an id and a token. The token is only in the
   reader's environment (`MC_ASK_TOKEN`, with the call id in `MC_ASK_CALL`); its
@@ -192,7 +200,7 @@ The reader gives one of four answers (Martin, 2026-11-15):
 | Answer | Verb | What happens | Ledger `outcome` | `answered_by` |
 |---|---|---|---|---|
 | Continue with an option | `continue <key>` | exit 0; the key is the answer. A key other than the recommendation carries its `--why`, which the asker's output and the ledger show and the desk reads. | `read` | `reader` |
-| A goal defect | `defect` | recorded as `mc goal defect` records it (one entry, the goal set to Martin, no further session); exit 0 with the entry's text. A defect that cannot be recorded is unread. | `defect` | `reader` |
+| A goal defect | `defect` | recorded as `mc goal defect` records it (one entry, the goal set to Martin, no further session); exit 1 with the entry's text: the session ends, as after `mc goal defect`. A defect that cannot be recorded is unread. | `defect` | `reader` |
 | A text of Martin's would change | `text` | `mc martin propose` writes the desk item (a duplicate takes the goal and notes the asker as `other_goal`); the caller continues inside the wording that stands, `--inside <key>` the option that does so (exit 0), or `--none` when none does (exit 1: continue with the rest, the part that needs the text waits on the item). The goal is not set to Martin. | `text` | `reader` |
 | Unread | — | no reader answered (no verdict, the 10 minutes ran out, no model could start, billing or the tool unavailable, the role missing, the ceiling held, the keys source unreadable): exit 0 with the session's own recommendation, and the ledger says why in `unread_reason`. Every unread row reaches the desk. | `decided` | `session` |
 
@@ -273,7 +281,7 @@ LOG.md, the ledger, stdout or stderr.
   with: <option text>`, and LOG.md gets an entry with the question, the
   options, the recommendation and jev's answer. The session continues with the
   answer as if Martin had given it.
-- **Read:** exit 0 (or 1 for a text with no option inside the wording); stdout
+- **Read:** exit 0 (1 for a defect, and for a text with no option inside the wording); stdout
   says `mc: the reader answered <key> — continue with: <option text>` (with
   `why:` when the key is not the recommendation), or names the desk item, or the
   defect. LOG.md gets the question, the options, what jev read and the answer.

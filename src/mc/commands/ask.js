@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
-import { answerVerb, askReaderCall } from '../ask-reader.js';
+import { answerVerb, areaStandards, askReaderCall } from '../ask-reader.js';
 import { deskBudget, deskBudgetReason } from '../desk-budget.js';
 import { proposeText } from '../desk-texts.js';
 import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, INSTRUCTIONS, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
@@ -46,14 +46,14 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: an ask-reader session cannot ask — it answers with mc ask answer <id> continue|defect|text …\n');
     return 2;
   }
-  if (argv[0] === 'answer') {
-    return answerVerb({ argv: argv.slice(1), ctx: { stdout, stderr, env, now: deps.now ? deps.now() : new Date(), readFile: deps.readFile }, deps: deps.answer || {} });
-  }
-  const scanned = scanArgs(argv, SCAN);
-  const named = scanned.positional?.[0] ?? env.MC_GOAL;
   let values = null;
   try { values = (deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values))(); } catch { values = null; }
   const secrets = secretsOf(values);
+  if (argv[0] === 'answer') {
+    return answerVerb({ argv: argv.slice(1), ctx: { stdout, stderr, env, now: deps.now ? deps.now() : new Date(), readFile: deps.readFile, secrets }, deps: deps.answer || {} });
+  }
+  const scanned = scanArgs(argv, SCAN);
+  const named = scanned.positional?.[0] ?? env.MC_GOAL;
   const clean = (value) => redactText(value, secrets);
   if (scanned.error) { stderr.write(clean(`mc: ${scanned.error}\n${usage()}`)); return 2; }
   const args = scanned.positional;
@@ -173,13 +173,15 @@ export async function run(argv, deps = {}) {
 
   stderr.write('mc: jev did not settle it — a reader reads it now (up to 10 minutes)\n');
   const trees = readerTrees({ target, goal, cwd, deps });
+  const standards = target && goal ? (deps.areaStandards || areaStandards)({ goal, goalDir: target.dir, home, programme: target.programme, read }) : [];
   let reader;
   try {
     reader = await (deps.askReader || askReaderCall)({ call, evidence, jevText, goalName: target?.name ?? null, goal, programme, readme: context.programme?.readme ?? null,
-      documents: context.documents || [], trees, asker: { tool: env.MC_TOOL || null, model: env.MC_MODEL || null }, env, secrets, stderr: safeStderr, deps: deps.reader || {} });
+      standards, documents: context.documents || [], trees, asker: { tool: env.MC_TOOL || null, model: env.MC_MODEL || null }, env, secrets, stderr: safeStderr, deps: deps.reader || {} });
   } catch (error) { reader = { read: false, reason: `the reader could not be launched: ${error.message}` }; }
   if (!reader?.read) return unreadAnswer({ why: reader?.reason || 'no reader answered', reader: reader?.tool ? { tool: reader.tool, model: reader.model } : null });
-  const verdict = reader.verdict;
+  // The reader's words are redacted before anything carries them out: the ledger, LOG.md and the desk item.
+  const verdict = redactValue(reader.verdict, secrets);
   const who = { tool: reader.tool, model: reader.model };
   const readerRow = (extra = {}) => ({ ...jevFields, answered_by: 'reader', reader: { ...who, ...extra } });
 
@@ -201,7 +203,7 @@ export async function run(argv, deps = {}) {
     if (code === 0) {
       writeLedger({ ...readerRow({ part: verdict.part, found: verdict.found }), outcome: 'defect', chosen: null, reason: `the reader found a goal defect: ${verdict.part}` });
       stdout.write(`mc: the reader found a goal defect — ${clean(verdict.part)}\n${clean(out.text)}`);
-      return 0;
+      return 1;
     }
     return unreadAnswer({ why: `the reader found a goal defect, which could not be recorded (${flat(out.err).replace(/^mc: /u, '')})`, reader: who });
   }
