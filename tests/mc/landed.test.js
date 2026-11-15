@@ -77,6 +77,18 @@ describe('a plan review is planning, not the goal\'s own work', () => {
   });
 });
 
+it('counts both repair and historical finish rows as not first pass', () => {
+  for (const kind of ['repair', 'finish']) {
+    const rows = readRunRows([
+      OLD_HEADER,
+      row('2026-11-09T10:00:00Z', 'goal:mc/a', 'build-goal', 60, 'success'),
+      row('2026-11-09T10:30:00Z', 'goal:mc/a', kind, 60, 'success'),
+      row('2026-11-09T11:00:00Z', 'goal:mc/a', 'merge', 10, 'merged', { pr: '1' }),
+    ].join('\n'));
+    assert.equal(landedSection({ rows, now: NOW }).first_pass, 0, kind);
+  }
+});
+
 describe('the pipeline', () => {
   it('draws one bar per bucket, scaled to the largest, and a space for none', () => {
     assert.equal(sparkline([0, 1, 4, 8]), ' ▁▄█');

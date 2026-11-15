@@ -99,3 +99,10 @@ test('pickWork: stage order precedes repository shares when another repository h
   const items = [goal('new-build', 'memoro-cli'), { ...review('stuck-review', 'memoro'), goal: { status: 'blocked' }, kind: 'mend', variant: null }];
   assert.equal(pickWork({ items, held: ['memoro'], lanes: 2 }).name, 'stuck-review');
 });
+
+test('pickWork: a repair has the old finish rank, ahead of review and build but after mend', () => {
+  const repair = { ...goal('repair', 'memoro'), kind: 'repair' };
+  const mend = { ...repair, name: 'mend', kind: 'mend' };
+  assert.equal(pickWork({ items: [goal('build', 'memoro'), review('review', 'memoro'), repair] }).name, 'repair');
+  assert.equal(pickWork({ items: [repair, mend] }).name, 'mend');
+});

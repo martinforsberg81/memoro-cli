@@ -56,8 +56,9 @@
  * A goal's stage only moves forward (`goals.js` `STAGES`); only a person moves
  * it back (`refusedMove`). A build session moves `build` to `review` — not
  * while a criterion is not met (`unmetGoalWords`) — or sets `blocked`; a
- * review session moves `review` to `merge` or `finish`; a finish session
- * moves `finish` to `merge`, or sets `blocked` or `Martin`; a mend session
+ * review session moves `review` to `merge`, or back to `build` when its
+ * verdict (REVIEW.md) has a NOT OK line — the third time it keeps the goal in
+ * review and sets Martin; a mend session
  * sets a status and requeues `merge`, and moves no stage; the interactive
  * plan session any stage forward.
  *
@@ -73,6 +74,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
 import { readAreas } from '../areas.js';
+import { checkVerdict, trippedAreas } from '../review-verdict.js';
 import { appendRecord, markerRecord, moveGate, planReviewCall, proposedStand, proposedWords, readRecords, showLine, verdictVerb } from '../plan-review.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
@@ -80,7 +82,7 @@ import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
 import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
-import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
+import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
 import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
@@ -343,7 +345,7 @@ function newGoal(args, flags, ctx) {
  * that is not one token (it holds whitespace, or is empty) is left out, and the entry is written without the
  * `· by` segment, because HEADING would not read it back and parseLog would drop the entry. With no role, none is written.
  */
-const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'mend', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
+const WRITER_WORDS = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [MEND_ROLE]: 'mend', [PLAN_ROLE]: 'plan', 'plan-session': 'plan', manager: 'manager' };
 export function writerRole(env) {
   const role = env.MC_ROLE || '';
   if (!role) return null;
@@ -358,8 +360,8 @@ export function writerRole(env) {
  * has. With a stage or status GOAL.json's is set too; an unknown one is
  * refused naming the field. A goal whose GOAL.json does not parse is refused,
  * and so is a move the caller may not make (`refusedMove`): a session's
- * backward one, `review` while a criterion is not met, a review's `finish`
- * without REVIEW.md. A person's backward move is made and logged. A review's
+ * backward one, `review` while a criterion is not met, a review's move without a
+ * complete REVIEW.md, or to `finish`. A person's backward move is made and logged. A review's
  * `merge` records the session's decision before queueing every registered PR.
  * A queue failure leaves that decision available for retry and runner recovery.
  */
@@ -382,8 +384,11 @@ function logEntry(args, fields, ctx) {
     for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
     return 1;
   }
-  const refused = refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env, reviewWritten: read(join(target.dir, REVIEW_FILE)) !== null, dir: target.dir });
+  const refused = refusedMove({ from: goal.stage, to: fields.stage, status: fields.status, env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
+  // A review's move out of review follows its verdict (REVIEW.md): complete for the heads judged and the tripped areas, no NOT OK to merge, one to build.
+  const verdict = reviewMove(goal, target, fields.stage, ctx);
+  if (verdict.refusal) { stderr.write(`mc: ${verdict.refusal}\n`); return 2; }
   // Out of draft a goal is complete and has been read (plan-review.js); a build session never gets here: refusedMove said so.
   const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx) });
   if (gate?.refusal) { stderr.write(`mc: ${gate.refusal}\n`); return 1; }
@@ -396,6 +401,8 @@ function logEntry(args, fields, ctx) {
     if (conflicted) { stderr.write(`mc: ${target.name} is not moved to ${fields.stage} — ${conflicted}\n`); return 1; }
   }
   const moves = fields.stage !== null && fields.stage !== goal.stage;
+  if (verdict.round) write(join(target.dir, `REVIEW-${verdict.round}.md`), verdict.text);
+  if (verdict.third) return thirdRejection({ target, goal, fields, round: verdict.round }, ctx);
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
   const base = gate?.comment ?? fields.comment;
@@ -447,7 +454,7 @@ function logEntry(args, fields, ctx) {
   // Queueing is complete before the runner may end this session. A failed or
   // partial enqueue leaves no receipt, so the session can repair and retry.
   if (fields.stage === 'merge' && env.MC_HEADLESS === '1' && env.MC_GOAL === target.name
-      && [REVIEW_ROLE, FINISH_ROLE, MEND_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
+      && [REVIEW_ROLE, MEND_ROLE].includes(env.MC_ROLE) && env.MC_SCRATCH) {
     write(join(env.MC_SCRATCH, MERGE_HANDOFF_FILE), JSON.stringify({ goal: target.name }));
   }
   if (now.stage === 'build' && goal.stage !== 'build') remakeBranches(target, goal, ctx);
@@ -567,7 +574,7 @@ async function askMartin(args, flags, ctx) {
  * `goal defect: <part> — <found>`; no "Martin is asked:" line, no options, no jev, no ledger row: the runner
  * starts nothing on a `Martin` goal (`goalSession`) and the desk opens an item for it (`syncDeskItems`).
  * It is the session's ending entry. `--part` and `--found` are required: a call without them exits 2 and
- * writes nothing. A finished goal is refused; a build, review or finish session reports only the goal in its
+ * writes nothing. A finished goal is refused; a build or review session reports only the goal in its
  * own stage, and a mend session never; plan, the desk roles and a person any.
  */
 function reportDefect(args, flags, ctx) {
@@ -605,11 +612,11 @@ function reportDefect(args, flags, ctx) {
     return 1;
   }
   if (FINISHED.includes(goal.stage)) { stderr.write(`mc: ${target.name} is ${goal.stage} — a finished goal has no defect to report\n`); return 1; }
-  const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env, dir: target.dir });
+  const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const role = isSession(env) ? writerRole(env) : null;
   if (role === 'mend') { stderr.write('mc: a mend session does not report a goal defect — a merge failure it cannot repair is Martin\'s (mc goal martin)\n'); return 2; }
-  if (['build', 'review', 'finish'].includes(role) && goal.stage !== role) { stderr.write(`mc: a ${role} session reports a goal defect only for a goal in ${role}, and this one is ${goal.stage}\n`); return 2; }
+  if (['build', 'review'].includes(role) && goal.stage !== role) { stderr.write(`mc: a ${role} session reports a goal defect only for a goal in ${role}, and this one is ${goal.stage}\n`); return 2; }
 
   const secrets = (() => { try { return secretsOf(ctx.readKeys()); } catch { return []; } })();
   const comment = redactText([`goal defect: ${part} — ${found}`, ...(evidence ? [`Evidence: ${evidence}`] : [])].join('\n'), secrets);
@@ -728,6 +735,51 @@ function mainConflictRefusal(goal, target, ctx) {
     paths.push(...checked.paths.map((path) => `${repo}/${path}`));
   }
   return paths.length ? conflictReason(paths) : null;
+}
+
+/**
+ * What a review session's move out of review asks of REVIEW.md (D4, D5, D8), as `{}` for any other move, `{ refusal }`,
+ * or `{ text, round, third }`: the verdict's text, the round it is (rejections so far, plus one) and whether a move to
+ * build is the third rejection. The head of the first repository must be MC_REVIEW_HEAD; every id the goal requires
+ * has one line; a move to merge has no NOT OK line and a move to build has one.
+ */
+function reviewMove(goal, target, to, ctx) {
+  const { env, read } = ctx;
+  if (env.MC_ROLE !== REVIEW_ROLE || !isSession(env) || goal.stage !== 'review' || (to !== 'merge' && to !== 'build')) return {};
+  const file = `${target.dir}/${REVIEW_FILE}`;
+  if (!env.MC_REVIEW_HEAD) return { refusal: 'a review judges the head the runner named: MC_REVIEW_HEAD is not set' };
+  const text = read(join(target.dir, REVIEW_FILE));
+  if (text === null) return { refusal: `a review moves a goal to ${to} with ${REVIEW_FILE} — write ${file} first: a \`head: <repo> <sha>\` line per repository, then \`<id>: OK\` or \`<id>: NOT OK — <what and where>\` per item` };
+  const found = trippedAreas({ goal, dir: target.dir, head: env.MC_REVIEW_HEAD, git: ctx.git, exists: ctx.exists });
+  if (found.error) return { refusal: found.error };
+  const checked = checkVerdict({ text, goal, tripped: found.tripped, heads: found.heads });
+  if (checked.problems.length) return { refusal: `${file} is not complete for the head judged (${env.MC_REVIEW_HEAD}) —\n  ${checked.problems.join('\n  ')}` };
+  const ids = checked.failed.map((one) => one.id).join(', ');
+  if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
+  if (to === 'build' && !checked.failed.length) return { refusal: `${REVIEW_FILE} has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge` };
+  const prior = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? ''));
+  return { text, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS };
+}
+
+/** How many times a review may send a goal back to build: the next NOT OK is the desk's. */
+const MAX_REJECTIONS = 2;
+
+/**
+ * The third rejection: no move. The goal stays in review, status Martin, with the comment that it was rejected a third
+ * time and the items that failed; nothing is queued and the session ends.
+ */
+function thirdRejection({ target, goal, fields, round }, ctx) {
+  const { stdout, stderr, env, read, write } = ctx;
+  const failed = checkVerdict({ text: read(join(target.dir, REVIEW_FILE)), goal: { ...goal, repos: [], success_criteria: [], version: 1 } }).failed;
+  const said = `rejected a third time — the goal stays in review for the desk${failed.length ? `; failed: ${failed.map((one) => one.id).join(', ')}` : ''}`;
+  const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done: fields.done, comment: [fields.comment, said].filter(Boolean).join(' — '), next: fields.next };
+  const outcome = setGoalState({ dir: target.dir, status: 'Martin', entry, read, write });
+  if (outcome.problems) {
+    for (const problem of outcome.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  stdout.write(`mc: ${target.name} · ${stageWords(outcome.goal)} — ${said} (${REVIEW_FILE} kept as REVIEW-${round}.md)\n`);
+  return 0;
 }
 
 /**
@@ -880,7 +932,7 @@ function markCriterion(args, met, ctx) {
  * — criterion `n`'s text and/or check rewritten, and the criterion unmet, its
  * check to be run again. Logged with the old and new text; the stage and status
  * kept. Acceptance is written by plan or a person: a goal session (build,
- * review, finish, mend) is refused, and so is a call with no flag. A check given is read for the test
+ * review, mend) is refused, and so is a call with no flag. A check given is read for the test
  * files it names (`warnAbsentTests`).
  */
 function setCriterion(args, flags, ctx) {
@@ -924,7 +976,7 @@ function setCriterion(args, flags, ctx) {
  * `n` taken out, the later ones moved up one number with their text, check and
  * met kept. Logged with the removed text, its check, whether it was met and the
  * reason; the stage and status kept. Acceptance is written by plan or a person:
- * a goal session (build, review, finish, mend) is refused. Every refusal exits 2 and writes nothing:
+ * a goal session (build, review, mend) is refused. Every refusal exits 2 and writes nothing:
  * no reason or a blank one, a number that is not one, a number past the criteria,
  * and the only criterion (its replacement is added first).
  */
@@ -1677,17 +1729,17 @@ function goalNamed(arg, { env, home }) {
  * a person, who may make any move, backward too (logged by `logEntry`). No
  * session moves a stage backward. The interactive plan session makes any
  * forward move: it writes goals, finishes them and drops them
- * (`canon/roles/plan-session.md`). A finish session moves a goal in `finish`
- * to `merge`, and sets `blocked` or `Martin` (`canon/roles/finish-session.md`).
- * A merge-only mend session sets a status and requeues a goal in `merge` with
+ * (`canon/roles/plan-session.md`). Nothing moves a goal to `finish`: a rejected
+ * review returns the goal to build. A merge-only mend session sets a status and requeues a goal in `merge` with
  * `mc goal stage merge`; it moves no stage
  * (`canon/roles/mend-session.md`). A review session moves a goal in `review`
- * to `merge` (OK) or `finish` (not OK, REVIEW.md written first), and sets no
- * status. A build session moves `build` to `review` or sets `blocked`,
+ * to `merge` (OK) or back to `build` (NOT OK; `reviewMove` holds the verdict
+ * to REVIEW.md), and sets no status. A build session moves `build` to `review` or sets `blocked`,
  * nothing else; build and review may also set Martin for an actual unresolved
  * decision or reserved act.
  */
-export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
+export function refusedMove({ from, to = null, status = null, env }) {
+  if (to === 'finish') return 'finish is no longer a goal stage to move to — use mc goal stage build for a rejected review';
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (env.MC_ROLE === 'plan-review') return 'a plan-review session reads and writes only PLAN-REVIEW.md, then records its verdict with mc goal plan-review <programme>/<goal> verdict ok|not-ok; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
@@ -1701,31 +1753,24 @@ export function refusedMove({ from, to = null, status = null, env, reviewWritten
   }
   if (!isSession(env)) return null;
   const moves = to !== null && to !== from;
-  if (moves && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
+  const rejects = env.MC_ROLE === REVIEW_ROLE && from === 'review' && to === 'build';
+  if (moves && !rejects && backward(from, to)) return `a session does not move a goal back — ${from} → ${to}; only a person does (mc goal stage <programme>/<goal> ${to}, MC_TOOL=person)`;
   if ([PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return null;
-  if (env.MC_ROLE === FINISH_ROLE) {
-    if (status !== null && status !== 'blocked' && status !== 'Martin') return `a finish session sets blocked or Martin, not ${status}`;
-    if (!moves) return null;
-    if (from !== 'finish') return `a finish session moves only a goal in finish, and this one is ${from}`;
-    if (to !== 'merge') return `a finish session ends in merge, not ${to} — a wrong goal is reported with mc goal defect --part "…" --found "…", and the session ends`;
-    return null;
-  }
   if (env.MC_ROLE === MEND_ROLE) {
     if (from !== 'merge') return `a mend session is only for merge failures, and this goal is in ${from}`;
     if (moves) return `a mend session moves no stage (${from} → ${to}): it returns merge to ready with mc goal ready, or requeues it with mc goal stage merge; a goal to move is Martin's`;
     return null;
   }
   if (status === 'Martin') {
-    const expected = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'merge' }[env.MC_ROLE];
+    const expected = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [MEND_ROLE]: 'merge' }[env.MC_ROLE];
     if (expected && from !== expected) return `${env.MC_ROLE} cannot set Martin for a goal in ${from}`;
-    if (!expected && ![PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return 'only build, review, finish, mend, plan or a person sets Martin';
+    if (!expected && ![PLAN_ROLE, 'plan-session'].includes(env.MC_ROLE)) return 'only build, review, mend, plan or a person sets Martin';
   }
   if (env.MC_ROLE === REVIEW_ROLE) {
-    if (status !== null && status !== 'blocked' && status !== 'Martin') return 'a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge (OK to land) or finish (not OK, with REVIEW.md)';
+    if (status !== null && status !== 'blocked' && status !== 'Martin') return 'a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge (every item OK) or mc goal stage build (a NOT OK item, with REVIEW.md)';
     if (!moves) return null;
     if (from !== 'review') return `a review moves only a goal in review, and this one is ${from}`;
-    if (to !== 'merge' && to !== 'finish') return `a review ends in merge or finish, not ${to}`;
-    if (to === 'finish' && !reviewWritten) return `a review sends a goal to finish with ${REVIEW_FILE} — write ${dir}/${REVIEW_FILE} first: the head judged, what is wrong and where`;
+    if (to !== 'merge' && to !== 'build') return `a review ends in merge or build, not ${to}`;
     return null;
   }
   if (to === 'done') return 'a session does not set done — move it to review; the merger sets done when the pull request lands';
@@ -1778,14 +1823,14 @@ function sessionNotPlan(env) {
 }
 
 /**
- * Whether the caller is a headless goal session — build, review, finish or
+ * Whether the caller is a headless goal session — build, review or
  * mend — which never writes the goal's acceptance: a criterion's text or check
  * is the goal's, and a change to the goal is plan's or a person's
- * (`canon/roles/finish-session.md`, `canon/roles/mend-session.md`).
+ * (`canon/roles/mend-session.md`).
  */
 function goalSessionWord(env) {
   const role = writerRole(env);
-  return ['build', 'review', 'finish', 'mend', 'martin', 'decision'].includes(role) ? role : null;
+  return ['build', 'review', 'mend', 'martin', 'decision'].includes(role) ? role : null;
 }
 
 /** `git -C <cwd> <args>`, as `{ ok, stdout, stderr }`. */

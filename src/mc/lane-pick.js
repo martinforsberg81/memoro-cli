@@ -5,7 +5,7 @@
  *
  * - `mend` for an unqueued merge failure or queued main-red request;
  * - `decision` for a prepared desk item or an eligible due brief;
- * - `finish` for a goal in finish;
+ * - `repair` for a repair build (a goal a review rejected; `finish` in rows from before);
  * - `review` for a goal in review;
  * - `build` for a goal in build;
  * - `plan` for one next draft in a programme with no delivery left.
@@ -18,7 +18,7 @@
  * project-shaped build/review items remain accepted legacy inputs to this
  * picker; they do not describe today's runner candidates.
  *
- * Merge-failure and main-red mend go first, then decision, finish, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
+ * Merge-failure and main-red mend go first, then decision, a repair build, review, build, then planning. Within the earliest runnable rank, repository fairness reserves a
  * share (`ceil(lanes / repositories)`) before programme priority, highest first.
  * Carry, resumed work and oldest wait break remaining ties. A carried build
  * never jumps ahead of a review or recovery. A repository with work in the
@@ -28,12 +28,12 @@
 
 /**
  * Finish work already started before commissioning more: merge-failure mend,
- * then decision, finish, reviews, then builds. Eligibility is the caller's.
+ * then decision, repair builds, reviews, then builds. Eligibility is the caller's.
  */
 function rankOf(item) {
   if (item.kind === 'mend' || item.goal?.status === 'blocked') return 0;
   if (item.kind === 'decision') return 1;
-  if (item.kind === 'finish') return 2;
+  if (item.kind === 'repair' || item.kind === 'finish') return 2;
   if (item.kind === 'review') return 3;
   if (item.kind === 'plan') return 6;
   return item.variant === 'goal' ? 5 : 4;
@@ -45,7 +45,7 @@ const priorityOf = (item) => Number.isSafeInteger(item.priority) && item.priorit
  * `{ items, held, lanes, carry }` → the item to start, or null. `lanes` is
  * the machine-wide lane cap, not a per-repository allowance.
  *
- * `items`: `{ name, repo, kind: 'review'|'finish'|'mend'|'decision'|'build'|'plan', variant: 'project'|'goal'|null,
+ * `items`: `{ name, repo, kind: 'review'|'repair'|'finish'|'mend'|'decision'|'build'|'plan', variant: 'project'|'goal'|null,
  * since, resumed, priority }` — caller-approved candidates. `variant: 'project'` and
  * project build/review kinds are retained for compatibility, although
  * `run.js` also supplies goal-less main-red mends. `held`: one repository per

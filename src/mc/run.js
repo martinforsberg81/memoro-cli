@@ -3,8 +3,7 @@
  *
  * The runner starts goal sessions: a free lane takes the next goal that could
  * start on any repository (`nextWork`, `pickWork` in lane-pick.js) — a build
- * session on an open goal, a review session on a goal in review, a finish
- * session on a goal in finish, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
+ * session on an open goal (a repair after a rejection), a review session on a goal in review, or the mend session a merge failure wakes — runs it, and picks again. One session is one fresh headless
  * process in the goal's worktree. A plan session completes the next draft
  * when its programme has only draft or finished goals (Martin, 2026-11-09). The runner decides
  * nothing with a model: it reads files, runs git and gh, starts the session
@@ -13,8 +12,8 @@
  *
  * Where a goal stands is its own GOAL.json and LOG.md (goals.js). A session
  * writes its entry with `mc goal log`; one that ends without a word gets a
- * runner entry, and three of those in a row send the goal to finish (`goalWithoutWord`).
- * A review or finish session sends its goal to merge;
+ * runner entry, and three of those in a row stop the goal for Martin (`goalWithoutWord`).
+ * A review session sends its goal to merge or back to build;
  * a goal whose pull requests have all landed is set done (`settleLanded`); a
  * goal waiting on `after` is opened when those have landed (`releaseWaiting`).
  *
@@ -71,7 +70,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISH_ROLE, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -103,6 +102,7 @@ import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished }
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
+import { trippedAreas } from './review-verdict.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
@@ -122,7 +122,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalFinishCheckInPrompt, goalFinishPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -135,7 +135,8 @@ const ADMISSION_RETRY_MS = 1000;
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** The role each goal session kind runs with (`goalSession`). */
-const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE });
+const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
+const NO_REVIEW_PR = 'in review without an open pull request';
 
 /*
  * Disk: no session starts unless the shared policy admits it
@@ -1427,7 +1428,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * The goals a lane could start now, as `pickWork` candidates: those the
     * runner starts a session on (`goalSession`: `build · ready`, `review ·
-    * ready`, `finish · ready`, `merge · blocked` when unqueued, and `merge ·
+    * ready` (a repair when REVIEW.md names what to fix), `merge · blocked` when unqueued, and `merge ·
     * ready` after a red while its pull request is out of the merger's line), on
     * one of `repos` (its first repository),
    * held by nobody — a current file on this machine, or a claim while its lane
@@ -1463,6 +1464,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         });
       }
     }
+    // A goal in finish · ready is one the stage went on from before it was retired: the build takes it (REVIEW.md makes it a repair).
+    for (const goal of all) {
+      if (!goal.problems.length && goal.stage === 'finish' && goal.status === 'ready' && !held.has(goalName(goal)) && !heldBy(goal)) {
+        goalState(goal, goalName(goal), { stage: 'build' }, {
+          comment: `in finish, a stage no session is started on any more — returns to build${goal.verdict === null ? '' : ' to repair what REVIEW.md names'}`,
+        });
+      }
+    }
     all = goals();
     const drafts = [...new Set(all.map(goal => goal.programme))]
       .map(programme => nextDraft(all, programme)).filter(Boolean);
@@ -1477,14 +1486,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       })];
   }
 
-  /** A build or review is `goal`'s variant (a project's was the other); a finish or a mend has none (`session-kind.js`). */
+  /** A build or review is `goal`'s variant (a project's was the other); a repair or a mend has none (`session-kind.js`). */
   function goalVariant(kind) {
     return kind === 'build' || kind === 'review' ? 'goal' : null;
   }
 
   /**
    * The session a goal gets (`goalSession`): `mend` only for unqueued merge failures,
-   * `review` in review, `finish` in finish, else `build`. Only a candidate of
+   * `review` in review, in build a `repair` after a rejection and else `build`. Only a candidate of
    * `goalWork` comes here, so the merger's line is not asked again. Drafts
    * receive the separate, programme-gated plan assignment.
    */
@@ -1492,7 +1501,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     if (goal.stage === 'draft') return 'plan';
     if (goal.stage === 'merge') return 'mend';
     if (goal.stage === 'review') return 'review';
-    return goal.stage === 'finish' ? 'finish' : 'build';
+    return goalSession(goal) === 'repair' ? 'repair' : 'build';
   }
 
   /**
@@ -1980,7 +1989,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /**
    * After a review session. The review decides (`canon/roles/review-session.md`):
    * its verb moved the goal to `merge`, all registered PRs sent to merge, or to
-   * `finish`; the runner reads neither its words nor any file. A review that
+   * `build`; the runner reads neither its words nor any file. A review that
    * ended with the goal still in `review` died (a crash, a limit): the goal
    * stays `review · ready` with the runner's entry, and the next review runs;
    * a second that dies in the same `review` waits directly on Martin.
@@ -1998,18 +2007,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       return;
     }
     goalState(goal, name, {}, { comment: `${REVIEW_DIED_TEXT} — a review runs again${left}` });
-  }
-
-  /**
-   * After a finish session (`canon/roles/finish-session.md`). It publishes
-   * and moves the goal to `merge`, or sets it `Martin`; the runner adds nothing
-   * then. One that ends with the goal still `finish · ready` waits directly on
-   * Martin because recovery cannot continue in the finish role.
-   */
-  function afterFinish(goal, name) {
-    const now = stateNow(goal);
-    if (now.stage !== 'finish' || now.status !== 'ready') { say(`${name}: finish left it ${now.stage} · ${now.status}`); return; }
-    goalState(goal, name, { status: 'Martin' }, { comment: 'the finish session ended with the goal still in finish — finish recovery cannot continue' });
   }
 
   /** After mend, a ready repair belongs to delivery again. Missing queue
@@ -2077,8 +2074,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The runner's own log entry, for a build session that left none: stage
-   * and status unchanged. Three of them in a row in `build` move the goal to
-   * `finish · ready`, for a finish session — the guard against a session that
+   * and status unchanged. Three of them in a row in `build` set status Martin
+   * — the guard against a session that
    * fails the same way for ever (the loop that ran 2 803 times); there is no
    * attempt counter, only the log. The runner's no-progress entries
    * (`afterBuild`) are not sessions that ended without a word: they are
@@ -2091,7 +2088,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${name}: ${comment}`);
     const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').filter((item) => !noProgressEntry(item)).slice(-3);
     if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
-    goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a finish session takes it' });
+    goalState(goal, name, { status: 'Martin' }, { comment: 'three sessions ended without a word — see the logs under runner/log' });
   }
 
   /**
@@ -2159,11 +2156,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * or a `skipped` word. A goal in `review` gets a review
    * session instead: the review role (`review-session:goal`), on the review model (`reviewRoute`),
    * with its pull request and head (MC_REVIEW_HEAD), and `mc goal stage
-   * merge` executes its decision, with `afterReview` after it. A goal in `finish`
-   * gets a finish session (`finish-session`) and `afterFinish`; an unqueued
+   * merge` or `mc goal stage build` executes its decision, with `afterReview` after it. A goal in
+   * `build` after a rejection gets a repair (the build role, REVIEW.md named in the prompt, the finish list); an unqueued
    * merge failure gets a mend session
    * (`mend-session`) and `afterMend`. Every kind runs in the goal's worktree.
-   * Only a build routes on the goal's class (fast, medium, large); review, finish, mend
+   * Only a build routes on the goal's class (fast, medium, large); review, repair, mend
    * and plan each route on their own catalog list, whatever the class, and wait
    * when it has no candidate rather than borrow a class's.
    *
@@ -2181,7 +2178,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const kind = goalKind(goal);
     const planning = kind === 'plan';
     const review = kind === 'review';
-    const finish = kind === 'finish';
+    const repair = kind === 'repair';
     const mend = kind === 'mend';
     // Count failed merge results, not how many sessions attempted a repair.
     if (mend && mergeFailures(parseLog(deps.read(logPath) ?? '')) >= 3) {
@@ -2191,7 +2188,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES[kind];
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    const routeList = kind === 'build' ? goal.class : kind;
+    const routeList = kind === 'build' ? goal.class : repair ? 'finish' : kind;
     const routed = review ? reviewRoute(goal) : { route: routeClass(routeList) };
     if (review && !routed.ok) { say(`${name}: its review waits — ${routed.reason}`); return 'skipped:no-capacity'; }
     const { route } = routed;
@@ -2236,14 +2233,23 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const branch = goalBranch({ git: deps.git, dir: goal.dir, goal: goal.goal, repo: repoName });
       const repo = repos.find((item) => item.name === repoName);
       let pr = null;
+      let found = null;
       if (review) {
         pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
         if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
         if (!pr) {
-          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a finish session takes it` });
+          const log = parseLog(deps.read(logPath) ?? '');
+          const review = log.findLastIndex((entry) => entry.role === 'review');
+          const draft = log.findLastIndex((entry, index) => entry.stage === 'draft' && (index === 0 || log[index - 1].stage !== 'draft'));
+          const since = review >= 0 ? review : draft;
+          const returned = log.slice(since + 1).some((entry) => entry.tool === 'runner' && String(entry.comment ?? '').startsWith(NO_REVIEW_PR));
+          if (returned) goalState(goal, name, { status: 'Martin' }, { comment: `${NO_REVIEW_PR} a second time — the desk must inspect it` });
+          else goalState(goal, name, { stage: 'build' }, { comment: `${NO_REVIEW_PR} — ${branch} returns to build` });
           return 'skipped:no-pr';
         }
       }
+      // The untouched areas the branch changed: the one function the move out of review checks against (`review-verdict.js`).
+      if (review) found = trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
@@ -2252,9 +2258,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const prompt = planning
         ? goalPlanPrompt(told)
         : review
-        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head })
-        : finish
-        ? goalFinishPrompt({ ...told, why: goal.log.at(-1) })
+        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null })
+        : repair
+        ? goalRepairPrompt({ ...told, verdict: goal.verdict })
         : mend
         ? goalMendPrompt({ ...told, stage: goal.stage, status: goal.status, why: goal.log.at(-1) })
         : goalPrompt(told);
@@ -2268,7 +2274,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
       const entriesBefore = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length;
       // What a build session is judged on, read before it starts (`afterBuild`).
-      const progressBefore = kind === 'build' ? progressReading(goal) : null;
+      const progressBefore = kind === 'build' || repair ? progressReading(goal) : null;
       say(`${name}: ${kind} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · ${kind === 'build' ? `class ${goal.class}` : `${routeList} list`}: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
       // There exactly as long as the session is, so in flight and slot are one
@@ -2315,8 +2321,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           return 'skipped:programme-changed';
         }
         const handoffPath = join(scratch, MERGE_HANDOFF_FILE);
-        // A session whose `mc goal stage merge` ends it: review, finish, and a mend in merge.
-        const canHandoff = (review || finish || mend) && scratchEnv.MC_SCRATCH;
+        // A session whose `mc goal stage merge` ends it: a review, and a mend in merge.
+        const canHandoff = (review || mend) && scratchEnv.MC_SCRATCH;
         if (canHandoff) remove(handoffPath);
         const pendingSession = deps.session({
           bin: tool.bin,
@@ -2329,7 +2335,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             catch { return false; }
           } : null,
           ...watchFor(launch, settings, {
-            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : finish ? goalFinishCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
+            prompt, name, checkInText: planning ? goalPlanCheckInPrompt : mend ? goalMendCheckInPrompt : goalCheckInPrompt,
             onCheckIn: (count) => writeJson(currentPath, { ...current, check_ins: count }),
           }),
           env: {
@@ -2373,7 +2379,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
         }
       }
-      else if (finish && !read.quota && !read.interrupted) afterFinish(goal, name);
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });
       // An offline ending answers nothing about the goal: no review entry, no runner entry.
       else if (review && read.interrupted !== 'offline') afterReview(goal, name);

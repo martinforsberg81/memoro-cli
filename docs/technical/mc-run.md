@@ -178,9 +178,9 @@ order without a model call:
 1. Read the goals under `~/mc/programs/<programme>/goals/`, through the
    runner's own environment. Convert older goal status/dependency records
    before judging them. An unreadable goal is not runnable.
-2. Consider `build · ready` with criteria, `review · ready`, `finish · ready`,
+2. Consider `build · ready` with criteria, `review · ready`,
    `merge · blocked`, or `merge · ready` after its first red or moved head
-   and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` a finish session. `Martin`
+   and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` (a name kept for old records) is moved to `build · ready` with a log entry before any session starts, and a build in `build · ready` after a review's rejection is a repair build. `Martin`
    waits for the desk decision pass, not a delivery session: this includes a
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
@@ -192,7 +192,7 @@ order without a model call:
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, finish, review, then build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -281,14 +281,19 @@ role tells the session to read LOG.md first.
   It gates, commits and publishes with `--no-merge`. It ends with `mc goal log`,
   moving to review only once every criterion has been checked and met.
 - A review uses `review-session:goal`, the open PR and its head. It judges,
-  never builds: `mc goal stage merge` sends all registered PRs to merge, or it
-  writes REVIEW.md and moves to finish. A review that dies still in review
+  never builds: it writes REVIEW.md in its fixed form, then `mc goal stage merge`
+  sends all registered PRs to merge, or `mc goal stage build` returns the goal to
+  build (a third rejection stays in review, set Martin). A second review is narrow:
+  its prompt names the first review's heads and failed items, and lists the
+  untouched areas the diff tripped. A review that dies still in review
   is retried once, then waits directly on Martin if it dies again.
-- A finish uses `finish-session` on a goal in `finish · ready`: it fixes what
-  review found, gates, publishes and `mc goal stage merge`. One that ends
-  with the goal still `finish · ready` is set `finish · Martin`.
-- A goal mend uses `mend-session` for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, finish on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
-  [finish and mend](mc-goals.md#finish-and-mend). Planning is a separate next-draft assignment under the rule below.
+- A repair build uses `build-session:goal` on the `finish` catalog list, not
+  the goal's class, on a goal in `build · ready` that a review rejected. Its
+  prompt names REVIEW.md and the NOT OK ids (or says the file is in the old form).
+  The run row's kind is `repair`; it ranks as finish did. It fixes what review
+  found, gates, publishes and moves the goal to review.
+- A goal mend uses `mend-session` for merge failures (conflict, failed candidate check or moved judged head), repairs and requeues merge. Pre-merge blockers are resolved in-role or sent directly to Martin. The first two failed merges run mend; its ready result retries delivery. The third failed merge waits on Martin. Both run in the goal's worktree, a repair build on the finish list and mend on the mend list (never the goal's class), and write the merge handoff when they queue. See
+  [repair and mend](mc-goals.md#repair-and-mend). Planning is a separate next-draft assignment under the rule below.
 
 These are fresh sessions, not a resumed execution chain. If a session ends
 after handing its goal to merge, its lane is available for the next assignment
@@ -299,19 +304,19 @@ head. `mc goal stage merge` writes a handoff receipt in the
 session's scratch directory after queueing every PR. The runner checks it
 every 250 ms, ends its own launched child, and releases the current file,
 slot and goal/programme claims after the child closes. Partial queue failures
-write no receipt and leave the session able to retry. Review and finish must
-write their records before the final stage command.
+write no receipt and leave the session able to retry. A review must
+write its records before the final stage command.
 
 If a session ends
 without writing a log entry, the runner writes one; three such build ends
-in succession send the goal to finish. A normal build end with more work
+in succession set the goal Martin; the stage stays build. A normal build end with more work
 leaves it build · ready for the next session.
 
 A session that ends because the API server cannot be reached (`apiInterruption`
 kind `offline`: `connection_failed`, or the result says `Can't reach the API
 server`, ENOTFOUND, ECONNREFUSED or ETIMEDOUT) is no answer about its goal: it
 writes no runner entry and records no refusal, and its `runs.tsv` note is
-`offline`. It holds every new model session of any kind — build, review, finish,
+`offline`. It holds every new model session of any kind — build, review, repair,
 mend, the helper and the intake — for `offlineBackoffMs(n)`: a
 minute, doubling, at most fifteen, with `n` the offline endings in a row. The
 hold is in memory, so a restart starts without one. A session that ends any
@@ -421,10 +426,10 @@ are recorded separately for the next launch.
 Every MC session starts on its selected provider's subscription. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
-This applies to every current MC session path: build, review, finish, mend,
+This applies to every current MC session path: build, review, repair, mend,
 helper, and interactive sessions. An ordinary interactive `mc plan` still lets
-Martin choose the tool and model; billing follows that choice. A finish or
-mend session runs on its own catalog list (finish, mend), never the goal's
+Martin choose the tool and model; billing follows that choice. A repair build or
+mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the goal's
 class, and is billed as any other session. `mc run --billing` shows both providers' next routes. The MC page shows
 one billing line.
 
@@ -514,7 +519,7 @@ billing boundaries starts a cold cache context.
 
 A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
 routes the goal's build sessions only. Every other unattended role runs on its
-own catalog list, whatever the goal's class: `review`, `finish`, `mend`, `plan`
+own catalog list, whatever the goal's class: `review`, `finish` (a repair build), `mend`, `plan`
 (the runner's next-draft planning), `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
 candidates: with none of its own usable and its API off, the session waits
@@ -749,7 +754,7 @@ remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-pl
 ## Goal-less main-red mend
 
 Queued `runner/main-mend/<repo>.json` requests share merge-failure mend's
-earliest rank, ahead of finish, review and build, within the unchanged
+earliest rank, ahead of a repair build, review and build, within the unchanged
 machine-wide lane total. A newly queued request wakes idle lanes at the existing
 30-second control poll instead of waiting the ten-minute idle delay. `mainMendWork` groups files by repository and finder,
 preserving a used batch on retries. Before launch fetch origin and use the

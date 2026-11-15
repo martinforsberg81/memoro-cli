@@ -883,7 +883,7 @@ export const MC_HOOKS = Object.freeze([
 /**
  * Why a goal's review session may not end yet, or null (`mc hook stop`). Only
  * a session with MC_ROLE `review-session:goal` and MC_GOAL is held: it ends
- * once the goal has left `review` — `mc goal stage merge` or `finish` —
+ * once the goal has left `review` — `mc goal stage merge` or `build` —
  * and it has written one proposal, a `.md` in its programme's `proposals/`
  * written since the session began (MC_SESSION_STARTED, which the runner
  * sets). Each thing missing is named. A goal blocked or waiting on Martin is not
@@ -902,7 +902,7 @@ export function reviewStopDecision({ env = process.env, home, read = (path) => r
   } catch { return null; }
   const started = Date.parse(env.MC_SESSION_STARTED ?? '');
   const missing = [];
-  if (stage === 'review') missing.push('the goal is still in review — mc goal stage merge (OK to land: it merges all registered pull requests) or write REVIEW.md in the goal\'s directory and mc goal stage finish (not OK)');
+  if (stage === 'review') missing.push('the goal is still in review — mc goal stage merge (OK to land: it merges all registered pull requests) or write REVIEW.md in the goal\'s directory and mc goal stage build (not OK)');
   if (Number.isFinite(started)) {
     const dir = join(home, programme, 'proposals');
     let names = [];

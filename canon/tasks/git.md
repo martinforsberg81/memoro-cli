@@ -22,13 +22,13 @@ and its `index.lock` are every session's at once.
 - **Branches.** Keep the goal's existing branch, worktree and pull request.
   Integrate main when needed for a concrete publication/merger conflict, a
   named already-landed prerequisite or a demonstrated upstream acceptance
-  obstacle. The owning build/finish/mend or interactive session records the
+  obstacle. The owning build/mend or interactive session records the
   reason, prerequisite commits and fixed main revision before merging it.
   Follow `docs/technical/mc-goals.md`, *Integrating main into a goal*.
   Preserve both intents and history, reconcile generated artefacts deliberately,
   and complete affected final-tree acceptance before publication and handoff.
   Main advancing alone does not justify synchronization. Reviewers send repairs
-  to finish; integration does not grant them edit authority.
+  back to build; integration does not grant them edit authority.
   New work starts from a fresh `origin/main`. A branch that has merged is
   finished: building on it lands the same content twice under two SHAs. A
   branch stacked on an open one is rebuilt from `main` once its parent lands,

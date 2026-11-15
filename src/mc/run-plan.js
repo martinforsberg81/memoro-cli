@@ -2,7 +2,7 @@
  * `mc run` — the decisions the runner makes without starting anything.
  *
  * Everything here is a function of text and small objects: the prompts a
- * goal's build, review, finish and mend session is given; the headless argument list
+ * goal's build, review, repair and mend session is given; the headless argument list
  * per tool; what a finished session's output means; when the helper, intake
  * and nightly chores are due; and the runs.tsv row. The process-touching half
  * (git, gh, the session itself) is run.js, and it calls in here so that the
@@ -318,32 +318,39 @@ export function goalPrompt({ name, dir, worktree, branch, brief = null }) {
   return withBrief(`You are a session on the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; your worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`, brief);
 }
 
+/** The fixed-form lines relevant to a repair and its next review; old free-form reviews have no heads. */
+function priorVerdict(verdict) {
+  const lines = String(verdict ?? '').split('\n');
+  return {
+    heads: lines.filter((line) => /^head: \S+ \S+\s*$/u.test(line)),
+    failed: lines.filter((line) => /^[^:]+: NOT OK(?:\s|$)/u.test(line)),
+  };
+}
+
+export function goalRepairPrompt({ verdict, ...args }) {
+  const { failed } = priorVerdict(verdict);
+  const items = failed.length ? `The NOT OK items are:\n${failed.join('\n')}` : 'REVIEW.md is in the old form or holds no item ids.';
+  return `${goalPrompt(args)}\n\nThis is a repair build. Read ${args.dir}/REVIEW.md. ${items}`;
+}
+
 /**
  * What a goal's review session is told: the goal, its worktree, and the pull
  * request with the head it is to judge. The rest is `canon/roles/review-session.md`'s
  * (its `goal` part).
  */
-export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null }) {
-  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.`, brief);
+export function goalReviewPrompt({ name, dir, worktree, branch, pr, head, brief = null, verdict = null, tripped = [], trippedError = null }) {
+  const { heads, failed } = priorVerdict(verdict);
+  const prior = heads.length ? `\n\nThe previous review judged:\n${heads.join('\n')}\nIts NOT OK items:\n${failed.join('\n') || '(none)'}` : '';
+  const areas = tripped.length
+    ? `\n\nThese areas the goal stands untouched on were changed by its branch; write an \`untouched <area>\` line for each:\n${tripped.map((one) => `${one.area}: ${one.files.join(', ')}`).join('\n')}`
+    : '';
+  const unread = trippedError ? `\n\nThe untouched areas could not be checked (${trippedError}); the move out of review refuses until they can.` : '';
+  return withBrief(`You review the goal ${name}. Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Its pull request is #${pr}, at head ${head}: that head is what you judge. Your role says the rest.${prior}${areas}${unread}`, brief);
 }
 
 /** The last word on a goal, for a prompt: the last entry's `Done` and `Comment`, joined. */
 function lastWord(why) {
   return [why?.done, why?.comment].filter(Boolean).join(' — ');
-}
-
-/**
- * What a goal's finish session is told: the goal in `finish · ready` (a
- * review found it not OK and wrote REVIEW.md, or the runner sent it there),
- * the last word on it, and where its worktree is. The rest is
- * `canon/roles/finish-session.md`'s.
- */
-export function goalFinishPrompt({ name, dir, worktree, branch, why = null, brief = null }) {
-  const reason = lastWord(why);
-  return withBrief([
-    `You finish the goal ${name}, headless: it is in finish. Read REVIEW.md in its directory when there is one, and LOG.md; fix what review found in its worktree, gate, publish, and move it to merge.${reason ? ` The last word on it: ${reason}.` : ''}`,
-    `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
-  ].join('\n'), brief);
 }
 
 /**
@@ -359,17 +366,6 @@ export function goalMendPrompt({ name, dir, worktree, branch, stage, status = 'b
     `You mend the goal ${name}, headless — ${task}.${reason ? ` The last word on it: ${reason}.` : ''}`,
     `Its directory is \`${dir}\`, with GOAL.json and LOG.md; its worktree is \`${worktree}\`, on branch \`${branch}\`. Your role says the rest.`,
   ].join('\n'), brief);
-}
-
-/** `checkInPrompt` for a goal's finish session. */
-export function goalFinishCheckInPrompt({ minutes, count }) {
-  return [
-    `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
-    'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
-    '',
-    'Your job is what review found: fix it, gate, publish, and `mc goal stage merge`. Preserve acceptance and gate requirements.',
-    'Repair in-scope acceptance obstacles yourself. For an actual design choice or reserved act, ask directly with `mc ask`; continue if jev answers, otherwise wait on Martin. Ordinary implementation detail is resolved from technical standards and programme design.',
-  ].join('\n');
 }
 
 /** `checkInPrompt` for a goal's mend session. */

@@ -59,7 +59,8 @@ describe('the plan role', () => {
     assert.match(told, /With Martin at the terminal you have full freedom/u);
     assert.match(told, /runner assigns exactly one next draft/u);
     assert.match(told, /Do not implement it, plan another draft/u);
-    assert.match(told, /A \*\*finish session\*\* takes `finish · ready`/u);
+    assert.match(told, /A \*\*review session\*\* judges and moves it to `merge` \(all OK\) or back to `build` \(a NOT OK line\)/u);
+    assert.match(told, /A goal rejected a third time stays in review with status Martin/u);
     assert.match(told, /A \*\*mend session\*\* handles merge failures only/u);
     assert.match(told, /You move a stage forward only; mc refuses a session's move back/u);
     assert.match(told, /not a runner area/u);

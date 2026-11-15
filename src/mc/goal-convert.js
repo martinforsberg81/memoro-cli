@@ -34,7 +34,7 @@ const doneLine = (entry) => String(entry?.done ?? '').split('\n')[0];
 
 /**
  * The stage a goal `blocked` before stages was blocked in, from its log, last
- * entry first: a red review's verdict is `finish`; the merger's red or a
+ * entry first: a red review's verdict is `build`; the merger's red or a
  * green the runner queued is `merge`; the runner's word on a review (no
  * verdict, no pull request, a moved head) or an entry in `review` is
  * `review`; anything else — a build session's question, three sessions
@@ -47,7 +47,7 @@ function blockedStage(log) {
     const done = doneLine(entry);
     const runner = entry.tool === 'runner';
     if (runner && done.startsWith('plan session ended')) continue;
-    if (/^red\b.*\b[0-9a-f]{7,40}\b/u.test(done)) return 'finish';
+    if (/^red\b.*\b[0-9a-f]{7,40}\b/u.test(done)) return 'build';
     if (runner && (/^merger answered red/u.test(done) || /^queued #\d+/u.test(done))) return 'merge';
     if (runner && /review left no verdict|^in review, but|^green on/u.test(String(entry.comment ?? ''))) return 'review';
     if (entry.status === 'review') return 'review';

@@ -26,7 +26,7 @@
  */
 import { execFileSync } from 'node:child_process';
 
-import { FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from './goals.js';
+import { MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from './goals.js';
 import { BUILD_ROLES } from './run-plan.js';
 
 /** The session kinds whose ending a page should say: a holder of these whose pid is gone is `holder gone`. */
@@ -91,9 +91,6 @@ export function leaseHolder({ env = process.env, verb = 'mc', pid = process.pid,
     name = text(env.MC_GATE_ROUND);
   } else if (role === REVIEW_ROLE || role?.startsWith('review-session')) {
     kind = 'review';
-    name = goal;
-  } else if (role === FINISH_ROLE) {
-    kind = 'finish';
     name = goal;
   } else if (role === MEND_ROLE) {
     kind = 'mend';
