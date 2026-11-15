@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -132,9 +132,24 @@ test('this repository\'s own .mc/areas.json validates, and every standard and pa
   const text = readFileSync(join(ROOT, AREAS_PATH), 'utf8');
   const r = checkAreas(text, AREAS_PATH);
   assert.equal(r.ok, true, r.reason);
-  assert.deepEqual(r.areas.map((area) => area.id), ['reserved-acts', 'session-roles', 'command-contract', 'tests-gate', 'operations', 'documentation']);
+  assert.deepEqual(r.areas.map((area) => area.id), ['reserved-acts', 'session-roles', 'command-contract', 'tests-gate', 'operations', 'documentation', 'system']);
   const missing = r.areas.flatMap((area) => [...area.standards, ...area.paths].filter((path) => !existsSync(join(ROOT, path))).map((path) => `${area.id}: ${path}`));
   assert.deepEqual(missing, []);
   const pages = r.areas.filter((area) => area.page && !existsSync(join(ROOT, area.page))).map((area) => `${area.id}: ${area.page}`);
   assert.deepEqual(pages, [], 'a page this declaration names exists');
+});
+
+test('the system area is a source area whose page has the five headings in order, the Aim quoted and credited, every mc standard listed, and an index named', () => {
+  const { areas } = checkAreas(readFileSync(join(ROOT, AREAS_PATH), 'utf8'), AREAS_PATH);
+  const system = areas.find((area) => area.id === 'system');
+  assert.deepEqual([isSourceArea(system), system.questions, system.page], [true, [], 'docs/technical/areas/system.md']);
+  const page = readFileSync(join(ROOT, system.page), 'utf8');
+  assert.deepEqual(page.split('\n').filter((line) => line.startsWith('## ')), ['## Aim', '## Closer', '## Decisions', '## Store', '## Standards']);
+  assert.ok(page.includes('memoro `docs/technical/README.md`'), 'its index is named');
+  assert.ok(page.includes('"One developer drives many tracks at once: the work is delivered at high quality, the system maintains and improves itself, and only the right kind of question reaches him. This is a direction, not a finish line: the programme is not done because a piece of work is." (Martin, 2026-11-14; programme `mc`)'));
+  const standards = readdirSync(join(ROOT, 'docs/technical')).filter((name) => /^mc-.*\.md$/u.test(name));
+  assert.deepEqual(standards.filter((name) => !page.includes(`](../${name})`)), [], 'every mc standard is listed');
+  const decisions = page.split('## Decisions')[1].split('## Store')[0];
+  assert.ok(/\(Martin, 2026-11-15; programme `horizon`\)/u.test(decisions), 'a decision of this programme stands among them');
+  for (const item of decisions.split('\n- ').slice(1)) assert.match(item, /\(Martin, \d{4}-\d{2}-\d{2}; programme `[a-z-]+`\)/u, item.slice(0, 40));
 });

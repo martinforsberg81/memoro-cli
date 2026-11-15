@@ -1321,7 +1321,7 @@ describe('INTAKE', () => {
     for (const columns of [60, 80, 120, 160]) {
       const lines = renderPageLines(pageData({ intake, sessions, programmes }), { columns });
       const header = lines.slice(0, lines.findIndex((line) => line.includes('PROGRAMMES'))).join('\n');
-      assert.match(header, /mc manager/u);
+      assert.match(header, /d {2}mc martin/u);
       assert.match(header, /● · MANAGER · 60 min/u);
       assert.match(header, /┌─ proposals ─+┐/u);
       assert.match(header, /│ +3 +│/u);
@@ -2958,7 +2958,8 @@ describe('DESK — what waits for Martin, read by the page', () => {
       assert.ok(text.indexOf('┌─ DESK') < text.indexOf('PROGRAMMES'), 'above PROGRAMMES');
       assert.match(text, /┌─ DESK ─+ d {2}mc martin ┐/u);
       assert.match(text, /^ {4}3 waiting for you$/mu);
-      assert.match(text, /d {2}mc martin {3}·   m {2}mc manager/u);
+      assert.match(text, /d {2}mc martin/u);
+      assert.doesNotMatch(text, /mc manager/u, 'the header offers no interactive manager (D10)');
     });
 
     it('draws texts before acts with their lead, brief line, age and what they block', () => {

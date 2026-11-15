@@ -115,3 +115,74 @@ export function publishLines({ pr, localHead, branch, pushed, created, repo, aft
     ...(handOff ? [handOff] : queued ? [] : [`next: mc merge ${repo} ${pr.number}`]),
   ];
 }
+
+/* ------------------------------------------------------------ the manager's guard */
+
+/** What the manager may change: its curation of the area texts is `docs/technical/` and nothing else (D6). */
+const MANAGER_ROOT = 'docs/technical/';
+const MANAGER_ME = 'docs/technical/memoro-me.md';
+const AREA_PAGE = /^docs\/technical\/areas\/[^/]+\.md$/u;
+/** A dated decision of Martin's: his name, a comma and a date, as every decision in the standards is written. */
+const MARTIN_DECIDED = /Martin, \d{4}-\d\d-\d\d/u;
+const BLOCK_START = /^(\s*([-*]|\d+\.)\s|#{1,6}\s)/u;
+
+/** The body of a `## <heading>` section of `text`, up to the next `## ` heading: '' when the section is not there. */
+function sectionOf(text, heading) {
+  const lines = String(text ?? '').split('\n');
+  const start = lines.findIndex((line) => line.trimEnd() === `## ${heading}`);
+  if (start < 0) return '';
+  let end = lines.findIndex((line, at) => at > start && line.startsWith('## '));
+  if (end < 0) end = lines.length;
+  return lines.slice(start + 1, end).join('\n').trim();
+}
+
+/**
+ * The blocks of `text` that hold a dated decision of Martin's, each as its lines: a list item with its continuation
+ * lines, a heading, or a paragraph up to the next blank line. A line that starts a list item or a heading starts a
+ * block of its own.
+ */
+export function martinBlocks(text) {
+  const blocks = []; let current = [];
+  const close = () => { if (current.length) blocks.push(current); current = []; };
+  for (const line of String(text ?? '').split('\n')) {
+    if (!line.trim()) { close(); continue; }
+    if (BLOCK_START.test(line)) close();
+    current.push(line);
+  }
+  close();
+  return blocks.filter((block) => MARTIN_DECIDED.test(block.join('\n')));
+}
+
+/**
+ * Why the manager may not publish this diff, or null (D6). `files` is `[{ path, before, after }]`: each file the branch
+ * changes against origin/main with its text there and at the branch's head, null where it is not (added, deleted).
+ * It refuses a file outside `docs/technical/`, `docs/technical/memoro-me.md`, a change to the `## Aim` or `##
+ * Decisions` of an area page, and any removal or alteration of a line in a block that holds a dated decision of Martin's.
+ */
+export function managerGuard(files) {
+  const found = [];
+  for (const { path, before, after } of files) {
+    if (!path.startsWith(MANAGER_ROOT)) { found.push(`${path} is outside docs/technical/`); continue; }
+    if (path === MANAGER_ME) { found.push(`${path} is Martin's own text`); continue; }
+    if (AREA_PAGE.test(path)) {
+      for (const heading of ['Aim', 'Decisions']) {
+        if (sectionOf(before, heading) !== sectionOf(after, heading)) found.push(`${path} changes its ## ${heading}`);
+      }
+    }
+    if (before != null) {
+      const kept = new Map();
+      for (const line of String(after ?? '').split('\n')) kept.set(line, (kept.get(line) ?? 0) + 1);
+      for (const block of martinBlocks(before)) {
+        const lost = block.find((line) => {
+          const left = kept.get(line) ?? 0;
+          if (!left) return true;
+          kept.set(line, left - 1);
+          return false;
+        });
+        if (lost !== undefined) found.push(`${path} removes or alters a line of a dated decision of Martin's (${JSON.stringify(lost.trim().slice(0, 60))})`);
+      }
+    }
+  }
+  if (!found.length) return null;
+  return `the manager publishes only what its role may change — ${found.join('; ')}; a text of Martin's goes to the desk with mc martin propose`;
+}

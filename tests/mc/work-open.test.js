@@ -448,7 +448,7 @@ describe('openInWorkArea and the foreground register', () => {
       const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
       assert.equal(result.ok, false, JSON.stringify(owner));
       assert.equal(result.reason, 'no owner');
-      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc manager, mc helper, mc martin\)/u);
+      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc helper, mc martin\)/u);
       assert.deepEqual(calls, []);
     }
     assert.deepEqual(events, []);

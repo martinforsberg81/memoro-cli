@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { describedBody, messageParts, publishLines, readBody, refusal } from '../../src/mc/publish.js';
+import { describedBody, managerGuard, messageParts, publishLines, readBody, refusal } from '../../src/mc/publish.js';
 import { pushBranch, repoName, run } from '../../src/mc/commands/publish.js';
 import { checkAgainstMain } from '../../src/mc/main-conflict.js';
 import { goalField, goalJson } from './_helpers/goal-file.js';
@@ -111,6 +111,88 @@ describe('mc publish', () => {
     assert.equal(await run(['--no-merge'], deps), 0);
     assert.equal(out.stderr, 'mc: warning: git fetch origin failed (could not read from remote) — checked against the origin/main already held\n');
     assert.deepEqual(out.pushed, ['step-x']);
+  });
+
+  // The manager's publish guard (D6): the diff against origin/main is read through git, the verdict is managerGuard's.
+  function asManager(deps, files) {
+    const real = deps.git;
+    deps.env = { MC_ROLE: 'manager' };
+    deps.git = (args) => {
+      const key = args.join(' ');
+      if (key === 'merge-base origin/main HEAD') return 'base1';
+      if (key === 'diff --name-only --no-renames base1 HEAD') return Object.keys(files).join('\n');
+      const shown = key.match(/^show (base1|HEAD):(.+)$/u);
+      if (shown) return files[shown[2]]?.[shown[1] === 'HEAD' ? 1 : 0] ?? null;
+      return real(args);
+    };
+    return deps;
+  }
+  const PAGE = (aim, decisions, store = 'x') => `# memoro-cli\n\n## Aim\n\n${aim}\n\n## Decisions\n\n${decisions}\n\n## Store\n\n${store}\n`;
+  const DECIDED = '- Merging waits for a review. Martin, 2026-11-10, programme mc.\n  It never merges itself.\n- An undated line.\n';
+
+  it('manager: a branch that changes a file outside docs/technical/ is refused, exit 2, one mc: line, nothing pushed, queued or opened', async () => {
+    const { out, deps } = fixture();
+    assert.equal(await run([], asManager(deps, { 'src/mc/run.js': ['a', 'b'], 'docs/technical/mc-run.md': ['a', 'b'] })), 2);
+    assert.match(out.stderr, /^mc: the manager publishes only what its role may change — src\/mc\/run\.js is outside docs\/technical\//u);
+    assert.equal(out.stderr.trim().split('\n').length, 1);
+    assert.deepEqual([out.pushed, out.gh, out.merged], [[], [], []]);
+  });
+
+  it('manager: docs/technical/memoro-me.md is refused; the changes the role may make publish', async () => {
+    const refused = fixture();
+    assert.equal(await run([], asManager(refused.deps, { 'docs/technical/memoro-me.md': ['a', 'b'] })), 2);
+    assert.match(refused.out.stderr, /docs\/technical\/memoro-me\.md is Martin's own text/u);
+    const allowed = fixture();
+    assert.equal(await run(['--no-merge'], asManager(allowed.deps, {
+      'docs/technical/mc-run.md': ['old\n', 'new\n'],
+      'docs/technical/areas/x.md': [PAGE('Aim.', DECIDED, 'old'), PAGE('Aim.', DECIDED, 'new')],
+    })), 0, allowed.out.stderr);
+    assert.deepEqual(allowed.out.pushed, ['step-x']);
+  });
+
+  it('manager: a changed ## Aim or ## Decisions of an area page is refused, ## Store is the manager\'s to change', async () => {
+    for (const [heading, after] of [['Aim', PAGE('A new aim.', DECIDED)], ['Decisions', PAGE('Aim.', `${DECIDED}- A new decision.\n`)]]) {
+      const { out, deps } = fixture();
+      assert.equal(await run([], asManager(deps, { 'docs/technical/areas/x.md': [PAGE('Aim.', DECIDED), after] })), 2);
+      assert.match(out.stderr, new RegExp(`docs/technical/areas/x\\.md changes its ## ${heading}`, 'u'));
+      assert.deepEqual(out.pushed, []);
+    }
+    const { out, deps } = fixture();
+    assert.equal(await run(['--no-merge'], asManager(deps, { 'docs/technical/areas/x.md': [PAGE('Aim.', DECIDED, 'old'), PAGE('Aim.', DECIDED, 'new')] })), 0, out.stderr);
+  });
+
+  it('manager: removing or altering a line of a block with a dated decision of Martin\'s is refused, wherever it stands; an undated block is free', async () => {
+    const FILE = 'docs/technical/mc-run.md';
+    const doc = `# Run\n\nThe runner starts it.\nMartin, 2026-11-12 decided that.\nIt holds.\n\n${DECIDED}`;
+    for (const after of [
+      doc.replace('It never merges itself.', 'It merges when it likes.'),
+      doc.replace('  It never merges itself.\n', ''),
+      doc.replace('- Merging waits for a review. Martin, 2026-11-10, programme mc.', '- Merging waits. Martin, 2026-11-10, programme mc.'),
+      doc.replace('It holds.\n', ''),
+      doc.replace(/- Merging[\s\S]*never merges itself\.\n/u, ''),
+    ]) {
+      const { out, deps } = fixture();
+      assert.equal(await run([], asManager(deps, { [FILE]: [doc, after] })), 2, after);
+      assert.match(out.stderr, /removes or alters a line of a dated decision of Martin's/u);
+    }
+    // Adding lines, rewording the undated list item and a decision with no date are not what the rule keeps.
+    const free = fixture();
+    assert.equal(await run(['--no-merge'], asManager(free.deps, { [FILE]: [doc, doc.replace('- An undated line.', '- A reworded line.').replace('It holds.', 'It holds.\nMore.')] })), 0, free.out.stderr);
+    assert.equal(managerGuard([{ path: FILE, before: 'Martin decided that.\n', after: 'Gone.\n' }]), null);
+  });
+
+  it('manager: a diff that cannot be read refuses; a role other than the manager is not guarded', async () => {
+    const unreadable = fixture();
+    assert.equal(await run([], unreadable.deps = { ...unreadable.deps, env: { MC_ROLE: 'manager' } }), 2);
+    assert.match(unreadable.out.stderr, /^mc: the manager's publish cannot read what the branch changes against origin\/main/u);
+    assert.deepEqual(unreadable.out.pushed, []);
+    for (const role of ['plan', 'build', 'review', undefined]) {
+      const { out, deps } = fixture();
+      deps.env = role ? { MC_ROLE: role } : {};
+      deps.git = ((real) => (args) => (args[0] === 'diff' ? 'src/mc/run.js\ndocs/technical/memoro-me.md' : real(args)))(deps.git);
+      assert.equal(await run(['--no-merge'], deps), 0, `${role}: ${out.stderr}`);
+      assert.deepEqual(out.pushed, ['step-x']);
+    }
   });
 
   it('a branch whose merge with origin/main conflicts is refused before anything is pushed, and the path is named', async () => {

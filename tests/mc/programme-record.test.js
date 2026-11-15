@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run as goal } from '../../src/mc/commands/goal.js';
@@ -33,6 +33,7 @@ async function call(argv, env, deps = {}) {
 }
 
 const GOOD = { schema: 'mc-programme', version: 1, horizon: 'mc-autonomy', end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+const OPEN_HORIZONS = { horizons: ['h-one', 'h-two', 'h-three', 'h-four', 'h-done'].map((slug) => ({ slug, state: slug === 'h-done' ? 'closed' : 'open' })) };
 const recordOf = (home, name) => JSON.parse(readFileSync(join(home, name, RECORD_FILE), 'utf8'));
 
 describe('the record validator', () => {
@@ -200,11 +201,13 @@ describe('mc programs record and show', () => {
 });
 
 describe('who may write a record', () => {
-  it('lets a person, the interactive Martin role and the manager through, each recorded as itself', async () => {
+  it('lets a person, the interactive Martin role and the manager through, each recorded as itself — the manager with --purpose and an open horizon', async () => {
     const a = area();
     try {
       for (const [name, extra, by] of [['one', {}, 'person'], ['two', { MC_ROLE: 'martin' }, 'martin'], ['three', { MC_ROLE: 'manager' }, 'manager'], ['four', { MC_ROLE: 'brief' }, 'manager']]) {
-        assert.equal((await call(['create', name, '--end', 'e'], { ...a.env, ...extra })).code, 0, name);
+        const manager = by === 'manager';
+        const argv = ['create', name, '--end', 'e', ...(manager ? ['--purpose', 'What it delivers.', '--horizon', `h-${name}`] : [])];
+        assert.equal((await call(argv, { ...a.env, ...extra }, { horizons: () => OPEN_HORIZONS })).code, 0, name);
         assert.equal(recordOf(a.home, name).created_by, by, name);
       }
     } finally { a.done(); }
@@ -296,5 +299,168 @@ describe('the record page', () => {
     assert.match(page, /^# alpha — /u);
     assert.match(page, /\\# not a heading/u, 'a sentence that starts with # is not a heading');
     assert.equal(recordPageTemplate({ canon: '/no/such/canon' }), null);
+  });
+});
+
+/** The declaration `.mc/areas.json` of a repository at origin/main, as `git show` gives it, for the area repairs. */
+const DECLARED = JSON.stringify({ schema_version: 1, areas: ['operations', 'documentation'].map((id) => ({ id, name: id, covers: id, standards: ['docs/technical/x.md'], paths: [`${id}/`], questions: [{ when: 'w', ask: 'a' }] })) });
+const AREA_DEPS = {
+  known: () => ['/home/m/memoro-cli.git'],
+  git: (cwd, args) => (args[0] === 'show' ? { ok: true, stdout: DECLARED, stderr: '' } : { ok: true, stdout: '', stderr: '' }),
+};
+
+describe('mc programs create for an area', () => {
+  it('writes the area into the record and the page, with a null horizon, and the record reads back', async () => {
+    const a = area();
+    try {
+      const { code, out } = await call(['create', 'ops-repair', '--end', 'The text says what runs.', '--area', 'memoro-cli/operations', '--purpose', 'The runner section is stale.'], a.env, AREA_DEPS);
+      assert.equal(code, 0, out);
+      const record = recordOf(a.home, 'ops-repair');
+      assert.deepEqual(record, { ...GOOD, horizon: null, area: 'memoro-cli/operations', end: 'The text says what runs.', phases: { order: 'stated' } });
+      assert.deepEqual(Object.keys(record).slice(0, 5), ['schema', 'version', 'horizon', 'area', 'end']);
+      assert.match(readFileSync(join(a.home, 'ops-repair', 'README.md'), 'utf8'), /Repairs the text of the area `memoro-cli\/operations`, a programme without a horizon\. The runner section is stale\./u);
+      assert.equal(readRecord(join(a.home, 'ops-repair')).status, 'valid');
+    } finally { a.done(); }
+  });
+
+  it('a record that names an area is valid only with a null horizon and an area of the form <repo>/<id>; one without area reads as it did', () => {
+    assert.deepEqual(validateRecord({ ...GOOD, horizon: null, area: 'memoro-cli/operations' }), []);
+    assert.ok(validateRecord({ ...GOOD, area: 'memoro-cli/operations' }).some((text) => text.startsWith('area:') && /horizon null/u.test(text)));
+    for (const bad of ['operations', 'memoro-cli/', 'Memoro/ops', 3, null]) assert.ok(validateRecord({ ...GOOD, horizon: null, area: bad }).some((text) => text.startsWith('area:')), String(bad));
+    assert.deepEqual(validateRecord(GOOD), []);
+    assert.deepEqual(Object.keys(newRecord({ horizon: null, end: 'e', createdBy: 'person', now: NOW })), ['schema', 'version', 'horizon', 'end', 'state', 'created', 'created_by']);
+  });
+
+  it('refuses --area for a repository mc does not know, an area it does not declare and a declaration git cannot read — exit 1, nothing made', async () => {
+    const a = area();
+    try {
+      for (const [area_, deps, why] of [
+        ['nowhere/operations', AREA_DEPS, /nowhere is not a repository mc knows/u],
+        ['memoro-cli/missing', AREA_DEPS, /memoro-cli declares no area missing/u],
+        ['memoro-cli/operations', { ...AREA_DEPS, git: () => ({ ok: false, stdout: '', stderr: 'fatal: not a git repository' }) }, /could not read/u],
+      ]) {
+        const { code, err } = await call(['create', 'ops-repair', '--end', 'e', '--area', area_], a.env, deps);
+        assert.equal(code, 1, area_);
+        assert.match(err, why, area_);
+      }
+      assert.deepEqual(readdirSync(a.home), []);
+    } finally { a.done(); }
+  });
+
+  it('refuses --area together with --horizon, --from-proposal without --area and an empty --purpose, exit 2, nothing made', async () => {
+    const a = area();
+    try {
+      for (const argv of [['--area', 'memoro-cli/operations', '--horizon', 'h'], ['--from-proposal', '/x/p.md'], ['--area', 'memoro-cli/operations', '--purpose', '  ']]) {
+        assert.equal((await call(['create', 'ops-repair', '--end', 'e', ...argv], a.env, AREA_DEPS)).code, 2, argv.join(' '));
+      }
+      assert.deepEqual(readdirSync(a.home), []);
+    } finally { a.done(); }
+  });
+
+  /** An area repair programme `ops-repair` for memoro-cli/operations holding a goal in `stage`, and a proposal waiting in ~/mc/proposals/. */
+  function repairArea(stage = 'build') {
+    const a = area();
+    mkdirSync(join(a.root, 'proposals'));
+    const proposal = join(a.root, 'proposals', '2026-11-12-operations.md');
+    writeFileSync(proposal, '# The operations text is stale\n\nThe runner section.\n');
+    return { ...a, proposal, create: async (name) => call(['create', name, '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p', '--from-proposal', proposal], a.env, AREA_DEPS), stage };
+  }
+
+  it('repair: a second create for an area that has an open repair programme holding a live goal is refused, exit 1, and the proposal stays where it is', async () => {
+    const a = repairArea();
+    try {
+      assert.equal((await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--purpose', 'p'], a.env, AREA_DEPS)).code, 0);
+      mkdirSync(join(a.home, 'ops-repair', 'goals', 'fix'), { recursive: true });
+      writeFileSync(join(a.home, 'ops-repair', 'goals', 'fix', 'GOAL.json'), JSON.stringify({ stage: 'build' }));
+      const { code, err } = await a.create('ops-repair-2');
+      assert.equal(code, 1);
+      assert.match(err, /the area memoro-cli\/operations already has the open repair programme ops-repair/u);
+      assert.ok(existsSync(a.proposal), 'the proposal is not moved by a refused create');
+      assert.equal(existsSync(join(a.home, 'ops-repair-2')), false);
+      assert.deepEqual(readdirSync(join(a.root, 'proposals')), ['2026-11-12-operations.md']);
+    } finally { a.done(); }
+  });
+
+  it('repair: with none open, create makes the programme and moves the proposal into its proposals/ under a first line naming where it came from; a done record frees the area', async () => {
+    const a = repairArea();
+    try {
+      const { code, out } = await a.create('ops-repair');
+      assert.equal(code, 0, out);
+      assert.equal(existsSync(a.proposal), false);
+      const moved = readFileSync(join(a.home, 'ops-repair', 'proposals', '2026-11-12-operations.md'), 'utf8');
+      assert.match(moved.split('\n')[0], new RegExp(`^Moved here from ${a.proposal.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} `, 'u'));
+      assert.match(moved, /# The operations text is stale\n\nThe runner section\./u);
+      const record = JSON.parse(readFileSync(join(a.home, 'ops-repair', RECORD_FILE), 'utf8'));
+      writeFileSync(join(a.home, 'ops-repair', RECORD_FILE), JSON.stringify({ ...record, state: 'done' }));
+      writeFileSync(a.proposal, '# Again\n');
+      assert.equal((await a.create('ops-repair-2')).code, 0, 'a repair that is done no longer holds the area');
+    } finally { a.done(); }
+  });
+
+  it('repair: a --from-proposal that is no proposal of ~/mc/proposals/ or a programme is refused before anything is made', async () => {
+    const a = repairArea();
+    try {
+      const outside = join(a.root, 'elsewhere.md');
+      writeFileSync(outside, 'x');
+      // A file under a proposals archive/ has been decided already: it is no proposal.
+      const archivedHere = join(a.root, 'proposals', 'archive', 'old.md');
+      const archivedThere = join(a.home, 'other', 'proposals', 'archive', 'old.md');
+      for (const file of [archivedHere, archivedThere]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, 'x'); }
+      for (const given of [outside, join(a.root, 'proposals', 'missing.md'), archivedHere, archivedThere]) {
+        const { code, err } = await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--from-proposal', given], a.env, AREA_DEPS);
+        assert.equal(code, 1, given);
+        assert.match(err, /--from-proposal/u);
+      }
+      assert.equal(existsSync(join(a.home, 'ops-repair')), false);
+    } finally { a.done(); }
+  });
+});
+
+describe('mc programs create as the manager', () => {
+  const asManager = (a) => ({ ...a.env, MC_ROLE: 'manager' });
+
+  it('names --purpose and exactly one of --horizon and --area, else exit 2 with nothing made; record is refused to it', async () => {
+    const a = area();
+    try {
+      for (const argv of [['--horizon', 'h-one'], ['--purpose', 'p'], ['--purpose', 'p', '--horizon', 'h-one', '--area', 'memoro-cli/operations']]) {
+        const { code } = await call(['create', 'x', '--end', 'e', ...argv], asManager(a), { ...AREA_DEPS, horizons: () => OPEN_HORIZONS });
+        assert.equal(code, 2, argv.join(' '));
+      }
+      const record = await call(['record', 'x', '--end', 'e'], asManager(a));
+      assert.equal(record.code, 2);
+      assert.match(record.err, /the manager role cannot write a record/u);
+      assert.deepEqual(readdirSync(a.home), []);
+    } finally { a.done(); }
+  });
+
+  it('refuses a horizon that is not open or already has a valid open record, exit 1; an invalid record on another programme holds nothing back; the page exists with the record', async () => {
+    const a = area();
+    try {
+      const deps = { ...AREA_DEPS, horizons: () => OPEN_HORIZONS };
+      const create = (name, horizon) => call(['create', name, '--end', 'e', '--purpose', 'What it delivers.', '--horizon', horizon], asManager(a), deps);
+      assert.equal((await create('gone', 'h-done')).code, 1);
+      assert.equal((await create('unknown', 'h-nothing')).code, 1);
+      assert.match((await create('unknown', 'h-nothing')).err, /is not an open horizon/u);
+      mkdirSync(join(a.home, 'broken')); writeFileSync(join(a.home, 'broken', RECORD_FILE), '{ not json');
+      assert.equal((await create('first', 'h-one')).code, 0);
+      assert.ok(existsSync(join(a.home, 'first', 'README.md')) && existsSync(join(a.home, 'first', RECORD_FILE)));
+      assert.match(readFileSync(join(a.home, 'first', 'README.md'), 'utf8'), /Serves the horizon `h-one`\. What it delivers\./u);
+      const second = await create('second', 'h-one');
+      assert.equal(second.code, 1);
+      assert.match(second.err, /the horizon h-one already has the open programme first/u);
+      assert.equal(existsSync(join(a.home, 'second')), false);
+      // Done frees the horizon again.
+      writeFileSync(join(a.home, 'first', RECORD_FILE), JSON.stringify({ ...recordOf(a.home, 'first'), state: 'done' }));
+      assert.equal((await create('second', 'h-one')).code, 0);
+    } finally { a.done(); }
+  });
+
+  it('a person and the interactive Martin role are not held to --purpose or to an open horizon', async () => {
+    const a = area();
+    try {
+      for (const extra of [{}, { MC_ROLE: 'martin' }]) {
+        assert.equal((await call(['create', `p-${extra.MC_ROLE ?? 'person'}`, '--end', 'e', '--horizon', 'h-never-heard-of'], { ...a.env, ...extra }, { horizons: () => OPEN_HORIZONS })).code, 0);
+      }
+    } finally { a.done(); }
   });
 });

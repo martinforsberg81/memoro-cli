@@ -728,8 +728,8 @@ function headerLines(lines, c, raw, wide, data, version) {
   lines.push('');
   rule('┌', '┐');
   const brand = `MC${version ? `  ${version}` : ''}`;
-  // The two entrances of the page: the desk's, then the manager's.
-  const action = 'd  mc martin   ·   m  mc manager';
+  // The page's one entrance: the desk. The manager runs headless and has none (D10).
+  const action = 'd  mc martin';
   frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
   // Wrap complete fields so every count survives a narrow terminal.
   const summary = (parts) => {

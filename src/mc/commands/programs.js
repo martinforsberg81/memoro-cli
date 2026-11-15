@@ -3,7 +3,7 @@
  *
  *   mc programs list [--json]    one line per programme, sorted by name
  *   mc programs priority <programme>... --set <n>    prefer work within a stage
- *   mc programs create <programme> --end "…" [--horizon <slug>]    a new programme with its record
+ *   mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]    a new programme with its record
  *   mc programs record <programme> --end "…" [--horizon <slug>]    the record of an existing one
  *   mc programs after <programme> <phase> <phase>… | --none    what a phase of a stated programme waits for
  *   mc programs show <programme> [--json]    one programme's record
@@ -14,12 +14,17 @@
  * (`readProgrammes`, page-collect.js), so a programme is active or dormant
  * here exactly when it is on the page. `mc programs` alone prints the usage.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { programsHome } from '../paths.js';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join, sep } from 'node:path';
+import { programsHome, workRoot } from '../paths.js';
+import { readAreas } from '../areas.js';
+import { readHorizons } from '../desk-horizons.js';
+import { run as runGit } from '../git.js';
+import { repoNameOf } from '../repos.js';
+import { knownRepositories } from '../work-area.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, writeRecord,
+  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, writeRecord,
 } from '../programme-record.js';
 import { PLAN_ROLE, listDirsOf, programsGoals } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
@@ -43,7 +48,7 @@ export const ROUTES = {
       : flags.set === null || !/^\d+$/u.test(flags.set) || !validPriority(Number(flags.set))
         ? 'mc programs priority needs --set <n>, a non-negative safe whole number' : null
   ) },
-  create: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('create', scanned) },
+  create: { strictValues: ['--end', '--horizon', '--area', '--purpose', '--from-proposal'], check: (scanned) => writeCheck('create', scanned) },
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
@@ -79,6 +84,14 @@ function writeCheck(verb, { positional, flags }) {
   if (reservedRoleName(name)) return reservedRoleHint(name);
   if (flags.end === null || !flags.end.trim()) return `mc programs ${verb} needs --end "<a sentence saying when the programme is done>"`;
   if (flags.horizon !== null && !NAME_RE.test(flags.horizon)) return `--horizon "${flags.horizon}" is not a slug: lower-case letters, digits and hyphens, at most 64, starting with a letter or digit`;
+  if (verb === 'record') {
+    for (const flag of ['area', 'purpose', 'from-proposal']) if (flags[flag] !== undefined && flags[flag] !== null) return `mc programs record takes no --${flag}; mc programs create does`;
+    return null;
+  }
+  if (flags.area !== null && !AREA_RE.test(flags.area)) return `--area "${flags.area}" is not <repo>/<id>: a repository and an area it declares, lower-case letters, digits and hyphens`;
+  if (flags.area !== null && flags.horizon !== null) return 'mc programs create takes --horizon or --area, not both: a programme serves a horizon or repairs an area';
+  if (flags.purpose !== null && !flags.purpose.trim()) return 'mc programs create --purpose needs the text of What it is for';
+  if (flags['from-proposal'] !== null && flags.area === null) return 'mc programs create --from-proposal needs --area <repo>/<id>: a proposal becomes an area repair';
   return null;
 }
 
@@ -213,14 +226,74 @@ export function listingText(listing) {
   return `programmes — ${listing.active} active · ${listing.dormant} dormant\n${lines.map((line) => `${line}\n`).join('')}`;
 }
 
-/** `create` and `record`: the caller is checked first; the whole request is validated before the first write. */
-function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date() }) {
+/** `git -C <cwd> <args>` as `{ ok, stdout, stderr }`, the shape `readAreas` reads. */
+function gitIn(cwd, args) {
+  const r = runGit(undefined, ['-C', cwd, ...args]);
+  return { ok: r.status === 0, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+/** The valid open records under `home`: `[{ name, record }]`. An invalid one is not here and holds nothing back at create. */
+export function openRecords(home) {
+  return recordedProgrammes(home)
+    .map((name) => ({ name, found: readRecord(join(home, name)) }))
+    .filter(({ found }) => found.status === 'valid' && found.record.state === 'open')
+    .map(({ name, found }) => ({ name, record: found.record }));
+}
+
+/**
+ * Why `area` (`<repo>/<id>`) is not an area a known repository declares at its origin/main, or null. A repository
+ * mc does not know, one whose declaration cannot be read and one that does not declare the id are all refused.
+ */
+function areaRefusal(area, { env, git = gitIn, known = () => knownRepositories(env) }) {
+  const [repo, id] = area.split('/');
+  const path = known().find((one) => repoNameOf(one) === repo);
+  if (!path) return `${repo} is not a repository mc knows — ${known().map(repoNameOf).join(', ')}`;
+  const read = readAreas(path, { git, repo });
+  if (!read.ok) return read.reason;
+  if (!read.areas.some((one) => one.id === id)) return `${repo} declares no area ${id}${read.areas.length ? ` — ${read.areas.map((one) => `${repo}/${one.id}`).join(', ')}` : ' (it declares none)'}`;
+  return null;
+}
+
+/** The proposal `--from-proposal` names, as a real path to a file in ~/mc/proposals/ or a programme's proposals/, or why not. */
+function proposalIn(given, { env, home }) {
+  let path;
+  try { path = realpathSync(given); } catch { return { error: `--from-proposal ${given} is not a file` }; }
+  if (!statSync(path).isFile()) return { error: `--from-proposal ${given} is not a file` };
+  const root = join(workRoot(env), 'proposals') + sep;
+  // A proposal is a file directly in a proposals folder; one under its archive/ has been decided already.
+  const under = (dir) => (path.startsWith(dir + sep) ? path.slice(dir.length + 1).split(sep) : null);
+  const inRoot = under(realOr(root.slice(0, -1)))?.length === 1;
+  const parts = under(realOr(home));
+  const inProgramme = parts?.length === 3 && parts[1] === 'proposals';
+  if (!inRoot && !inProgramme) return { error: `--from-proposal ${given} is not a proposal: it must be a file in ${root} or in a programme's proposals/ folder` };
+  return { path };
+}
+
+function realOr(path) {
+  try { return realpathSync(path); } catch { return path; }
+}
+
+/**
+ * `create` and `record`: the caller is checked first; the whole request is validated before the first write.
+ * The manager (D9) names `--purpose` and exactly one of `--horizon` and `--area`, and cannot call `record`; a
+ * `--horizon` it names is an open horizon of the store that no valid open record names. `--area` is refused when
+ * the area is not declared or a valid open record already names it. The page is written before the record, so a
+ * programme is offered to planning only once its page is whole; a proposal named by `--from-proposal` is moved
+ * into the programme only after both exist.
+ */
+function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, canon, now = new Date(), git, known, horizons }) {
   const writer = recordWriter(env);
   if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
   const [name] = positional;
   const home = programsHome(env);
   const dir = join(home, name);
   const problem = (text) => { stderr.write(`mc: ${text}\n`); return 1; };
+  const manager = writer.by === 'manager';
+  if (manager && verb === 'record') { stderr.write('mc: the manager role cannot write a record onto an existing directory — mc programs create makes a whole programme, its page and its record\n'); return 2; }
+  if (manager && verb === 'create') {
+    if (flags.purpose === null) { stderr.write('mc: the manager names --purpose "<What it is for: what this programme delivers of its horizon or repairs of its area>" on create\n'); return 2; }
+    if ((flags.horizon === null) === (flags.area === null)) { stderr.write('mc: the manager names exactly one of --horizon <slug> and --area <repo>/<id> on create\n'); return 2; }
+  }
   try {
     if (verb === 'record') {
       if (!existsSync(dir)) return problem(`no programme ${name} — ${dir} does not exist; mc programs create ${name} --end "…" makes a new one`);
@@ -231,15 +304,42 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     }
     const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
     if (exists) return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
+    const open = openRecords(home);
+    if (manager && flags.horizon !== null) {
+      const held = (horizons ? horizons() : readHorizons({ env })).horizons.find((one) => one.slug === flags.horizon);
+      if (!held || held.state !== 'open') return problem(`--horizon ${flags.horizon} is not an open horizon — mc martin horizon list says which are`);
+      const named = open.find((one) => one.record.horizon === flags.horizon);
+      if (named) return problem(`the horizon ${flags.horizon} already has the open programme ${named.name} — one open programme per horizon`);
+    }
+    if (flags.area !== null) {
+      const refused = areaRefusal(flags.area, { env, git, known });
+      if (refused) return problem(refused);
+      const named = open.find((one) => one.record.area === flags.area);
+      if (named) return problem(`the area ${flags.area} already has the open repair programme ${named.name} — one repair at a time per area, the rest wait`);
+    }
+    let proposal = null;
+    if (flags['from-proposal'] !== null) {
+      proposal = proposalIn(flags['from-proposal'], { env, home });
+      if (proposal.error) return problem(proposal.error);
+    }
     const template = recordPageTemplate(canon ? { canon } : {});
     if (template === null) return problem('could not read the programme record page template (canon/tasks/references/programme-record-readme.md) — nothing was made');
-    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon });
+    const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose });
+    const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(dir);
-    writeRecord(dir, newRecord({ horizon: flags.horizon, end: flags.end.trim(), createdBy: writer.by, now, stated: true }));
-    writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
     for (const sub of ['goals', join('proposals', 'archive'), 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
+    writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
+    writeRecord(dir, record);
     stdout.write(`${name}: programme made at ${dir} — record state open, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+    if (proposal) {
+      const moved = join(dir, 'proposals', basename(proposal.path));
+      try {
+        writeFileSync(moved, `Moved here from ${proposal.path} when ${name} was made (mc programs create --from-proposal).\n\n${readFileSync(proposal.path, 'utf8')}`, { flag: 'wx' });
+        unlinkSync(proposal.path);
+      } catch (error) { return problem(`${name} is made, but the proposal ${proposal.path} was not moved into ${join(dir, 'proposals')}: ${error.message}`); }
+      stdout.write(`${name}: the proposal moved into ${moved}\n`);
+    }
     return 0;
   } catch (error) {
     if (error.code === 'EEXIST' && verb === 'record') return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
@@ -261,8 +361,8 @@ function showVerb({ positional, flags }, { env, stdout, stderr }) {
     stderr.write(`mc: ${name} has an invalid record (${join(dir, RECORD_FILE)}):\n${found.problems.map((text) => `  ${text}\n`).join('')}`);
     return 1;
   }
-  const { horizon, end, state, created, created_by: by, phases } = found.record;
-  stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n  end      ${end}\n  state    ${state}\n  created  ${created} by ${by}\n`);
+  const { horizon, end, state, created, created_by: by, phases, area } = found.record;
+  stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n${area ? `  area     ${area}\n` : ''}  end      ${end}\n  state    ${state}\n  created  ${created} by ${by}\n`);
   if (phases) {
     stdout.write('  phases: stated\n');
     for (const [phase, waits] of Object.entries(phases.after ?? {})) stdout.write(`  phase ${phase} after ${phaseWords(waits)}\n`);

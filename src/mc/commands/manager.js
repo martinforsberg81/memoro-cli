@@ -1,12 +1,13 @@
-/** The interactive session for priorities and decisions across all programmes. */
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-
-import { managerDir, workRoot } from '../paths.js';
-import { readCanonRole, roleSourceOf } from '../roles.js';
-import { openInWorkArea } from '../work-open.js';
+/**
+ * `mc manager --headless --prompt …` — one manual manager task, run once with nobody present. The interactive manager is
+ * gone (Martin, 2026-11-14): the pulse is the runner's two automatic turns (mc-manager.md), and Martin's own entrance is
+ * `mc martin`. Every other form of the verb, and `mc brief`, is refused before anything starts.
+ */
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
+
+/** The one line every interactive form is refused with, here and in `runModule`, which refuses before server routing. */
+export const MANAGER_GONE = 'mc: the interactive manager is gone — talk to the desk with `mc martin`, or give the manager one task with `mc manager --headless --prompt "<task>"`';
 
 export function usage() {
   return commandUsage('manager');
@@ -23,13 +24,13 @@ function managerArguments({ flags, positional }) {
   if (flags.resume && flags.headless) return '--resume requires an interactive session';
   if (flags.bg && flags.headless) return '--bg needs an interactive session';
   if (flags.headless && !flags.prompt?.trim()) return '--headless requires --prompt';
-  if (!flags.headless && (flags.prompt !== null || flags.minutes !== null)) return '--prompt and --minutes require --headless';
   if (flags.minutes !== null && (!Number.isFinite(Number(flags.minutes)) || Number(flags.minutes) <= 0 || Number(flags.minutes) > 1440)) return '--minutes must be greater than 0 and at most 1440';
   return null;
 }
 
 export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
+  if (!argv.includes('--headless')) { stderr.write(`${MANAGER_GONE}\n`); return 2; }
   const scanned = scanArgs(argv, ROUTES['']);
   const refused = scanned.error || ROUTES[''].check(scanned);
   if (refused) {
@@ -37,60 +38,10 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  const { flags, positional } = scanned;
+  const { flags } = scanned;
 
-  if (flags.headless) {
-    const { runManagerTurn } = await import('../manager-turn.js');
-    const result = await (deps.turn || runManagerTurn)({ prompt: flags.prompt, tool: flags.tool, model: flags.model, minutes: flags.minutes === null ? 30 : Number(flags.minutes) });
-    (deps.stdout || process.stdout).write(`${result.answer ? `${result.answer}\n` : ''}manager: ${result.note || result.reason}\n${result.log ? `log: ${result.log}\n` : ''}`);
-    return result.ok ? 0 : (Number.isInteger(result.status) && result.status > 0 ? result.status : 1);
-  }
-
-  const role = readCanonRole('manager');
-  if (!role?.overlay) {
-    stderr.write('mc: the manager role is missing from this install — expected canon/roles/manager.md with an overlay body\n');
-    return 1;
-  }
-  const launch = managerLaunch({ role });
-  const root = managerDir();
-  (deps.mkdir || mkdirSync)(root, { recursive: true });
-  const opened_ = await (deps.open || openInWorkArea)({
-    areaRoot: root,
-    conversationRoots: [root, join(workRoot(), 'brief')],
-    worktree: { repo: null, path: root, is_git: false },
-    tool: flags.tool || role.tools?.[0] || 'claude',
-    pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
-    resumeTool: flags.tool,
-    stdout: deps.stdout || process.stdout,
-    stderr,
-    // NOW says "mc manager" while this is up. Its room is nobody's workarea,
-    // so there is no area name to give it.
-    verb: 'manager',
-    bg: flags.bg,
-    // What it was told it is, kept in the register the session outlives — so
-    // `mc roles check manager` can say whether the text it is running on is the
-    // one in `canon/roles/manager.md` today.
-    roleName: role.name || 'manager',
-    roleSource: roleSourceOf(role),
-    cache: role.cache,
-    model: flags.model,
-    overlay: launch.overlay,
-    prompt: launch.prompt,
-    defaultModel: role.model,
-    defaultModelTool: role.tools?.[0] || null,
-  });
-  if (!opened_.ok) {
-    stderr.write(`mc: ${opened_.reason}${opened_.hint ? ` — ${opened_.hint}` : ''}\n`);
-    return 1;
-  }
-  return opened_.code ?? 0;
-}
-
-/**
- * What the session is told: the role as written, and no opening words. Martin
- * says what he wants help with; `Start the meeting.` sent it walking the whole
- * page on its own (Martin, 2026-09-28).
- */
-export function managerLaunch({ role }) {
-  return { overlay: role.overlay, prompt: null, model: role.model || null };
+  const { runManagerTurn } = await import('../manager-turn.js');
+  const result = await (deps.turn || runManagerTurn)({ prompt: flags.prompt, tool: flags.tool, model: flags.model, minutes: flags.minutes === null ? 30 : Number(flags.minutes) });
+  (deps.stdout || process.stdout).write(`${result.answer ? `${result.answer}\n` : ''}manager: ${result.note || result.reason}\n${result.log ? `log: ${result.log}\n` : ''}`);
+  return result.ok ? 0 : (Number.isInteger(result.status) && result.status > 0 ? result.status : 1);
 }

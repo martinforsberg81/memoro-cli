@@ -477,6 +477,76 @@ test('a text item is labelled by its text, a sync neither closes nor opens anoth
   assert.deepEqual([readDeskItem(old.id, { env: f.env }).sort, readDeskItem(old.id, { env: f.env }).due_at], ['product', '2026-11-16T10:00:00Z']);
 });
 
+/* ---- a manager item: the manager's horizon turn's */
+
+const OPEN_RECORD = (horizon) => JSON.stringify({ schema: 'mc-programme', version: 1, horizon, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'manager' });
+const horizonStateAt = (f, slug = 'h-one') => join(f.env.MC_WORK_ROOT, 'runner', 'manager-turn', 'horizon', `${slug}.json`);
+const horizonStateText = (...reasons) => JSON.stringify({ schema: 'mc-manager-turn', version: 1, kind: 'horizon', horizon: 'h-one', failures: reasons.map((reason, index) => ({ at: `2026-11-14T10:0${index}:00Z`, reason, log: null })), items: [] });
+/** The `for-martin` item the horizon turn opens at its second failure, and a store that holds the horizon `h-one` as `state`. */
+function managerItem(f, fields = {}) {
+  const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('manager', 'manager:h-one', stamp), kind: 'manager', reference: 'manager:h-one', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
+  writeDeskItem(item, { env: f.env });
+  return item;
+}
+function syncManager(f, state = 'open') {
+  const issues = [];
+  const horizon = (slug) => (slug === 'h-one' && state ? { slug, state } : null);
+  const item = syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, horizon, reportIssue: (issue) => issues.push(issue) }).find((one) => one.reference === 'manager:h-one');
+  return { item, issues };
+}
+
+test('a manager item stays open while its horizon is open, no valid open record names it and no text item holds it', () => {
+  const f = fixture(); managerItem(f);
+  mkdirSync(join(f.home, 'other'), { recursive: true }); writeFileSync(join(f.home, 'other', 'PROGRAMME.json'), OPEN_RECORD('h-two'));
+  assert.equal(syncManager(f).item.state, 'prepared');
+  assert.equal(deskItemId('manager', 'manager:h-one', stamp).length, 24, 'a manager item has the id of any kind');
+});
+
+test('a manager item closes by source when the horizon is no longer open, a valid open record names it, or the text item horizon:<slug> is open', () => {
+  const gone = fixture(); managerItem(gone);
+  for (const state of ['closed', null]) {
+    const closed = syncManager(gone, state).item;
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The horizon h-one is no longer open.'], String(state));
+    managerItem(gone, { state: 'prepared', outcome: null });
+  }
+
+  const named = fixture(); managerItem(named);
+  mkdirSync(join(named.home, 'serves'), { recursive: true }); writeFileSync(join(named.home, 'serves', 'PROGRAMME.json'), OPEN_RECORD('h-one'));
+  assert.deepEqual([syncManager(named).item.state, syncManager(named).item.outcome.summary], ['closed', 'An open programme now serves the horizon.']);
+
+  const invalid = fixture(); managerItem(invalid);
+  mkdirSync(join(invalid.home, 'broken'), { recursive: true }); writeFileSync(join(invalid.home, 'broken', 'PROGRAMME.json'), '{ not json');
+  assert.equal(syncManager(invalid).item.state, 'prepared', 'a record that is not valid names nothing');
+
+  const text = fixture(); managerItem(text);
+  const at = '2026-11-14T10:00:00.000Z';
+  const held = { schema: 'mc-desk-item', version: 1, id: deskItemId('text', 'text:horizon:h-one', at), kind: 'text', reference: 'text:horizon:h-one', text: 'horizon:h-one', goal: null, source_at: at, opened_at: at, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null };
+  writeDeskItem(held, { env: text.env });
+  const closed = syncManager(text).item;
+  assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The text item horizon:h-one is open.']);
+});
+
+test('a manager item whose horizon state file cannot be read stays open, and the sync reports the file', () => {
+  const f = fixture(); managerItem(f);
+  mkdirSync(join(f.env.MC_WORK_ROOT, 'runner', 'manager-turn', 'horizon'), { recursive: true }); writeFileSync(horizonStateAt(f), '{ not json');
+  const { item, issues } = syncManager(f, 'closed');
+  assert.equal(item.state, 'prepared', 'not closed on a source that could not be read, though the horizon is not open');
+  const reported = issues.filter((issue) => issue.path === horizonStateAt(f));
+  assert.equal(reported.length, 1);
+  assert.match(reported[0].error, /not JSON/u);
+});
+
+test('a manager item is labelled by the reason of the last failure in its horizon state', () => {
+  const f = fixture(); const item = managerItem(f);
+  const ask = () => deskItemQuestion(item, { env: f.env, home: f.home, read: fixtureRead });
+  assert.equal(ask(), 'Source reason unavailable.', 'no state file: no label to give');
+  mkdirSync(join(f.env.MC_WORK_ROOT, 'runner', 'manager-turn', 'horizon'), { recursive: true });
+  writeFileSync(horizonStateAt(f), horizonStateText('manager session ended with no programme, no reached horizon and no text item', 'read checkout retained: /w/runner/work/manager-turn-h-one/memoro'));
+  assert.equal(ask(), 'read checkout retained: /w/runner/work/manager-turn-h-one/memoro');
+  writeFileSync(horizonStateAt(f), '{ not json');
+  assert.equal(ask(), 'Source reason unavailable.', 'an unreadable state file gives none');
+});
+
 test('one way to ask: the record — a reader row opens a decision item when its key differs, an unread row always does, and a row that took the recommendation does not',()=>{
   const f=fixture(); const ledger=join(f.env.MC_HOME,'jev','decisions.jsonl'); mkdirSync(join(f.env.MC_HOME,'jev'),{recursive:true});
   const row=(at,extra)=>({at,recommend:'a',question:'Question?',options:{a:'A',b:'B'},kind:null,...extra});

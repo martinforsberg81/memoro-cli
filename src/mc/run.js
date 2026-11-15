@@ -57,7 +57,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -80,7 +80,7 @@ import { loggedTick } from './nightly-loop.js';
 import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
-import { RUNNER_DISK, RUNNER_MEMORY, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, archivedProgramsHome, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -101,7 +101,8 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
-import { readHorizon } from './desk-horizons.js';
+import { readHorizon, readHorizons } from './desk-horizons.js';
+import { MANAGER_CLAIM, archivedFor, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, horizonDue, horizonOutcome, horizonPrompt, proposalBacklog, readCurationState, curationStatePath, recordHorizonFailure, removeHorizonCheckouts, setUpCurationWorktrees, setUpHorizonCheckouts, settleCurationWorktrees } from './manager-pulse.js';
 import { goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
@@ -126,7 +127,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, managerCheckInPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -589,6 +590,10 @@ export function realDeps(env = process.env) {
     })),
     deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
     horizon: slug => readHorizon(slug, { env }),
+    // The open horizons in position order, for the manager's horizon turn.
+    horizons: () => readHorizons({ env, state: 'open' }).horizons,
+    // A file's modification time in milliseconds, for the curation prompt's backlog.
+    modified: (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } },
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
     launch: resolveLaunch,
@@ -1891,6 +1896,219 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
   }
 
+  /* ------------------------------------------------------------ manager turns */
+
+  /** A notice, said once while it lasts: the key is its place, the text is replaced when it changes and dropped when it stops. */
+  const managerSaid = new Map();
+  function sayManager(notices) {
+    const now = new Set(notices.map((notice) => notice.key));
+    for (const notice of notices) if (managerSaid.get(notice.key) !== notice.text) { say(notice.text); managerSaid.set(notice.key, notice.text); }
+    for (const key of [...managerSaid.keys()]) if (!now.has(key) && (key === 'records' || key.startsWith('state:') || key === 'curation')) managerSaid.delete(key);
+  }
+  /** The repositories that declare areas and the commit each one's origin/main is at, read at most once a minute. */
+  let areaMemo = null;
+  function areaRepos() {
+    const t = deps.now().getTime();
+    if (areaMemo && t - areaMemo.at < 60_000) return areaMemo;
+    const found = areaRepositories({ repos, git: deps.git });
+    areaMemo = { at: t, repos: found.repos, problems: found.problems };
+    return areaMemo;
+  }
+  /** What the manager would run now: the horizon turn first, then the curation turn (D4, D7); null when neither is due. */
+  function managerDue() {
+    const horizon = horizonDue({ root, home: programsHome(deps.env), list: deps.list, read: deps.read, horizons: deps.horizons?.() ?? [], items: turnItems() });
+    const notices = [...horizon.notices];
+    if (horizon.slug) { sayManager(notices); return { kind: 'horizon', slug: horizon.slug }; }
+    const state = readCurationState({ root, read: deps.read });
+    const curation = curationDue({ state, now: deps.now(), repos: () => areaRepos().repos, heads: () => Object.fromEntries(areaRepos().repos.map((repo) => [repo.name, headOf({ git: deps.git, repo })])) });
+    if (curation.notice) notices.push({ key: 'curation', text: curation.notice });
+    sayManager(notices);
+    return curation.due ? { kind: 'curation', moved: curation.moved, state } : null;
+  }
+  function managerWork(names, passed = new Set()) {
+    if (!names.length) return [];
+    const name = MANAGER_CLAIM;
+    if (passed.has(name) || claims.has(name) || stepsHeld().some(x => x.name === name)) return [];
+    const due = managerDue();
+    if (!due) return [];
+    return [{ name, repo: names[0], kind: 'manager', variant: null, since: stamp(), resumed: false, managerTurn: due, priority: 0 }];
+  }
+  async function managerPass(item, { lane }) {
+    const { name, repo: repoName } = item;
+    const claimed = lock(root, () => {
+      if (claims.has(name) || stepsHeld().some(x => x.name === name)) return false;
+      claims.add(name); claimRepos.set(name, repoName);
+      return true;
+    }, { strict: true, name: 'manager-claim' });
+    if (!claimed) return { ran: 0 };
+    try {
+      const outcome = await runManager(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, goal: false } : { ran: 0, reason: outcome };
+    } finally { claims.delete(name); claimRepos.delete(name); }
+  }
+  /** A failure of a horizon turn, counted under the lock (D12); one that cannot be written is said, never a missing run row. */
+  function countManagerFailure(slug, reason, log) {
+    try {
+      const failed = recordHorizonFailure({ root, slug, reason, log, at: stamp(), env: deps.env, read: deps.read, write: deps.write, writeJson, lock, itemDirectory });
+      if (failed.item) say(`manager:${slug}: the horizon turn failed ${failed.count} times — desk item ${failed.item.id} (${failed.item.state}) opened`);
+      return failed;
+    } catch (error) { say(`manager:${slug}: the failure was not counted — ${error.message || String(error)}`); return null; }
+  }
+  /**
+   * One manager turn, a horizon turn or a curation turn: one headless session of the manager role with nobody
+   * present, large class, one runs.tsv row. What differs is what it stands in (read checkouts at origin/main, or
+   * branch worktrees made from it), what it is told, and what the runner checks afterwards without a model.
+   */
+  async function runManager(item, { lane }) {
+    const { name, repo: repoName, managerTurn: turn } = item;
+    const horizonTurn = turn.kind === 'horizon';
+    const turnLabel = horizonTurn ? `manager:${turn.slug}` : 'manager:curation';
+    const roleName = 'manager';
+    const role = deps.role(roleName);
+    if (!role?.overlay) { say(`${turnLabel}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const route = routeClass('large');
+    if (!route.ok) { say(`${turnLabel}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) { say(`${turnLabel}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${turnLabel}`); return 'stop'; }
+    if (slot !== 'ok') { say(`${turnLabel}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
+    let admission; let scratch; let marker; let result; let set = null; let areaSet = []; let worktrees = null;
+    let before = null;
+    const currentPath = paths.currentFor(repoName, lane);
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') { say(`${turnLabel}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) { say(`${turnLabel}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
+      // Read again after admission: a record made, a horizon closed or an item opened meanwhile leaves nothing to do (D4).
+      const again = managerDue();
+      if (!again || again.kind !== turn.kind || (horizonTurn && again.slug !== turn.slug)) {
+        say(`${turnLabel}: the ${horizonTurn ? 'horizon' : 'curation'} changed during admission — the turn is deferred`);
+        return horizonTurn ? 'skipped:horizon-changed' : 'skipped:curation-changed';
+      }
+      const declaring = areaRepos();
+      for (const problem of declaring.problems) say(`${turnLabel}: ${problem}`);
+      const stampText = stamp().replace(/[-:]/gu, '');
+      let cwd; let prompt; let checkouts = {};
+      if (horizonTurn) {
+        set = setUpHorizonCheckouts({ git: deps.git, root, slug: turn.slug, repos: declaring.repos, exists: deps.exists });
+        if (!set.ok) {
+          const refused = set;
+          set = null;
+          // A fetch that fails is the network's, not the horizon's: nothing is counted.
+          if (refused.fetch) { say(`${turnLabel}: ${refused.reason} — skip`); return 'skipped:fetch'; }
+          if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${turnLabel}: no session started — ${refused.reason}`); }
+          countManagerFailure(turn.slug, refused.reason, null);
+          return 'skipped:setup';
+        }
+        checkouts = set.paths;
+        prompt = horizonPrompt({ slug: turn.slug, env: deps.env, pages: areaPages({ repos: declaring.repos, checkouts }),
+          archivedProgrammes: archivedFor({ archived: archivedProgramsHome(deps.env), slug: turn.slug, list: deps.list, read: deps.read }), checkouts });
+      } else {
+        before = again.state.status === 'valid' ? again.state.state : null;
+        worktrees = setUpCurationWorktrees({ git: deps.git, root, stamp: stampText, repos: declaring.repos });
+        if (!worktrees.ok) {
+          // A fetch that fails is the network's: nothing is spent, and the next pick tries again. Any other setup
+          // failure is the turn's: it is said in runner.log, the cadence starts from now so it is said once a day at
+          // most, the bases stay what the last success read, and no desk item opens (D7).
+          say(`${turnLabel}: no session started — ${worktrees.reason}${worktrees.fetch ? '' : '; the next turn waits for the cadence'}`);
+          if (worktrees.fetch) return 'skipped:fetch';
+          writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
+          return 'skipped:setup';
+        }
+        areaSet = declaring.repos;
+        const backlog = proposalBacklog({ root, home: programsHome(deps.env), list: deps.list, modified: deps.modified ?? (() => 0) });
+        prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
+        cwd = curationWorktreesDir(root, stampText);
+        // The turn has started: the cadence runs from now, and the bases stay what the last success read.
+        writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
+      }
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const stem = `manager-${horizonTurn ? turn.slug : 'curation'}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
+      const out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      cwd = cwd ?? scratch;
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'manager', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const current = { name, step: null, kind: 'manager', variant: null, programme: null, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: cwd,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${turnLabel}: ${horizonTurn ? 'horizon turn' : 'curation turn'} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      try {
+        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
+          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
+          ...watchFor(launch, settings, { prompt, name, checkInText: managerCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). The manager role is what the publish guard reads.
+          env: { MC_HEADLESS: '1', MC_ROLE: roleName, ...(horizonTurn ? { MC_HORIZON: turn.slug } : {}), MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
+          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        admission.release?.();
+        result = await pending;
+      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout || '');
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      // An ending the provider caused says nothing about the horizon or the area texts: a quota, an unreachable API, or a refused login counts for nothing.
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      let note = read.note;
+      if (horizonTurn) {
+        const outcome = horizonOutcome({ slug: turn.slug, home: programsHome(deps.env), list: deps.list, read: deps.read, horizon: deps.horizon?.(turn.slug) ?? null, items: turnItems() });
+        if (outcome.ok) note = `${read.note},${outcome.how}`;
+        else if (!providerEnding) {
+          const reason = `horizon session exited ${result.status ?? 1}: ${outcome.reason} (${read.note})`;
+          countManagerFailure(turn.slug, reason, `${out}.jsonl`);
+          note = reason;
+        }
+      } else if (providerEnding) {
+        // Nothing was read of the area texts: the cadence is given back.
+        writeJson(curationStatePath(root), curationState({ started: before?.started ?? null, bases: before?.bases ?? {} }));
+      } else if (result.status === 0 && !result.timedOut) {
+        writeJson(curationStatePath(root), curationState({ started: stamp(), bases: Object.fromEntries(Object.entries(worktrees.heads).filter(([, head]) => head)) }));
+        note = `${read.note},curated`;
+      } else {
+        note = `curation session exited ${result.status ?? 1} (${read.note})`;
+        say(`${turnLabel}: curation failed — ${note}; the next turn waits for the cadence`);
+      }
+      logRun({ ...read, ts: stamp(), name: turnLabel, kind: 'manager', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      say(`${turnLabel}: manager done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+      return 'ran';
+    } finally {
+      remove(currentPath);
+      try {
+        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
+      } finally {
+        try {
+          if (set?.ok) {
+            const kept = removeHorizonCheckouts({ git: deps.git, root, slug: turn.slug, repos: areaRepos().repos, exists: deps.exists });
+            for (const path of kept) say(`${turnLabel}: read checkout ${path} holds work and was kept`);
+          }
+          if (worktrees?.ok) {
+            const settled = settleCurationWorktrees({ git: deps.git, repos: areaSet, paths: worktrees.paths, branches: worktrees.branches });
+            for (const keep of settled.kept) if (!retainedSaid.has(keep.path)) { retainedSaid.add(keep.path); say(`${turnLabel}: worktree ${keep.path} was kept — ${keep.why}`); }
+          }
+        } finally { admission?.release?.(); dropSlot(); }
+      }
+    }
+  }
+
   const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
 
   // An idle lane notices newly queued main reds on the existing control poll,
@@ -3056,11 +3274,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed)];
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed), ...managerWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision || item.deployMend || item.programmeTurn) continue;
+      if (item.mainMend || item.decision || item.deployMend || item.programmeTurn || item.managerTurn) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -3169,6 +3387,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ? await decisionPass(pick, { lane })
         : pick.programmeTurn
         ? await programmePass(pick, { lane })
+        : pick.managerTurn
+        ? await managerPass(pick, { lane })
         : pick.mainMend
         ? await mainMendPass(pick, { lane })
         : pick.deployMend

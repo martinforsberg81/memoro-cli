@@ -21,7 +21,9 @@ export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 1;
 export const RECORD_STATES = Object.freeze(['open', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager']);
-const KEYS = Object.freeze(['schema', 'version', 'horizon', 'end', 'state', 'created', 'created_by', 'phases']);
+const KEYS = Object.freeze(['schema', 'version', 'horizon', 'area', 'end', 'state', 'created', 'created_by', 'phases']);
+/** The one value of `area`: `<repo>/<id>`, an area a repository declares; the programme repairs that area's text and serves no horizon. */
+export const AREA_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z][a-z0-9-]*$/u;
 /** The one value of `phases.order`: the programme's phases wait for what the record says and for nothing else. */
 export const PHASES_ORDER = 'stated';
 const PHASE_NUMBER = /^[1-9]\d*$/u;
@@ -82,6 +84,10 @@ export function validateRecord(value) {
   if (value.schema !== RECORD_SCHEMA) problems.push(`schema: must be "${RECORD_SCHEMA}"`);
   if (value.version !== RECORD_VERSION) problems.push(`version: must be ${RECORD_VERSION}`);
   if (value.horizon !== null && !(typeof value.horizon === 'string' && NAME_RE.test(value.horizon))) problems.push('horizon: a slug (lower-case letters, digits and hyphens), or null');
+  if (value.area !== undefined) {
+    if (typeof value.area !== 'string' || !AREA_RE.test(value.area)) problems.push('area: <repo>/<id>, an area a repository declares');
+    if (value.horizon !== null) problems.push('area: allowed only with horizon null — a programme serves a horizon or repairs an area, not both');
+  }
   if (typeof value.end !== 'string' || !value.end.trim()) problems.push('end: a non-empty sentence saying when the programme is done');
   if (!RECORD_STATES.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
   if (typeof value.created !== 'string' || !INSTANT.test(value.created) || !Number.isFinite(Date.parse(value.created))) problems.push('created: an ISO instant in UTC to the second');
@@ -91,11 +97,12 @@ export function validateRecord(value) {
 }
 
 /** A new record, the keys in their order; `stated` opts the programme's phases in (`mc programs create`). */
-export function newRecord({ horizon = null, end, createdBy, now = new Date(), stated = false }) {
+export function newRecord({ horizon = null, area = null, end, createdBy, now = new Date(), stated = false }) {
   return {
     schema: RECORD_SCHEMA,
     version: RECORD_VERSION,
     horizon,
+    ...(area ? { area } : {}),
     end,
     state: 'open',
     created: now.toISOString().replace(/\.\d+Z$/u, 'Z'),
@@ -126,7 +133,7 @@ export function readRecord(dir, { read = (path) => readFileSync(path, 'utf8') } 
 export function recordView(read) {
   if (read.status === 'valid') {
     const { horizon, end, state, created, created_by: createdBy } = read.record;
-    return { horizon, end, state, created, created_by: createdBy, ...(read.record.phases ? { phases: read.record.phases } : {}) };
+    return { horizon, ...(read.record.area ? { area: read.record.area } : {}), end, state, created, created_by: createdBy, ...(read.record.phases ? { phases: read.record.phases } : {}) };
   }
   return read.status === 'invalid' ? { problems: read.problems } : null;
 }
@@ -195,11 +202,15 @@ function withSection(text, heading, body) {
 /**
  * The page of a new programme with a record: the template with the name in its
  * first line, the end sentence under End and, when there is one, the horizon
- * under What it is for. What the plan session writes is left as placeholders.
+ * under What it is for (or the area it repairs), followed by `purpose` when one is given. What the plan
+ * session writes is left as placeholders.
  */
-export function recordPage(template, { name, end, horizon }) {
+export function recordPage(template, { name, end, horizon, area = null, purpose = null }) {
   let page = template.replace(/^# <programme>/mu, `# ${name}`);
   page = withSection(page, 'End', end.trim().replace(/^#/gmu, '\\#'));
-  if (horizon) page = withSection(page, 'What it is for', `Serves the horizon \`${horizon}\`. <The part of that horizon this programme delivers.>`);
+  const said = purpose?.trim() ? purpose.trim().replace(/^#/gmu, '\\#') : null;
+  if (horizon) page = withSection(page, 'What it is for', `Serves the horizon \`${horizon}\`. ${said ?? '<The part of that horizon this programme delivers.>'}`);
+  else if (area) page = withSection(page, 'What it is for', `Repairs the text of the area \`${area}\`, a programme without a horizon. ${said ?? '<What in that area text is wrong or missing.>'}`);
+  else if (said) page = withSection(page, 'What it is for', said);
   return page.endsWith('\n') ? page : `${page}\n`;
 }
