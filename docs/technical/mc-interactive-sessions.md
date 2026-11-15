@@ -330,8 +330,9 @@ is taken) naming it.
   held check and the register row (the row carries `conversation` and
   `launch`), then releases it before the process starts. A conversation is held
   by a live register row three ways: the conversation it resumed, the launch
-  nonce its opening message carries, and — for a launch with no marker — a
-  conversation with no nonce created at or after the row's start. A held
+  nonce its opening message carries, and — for a row naming neither, or whose
+  launch nonce no conversation carries yet — every conversation with no nonce
+  created at or after the row's start. A held
   conversation is refused with exit 2, `held by a running Antigravity CLI
   session (pid N); no second one was started`; a row whose process is gone
   holds nothing.

@@ -1011,8 +1011,9 @@ describe('openInWorkArea with a terminal tool (agy)', () => {
       { tool: 'codex', id: 'd', nonce: null, created_ms: 9_000 },
     ];
     const held = (rows) => Object.fromEntries(heldConversations({ env: {}, areaName: 'desk', items, records: () => rows, alive: () => true }));
-    assert.deepEqual(held([{ pid: 1, tool: 'agy', area: 'desk', launch: 'n1' }]), { a: 1 });
+    assert.deepEqual(held([{ pid: 1, tool: 'agy', area: 'desk', launch: 'n1', started: new Date(2_000).toISOString() }]), { a: 1 });
     assert.deepEqual(held([{ pid: 2, tool: 'agy', area: 'desk', started: new Date(2_000).toISOString() }]), { b: 2 }, 'unmarked and created after the start; the marked and the older one are not');
+    assert.deepEqual(held([{ pid: 5, tool: 'agy', area: 'desk', launch: 'nX', started: new Date(2_000).toISOString() }]), { b: 5 }, 'until its launch nonce appears, the row holds unmarked conversations created after its start');
     assert.deepEqual(held([{ pid: 3, tool: 'agy', area: 'other', conversation: 'a' }]), {}, 'another desk');
     assert.deepEqual(held([{ pid: 4, tool: 'claude', area: 'desk', conversation: 'a' }]), {}, 'a tool that has no terminal driver');
   });

@@ -144,8 +144,8 @@ export const BACKGROUND_REFUSALS = Object.freeze({
  * session that holds it. A terminal session of a tool that records its own conversation id is held
  * three ways, by what its register row says: the conversation it resumed (`conversation`); the
  * launch nonce its opening message carries, matched to the conversation that has it (`launch`);
- * and, for a row with neither (a launch that carries no marker), every conversation with no nonce
- * that was created at or after the row's `started`. A row whose process is gone holds nothing.
+ * and, for a row with neither or whose launch nonce no conversation carries yet, every conversation
+ * with no nonce created at or after the row's `started`. A row whose process is gone holds nothing.
  */
 export function heldConversations({ env, areaName = null, items, records = readRegister, alive = pidAlive }) {
   const held = new Map();
@@ -154,8 +154,9 @@ export function heldConversations({ env, areaName = null, items, records = readR
       || (row.area || null) !== (areaName || null) || !alive(row.pid)) continue;
     const mine = items.filter(item => isSameTool(item.tool, row.tool));
     if (row.conversation) held.set(row.conversation, row.pid);
-    if (row.launch) for (const item of mine) if (item.nonce === row.launch) held.set(item.id, row.pid);
-    if (row.conversation || row.launch) continue;
+    const launched = row.launch ? mine.filter(item => item.nonce === row.launch) : [];
+    for (const item of launched) held.set(item.id, row.pid);
+    if (row.conversation || launched.length) continue;
     const since = Date.parse(row.started);
     for (const item of mine) if (!item.nonce && Number.isFinite(since) && (item.created_ms ?? 0) >= since) held.set(item.id, row.pid);
   }
