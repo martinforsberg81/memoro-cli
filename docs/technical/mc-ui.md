@@ -24,7 +24,7 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` draws PROGRAMMES followed by three work panels: MERGE & DEPLOY, DEV
+`renderPageLines` draws DESK first, directly under the header, then PROGRAMMES followed by three work panels: MERGE & DEPLOY, DEV
 and MAINTENANCE. Orange opening and closing rules distinguish these
 panels from cyan programme boundaries. SYSTEM follows a horizontal separator
 at the bottom, containing MC, runner diagnostics, Docker when present and BILLING. There is no
@@ -36,6 +36,53 @@ the next press returns to the normal view. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
 remain visible in both modes. Normal headings use spacing and indentation,
 without repeated table headers; programme blocks have opening and closing rules.
+
+### DESK
+
+What waits for Martin, read and not synced. `readPageDesk` (`page-desk.js`) is
+`desk` in `mc --json`; `deskLines` draws the panel from that data alone and
+draws none when the data has no `desk`. The heading reads `DESK`, then
+`<n> waiting for you` (`Nothing waits for you.` with nothing), with `d  mc martin`
+at its right.
+
+The rows are the waiting texts, then the waiting acts, at most 5, then
+`+n more — d opens the desk`. A text row starts `text`, then the text it changes
+and its goal (`no goal` when it has none); an act row starts `act` and its
+reference. Each row then carries the first line of the item's `brief.md` (`#`
+marks removed; `brief.md is missing` or `brief.md is empty`), how long it has
+waited — minutes under an hour, hours under two days, then days — and
+`blocks n` when n is above zero. A row is held to the frame by the page's own
+`clip` and `width`: the brief gives way first, then the name. Wide (CJK) and
+combining characters are measured as every other row measures them, which is the
+recorded residual risk.
+
+Three rows always follow, wrapped rather than clipped: what was decided without
+Martin since the last opening (asks settled in the jev ledger and how many went
+against the asking session's recommendation, desk items closed for him, ledger
+lines that could not be read), what is not ready (in preparation, failed, the
+oldest's age, and the runner's stuck items, which are not Martin's and never
+among the waiting rows), and what the desk costs today of the ceiling.
+
+An unreadable part says so in red in its own row and the rest still draws: an
+invalid `last-open.json` and an unreadable ledger on the decided row, `desk.json`
+or `runs.tsv` on the cost row, a failure of the whole read as `desk unreadable —`
+with nothing else. The read never throws, so the page always comes. `⚑n`,
+`status Martin` and the MARTIN QUEUE panels stay as they are.
+
+`desk` in `--json`: `since`, `last_opened`, `waiting`, `texts` and `acts` (each
+`id`, `kind`, `reference`, `sort`, `source_at`, `waited_minutes`, `blocks`,
+`brief_line`, and for a text also `text` and `goal`), `decided` (`since`,
+`asks`, `against`, `closed_for_you`, `unreadable_lines`, `error`), `not_ready`
+(`count`, `oldest_age_hours`, `failed`, `stuck`), `cost` (`day`, `today`,
+`ceiling`, `error`) and `error`.
+
+The read writes nothing and takes no lock: the item store, `.store.json`, every
+`brief.md` and `last-open.json` are as the last sync left them, whatever the
+runner holds. It reads the programmes' goals only when something waits, and
+never the changes, the horizons or the archive; with nothing waiting it adds a
+few tens of milliseconds at most. Its figures come from the functions the
+desk's own opening is built from (`desk-opening.js`, [mc-martin.md](mc-martin.md#opening)),
+so the page and the desk agree on what waits, in what order and what was decided.
 
 ### PROGRAMMES
 
@@ -244,6 +291,10 @@ A stopped runner has the same nearby warning with its restart command.
 | digest and proposal counts | intake digests and proposal filenames | helper and sessions |
 | production | `runner/log/deploys.tsv`, `runner/version.json` | deploy, helper |
 | container runtime | mc home's `docker/state.json` | Docker verbs and runner |
+| DESK: waiting texts, acts, not ready and stuck | the desk item store (`martin/items`, `.store.json`) and each item's `brief.md` | the desk's sync, under the runner lock; the page only reads |
+| DESK: cost today and ceiling | the desk's rows in `runner/log/runs.tsv`, `runner/desk.json` | runner and desk; `mc martin ceiling` |
+| DESK: since | `~/mc/martin/last-open.json` | `mc martin`, after a launch |
+| DESK: asks decided without Martin | the jev ledger, `decisions.jsonl` in mc home | jev |
 
 Paths without `~/mc/` in this table are relative to the work root.
 `pidAlive` is the liveness test: a current file naming a dead pid is stale,
@@ -336,6 +387,7 @@ painted rows occupy the same columns.
 |---|---|
 | a goal's number | `mc goal show` for that numbered goal, then redraw |
 | `a` / `all` | toggle all folded rows and details across every surface |
+| `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
 | `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
@@ -372,7 +424,7 @@ immediately with `r`.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost). If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.
@@ -591,6 +643,8 @@ checks that routing without opening a coding tool.
 
 - `src/mc/commands/home.js`: page, arguments, menu, freshness and restart on new code.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
+- `src/mc/page-desk.js`: the DESK section — `readPageDesk`, `deskLines` and `deskKey`.
+- `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost, the ask ledger and `last-open.json`), shared by `mc martin` and the page; it has no sync, lock or writer.
 - `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
@@ -604,7 +658,7 @@ checks that routing without opening a coding tool.
 stage frame counts; `tests/mc/desk-cost.test.js` pins which transcripts are
 interactive, the incremental reading and the partial first reading. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
-menu routing and piped output. `tests/mc/page-live.test.js` and
+menu routing, including `d` and `desk`, and piped output. The DESK section's fixture, its agreement with the opening, its held-lock and error cases and its render are in `tests/mc/page.test.js`. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
 
 ## Manager header
@@ -674,8 +728,8 @@ The name is bold in the terminal's own foreground; a count is bold above zero
 and grey at zero; the arrows are grey; `⚑` keeps its yellow and `⊘` its red, and
 a blocked goal changes nothing else. `done` and
 `dropped` have no box; what landed is in the hero frame. Complete header fields
-wrap within the hero frame on narrow terminals. `mc manager` (or `m` at the page
-prompt) opens the session for priorities, blockers and proposals across all
+wrap within the hero frame on narrow terminals. The header's action reads `d  mc martin   ·   m  mc manager`: `mc martin` (or `d`
+at the page prompt) opens the desk, `mc manager` (or `m`) opens the session for priorities, blockers and proposals across all
 programmes. Manager's open state is shown below the pipeline, including
 foreground records from before the rename.
 

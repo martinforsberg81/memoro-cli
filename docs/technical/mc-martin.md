@@ -19,6 +19,14 @@ session; `brief --json` gives the same data as the text. `brief` writes nothing
 except the sync's own store writes, and neither it nor a refused or failed
 launch changes `last-open.json`.
 
+The opening's data is built in `src/mc/desk-opening.js`: texts, acts, stuck, not
+ready, decided, cost, the ledger's asks and `last-open.json`, with no sync, lock
+or writer. `martin.js` re-exports them and what the opening shows is unchanged.
+The page's DESK section ([mc-ui.md](mc-ui.md#desk)) reads the same texts, acts,
+decided, not-ready and cost from the store as the last sync left it, without a
+sync or a lock, and writes nothing; its decided row's asks come from the jev
+ledger, `decisions.jsonl`, by the same function the opening uses.
+
 The opening has these parts, in this order (Horizons only when the desk holds one):
 
 1. **Horizons** — present only when the horizon store holds a horizon or a
