@@ -14,8 +14,8 @@
  * the child's environment holds. Every function here takes what it reads and writes from the caller, so a test
  * runs it with no model, no git and no clock.
  */
-import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -310,10 +310,25 @@ function realCheckout({ repos, dir }) {
 }
 
 /** The checkout the call made, writable again and removed. */
-function realDiscard(dir) {
-  try { chmodSync(dir, 0o700); } catch { /* removed below, or not there */ }
+function realDiscard(dir, identity) {
+  const recheck = () => {
+    const current = checkoutIdentity(dir);
+    if (!identity || current.dev !== identity.dev || current.ino !== identity.ino || current.birthtimeMs !== identity.birthtimeMs) {
+      throw new Error('the checkout identity changed or cannot be proved');
+    }
+  };
+  recheck();
+  chmodSync(dir, 0o700);
   spawnSync('chmod', ['-R', 'u+w', dir]);
+  recheck();
   rmSync(dir, { recursive: true, force: true });
+}
+
+/** Do not follow a replacement symlink when proving the directory belongs to this call. */
+function checkoutIdentity(dir) {
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory()) throw new Error('the checkout identity is not a directory');
+  return { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
 }
 
 function appendRun(row, env) {
@@ -373,7 +388,9 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   const hash = goalHash(goal);
   const round = state.readings.length + 1;
   const author = authorOf(env, avoid);
-  const checkout = join(deps.tmp ?? tmpdir(), `mc-plan-review-${target.programme}-${target.goal}-r${round}`);
+  // A dead call may leave its tree behind without recording a reading. Never reuse or remove that tree.
+  const checkoutId = (deps.checkoutId ?? randomUUID)();
+  const checkout = join(deps.tmp ?? tmpdir(), `mc-plan-review-${target.programme}-${target.goal}-r${round}-${checkoutId}`);
   const exists = deps.exists ?? existsSync;
   if (exists(checkout)) return refuse(`${checkout} exists and this call did not make it — nothing is launched and nothing removed`);
 
@@ -411,14 +428,15 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   const before = Object.fromEntries(names.map((file) => [file, read(join(target.dir, file))]));
   const discard = deps.discard ?? realDiscard;
   let made = false;
+  let identity = null;
   const closeLaunch = () => { try { (deps.remove ?? ctx.remove)(join(target.dir, LAUNCH_FILE)); } catch { /* none left */ } };
   let result = null;
   let summary = null;
   let verdict = null;
   let note = null;
   try {
-    try { mkdirSync(checkout, { recursive: false }); made = true; } catch (error) { note = `the checkout could not be made: ${error.message}`; }
-    if (made) {
+    try { mkdirSync(checkout, { recursive: false }); made = true; identity = checkoutIdentity(checkout); } catch (error) { note = `the checkout could not be made: ${error.message}`; }
+    if (made && !note) {
       const done = (deps.checkout ?? realCheckout)({ repos: declarations.declared.map((one) => ({ repo: one.repo, path: one.path })), dir: checkout });
       if (!done?.ok) note = done?.reason || 'the checkout failed';
     }
@@ -442,7 +460,13 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
     }
   } finally {
-    if (made) { try { discard(checkout); } catch (error) { stderr.write(`mc: plan-review ${target.name}: the checkout ${checkout} is left in place — ${error.message}\n`); } }
+    if (made) {
+      try { discard(checkout, identity); }
+      catch (error) {
+        note = `the checkout ${checkout} is left in place — ${error.message}`;
+        stderr.write(`mc: plan-review ${target.name}: ${note}\n`);
+      }
+    }
   }
 
   // What the turn left: the launch record's verdict, and whether the goal's own files stayed as they were.
@@ -453,7 +477,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   let code;
   if (note) { stderr.write(`mc: plan-review ${target.name}: no reading — ${note}\n`); code = 1; }
   else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: plan-review ${target.name}: no reading stored — ${note}\n`); code = 1; }
-  else if (!verdict) { note = result?.timedOut ? 'the reading exceeded twenty minutes' : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: plan-review ${target.name}: no reading stored — ${note}\n`); code = 1; }
+  else if (result?.timedOut || !verdict) { note = result?.timedOut ? 'the reading exceeded twenty minutes' : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: plan-review ${target.name}: no reading stored — ${note}\n`); code = 1; }
   else {
     const at = now();
     appendRecord(target.dir, { kind: 'reading', verdict, hash, round, tool: candidate.tool, model: candidate.model, author, at: at.toISOString() }, { read, write });
@@ -464,7 +488,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   }
   if (summary) {
     const row = { ...summary, ts: now().toISOString(), name: `goal:${target.name}`, kind: 'plan-review', exit: result?.status ?? 1,
-      seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: verdict && !changed.length ? verdictWord(verdict) : note,
+      seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: note ?? (verdict ? verdictWord(verdict) : null),
       model: candidate.model, cls: 'review', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
     (deps.logRun ?? ((one) => appendRun(one, env)))(row);
   }

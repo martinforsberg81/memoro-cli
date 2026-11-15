@@ -992,12 +992,17 @@ move exits 1 and writes nothing.
   (a build, review, finish, mend, desk-prepare or plan-review session is
   refused). The learning role runs one reading per goal it wrote. At most two
   readings per stay in draft; a refused call exits 2 and launches nothing.
-  Exit 0 is OK, 1 is not OK, no verdict or a changed file.
+  Exit 0 is OK, 1 is not OK, no verdict, a timeout (even after a verdict),
+  a changed file or unproven checkout cleanup.
 - **The reader** runs on the review list, never on the author's model while
   another candidate can run (the author is the caller's `MC_TOOL`/`MC_MODEL`,
   else `--avoid`; with neither, nothing is excluded and the call and the record
   say the author is unknown). It is a child of the call with a 20-minute limit,
-  no runner lane, in a read-only checkout the call makes and removes. Its cost is
+  no runner lane, in a read-only checkout with a unique path per call. The call
+  removes only the directory it created, rechecking its device, inode and birth
+  time before cleanup; a replacement or uncertain identity is retained and named.
+  A dead or expired launch leaves no reading; the next call uses its own path
+  and leaves any abandoned checkout untouched. Its cost is
   a run row `goal:<p>/<g>`, kind `plan-review`, in the desk's runs: plan cost in
   `mc landed`, never the goal's own, and not the desk budget.
 - **The verdict** is recorded only by the launched session: `mc goal plan-review

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -64,10 +64,10 @@ function setup(t, { fields = {}, records = null, review = null } = {}) {
   const goal = parseGoal(text);
   const baseEnv = { MC_WORK_ROOT: root, MC_HOME: join(root, 'home'), MC_ROLE: 'plan', MC_GOAL: 'mc/ex', MC_PROGRAMME: 'mc', MC_TOOL: 'claude', MC_MODEL: 'opus', MC_REPO: 'memoro-cli', MC_STEP: '3', MC_PROJECT: 'x' };
   const rows = [];
-  const checkoutPath = (round = 1) => join(tmp, `mc-plan-review-mc-ex-r${round}`);
+  const checkoutPath = (round = 1) => join(tmp, `mc-plan-review-mc-ex-r${round}-fixture`);
   const ctxOf = (env, stdout = sink(), stderr = sink()) => ({ stdout, stderr, env, read: readTextOrNull, write: writeFileAtomic, now: NOW, lock: (_root, fn) => fn(), remove: unlinkSync });
   const deps = {
-    now: () => NOW, alive: () => true, tmp, pid: 4242, mtime: () => AFTER_START, logRun: (row) => rows.push(row),
+    checkoutId: () => 'fixture', now: () => NOW, alive: () => true, tmp, pid: 4242, mtime: () => AFTER_START, logRun: (row) => rows.push(row),
     catalog: catalogOf([SOL, OPUS]), capacity: capacityOf(0.5, 0.5), token: () => 'a'.repeat(48),
     launch: () => ({ ok: true, id: 'claude', shortName: 'claude', spec: { bin: '/fake/claude' }, adapter: claude }),
     billingRoute: () => ({ billing: 'plan' }),
@@ -83,7 +83,8 @@ function setup(t, { fields = {}, records = null, review = null } = {}) {
   };
   /** A session that writes PLAN-REVIEW.md and records `word` the way the reader does, from the environment the call gave it. */
   const reads = (word, { text = word === 'ok' ? 'OK' : 'NOT OK', before = null } = {}) => async (spawned) => {
-    assert.equal(readdirSync(tmp).length, 1, 'the checkout is there while the reader reads');
+    const into = spawned.args[spawned.args.indexOf('--add-dir') + 1];
+    assert.equal(readFileSync(join(into, 'README.md'), 'utf8'), 'origin/main', 'the launched reader’s checkout is there');
     if (before) before(spawned);
     writeFileSync(join(dir, REVIEW_TEXT_FILE), `${text}\n\nWhat was read.\n`);
     const said = sink();
@@ -225,6 +226,51 @@ test('no verdict, a timeout, a failed session and a failed checkout leave no rea
   assert.equal(existsSync(join(failed.dir, LAUNCH_FILE)), false);
 });
 
+test('a timeout after a valid verdict discards the reading but keeps the paid run row', async (t) => {
+  for (const word of ['ok', 'not-ok']) {
+    const f = setup(t);
+    const { code, err } = await f.call({ extra: { session: async (spawned) => {
+      await f.reads(word)(spawned);
+      return { ...DONE, status: TIMEOUT_EXIT, timedOut: true };
+    } } });
+    assert.equal(code, 1, word);
+    assert.match(err, /exceeded twenty minutes/u);
+    assert.deepEqual(f.records(), []);
+    assert.equal(f.log().length, 1);
+    assert.equal(existsSync(join(f.dir, LAUNCH_FILE)), false);
+    assert.equal(existsSync(f.checkoutPath()), false);
+    assert.deepEqual(f.rows.map(({ kind, exit, note }) => [kind, exit, note]), [
+      ['plan-review', TIMEOUT_EXIT, 'the reading exceeded twenty minutes'],
+    ]);
+  }
+});
+
+test('cleanup retains and names a replacement directory or symlink rather than deleting an unowned checkout', async (t) => {
+  for (const replacement of ['directory', 'symlink']) {
+    const f = setup(t);
+    const original = join(f.tmp, 'original-checkout');
+    const other = join(f.tmp, 'other');
+    const { code, err } = await f.call({ extra: { session: async (spawned) => {
+      await f.reads('ok')(spawned);
+      renameSync(f.checkoutPath(), original);
+      if (replacement === 'directory') mkdirSync(f.checkoutPath());
+      else {
+        mkdirSync(other);
+        symlinkSync(other, f.checkoutPath(), 'dir');
+      }
+      writeFileSync(join(f.checkoutPath(), 'unowned.txt'), 'keep');
+      return DONE;
+    } } });
+    assert.equal(code, 1, replacement);
+    assert.match(err, /checkout .* is left in place.*identity/u);
+    assert.ok(err.includes(f.checkoutPath()));
+    assert.equal(readFileSync(join(f.checkoutPath(), 'unowned.txt'), 'utf8'), 'keep');
+    assert.equal(readFileSync(join(original, 'README.md'), 'utf8'), 'origin/main');
+    assert.deepEqual(f.records(), []);
+    assert.equal(existsSync(join(f.dir, LAUNCH_FILE)), false);
+  }
+});
+
 test('the default run row is appended to the runner\'s runs file with kind plan-review and the goal\'s name', async (t) => {
   const f = setup(t);
   const { logRun, ...rest } = f.deps;
@@ -360,10 +406,15 @@ test('a dead-pid or an expired launch is closed as no reading and the next call 
   ]) {
     const f = setup(t);
     writeFileSync(join(f.dir, LAUNCH_FILE), `${JSON.stringify({ round: 1, hash: 'h', token_sha256: 'x', ...launch })}\n`);
+    const abandoned = f.checkoutPath();
+    mkdirSync(abandoned);
+    writeFileSync(join(abandoned, 'keep.txt'), 'abandoned checkout');
     const alivePid = f.deps.alive;
-    const { code, err } = await f.call({ extra: { alive: (pid) => (pid === 99 ? alive() : alivePid(pid)), session: f.reads('ok') } });
+    const { code, err } = await f.call({ extra: { checkoutId: () => 'next', alive: (pid) => (pid === 99 ? alive() : alivePid(pid)), session: f.reads('ok') } });
     assert.equal(code, 0, `${label}: ${err}`);
     assert.equal(f.records().length, 1, `${label}: the dead launch left no reading of its own`);
+    assert.equal(readFileSync(join(abandoned, 'keep.txt'), 'utf8'), 'abandoned checkout');
+    assert.equal(existsSync(join(f.tmp, 'mc-plan-review-mc-ex-r1-next')), false, 'only this call’s checkout is removed');
   }
   const f = setup(t);
   const path = f.checkoutPath();

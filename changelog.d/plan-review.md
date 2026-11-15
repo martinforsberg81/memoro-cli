@@ -9,3 +9,5 @@ section: Added
   after two readings the plan decides with `--reason`. `mc goal show` says
   where the review stands, `mc goal areas` proposes a stand, and `mc goal new
   --stage build` is refused.
+  Timed-out readings never count, even after a verdict. Each call owns a unique
+  checkout, and cleanup retains and names a path whose identity changed.
