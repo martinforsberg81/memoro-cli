@@ -31,6 +31,8 @@ mc shot <dev|prod> <target> [--el <css> | --shell base|immersive|window] [--full
         [--upload <css>=<file>]… [--press <key>]… [--timeout <s>]
         [--account <name>] [--onboarding]
         [--me] [--here] [--main] [--keep] [--out <file.png>] [--open] [--json]
+        [--allow-unsettled]
+mc shot dev <target> --set <dir> --state <name> [capture flags]
 mc shot next [<id>] [step flags]
 mc shot close [<id>|--all]
 mc shot sessions
@@ -65,6 +67,33 @@ mc shot logout prod
   worktree — how the app is *now*, on main. `--here` and `--main` are refused together.
   `login` and `logout` work only with `prod`. Each refusal is one line and
   exits 2.
+- **`--allow-unsettled`** deliberately pictures an unloaded or unsettled state:
+  readiness refusals become warnings. It does not override sign-in, browser,
+  action, eval or access failures. Without it a still-visible loading marker,
+  missing settled surface, visible not-found surface or unexpected admin HTTP
+  error is `not-loaded`, exit 1, with no requested PNG. A 401/403 denial that
+  holds the declared access verdict remains a valid denial picture. Public HTTP
+  errors remain `public-page` failures. Readiness is checked after navigation
+  and opening, and again after actions and scroll before a requested picture.
+- **`--set <dir> --state <name>`** is dev-only and requires one target and a
+  state matching `^[a-z0-9][a-z0-9-]*$`. It refuses `--viewport`, `--theme`,
+  `--out`, `--keep`, `--list` and `--compare`; `--state` alone is refused.
+  Validation, including the declared desktop and iphone viewports, precedes
+  directory creation and server startup. The directory is relative to the
+  caller's cwd. One server ensure precedes four independent captures, in order:
+  `<name>-desktop-light.png`, `<name>-desktop-dark.png`,
+  `<name>-phone-light.png`, `<name>-phone-dark.png`. Phone uses the declared
+  iphone viewport and safe area unless overridden. Every capture replays the
+  request and ordered actions in a fresh browser context. Actions can mutate
+  server state four times; there is no reset or transaction.
+
+  Plain stdout contains only successful paths, in order. Diagnostics are on
+  stderr labelled by rendering, then one aggregate timing line. A failure exits
+  1, names the rendering, retains completed files and stops before later ones;
+  diagnostic failure images are not completed renderings. `--open` opens each
+  success. `--json` instead emits `{ ok, files, results, failed?, timing }` in
+  capture order and no plain timing line. Invalid combinations exit 2 with a
+  usable call and no side effects.
 - **The output** is the file path, alone on the first stdout line, so
   `$(mc shot … | head -1)` is the path. The page URL comes next, then any
   warning as `mc: warning — …`; what the shot met in between is § *What comes
@@ -76,6 +105,8 @@ mc shot logout prod
   so a slow shot can be told from a slow app. It is not printed for `--keep`,
   `--compare` or `mc shot next`. `--json` carries it as `timing`
   (`{ slot_wait_s, server_start_s, shot_s }`, prod `{ shot_s }`) and prints no such line.
+  A failed server start also prints timing with the failed step named and shot
+  0 s; JSON carries failure timing rather than a plain line.
   `--json` prints the script's result object instead, and `--open` opens the
   file with the platform's opener (`open`, `xdg-open`, `start`), detached.
 
@@ -205,7 +236,9 @@ mc: warning — …
 `--json` prints the result whole, as before. **Exit codes**: 0 when nothing
 failed, whatever `errors` holds — an app's console error is information, not a
 failed shot; 1 when a step failed, an eval threw, or a gate did not hold; 2 for
-a flag mc refuses. When the script answers `ok: false`, mc prints `mc: <error>` on stderr
+a flag mc refuses. A `not-loaded` result prints `mc: the page did not load —
+<reason>`; mc removes only the requested output, never a path supplied by the
+result. For other `ok: false` results, mc prints `mc: <error>` on stderr
 and then the result's `error` lines, so a page that crashed before the picture
 still says why. With `--compare`, each side's `error`, `eval` and `failed`
 lines come after the diff, each prefixed with its side (`here: ` or `<ref>: `),
@@ -399,6 +432,8 @@ mc shot dev assistant --viewport iphone --scroll @end --measure @layout
 The worktree is the one you stand in when it is a memoro worktree (it has
 `.mc/shot.json`); elsewhere it is the shared memoro checkout
 (`sharedWorktree`). `--here` still names the one you stand in explicitly.
+Any git worktree path and local branch works, including a nested cwd; this
+selection is not subject to `--compare` path restrictions.
 Until 2026-10-15 the shared checkout was the default everywhere, so a session
 on its own branch photographed `main` unless it remembered `--here`.
 
@@ -449,7 +484,9 @@ from the script's environment, so a token exported in your shell reaches the
 script only through the request file. Capture mode sends `mode`, `base_url`,
 `account`, `sign_in`, `target`, `element`, `shell`, `full_page`, `viewport`,
 `theme`, `locale` and `out`. Login mode sends `mode`, `base_url`, `account` and
-`profile_dir`. The request shape is the capture protocol described here.
+`profile_dir`. Capture requests may include boolean `allow_unsettled`; absent
+means false. The policy persists in a kept capture and its steps and rebase.
+The request shape is the capture protocol described here.
 For a public target the request carries `sign_in: { kind: "none" }`, no
 `account` field at all, `locale: null` and `target: { name }`; memoro accepts
 `none` only for a target it declares `"public": true`, and refuses a public

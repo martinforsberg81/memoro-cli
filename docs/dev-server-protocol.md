@@ -174,6 +174,18 @@ this protocol; a profile's `readiness.timeout_ms` is now the window mc gives
 that service to register (the app's never declared one and keeps the long
 default).
 
+When a spawned app server exits before registration, `ensureDevServer` releases
+that attempt's reservation and child bookkeeping, waits five seconds and admits
+one fresh attempt. Admission rechecks reuse, so a concurrent registration wins.
+There are at most two spawns and an adopted reservation is never reused. A live
+unregistered wrapper without a known dead child, admission or spawn refusal,
+registration timeout, health failure and already-registered reuse do not retry.
+The final failure leads with the current attempt's `start failed:` reason when
+available, followed by exit context and its last 20 log lines; a missing current
+log is reported without attributing an older cause. Slot wait accumulates across
+admissions; server start includes both attempts and the pause. `ensureAppServer`
+retains failure timing for callers, including `mc shot`'s failed-start line.
+
 A manifest may also say what tree the service was built from:
 
 ```json
