@@ -17,6 +17,7 @@ import { ledgerPath } from '../jev.js';
 import { FINISHED, goalReferences, programsGoals } from '../goals.js';
 import { readRunRows } from '../landed.js';
 import { writeJsonAtomic } from '../atomic-write.js';
+import { HORIZON_STATES, PLAYBACK_PARTS, horizonsOpening, parsePlaybackInput, planDrop, planMove, planReached, planReopen, planSet, readHorizon, readHorizons, renderHorizons, updateDeskHorizons, validSlug } from '../desk-horizons.js';
 import { addLesson, briefLesson, briefOptions, buildChanges, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
 
 export function usage() { return commandUsage('martin'); }
@@ -39,6 +40,8 @@ export const ROUTES = {
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
   lessons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
+  horizon: { booleans: ['--json'], strictValues: ['--title', '--file', '--position', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  horizons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   item: { booleans: ['--no-option'], strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
@@ -50,6 +53,8 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'item') return item(argv.slice(1), deps);
   if (argv[0] === 'lesson') return lesson(argv.slice(1), deps);
   if (argv[0] === 'lessons') return lessons(argv.slice(1), deps);
+  if (argv[0] === 'horizon') return horizon(argv.slice(1), deps);
+  if (argv[0] === 'horizons') return horizons(argv.slice(1), deps);
   if (argv[0] === 'get') return get(argv.slice(1), deps);
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
@@ -254,6 +259,107 @@ function lessons(argv, deps) {
   return 0;
 }
 
+// ---- Horizons -----------------------------------------------------------------------
+
+const HORIZON_VERBS = ['set', 'show', 'move', 'reached', 'reopen', 'drop'];
+const HORIZON_USAGE = 'mc: usage: mc martin horizon set <slug> --title <t> --file <path|-> [--position n] | show <slug> [--json] | move <slug> --position n | reached <slug> --file <path|-> | reopen <slug> --reason <t> [--position n] | drop <slug> --reason <t>\n';
+
+/** Who may write a horizon: the interactive desk or a person; `reached` also the unattended manager. Null when the caller may. */
+function horizonRefusal(verb, role, env) {
+  const headless = env.MC_HEADLESS === '1';
+  if (!headless && (role === 'martin' || role === 'person')) return null;
+  if (verb === 'reached' && headless && role === 'manager') return null;
+  if (verb === 'reached' && role === 'manager') return 'horizon reached is refused to the interactive manager; take it to the desk (mc martin), or let the unattended manager mark it';
+  const caller = `${headless ? 'an unattended ' : ''}${role}`;
+  return verb === 'reached'
+    ? `horizon reached is refused to ${caller}; only the interactive desk (mc martin), a person or the unattended manager marks a horizon reached`
+    : `horizon ${verb} is refused to ${caller}; only the interactive desk (mc martin) or a person sets, moves, reopens or drops a horizon`;
+}
+
+function horizon(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const [verb] = argv;
+  if (!HORIZON_VERBS.includes(verb)) { stderr.write(HORIZON_USAGE); return 2; }
+  const fail = (message) => { stderr.write(`mc: ${message}\n`); return 2; };
+  const role = writerRole(env);
+  if (verb !== 'show') { const refusal = horizonRefusal(verb, role, env); if (refusal) return fail(refusal); }
+  const parsed = scanArgs(argv, ROUTES.horizon); // the sub-verb is the first positional, the slug the second
+  const error = parsed.error || ROUTES.horizon.check(parsed);
+  if (error) return fail(error);
+  const f = parsed.flags, slug = parsed.positional[1] ?? null;
+  if (!slug) return fail(`horizon ${verb} expects <slug>`);
+  if (!validSlug(slug)) return fail(`${slug} is not a slug: lowercase letters, digits and hyphens, starting with a letter or digit`);
+  if (verb === 'show') {
+    const found = readHorizon(slug, { env });
+    if (!found) return fail(`unknown horizon ${slug}`);
+    if (f.json) {
+      const { playback, now_true, ...record } = found;
+      stdout.write(`${JSON.stringify({ ...record, playback, now_true }, null, 2)}\n`);
+      return 0;
+    }
+    const lines = [`${found.title} (${found.slug}) · ${found.state}${found.position ? ` · ${found.position}` : ''}`, `set ${found.set_at} by ${found.set_by}`];
+    if (found.reopened_at) lines.push(`reopened ${found.reopened_at} by ${found.reopened_by}: ${found.reopen_reason}`);
+    if (found.dropped_at) lines.push(`dropped ${found.dropped_at} by ${found.dropped_by}: ${found.drop_reason}`);
+    for (const [key, title] of PLAYBACK_PARTS) lines.push('', `## ${title}`, '', found.playback[key]);
+    if (found.now_true !== null) lines.push('', `## Now true (reached ${found.reached_at} by ${found.reached_by})`, '', found.now_true.trim());
+    stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+  const now = (deps.now || (() => new Date()))().toISOString();
+  const readInput = () => {
+    if (!f.file) return { error: `horizon ${verb} needs --file <path|->` };
+    try { return { text: f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8') }; } catch { return { error: `cannot read ${f.file}` }; }
+  };
+  const reasonOf = () => oneLine(f.reason);
+  let position = null;
+  if (f.position !== null && f.position !== undefined) {
+    if (verb !== 'set' && verb !== 'move' && verb !== 'reopen') return fail(`horizon ${verb} takes no --position`);
+    if (!/^[1-9][0-9]*$/u.test(f.position)) return fail('--position must be a whole number from 1');
+    position = Number(f.position);
+  }
+  let plan;
+  if (verb === 'set') {
+    const title = oneLine(f.title);
+    if (!title || /[\r\n]/u.test(f.title ?? '')) return fail('horizon set needs --title, one non-empty line');
+    const input = readInput(); if (input.error) return fail(input.error);
+    const playback = parsePlaybackInput(input.text); if (playback.error) return fail(playback.error);
+    plan = (held) => planSet(held, { slug, title, playback: `${input.text.trimEnd()}\n`, position, by: role, now });
+  } else if (verb === 'move') {
+    if (position === null) return fail('horizon move needs --position n');
+    plan = (held) => planMove(held, { slug, position });
+  } else if (verb === 'reached') {
+    const input = readInput(); if (input.error) return fail(input.error);
+    if (!input.text.trim()) return fail('horizon reached needs what is now true, not an empty file');
+    plan = (held) => planReached(held, { slug, statement: `${input.text.trimEnd()}\n`, by: role, now });
+  } else if (verb === 'reopen') {
+    if (!reasonOf()) return fail('horizon reopen needs --reason <text>');
+    plan = (held) => planReopen(held, { slug, reason: reasonOf(), position, by: role, now });
+  } else {
+    if (!reasonOf()) return fail('horizon drop needs --reason <text>');
+    plan = (held) => planDrop(held, { slug, reason: reasonOf(), by: role, now });
+  }
+  let done;
+  try { done = updateDeskHorizons(plan, { env, ...(deps.lock ? { lock: deps.lock } : {}) }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  if (done.error) return fail(done.error);
+  stdout.write(`${slug} · ${verb === 'reached' ? 'reached' : verb === 'drop' ? 'dropped' : `open · ${done.position}`}\n`);
+  return 0;
+}
+
+function horizons(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const parsed = scanArgs(argv, ROUTES.horizons);
+  const error = parsed.error || ROUTES.horizons.check(parsed);
+  if (error) { stderr.write(`mc: ${error}\n`); return 2; }
+  if (parsed.flags.state && !HORIZON_STATES.includes(parsed.flags.state)) { stderr.write(`mc: unknown state ${parsed.flags.state}\n`); return 2; }
+  const { horizons: found, unreadable } = readHorizons({ env, state: parsed.flags.state });
+  if (unreadable.length) stderr.write(`mc: horizon record cannot be read, left as it is: ${unreadable.join(', ')}\n`);
+  if (parsed.flags.json) { stdout.write(`${JSON.stringify(found, null, 2)}\n`); return 0; }
+  for (const x of found) stdout.write(`${x.slug} · ${x.state} · ${x.position ?? '-'} · ${x.title}\n`);
+  return 0;
+}
+
 const DESK_WRITERS = ['person', 'martin', 'desk-prepare', 'decision'];
 export function writerRole(env) { const identity = sessionIdentity({ env, cwd: env.cwd || process.cwd() }); return env.MC_ROLE || (env.MC_TOOL && env.MC_TOOL !== 'person' ? 'session' : identity.role || 'person'); }
 /** Closed by the source after it was prepared or briefed: the one closed item a close still applies to. */
@@ -374,6 +480,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
     id: item.id, reference: item.reference, state: item.state, prepare_failures: item.prepare_failures?.length ?? 0, decision_failures: item.decision_failures?.length ?? 0,
   }));
 
+  const horizonData = horizonsOpening({ env, since, now });
   return {
     generated_at: now.toISOString(), last_opened: last, since,
     yours,
@@ -384,6 +491,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
       failed,
     },
     cost: costReading({ env, now, read }),
+    ...(horizonData ? { horizons: horizonData } : {}),
     changes: buildChanges({ lessons: listLessons({ env }), items, goals: goalReferences({ home }), since, now }),
   };
 }
@@ -401,6 +509,7 @@ export function renderOpening(data) {
     if (item.due) out.push(`Due ${item.due}: if nothing is said by then, the recommendation in the brief is carried out and the item is closed by default.`);
     out.push('', item.brief ?? '(brief.md is missing)');
   });
+  if (data.horizons) out.push('', ...renderHorizons(data.horizons));
   out.push('', '## Decided without you');
   if (!data.decided.programmes.length) out.push('', 'Nothing was decided without you in this interval.');
   for (const group of data.decided.programmes) {
