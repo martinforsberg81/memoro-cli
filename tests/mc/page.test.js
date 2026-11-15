@@ -13,6 +13,8 @@ import { describe, it } from 'node:test';
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
+import { horizonsDir } from '../../src/mc/desk-horizons.js';
+import { newRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
@@ -2018,6 +2020,116 @@ describe('collectPage', () => {
     writeFileSync(join(programmeProposals, 'archive', 'old.md'), 'archived');
     return root;
   }
+
+  /**
+   * The horizons the overview reads: real horizon records and real PROGRAMME.json records under a fixture home,
+   * collected by `collectPage` with no network. `plan` is the plan-branch pull requests the cache holds.
+   */
+  function horizonsFixture({ plan = [] } = {}) {
+    const root = workRootFixture();
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    const horizon = (slug, state, position, extra = {}) => {
+      mkdirSync(join(horizonsDir(env), slug), { recursive: true });
+      writeFileSync(join(horizonsDir(env), slug, 'horizon.json'), JSON.stringify({
+        schema: 'mc-desk-horizon', version: 1, slug, title: `Title of ${slug}`, state, position,
+        set_at: '2026-11-14T10:00:00.000Z', set_by: 'martin', ...extra,
+      }));
+    };
+    const record = (name, horizonSlug) => {
+      mkdirSync(join(programsHome(env), name), { recursive: true });
+      writeRecord(join(programsHome(env), name), newRecord({ horizon: horizonSlug, end: 'it is over', createdBy: 'person', now: NOW }));
+    };
+    const collect = (over = {}) => collectPage({
+      claudeSettings: () => null, env, now: NOW, repos: [], offline: true, checkout: null,
+      exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+      cache: { loadPrs: () => ({ prs: plan.map((name, i) => ({ repo: 'memoro', number: 9000 + i, headRefName: `plan/${name}`, title: `Plan: ${name}`, updatedAt: '2026-08-29T11:00:00Z' })), fetched: '2026-08-29T11:00:00Z', age_seconds: 60 }), savePrs: () => {} },
+      ...over,
+    });
+    return { root, env, horizon, record, collect };
+  }
+
+  it('numbers the programmes after the goals and reads the horizon each record names, with its state', async (t) => {
+    const fx = horizonsFixture({ plan: ['plan-only'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('second', 'open', 2);
+    fx.horizon('first', 'open', 1);
+    fx.horizon('done-one', 'reached', null, { reached_at: '2026-11-14T11:00:00.000Z' });
+    fx.horizon('gone', 'dropped', null, { dropped_at: '2026-11-14T11:00:00.000Z' });
+    mkdirSync(join(horizonsDir(fx.env), 'broken'), { recursive: true });
+    writeFileSync(join(horizonsDir(fx.env), 'broken', 'horizon.json'), '{ not json');
+    fx.record('p-second', 'second');
+    fx.record('p-first', 'first');
+    fx.record('p-reached', 'done-one');
+    fx.record('p-dropped', 'gone');
+    fx.record('p-unheld', 'ghost');
+    fx.record('p-none', null);
+    mkdirSync(join(programsHome(fx.env), 'p-invalid'), { recursive: true });
+    writeFileSync(join(programsHome(fx.env), 'p-invalid', 'PROGRAMME.json'), '{ "schema": "nope" }');
+    const data = await fx.collect();
+    const groups = data.programmes.programmes;
+    const by = Object.fromEntries(groups.map((group) => [group.programme, group]));
+
+    // Goal numbers are the goals'; programmes follow, in name order, one each, plan-PR-only programme included.
+    assert.deepEqual(groups.map((group) => group.programme), [...groups.map((group) => group.programme)].sort());
+    assert.deepEqual(groups.map((group) => group.number), groups.map((_, i) => data.programmes.count + 1 + i));
+    assert.deepEqual(data.programmes.programmes.flatMap((group) => group.goals).map((goal) => goal.number), [1], 'the goals keep 1..N');
+    assert.ok(by['plan-only'], 'a programme only a plan pull request names is a group');
+    assert.equal(by['plan-only'].prs.length, 1);
+    assert.equal(by['plan-only'].number > data.programmes.count, true);
+
+    assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
+      mc: [null, null],
+      'p-dropped': ['gone', 'dropped'],
+      'p-first': ['first', 'open'],
+      'p-invalid': [null, null],
+      'p-none': [null, null],
+      'p-reached': ['done-one', 'reached'],
+      'p-second': ['second', 'open'],
+      'p-unheld': ['ghost', 'not held'],
+      'plan-only': [null, null],
+    });
+    assert.equal(by['p-invalid'].record_invalid, true);
+
+    // The open horizons in the desk's order (position 1 before 2), the programmes naming each; every other programme under none.
+    assert.deepEqual(data.horizons.open.map((item) => [item.slug, item.position, item.programmes]), [
+      ['first', 1, ['p-first']], ['second', 2, ['p-second']],
+    ]);
+    assert.deepEqual(data.horizons.none, ['mc', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
+    assert.deepEqual(data.horizons.unreadable, ['broken']);
+    assert.equal(data.horizons.error, null);
+  });
+
+  it('says a horizon store that cannot be listed in horizons.error, and still numbers the programmes', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.record('p-one', 'first');
+    // The store path is a file: it exists and cannot be listed.
+    mkdirSync(dirname(horizonsDir(fx.env)), { recursive: true });
+    writeFileSync(horizonsDir(fx.env), 'not a directory');
+    const data = await fx.collect();
+    assert.equal(typeof data.horizons.error, 'string');
+    assert.ok(data.horizons.error.length > 0);
+    assert.deepEqual(data.horizons.open, []);
+    assert.deepEqual(data.horizons.none, data.programmes.programmes.map((group) => group.programme));
+    assert.ok(data.programmes.programmes.every((group) => Number.isInteger(group.number)));
+    assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'not held');
+    const lines = renderPageLines(data, { columns: 100, now: NOW });
+    assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
+  });
+
+  it('a page with no horizon store has no error and nothing open, and the json keeps every key it had', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const data = await fx.collect();
+    assert.deepEqual(data.horizons, { open: [], none: data.programmes.programmes.map((group) => group.programme), unreadable: [], error: null });
+    // Every top-level key `mc --json` had on origin/main is still there, and `horizons` is the one that is new.
+    const had = ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes'];
+    for (const key of had) assert.ok(key in data, key);
+    assert.ok('horizons' in data);
+    assert.deepEqual(Object.keys(data.horizons), ['open', 'none', 'unreadable', 'error']);
+    const group = data.programmes.programmes.find((item) => item.programme === 'mc');
+    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'proposals', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses']) assert.ok(key in group, key);
+  });
 
   it('collects current disk state and retry times at the page observation clock', async (t) => {
     const root = workRootFixture();

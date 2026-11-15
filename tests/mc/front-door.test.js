@@ -391,7 +391,7 @@ describe('the menu under the page', () => {
     const session = drive(['q']);
     await session.run();
     const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
-    assert.ok(keys.some((line) => /^ {2}<n> {2}show that goal {3}· {3}a {2}all \/ collapse {3}· {3}d {2}desk {3}· {3}m {2}manager$/u.test(line)), keys.join('\n'));
+    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}h {2}home {3}· {3}d {2}desk {3}· {3}m {2}manager$/u.test(line)), keys.join('\n'));
     const longest = Math.max(...keys.filter((line) => !/<n>/u.test(line)).map((line) => line.length));
     assert.ok(keys.every((line) => line.length <= longest), keys.map((line) => line.length).join(','));
   });
@@ -428,7 +428,7 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show that goal', 'a  all / collapse', 'm  manager', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show a goal or open a programme', 'a  all / collapse', 'h  home', 'm  manager', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');
