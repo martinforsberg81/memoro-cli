@@ -64,6 +64,7 @@ import { fileURLToPath } from 'node:url';
 import { adapterOfProvider, billingProviders, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import { gitDirOf } from './repos.js';
@@ -835,16 +836,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
   }
   /**
-   * A provider refused a session until the reset the refusal named, or the
-   * quota sleep from now when it named none. Only that provider is refused: the
-   * other is still a candidate, which is how a goal's class runs on codex the
-   * launch after claude refused.
+   * A provider refused a session: when the read says its plan did (a quota, or
+   * a login a plan-refusing tool cannot get past), that provider is refused
+   * until the reset the read named, or the quota sleep from now. Only that
+   * provider is refused: the other is still a candidate, which is how a goal's
+   * class runs on codex the launch after claude refused. The rule is
+   * `refusePlanOnRead`'s, the one every unattended caller writes; the runner
+   * records it through its own capacity observation.
    */
-  function refuseProvider(provider, quotaReset) {
-    const nowMs = deps.now().getTime();
-    const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
-    observeCapacity((state) => applyRefusal(state, provider, until.toISOString()));
-    say(`${provider} refused until ${until.toISOString()}`);
+  function refuseProvider(read, launch, billing) {
+    return refusePlanOnRead({ read, launch, billing, now: deps.now(), say, write: (provider, until) => observeCapacity((state) => applyRefusal(state, provider, until)) });
   }
   /**
    * The API server cannot be reached (`apiInterruption` kind `offline`): no new
@@ -1721,7 +1722,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const ended = deps.deskItems.read(name);
       // An item the session left prepared is not a successful ending.
       const unfinished = decisionUnfinished(ended);
@@ -1870,7 +1871,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
@@ -2020,7 +2021,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2160,7 +2161,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2934,7 +2935,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);

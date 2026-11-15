@@ -34,6 +34,7 @@ import { runnerDir, workRoot } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { pidAlive } from './status-collect.js';
@@ -487,6 +488,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
+      refusePlanOnRead({ read: summary, launch: launched, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: plan-review ${target.name}: ${text}\n`) });
     }
   } finally {
     if (made) {

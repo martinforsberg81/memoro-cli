@@ -640,6 +640,17 @@ export function sessionResult(stdout) {
 const OUTPUT_READERS = new Set(['claude-stream', 'codex-events', 'agy-stream']);
 
 /**
+ * Whether a headless session finished its work as its read says, for every
+ * tool alike: it exited 0 without timing out, hit no quota, was not
+ * interrupted, and its read is neither `failed` nor `no-json` (a non-SUCCESS
+ * result, an error, or an empty stdout at exit 0 is one of those). The outward
+ * `ok` of the manager turn and the helper turn.
+ */
+export function sessionFinished(result, read) {
+  return result.status === 0 && !result.timedOut && !read.quota && !read.interrupted && !['failed', 'no-json'].includes(read.note);
+}
+
+/**
  * The text a headless session answered with, read by the output reader its
  * adapter declares; '' when it gave none. A tool with no reader is refused.
  */
