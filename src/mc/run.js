@@ -136,6 +136,7 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** The role each goal session kind runs with (`goalSession`). */
 const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, review: REVIEW_ROLE, finish: FINISH_ROLE, mend: MEND_ROLE });
+const NO_REVIEW_PR = 'in review without an open pull request';
 
 /*
  * Disk: no session starts unless the shared policy admits it
@@ -2240,7 +2241,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         pr = repo ? goalPr(repo, branch) : { error: `${repoName} is not a repository this runner knows` };
         if (pr?.error) { say(`${name}: its pull request could not be read (${pr.error}) — skip`); return 'skipped:github'; }
         if (!pr) {
-          goalState(goal, name, { stage: 'finish' }, { comment: `in review, but ${branch} has no open pull request — a finish session takes it` });
+          const log = parseLog(deps.read(logPath) ?? '');
+          const review = log.findLastIndex((entry) => entry.role === 'review');
+          const draft = log.findLastIndex((entry, index) => entry.stage === 'draft' && (index === 0 || log[index - 1].stage !== 'draft'));
+          const since = review >= 0 ? review : draft;
+          const returned = log.slice(since + 1).some((entry) => entry.tool === 'runner' && String(entry.comment ?? '').startsWith(NO_REVIEW_PR));
+          if (returned) goalState(goal, name, { status: 'Martin' }, { comment: `${NO_REVIEW_PR} a second time — the desk must inspect it` });
+          else goalState(goal, name, { stage: 'build' }, { comment: `${NO_REVIEW_PR} — ${branch} returns to build` });
           return 'skipped:no-pr';
         }
       }

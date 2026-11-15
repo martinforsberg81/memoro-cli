@@ -4560,12 +4560,22 @@ test('a review that dies with its tree left dirty logs the dirty paths in the en
   assert.match(goalEntries(f).at(-1).comment, /^the review ended with the goal still in review — a review runs again; worktree not clean — .*src\/mc\/runner-lock\.js$/u);
 });
 
-test('a goal in review with no open pull request goes to finish, and no review starts', async () => {
+test('a review without a pull request returns once to build, then stops for Martin; a review entry resets the count', async () => {
   const f = reviewFixture({ pr: null });
-  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const runner = createRunner({ deps: f.deps });
+  const ready = () => { f.files[`${GOALS}/judged/GOAL.json`] = withGoal(f.files[`${GOALS}/judged/GOAL.json`], { stage: 'review', status: 'ready' }); };
+  await runner.pass({ repo: 'memoro' });
   assert.equal(f.calls.sessions.filter((call) => call.env.MC_ROLE === 'review-session:goal').length, 0);
-  assert.equal(where(f, 'judged'), 'finish · ready');
-  assert.match(goalEntries(f).at(-1).comment, /^in review, but goal\/judged has no open pull request — a finish session takes it$/u);
+  assert.equal(where(f, 'judged'), 'build · ready');
+  assert.match(goalEntries(f).at(-1).comment, /^in review without an open pull request/u);
+  ready();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(where(f, 'judged'), 'review · Martin');
+  assert.match(goalEntries(f).at(-1).comment, /second time/u);
+  f.files[`${GOALS}/judged/LOG.md`] += '\n## 2026-08-29T10:00Z · codex model · review · ready · by review\n\nDone: reviewed\n';
+  ready();
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(where(f, 'judged'), 'build · ready');
 });
 
 /* ---------------------------------------------------------------- no loop */
