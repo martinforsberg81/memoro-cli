@@ -22,10 +22,12 @@ launch changes `last-open.json`.
 The opening has these parts, in this order (Horizons only when the desk holds one):
 
 1. **Yours (n)** — every for-martin item, blocking work first: a goal item that
-   blocks later-phase goals of its programme sorts before one that blocks none,
+   blocks goals of its programme that wait for it sorts before one that blocks none,
    more blocking first; then oldest source time; then id. Each shows its
    reference, sort, reversible or not, id, source time and, when it blocks,
-   how many later-phase goals of its programme wait on it. A due time within
+   how many goals of its programme wait on it (`blocks <n> later-phase goals of
+   <programme>`; for a programme whose record states its phases `blocks <n>
+   goals of <programme> whose phases wait for it`). A due time within
    24 hours is shown with the closure it will cause by default. The brief is
    printed as written; a missing `brief.md` is named as missing.
 2. **Horizons** — present only when the horizon store holds a horizon or a
@@ -56,10 +58,14 @@ Each launch that succeeds writes `~/mc/martin/last-open.json` as
 hold a valid time refuses the launch with exit 1 and is not replaced by a
 fresh history. An unattended launch is refused as before, with exit 2.
 
-Phase gating means every unfinished goal of a programme waits for the phase
-below it, so a phase-1 goal blocks each later-phase goal that is not finished
-and whose GOAL.json parses. Goals of one phase block the same set and are
-ordered by age.
+In a sequential programme every unfinished goal waits for the phase below it,
+so a phase-1 goal blocks each later-phase goal that is not finished and whose
+GOAL.json parses. In a programme whose record states its phases a goal blocks
+the unfinished goals (whose GOAL.json parses) of the phases that wait for its
+phase, directly or through other phases; a phase that waits for none is blocked
+by nothing, and a programme whose record is invalid counts none (`laterPhaseGoals`,
+by the rule of `phaseStanding`, [mc-goals.md](mc-goals.md#phases)). Goals of one
+phase block the same set and are ordered by age.
 
 ## Read-only queue
 

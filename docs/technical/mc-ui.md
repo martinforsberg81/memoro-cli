@@ -53,7 +53,15 @@ a goal; a programme without a record appears as before.
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
 → goal → PR. Each programme is a bounded block with a bold name and cyan
 opening/closing rules. Each phase has its own bold cyan heading. All unfinished
-phases and goals are visible, including future phases labelled `after phase N`.
+phases and goals are visible, including a phase that waits, headed `after phase
+N` (the phase the programme is in, for a sequential programme) or, in a
+programme whose record states its phases, `after phase <m>[, <m>…]` with every
+phase it is stated to wait for; an open phase is headed as any other, and a
+programme whose record is invalid shows every unfinished goal held and says
+`record invalid` on its name. Each phase in `--json` carries `state` and
+`after`, a goal's `held` is true when it is unfinished and its phase is not
+open, and `current_phase` is the lowest phase with an unfinished goal; the rule
+is `phaseStanding` ([mc-goals.md](mc-goals.md#phases)).
 Only finished history folds by default; `a` expands it. Malformed goals appear
 under NEEDS ATTENTION, without an inferred phase.
 

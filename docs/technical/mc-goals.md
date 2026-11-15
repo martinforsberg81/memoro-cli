@@ -503,7 +503,10 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`phase [<p>/<g>] <n>`** — moves the goal to phase `<n>`, at most one past
   the highest of its programme's other goals, with an entry `Done: phase <n>`;
   then the programme's phases are renumbered (`renumberPhases`), so a phase
-  the move left empty closes up and the line names each goal that moved.
+  the move left empty closes up and the line names each goal that moved. In a
+  stated programme the goal takes the dependencies of the phase it arrives in,
+  and a move that would leave with no goal a phase another phase waits for is
+  refused (*Phases*, *Stated order*).
 - **`log [<p>/<g>] [--done "…"] [--comment "…"] [--next "…"] [--stage <s>] [--status ready|blocked]`** —
   appends one entry; at least one field is needed. `--stage` and `--status`
   also set them. The goal is `MC_GOAL`'s when none is named. `--status Martin`
@@ -548,7 +551,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   dot-directory, so no reader lists it), and `goals/goal_log.md` gets a row:
   date, goal, status, pull requests, the last `Done:`. Then the programme's
   phases are renumbered (*Phases*): when the goal was the last of the lowest
-  phase, every goal left moves one phase down, and the line names each. The runner does the same
+  phase, every goal left moves one phase down, and the line names each; in a
+  stated programme the record's dependencies move with their phases (*Stated
+  order*). The runner does the same
   by itself immediately for dropped goals during every ordinary reconciliation,
   including old dropped goals without a stage timestamp. Done goals retain the
   24-hour hold (`ARCHIVE_HOLD_MS`), counted from the log entry that set the
@@ -586,7 +591,10 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   each worktree's changed files, commits past `origin/main` and last commit date.
 - **`list [<p>]`** — each programme's goals under a line per phase,
   `<p> · phase <n> · in progress` for the phase the programme is in, `· done`
-  for one before it and `· after phase <n-1>` for one after it; under it,
+  for one before it and `· after phase <n-1>` for one after it (a stated
+  programme: `· done`, `· in progress` or `· waiting`, each ending `· after
+  phase <m>[, <m>…]` for what the record says the phase waits for, and above
+  them `<p> · record invalid — no phase is open` for an invalid record); under it,
   indented, one line per goal: `programme/goal · repos · stage · status ·
   criteria <met>/<all> · n sessions · the last entry's Next` — `—` for a `done` or `dropped` goal,
   whose last next action is over. A goal waiting for Martin reads `<stage> · Martin,
@@ -675,7 +683,24 @@ grupp mål som ska vara samtliga 'done' innan goals i fas 2 kan påbörjas."* an
 *"Vi använder phases alltså behövs inte waiting."* A goal's `phase` says when
 it may start; its stage does not change for it.
 
-- **Gated by phase** (`currentPhase`, `phaseOpen` in `goals.js`). The phase a
+There are two kinds of programme, told by its record
+([mc-plan.md](mc-plan.md), *A programme with a record*):
+
+- **Sequential** — no `PROGRAMME.json`, or one without `phases`. Every
+  programme made before 2026-11-15 is of this kind, and `mc programs record`
+  makes no other.
+- **Stated** — a record with `"phases": {"order": "stated"}`, which `mc
+  programs create` writes and nothing else does (*Stated order*).
+
+One function holds the rule, `phaseStanding(own, order)` in `goals.js`, for the
+goals of one programme and its order (`SEQUENTIAL`, `{kind: 'stated', after}` or
+`{kind: 'invalid', problems}`, from `programmeOrder`, which reads the record
+each time it is asked). It gives `current` and each phase's `state`
+(`finished`, `current` or `waiting`), `open` and `after`. The runner
+(`phaseOpen`, `nextGoal`, `nextDraft`), `mc goal list`, the page, tidy and the
+desk's opening all ask it; none keeps a rule of its own.
+
+- **Sequential: gated by phase** (`currentPhase`, `phaseOpen`). The phase a
   programme is in is the lowest phase of its goals that parse and are neither
   `done` nor `dropped`. The runner picks no goal in a higher phase — not for a
   build, a review or plan — until every goal of the programme in a lower phase
@@ -687,12 +712,103 @@ it may start; its stage does not change for it.
   `mc goal phase` moves one, the programme's phases are renumbered so they run
   1, 2, … in the order they had: when the last goal of phase 1 leaves, phase 2
   is phase 1 and phase 3 phase 2 (Martin: *"när goals/faser arkiveras så får
-  n+1 n istället"*). A renumbering writes GOAL.json only, no log entry.
+  n+1 n istället"*). A renumbering writes GOAL.json only, no log entry — and,
+  for a stated programme, the record's dependencies (*Stated order*).
 - **Seen.** `mc goal list` groups by phase and names the phase in progress;
-  `mc goal show` gives the goal's phase. On the page a goal in a phase not yet
-  reached is in the waiting colour (yellow, `docs/technical/mc-ui.md`)
-  and leads its tail with `phase <n> — after phase <n-1>`; its row in `mc
-  --json` (`programmes[].goals[]`) carries `phase` and `held`.
+  `mc goal show` gives the goal's phase. On the page a goal in a phase not
+  open is in the waiting colour (yellow, `docs/technical/mc-ui.md`) under a
+  heading `Phase <n> · after phase <c>` — the phase the programme is in, for a
+  sequential one — and its row in `mc --json` (`programmes[].goals[]`) carries
+  `phase` and `held`; a stated programme says it with its own words
+  (*Stated order*).
+
+### Stated order
+
+Martin, 2026-11-15: a programme is a bounded piece of work, its phases run in
+parallel, and a dependency is stated where there is one. For a stated
+programme:
+
+- **The rule** (`phaseStanding`). A phase is open unless the record names the
+  phases it comes after. A phase with none is open at once. A phase that waits
+  is open when every goal of each phase it names is `done` or `dropped`; only
+  the phases named count, not what those wait for in turn, and a phase may wait
+  for one with a higher number. A goal in `draft` is not finished and holds the
+  phases that wait for its phase; a goal whose GOAL.json does not parse has no
+  phase and holds nothing back. A phase every goal of which is finished is
+  `finished`; an open one with an unfinished goal is `current`; one that waits
+  is `waiting`. `current` (the page's `current_phase`) is still the lowest phase
+  with an unfinished goal.
+- **The record's key** (`programme-record.js`). `phases` is optional and last,
+  after `created_by`; `version` stays 1: `"phases": {"order": "stated", "after":
+  {"3": [1, 2]}}`. `order` takes one value, `stated`. `after` is absent or an
+  object whose keys are phase numbers as strings and whose values are the
+  phases that phase waits for: whole numbers from 1, ascending, none twice, never
+  the phase itself, and no cycle through the other keys. Any other shape and a
+  cycle are problems of the record, so the file is an invalid record. `mc
+  programs create` writes `{"order": "stated"}`; `mc programs record` writes no
+  `phases`, so a programme under way that is given a record stays sequential,
+  and no verb opts a programme in or out later. `changePhases` is the one way to
+  change the key: it reads a valid record, validates the whole result, writes
+  it whole and keeps every other key and its order; it never touches an invalid
+  record.
+- **The verb.** `mc programs after <programme> <phase> <phase>…` states that
+  the first phase waits for those after it, replacing what it waited for (a
+  phase named twice is kept once, the list is stored ascending); with `--none`
+  in place of the phases it removes all the phase waited for. It answers
+  `mc: <programme> · phase <n> · after phase <m>[, <m>…]` or `mc: <programme> · phase <n> · waits for no
+  phase`. Exit 2, nothing written: a phase that is not a whole number from 1,
+  the phase among those it waits for, neither phases nor `--none` or both, an
+  unknown flag, a missing programme, and a caller not allowed. Exit 1, nothing
+  written: a programme with no directory, one with no record or one not stated
+  (its phases run in sequence and `mc goal phase` orders its goals), an invalid
+  record (`mc programs show` says why), a phase in which the programme has no
+  goal that parses, and a statement that would make a cycle (the message names
+  its phases). A person, interactive Martin, and the manager and plan roles may
+  call it, the last two also with `MC_HEADLESS=1`; every other role and a caller
+  with `MC_GOAL` and no `MC_ROLE` is refused, the message naming the role. A
+  stated dependency stops no running session: it takes effect at the runner's
+  next pick.
+- **Renumbering** (`renumberPhases`). A dependency belongs to the phase, not
+  its number: when numbers move, every key and every listed number of `after`
+  moves with its phase. A phase with no goal left that parses loses its key and
+  is taken out of every list — its goals were all archived, so what waited for
+  it no longer waits — and a key whose list is then empty is removed. This
+  runs on every call for a stated programme, also when no goal moves, and the
+  record is written once, after the goals, when it differs. `mc goal phase`
+  refuses, exit 2 and nothing written, a move that would leave with no goal a
+  phase another phase waits for, naming that phase and `mc programs after`; and
+  after an accepted move it says each dependency the record lost. A sequential
+  programme's record is not written; an invalid record is left as it is and the
+  goals are renumbered as before.
+- **Dropped** goals meet a dependency, as they hold no later phase back in a
+  sequential programme: a phase whose goals are all dropped lets the phase that
+  waited for it open. Dropping is a person's, interactive Martin's, the
+  decision role's or plan's act, and whoever drops it decides knowingly.
+- **An invalid record** is read neither as stated nor as sequential: it holds
+  every phase of its programme. The runner starts no goal and no plan session in
+  it and says so once per programme while it lasts (`<prog>: its record
+  (PROGRAMME.json) is invalid — no goal or plan session is started in it until
+  it is repaired (…; mc programs show <prog>)`). `mc goal list` prints `<prog> ·
+  record invalid — no phase is open` above the phases, each unfinished phase
+  `waiting`; the page holds every unfinished goal and says `record invalid` on
+  the programme (`record_invalid` in `--json`); tidy rule P releases nothing on
+  the ground of the phase; the desk's opening counts nothing as blocked. A
+  missing record is no record and is the sequential rule.
+- **Seen, stated.** `mc goal list` ends a phase line `· after phase <m>[,
+  <m>…]` in every state, and its state reads `done`, `in progress` (open) or
+  `waiting`. The page heads a waiting phase `Phase <n> · after phase <m>[,
+  <m>…]`; each phase in `--json` carries `after` (`[]` when none) and `state`;
+  `held` is true when the goal is unfinished and its phase is not open. Tidy's
+  reason reads `phase <n> waits for phase <m>[, <m>…] of its programme`; the
+  desk says `blocks <n> goals of <programme> whose phases wait for it` for the
+  goals of the phases that wait for the item's phase, directly or through
+  others. `mc programs show` prints `phases: stated` and a line `phase <n> after
+  phase <m>[, <m>…]` per waiting phase; `--json` carries `phases` inside
+  `record`.
+- **Sessions that touch the same files** are not kept apart: two phases that
+  both open at once and edit the same files meet in the merger's one round per
+  repository and a conflict goes to mend. Where phases share files the plan
+  states the dependency (`canon/tasks/designing-a-programme.md`).
 
 ### Converting after into phases
 
@@ -739,8 +855,9 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    `review · ready` (a review), `build · ready` after a rejection (a repair build), unqueued
    `merge · blocked`, and legacy `merge · ready` whose last entry is the merger's red and none of whose pull requests
    is in the merger's line (a mend session) — no delivery session on `draft · ready` or
-   `Martin`. The next-draft assignment is added separately to the candidates. Eligible work is in the phase their programme is in or an earlier one
-   (*Phases*), and not held, on any repository (a lane serves them all), the
+   `Martin`. The next-draft assignment is added separately to the candidates. Eligible work is in a phase that is open in its programme (*Phases*: the phase
+   it is in or an earlier one, or, for a stated programme, one whose stated
+   dependencies are met; none in a programme whose record is invalid), and not held, on any repository (a lane serves them all), the
    one whose last entry is oldest. A review that cannot run now (step 3) is
    left out of the pick, so it does not stand in front of every other goal;
    why is said once in `runner.log`. No entry means oldest of all; a tie goes
@@ -1257,7 +1374,25 @@ The next draft is selected by ascending phase, creation instant, then name.
 Compare creation instants chronologically regardless of offset or precision;
 missing dates sort before dated goals, and equal or missing instants tie by name.
 The selected draft must be ready and not held; one waiting on Martin or held holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
-starts, including current records from a predecessor runner. Admission rechecks
+starts, including current records from a predecessor runner. This is the rule
+of a sequential programme.
+
+A stated programme (*Phases*) reads the trigger per phase. A phase offers its
+first draft — by creation instant, then name — when the phase is open, none of
+its goals is in `build`, `review` or `merge` (each is `draft`, `done` or
+`dropped`), and that draft is ready, not held and not decision-claimed. A first
+draft that waits on Martin, is held or is decision-claimed is not bypassed by a
+later draft of its phase: that phase offers none, and holds only itself, so
+another open phase's ready first draft is planned. The programme's next draft
+is the one the lowest phase offering one gives. A goal in another phase,
+building, held or waiting on Martin, does not hold planning; a goal that does
+not parse holds it for the whole programme, and an invalid record offers none.
+At most one plan session runs in a programme at a time, but a build, review or
+mend session on a goal of another phase does not keep it out: the runner tells
+them apart by the session's kind, which it writes into the current record
+(`planSessions`), not by the goal's stage, so a plan session that has moved its
+draft to `build` and has not ended is still the programme's plan session. The
+recheck after admission asks the same. Admission rechecks
 the trigger and the hold before spawning. The plan uses that draft's goal worktrees and branch,
 role `plan`, kind `plan`, MC_GOAL and MC_HEADLESS=1, with existing routing, lane
 and reserved-act rules. Interactive planning checkouts remain separate.

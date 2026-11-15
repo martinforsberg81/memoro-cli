@@ -125,8 +125,11 @@ keeps every one, with its error.
 **P — unused draft goal worktrees.** In layout 2, a registered checkout at
 `programs/<programme>/goals/<goal>/<declared-repo>` may be released automatically
 while its valid `GOAL.json` says `stage: draft` (`plan` before 2026-11-07), or `status: Martin`, or its phase
-is above its programme's lowest unfinished phase (the runner's own `phaseOpen`
-rule), once its goal and checkout have been untouched for 72 hours. A goal with
+is not open in its programme (the runner's own `phaseOpen` rule: above the
+lowest unfinished phase in a sequential programme; waiting for a phase with an
+unfinished goal in one whose record states its phases, reason `phase <n> waits
+for phase <m>[, <m>…] of its programme`; never on an invalid record, which gives
+no ground), once its goal and checkout have been untouched for 72 hours. A goal with
 `status: blocked` keeps its checkout; a goal in a finished stage is not reached. It must be on `goal/<goal>`, have no tracked or untracked
 entry, and no live cwd, open file, or uncertain process evidence in the goal or
 checkout. Its ignored entries may be only the `node_modules/` link the runner

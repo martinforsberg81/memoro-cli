@@ -56,7 +56,8 @@ before it has documents on main, or after all its goals have been archived.
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work that serves a horizon
 and ends. A programme without the file is a programme as above, and nothing
-about it changes. The file has seven keys, in this order, and no other:
+about it changes. The file has seven keys, in this order, and an eighth,
+`phases`, that is optional, and no other:
 
 | key | value |
 |---|---|
@@ -67,6 +68,18 @@ about it changes. The file has seven keys, in this order, and no other:
 | `state` | `open` or `done` |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin` or `manager` |
+| `phases` | optional, last: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+
+`phases` says how the programme's phases run. A record without it is a
+sequential programme: a phase starts when every lower phase is finished. With
+`"order": "stated"` a phase starts when the phases the record says it waits for
+are finished, and one that waits for none starts at once. `create` writes
+`{"order": "stated"}`; `record` writes no `phases`, so a programme under way that
+is given a record stays sequential, and nothing opts one in later. The key's
+form (the phase numbers of `after` are whole numbers from 1, ascending, none
+twice, never the phase itself, no cycle), the rule, what renumbering does to
+it and what is shown are in [mc-goals.md](mc-goals.md#phases). A `phases` of
+another form is a problem, so the record is invalid.
 
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
@@ -80,7 +93,16 @@ either kind, as in [Archiving a programme](#archiving-a-programme).
 mc programs create <programme> --end "…" [--horizon <slug>]
 mc programs record <programme> --end "…" [--horizon <slug>]
 mc programs show <programme> [--json]
+mc programs after <programme> <phase> <phase>… | --none
 ```
+
+`after` states what a phase of a stated programme waits for (the first number
+is the phase that waits) and replaces what it waited for; `--none` removes it.
+It writes only `phases`, through the record's module, refuses a cycle and a
+programme that is not stated or whose record is invalid (exit 1), and a
+malformed call or a caller not allowed (exit 2); the person, the interactive
+Martin role, the manager and the plan role may call it, the last two also
+unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
 `open`, created now), `README.md` from the record page, and empty `goals/`,
@@ -91,7 +113,8 @@ without a record its record and touches nothing else; it refuses a directory
 that is missing or already has a record (exit 1). Both refuse a bad name, a
 blank `--end` or a horizon that is not a slug with exit 2, before any write.
 `show` prints the record (`--json`: `{ "name", "record" }`, where `record` is
-`null` without one) or says the programme has none; a record that does not
+`null` without one; for a stated programme it also prints `phases: stated` and
+a line `phase <n> after phase <m>[, <m>…]` per waiting phase) or says the programme has none; a record that does not
 validate is printed as its problems with exit 1, a programme with no directory
 exits 1, and a word that is not a programme name exits 2.
 
@@ -108,7 +131,7 @@ write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
 hold a `PROGRAMME.json`, valid or not, so a recorded programme is listed (and
 counted as dormant) before its first goal. `--json` adds a `record` key to
 each programme: `null`, `{ horizon, end, state, created, created_by }` or
-`{ problems }`. The text line gains a last cell, `record open · horizon <slug>`
+`{ problems }`, and `phases` inside `record` as the record holds it. The text line gains a last cell, `record open · horizon <slug>`
 (`no horizon` without one) or `record invalid`; a programme without a record
 keeps its seven cells.
 
@@ -213,8 +236,10 @@ See [mc-goals.md](mc-goals.md).
 `goal-verb.md`, included by the role, describes the verbs. The goal carries
 the goal's numbered parts, its documents and its criteria with their checks.
 Stages move forward; `ready` or `blocked` is a separate status. Phases order
-work across the programme: all goals of a lower phase finish or are dropped
-before any goal in a higher phase starts. Build sessions neither rewrite the
+work across the programme: in a sequential programme all goals of a lower phase
+finish or are dropped before any goal in a higher phase starts; in one whose
+record states its phases a phase starts when the phases it is stated to wait
+for have finished, and the others run side by side. Build sessions neither rewrite the
 brief nor invent another unit inside it. How a programme is designed before
 its goals — its README (`canon/tasks/references/programme-readme.md`), the
 decisions put to Martin in one sitting, the cut into phases, and every
