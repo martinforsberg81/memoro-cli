@@ -1,0 +1,3 @@
+section: Changed
+
+- **`mc deploy` says whether the release can be taken back.** For the commits between what is live and the commit it picks, `mc deploy` (and `--dry-run`) says whether the release can be taken back and, if not, which change makes it so — a migration, a Durable Object, binding, container or configuration change, or a declared production act — with the commits that brought it. The reading is memoro's own `scripts/release/reading.mjs`, run from git as the pick has it, so it works from the bare repository `mc deploy` runs in. `--json` carries it as `take_back`, and `deploys.tsv` keeps it in two new columns, `take_back` and `take_back_why`. It never refuses, holds or asks; a reading that cannot be made reads as a release that cannot be taken back.
