@@ -62,11 +62,11 @@ its check, and each worktree's state.
   <option text>`, the status stays, and the session continues with that answer.
   Every unsettled technical call, whatever jev reads or if jev is unavailable,
   logs and continues with the session's recommendation, without changing
-  stage/status. Unresolved product calls reach Martin; a goal-bound product escalation
-  exits 1. `mc decisions` lists answered and
-  session-decided records read-only. A reserved
-  act (`--reserved deploy|production-data|credentials|admin`) and a person's
-  call never go to jev. Interactive Martin may use `mc ask` for a newly
+  stage/status. An unsettled goal-bound `product` call sets the goal `Martin`
+  and exits 1; what the kinds mean is in
+  [asking-martin](../tasks/asking-martin.md). `mc decisions` lists answered and
+  session-decided records read-only. A call with
+  `--reserved deploy|production-data|credentials|admin` never goes to jev. Interactive Martin may use `mc ask` for a newly
   synthesized question after investigating the standards; do not repeat jev for
   the same recorded live question. `mc goal log --status Martin` is refused: use
   `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
@@ -101,7 +101,7 @@ its check, and each worktree's state.
   interactive decision desk. That role investigates it against technical and
   programme design, resolves settled details, records actual decisions
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
-  In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; product choices and reserved acts reach Martin. Continue if jev answers. A product choice must name the missing rule and proposed technical amendment. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
+  In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; what reaches Martin is in [asking-martin](../tasks/asking-martin.md). Continue if jev answers. A `--kind product` ask names the text, what it says and the proposed wording. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
   <key>` in its current stage with exactly what is needed; when jev answers, it
   continues with jev's answer instead of ending.
 - **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages
@@ -137,6 +137,6 @@ The unattended `decision` desk role has Martin's goal mutation authority,
 including backward moves, ready, goal/criterion rewrites and dropping, but
 never administrative done. It logs `by decision`, runs criteria before marking
 them met, and preserves gate, review, publication and merger evidence. The
-interactive Martin role remains refused with `MC_HEADLESS=1`. Headless deploy,
-admin override, production-data and credential hooks still refuse decision;
-these become Swedish briefs rather than acts ([mc-martin.md](../../docs/technical/mc-martin.md)).
+interactive Martin role remains refused with `MC_HEADLESS=1`. The headless
+refusals of reserved acts still hold for decision; what waits on one becomes a
+Swedish brief rather than an act ([mc-martin.md](../../docs/technical/mc-martin.md)).

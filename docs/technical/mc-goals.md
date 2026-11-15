@@ -94,8 +94,9 @@ and the normal review handoff. Record the judged head, frozen base, logs and ran
 The merger measures the combined candidate and reuses the session’s evidence;
 the session’s acceptance remains required because it is what the merger reuses.
 This procedure authorizes no test waiver, budget change, product-scope change,
-admin override or deployment. Only a remaining product/policy choice or reserved
-act goes to Martin; the need for ordinary integration alone does not.
+admin override or deployment. What reaches Martin is what
+[canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md) names; the need
+for ordinary integration alone does not.
 
 ```
 ~/mc/programs/<programme>/goals/<goal>/GOAL.json  the brief, its criteria, its stage and status
@@ -577,7 +578,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. Ordinary sessions cannot move a
   stage backward. A person, interactive `MC_ROLE=martin` or unattended `MC_ROLE=decision` may; the entry names
   the actor (`moved back from merge to review by martin`). The interactive plan session (`MC_ROLE=plan`)
-  makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for an unresolved design choice/reserved act. Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
+  makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for what asking-martin names (an unsettled `--kind product` call, or a reserved act). Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
   criterion met mc/g 2` (`unmetGoalWords`). A build session's move to review is also refused without
@@ -932,8 +933,9 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
   NOT OK items, runs every criterion's check again and records it at the new
   head (*Evidence and heads*), runs `mc gate`, publishes and moves the
   goal to `review`. It changes code within contract, not goal text or product
-  scope, and resolves its own acceptance obstacles; an unresolved design
-  choice or reserved act goes directly to Martin. It runs on the `finish`
+  scope, and resolves its own acceptance obstacles; what
+  [canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md) names goes
+  directly to Martin. It runs on the `finish`
   catalog list. Three such sessions without a word set the goal Martin, the stage stays
   build. `finish` is a name kept for old records: a goal found in `finish · ready`
   is moved to `build · ready` by the runner, with a log entry, before any session starts.
@@ -971,7 +973,7 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
 Both run in the goal's first repository's worktree, a repair build on the finish list
 and mend on the mend list (never the goal's class), with billing like a build, with `MC_GOAL`, `MC_REPO` and
 `MC_WORKAREA` set; their `mc goal stage merge` writes the merge handoff file
-that ends the session and releases its lane. Neither performs Martin's acts:
+that ends the session and releases its lane. Neither performs what is refused to an unattended session:
 deploy, production data, credentials or admin override. The programme turns
 headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
 disabled: their instructions were too poor to use (Martin, 2026-11-07), and

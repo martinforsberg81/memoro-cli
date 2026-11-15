@@ -33,8 +33,7 @@ without a record keeps [the programme page](references/programme-readme.md) and 
    first reading and date, or say what would give a reading. A programme with a record has no aim of
    its own: write what it is for and its end as the record says it, and point to the area pages.
 2. Read affected code, technical standards, programme README and proposals; design claims cite files actually opened.
-3. Resolve questions through [asking-martin](asking-martin.md): technical by the session,
-   product/reserved by Martin. Record decisions in the README or goal, or in the technical standard
+3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal, or in the technical standard
    if it reaches beyond the programme, then in affected goals. Add needed standards within the app's
    direction. No goal is written with a decision still open.
 4. Cut work into goals buildable start to finish by headless sessions. Investigate, measure and design before the cut, not as
@@ -54,6 +53,6 @@ Landed work is in `mc goal list` and `docs/technical/`, not Gap. Archive only wh
 
 ## Faithful scope correction and handoff
 
-Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from product or policy choices only Martin decides. Ask Martin only a remaining product choice or reserved act, with evidence, alternatives/tradeoffs and a recommendation. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
+Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
 
 A runner-assigned plan completes only its selected draft under the same rules; see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.

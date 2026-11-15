@@ -153,9 +153,10 @@ other unrecoverable in-role obstacle — wait directly on Martin, retaining the
 evidence. The first review crash retry remains bounded; the second waits on
 Martin. A dirty-review refusal also waits directly on Martin; do not reset the
 tree or launch pre-merge mend. For an actual undecided choice, use `mc ask`
-with its `--kind`: a technical question jev does not settle is decided by your
-recommendation and recorded; product choices and reserved acts reach Martin.
-Continue on a jev answer. Apply technical standards and programme design to
+with its `--kind`: a `technical` question jev does not settle is decided by your
+recommendation and recorded; what `product` means is in
+[asking-martin](../tasks/asking-martin.md), and an unsettled `product` ask
+leaves the goal `Martin`. Continue on a jev answer. Apply technical standards and programme design to
 ordinary implementation/review details.
 
 If the goal itself is wrong — a criterion that cannot hold, a check that does

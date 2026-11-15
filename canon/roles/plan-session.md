@@ -21,10 +21,9 @@ assigned phase, including goals waiting for an earlier phase. `draft` means its
 brief is unfinished, never a queue for completed planning. Unresolved planning
 prerequisites mean the work is not build-ready: do not hand it to build with a
 ceremonial `LOG.md` hold. Investigate until relevant facts and remaining
-uncertainty are established; distinguish technical questions, which the session
-decides by its recommendation when jev does not settle them, from product or
-policy choices only Martin decides. Ask only the remaining product choice, with
-evidence and a recommendation. Do not infer that deferring consumer
+uncertainty are established; what is left is decided as
+[asking-martin](../tasks/asking-martin.md) says, and only a change to a text
+Martin holds is asked, with evidence and a recommendation. Do not infer that deferring consumer
 features also defers provider, data or DPA prerequisites. When Martin clarifies
 scope, amend the affected README/design, standards, goals and criteria
 consistently; change only what he clarified and preserve other requirements and
@@ -60,8 +59,8 @@ design, technical contracts, goal and log, and the affected code.
 Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
 remaining question through goal-bound `mc ask --kind technical|product`; continue
-on a jev answer. An unsettled technical question is decided by the session's
-recommendation and recorded; only a product choice or reserved act leaves the
+on a jev answer. An unsettled `technical` question is decided by the session's
+recommendation and recorded; an unsettled `product` one leaves the
 draft waiting on Martin. Amend the canonical rule and goal consistently.
 
 Your headless assignment ends after that one draft is ready for build or
@@ -72,25 +71,24 @@ planning checkouts remain separate. Reserved acts retain their headless boundary
 The runner contains an incomplete session that leaves draft ready so it cannot
 launch indefinitely without progress.
 
-Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question. A human decision is framed at design level: establish facts and remaining uncertainty, distinguish what you can resolve from what Martin owns, then bring what is his as the brief `tasks/asking-martin.md` sets. A technical gap within existing direction is resolved by planning and recorded; only an unapproved product/privacy choice or reserved act goes to Martin. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
+Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 
 ## What you own, and what the headless roles own
 
 The goal's text is yours: every part, the criteria and their checks, documents,
 phase, and whether the goal exists at all (`mc goal drop`). A headless delivery
 session never changes it; when one finds a genuine choice, it supplies the kind
-to `mc ask`: jev's answer continues, an unsettled technical question is decided
-and recorded by that session, and only a product choice or reserved act reaches
-Martin. Otherwise it resolves its own acceptance obstacle. If the goal itself is
+to `mc ask`: jev's answer continues, an unsettled `technical` question is decided
+and recorded by that session, and an unsettled `product` one leaves the goal
+`Martin`. Otherwise it resolves its own acceptance obstacle. If the goal itself is
 wrong, the session reports it with `mc goal defect --part "…" --found "…"` (one
 entry, status `Martin`, no options), and the desk or you amend the goal with the
-verbs and set it ready with `mc goal ready`. A product choice is asked only as a
-product choice. A decision kept only in LOG.md is judged against the old text by
+verbs and set it ready with `mc goal ready`. A decision kept only in LOG.md is judged against the old text by
 the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
-  `review`, or records a technical decision, or asks Martin about a product
-  choice or reserved act, or reports a wrong goal with `mc goal defect`. Three
+  `review`, or records a technical decision, or makes a `--kind product` ask
+  or a reserved-act ask, or reports a wrong goal with `mc goal defect`. Three
   build sessions in a row without a commit or a criterion met stop the goal
   (`no progress:`, status `Martin`).
 - A **review session** judges and moves it to `merge` (all OK) or back to
@@ -101,7 +99,7 @@ the next reader.
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.
 - `Martin` waits for him and wakes nothing. Interactive planning reads those goals when it
-  starts: each carries a product question, reserved act or runner issue and a recommendation.
+  starts: each carries an unsettled `--kind product` ask, a reserved act or a runner issue, and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
 over a goal yourself — one in build or one waiting on Martin — hold
@@ -160,10 +158,11 @@ question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>
 [--evidence "…"] [--document <repo>/<path>] [--reserved <act>]`, 2 to 4
 options. jev reads it first; when it prints `mc: jev answered <key> … —
 continue with: <text>`, the goal's status stays and you continue with that
-answer. An unsettled technical question is decided by the session's
-recommendation and recorded; only a product choice or reserved act leaves the
-goal `Martin` with jev's reading. With Martin at the terminal, bring him the
-concrete product question after jev has read it. A failing check, missing instructions,
+answer. An unsettled `technical` question is decided by the session's
+recommendation and recorded; an unsettled `product` one leaves the
+goal `Martin` with jev's reading. With Martin at the terminal, a change to a
+text he holds is left as `tasks/asking-martin.md` says, not put to him as a
+question. A failing check, missing instructions,
 review rejection or check-in alone is not a reason to stop.
 
 Yours without asking:

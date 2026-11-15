@@ -123,7 +123,7 @@ export const COMMAND_USAGE = Object.freeze({
     "A goal has a stage — draft → build → review → merge → done, or dropped — and a status, ready, blocked or Martin. A review that finds it not OK moves it back to build, where a repair build session takes REVIEW.md's NOT OK items.\n",
     "draft was named plan until 2026-11-07: a GOAL.json or LOG.md heading saying plan reads as draft; mc goal convert rewrites the GOAL.json once.\n",
     "The stage only moves forward, but for a review's move from review to build; other backward moves by a session are refused; a person or interactive Martin may move it back, with attribution.\n",
-    "A build session moves build to review or waits directly on Martin for a product choice/reserved act; an unsettled technical question is decided and recorded. Interactive Martin may act at any stage, including backward, with role attribution. A review writes REVIEW.md and moves review to merge (every line OK) or to build (a line NOT OK; the third time it stays in review and sets Martin), or sets Martin;\n",
+    "A build session moves build to review or waits directly on Martin when an unsettled --kind product ask or a reserved act stops it; an unsettled technical question is decided and recorded. Interactive Martin may act at any stage, including backward, with role attribution. A review writes REVIEW.md and moves review to merge (every line OK) or to build (a line NOT OK; the third time it stays in review and sets Martin), or sets Martin;\n",
     "a repair build is a build session and ends as one; merge-only mend resolves and requeues merge, and moves no stage; the interactive plan session any stage forward.\n",
     "The runner starts a build session on build · ready, a review on review · ready, and a goal mend session only on merge failures; queued main reds run goal-less mend on their own branch, never create a goal; legacy pre-merge blocked goals are reconciled to Martin without launching; a draft may receive next-draft planning under the programme trigger; never on Martin.\n",
     "--reason supplies the entry's comment. mc decisions [--since <date>] [--programme <programme>] [--json] reports answered and session-decided jev ledger rows, newest first, read-only.\n",
@@ -138,7 +138,7 @@ export const COMMAND_USAGE = Object.freeze({
   ].join(''),
   ask: [
     'usage — mc ask [<programme>/<goal>] --kind technical|product --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <path>]… [--reserved <act>]\n',
-    'Session callers require --kind technical|product. Every unresolved technical call is decided by its recommendation, whatever jev reads; product choices and reserved acts reach Martin.\n',
+    'Session callers require --kind technical|product. Every unresolved technical call is decided by its recommendation, whatever jev reads; an unsettled product ask and a reserved act go to the desk.\n',
     'Without a goal, asks jev and prints its reading (the jev ledger records it); uses MC_PROGRAMME or the programme containing the working directory.\n',
   ].join(''),
   decisions: [
