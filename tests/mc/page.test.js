@@ -13,12 +13,14 @@ import { describe, it } from 'node:test';
 import { parseRuns } from '../../src/mc/brief-collect.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { mcHome } from '../../src/mc/paths.js';
+import { horizonsDir } from '../../src/mc/desk-horizons.js';
+import { newRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
-import { recordStart } from '../../src/mc/deploys.js';
+import { recordEnd, recordStart } from '../../src/mc/deploys.js';
 import {
-  attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
+  attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, horizonsSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
 } from '../../src/mc/page-collect.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
@@ -479,6 +481,31 @@ describe('DEPLOY', () => {
     assert.doesNotMatch(strip(line()), /martin@laptop/u);
   });
 
+  it('says on the RECORDED line what the check after the deploy found, in the words mc deploy and the digest use', () => {
+    const at = '2026-08-29T10:40:00Z';
+    const cases = [
+      [{ check: 'green', check_at: at, check_why: '' }, {}, /RECORDED + 1a2b3c4 · deployed 2 h ago · checked green$/u],
+      [{ check: 'red', check_at: at, check_why: 'suites: api (exit 1) red' }, {}, /RECORDED + 1a2b3c4 · deployed 2 h ago · check red: suites: api \(exit 1\) red$/u],
+      [{ check: 'could-not-run', check_at: at, check_why: 'version: production is at b3e65b6' }, {}, /· check could not run: version: production is at b3e65b6$/u],
+      [{}, { checking: { started: DEPLOYED.started } }, /· checking$/u],
+      [{}, {}, /· not checked$/u],
+    ];
+    for (const [cells, over, expected] of cases) {
+      const deploy = { ...DEPLOYED, ...cells };
+      const p = section({ deploy, attempt: deploy, ...over });
+      assert.equal(p.check, cells.check || '');
+      assert.equal(p.check_why, cells.check_why || '');
+      const recorded = strip(line({ deploy, attempt: deploy, ...over })).split('\n').map((row) => row.replace(/[│ ]+$/u, '').replace(/^[│ ]+/u, '')).find((row) => /^RECORDED/u.test(row));
+      assert.match(recorded, expected);
+    }
+    // A red is yellow-red on that line and nothing else on the page changes: no mismatch, no failure frame.
+    const red = line({ deploy: { ...DEPLOYED, check: 'red', check_why: 'database: down' }, attempt: { ...DEPLOYED, check: 'red', check_why: 'database: down' } });
+    assert.match(rowWith(red.split('\n'), 'check red'), /\x1b\[31m/u);
+    assert.doesNotMatch(strip(red), /ATTEMPT|version mismatch/u);
+    // A check in flight belongs to the deploy it is checking, not to a later one.
+    assert.equal(section({ checking: { started: '2026-08-28T00:00:00Z' } }).checking, false);
+  });
+
   it('removes successful deploy frames and shows pids only for a live attempt', () => {
     const done = { ...DEPLOYED, pid: '84970' };
     const text = strip(line({ deploy: done, attempt: done }));
@@ -784,6 +811,37 @@ describe('collectPage — a deploy preparation and a round that lost its process
       assert.match(text, /said 40s ago/u);
       assert.match(text, /interrupted gate round · memoro check/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('collectPage — the check after a deploy', () => {
+  const SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+  const started = '2026-08-29T09:40:00.000Z';
+  async function collectWith({ cells = {}, pid = null, alive = () => false } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-check-'));
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    try {
+      mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+      const key = recordStart({ sha: SHA, started, pid: 1 }, env);
+      recordEnd(key, { outcome: 'deployed', ended: '2026-08-29T10:00:00.000Z', build: '813', live_commit: SHA, live_build: '813', ...cells }, env);
+      if (pid) writeFileSync(join(root, 'runner', 'deploy-check.json'), JSON.stringify({ from: started, attempt: { key, pid, started_at: started, deadline: 1 } }));
+      const data = await collectPage({
+        claudeSettings: () => null, env, now: NOW, repos: [], offline: true,
+        exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+        checkout: null, alive,
+        cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }), savePrs: () => {} },
+      });
+      return strip(renderPage(data, { columns: 140, now: NOW }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+
+  it('reads the verdict from deploys.tsv and the attempt in flight from its state file', async () => {
+    assert.match(await collectWith({ cells: { check: 'green', check_at: '2026-08-29T10:40:00.000Z' } }), /RECORDED +1a2b3c4 · deployed .* · checked green/u);
+    assert.match(await collectWith({ cells: { check: 'red', check_at: '2026-08-29T10:40:00.000Z', check_why: 'errors: 1 new' } }), /check red: errors: 1 new/u);
+    assert.match(await collectWith({ cells: { check: 'could-not-run', check_at: '2026-08-29T10:40:00.000Z', check_why: 'the check passed its deadline (pid 7)' } }), /check could not run: the check passed its deadline/u);
+    assert.match(await collectWith({}), /RECORDED +1a2b3c4 · deployed .* · not checked/u);
+    assert.match(await collectWith({ pid: 4242, alive: (pid) => pid === 4242 }), /RECORDED +1a2b3c4 · deployed .* · checking/u);
+    assert.match(await collectWith({ pid: 4242, alive: () => false }), /· not checked/u, 'a dead attempt is not "checking"');
   });
 });
 
@@ -1711,6 +1769,95 @@ describe('the page', () => {
     }
   });
 
+  /**
+   * A programme's view lives in run()'s closure beside `expand`, because the live loop draws through it, and what the
+   * prompt resolves is the page the last frame drew. Here a "frame" is a call of run()'s own `page`, which the reader is
+   * handed (a test's reader may be a function of it); the collect is injected.
+   */
+  describe('a programme view and the numbers, across live frames', () => {
+    const horizonRoot = () => mkdtempSync(join(tmpdir(), 'mc-page-view-'));
+    const dataWith = (rows, root) => {
+      const programmes = programmesSection({ goalRows: rows });
+      horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } });
+      return { ...pageData({ programmes }), horizons: horizonsSection({ programmes, env: { MC_WORK_ROOT: root, MC_HOME: root } }) };
+    };
+    const FIRST = [goalRow('mc-ui', 'mc'), goalRow('docx-editor', 'docx-editing-surface')];
+    const SECOND = [goalRow('new-goal', 'aaa-new'), ...FIRST];
+    const numberOf = (data, name) => data.programmes.programmes.find((group) => group.programme === name).number;
+
+    /** Run the page with `steps`: each is called with `{ page }` and returns the answer to give (a promise is awaited). */
+    async function drive(collect, steps) {
+      const frames = [];
+      const queue = [...steps];
+      const code = await page([], {
+        collect, stdout: { columns: 120, write: () => {} }, stderr: { write: () => {} }, env: {}, interactive: () => true,
+        reader: ({ page: frame }) => ({
+          ask: async () => { const step = queue.shift(); return step ? step({ frame, frames }) : null; },
+          show: (lines) => frames.push(lines.join('\n')),
+        }),
+        checkAndPrintFreshInstall: async () => {},
+      });
+      return { code, frames };
+    }
+
+    it('keeps the programme open through a live frame, and h goes home', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const data = dataWith(FIRST, root);
+      const live = [];
+      const { code, frames } = await drive(async () => data, [
+        () => String(numberOf(data, 'mc')),
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'a'; },
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'h'; },
+        async ({ frame }) => { live.push((await frame()).lines.join('\n')); return 'q'; },
+      ]);
+      assert.equal(code, 0);
+      assert.match(frames[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'));
+      assert.doesNotMatch(frames[0], /HORIZONS/u);
+      assert.match(live[0], new RegExp(`┌─ ${numberOf(data, 'mc')} mc`, 'u'), 'a live frame keeps the programme open');
+      assert.doesNotMatch(live[0], /HORIZONS/u);
+      // `a` in the programme view expands that block; the frame after it keeps both.
+      assert.match(frames[1], /mc-ui · /u);
+      assert.match(live[1], /mc-ui · /u);
+      assert.match(frames[2], /HORIZONS/u, 'h is the overview again');
+      assert.match(live[2], /HORIZONS/u, 'and a live frame keeps it');
+    });
+
+    it('opens by the numbers of the frame on the screen after a frame added a goal', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const first = dataWith(FIRST, root);
+      const second = dataWith(SECOND, root);
+      let now = first;
+      const { frames } = await drive(async () => now, [
+        async ({ frame }) => { now = second; await frame(); return String(numberOf(second, 'aaa-new')); },
+        () => 'q',
+      ]);
+      // A number that named `mc` a frame ago is `aaa-new`'s now, and the prompt goes by the frame on the screen.
+      assert.notEqual(numberOf(first, 'mc'), numberOf(second, 'mc'));
+      assert.match(frames[0], new RegExp(`┌─ ${numberOf(second, 'aaa-new')} aaa-new`, 'u'));
+    });
+
+    it('does not let a collect that started before a redraw, and finished after it, replace the redraw\'s data', async (t) => {
+      const root = horizonRoot();
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      const older = dataWith(FIRST, root);
+      const newer = dataWith(SECOND, root);
+      let release;
+      const slow = new Promise((resolve) => { release = resolve; });
+      const calls = [async () => older, () => slow, async () => newer, async () => newer]; // start, the live frame, `r`, then the redraw that opens a programme
+      let slowFrame;
+      const { frames } = await drive(() => calls.shift()(), [
+        // A live frame starts collecting, and before it is back the menu redraws on newer data.
+        ({ frame }) => { slowFrame = frame(); return 'r'; },
+        async () => { release(older); await slowFrame; return String(numberOf(newer, 'aaa-new')); },
+        () => 'q',
+      ]);
+      assert.equal(frames.length, 2);
+      assert.match(frames[1], new RegExp(`┌─ ${numberOf(newer, 'aaa-new')} aaa-new`, 'u'), 'the older collect did not replace the newer numbers');
+    });
+  });
+
   it('the menu writes priority through mc model and redraws the effective setting', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-page-priority-'));
     try {
@@ -2019,6 +2166,246 @@ describe('collectPage', () => {
     return root;
   }
 
+  /**
+   * The horizons the overview reads: real horizon records and real PROGRAMME.json records under a fixture home,
+   * collected by `collectPage` with no network. `plan` is the plan-branch pull requests the cache holds.
+   */
+  function horizonsFixture({ plan = [] } = {}) {
+    const root = workRootFixture();
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    const horizon = (slug, state, position, extra = {}) => {
+      mkdirSync(join(horizonsDir(env), slug), { recursive: true });
+      writeFileSync(join(horizonsDir(env), slug, 'horizon.json'), JSON.stringify({
+        schema: 'mc-desk-horizon', version: 1, slug, title: `Title of ${slug}`, state, position,
+        set_at: '2026-11-14T10:00:00.000Z', set_by: 'martin', ...extra,
+      }));
+    };
+    const record = (name, horizonSlug) => {
+      mkdirSync(join(programsHome(env), name), { recursive: true });
+      writeRecord(join(programsHome(env), name), newRecord({ horizon: horizonSlug, end: 'it is over', createdBy: 'person', now: NOW }));
+    };
+    const collect = (over = {}) => collectPage({
+      claudeSettings: () => null, env, now: NOW, repos: [], offline: true, checkout: null,
+      exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+      cache: { loadPrs: () => ({ prs: plan.map((name, i) => ({ repo: 'memoro', number: 9000 + i, headRefName: `plan/${name}`, title: `Plan: ${name}`, updatedAt: '2026-08-29T11:00:00Z' })), fetched: '2026-08-29T11:00:00Z', age_seconds: 60 }), savePrs: () => {} },
+      ...over,
+    });
+    return { root, env, horizon, record, collect };
+  }
+
+  it('numbers the programmes after the goals and reads the horizon each record names, with its state', async (t) => {
+    const fx = horizonsFixture({ plan: ['plan-only'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('second', 'open', 2);
+    fx.horizon('first', 'open', 1);
+    fx.horizon('done-one', 'reached', null, { reached_at: '2026-11-14T11:00:00.000Z' });
+    fx.horizon('gone', 'dropped', null, { dropped_at: '2026-11-14T11:00:00.000Z' });
+    mkdirSync(join(horizonsDir(fx.env), 'broken'), { recursive: true });
+    writeFileSync(join(horizonsDir(fx.env), 'broken', 'horizon.json'), '{ not json');
+    fx.record('p-second', 'second');
+    fx.record('p-first', 'first');
+    fx.record('p-reached', 'done-one');
+    fx.record('p-dropped', 'gone');
+    fx.record('p-unheld', 'ghost');
+    fx.record('p-none', null);
+    mkdirSync(join(programsHome(fx.env), 'p-invalid'), { recursive: true });
+    writeFileSync(join(programsHome(fx.env), 'p-invalid', 'PROGRAMME.json'), '{ "schema": "nope" }');
+    const data = await fx.collect();
+    const groups = data.programmes.programmes;
+    const by = Object.fromEntries(groups.map((group) => [group.programme, group]));
+
+    // Goal numbers are the goals'; programmes follow, in name order, one each, plan-PR-only programme included.
+    assert.deepEqual(groups.map((group) => group.programme), [...groups.map((group) => group.programme)].sort());
+    assert.deepEqual(groups.map((group) => group.number), groups.map((_, i) => data.programmes.count + 1 + i));
+    assert.deepEqual(data.programmes.programmes.flatMap((group) => group.goals).map((goal) => goal.number), [1], 'the goals keep 1..N');
+    assert.ok(by['plan-only'], 'a programme only a plan pull request names is a group');
+    assert.equal(by['plan-only'].prs.length, 1);
+    assert.equal(by['plan-only'].number > data.programmes.count, true);
+
+    assert.deepEqual(Object.fromEntries(groups.map((group) => [group.programme, [group.horizon, group.horizon_state]])), {
+      mc: [null, null],
+      'p-dropped': ['gone', 'dropped'],
+      'p-first': ['first', 'open'],
+      'p-invalid': [null, null],
+      'p-none': [null, null],
+      'p-reached': ['done-one', 'reached'],
+      'p-second': ['second', 'open'],
+      'p-unheld': ['ghost', 'not held'],
+      'plan-only': [null, null],
+    });
+    assert.equal(by['p-invalid'].record_invalid, true);
+
+    // The open horizons in the desk's order (position 1 before 2), the programmes naming each; every other programme under none.
+    assert.deepEqual(data.horizons.open.map((item) => [item.slug, item.position, item.programmes]), [
+      ['first', 1, ['p-first']], ['second', 2, ['p-second']],
+    ]);
+    assert.deepEqual(data.horizons.none, ['mc', 'p-dropped', 'p-invalid', 'p-none', 'p-reached', 'p-unheld', 'plan-only']);
+    assert.deepEqual(data.horizons.unreadable, ['broken']);
+    assert.equal(data.horizons.error, null);
+  });
+
+  /** The overview's facts, collected from real records: two open horizons, one with a programme at work, one without. */
+  async function overviewData(t) {
+    const fx = horizonsFixture({ plan: ['plan-only', 'p-unheld'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('second', 'open', 2);
+    fx.horizon('first', 'open', 1);
+    mkdirSync(join(horizonsDir(fx.env), 'broken'), { recursive: true });
+    writeFileSync(join(horizonsDir(fx.env), 'broken', 'horizon.json'), '{ not json');
+    fx.record('mc', 'first');
+    fx.record('p-second', 'second');
+    fx.record('p-unheld', 'ghost');
+    fx.record('p-none', null);
+    return fx.collect();
+  }
+  const between = (lines, from, to) => {
+    const start = lines.findIndex((line) => line.includes(from));
+    const end = lines.findIndex((line, i) => i > start && line.includes(to));
+    return lines.slice(start, end);
+  };
+
+  it('draws HORIZONS in the default view, below the desk, with no goal row and no phase', async (t) => {
+    const data = await overviewData(t);
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW });
+      const text = lines.join('\n');
+      assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
+      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'the desk is above HORIZONS');
+      assert.doesNotMatch(text, /PROGRAMMES/u);
+      assert.doesNotMatch(text, /Phase \d|The page|stage build · status/u, 'no phase and no goal row in the overview');
+      const section = between(lines, 'HORIZONS', 'UNASSIGNED ACTIVITY').map((row) => row.trimEnd());
+      assert.match(section[0], /^ {2}HORIZONS {2}2 open horizons · 3 programmes under way$/u);
+      // The horizons in the desk's order, then the programme under the one it names, with its number.
+      assert.match(section[1], /^ {2}1 horizon record cannot be read: broken$/u);
+      assert.match(section[2], /^ {2}1 {2}Title of first {2}first$/u);
+      assert.match(section[3], /^ {4} ?2 mc +(phase 1 of 1 · )?1 build/u);
+      assert.match(section[4], /^ {2}2 {2}Title of second {2}second$/u);
+      assert.match(section[5], /^ {4}nothing under way$/u);
+      assert.equal(section[6], '  Serving no horizon');
+      // A programme only a plan pull request names has something under way, and is not folded.
+      assert.ok(section.some((row) => /^ {4} ?\d+ plan-only +1 PR/u.test(row)), section.join('\n'));
+      const unheld = section.find((row) => /p-unheld/u.test(row));
+      assert.match(unheld, /ghost \(not held\)/u);
+      assert.ok(!section.some((row) => /p-none|p-second/u.test(row)), 'nothing under way is folded, not drawn');
+      assert.ok(section.includes('  ▸ 2 with nothing under way'), section.join('\n'));
+      assert.match(text, /1 horizon record cannot be read: broken/u);
+    }
+  });
+
+  it("a programme's row carries its sessions, ⚑ ⊘ ! flags, record invalid, done and priority at 160 and 80", async (t) => {
+    const data = await overviewData(t);
+    const group = data.programmes.programmes.find((item) => item.programme === 'mc');
+    const [base] = group.goals;
+    const goal = (name, extra) => ({ ...base, name, title: name, prs: [], running: false, ...extra });
+    const waiting = goal('waits', { status: 'Martin' });
+    const blocked = goal('stuck', { status: 'blocked' });
+    const done = goal('over', { stage: 'done', status: 'done', phase: 3 });
+    const broken = goal('malformed', { problems: ['GOAL.json does not parse'], phase: null });
+    group.goals = [...group.goals, waiting, blocked, done, broken];
+    group.phases = [
+      { ...group.phases[0], goals: [...group.phases[0].goals, waiting, blocked] },
+      { number: 3, goals: [done] },
+      { number: null, goals: [broken] },
+    ];
+    group.finished = 1;
+    group.priority = 5;
+    group.record_invalid = true;
+    group.planning_sessions = [{ kind: 'plan', name: 'plan:mc' }];
+    const runner = Array.from({ length: 10 }, (_, i) => ({ kind: 'build', goal: `mc/waits-${i}` }));
+    const page = { ...data, runner: { ...data.runner, sessions: runner } };
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(page, { columns, now: NOW });
+      assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
+      const row = between(lines, 'HORIZONS', 'UNASSIGNED ACTIVITY').find((line) => /^ {4} ?\d+ mc /u.test(line));
+      assert.ok(row, lines.join('\n'));
+      assert.match(row, /3 build/u, `${columns}: the unfinished goals by stage`);
+      assert.match(row, /record invalid/u, `${columns}: ${row}`);
+      assert.match(row, /●×10 ●/u, `${columns}: ten runner sessions and the plan session are marked`);
+      assert.match(row, /⚑1 ⊘1 !1$/u, `${columns}: the goal waiting on Martin, the blocked one and the malformed one`);
+      if (columns === 160) assert.match(row, /phase 1 of 3 · 3 build · 1 done · priority 5 · record invalid/u, row);
+    }
+  });
+
+  it('draws one programme alone: the desk, then its block with its number, and nothing below', async (t) => {
+    const data = await overviewData(t);
+    const number = data.programmes.programmes.find((group) => group.programme === 'mc').number;
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      const text = lines.join('\n');
+      assert.ok(lines.every((row) => width(row) <= columns));
+      assert.ok(text.includes('┌─ DESK'), 'everything above PROGRAMMES stays');
+      assert.doesNotMatch(text, /HORIZONS|Serving no horizon|UNASSIGNED ACTIVITY|MERGE & DEPLOY|MAINTENANCE|SYSTEM/u);
+      const heading = lines.findIndex((row) => row.startsWith(`  ┌─ ${number} mc`));
+      assert.ok(heading > lines.findIndex((row) => row.includes('┌─ DESK')), lines.join('\n'));
+      assert.match(lines[heading + 1], /^ {4}Phase 1$/u);
+      assert.match(lines[heading + 2], /^ {6} ?1 The page$/u);
+      assert.match(lines.at(-1), /^ {2}└─+┘$/u, 'the block closes the page');
+      // `a` expands the block, as it does in PROGRAMMES.
+      const wide = renderPageLines(data, { columns, now: NOW, view: 'mc', expand: true }).join('\n');
+      assert.ok(wide.length > text.length);
+      assert.match(wide, /mc-ui · memoro-cli|mc-ui · /u);
+    }
+    // A name the data no longer lists is the overview again.
+    assert.match(renderPageLines(data, { columns: 100, now: NOW, view: 'gone' }).join('\n'), /HORIZONS/u);
+  });
+
+  it('a unfolds every programme as a row under its horizon and draws PROGRAMMES as it always was, numbered nowhere', async (t) => {
+    const data = await overviewData(t);
+    const without = { ...data, horizons: undefined };
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, expand: true });
+      assert.ok(lines.every((row) => width(row) <= columns));
+      const programmes = between(lines, 'PROGRAMMES', 'MERGE & DEPLOY');
+      const before = between(renderPageLines(without, { columns, now: NOW, expand: true }), 'PROGRAMMES', 'MERGE & DEPLOY');
+      assert.ok(programmes.length > 3);
+      assert.deepEqual(programmes, before, 'the PROGRAMMES lines are the ones the page drew before HORIZONS');
+      assert.ok(programmes.some((row) => /^ {2}┌─ mc · 1 goal/u.test(row)), 'the heading carries no number');
+      assert.ok(programmes.some((row) => /┌─ plan-only · 0 goals/u.test(row)));
+      const section = between(lines, 'HORIZONS', 'PROGRAMMES');
+      assert.ok(section.some((row) => /p-second/u.test(row)) && section.some((row) => /p-none/u.test(row)), 'every programme is a row when unfolded');
+      assert.ok(!section.some((row) => /with nothing under way/u.test(row)), 'no folded row when unfolded');
+    }
+  });
+
+  it('says a horizon store that cannot be listed in red under HORIZONS', () => {
+    const data = { ...DATA, horizons: { open: [], none: [], unreadable: [], error: 'ENOTDIR: not a directory' } };
+    const lines = renderPageLines(data, { columns: 100, now: NOW, colour: true });
+    const row = lines.find((line) => line.includes('horizons unreadable'));
+    assert.ok(row.includes('\u001b[31m'), row);
+  });
+
+  it('says a horizon store that cannot be listed in horizons.error, and still numbers the programmes', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.record('p-one', 'first');
+    // The store path is a file: it exists and cannot be listed.
+    mkdirSync(dirname(horizonsDir(fx.env)), { recursive: true });
+    writeFileSync(horizonsDir(fx.env), 'not a directory');
+    const data = await fx.collect();
+    assert.equal(typeof data.horizons.error, 'string');
+    assert.ok(data.horizons.error.length > 0);
+    assert.deepEqual(data.horizons.open, []);
+    assert.deepEqual(data.horizons.none, data.programmes.programmes.map((group) => group.programme));
+    assert.ok(data.programmes.programmes.every((group) => Number.isInteger(group.number)));
+    assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'not held');
+    const lines = renderPageLines(data, { columns: 100, now: NOW });
+    assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
+  });
+
+  it('a page with no horizon store has no error and nothing open, and the json keeps every key it had', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    const data = await fx.collect();
+    assert.deepEqual(data.horizons, { open: [], none: data.programmes.programmes.map((group) => group.programme), unreadable: [], error: null });
+    // Every top-level key `mc --json` had on origin/main is still there, and `horizons` is the one that is new.
+    const had = ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes'];
+    for (const key of had) assert.ok(key in data, key);
+    assert.ok('horizons' in data);
+    assert.deepEqual(Object.keys(data.horizons), ['open', 'none', 'unreadable', 'error']);
+    const group = data.programmes.programmes.find((item) => item.programme === 'mc');
+    for (const key of ['programme', 'priority', 'dormant', 'finished', 'goals', 'phases', 'current_phase', 'proposals', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses']) assert.ok(key in group, key);
+  });
+
   it('collects current disk state and retry times at the page observation clock', async (t) => {
     const root = workRootFixture();
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -2216,7 +2603,7 @@ describe('collectPage', () => {
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW }), /HORIZONS/u);
   });
 
   it('collects repository pauses, merger liveness and landed PR history from the supplied homes', async (t) => {
@@ -2932,7 +3319,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
   });
 
   describe('drawn', () => {
-    const base = { ...DATA };
+    const base = { ...DATA, horizons: { open: [], none: [], unreadable: [], error: null } };
     const waiting = (over = {}) => ({
       since: LAST, last_opened: LAST, waiting: 3, error: null,
       texts: [
@@ -2955,7 +3342,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
       const lines = draw(waiting(), 100);
       const text = lines.join('\n');
       assert.ok(text.indexOf('┌─ DESK') > text.indexOf('MC'), 'under the header');
-      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('PROGRAMMES'), 'above PROGRAMMES');
+      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'above HORIZONS');
       assert.match(text, /┌─ DESK ─+ d {2}mc martin ┐/u);
       assert.match(text, /^ {4}3 waiting for you$/mu);
       assert.match(text, /d {2}mc martin/u);

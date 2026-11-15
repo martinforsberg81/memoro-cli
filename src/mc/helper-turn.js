@@ -17,9 +17,9 @@
  * after round until nothing is left. `mc run` and `mc helper --intake` both go
  * through it, so there is one drain and one archive rather than two.
  *
- * The bare `mc helper` is the other half of the verb and is not here: it is a
- * session with Martin in it, taking his own reports (`commands/helper.js`).
- * Both write into the same `proposals/`, and neither reads the other.
+ * The verb has no other half: `~/mc/helper/` holds the retired desk's old
+ * conversations, and the desk is `mc martin` (`commands/helper.js`).
+ * The turn writes into `proposals/`, where the owning programme's plan session reads it.
  *
  * The file is **named**, not inlined. Everything else the turn judges against
  * is in the prompt — the project log, every plan on main with the step it is
@@ -58,15 +58,15 @@ import { programsHome } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
-import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
+import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, sessionFinished, TIMEOUT_EXIT } from './run-plan.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 
 /** One turn over one file. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
 
 /**
- * The role this turn wears. It is `intake`, not `helper`: `helper` is the
- * session Martin sits in, and one name for two different jobs is how a role
- * file ends up trying to be both.
+ * The role this turn wears. It is `intake`; the turn's live record keeps the
+ * verb `helper`, which the page's intake panel reads.
  */
 export const INTAKE_ROLE = 'intake';
 
@@ -363,12 +363,13 @@ export async function runHelperTurn({
     release();
   }
   const read = readSessionOutput({
-    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
+    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now, model: selectedModel,
   });
+  refusePlanOnRead({ read, launch, billing: billing.billing, env, now, say: deps.say });
   const after = listAll(env);
   const wrote = after.filter((p) => !before.has(p.path));
   return {
-    ok: result.status === 0 && !result.timedOut,
+    ok: sessionFinished(result, read),
     status: result.status,
     note: read.note,
     quota: read.quota,
@@ -381,6 +382,7 @@ export async function runHelperTurn({
     output: read.output,
     cacheRead: read.cacheRead,
     cacheWrite: read.cacheWrite,
+    cost: read.cost,
     stdout: result.stdout,
     stderr: result.stderr,
     model: selectedModel,

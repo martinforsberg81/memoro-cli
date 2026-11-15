@@ -10,6 +10,7 @@ import { descriptor, sessionDescriptor, ENTRANCES } from '../server-protocol.js'
 import { pidAlive } from '../status-collect.js';
 import { chooseProgramme } from './plan.js';
 import { requireCapability } from '../../adapters/index.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 
 export const usage = () => 'usage — mc session version|list|start|join <entrance> [--json]\nInternal server protocol; use mc server on the client.\n';
 export const ROUTES = Object.fromEntries(['version', 'list', 'start', 'join'].map(key => [key, { booleans: ['--json'], check: () => null }]));
@@ -74,6 +75,8 @@ export async function run(argv, {
       const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture, host: request.host };
       const mechanics = launch => {
         const provider = launch.id;
+        const notInteractive = interactiveToolRefusal(provider);
+        if (notInteractive) throw new Error(notInteractive);
         const wire = requireCapability(provider, 'SERVER_SESSION');
         const driverOf = requireCapability(provider, 'PERSISTENT_DRIVER');
         const measured = run(launch.spec.bin, ['--version'], { encoding: 'utf8', env });

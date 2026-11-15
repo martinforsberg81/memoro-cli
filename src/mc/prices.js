@@ -32,7 +32,24 @@ export const CACHE_READ_FACTOR = 0.1;
  */
 export const OPENAI_PRICES_DATED = '2026-11-09';
 
+/**
+ * Google's Gemini API standard (paid, not Batch/Flex/Priority) list prices, as
+ * published on ai.google.dev/gemini-api/docs/pricing (now aistudio.google.com/docs/pricing),
+ * read 2026-11-15. Output is priced "including thinking tokens". `cacheRead`
+ * is the listed implicit-cache read price, and `input` is the uncached input
+ * (agy reports it so), so these rows carry no `inputIncludesCached`. A slug's
+ * level suffix (`gemini-4-argon-high`) prices as its base model by the prefix
+ * match below. Carbon and Argon list $4 input, $20 output and $0.20 cache read
+ * from 2026-12-01; the rows hold the prices in effect on the date above. The
+ * page shows no long-context tier for Gemini 4. A model Google does not list
+ * here costs null.
+ */
+export const GEMINI_PRICES_DATED = '2026-11-15';
+
 export const PRICES = Object.freeze({
+  'gemini-4-carbon': { input: 2, output: 10, cacheRead: 0.1 },
+  'gemini-4-argon': { input: 2, output: 10, cacheRead: 0.1 },
+  'gemini-4-hydrogen': { input: 1.5, output: 7.5, cacheRead: 0.075 },
   'gpt-6-astra': { input: 10, output: 50, cachedInput: 1, inputIncludesCached: true },
   'gpt-6.1-sol': { input: 2, output: 10, cachedInput: 0.1, inputIncludesCached: true },
   'gpt-6.1-terra': { input: 1, output: 5, cachedInput: 0.05, inputIncludesCached: true },

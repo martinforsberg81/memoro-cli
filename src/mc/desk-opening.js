@@ -19,6 +19,8 @@ import { readRunRows } from './landed.js';
 import { horizonsOpening } from './desk-horizons.js';
 import { isTextSort } from './desk-texts.js';
 import { buildChanges, listLessons } from './desk-lessons.js';
+import { proposalsDir } from './helper-collect.js';
+import { programmeRoutes } from './helper-turn.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 const PASSES = ['desk-prepare', 'decision', 'learning', 'ask-reader'];
@@ -216,6 +218,19 @@ function ledgerRows({ env, read }) {
   return out;
 }
 
+/**
+ * What the desk needs to place a thing that answers no item: today's date (UTC, from `now`), the proposal file name's
+ * shape, the two destinations as absolute paths and the programmes with their one line each. Read from the same
+ * `programmeRoutes` the intake turn routes by, so no second reader of the programmes' READMEs exists.
+ */
+export function buildPlacing({ env = process.env, home = programsHome(env), now = new Date() } = {}) {
+  const date = now.toISOString().slice(0, 10);
+  return {
+    date, file_name: `${date}-<mc|memoro>-<slug>.md`, programs_path: home, proposals_path: proposalsDir(env),
+    programmes: programmeRoutes(env).map(({ name, line }) => ({ name, line })),
+  };
+}
+
 /** The opening as data. Reads only; `last` is the previous opening's time, or null. */
 export function buildOpening({ env = process.env, home = programsHome(env), now = new Date(), last = null, read = readDeskText } = {}) {
   const since = openingSince({ env, last });
@@ -232,5 +247,6 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
     cost: costReading({ env, now, read }),
     ...(horizonData ? { horizons: horizonData } : {}),
     changes: buildChanges({ lessons: listLessons({ env }), items, goals: goalReferences({ home }), since, now }),
+    placing: buildPlacing({ env, home, now }),
   };
 }

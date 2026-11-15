@@ -225,7 +225,7 @@ describe('the text every role session shares', () => {
   });
 
   it('reaches every canon role that has a body of its own', () => {
-    for (const name of ['manager', 'helper', 'intake', ...STARTS]) {
+    for (const name of ['manager', 'intake', ...STARTS]) {
       const role = readCanonRole(name);
       assert.ok(role?.overlay, `${name} has no overlay`);
       assert.match(instructionsFor('claude-code', role.overlay), TURN_COST, name);
@@ -329,8 +329,8 @@ describe('reserved names', () => {
     assert.equal(reservedRoleName('worker-1'), false);
     assert.equal(reservedRoleName('pm'), false);
     assert.equal(reservedRoleName('pm-helper'), false);
-    // The bare verb owns `~/mc/helper/`, so that is the command to name.
-    assert.match(reservedRoleHint('helper'), /mc helper\)/u);
+    // The eye keeps the name; its intake flag is the command to name.
+    assert.match(reservedRoleHint('helper'), /mc helper --intake\)/u);
     assert.match(reservedRoleHint('martin'), /mc martin\)/u);
   });
 
@@ -338,7 +338,7 @@ describe('reserved names', () => {
     for (const name of ['Helper', 'HELPER']) {
       assert.equal(reservedRoleName(name), true, name);
     }
-    assert.match(reservedRoleHint('HELPER'), /mc helper\)/u);
+    assert.match(reservedRoleHint('HELPER'), /mc helper --intake\)/u);
   });
 });
 
@@ -352,7 +352,7 @@ describe('the role catalogue', () => {
   // went with the finish stage (2026-11-15): a rejected goal returns to build.
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'helper.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });

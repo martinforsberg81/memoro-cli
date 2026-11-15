@@ -46,7 +46,7 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan, mc helper, mc martin open interactive sessions;
+  Person: mc plan and mc martin open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc goal new / set / criterion add writes goals; mc goal log
@@ -57,10 +57,13 @@ WHO USES THE VERBS
 
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
-                                    you, what waits in intake, and every
-                                    goal numbered, by programme. At a
-                                    terminal it ends in a way in — a number
-                                    shows that goal. No model; reads only
+                                    you, what waits in intake, and the open
+                                    horizons with one numbered row per
+                                    programme. At a terminal it ends in a
+                                    way in — a number shows that goal or
+                                    opens that programme (h returns), a
+                                    name opens it, a unfolds every goal.
+                                    No model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
@@ -161,7 +164,7 @@ WHAT IS NOT HERE
   share only the name: dev servers, and dependency updates.
 
   Nor is a session of nobody's. Every session belongs to a programme (plan,
-  build, review) or a desk (manager, helper, Martin); the verbs that opened folders of
+  build, review) or the desk (Martin); the verbs that opened folders of
   their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS

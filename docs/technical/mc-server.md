@@ -3,7 +3,7 @@
 ## Configuration and routing
 
 mc remains fully usable locally. An optional **single** server changes only the
-person's interactive entrances: `mc plan`, `mc martin` and `mc helper`. The manager
+person's interactive entrances: `mc plan` and `mc martin`. `mc helper` is the eye and has none; the manager
 has no interactive entrance: `mc manager` without `--headless` and `mc brief` are
 refused before routing and are never sent to a server ([mc-manager.md](mc-manager.md)).
 

@@ -902,7 +902,7 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    the first repository's worktree, with the goal's class routing, model and
    billing as any headless session has them. A goal in `review` gets a review session with
    the `review-session:goal` role instead, on a review candidate (`mc
-   model`). Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. Build-model diversity is a tie rule, not a reason to abandon a preferred provider or roomier subscription. With no
+   model`). Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order. The catalog's first review candidate is the first choice whenever it can run (not refused, not exhausted, launchable); the ranking applies when it cannot, or when its model built the goal. Within the ranking, build-model diversity is a tie rule, not a reason to abandon a preferred provider or roomier subscription. With no
    candidate on its plan it uses the API
    reserve as a class does (`docs/technical/mc-run.md`, *Work classes and
    capacity*). The models are compared as the catalog spells them, which is

@@ -239,6 +239,19 @@ describe('the helper turn', () => {
     assert.equal(failed.result.note, 'no-json');
   });
 
+  it('on agy a finished session is a SUCCESS result: a failed result or an empty stdout at exit 0 is not ok, and json output is priced for the model launched', async () => {
+    const agy = { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: getAdapter('antigravity-cli'), spec: { bin: '/usr/bin/agy' } };
+    const result = (status, extra = {}) => JSON.stringify({ conversation_id: 'c1', status, response: 'done', num_turns: 2, usage: { input_tokens: 10415, output_tokens: 657, cache_read_tokens: 8113 }, ...extra });
+    const run = (stdout) => runHelperTurn({ env: env(), now: NOW, file: FILE, model: 'gemini-4-argon-high', tool: 'agy', deps: { role: () => ROLE, launch: () => agy, ground: GROUND, session: fakeSession({}, { write: null, stdout }) } });
+    const good = await run(result('SUCCESS'));
+    assert.deepEqual([good.ok, good.note], [true, 'success']);
+    assert.ok(Math.abs(good.cost - 0.0282113) < 1e-9, 'priced as the model launched: 10415 uncached input, 657 output, 8113 cached' + ` (got ${good.cost})`);
+    const failed = await run(result('ERROR', { error: 'the model stopped' }));
+    assert.deepEqual([failed.ok, failed.note], [false, 'failed']);
+    const empty = await run('');
+    assert.deepEqual([empty.ok, empty.note], [false, 'failed']);
+  });
+
   it('passes a model asked for on the command line over the role\'s', async () => {
     const e = env();
     const seen = {};

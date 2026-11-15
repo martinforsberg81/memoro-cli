@@ -300,6 +300,8 @@ changed with `mc model add|remove <list>` or `mc model set <list>`; this is
 
 Review ranks usable subscriptions by provider priority, then headroom; ties avoid the build model, then follow catalog order.
 
+The catalog's first review candidate is read first whenever it can run; the author's removal from the list never promotes another candidate to first choice, so with the first candidate being the author the ranking above chooses among the rest.
+
 ## Archiving a programme
 
 `mc plan <programme> --archive` is a person's act, and the only way to archive a

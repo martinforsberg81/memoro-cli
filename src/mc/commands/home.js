@@ -32,6 +32,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
+import { providerPriorities } from '../../adapters/index.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { run as runGit } from '../git.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
@@ -78,6 +79,9 @@ export async function run(argv, deps = {}) {
   // mode would fold them again, thirty seconds after somebody asked to see
   // them.
   let expand = false;
+  // The programme the page shows alone, or null for the overview. Held here beside `expand` for the same reason:
+  // the live loop draws through this closure, so a frame keeps the view somebody opened.
+  let view = null;
   // At a terminal the page keeps its own pull requests current: every draw,
   // the live loop's included, asks GitHub when the cache is older than five
   // minutes (page-collect.js, `fresh: 'stale'`). A pipe reads the cache as it
@@ -103,13 +107,27 @@ export async function run(argv, deps = {}) {
   let movedTo = null;
   // One way to make a page, used by both surfaces: the width and the
   // colour are read per draw.
+  //
+  // Draws may overlap: the live loop's frame can still be collecting when `r` asks for a redraw. Each call is
+  // numbered as it starts and its data is kept for the menu only when no call that started later has been kept
+  // already, so a slow older collect never puts older numbers under a newer page (`current`).
+  let started = 0;
+  let kept = 0;
+  let latest = null;
   const page = async () => {
+    const call = ++started;
     const fresh = freshFor({ opts, live, once: freshOnce, now: clock(), askedAt });
     freshOnce = false;
     const data = await collect({ fresh, offline: opts.offline });
     if (data?.caches?.prs?.asked) askedAt = clock();
     const now = startedOn ? commitOf() : null;
     if (now && now !== startedOn) movedTo = now;
+    if (call > kept) {
+      kept = call;
+      latest = data;
+      // A programme that is no longer listed is the overview again.
+      if (view !== null && !(data?.programmes?.programmes || []).some((group) => group.programme === view)) view = null;
+    }
     return {
       data,
       restart: movedTo !== null,
@@ -119,6 +137,7 @@ export async function run(argv, deps = {}) {
         colour: colourFor(stdout, env),
         version,
         expand,
+        view,
       }),
     };
   };
@@ -134,9 +153,11 @@ export async function run(argv, deps = {}) {
   // only there does anything refresh, because this is the only place that
   // knows there is a terminal to refresh.
   if (!live) return 0;
-  const reader = deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
+  // A test's reader may be a function of the page closure, to draw frames as the live loop does.
+  const reader = typeof deps.reader === 'function' ? deps.reader({ page, first }) : deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
+    current: () => latest, show: (name) => { view = name; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -248,7 +269,12 @@ export function pageKey(data) {
   const priorityKey = (data?.programmes?.programmes || []).filter((group) => group.priority)
     .map((group) => `${group.programme}:priority:${group.priority}`).join('|');
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk)].filter(Boolean).join('|');
+  // The overview is drawn from the programmes' numbers and names and from the horizons they are under, in order.
+  const horizonKey = [
+    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}`).join(','),
+    (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
+  ].join('/');
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -266,8 +292,8 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  all / collapse   ·   d  desk',
-  '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
+  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk',
+  `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
@@ -315,8 +341,8 @@ async function showGoalVerb(argv, io) {
  * The way on from the page.
  *
  * The numbers are the page's — the page above the prompt is the listing, so the
- * menu has none of its own. A goal's number shows it (`mc goal show`). `a`
- * draws the dormant programmes too. Everything a number cannot say is a
+ * menu has none of its own. A goal's number shows it (`mc goal show`); a
+ * programme's number or name opens it alone and `h` returns to the overview. `a` draws everything. Everything a number cannot say is a
  * letter. Anything else is said out loud rather than swallowed, and the page
  * is drawn again with whatever changed.
  *
@@ -328,6 +354,11 @@ async function showGoalVerb(argv, io) {
  */
 export async function menu(first, {
   stdout, stderr, env = process.env, page, reader, expand = () => {},
+  // The page on the screen: the numbers and names the prompt resolves are the ones the last frame drew, which the
+  // live loop may have drawn since this menu's own redraw. Without it the menu goes by the data it drew itself.
+  current = () => null,
+  // Opens a programme's view (its name) or the overview (null) on the caller's closure, as `expand` does.
+  show = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -352,17 +383,25 @@ export async function menu(first, {
   // is set on the caller's closure and the page is simply asked for again.
   let all = false;
   for (;;) {
-    // Every goal PROGRAMMES numbered, reached by its number.
-    const goals = data.programmes.programmes.flatMap((group) => group.goals || []);
     const answer = await reader.ask(`\n${KEYS}\n\n`, '>');
     if (answer === RESTART) return restart();
     if (!answer || answer === 'q') return 0;
+    // Every goal numbered on the page, and every programme, as the frame on the screen numbered them.
+    const shown = current() ?? data;
+    const groups = shown.programmes?.programmes || [];
+    const goals = groups.flatMap((group) => group.goals || []);
 
     // The page again with every phase, finished goal and dormant programme. `a`
     // again folds them.
     if (answer === 'a' || answer === 'all') {
       all = !all;
       expand(all);
+      data = await redraw();
+      continue;
+    }
+    // The overview again, from whichever programme was open.
+    if (answer === 'h' || answer === 'home') {
+      show(null);
       data = await redraw();
       continue;
     }
@@ -442,6 +481,17 @@ export async function menu(first, {
     if (goal) {
       stdout.write('\n');
       await (showGoal || showGoalVerb)(['show', `${goal.programme}/${goal.name}`], { stdout, stderr });
+      data = await redraw();
+      continue;
+    }
+
+    // A programme opens alone by its number (digits only, after the goals') or by its exact name, which is any other
+    // answer: no word the menu answers is a name, and a number is never a name.
+    const programme = /^\d+$/u.test(answer)
+      ? groups.find((group) => group.number === Number(answer))
+      : groups.find((group) => group.programme === answer);
+    if (programme) {
+      show(programme.programme);
       data = await redraw();
       continue;
     }

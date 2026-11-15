@@ -53,6 +53,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { attemptInFlight, checkWords } from './deploy-check.js';
 import { lastDeploy } from './deploys.js';
 import { runAsync as runGitAsync } from './git.js';
 import { defaultRepos } from './repos.js';
@@ -171,10 +172,9 @@ function mtimeOf(path) {
 }
 
 /**
- * Where the bare `mc helper` session stands — its own room beside
- * `~/mc/brief/`, and not `~/mc/intake/`: the intake turn's material is not
- * that session's business, and standing in the directory it must not read
- * would be an odd way to say so.
+ * `~/mc/helper/`: where the retired desk's old conversations stand, and a state
+ * home, so they are not reported as strays and nothing deletes them. The desk
+ * is `mc martin`; the intake turn's material is in `~/mc/intake/`.
  */
 export function helperDir(env = process.env) {
   return join(workRoot(env), 'helper');
@@ -393,7 +393,7 @@ export function analysisRows(analysis) {
  * key a GitHub deploy webhook was meant to fill. It never did; memoro removed
  * the webhook, the route and the nightly `checkDeployAge` that read it.
  */
-export function deployState(row, { now = new Date(), live = null, staleAfterHours = DEPLOY_STALE_HOURS } = {}) {
+export function deployState(row, { now = new Date(), live = null, staleAfterHours = DEPLOY_STALE_HOURS, checking = null } = {}) {
   const hoursSince = (when) => {
     const at = Date.parse(when);
     return Number.isNaN(at) ? null : Math.round((now.getTime() - at) / 3_600_000);
@@ -405,6 +405,9 @@ export function deployState(row, { now = new Date(), live = null, staleAfterHour
       at: row.ended || row.started || null,
       holder: row.holder || null,
       liveCommit: row.live_commit || null,
+      check: row.check || '',
+      check_why: row.check_why || '',
+      checking: !row.check && checking?.started === row.started,
     }
     : null;
   const mcAgeHours = mc?.at ? hoursSince(mc.at) : null;
@@ -669,7 +672,8 @@ export function renderDigest({
     const verified = deploy.mc.liveCommit ? `, verified live \`${sha7(deploy.mc.liveCommit)}\`` : ', no live version verified';
     out.push(`- mc's own last deploy: \`${sha7(deploy.mc.sha)}\`${deploy.mc.build ? ` build ${deploy.mc.build}` : ''} — `
       + `${short(deploy.mc.at)}${deploy.mc.holder ? ` by ${deploy.mc.holder}` : ''}${verified}`
-      + `${deploy.mcAgeHours == null ? '' : ` (${deploy.mcAgeHours} h ago)`}`);
+      + `${deploy.mcAgeHours == null ? '' : ` (${deploy.mcAgeHours} h ago)`}`
+      + ` · ${checkWords(deploy.mc, { checking: deploy.mc.checking })}`);
   } else {
     out.push('- mc has deployed nothing itself — `~/mc/runner/log/deploys.tsv` holds no `deployed` row. '
       + '`mc deploy` writes one before and after every deploy it runs.');
@@ -937,7 +941,7 @@ export async function collectHelper({
   // The row is read straight from `deploys.tsv` rather than injected: `env`
   // already points the whole of mc at a throwaway work root, so a test writes
   // the file it wants read, and a faked reader would only prove the fake ran.
-  const deploy = deployState(lastDeploy(env), { now, live });
+  const deploy = deployState(lastDeploy(env), { now, live, checking: attemptInFlight(env) });
   if (versionRaw.ok) writeLiveVersion(versionRaw.json, { env, now });
 
   const requests = [analysisRaw, servicesRaw, operationsRaw, pingRaw, versionRaw];

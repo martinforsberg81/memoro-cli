@@ -63,6 +63,8 @@ import { fileURLToPath } from 'node:url';
 
 import { adapterOfProvider, billingProviders, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import { gitDirOf } from './repos.js';
@@ -97,6 +99,7 @@ import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { answerMainMend, failMainMend, mainMendBranch, mainMendPrompt, readMainMends, removeFinishedWorktrees, updateMainMends } from './main-repair.js';
 import { answerDeployMend, deployMendBranch, deployMendPrompt, failDeployMend, readDeployMends, REPOS as DEPLOY_REPOS, removeCopies, retryFailed, retryHolder, retryVerdict, updateDeployMends, FINISHED as DEPLOY_MEND_FINISHED } from './deploy-repair.js';
 import { deployAlive, readDeploys } from './deploys.js';
+import { deployCheckTick } from './deploy-check.js';
 import { pickWork } from './lane-pick.js';
 import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
@@ -117,6 +120,7 @@ import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { refreshCodexCapacity } from './codex-capacity.js';
+import { makeAgyUsageReader } from './agy-capacity.js';
 import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
@@ -146,6 +150,8 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** The billing provider a launch is billed under; a tool whose adapter declares none is refused, naming the tool. */
 const providerOf = (launch) => requireCapability(launch.id, 'BILLING_PROVIDER');
+/** The variables taken out of an unattended launch's environment: every provider API key, and the tool's own declared extras. */
+const dropEnv = (launch) => [...PROVIDER_API_ENV_NAMES, ...(declared(launch.id, 'LAUNCH_DROP_ENV') ?? [])];
 /** Whether a login interruption means this launch's plan refused it. */
 const loginRefusesPlan = (launch) => declared(launch.id, 'LOGIN_REFUSES_PLAN') === true;
 /** The dependency name a provider's capacity refresh is injected under: `refreshClaude`, `refreshCodex`. */
@@ -171,6 +177,7 @@ const CAPACITY_READERS = Object.freeze({
     return { ...got, state };
   },
   'codex-rpc': (provider, env) => () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
+  'agy-usage': (provider, env) => makeAgyUsageReader({ provider, env }),
 });
 
 /** The role each goal session kind runs with (`goalSession`). */
@@ -615,6 +622,10 @@ export function realDeps(env = process.env) {
     // the merge lane — with its narration in `~/.memoro/mc/nightly/nightly.log`.
     // A dependency so a test can drive the chore without a suite behind it.
     nightlyTick: (options) => loggedTick({ env, ...options }),
+    // The check after a deploy (`deploy-check.js`): started detached for a
+    // deployed row without a verdict. A dependency so a test drives the chore
+    // without a process behind it and without writing under the real home.
+    deployCheckTick: (options) => deployCheckTick({ env, ...options }),
     // `mc deps <repo>`'s reading, saved where `mc deps` and the page read it.
     // A dependency so a test drives the chore without npm or a remote.
     readDeps: (options) => readDeps({ env, refresh: true, ...options }),
@@ -842,16 +853,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) { say(`capacity not recorded (${error?.message || error})`); }
   }
   /**
-   * A provider refused a session until the reset the refusal named, or the
-   * quota sleep from now when it named none. Only that provider is refused: the
-   * other is still a candidate, which is how a goal's class runs on codex the
-   * launch after claude refused.
+   * A provider refused a session: when the read says its plan did (a quota, or
+   * a login a plan-refusing tool cannot get past), that provider is refused
+   * until the reset the read named, or the quota sleep from now. Only that
+   * provider is refused: the other is still a candidate, which is how a goal's
+   * class runs on codex the launch after claude refused. The rule is
+   * `refusePlanOnRead`'s, the one every unattended caller writes; the runner
+   * records it through its own capacity observation.
    */
-  function refuseProvider(provider, quotaReset) {
-    const nowMs = deps.now().getTime();
-    const until = quotaReset instanceof Date && quotaReset.getTime() > nowMs ? quotaReset : new Date(nowMs + QUOTA_SLEEP_MS);
-    observeCapacity((state) => applyRefusal(state, provider, until.toISOString()));
-    say(`${provider} refused until ${until.toISOString()}`);
+  function refuseProvider(read, launch, billing) {
+    return refusePlanOnRead({ read, launch, billing, now: deps.now(), say, write: (provider, until) => observeCapacity((state) => applyRefusal(state, provider, until)) });
   }
   /**
    * The API server cannot be reached (`apiInterruption` kind `offline`): no new
@@ -889,7 +900,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
       const saved = deps.catalog();
-      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto' });
+      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok) });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {
@@ -904,6 +915,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function startCapacityTicker() {
     if (!deps.every || !billingProviders().some((provider) => deps[refreshDep(provider)])) return () => {};
     const inFlight = new Set();
+    // A reader that answered `stop` (agy's first unparsed /usage) is not called again for the life of the runner.
+    const stoppedReaders = new Set();
     const lastAttempt = new Map();
     let stopped = false;
     let stopTimer = null;
@@ -919,13 +932,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (updateRequested()) return;
       for (const provider of billingProviders()) {
         const refresh = deps[refreshDep(provider)];
-        if (!refresh || inFlight.has(provider)) continue;
+        if (!refresh || inFlight.has(provider) || stoppedReaders.has(provider)) continue;
         const item = capacity.read().providers[provider];
         const attempts = [item.observed_at, item.failure?.at, lastAttempt.get(provider)].map((at) => typeof at === 'number' ? at : Date.parse(at || '')).filter(Number.isFinite);
         if (attempts.length && deps.now().getTime() - Math.max(...attempts) < CAPACITY_POLL_MS) continue;
         lastAttempt.set(provider, deps.now().getTime());
         inFlight.add(provider);
         Promise.resolve().then(refresh).then((got) => {
+          if (got?.stop) { stoppedReaders.add(provider); say(`${provider} capacity not read: ${got.why} — the reader stops until the runner restarts; the last snapshot stands`); return; }
           say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
         }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
       }
@@ -1241,6 +1255,31 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       });
     }
     return outcome;
+  }
+
+  /**
+   * The check after a deploy (`deploy-check.js`, docs/technical/mc-deploy.md,
+   * *The check after a deploy*): one pass of the chore that starts it, detached,
+   * for the oldest deployed row that has none, and settles what it left. It
+   * starts nothing while a deploy runs, STOP or UPDATE is asked, or a check is
+   * alive. A failure here is said and never stops the pass.
+   */
+  async function runDeployCheck() {
+    if (!deps.deployCheckTick || stopRequested() || updateRequested()) return null;
+    try {
+      const tick = await deps.deployCheckTick({
+        now: () => deps.now().getTime(),
+        alive: deps.alive || pidAlive,
+        stopRequested,
+        updateRequested,
+        say: (message) => say(message),
+      });
+      for (const note of tick?.notes || []) say(`deploy check: ${note}`);
+      return tick;
+    } catch (error) {
+      say(`deploy check: the pass failed — ${error?.message || error}. Asked again on the next chore pass.`);
+      return null;
+    }
   }
 
   /**
@@ -1716,7 +1755,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
             ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
-          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
+          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1725,7 +1764,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const ended = deps.deskItems.read(name);
       // An item the session left prepared is not a successful ending.
       const unfinished = decisionUnfinished(ended);
@@ -1852,20 +1891,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
-        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
+        check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: dir,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
       say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {
         const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1874,11 +1913,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
       if (count === 0 && !providerEnding) {
         const reason = `planning session exited ${result.status ?? 1} with the programme holding no goal (${read.note})`;
@@ -2078,7 +2117,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: archiveCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -2273,20 +2312,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'manager', variant: null, programme: null, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
-        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: cwd,
+        check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: cwd,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
       say(`${turnLabel}: ${horizonTurn ? 'horizon turn' : 'curation turn'} starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {
         const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: managerCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). The manager role is what the publish guard reads.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, ...(horizonTurn ? { MC_HORIZON: turn.slug } : {}), MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: [...(horizonTurn ? [] : ['MC_HORIZON']), 'MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -2295,10 +2334,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the horizon or the area texts: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       let note = read.note;
       if (horizonTurn) {
         const outcome = horizonOutcome({ slug: turn.slug, home: programsHome(deps.env), list: deps.list, read: deps.read, horizon: deps.horizon?.(turn.slug) ?? null, items: turnItems() });
@@ -2453,7 +2492,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
-        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', ...dropEnv(launch)] });
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
@@ -2461,7 +2500,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2593,7 +2632,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the deploy-mend in these worktrees. No goal or LOG.md. Publish with mc publish, or end with mc repo mend deploy <id> repaired.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_DEPLOY_MEND: request.id, MC_WORKAREA: cwd, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
-        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', ...dropEnv(launch)] });
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
@@ -2601,7 +2640,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -3360,7 +3399,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
             ...scratchEnv,
           },
-          unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
+          unsetEnv: dropEnv(launch),
         });
         admission.release?.();
         result = await pendingSession;
@@ -3380,7 +3419,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
+      refuseProvider(read, launch, picked.billing);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);
@@ -3728,6 +3767,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // for. The deps reading goes first: a minute a repository.
     await runDepsDaily();
     await runNightly();
+    await runDeployCheck();
   }
 
   /**
@@ -3879,7 +3919,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }

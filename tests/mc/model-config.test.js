@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -64,6 +64,7 @@ test('a catalog whose review is one object reads as a list of it, and is written
 test('mc model add and remove review change the list as they do fast and large; set review replaces it whole', async () => {
   const c = catalogAt(null);
   try {
+    assert.equal((await c.verb('remove', 'review', 'agy:gemini-4-argon-high')).code, 0);
     assert.equal((await c.verb('remove', 'review', 'codex:gpt-6.1-sol')).code, 0);
     const added = await c.verb('add', 'review', 'codex:gpt-6.1-sol:high');
     assert.equal(added.code, 0, added.err);
@@ -196,7 +197,7 @@ test('provider priority reads as auto, roundtrips reversibly, and catalog edits 
   const c = catalogAt(OLD);
   try {
     assert.equal(readModels(c.env).providerPriority, 'auto');
-    for (const priority of ['codex', 'claude', 'auto']) {
+    for (const priority of ['codex', 'claude', 'agy', 'auto']) {
       const set = await c.verb('priority', priority);
       assert.equal(set.code, 0, set.err);
       assert.equal(set.out, `provider priority: ${priority}\n`);
@@ -240,5 +241,28 @@ test('decision defaults read without rewriting old catalogs and mc model lists a
     assert.equal(readFileSync(modelsPath(c.env),'utf8'),before);
     assert.equal((await c.verb('set','decision','codex:gpt-6.1-sol:high')).code,0);
     assert.deepEqual(c.file().decision,[{tool:'codex',model:'gpt-6.1-sol',effort:'high'}]);
+  } finally { c.done(); }
+});
+
+test('the default review list starts with agy:gemini-4-argon-high:high', () => {
+  const c = catalogAt(null);
+  try {
+    assert.deepEqual(readModels(c.env).review.map(({ tool, model, effort }) => `${tool}:${model}:${effort}`), ['agy:gemini-4-argon-high:high', 'claude:opus:medium', 'codex:gpt-6.1-sol:medium']);
+  } finally { c.done(); }
+});
+
+test('an agy candidate whose effort contradicts its model\'s level is refused at add and set (exit 2, nothing written) and as a document problem; a slug without a level takes any effort', async () => {
+  const c = catalogAt(null);
+  try {
+    for (const verb of ['add', 'set']) {
+      const refused = await c.verb(verb, 'review', 'agy:gemini-4-argon-high:medium');
+      assert.equal(refused.code, 2, refused.err);
+      assert.match(refused.err, /effort: gemini-4-argon-high carries level high in its name, so the effort is high, not medium/u);
+    }
+    assert.equal(existsSync(modelsPath(c.env)), false, 'nothing was written');
+    assert.throws(() => readModels(catalogAt({ ...OLD, review: [{ tool: 'agy', model: 'gemini-4-argon-low', effort: 'high' }] }).env), /review\[0\]\.effort: gemini-4-argon-low carries level low/u);
+    assert.equal((await c.verb('add', 'review', 'agy:gemini-4-argon-low:low')).code, 0);
+    assert.equal((await c.verb('add', 'review', 'agy:gemini-4-carbon:medium')).code, 0, 'a name with no level suffix takes any effort');
+    assert.equal((await c.verb('add', 'review', 'claude:opus-high:low')).code, 0, 'another tool is not held to the rule');
   } finally { c.done(); }
 });

@@ -19,14 +19,14 @@
  * only: both tools take it as the last positional argument. A resumed
  * conversation already has its own history and is not spoken over — unless
  * the caller hands a `resumePrompt`, which lands as a reply to wherever that
- * conversation stopped. Nothing hands one today: `mc brief` resumes where the
- * session was, as `mc helper` does.
+ * conversation stopped. Nothing hands one today.
  */
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import { interactive, select } from './prompt.js';
 import { canonicalToolId, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
+import { interactiveToolRefusal } from './interactive-tool.js';
 import { trustClaudeFolder } from './claude-trust.js';
 import { SESSION_IDENTITY_ENV, normalizeSessionRole, sessionLaunchEnvironment } from './session-role.js';
 import { conversationIdentityReader, conversationModel, launchIdentityMarker, listConversations } from './conversations.js';
@@ -165,6 +165,8 @@ export async function interactiveLaunchPlan({
   const wanted = chosen?.tool || tool || before[0]?.tool || 'codex';
   const launch = resolve(wanted);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
+  const notInteractive = interactiveToolRefusal(launch.id);
+  if (notInteractive) return { ok: false, reason: notInteractive };
   const toolId = launch.id;
   onProvider(launch.shortName);
   // Resolve a named conversation before choosing its transport. The callback

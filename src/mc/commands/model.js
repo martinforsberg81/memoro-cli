@@ -7,7 +7,7 @@
  * that is the routing's, and this verb does not poll anything.
  *
  *   mc model [list] [--json]                    the catalog, and whether it is the file's or the defaults
- *   mc model priority [auto|codex|claude]        the global unattended provider preference
+ *   mc model priority [auto|codex|claude|agy]        the global unattended provider preference
  *   mc model add <list> <tool>:<model>:<effort>  append a candidate to a list
  *   mc model remove <list> <tool>:<model>        remove the candidate with exactly that tool and model
  *   mc model set <role> <tool>:<model>:<effort>  replace a whole role list with that one candidate
@@ -17,7 +17,7 @@
  */
 import { commandUsage } from '../command-help.js';
 import {
-  LISTS, PROVIDER_PRIORITIES, ROLE_LISTS, ModelConfigError, addCandidate, candidateSpec, changeModels, changeProviderPriority, parseCandidate, parseTarget,
+  LISTS, PROVIDER_PRIORITIES, ROLE_LISTS, ModelConfigError, addCandidate, candidateSpec, changeModels, changeProviderPriority, effortContradiction, parseCandidate, parseTarget,
   readModels, removeCandidate, setRoleList,
 } from '../model-config.js';
 import { scanArgs } from './flags.js';
@@ -47,9 +47,11 @@ function refusal(verb, rest, flags) {
   if (flags.json) return '--json is for mc model list';
   if (verb === 'add' || verb === 'remove') {
     if (rest.length !== 2) return verb === 'add' ? `mc model add ${LISTS.join('|')} <tool>:<model>:<effort>` : `mc model remove ${LISTS.join('|')} <tool>:<model>`;
-    return LISTS.includes(rest[0]) ? null : `"${rest[0]}" is not a list: ${verb} takes ${LISTS.join(', ')}`;
+    if (!LISTS.includes(rest[0])) return `"${rest[0]}" is not a list: ${verb} takes ${LISTS.join(', ')}`;
+    return verb === 'add' ? effortContradiction(rest[1]) : null;
   }
-  return rest.length !== 2 || !ROLE_LISTS.includes(rest[0]) ? `mc model set ${ROLE_LISTS.join('|')} <tool>:<model>:<effort>` : null;
+  if (rest.length !== 2 || !ROLE_LISTS.includes(rest[0])) return `mc model set ${ROLE_LISTS.join('|')} <tool>:<model>:<effort>`;
+  return effortContradiction(rest[1]);
 }
 
 export async function run(argv, deps = {}) {

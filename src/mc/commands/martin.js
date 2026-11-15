@@ -8,6 +8,7 @@ import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { interactive } from '../prompt.js';
 import { scanArgs } from './flags.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 import { collectMartinQueue, renderMartinQueue } from '../martin-collect.js';
 import { deskItemQuestion, itemDirectory, listDeskItems, readDeskItem, syncDeskItems, updateDeskItem } from '../desk-items.js';
 import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
@@ -75,6 +76,9 @@ export async function run(argv, deps = {}) {
   }
   const role = (deps.role || (() => readCanonRole('martin')))();
   if (!role?.overlay) { stderr.write('mc: the martin role is missing from this install — expected canon/roles/martin.md with an overlay body\n'); return 1; }
+  const tool = flags.tool || role.tools?.[0] || 'claude';
+  const notInteractive = interactiveToolRefusal(tool);
+  if (notInteractive) { stderr.write(`mc: ${notInteractive}\n`); return 2; }
   const now = (deps.now || (() => new Date()))();
   const home = deps.home || programsHome(env);
   let last;
@@ -87,7 +91,7 @@ export async function run(argv, deps = {}) {
   const launch = { overlay: role.overlay, prompt: opening, model: role.model || null };
   const opened = await (deps.open || openInWorkArea)({
     env, areaRoot: root, conversationRoots: [root],
-    worktree: { repo: null, path: root, is_git: false }, tool: flags.tool || role.tools?.[0] || 'claude',
+    worktree: { repo: null, path: root, is_git: false }, tool,
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool, stdout, stderr, verb: 'martin', areaName: 'martin', bg: flags.bg,
     roleName: role.name || 'martin', roleSource: roleSourceOf(role), cache: role.cache,
@@ -467,6 +471,16 @@ function blocksPhrase(item) {
     : `, blocks ${plural(item.blocks, 'later-phase goal')} of ${programme}`;
 }
 
+/** The part Where a new thing goes: reference for placing, never something that waits. */
+function renderPlacing(placing) {
+  const out = ['## Where a new thing goes', ''];
+  out.push(`Today is ${placing.date}. A proposal is a file named \`${placing.file_name}\`, in \`${placing.programs_path}/<programme>/proposals/\` when a programme owns it, else in \`${placing.proposals_path}\`.`);
+  out.push('', 'The programmes, one line each:');
+  if (!placing.programmes.length) out.push('_none_');
+  else for (const programme of placing.programmes) out.push(`- ${programme.name} — ${programme.line}`);
+  return out;
+}
+
 /** The opening as the text the session starts from. */
 export function renderOpening(data) {
   const out = [];
@@ -504,6 +518,7 @@ export function renderOpening(data) {
   if (cost.unknown_cost_runs) out.push(`Runs with unknown cost, not counted: ${cost.unknown_cost_runs}.`);
   if (cost.error) out.push(`Cost reading error: ${cost.error}.`);
   out.push('', ...renderChanges(data.changes));
+  out.push('', ...renderPlacing(data.placing));
   return `${out.join('\n')}\n`;
 }
 

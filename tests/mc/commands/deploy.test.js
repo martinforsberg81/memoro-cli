@@ -23,6 +23,7 @@ import {
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
+import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
 import { readDeployMends } from '../../../src/mc/deploy-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { exerciseApp, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
@@ -4290,5 +4291,144 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
       assert.equal(row.outcome, 'deployed');
       assert.deepEqual(r.stops, []);
     });
+  });
+});
+
+describe('mc deploy — the check after a deploy: its verdict in the plan, the before-reading, the admission lock', () => {
+  const env = () => ({ MC_WORK_ROOT: work });
+  /** A deployed row of the last deploy, as deploys.tsv keeps it, with the check cells given. */
+  function lastRow(cells = {}) {
+    const key = recordStart({ sha: SHA, started: '2026-11-14T08:00:00.000Z', pid: 1 }, env());
+    recordEnd(key, { outcome: 'deployed', ended: '2026-11-14T08:09:00.000Z', build: '900', live_commit: SHA.slice(0, 7), live_build: '900', ...cells }, env());
+    return key;
+  }
+  /** The plan as lines, with the verb's own reader of deploys.tsv (no `lastDeploy` handed in). */
+  async function plan(extra = {}) {
+    const d = deps({ git: fakeGit({ counts: { [`${SHA}..${SHA}`]: 0 } }), ...extra });
+    delete d.lastDeploy;
+    const { out, stdout, stderr } = io();
+    await run(['--dry-run'], { ...d, stdout, stderr });
+    const json = io();
+    await run(['--dry-run', '--json'], { ...d, stdout: json.stdout, stderr: json.stderr });
+    return { text: out.stdout, json: JSON.parse(json.out.stdout) };
+  }
+
+  it('the plan line says what the check found, in the words the page uses, and --json carries the three cells', async () => {
+    const cases = [
+      [{ check: 'green', check_at: '2026-11-14T08:50:00.000Z', check_why: '' }, / · checked green$/mu],
+      [{ check: 'red', check_at: '2026-11-14T08:50:00.000Z', check_why: 'suites: api (exit 1) red' }, / · check red: suites: api \(exit 1\) red$/mu],
+      [{ check: 'could-not-run', check_at: '2026-11-14T08:50:00.000Z', check_why: 'version: production is at fedcba9, not 1a2b3c4' }, / · check could not run: version: production is at fedcba9, not 1a2b3c4$/mu],
+      [{}, / · not checked$/mu],
+    ];
+    for (const [cells, line] of cases) {
+      work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
+      lastRow(cells);
+      const { text, json } = await plan();
+      assert.match(text, /^mc: live now 1a2b3c4 \(build 900\) — deploys\.tsv, 2026-11-14 08:09/mu);
+      assert.match(text, line);
+      assert.equal(json.last.check, cells.check || '');
+      assert.equal(json.last.check_at, cells.check_at || '');
+      assert.equal(json.last.check_why, cells.check_why || '');
+    }
+  });
+
+  it('an attempt whose process is alive reads "checking"; one whose process is gone reads "not checked"', async () => {
+    const key = lastRow();
+    const state = (pid) => {
+      mkdirSync(dirname(statePath(env())), { recursive: true });
+      writeFileSync(statePath(env()), JSON.stringify({ from: '2026-11-14T00:00:00.000Z', attempt: { key, pid, started_at: '2026-11-14T08:10:00.000Z', deadline: 1 } }));
+    };
+    state(process.pid);
+    assert.match((await plan()).text, / · checking$/mu);
+    assert.equal((await plan()).json.last.checking, true);
+    state(2 ** 22 + 12345);
+    assert.match((await plan()).text, / · not checked$/mu);
+  });
+
+  it('the live line of a version-only reading (no deploys.tsv) says nothing of a check', async () => {
+    const d = deps();
+    const { out, stdout, stderr } = io();
+    await run(['--dry-run'], { ...d, stdout, stderr });
+    assert.match(out.stdout, /live now 9f8e7d6 \(build 812\) — api\/version/u);
+    assert.doesNotMatch(out.stdout, /checked|not checked|checking/u);
+  });
+
+  /** The real before-reading, its script and clock faked: `survey` is what the script does. */
+  const reading = (survey, extra = {}) => (options) => takeBeforeReading({
+    ...options,
+    exportTree: (path, sha, what, dir) => {
+      if (survey.exported) return survey.exported;
+      mkdirSync(dirname(join(dir, 'scripts/admin/survey-errors.mjs')), { recursive: true });
+      writeFileSync(join(dir, 'scripts/admin/survey-errors.mjs'), '// stand-in');
+      return null;
+    },
+    run: survey.run,
+    boundMs: 40,
+    ...extra,
+  });
+
+  it('a before-reading that fails, hangs or has no script never changes the deploy: spawned once, the same outcome, the failure in its file', async () => {
+    const ok = await attempt([]);
+    const cases = [
+      ['a failing script', { run: async () => ({ code: 1, stdout: '', stderr: 'no token\n' }) }, /exited 1: no token/u],
+      ['a hanging script', { run: () => new Promise(() => {}) }, /did not finish in 0 s/u],
+      ['a missing script', { exported: 'path not in tree' }, /is not on 1a2b3c4/u],
+      ['a script that throws', { run: async () => { throw new Error('spawn EACCES'); } }, /spawn EACCES/u],
+    ];
+    for (const [what, survey, why] of cases) {
+      work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
+      const { code, spawned, row, out } = await attempt([], { extra: { beforeReading: reading(survey) } });
+      assert.equal(code, ok.code, what);
+      assert.equal(spawned.length, 1, `${what}: the script was spawned`);
+      assert.equal(row.outcome, ok.row.outcome, `${what}: the deploy ended the same`);
+      assert.equal(row.stopped_at, ok.row.stopped_at, what);
+      const file = readBeforeFile(env(), row.started);
+      assert.equal(file.ok, false, what);
+      assert.match(file.why, why, what);
+      assert.match(out.stdout, /the error reading before the deploy was not made/u, what);
+    }
+  });
+
+  it('a before-reading that works is kept for the check, and the script runs after it', async () => {
+    const order = [];
+    const survey = { run: async () => { order.push('survey'); return { code: 0, stdout: JSON.stringify({ totalFingerprints: 1, returnedFingerprints: 1, topFingerprints: [{ fingerprint: 'a', normalizedMessage: 'x', firstSeen: '2026-11-01 00:00:00' }] }), stderr: '' }; } };
+    const { code, row } = await attempt([], {
+      extra: { beforeReading: reading(survey), spawnDeploy: async () => { order.push('script'); return { code: 0 }; } },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(order, ['survey', 'script']);
+    const file = readBeforeFile(env(), row.started);
+    assert.equal(file.ok, true);
+    assert.deepEqual(file.survey.fingerprints.map((f) => f.fingerprint), ['a']);
+    assert.ok(existsSync(beforePath(env(), row.started)));
+  });
+
+  it('a before-reading that throws is no reading and does not stop the deploy', async () => {
+    const { code, spawned } = await attempt([], { extra: { beforeReading: async () => { throw new Error('boom'); } } });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1);
+  });
+
+  it('a fixture with its own spawn reaches no production: without deps.beforeReading nothing is read', async () => {
+    const { row } = await attempt([]);
+    assert.equal(existsSync(beforePath(env(), row.started)), false);
+  });
+
+  it('the admission takes the deploys lock once: no waiting on its own hold, no runner-lock-unlocked line, one lock named deploy', async () => {
+    const events = [];
+    const taken = [];
+    const lock = (root, fn, options) => {
+      taken.push(options?.name);
+      return realLock(root, fn, { ...options, log: (event, fields) => events.push({ event, fields }) });
+    };
+    const began = Date.now();
+    const { code, row } = await attempt([], { extra: { lock } });
+    assert.equal(code, 0);
+    assert.equal(row.outcome, 'deployed');
+    assert.deepEqual(events.filter((e) => e.event === 'runner-lock-unlocked'), [], 'the lock was never taken without being held');
+    // The preparation takes its own lock (`deploy-prepare`), before the admission and apart from it.
+    assert.deepEqual(taken.filter((name) => name === 'deploy'), ['deploy'], 'one lock for the whole admission');
+    // A writer inside the admission that waited for its own hold would wait out the lock's five seconds.
+    assert.ok(Date.now() - began < 3000, `the admission took ${Date.now() - began} ms`);
   });
 });

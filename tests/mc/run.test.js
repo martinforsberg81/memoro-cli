@@ -6,6 +6,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { attemptDeadline, deployCheckTick, killGroup, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
+import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
@@ -18,6 +20,7 @@ import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
+import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import { expandRoleIncludes, sharedRoleText, textDigest } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
@@ -918,6 +921,173 @@ test('a cleanup that is refused or fails is recorded as cleanup: the session, th
     assert.deepEqual(lines(f), lines(clean), 'the runner log says the same about the session as a clean run');
     assert.match(f.files['/w/runner/log/runner.log'], /scratch cleanup not completed — .*; its exports stay for the next tidy/u);
   }
+});
+
+/* ------------------------------------------------ the deploy check chore (deploy-check.js) */
+
+test('deploy check: the chore pass asks the tick once, with the runner\'s clock and liveness, and says its notes in the log', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  const asked = [];
+  f.deps.deployCheckTick = async (options) => { asked.push(options); return { notes: ['started the check of 1a2b3c4 (pid 7)'], started: { pid: 7 } }; };
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].now(), Date.parse('2026-09-19T10:00:00Z'));
+  assert.equal(typeof asked[0].alive, 'function');
+  assert.equal(asked[0].stopRequested(), false);
+  assert.equal(asked[0].updateRequested(), false);
+  assert.match(f.files['/w/runner/log/runner.log'], /deploy check: started the check of 1a2b3c4 \(pid 7\)/u);
+});
+
+test('deploy check: a tick that throws is said, never stops the pass, and is asked again on the next', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.deps.deployCheckTick = async () => { calls += 1; throw new Error('deploys.tsv is unreadable'); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(calls, 2);
+  assert.match(f.files['/w/runner/log/runner.log'], /deploy check: the pass failed — deploys\.tsv is unreadable\. Asked again on the next chore pass\./u);
+});
+
+test('deploy check: nothing is asked under STOP or UPDATE, and a fixture without the dependency checks nothing', async () => {
+  for (const order of ['STOP', 'UPDATE']) {
+    const f = fixture();
+    let calls = 0;
+    f.deps.deployCheckTick = async () => { calls += 1; return { notes: [] }; };
+    f.files[`/w/runner/${order}`] = '';
+    await createRunner({ deps: f.deps }).chores();
+    assert.equal(calls, 0, order);
+  }
+  const bare = fixture();
+  delete bare.deps.deployCheckTick;
+  await createRunner({ deps: bare.deps }).chores();
+  assert.doesNotMatch(bare.files['/w/runner/log/runner.log'] || '', /deploy check/u);
+  assert.equal(typeof realDeps({ MC_WORK_ROOT: '/nowhere', MC_HOME: '/nowhere' }).deployCheckTick, 'function', 'the real runner has the chore');
+});
+
+/**
+ * The real tick through the runner's chore pass: its process boundaries are
+ * faked (what it started, killed), its work root is a temporary directory and
+ * the runner's clock is the fixture's. Each rule of the chore is one case.
+ */
+function checkChore(t, { now = '2026-11-15T12:10:00Z', alive = () => false, running = () => null, from = '2026-11-15T11:00:00.000Z' } = {}) {
+  const f = fixture({ now });
+  const root = mkdtempSync(join(tmpdir(), 'mc-run-deploy-check-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+  writeFileSync(join(root, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+  const env = { MC_WORK_ROOT: root };
+  const seen = { started: [], killed: [] };
+  const state = { alive, running };
+  if (from) writeFileSync(deployCheckState(env), JSON.stringify({ from }));
+  f.deps.alive = (pid) => state.alive(pid);
+  f.deps.deployCheckTick = (options) => deployCheckTick({
+    env, ...options,
+    running: () => state.running(),
+    kill: (pid) => { seen.killed.push(pid); },
+    start: (job) => { seen.started.push(job); return { pid: 4000 + seen.started.length, log: '/log' }; },
+  });
+  const deployed = (started, sha, ended) => {
+    const key = recordStart({ sha, started, pid: 1 }, env);
+    recordEnd(key, { ended, outcome: DEPLOY_ROW, live_commit: sha.slice(0, 7) }, env);
+    return key;
+  };
+  const read = () => readDeploys(env);
+  const attempt = () => JSON.parse(readFileSync(deployCheckState(env), 'utf8')).attempt;
+  return { f, env, seen, state, deployed, read, attempt, runner: createRunner({ deps: f.deps }) };
+}
+const SHA_A = '0123456789abcdef0123456789abcdef01234567';
+const SHA_B = 'fedcba9876543210fedcba9876543210fedcba98';
+
+test('deploy check: a chore pass starts the check of the oldest due row, one at a time, and a pass while it lives starts nothing', async (t) => {
+  const c = checkChore(t, { alive: () => true });
+  const first = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [{ started: first.started, sha: SHA_A }]);
+  assert.equal(c.attempt().pid, 4001);
+  await c.runner.chores();
+  assert.equal(c.seen.started.length, 1, 'the attempt is alive: nothing is started');
+  assert.equal(c.read()[0].check, '');
+});
+
+test('deploy check: a row that ended before `from` stays empty, and `from` is written on the first pass and never moved', async (t) => {
+  const c = checkChore(t, { from: null });
+  c.deployed('2026-11-15T10:00:00.000Z', SHA_A, '2026-11-15T10:05:00.000Z');
+  await c.runner.chores();
+  assert.equal(JSON.parse(readFileSync(deployCheckState(c.env), 'utf8')).from, '2026-11-15T12:10:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.read()[0].check, '', 'not checked');
+});
+
+test('deploy check: a due row a later deploy superseded is written could-not-run without a start, and the later one is started', async (t) => {
+  const c = checkChore(t);
+  c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  const second = c.deployed('2026-11-15T12:05:00.000Z', SHA_B, '2026-11-15T12:07:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'superseded by fedcba9 before it was checked']);
+  assert.deepEqual(c.seen.started, [{ started: second.started, sha: SHA_B }]);
+});
+
+test('deploy check: nothing starts while a deploy runs; and the pass, asked again, starts the row', async (t) => {
+  const c = checkChore(t);
+  c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  c.state.running = () => ({ started: '2026-11-15T12:09:00.000Z' });
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.read()[0].check, '');
+  c.state.running = () => null;
+  await c.runner.chores();
+  assert.equal(c.seen.started.length, 1);
+});
+
+test('deploy check: an attempt that died without a verdict is written could-not-run with its pid and is not started again', async (t) => {
+  const c = checkChore(t);
+  const row = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  writeFileSync(deployCheckState(c.env), JSON.stringify({ from: '2026-11-15T11:00:00.000Z', attempt: { key: { started: row.started, sha: SHA_A }, pid: 4321, started_at: '2026-11-15T12:02:00.000Z', deadline: Date.parse('2026-11-15T14:00:00.000Z') } }));
+  await c.runner.chores();
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'the check ended without a verdict (pid 4321)']);
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.attempt(), null);
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [], 'not retried against production');
+});
+
+test('deploy check: an attempt alive past its deadline is killed by its pid, written could-not-run, and the next due row starts on a later pass', async (t) => {
+  const c = checkChore(t, { now: '2026-11-15T13:40:00Z', alive: () => true });
+  const first = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  const second = c.deployed('2026-11-15T13:00:00.000Z', SHA_B, '2026-11-15T13:02:00.000Z');
+  writeFileSync(deployCheckState(c.env), JSON.stringify({ from: '2026-11-15T11:00:00.000Z', attempt: { key: { started: first.started, sha: SHA_A }, pid: 4321, started_at: '2026-11-15T12:02:00.000Z', deadline: attemptDeadline({ startedAt: Date.parse('2026-11-15T12:02:00.000Z'), ended: '2026-11-15T12:02:00.000Z' }) } }));
+  assert.ok(Date.parse('2026-11-15T13:40:00Z') > attemptDeadline({ startedAt: Date.parse('2026-11-15T12:02:00.000Z'), ended: '2026-11-15T12:02:00.000Z' }));
+  await c.runner.chores();
+  assert.deepEqual(c.seen.killed, [4321]);
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'the check passed its deadline (pid 4321)']);
+  assert.deepEqual(c.seen.started, [], 'the slot is free, but the next row waits for a later pass');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [{ started: second.started, sha: SHA_B }]);
+});
+
+test('deploy check: the kill reaches the attempt\'s process group, and the process alone when it has no group', (t) => {
+  const calls = [];
+  t.mock.method(process, 'kill', (pid, signal) => { calls.push([pid, signal]); if (pid < 0) throw new Error('ESRCH'); return true; });
+  assert.equal(killGroup(4321), true);
+  assert.deepEqual(calls, [[-4321, 'SIGKILL'], [4321, 'SIGKILL']]);
+  calls.length = 0;
+  process.kill.mock.restore();
+  t.mock.method(process, 'kill', (pid, signal) => { calls.push([pid, signal]); return true; });
+  assert.equal(killGroup(4321), true);
+  assert.deepEqual(calls, [[-4321, 'SIGKILL']], 'the group is enough');
+});
+
+test('deploy check: a verdict file whose row has no check is written into it, and nothing is started for that row', async (t) => {
+  const c = checkChore(t);
+  const row = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  writeVerdictFile(c.env, row, { check: 'red', check_at: '2026-11-15T12:40:00.000Z', check_why: 'database: down', parts: [] });
+  await c.runner.chores();
+  const after = c.read()[0];
+  assert.deepEqual([after.check, after.check_at, after.check_why], ['red', '2026-11-15T12:40:00.000Z', 'database: down']);
+  assert.deepEqual(c.seen.started, []);
+  assert.match(c.f.files['/w/runner/log/runner.log'], /deploy check: .*restored from its file/u);
 });
 
 test('the chore pass removes no scratch directory by age: what goes from scratch is tidy rule S\'s, on proof', async () => {
@@ -3324,8 +3494,28 @@ test('an available plan launches directly and removes ambient provider keys', as
   const [{ call, current }] = calls;
   assert.equal(call.bin, '/bin/claude');
   assert.equal('ANTHROPIC_API_KEY' in call.env, false);
-  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY']);
+  assert.deepEqual(call.unsetEnv, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY']);
   assert.equal(current.billing, 'plan');
+});
+
+test('an agy goal session launches without the Gemini keys or its own dropped variable, and a Claude one keeps AGY_ADC_AUTH out of its drop list', async () => {
+  const { f, calls } = onBilling('plan');
+  f.deps.env = { ...f.deps.env, GEMINI_API_KEY: 'g-from-the-runner', GOOGLE_API_KEY: 'o-from-the-runner', AGY_ADC_AUTH: 'adc' };
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  const launch = f.deps.launch;
+  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
+  await createRunner({ deps: f.deps }).pass();
+  const [{ call }] = calls;
+  assert.equal(call.bin, '/bin/agy');
+  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'AGY_ADC_AUTH']) {
+    assert.equal(name in call.env, false, `${name} is not in the child's environment`);
+    assert.ok(call.unsetEnv.includes(name), `${name} is unset at the launch`);
+  }
+
+  const other = onBilling('plan');
+  other.f.deps.env = { ...other.f.deps.env, AGY_ADC_AUTH: 'adc' };
+  await createRunner({ deps: other.f.deps }).pass();
+  assert.equal(other.calls[0].call.unsetEnv.includes('AGY_ADC_AUTH'), false, 'another tool\'s launch drops only its own');
 });
 
 test('a full Codex plan uses the same gateway route', async () => {
@@ -4444,15 +4634,16 @@ test('a goal in review gets a review session: the goal-review role, the review m
 
 test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
+  const only = DEFAULT_CATALOG.review.find((candidate) => candidate.tool === 'claude');
+  const sameModel = builtBy(`claude ${only.model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [DEFAULT_CATALOG.review[0]] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [only] });
   f.answer = judges(f, 'merge');
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
-  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', DEFAULT_CATALOG.review[0].model]);
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', only.model]);
   assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
   assert.ok(f.log.some((line) => /review starting .*preferred \(review candidate 1 — claude opus built it, and no other candidate can run on its plan\)/u.test(line)));
 });
@@ -4509,10 +4700,10 @@ test('a goal built on the first review candidate is reviewed by the next one whe
   assert.ok(f.log.some((line) => /review starting .* review list: preferred \(review candidate 2 — codex gpt-6\.1-sol built it\)/u.test(line)));
 });
 
-test('goal review rereads changed provider priority over headroom and build-model avoidance', async () => {
+test('goal review rereads the catalog: priority outranks headroom when the first candidate built it, and the first choice outranks priority', async () => {
   const f = reviewFixture({ log: builtBy('codex gpt-6-luna') });
   let priority = 'codex';
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [OPUS_REVIEW, LUNA_REVIEW] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), providerPriority: priority, review: [LUNA_REVIEW, OPUS_REVIEW] });
   f.deps.capacity.write(capacityWith({ claude: 0.1, codex: 0.9 }));
   f.answer = judges(f, 'review');
   const runner = createRunner({ deps: f.deps });
@@ -4523,7 +4714,9 @@ test('goal review rereads changed provider priority over headroom and build-mode
   priority = 'claude';
   f.answer = judges(f, 'merge');
   await runner.pass({ repo: 'memoro' });
-  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['claude', 'opus']]);
+  // The catalog's first candidate runs whenever it can: a changed priority no longer outranks it.
+  assert.deepEqual(f.calls.sessions.map(c => [c.env.MC_TOOL, c.env.MC_MODEL]), [['codex', 'gpt-6-luna'], ['codex', 'gpt-6-luna']]);
+  assert.ok(f.log.some((line) => /review candidate 1, the first choice/u.test(line)));
 });
 
 test('a goal review with no candidate on plan goes to the API reserve, and waits while that API is off', async () => {
@@ -6137,6 +6330,28 @@ test('programme turn: a quota, an offline and a refused-login ending write no fa
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: written nothing`);
     assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/martin/items/')), [], kind);
   }
+});
+
+test('programme turn: on agy the turn asks the registry — no check-in, its own provider refused on a login ending, and no failure counted', async () => {
+  const f = programmeFixture();
+  wireDesk(f);
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  const launch = f.deps.launch;
+  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
+  let current = null;
+  f.answer = () => {
+    current = Object.entries(f.files).filter(([path]) => path.startsWith('/w/runner/current-')).map(([, text]) => JSON.parse(text))[0];
+    return { status: 1, stdout: '', stderr: 'authentication required: please sign in', timedOut: false };
+  };
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const [call, ...rest] = turnSessions(f);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([call.env.MC_TOOL, call.args[0], call.prompt, call.checkInMs], ['agy', '-p', undefined, undefined], 'agy\'s own arguments, and no check-in or stall guard');
+  assert.deepEqual([current.tool, current.check_in_minutes], ['agy', null]);
+  const providers = f.deps.capacity.read().providers;
+  assert.ok(providers.agy.refusal_until, 'the login ending refuses agy until the quota sleep');
+  assert.equal(providers.claude.refusal_until, null, 'and no other provider');
+  assert.equal(f.files[TURN_STATE], undefined, 'a login ending counts for nothing against the programme');
 });
 
 test('programme turn: an unreadable state file starts no turn and is said once', async () => {

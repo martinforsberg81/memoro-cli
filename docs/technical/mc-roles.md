@@ -5,7 +5,7 @@ Every session mc starts in a role is told two things, in this order: the text
 the user's Coding Profile, which once came first, was removed by ruling 24, and
 the one rule in it nothing else said (what is written in English) is a sentence
 in `all-sessions.md`. This document is the one account of how those two are found
-and joined. `mc run`, `mc plan`, `mc helper` and `mc manager` each described a corner
+and joined. `mc run`, `mc plan`, `mc martin` and `mc manager` each described a corner
 of it from their own angle; they now point here, because parallel accounts
 of one mechanism is four things to keep true.
 
@@ -75,7 +75,6 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `manager` | opus | `manager` | `mc run`, the manager's horizon and curation turns ([mc-run.md](mc-run.md)); `mc manager --headless`, an explicit fresh task; never a conversation |
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
-| `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
 | `decision` | fable | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
@@ -213,7 +212,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc helper`, `mc martin`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc martin`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runGoal`) | a selected-draft plan, build, review or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
@@ -432,7 +431,7 @@ verified by opening a real planning session with it (2026-09-05, #614).
 
 Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
 accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
-`helper` and `intake`; `manager` is launched headless, by the runner or by a person. The launch clears inherited session
+`martin` and the eye's `intake`; `manager` is launched headless, by the runner or by a person. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 Runner roles are `build-session:goal`, `review-session:goal`
 and `mend-session`; `plan` serves interactive planning and next-draft assignment.

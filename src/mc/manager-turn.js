@@ -10,7 +10,8 @@ import { registerForeground } from './foreground.js';
 import { runnerDir } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
-import { headlessArgs, readSessionOutput, sessionAnswer, TIMEOUT_EXIT } from './run-plan.js';
+import { headlessArgs, readSessionOutput, sessionAnswer, sessionFinished, TIMEOUT_EXIT } from './run-plan.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { DEFAULT_CATALOG, readModels } from './model-config.js';
@@ -74,8 +75,9 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
     } catch (error) {
       result = { status: 1, stdout: '', stderr: error.message || String(error) };
     }
-    const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now });
-    const ok = result.status === 0 && !result.timedOut && !summary.quota && !summary.interrupted && !['failed', 'no-json'].includes(summary.note);
+    const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now, model: selectedModel });
+    refusePlanOnRead({ read: summary, launch, billing: billing.billing, env, now, say: deps.say });
+    const ok = sessionFinished(result, summary);
     const answer = sessionAnswer(launch.id, result.stdout);
     const receipt = { ...summary, answer, ok, status: result.status, tool: launch.shortName || launch.id, model: selectedModel, providerPriority: priority, routeWhy, billing: billing.billing, started: now.toISOString(), finished: new Date().toISOString(), prompt, stdout: result.stdout, stderr: result.stderr };
     writeFileSync(log, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
+import * as agyAdapter from '../../src/adapters/antigravity-cli.js';
 import * as claude from '../../src/adapters/claude-code.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { refusedMove } from '../../src/mc/commands/goal.js';
@@ -18,12 +19,13 @@ import { deskRunsPath } from '../../src/mc/desk-budget.js';
 import { HOLD_FILE, MEND_ROLE, parseGoal, parseLog, REVIEW_ROLE, readTextOrNull } from '../../src/mc/goals.js';
 import { readRunRows } from '../../src/mc/landed.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
-import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
+import { applyObservation, normaliseCapacity, readCapacity } from '../../src/mc/model-capacity.js';
+import { runnerDir } from '../../src/mc/paths.js';
 import {
   authorOf, chooseReader, goalHash, LAUNCH_FILE, LIMIT_MS, markerRecord, partsLacks, planReviewCall, readerPrompt, readingState, RECORDS_FILE,
   REVIEW_TEXT_FILE, unsupportedClaims, verdictVerb,
 } from '../../src/mc/plan-review.js';
-import { TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
+import { QUOTA_SLEEP_MS, TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
 import { writeFileAtomic } from '../../src/mc/atomic-write.js';
 import { goalJsonV2 } from './_helpers/goal-file.js';
 
@@ -175,6 +177,20 @@ test('a candidate that can run only on its API reserve is chosen over the author
   assert.match(alone.out, /the author is claude opus \(no other model could run\)/u);
   const stub = chooseReader({ catalog: catalogOf([SOL, OPUS]), capacity: capacityOf(0.5, 0.5), now: NOW, author: { tool: 'claude', model: 'opus' }, choose: ({ catalog }) => (catalog.review.length === 1 ? { ok: false, reason: 'nothing can run' } : { ok: true, candidate: catalog.review[1] }) });
   assert.equal(stub.candidate.model, 'opus', 'when the others answer that nothing can run, the whole list is asked');
+});
+
+test('plan review\'s removal of the author promotes no other candidate to first choice: the catalog\'s first stays first only while it is not the author', () => {
+  const ARGON = Object.freeze({ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' });
+  const catalog = catalogOf([ARGON, OPUS, SOL]);
+  const withArgon = (claudeUsed, codexUsed) => applyObservation(capacityOf(claudeUsed, codexUsed), 'agy', { windows: { five_hour: win(0.5), weekly: win(0.5) } }, NOW);
+  // The author is the first candidate: claude is not promoted, the ranking chooses and codex has the room.
+  const byArgon = chooseReader({ catalog, capacity: withArgon(0.9, 0.1), now: NOW, author: { tool: 'agy', model: 'gemini-4-argon-high' } });
+  assert.equal(byArgon.candidate.tool, 'codex');
+  assert.doesNotMatch(byArgon.why, /first choice/u);
+  // The author is a later candidate and the first can run: it is read on the first.
+  const byOpus = chooseReader({ catalog, capacity: withArgon(0.1, 0.1), now: NOW, author: { tool: 'claude', model: 'opus' } });
+  assert.equal(byOpus.candidate.tool, 'agy');
+  assert.match(byOpus.why, /review candidate 1, the first choice/u);
 });
 
 test('the author is MC_TOOL and MC_MODEL, else --avoid, else unknown, and the call and the record say so', async (t) => {
@@ -524,4 +540,23 @@ test('the prompt names every claim that says every, only or no other and cites n
   assert.match(prompt, /outcome 1: Every writer is covered\./u);
   assert.doesNotMatch(prompt, /D1: .*Only Martin/u);
   assert.match(prompt, /\/g\/PLAN-REVIEW\.md/u);
+});
+
+test('a plan review whose agy session reads a login refusal writes agy\'s refusal, and the next choice passes it by; an API-billed one writes nothing', async (t) => {
+  const ARGON = Object.freeze({ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' });
+  const catalog = catalogOf([ARGON, OPUS, SOL]);
+  const agy = () => ({ ok: true, id: 'antigravity-cli', shortName: 'agy', spec: { bin: '/fake/agy' }, adapter: agyAdapter });
+  const signedOut = async () => ({ status: 1, stdout: '', stderr: 'Error: authentication required, please sign in' });
+  const f = setup(t);
+  const { code } = await f.call({ extra: { catalog, launch: agy, session: signedOut } });
+  assert.equal(code, 1, 'no verdict, no reading');
+  const kept = readCapacity({ root: runnerDir(f.baseEnv) });
+  assert.equal(kept.providers.agy.refusal_until, new Date(NOW.getTime() + QUOTA_SLEEP_MS).toISOString(), 'refused for the quota sleep, the read naming no reset');
+  const next = chooseReader({ catalog, capacity: applyObservation(capacityOf(0.5, 0.5), 'agy', { windows: { five_hour: win(0.1), weekly: win(0.1) } }, NOW), now: NOW });
+  assert.equal(next.candidate.tool, 'agy', 'unrefused, agy is the first choice');
+  assert.notEqual(chooseReader({ catalog, capacity: kept, now: NOW }).candidate.tool, 'agy', 'refused, the choice passes agy by');
+
+  const api = setup(t);
+  await api.call({ extra: { catalog, launch: agy, session: signedOut, billingRoute: () => ({ billing: 'credits' }) } });
+  assert.equal(readCapacity({ root: runnerDir(api.baseEnv) }).providers.agy?.refusal_until ?? null, null, 'an API-billed session refused nothing about the plan');
 });

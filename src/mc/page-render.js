@@ -48,6 +48,7 @@ import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
+import { horizonsLines } from './page-horizons.js';
 import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
@@ -540,11 +541,11 @@ export function statusRollup(statuses = {}) {
   return Object.entries(statuses).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-function programmeLine(c, wide, group, expand) {
+function programmeLine(c, wide, group, expand, numbered = false) {
   const metadata = expand ? ` · ${group.goals?.length || 0} goal${group.goals?.length === 1 ? '' : 's'}${group.proposals ? ` · ${group.proposals} proposal${group.proposals === 1 ? '' : 's'}` : ''}` : '';
   // The goals done or dropped and still under `goals/`: the count `a` shows.
   const done = group.finished ?? (group.goals || []).filter((goal) => ['done', 'dropped'].includes(goal.stage)).length;
-  const label = clipCell(`${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${done ? ` · ${done} done` : ''}${group.record_invalid ? ' · record invalid' : ''}${metadata}`, wide - 8);
+  const label = clipCell(`${numbered && group.number != null ? `${group.number} ` : ''}${group.programme}${group.priority ? ` · priority ${group.priority}` : ''}${done ? ` · ${done} done` : ''}${group.record_invalid ? ' · record invalid' : ''}${metadata}`, wide - 8);
   return `  ${c('┌─ ', 'cyan')}${c(label, 'bold')}${c(` ${'─'.repeat(Math.max(0, wide - width(label) - 7))}┐`, 'cyan')}`;
 }
 
@@ -583,11 +584,7 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   let alone = false;
   for (const group of groups) {
     if (group.dormant && !expand && !(group.planning_sessions?.length || group.sessions?.length)) continue;
-    const body = [
-      ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
-      ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
-      ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }),
-    ];
+    const body = programmeBody(c, wide, group, expand, runnerSessions);
     // A programme with nothing to draw — nothing unfinished, nothing to attend to — is its heading row alone.
     if (lines.at(-1) !== '' && !(alone && !body.length)) lines.push('');
     lines.push(programmeLine(c, wide, group, expand));
@@ -599,6 +596,33 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
   // A last programme drawn as its heading alone has no border under it: a blank
   // line keeps what follows (unassigned activity, strays) from reading as its rows.
   if (alone) lines.push('');
+  unassignedLines(lines, c, wide, programmes, expand, runnerSessions);
+}
+
+/** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
+function programmeBody(c, wide, group, expand, runnerSessions) {
+  return [
+    ...(group.planning_sessions || []).flatMap((session) => activityLines(c, wide, { ...session, kind: 'plan' }, { indent: 4, expand })),
+    ...(group.sessions || []).flatMap((session) => activityLines(c, wide, session, { indent: 4, expand })),
+    ...programmeTreeLines(c, wide, group, { expand, sessions: runnerSessions }),
+  ];
+}
+
+/**
+ * One programme's block alone — the programme view: its heading with its number, then the body and the border.
+ * A programme with nothing to draw is its heading row and a blank line.
+ */
+function programmeViewLines(lines, c, wide, group, expand, runnerSessions) {
+  const body = programmeBody(c, wide, group, expand, runnerSessions);
+  lines.push(programmeLine(c, wide, group, expand, true));
+  if (!body.length) { lines.push(''); return; }
+  lines.push(...body);
+  lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
+}
+
+/** The runner's sessions no programme's goal or plan explains, then what mc has no kind for. */
+function unassignedLines(lines, c, wide, programmes, expand, runnerSessions = []) {
+  const groups = programmes.programmes || [];
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
   // Match identities rather than object references: cached JSON copies sessions.
   const identity = (session) => JSON.stringify([session.name, session.pid, session.started]);
@@ -612,7 +636,6 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     }
   }
   strayLines(lines, c, wide, programmes.strays);
-
 }
 
 /**
@@ -914,7 +937,7 @@ function pipelineLines(lines, c, raw, wide, data) {
  * per section, so the two can never say different things.
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), expand = false,
+  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null,
 } = {}) {
   const paintText = painter(colour);
   // Secondary information must remain readable on dark terminal palettes.
@@ -939,7 +962,15 @@ export function renderPageLines(data, {
     if (runner.memory?.line) detail(lines, c, wide, 2, 'New sessions paused — low memory', ['yellow']);
     if (runner.stop) detail(lines, c, wide, 2, 'New sessions paused — runner stopping', ['yellow']);
   } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);
-  programmesLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
+  // `view` is a programme's name: that programme's block alone, nothing below it. A name that is no longer listed is the overview.
+  const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
+  if (open) {
+    programmeViewLines(lines, c, wide, open, expand, runner.sessions || []);
+    return lines;
+  }
+  horizonsLines(lines, c, wide, data, { expand, sessions: runner.sessions || [] });
+  if (expand || !data.horizons) programmesLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
+  else unassignedLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
   lines.push('');
   const mendMartin = (data.checks?.main_mend || []).flatMap((repo) => repo.entries.filter((entry) => entry.state === 'Martin').map((entry) => ({ ...entry, repo: repo.repo })));
   if (mendMartin.length) {

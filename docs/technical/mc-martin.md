@@ -68,9 +68,18 @@ The opening has these parts, in this order (Horizons only when the desk holds on
    or `off`.
 7. **What the system changed** — from the lessons and the item store only (see
    *Lessons and the learning pass*). It never lists lessons or prints their text.
+8. **Where a new thing goes** — what the session needs to place a thing Martin
+   says that answers no waiting item (*Placing*, below): the UTC date of the
+   opening, the proposal file name shape `<date>-<mc|memoro>-<slug>.md`, the two
+   destinations as absolute paths (`<programs home>/<programme>/proposals/` when a
+   programme owns it, else `~/mc/proposals`) and every programme with one line, in
+   alphabetical order, from the same reader the intake turn routes by
+   (`programmeRoutes`, [mc-helper.md](mc-helper.md)); `_none_` when there are none.
+   It is read from the disk at the opening and stores nothing.
 
 `brief --json` carries `texts`, `acts` and `not_ready.stuck` for these parts, and no
-`yours`.
+`yours`; its last key, `placing`, is `{ date, file_name, programs_path,
+proposals_path, programmes: [{ name, line }] }`.
 
 The interval is `(since, now]`, where `since` is the time of the last
 successful opening, or the store's `first_sync_at` before the first opening.
@@ -87,6 +96,20 @@ phase, directly or through other phases; a phase that waits for none is blocked
 by nothing, and a programme whose record is invalid counts none (`laterPhaseGoals`,
 by the rule of `phaseStanding`, [mc-goals.md](mc-goals.md#phases)). Goals of one
 phase block the same set and are ordered by age.
+
+## Placing
+
+The desk takes the place of the old helper desk. When Martin says something
+that answers no waiting item, the desk session reads it against the texts
+(`docs/technical/`, the programme README and goals, and the texts he holds),
+says back in Swedish where it lands and places it on his word
+(`canon/roles/martin.md`, *Placing*): a deviation that a goal waiting in status
+`Martin` can settle within its scope is settled there; any other deviation is a
+proposal file as [proposals](../../canon/tasks/proposals.md) says; a change to a
+text he holds goes through `mc martin propose`; a new aim is a horizon, played
+back and set as under *Horizons*. A candidate horizon is said to him and never
+stored. `mc helper` without `--intake` or `--collect` is refused with a pointer
+to `mc martin` ([mc-helper.md](mc-helper.md)).
 
 ## Read-only queue
 
@@ -395,8 +418,8 @@ open: [{ slug, title, position }], unreadable: [<directory names>] }`, present
 only when the store holds a horizon or an unreadable record. Reached horizons are
 those with `reached_at` in `(since, now]`, oldest first.
 
-**What does not read horizons.** The runner's pick, `PRIORITY.json`, `mc programs`
-and the page do not read horizons: the order of the horizons does not change
+**What does not read horizons.** The page reads them to order its overview
+(HORIZONS, [mc-ui.md](mc-ui.md#horizons)); the runner's pick, `PRIORITY.json` and `mc programs` do not: the order of the horizons does not change
 which programme the runner works on. The one reader besides the desk is the
 manager's horizon turn, which takes the open horizons in position order and
 creates the next programme of the first that has none ([mc-run.md](mc-run.md#the-managers-turns)).
