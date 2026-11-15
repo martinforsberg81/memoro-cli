@@ -111,6 +111,7 @@ import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
 import { refreshCodexCapacity } from './codex-capacity.js';
+import { makeAgyUsageReader } from './agy-capacity.js';
 import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
@@ -165,6 +166,7 @@ const CAPACITY_READERS = Object.freeze({
     return { ...got, state };
   },
   'codex-rpc': (provider, env) => () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
+  'agy-usage': (provider, env) => makeAgyUsageReader({ provider, env }),
 });
 
 /** The role each goal session kind runs with (`goalSession`). */
@@ -892,6 +894,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function startCapacityTicker() {
     if (!deps.every || !billingProviders().some((provider) => deps[refreshDep(provider)])) return () => {};
     const inFlight = new Set();
+    // A reader that answered `stop` (agy's first unparsed /usage) is not called again for the life of the runner.
+    const stoppedReaders = new Set();
     const lastAttempt = new Map();
     let stopped = false;
     let stopTimer = null;
@@ -907,13 +911,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (updateRequested()) return;
       for (const provider of billingProviders()) {
         const refresh = deps[refreshDep(provider)];
-        if (!refresh || inFlight.has(provider)) continue;
+        if (!refresh || inFlight.has(provider) || stoppedReaders.has(provider)) continue;
         const item = capacity.read().providers[provider];
         const attempts = [item.observed_at, item.failure?.at, lastAttempt.get(provider)].map((at) => typeof at === 'number' ? at : Date.parse(at || '')).filter(Number.isFinite);
         if (attempts.length && deps.now().getTime() - Math.max(...attempts) < CAPACITY_POLL_MS) continue;
         lastAttempt.set(provider, deps.now().getTime());
         inFlight.add(provider);
         Promise.resolve().then(refresh).then((got) => {
+          if (got?.stop) { stoppedReaders.add(provider); say(`${provider} capacity not read: ${got.why} — the reader stops until the runner restarts; the last snapshot stands`); return; }
           say(got?.ok ? `${provider} capacity read — its subscription windows are noted${notRead(got.unread)}` : `${provider} capacity not read: ${got?.why || 'no answer'} — the last snapshot stands`);
         }).catch((error) => say(`${provider} capacity not read: ${error?.message || error} — the last snapshot stands`)).finally(() => inFlight.delete(provider));
       }

@@ -4444,15 +4444,16 @@ test('a goal in review gets a review session: the goal-review role, the review m
 
 test('a goal whose every review candidate is its build model is reviewed on that model, not left waiting', async () => {
   // The review catalog's model and the build session's are the same: claude opus.
-  const sameModel = builtBy(`claude ${DEFAULT_CATALOG.review[0].model}`, '2026-08-20T10:00Z');
+  const only = DEFAULT_CATALOG.review.find((candidate) => candidate.tool === 'claude');
+  const sameModel = builtBy(`claude ${only.model}`, '2026-08-20T10:00Z');
   const f = reviewFixture({ log: sameModel });
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [DEFAULT_CATALOG.review[0]] });
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [only] });
   f.answer = judges(f, 'merge');
   const r = await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
   assert.equal(r.name, 'goal:prog/judged');
   const [call] = f.calls.sessions;
   assert.equal(call.env.MC_ROLE, 'review-session:goal');
-  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', DEFAULT_CATALOG.review[0].model]);
+  assert.deepEqual([call.env.MC_TOOL, call.env.MC_MODEL], ['claude', only.model]);
   assert.equal(f.log.some((line) => /its review waits/u.test(line)), false);
   assert.ok(f.log.some((line) => /review starting .*preferred \(review candidate 1 — claude opus built it, and no other candidate can run on its plan\)/u.test(line)));
 });

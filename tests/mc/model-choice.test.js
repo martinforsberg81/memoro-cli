@@ -51,7 +51,7 @@ test('explicit Claude priority bootstraps unknown or stale usage ahead of known 
   const classes = ['fast', 'medium', 'large', 'review'];
   const mixedReview = { ...DEFAULT_CATALOG, review: [
     { tool: 'codex', model: 'gpt-6.1-sol', effort: 'high' },
-    DEFAULT_CATALOG.review[0],
+    { tool: 'claude', model: 'opus', effort: 'medium' },
   ] };
   // Review's first candidate (codex) built the goal, so the priority ranking decides, not the first choice.
   const built = { tool: 'codex', model: 'gpt-6.1-sol' };
