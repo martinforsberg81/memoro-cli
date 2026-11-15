@@ -4,17 +4,26 @@ description: Designing a programme in mc — its README, decisions, phases and b
 ---
 # Designing a programme
 
-A programme is thought through once, before its goals are written. Its design is read from one page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision means the programme was not designed.
+A programme is thought through once, before its goals are written. Its design is read from one
+page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
+means the programme was not designed.
 
-A programme is of one of two kinds. One with a record (`PROGRAMME.json`, made by `mc programs create <programme> --end "…" [--horizon <slug>]`) is bounded: it serves a horizon and ends, its page is [the record page](references/programme-record-readme.md) (What it is for, End, Decisions, Phases, Where things are) and the enduring aim stays in the area pages it points to. It is done when its goals are done and what is now true is written back to `docs/technical/`. One without a record keeps [the programme page](references/programme-readme.md) and everything below that speaks of its aim.
+A programme is of one of two kinds. One with a record (`PROGRAMME.json`, made by `mc programs create
+<programme> --end "…"`) is bounded: it serves a horizon and ends. Its page is [the record
+page](references/programme-record-readme.md); the enduring aim stays in the area pages it points to.
+It is done when its goals are done and what is now true is written back to `docs/technical/`. One
+without a record keeps [the programme page](references/programme-readme.md) and what speaks of its aim.
 
 ## Files
 
-- `README.md` — the programme page of its kind: aim, measures, gap, next horizon, phases, Martin-only choices and pointers. Read first; keep its gap current each session.
+- `README.md` — the programme page of its kind: aim, measures, gap, next
+  horizon, phases, Martin-only choices and pointers. Read first; keep its gap current each session.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
-- `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes `docs/project/`.
-- `evidence/<date>-<slug>/` — measured evidence linked from README. No `PLAN.md`, `decisions/` or second plan format.
+- `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
+  `docs/project/`.
+- `evidence/<date>-<slug>/` — measured evidence linked from README. No `PLAN.md`, `decisions/` or
+  second plan format.
 
 ## Design, in order
 
@@ -33,10 +42,10 @@ A programme is of one of two kinds. One with a record (`PROGRAMME.json`, made by
 5. Order by prerequisites and shared files: independent goals share a phase; dependent goals go later. A prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
-7. Write/read back the README as a headless session will, in the order of its page's headings
-   (without a record: Aim, Measures, Gap, Next horizon, Phases, Martin's, Where things are). Rewrite the dated Gap
-   at every plan session's end. At its next plan session, bring an existing page to this template,
-   settling its aim with Martin. Each goal stands on the design's decisions and prerequisites; landed sections leave the README.
+7. Write/read back the README as a headless session will, in the order of its page's headings (for a
+   programme without a record: Aim, Measures, Gap, Next horizon, Phases, Martin's, Where things are). Rewrite the dated Gap at every plan session's end.
+   At its next plan session, bring an existing page to this template, settling its aim with Martin.
+   Each goal stands on the design's decisions and prerequisites; landed sections leave the README.
 
 ## When a goal lands
 

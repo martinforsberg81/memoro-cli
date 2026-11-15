@@ -260,12 +260,19 @@ describe('the list and the page', () => {
     } finally { a.done(); }
   });
 
-  it('leaves a programme without a record as it was: seven cells and record null', () => {
-    const section = { programmes: [{ programme: 'p', goals: [], dormant: true, statuses: {}, priority: 0 }] };
-    const listing = programmesListing({ section });
-    assert.equal(listing.programmes[0].record, null);
-    assert.equal(listingText(listing).split('\n')[1].trim().split(/ {2,}/u).length, 7);
-    assert.deepEqual(Object.keys(listing.programmes[0]).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'proposals', 'statuses', 'plan_sessions']);
+  it('leaves a programme without a record as it was: seven cells and record null, beside one with a record', () => {
+    const group = (programme) => ({ programme, goals: [], dormant: true, statuses: {}, priority: 0 });
+    const view = { horizon: null, end: 'e', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+    const listing = programmesListing({ section: { programmes: [group('with'), group('without')] } }, { record: (name) => (name === 'with' ? view : null) });
+    const [withRecord, without] = listing.programmes;
+    assert.deepEqual(withRecord.record, view);
+    assert.equal(without.record, null);
+    const [, first, second] = listingText(listing).split('\n');
+    assert.equal(first.trim().split(/ {2,}/u).length, 8, 'the programme with a record has one cell more');
+    assert.match(first, /record open · no horizon$/u);
+    assert.equal(second.trim().split(/ {2,}/u).length, 7);
+    assert.doesNotMatch(second, /record/u);
+    assert.deepEqual(Object.keys(without).slice(0, -1), ['name', 'priority', 'state', 'dormant', 'repos', 'goals', 'proposals', 'statuses', 'plan_sessions']);
   });
 });
 
