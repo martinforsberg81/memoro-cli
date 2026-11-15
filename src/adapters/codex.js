@@ -566,3 +566,166 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
     return entry?.type === 'session_meta' ? entry?.payload?.id || null : null;
   },
 });
+
+/* ------------------------------------------------------------------
+ * Seam declarations. `src/mc/` asks the registry (`index.js`) for these and
+ * never compares this tool's name. A declaration is a named export; a tool
+ * that lacks one is refused by a seam that launches, bills, routes or acts.
+ * ------------------------------------------------------------------ */
+
+/** The command name this tool's process runs under. */
+export const PROCESS_NAME = 'codex';
+
+/**
+ * The headless argument list from the pieces the runner computed from this
+ * adapter's own switches. Headless planning/helper work starts in mc-owned
+ * directories outside Git, so the working directory is allowed in fresh and
+ * resumed runs and the sandbox policy is unchanged. `codex exec resume` takes
+ * no `--sandbox` (codex-cli 0.151.0): the same setting goes through `-c`, and
+ * the session id is the first positional.
+ */
+export function headlessArgs({ modelArgs: model, effortArgs: effort, session, instr, prompt, resume = null }) {
+  if (resume) return ['exec', 'resume', '--json', ...model, ...effort, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, '--skip-git-repo-check', resume, prompt];
+  return ['exec', '--json', '--sandbox', 'danger-full-access', ...model, ...effort, ...session, ...instr, '--skip-git-repo-check', prompt];
+}
+
+/** The mechanism `src/mc/run-plan.js` reads this tool's headless output with. */
+export const OUTPUT_READER = 'codex-events';
+
+/** Codex gets neither a check-in nor a stall guard: its stdin is not a pipe. */
+export const WATCH = null;
+
+/** The name billing state, plan windows and the API gateway know this tool by. */
+export const BILLING_PROVIDER = 'codex';
+
+/** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
+export const PROVIDER_PRIORITY_RANK = 0;
+
+/** Intake and other catalog-routed turns run on a candidate the catalog lists for this tool; the name is what a refusal calls it. */
+export const INTAKE_FROM_CATALOG = 'Codex';
+
+/** A plan review does not pass the checkout as an allowed directory. */
+export const ALLOWED_DIR = null;
+
+/** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */
+export const CAPACITY_READER = 'codex-rpc';
+
+/** The plan windows a usage snapshot carries for this tool, in order. */
+export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
+
+/** A login interruption is not a plan refusal for this tool. */
+export const LOGIN_REFUSES_PLAN = false;
+
+/** No plan refusal or stream window is recorded for this tool. */
+export const PLAN_STATE = null;
+
+/**
+ * The standing rule for choosing a model of this tool (`model-choice.js`): an
+ * unknown capacity reading never bootstraps a choice, and candidates are
+ * judged per model.
+ */
+export const MODEL_CHOICE = Object.freeze({ bootstrapsOnUnknown: false, perModel: true });
+
+/**
+ * The API-credit route: where the gateway forwards, how it authenticates, and
+ * the settings the tool is started with so it talks to the gateway. Codex with
+ * websockets upgrades on its HTTP path and then sends only what is new since
+ * the previous response on the open connection. No key or grant is held here.
+ */
+export const API_ROUTE = Object.freeze({
+  upstream: 'https://api.openai.com',
+  auth: Object.freeze({ header: 'authorization', scheme: 'Bearer' }),
+  routes: Object.freeze([
+    Object.freeze({ path: '/v1/responses', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/responses/compact', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/models', methods: Object.freeze(['GET']) }),
+  ]),
+  websocket: Object.freeze({ path: '/v1/responses', upstream: 'wss://api.openai.com/v1/responses', forwardHeaders: Object.freeze(['openai-beta']) }),
+  modelAliases: null,
+  creditsByMode: false,
+  toolConfig({ base, grant, args, env }) {
+    return {
+      args: [
+        '-c', 'model_provider="mc_api"',
+        '-c', 'model_providers.mc_api.name="MC API gateway"',
+        '-c', `model_providers.mc_api.base_url="${base}/codex/v1"`,
+        '-c', 'model_providers.mc_api.env_key="MC_GATEWAY_GRANT"',
+        '-c', 'model_providers.mc_api.wire_api="responses"',
+        '-c', 'model_providers.mc_api.requires_openai_auth=false',
+        '-c', 'model_providers.mc_api.supports_websockets=true',
+        ...args,
+      ],
+      env: { ...env, MC_GATEWAY_GRANT: grant },
+    };
+  },
+});
+
+/** The model a plan session runs on when none is named. */
+export const PLAN_MODEL = 'gpt-6.1-sol';
+
+/**
+ * How an interactive launch hands the role's instructions over: the
+ * channel's name, its arguments, whether a resume supplies them again, the
+ * channel a guarded launch uses instead (ordinary resume text cannot replace
+ * historical developer authority), and whether a guarded fresh launch names
+ * its own session id.
+ */
+export const INSTRUCTIONS = Object.freeze({
+  channel: 'instructions',
+  args: (markdown) => ['-c', `instructions=${JSON.stringify(markdown)}`],
+  onResume: false,
+  guarded: Object.freeze({
+    channel: 'developer_instructions',
+    args: (markdown) => ['-c', `developer_instructions=${JSON.stringify(markdown)}`],
+    marker: true,
+  }),
+  freshSessionId: false,
+});
+
+/** A resume's session switches go before its session id (`codex resume [OPTIONS] [SESSION_ID]`). */
+export const RESUME_ID_LAST = true;
+
+/** A session has no client but the terminal: nothing could be left running in the background. */
+export const BACKGROUND = false;
+
+/** No Remote Control. */
+export const REMOTE_CONTROL = false;
+
+/** No folder is trusted before the tool opens in it. */
+export const FOLDER_TRUST = null;
+
+/** The mechanism that keeps a persistent session; `src/mc/work-open.js` and `commands/session.js` hold the code. */
+export const PERSISTENT_DRIVER = 'codex-session';
+
+/**
+ * What a server session of this tool is on the wire: a socket the client
+ * forwards and a local client (`bin`) it runs against it.
+ */
+export const SERVER_SESSION = Object.freeze({ mechanism: 'socket', name: 'Codex', bin: 'codex' });
+
+/**
+ * How a conversation's launching role is proven (reading seam; `src/mc/conversations.js` holds the code by
+ * these names): from the developer instructions the rollout records.
+ */
+export const IDENTITY_READER = 'developer-instructions';
+
+/** Context usage is not read from a rollout. */
+export const CONTEXT_READER = null;
+
+/** How a transcript's last model is read: the model of the last turn context. */
+export const MODEL_READER = 'turn-context';
+
+/** How a conversation is removed: the tool's own verb, because it holds an index a deleted file would leave lying. */
+export const CONVERSATION_DELETE = Object.freeze({ mechanism: 'tool-verb', bin: 'codex', args: (id) => ['delete', '--force', id], failed: 'codex-delete-failed' });
+
+/** How the end of a transcript is read for what was said and whose turn it is (`src/mc/work-status.js` holds the code by this name). */
+export const TAIL_READER = 'codex-tail';
+
+/**
+ * Where the desk's cost is read from (`src/mc/desk-cost.js` holds the code by these names): the transcript
+ * files, the reader of their lines, and the option that names their directory.
+ */
+export const COST_SOURCE = Object.freeze({ files: 'codex-rollouts', reader: 'codex-readings', option: 'codexDir' });
+
+/** Where the tool reads skills from. */
+export const SKILLS_DIR = (_env, home) => join(home, '.agents', 'skills');

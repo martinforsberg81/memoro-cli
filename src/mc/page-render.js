@@ -44,6 +44,7 @@
  * Lines rather than one string, so a test can look
  * at a row without splitting a page apart again.
  */
+import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
@@ -528,7 +529,7 @@ export function planSessionWords(group) {
 export function planProviders(group) {
   const providers = {};
   for (const item of group.planning_sessions || (group.planning ? [group.planning] : [])) {
-    const provider = item.tool === 'claude-code' ? 'claude' : item.tool || 'unknown';
+    const provider = toolShortName(item.tool) || item.tool || 'unknown';
     providers[provider] = (providers[provider] || 0) + 1;
   }
   return Object.fromEntries(Object.entries(providers).sort(([a], [b]) => a.localeCompare(b)));

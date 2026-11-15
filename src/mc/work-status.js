@@ -29,6 +29,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 
+import { declared, toolShortName, toolsWith } from '../adapters/index.js';
 import { contextUsage, lastModel, listConversations, readTailEntries } from './conversations.js';
 import { runAsync as runGitAsync } from './git.js';
 import { readMenu } from './menu-read.js';
@@ -146,15 +147,20 @@ function toolsByDirectory(paths) {
  * Shared by the status board, which only needs to count them, and by stopping
  * a piece of work, which needs to reach them.
  */
+function processTools() {
+  return toolsWith('PROCESS_NAME').map((tool) => {
+    const escaped = declared(tool, 'PROCESS_NAME').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    return { tool: toolShortName(tool), pattern: new RegExp(`(^|\\/)${escaped}(\\s|$)`, 'u') };
+  });
+}
+
 export function toolProcesses(paths) {
   const found = [];
   for (const { pid, command, directory } of processesIn(paths)) {
     // The tool itself, not the shell it was started from and not mc's own
     // background daemons — those stand here too and mean nothing about
     // whether anyone is working.
-    const name = /(^|\/)claude(\s|$)/u.test(command) ? 'claude'
-      : /(^|\/)codex(\s|$)/u.test(command) ? 'codex'
-        : null;
+    const name = processTools().find(({ pattern }) => pattern.test(command))?.tool ?? null;
     if (name) found.push({ pid, name, directory });
   }
   return found;
@@ -264,7 +270,7 @@ function markLive(conversations, running, now) {
   for (const name of running) budget.set(name, (budget.get(name) || 0) + 1);
   const live = new Set();
   for (const item of [...conversations].sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0))) {
-    const name = item.tool === 'claude-code' ? 'claude' : item.tool;
+    const name = toolShortName(item.tool) || item.tool;
     const left = budget.get(name) || 0;
     // A transcript being written right now is its own proof, but it is also
     // almost certainly the process that was found — so it spends the budget
@@ -285,7 +291,8 @@ function markLive(conversations, running, now) {
 
 function describeConversation(item, live) {
   const entries = readTailEntries(item.path);
-  const { said, turn } = item.tool === 'codex' ? codexTail(entries) : claudeTail(entries);
+  const reader = declared(item.tool, 'TAIL_READER');
+  const { said, turn } = reader === 'codex-tail' ? codexTail(entries) : reader === 'claude-tail' ? claudeTail(entries) : { said: null, turn: null };
   return {
     ...item,
     said,

@@ -34,6 +34,7 @@
  *     the ChatGPT entitlement and a failed one as its absence. That is an
  *     inference; an `account/read` would make it a fact.
  */
+import { declared } from '../adapters/index.js';
 import { candidateSpec, LISTS } from './model-config.js';
 import { codexCandidateAt, providerAt, STALE_MS } from './model-capacity.js';
 import { REVIEW_CLASS } from './plan-schema.js';
@@ -60,17 +61,21 @@ function windowStanding(name, standing) {
   return { state: 'known', headroom, retry_at: null, why: `${name} has ${pct(headroom)} headroom` };
 }
 
+/** Whether a tool's plan may carry a choice while its capacity is unknown: the adapter's standing rule. */
+const bootstraps = (tool) => declared(tool, 'MODEL_CHOICE')?.bootstrapsOnUnknown === true;
+
 /** One candidate judged at `now`: `{ state, headroom, retry_at, why }`. */
 function judge(capacity, candidate, now) {
-  if (candidate.tool === 'claude') {
-    const standing = providerAt(capacity, 'claude', now);
-    return standing.refusal_until ? refused('claude', standing.refusal_until) : windowStanding('claude', standing);
+  const provider = declared(candidate.tool, 'BILLING_PROVIDER');
+  const rule = declared(candidate.tool, 'MODEL_CHOICE');
+  if (!provider || !rule) return { state: 'unavailable', headroom: null, retry_at: null, why: `${candidate.tool} declares no ${provider ? 'MODEL_CHOICE' : 'BILLING_PROVIDER'}` };
+  const standing = providerAt(capacity, provider, now);
+  if (standing.refusal_until) return refused(provider, standing.refusal_until);
+  if (rule.perModel) {
+    const listed = codexCandidateAt(capacity, candidate, now);
+    if (!listed.available) return { state: 'unavailable', headroom: null, retry_at: null, why: listed.why };
   }
-  const standing = providerAt(capacity, 'codex', now);
-  if (standing.refusal_until) return refused('codex', standing.refusal_until);
-  const listed = codexCandidateAt(capacity, candidate, now);
-  if (!listed.available) return { state: 'unavailable', headroom: null, retry_at: null, why: listed.why };
-  return windowStanding('codex', standing);
+  return windowStanding(provider, standing);
 }
 
 const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls, candidate, spec: candidateSpec(candidate), basis, headroom, why });
@@ -84,12 +89,12 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
   const judged = order.map((value) => ({ candidate: value, ...judge(capacity, value, now) }));
   const passed = (entry) => `${candidateSpec(entry.candidate)}: ${entry.why}`;
   const allKnown = judged.some((entry) => entry.state === 'known');
-  const eligible = judged.filter((entry) => entry.state === 'known' || (!allKnown && entry.state === 'unknown' && entry.candidate.tool === 'claude'));
+  const eligible = judged.filter((entry) => entry.state === 'known' || (!allKnown && entry.state === 'unknown' && bootstraps(entry.candidate.tool)));
   const preferred = priority === 'auto' ? eligible : eligible.filter((entry) => entry.candidate.tool === priority);
   // An explicit subscription priority is an attempted launch even when its
   // usage is unknown/stale; a known alternative must not silently override it.
   const preferredBootstrap = priority !== 'auto' && !preferred.length
-    ? judged.filter((entry) => entry.candidate.tool === priority && entry.state === 'unknown' && entry.candidate.tool === 'claude')
+    ? judged.filter((entry) => entry.candidate.tool === priority && entry.state === 'unknown' && bootstraps(entry.candidate.tool))
     : [];
   const selectedPool = preferred.length ? preferred : preferredBootstrap.length ? preferredBootstrap : eligible;
   const best = selectedPool.reduce((a, b) => !a || (b.headroom ?? -1) > (a.headroom ?? -1) ? b : a, null);
@@ -136,15 +141,15 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
   if (!LISTS.includes(cls)) throw new Error(`"${cls}" is not a list — ${LISTS.join(', ')}`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   if (cls === 'decision') {
-    const usable = judged.find(entry => entry.state === 'known' || (entry.state === 'unknown' && entry.candidate.tool === 'claude'));
+    const usable = judged.find(entry => entry.state === 'known' || (entry.state === 'unknown' && bootstraps(entry.candidate.tool)));
     if (usable) return answer(cls, usable.candidate, usable.state === 'known' ? 'known' : 'bootstrap', usable.headroom, `${usable.why}; first usable decision candidate`);
   }
   if (priority !== 'auto') {
     const known = judged.filter((entry) => entry.state === 'known');
-    const usable = known.length ? known : judged.filter((entry) => entry.state === 'unknown' && entry.candidate.tool === 'claude');
+    const usable = known.length ? known : judged.filter((entry) => entry.state === 'unknown' && bootstraps(entry.candidate.tool));
     const preferred = usable.filter((entry) => entry.candidate.tool === priority);
-    const preferredBootstrap = priority === 'claude' && !preferred.length
-      ? judged.filter((entry) => entry.candidate.tool === 'claude' && entry.state === 'unknown')
+    const preferredBootstrap = bootstraps(priority) && !preferred.length
+      ? judged.filter((entry) => entry.candidate.tool === priority && entry.state === 'unknown')
       : [];
     const pool = preferred.length ? preferred : preferredBootstrap.length ? preferredBootstrap : usable;
     if (pool.length) {
@@ -161,7 +166,7 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
     const best = known.reduce((a, b) => (b.headroom > a.headroom ? b : a));
     return answer(cls, best.candidate, 'known', best.headroom, best.why);
   }
-  const bootstrap = judged.find((entry) => entry.state === 'unknown' && entry.candidate.tool === 'claude');
+  const bootstrap = judged.find((entry) => entry.state === 'unknown' && bootstraps(entry.candidate.tool));
   if (bootstrap) return answer(cls, bootstrap.candidate, 'bootstrap', null, `${bootstrap.why} — bootstrapped on the included plan`);
   const reserve = judged.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state));
   if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; API reserve`), billing: 'credits' };

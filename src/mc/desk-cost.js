@@ -17,6 +17,7 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { adapterFor, toolsDeclaring } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { estimateCost } from './prices.js';
 
@@ -190,6 +191,11 @@ function readCodex(entry, lines) {
 const OPEN_MESSAGES = 8;
 const BUCKET_MS = 10 * 60 * 1000;
 
+/** The reader of a tool's transcript lines, by the mechanism its adapter declares (`COST_SOURCE.reader`). */
+function readerOf(tool) {
+  return adapterFor(tool).COST_SOURCE.reader === 'claude-messages' ? readClaude : readCodex;
+}
+
 /** Drop what is older than the window, keeping a codex file's last reading before it. */
 function prune(entry, since) {
   if (entry.messages) {
@@ -227,7 +233,7 @@ function costOf(entry, since) {
  * the cache is written back unless `write` is null.
  */
 export function deskCost({
-  claudeDir, codexDir, cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET,
+  cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET, ...directories
 } = {}) {
   const since = now.getTime() - DAY_MS;
   const age = now.getTime() - Date.parse(cache?.at || '');
@@ -236,19 +242,23 @@ export function deskCost({
   const seen = new Set();
   let left = budget;
   let partial = false;
-  const sources = [
-    ...(claudeDir ? claudeFiles(claudeDir, since, files).map((file) => ({ ...file, tool: 'claude' })) : []),
-    ...(codexDir ? codexFiles(codexDir, since, now).map((file) => ({ ...file, tool: 'codex' })) : []),
-  ];
+  // Each implemented tool that declares a cost source (`COST_SOURCE`) is read from the directory its option names.
+  const sources = toolsDeclaring('COST_SOURCE').flatMap((tool) => {
+    const { files: kind, option } = adapterFor(tool).COST_SOURCE;
+    const dir = directories[option];
+    if (!dir) return [];
+    const found = kind === 'claude-projects' ? claudeFiles(dir, since, files) : codexFiles(dir, since, now);
+    return found.map((file) => ({ ...file, tool }));
+  });
   for (const { path, size, tool } of sources) {
     seen.add(path);
     let entry = files[path];
     if (!entry || entry.tool !== tool || size < entry.offset) {
-      entry = { tool, offset: 0, interactive: null, ...(tool === 'claude' ? { messages: {} } : { readings: [], model: null }) };
+      entry = { tool, offset: 0, interactive: null, ...(readerOf(tool) === readClaude ? { messages: {} } : { readings: [], model: null }) };
     }
     files[path] = entry;
     if (entry.interactive === false || size === entry.offset) continue;
-    const reader = tool === 'claude' ? readClaude : readCodex;
+    const reader = readerOf(tool);
     try {
       // An unknown file: its head says whose it is, and a runner's is not read further.
       if (entry.interactive == null) {
@@ -287,10 +297,10 @@ export function deskCost({
 }
 
 /** `deskCost` against the real homes, with its cache under `~/mc/runner/`. */
-export function readDeskCost({ root, claudeDir, codexDir, now = new Date(), read }) {
+export function readDeskCost({ root, now = new Date(), read, ...directories }) {
   const path = join(root, 'runner', DESK_COST_FILE);
   let cache = null;
   try { cache = JSON.parse(read(path, 'utf8')); } catch { cache = null; }
-  const { cache: _written, ...answer } = deskCost({ claudeDir, codexDir, cache, now, write: (value) => writeJsonAtomic(path, value) });
+  const { cache: _written, ...answer } = deskCost({ ...directories, cache, now, write: (value) => writeJsonAtomic(path, value) });
   return answer;
 }
