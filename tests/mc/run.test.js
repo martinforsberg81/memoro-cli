@@ -5576,3 +5576,115 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
     assert.deepEqual(planned(f), [], 'the younger draft is not planned past the older');
   }
 });
+
+/* ------------------------------------------------------------ the programme planning turn */
+
+const PROG = '/w/programs/prog';
+const TURN_STATE = '/w/runner/programme-turn/prog.json';
+const readCheckout = (repo) => `/w/runner/work/programme-turn-prog/${repo}`;
+const recordWith = (changes) => `${JSON.stringify({ ...JSON.parse(plainText()), ...changes }, null, 2)}\n`;
+
+/** A programme `prog` with a record and a README and no goal, as a turn finds it; `goals` are goals it already holds. */
+function programmeFixture({ record = plainText(), readme = true, goals = {}, ...options } = {}) {
+  const f = goalFixture(goals, options);
+  if (record !== null) f.files[RECORD_AT] = record;
+  if (readme) f.files[`${PROG}/README.md`] = '# prog\n\nEnd: Done when it holds.\n';
+  return f;
+}
+/** The desk's items as the runner's fake store reads them out of the fixture's files. */
+function wireDesk(f) {
+  const items = () => Object.entries(f.files).filter(([path]) => /^\/w\/martin\/items\/[^/]+\/item\.json$/u.test(path)).map(([, text]) => JSON.parse(text));
+  f.deps.deskItems = { list: items, read: (id) => items().find((item) => item.id === id) ?? null };
+  return items;
+}
+/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them. */
+function writesGoals(f, goals) {
+  for (const [name, { stage = 'draft', phase = 1 }] of Object.entries(goals)) {
+    const text = goalJson({ stage, status: 'ready', phase, repos: ['memoro'], title: name, goal: [], prs: [] });
+    f.files[`${GOALS}/${name}/GOAL.json`] = stage === 'draft' ? withGoal(text, { success_criteria: [] }) : text;
+    f.files[`${GOALS}/${name}/LOG.md`] = '';
+    f.dirs.add(`${GOALS}/${name}/memoro`);
+  }
+}
+const turnSessions = (f) => f.calls.sessions.filter((call) => call.env.MC_PROGRAMME === 'prog');
+const turnState = (f) => JSON.parse(f.files[TURN_STATE]);
+const noRunnableTurn = (runner) => runner.nextWork()?.name !== 'programme:prog';
+
+test('programme turn: a recorded open programme with a README and no goals gets one turn at the next pick, sequential and stated alike', async () => {
+  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
+    const f = programmeFixture({ record });
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(runner.nextWork().name, 'programme:prog', `${kind}: the turn is the pick`);
+    const seen = {};
+    f.answer = (call) => {
+      seen.currents = Object.entries(f.files).filter(([path]) => path.startsWith('/w/runner/current-')).map(([, text]) => JSON.parse(text));
+      seen.claimed = runner.claims.has('programme:prog');
+      seen.next = runner.nextWork()?.name ?? null;
+      return okSession()(call);
+    };
+    const result = await runner.pass({ repo: 'memoro' });
+    assert.deepEqual([result.ran, result.name], [1, 'programme:prog'], kind);
+    const [call, ...rest] = f.calls.sessions;
+    assert.equal(rest.length, 0, `${kind}: one session`);
+    assert.deepEqual([call.env.MC_ROLE, call.env.MC_HEADLESS, call.env.MC_PROGRAMME], ['plan', '1', 'prog'], kind);
+    assert.equal('MC_GOAL' in call.env, false, `${kind}: no MC_GOAL`);
+    assert.ok(call.unsetEnv.includes('MC_GOAL'), `${kind}: an inherited MC_GOAL is removed`);
+    assert.equal(call.cwd, PROG, `${kind}: in the programme directory`);
+    assert.match(call.prompt, new RegExp(`${PROG}/README\\.md`, 'u'), kind);
+    assert.match(call.prompt, /\bEnd\b/u, kind);
+    assert.deepEqual(seen.currents.map((current) => [current.name, current.kind, current.programme]), [['programme:prog', 'plan', 'prog']], `${kind}: its current record while it runs`);
+    assert.equal(seen.claimed, true, `${kind}: its claim while it runs`);
+    assert.equal(seen.next, null, `${kind}: no second turn of the programme while it runs`);
+    assert.equal(Object.keys(f.files).some((path) => path.startsWith('/w/runner/current-')), false, `${kind}: the current record is gone after it`);
+    assert.equal(runner.claims.has('programme:prog'), false, `${kind}: the claim is released`);
+    const rows = runRows(f.files);
+    assert.deepEqual(rows.map((row) => [row.name, row.kind]), [['programme:prog', 'plan']], kind);
+  }
+});
+
+test('programme turn: no turn for a programme that is not eligible, and another programme\'s goal still starts in the same pass', async () => {
+  const goalAt = (path) => (f) => { f.files[path] = goalJson({ stage: 'draft', status: 'Martin', phase: 1, repos: ['memoro'], title: 'x', goal: [], prs: [] }); };
+  const table = [
+    ['no record', (f) => { delete f.files[RECORD_AT]; }],
+    ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
+    ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
+    ['no README.md', (f) => { delete f.files[`${PROG}/README.md`]; }],
+    ['a draft in goals/', goalAt(`${GOALS}/a-draft/GOAL.json`)],
+    ['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }],
+    ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }],
+    ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }],
+    ['a horizon that is reached', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }],
+    ['a horizon that is dropped', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'dropped' }); }],
+    ['a horizon that is missing', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => null; }],
+  ];
+  for (const [kind, make] of table) {
+    const f = programmeFixture();
+    make(f);
+    const runner = createRunner({ deps: f.deps });
+    assert.ok(noRunnableTurn(runner), `${kind}: programmeWork offers no candidate`);
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, kind);
+    assert.deepEqual(turnSessions(f), [], `${kind}: no session`);
+    assert.equal(f.files[TURN_STATE], undefined, `${kind}: nothing counted`);
+  }
+  // Dot-entries of goals/ are not goals: the programme is eligible.
+  const dots = programmeFixture();
+  dots.files[`${GOALS}/.hold.json`] = '{}';
+  assert.equal(createRunner({ deps: dots.deps }).nextWork().name, 'programme:prog', 'a dot-entry alone is no goal');
+  // A horizon that is not open is said once over two passes.
+  const reached = programmeFixture({ record: recordWith({ horizon: 'h' }) });
+  reached.deps.horizon = () => ({ state: 'reached' });
+  const runner = createRunner({ deps: reached.deps });
+  await runner.pass({ repo: 'memoro' }); await runner.pass({ repo: 'memoro' });
+  assert.equal(reached.log.filter((line) => /prog: its horizon h reads reached/u.test(line)).length, 1, 'said once while it lasts');
+  // An eligible programme beside another programme's build: the build starts, the turn follows on the next pass.
+  const both = programmeFixture();
+  both.files['/w/programs/other/goals/go/GOAL.json'] = goalJson({ repos: ['memoro'], title: 'go', goal: [] });
+  both.files['/w/programs/other/goals/go/LOG.md'] = '';
+  both.dirs.add('/w/programs/other/goals/go/memoro');
+  const together = createRunner({ deps: both.deps });
+  both.answer = (call) => { if (call.env.MC_GOAL) both.files['/w/programs/other/goals/go/GOAL.json'] = withGoal(both.files['/w/programs/other/goals/go/GOAL.json'], { stage: 'done' }); return okSession()(call); };
+  assert.equal((await together.pass({ repo: 'memoro' })).name, 'goal:other/go', 'the build is the first pick');
+  assert.deepEqual(turnSessions(both), []);
+  assert.equal((await together.pass({ repo: 'memoro' })).name, 'programme:prog', 'the turn follows');
+  assert.equal(turnSessions(both).length, 1);
+});
