@@ -15,7 +15,7 @@ const session = (fields = {}) => sessionDescriptor({ id: 'session-a', name: 'mc 
   started: '2026-11-14T10:00:00Z', socket: '/server/socket', access: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'on-request'], ...fields }, 'codex', 'codex 0.168.0');
 const sink = () => { let value = ''; return { write: s => { value += s; }, get value() { return value; } }; };
 
-for (const entrance of ['plan', 'martin', 'helper']) {
+for (const entrance of ['plan', 'martin']) {
   const cases = [
     ['interactive configured', {}, [], true, 'tc', true],
     ['--local', {}, ['--local'], true, 'tc', false],
@@ -78,7 +78,7 @@ for (const [name, fields] of [['unknown version', { version: 8 }], ['unknown fie
 
 test('a server refusal is relayed as on <destination>: measured instruction', () => {
   const link = serverLink('tc', { env: {}, run: () => ({ status: 1, stdout: JSON.stringify(descriptor('refusal', { reason: 'open /server/workspace in Claude once' })) }) });
-  assert.throws(() => link.request('start', 'helper'), /^Error: on tc: open \/server\/workspace in Claude once$/u);
+  assert.throws(() => link.request('start', 'martin'), /^Error: on tc: open \/server\/workspace in Claude once$/u);
 });
 
 /** Decode just the POSIX single-quote language emitted by the boundary. No shell/network fixture. */
@@ -254,7 +254,6 @@ function serverFixture({ prompt = null, resumePrompt = null, historical = false,
 }
 for (const [name, options, expected] of [
   ['fresh plan', { entrance: 'plan', prompt: 'plan opening' }, 'plan opening'],
-  ['fresh helper', { entrance: 'helper', prompt: 'helper opening' }, 'helper opening'],
   ['historical resumePrompt', { entrance: 'martin', prompt: 'not repeated', resumePrompt: 'refresh current queue', historical: true }, 'refresh current queue'],
   ['join of a running session', { prompt: 'not repeated', resumePrompt: 'not refreshed', joining: true }, undefined],
 ]) test(`server descriptor opening message: ${name}, no other launch settings cross`, async () => {

@@ -1,21 +1,18 @@
 /**
- * `mc helper` — the verb, which is now two doors.
+ * `mc helper` — the eye. The desk it once carried is `mc martin` now
+ * (reach/helper-goes-into-the-desk): every call that names neither `--intake`
+ * nor `--collect` is refused with exit 2 before it reads a role, makes a
+ * directory or opens a session. `--intake` is collect, then the headless turn,
+ * and `--collect` stops after the file.
  *
- * The bare verb is the desk: a fresh foreground session in `~/mc/helper/`
- * with the `helper` role, and nothing collected, nothing read, no digest.
- * `--intake` is the old bare verb — collect, then the headless turn — and
- * `--collect` still stops after the file. The one thing worth holding down
- * hardest is that the desk reaches neither the collect step nor the model,
- * and that `--intake` still does both.
- *
- * No model here: the turn and the opener are stubs.
+ * No model here: the turn is a stub.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { helperLaunch, run } from '../../../src/mc/commands/helper.js';
+import { run } from '../../../src/mc/commands/helper.js';
 import { describeDigest, unreadableSections } from '../../../src/mc/helper-collect.js';
 import { describeTurn } from '../../../src/mc/helper-turn.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
@@ -46,8 +43,6 @@ const TURN = (over = {}) => ({
   wrote: [], waiting: [], ...over,
 });
 
-const ROLE = { name: 'helper', model: 'sonnet', tools: ['claude', 'codex'], overlay: 'You are the helper: the desk…' };
-
 /**
  * The inbox as the drain finds it, and where it puts a file afterwards. The
  * real `drainIntake` runs — only its filesystem and its turn are the test's —
@@ -59,7 +54,6 @@ async function invoke(argv, data = {}, turn = TURN(), over = {}) {
   const seen = {};
   const turned = {};
   const opened = {};
-  const made = [];
   const { inbox = ['errors-2026-08-29.md'], ...rest } = over;
   const moved = [];
   const code = await run(argv, {
@@ -70,136 +64,49 @@ async function invoke(argv, data = {}, turn = TURN(), over = {}) {
     files: () => inbox,
     move: (from, to) => { moved.push([from, to]); return true; },
     open: async (options) => { Object.assign(opened, options, { called: true }); return { ok: true, code: 0 }; },
-    role: () => ROLE,
-    mkdir: (path) => made.push(path),
-    routes: () => [{ name: 'mc', line: 'mc itself' }],
     ...rest,
   });
-  return { code, stdout: stdout.text, stderr: stderr.text, seen, turned, opened, made, moved };
+  return { code, stdout: stdout.text, stderr: stderr.text, seen, turned, opened, moved };
 }
 
-describe('mc helper — the desk', () => {
-  it('opens the foreground session in ~/mc/helper/, resumed if there, and collects nothing', async () => {
-    const result = await invoke([]);
-    assert.equal(result.code, 0);
-    assert.equal(result.seen.called, undefined, 'the desk reads no digest');
-    assert.equal(result.turned.called, undefined, 'the desk runs no headless turn');
-    assert.equal(result.opened.called, true);
-    assert.match(result.opened.areaRoot, /\/helper$/u);
-    assert.equal(result.opened.worktree.path, result.opened.areaRoot);
-    assert.equal(result.opened.worktree.is_git, false);
-    assert.equal(result.opened.pick, null);
-    assert.equal(result.opened.verb, 'helper');
-    assert.equal(result.opened.roleName, 'helper');
-    assert.equal(result.opened.tool, 'claude');
-    assert.equal(result.opened.defaultModel, 'sonnet');
-    assert.match(result.opened.overlay, /^You are the helper/u);
+describe('mc helper — the desk is mc martin', () => {
+  // The refusal comes before anything is read or made: every seam the old desk used throws if touched.
+  const TOUCHED = (name) => () => { throw new Error(`${name} must not be called by a refused call`); };
+  const refused = (argv) => invoke(argv, {}, TURN(), {
+    open: TOUCHED('open'), role: TOUCHED('role'), mkdir: TOUCHED('mkdir'), routes: TOUCHED('routes'),
+    collect: TOUCHED('collect'), drain: TOUCHED('drain'), turn: TOUCHED('turn'),
   });
 
-  /**
-   * Both directories are made before the session starts: the room it stands
-   * in, and the one place it is allowed to write. A session told to write
-   * into a path that does not exist has one avoidable way to fail.
-   */
-  it('makes its room and the proposals directory first, and says where both are', async () => {
-    const result = await invoke([]);
-    assert.equal(result.made.length, 2);
-    assert.match(result.made[0], /\/helper$/u);
-    assert.match(result.made[1], /\/proposals$/u);
-    assert.match(result.stdout, /tell it what is broken; proposals land in .*\/<programme>\/proposals, or .*\/proposals when no programme owns it/u);
-    // The session is given the routing table the intake turn gets.
-    assert.match(result.opened.prompt, /^- mc — mc itself$/mu);
-  });
-
-  it('takes the tool sugar and a model, like every other session verb', async () => {
-    const result = await invoke(['--codex', '--model', 'fable']);
-    assert.equal(result.opened.tool, 'codex');
-    assert.equal(result.opened.model, 'fable');
-  });
-
-  it('--new starts a fresh conversation instead of resuming', async () => {
-    const result = await invoke(['--new']);
-    assert.equal(result.opened.pick, 'new');
-  });
-
-  /**
-   * `--since` on the bare verb is somebody asking the desk for a digest
-   * window. Silently ignoring it would open a session that is not the one
-   * they asked for; the refusal says which door has that flag.
-   */
-  it('refuses the digest flags, and names the door they belong to', async () => {
-    const result = await invoke(['--since', '2026-08-27']);
+  it('refuses the bare verb with exit 2, names mc martin and says the eye is unchanged', async () => {
+    const result = await refused([]);
     assert.equal(result.code, 2);
-    assert.equal(result.opened.called, undefined);
-    assert.match(result.stderr, /--since is the digest's flag — say mc helper --intake --since/u);
-    for (const flag of [['--limit', '10'], ['--threshold', '3']]) {
-      assert.equal((await invoke(flag)).code, 2);
+    assert.match(result.stderr, /the desk is mc martin/u);
+    assert.match(result.stderr, /mc helper --collect and mc helper --intake are unchanged/u);
+    assert.equal(result.stdout, '');
+  });
+
+  it('refuses every call that names neither --intake nor --collect, and opens, reads and makes nothing', async () => {
+    for (const argv of [['--new'], ['--resume'], ['--resume', 'abc123'], ['--bg'], ['--local'], ['--codex'], ['--claude'], ['--model', 'fable'],
+      ['--since', '2026-08-27'], ['--limit', '10'], ['--threshold', '3'], ['--codex', '--model', 'fable', '--new']]) {
+      const result = await refused(argv);
+      assert.equal(result.code, 2, `[${argv}] exits 2`);
+      assert.match(result.stderr, /mc martin/u, `[${argv}] names the desk`);
+      assert.match(result.stderr, /mc helper --intake/u, `[${argv}] names the eye`);
+      assert.equal(result.stdout, '', `[${argv}] writes nothing on stdout`);
     }
   });
 
-  it('stops rather than opening a session with no role to wear', async () => {
-    const result = await invoke([], {}, TURN(), { role: () => null });
-    assert.equal(result.code, 1);
-    assert.equal(result.opened.called, undefined);
-    assert.match(result.stderr, /the helper role is missing from this install/u);
+  it('the helper role and its launch prompt are gone', async () => {
+    const module = await import('../../../src/mc/commands/helper.js');
+    assert.equal(module.helperLaunch, undefined);
+    assert.equal(readCanonRole('helper'), null);
   });
 
-  it('opens by asking, carries the date its filenames need, and names both destinations', () => {
-    const launch = helperLaunch({
-      proposalsPath: '/work/proposals', programsPath: '/work/programs', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
-      programmes: [{ name: 'mc', line: 'mc itself' }, { name: 'quiet', line: null }],
-    });
-    assert.match(launch.prompt, /^Today is 2026-08-30\./u);
-    assert.match(launch.prompt, /`2026-08-30-<mc\|memoro>-<slug>\.md`/u);
-    assert.match(launch.prompt, /`\/work\/programs\/<programme>\/proposals\/`/u);
-    assert.match(launch.prompt, /When no programme owns it, it goes in `\/work\/proposals`/u);
-    assert.match(launch.prompt, /^- mc — mc itself$/mu);
-    assert.match(launch.prompt, /^- quiet — \(no description\)$/mu);
-    assert.match(launch.prompt, /Open by asking what he has\. Write nothing until you have it\./u);
-    assert.equal(launch.model, 'sonnet');
-  });
-});
-
-describe('the helper role', () => {
-  it('ships with mc, on a cheap model, and is the desk — not the digest reader', () => {
-    const role = readCanonRole('helper');
-    assert.equal(role.model, 'sonnet');
-    // What the desk must know and cannot derive: it takes Martin's own
-    // reports, it adds, and it does not fix. A role no longer describes the
-    // other role's session — neither can act on the other's existence.
-    assert.match(role.overlay, /desk Martin walks up to/u);
-    assert.match(role.overlay, /do not fix it/u);
-    // Not touching the proposals already waiting is the proposals skill's rule
-    // now, for every role that writes one.
-    assert.doesNotMatch(role.overlay, /^@skill /mu);
-    assert.match(readFileSync(join(canonSkillsDir(), 'proposals.md'), 'utf8'), /Never touch a proposal already waiting/u);
-    assert.doesNotMatch(role.overlay, /You are not the intake turn/u);
-  });
-
-  /**
-   * The frontmatter is the contract with `mc brief --collect`, which has to
-   * say what kind of thing each proposal is without a model. Both roles that
-   * write one dictate the same four keys, so the shape is asserted here as
-   * well as in the intake role's own test.
-   */
-  // mc parses nothing out of a proposal any more, so the role dictates no
-  // shape for a parser's sake. What it still has to say is where the file
-  // goes and what its name looks like, because those two are mc's — the
-  // directory it counts, and the date its ordering relies on.
-  // Both are the proposals skill's, which the helper names.
-  it('names where a proposal goes and what it is called, and dictates no format', () => {
-    const { overlay } = readCanonRole('helper');
-    assert.doesNotMatch(overlay, /^@skill /mu);
-    const skill = readFileSync(join(canonSkillsDir(), 'proposals.md'), 'utf8');
-    assert.match(skill, /~\/mc\/proposals\//u);
-    assert.match(skill, /<date>-<system>-<slug>\.md/u);
-  });
-
-  it('is a different role from the one the intake turn wears', () => {
+  it('the intake turn still wears its own role', () => {
     const intake = readCanonRole('intake');
     assert.equal(intake.model, 'sonnet');
     assert.match(intake.overlay, /^You are the intake turn/u);
-    assert.notEqual(intake.overlay, readCanonRole('helper').overlay);
+    assert.match(readFileSync(join(canonSkillsDir(), 'proposals.md'), 'utf8'), /Never touch a proposal already waiting/u);
   });
 });
 

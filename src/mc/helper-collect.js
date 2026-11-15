@@ -171,10 +171,9 @@ function mtimeOf(path) {
 }
 
 /**
- * Where the bare `mc helper` session stands — its own room beside
- * `~/mc/brief/`, and not `~/mc/intake/`: the intake turn's material is not
- * that session's business, and standing in the directory it must not read
- * would be an odd way to say so.
+ * `~/mc/helper/`: where the retired desk's old conversations stand, and a state
+ * home, so they are not reported as strays and nothing deletes them. The desk
+ * is `mc martin`; the intake turn's material is in `~/mc/intake/`.
  */
 export function helperDir(env = process.env) {
   return join(workRoot(env), 'helper');

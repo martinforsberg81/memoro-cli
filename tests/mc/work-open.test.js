@@ -223,7 +223,7 @@ describe('openInWorkArea and the launch switches', () => {
 
 describe('openInWorkArea in a role area', () => {
   it('every role including plan gets native Agent, fresh and resumed, without mc-defined agents', async () => {
-    for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'martin', 'helper', 'intake']) {
+    for (const name of ['build-session:goal', 'review-session:goal', 'plan', 'manager', 'martin', 'intake']) {
       const role = readCanonRole(name);
       assert.ok(role, name);
       for (const resumed of [false, true]) {
@@ -448,7 +448,7 @@ describe('openInWorkArea and the foreground register', () => {
       const result = await openInWorkArea({ areaRoot, worktree, env, register, ...options });
       assert.equal(result.ok, false, JSON.stringify(owner));
       assert.equal(result.reason, 'no owner');
-      assert.match(result.hint, /belongs to a programme .* or to a desk \(mc helper, mc martin\)/u);
+      assert.match(result.hint, /belongs to a programme .* or to the desk \(mc martin\)/u);
       assert.deepEqual(calls, []);
     }
     assert.deepEqual(events, []);
@@ -585,8 +585,8 @@ describe('startInBackground and --model', () => {
 
 
 describe('foreground launch identity', () => {
-  it('sets the role for plan, manager, Martin and helper, on a new conversation and a resume', async () => {
-    for (const roleName of ['plan', 'manager', 'martin', 'helper']) {
+  it('sets the role for plan, manager and Martin, on a new conversation and a resume', async () => {
+    for (const roleName of ['plan', 'manager', 'martin']) {
       for (const resumed of [false, true]) {
         const { areaRoot, worktree, env } = fixture(resumed ? { role: roleName, programme: roleName === 'plan' ? 'mc' : null, entries: [{ type: 'user', message: { role: 'user', content: 'Hi' } }] } : {});
         const { calls, options } = opening();
@@ -800,7 +800,7 @@ describe('Linux SSH interactive continuity', () => {
       { isInteractive: () => false }, { verb: 'project' }]) {
       assert.equal(entersPersistentSession({ ...base, ...change }), false);
     }
-    for (const verb of ['manager', 'brief', 'helper', 'martin']) assert.equal(entersPersistentSession({ ...base, verb }), true);
+    for (const verb of ['manager', 'brief', 'martin']) assert.equal(entersPersistentSession({ ...base, verb }), true);
   });
 
   it('passes current nonsecret environment to what mc starts for a desk', () => {
@@ -818,7 +818,7 @@ describe('Linux SSH interactive continuity', () => {
     delete sshEnv.MC_HEADLESS;
     const entered = [];
     for (const tool of ['codex', 'claude']) {
-      for (const verb of ['plan', 'manager', 'helper', 'martin']) {
+      for (const verb of ['plan', 'manager', 'martin']) {
         const result = await openInWorkArea({ ...local, verb, roleName: verb, programme: 'example', areaName: 'programs/example', tool, env: sshEnv,
           platform: 'linux', isInteractive: () => true,
           background: settings => { entered.push([settings.launch.id, verb]); return { result: { ok: true, entered: settings.launch.id } }; },
@@ -826,7 +826,7 @@ describe('Linux SSH interactive continuity', () => {
         assert.equal(result.entered, tool === 'codex' ? 'codex' : 'claude-code');
       }
     }
-    assert.equal(entered.length, 8);
+    assert.equal(entered.length, 6);
     const { options, calls: spawned } = opening();
     await openInWorkArea({ ...local, ...options, platform: 'darwin', env: sshEnv, isInteractive: () => true,
       background: () => { throw new Error('a Mac keeps its terminal launch'); } });

@@ -467,6 +467,16 @@ function blocksPhrase(item) {
     : `, blocks ${plural(item.blocks, 'later-phase goal')} of ${programme}`;
 }
 
+/** The part Where a new thing goes: reference for placing, never something that waits. */
+function renderPlacing(placing) {
+  const out = ['## Where a new thing goes', ''];
+  out.push(`Today is ${placing.date}. A proposal is a file named \`${placing.file_name}\`, in \`${placing.programs_path}/<programme>/proposals/\` when a programme owns it, else in \`${placing.proposals_path}\`.`);
+  out.push('', 'The programmes, one line each:');
+  if (!placing.programmes.length) out.push('_none_');
+  else for (const programme of placing.programmes) out.push(`- ${programme.name} — ${programme.line}`);
+  return out;
+}
+
 /** The opening as the text the session starts from. */
 export function renderOpening(data) {
   const out = [];
@@ -504,6 +514,7 @@ export function renderOpening(data) {
   if (cost.unknown_cost_runs) out.push(`Runs with unknown cost, not counted: ${cost.unknown_cost_runs}.`);
   if (cost.error) out.push(`Cost reading error: ${cost.error}.`);
   out.push('', ...renderChanges(data.changes));
+  out.push('', ...renderPlacing(data.placing));
   return `${out.join('\n')}\n`;
 }
 

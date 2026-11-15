@@ -3,7 +3,7 @@ import { interactive, select, ask } from './prompt.js';
 import { readServer } from './server-settings.js';
 import { declared } from '../adapters/index.js';
 
-const ENTRANCES = new Set(['plan', 'martin', 'helper']);
+const ENTRANCES = new Set(['plan', 'martin']);
 
 export async function routeServerEntrance(entrance, args, {
   env = process.env, isInteractive = interactive, read = readServer, link,

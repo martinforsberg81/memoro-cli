@@ -46,7 +46,7 @@ WORKSPACES
 
 IN FULL
 WHO USES THE VERBS
-  Person: mc plan, mc helper, mc martin open interactive sessions;
+  Person: mc plan and mc martin open interactive sessions;
           mc run start|stop controls the headless runner. A session never
           starts itself with these verbs. mc plan refuses inside a session.
   Session: mc goal new / set / criterion add writes goals; mc goal log
@@ -161,7 +161,7 @@ WHAT IS NOT HERE
   share only the name: dev servers, and dependency updates.
 
   Nor is a session of nobody's. Every session belongs to a programme (plan,
-  build, review) or a desk (manager, helper, Martin); the verbs that opened folders of
+  build, review) or the desk (Martin); the verbs that opened folders of
   their own, and the page's list of them, went on 2026-11-03.
 
 REQUIREMENTS
