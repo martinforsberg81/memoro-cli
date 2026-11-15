@@ -45,9 +45,10 @@ test('billing command reads both providers in one status line', async () => {
   const read = await mc.billing();
   assert.equal(read.code, 0);
   assert.deepEqual(read.out, [
-    'billing claude ? plan · codex ? plan',
+    'billing claude ? plan · codex ? plan · agy ? plan',
     'next claude session: plan — plan status unknown',
     'next codex session: plan — plan status unknown',
+    'next agy session: plan — plan status unknown',
   ]);
 });
 
@@ -56,7 +57,7 @@ test('billing command shows the provider on API at 100 %', async () => {
   const full = applyObservation(normaliseCapacity(null), 'claude', { windows: { five_hour: { fraction_used: 1, resets_at: reset } } }, NOW);
   mc.deps.readCapacity = () => full;
   const read = await mc.billing();
-  assert.equal(read.out[0], 'billing claude 100% API · codex ? plan');
+  assert.equal(read.out[0], 'billing claude 100% API · codex ? plan · agy ? plan');
   assert.equal(read.out[1], 'next claude session: API — plan reached 100 %');
 });
 
@@ -78,12 +79,13 @@ test('billing switches one provider\'s API off and on, and says what the next se
   assert.equal(off.code, 0);
   assert.deepEqual(off.out, [
     'codex API off — applies from the next session; a running one keeps its billing',
-    'billing claude ? plan · codex 100% plan (API off)',
+    'billing claude ? plan · codex 100% plan (API off) · agy ? plan',
     'next claude session: plan — plan status unknown',
     'next codex session: plan — plan reached 100 %; API off',
+    'next agy session: plan — plan status unknown',
   ]);
   const on = await mc.billing('codex', 'on');
-  assert.equal(on.out[1], 'billing claude ? plan · codex 100% API');
+  assert.equal(on.out[1], 'billing claude ? plan · codex 100% API · agy ? plan');
   assert.deepEqual(parseRunArgs(['--billing', 'claude', 'off']), { verb: 'billing', mode: null, api: { provider: 'claude', enabled: false } });
   const wrong = await mc.billing('gemini', 'off');
   assert.equal(wrong.code, 2);
