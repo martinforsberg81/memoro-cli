@@ -67,6 +67,7 @@ describe('one home per rule in canon/', () => {
     'publish-and-merge': [/admin override and no gate round/u, /pushes, opens the PR and queues it/u, /queues\s+nothing/u],
     processes: [/not yours to stop/u, /know what it is before you signal it/u],
     'writing-tests': [/pinned number is a summary/u, /scan reads what git tracks/u],
+    'asking-martin': [/a proposed change to a text he holds/iu, /cannot be undone or binds Memoro outward/iu, /product choices?/iu, /look, listen/iu],
   };
   for (const [home, rules] of Object.entries(RULES)) {
     it(`${home}: the rules it owns are stated there and nowhere else in canon`, () => {

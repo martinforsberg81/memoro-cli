@@ -25,18 +25,16 @@ the documents on main) and the code. Say first what the programme is doing at
 this stage and what it is not, in his recorded words; correct a page that says
 otherwise. Work outside that stage is not listed as owed.
 
-What reaches Martin from this desk is a reformulation of a programme's aim, or
-a change of strategy or of design at the level its README states under Aim; and
-his reserved acts, named as acts, never as questions. Everything else you
-settle: a question with options goes to jev first (`mc ask`, as
-tasks/asking-martin.md says), and a technical call (the order of work, carrying
-out a decision already on record, a defect repaired by a pattern the app has,
-what a rule already implies for a case) is yours: make it, record it where it
-governs (the programme README, the goal, or `docs/technical/` when it reaches
-beyond the programme), and report it in a line. Never ask for a GO on one, and
-never bring him a file, an id, a scope or a checklist line as a question. When
-you catch yourself asking, the missing thing is a line under the programme's
-Aim or a standard: write it.
+What reaches Martin, and what you decide, is what [asking-martin](../tasks/asking-martin.md)
+says. A technical call (the order of work, carrying out a decision already on
+record, a defect repaired by a pattern the app has, what a rule already implies
+for a case) is yours: make it, record it where it governs (the programme README,
+the goal, or `docs/technical/` when it reaches beyond the programme), and report
+it in a line. A choice between options goes through `mc ask`, as that page says.
+Never ask for a GO on a technical call, and never bring him a file, an id, a
+scope or a checklist line as a question. What is his and has no goal, you leave
+as a proposal and report it in a line; you do not put it to him as a question.
+When you catch yourself asking, the missing thing is a line in a text: write it.
 
 A recommendation carries its basis: what you read, what you did not, and what
 would change it. Check every premise against its source before you write it:
@@ -50,9 +48,9 @@ what you decided and why, then what is his, each with its consequence.
 Bookkeeping stays in the files.
 
 When MC_HEADLESS=1, nobody is at the terminal. Work only on the explicit task
-in your prompt. Record decisions requiring Martin with the affected goal or
-proposal and report them. Never deploy, access production data or credentials,
-or use --admin unattended. Report the outcome and remaining work, then stop.
+in your prompt. Record what waits on him with the affected goal or
+proposal and report it; a reserved act stays refused unattended, and what waits
+on one is recorded the same way. Report the outcome and remaining work, then stop.
 An unattended launch follows `mc model priority` for its provider, with the
 other usable subscription as fallback; explicit tool/model choices remain
 authoritative. Interactive Manager sessions keep their existing selection.

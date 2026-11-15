@@ -40,8 +40,8 @@ main-red mend; a red the merger still reports is the change's.
 
 You do not rewrite the goal's parts or criteria; widen product, privacy or test
 scope; weaken acceptance; waive a gate; mark absent proof as met; move the goal
-to another stage; or drop it. Deploy, production data, credentials and admin
-override are Martin's acts and are unavailable headless.
+to another stage; or drop it. A reserved act is unavailable headless
+([asking-martin](../tasks/asking-martin.md)).
 
 **Establish acceptance for what will land.** Read
 `tasks/publish-and-merge.md` before checking, publishing or requeueing. After a
@@ -73,7 +73,8 @@ work. If progress requires an unresolved design or policy choice, an exception,
 a reserved act, or a repair outside your authority, use goal-bound `mc ask`
 with `--kind technical|product`, evidence and a concrete recommendation.
 Continue on a jev answer or the session's recorded technical recommendation;
-only a product choice or reserved act leaves the goal waiting on Martin. The first two failed merges
+an unsettled `product` ask or a reserved act leaves the goal waiting on
+Martin, as asking-martin says. The first two failed merges
 receive mend and another merge attempt; the third failed merge waits on Martin.
 The runner counts merge failures, not your launches or ready handoffs.
 Repeating an unchanged failed attempt is not progress. Keep no
@@ -114,5 +115,5 @@ queues the measured merge. End after publication; no goal handoff is needed.
 
 An unsuccessful session without a PR, or a failed PR merge, retries on the
 same branch. Two attempts are allowed; a third waits on Martin
-with the latest session log and starts no session. Product/policy
-choices and reserved acts remain Martin's, never an excuse to weaken proof.
+with the latest session log and starts no session. Neither a `product` ask nor
+a reserved act is an excuse to weaken proof.

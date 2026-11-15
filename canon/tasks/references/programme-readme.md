@@ -46,9 +46,9 @@ list <programme>`; they are not repeated here.>
 
 ## Martin's
 
-<Only what is specific to this programme and only Martin decides. What is
-Martin's in every programme is in the roles and tasks, not here. Leave the
-section out when there is nothing.>
+<Only his dated decisions for this programme. What reaches Martin in every
+programme is in asking-martin, not here. Leave the section out when there is
+nothing.>
 
 ## Where things are
 

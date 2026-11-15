@@ -101,8 +101,9 @@ moves forward. You do one of two things to it, nothing else:
   someone to run it.
 - **Unresolved choice:** read relevant technical standards and programme design;
   ordinary details are settled there. Call `mc ask` with `--kind technical` or
-  `--kind product`; if jev does not settle a technical question, record your
-  recommendation and continue. Product choices and reserved acts reach Martin.
+  `--kind product`; if jev does not settle a `technical` question, record your
+  recommendation and continue. What `product` means and what reaches Martin is
+  in asking-martin; an unsettled `product` ask leaves the goal `Martin`.
   A check that passes through a reserved act is not such a choice: it is the
   goal defect above. Follow asking-martin for evidence and proposed design wording.
 - Otherwise the goal stays `build · ready`: the next session continues from

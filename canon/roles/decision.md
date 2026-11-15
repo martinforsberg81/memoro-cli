@@ -13,8 +13,7 @@ programme plan, move stages forward or backward, hand off, or drop. Report what
 you did. Use validated `mc goal` verbs, never edit GOAL.json by hand. Authority
 never makes a criterion met: run its check. Keep evidence, gate, publication,
 independent review and merger handoffs unchanged; only the merger marks done.
-Headless hooks still refuse deploy, --admin, production data and credentials:
-these require briefs, never a bypass.
+Reserved acts stay refused to this pass: they are briefed, never bypassed.
 
 Read the item's `prepared.md` first. Then read its live source with `mc martin
 item <id>`, the goal, its whole LOG.md, the current worktree state and the
@@ -32,11 +31,7 @@ Martin; once you have answered, the close succeeds.
 
 ## Decide here
 
-Three kinds of thing are Martin's, as [asking-martin](../tasks/asking-martin.md)
-defines them: a product choice (a direction the goal, programme page and
-standards do not already answer, changing user promises, product cost,
-personal-data handling or test strategy); a judgement (look, listen, try);
-and a reserved act (deploy, money, credentials, production data, --admin).
+What is Martin's is what [asking-martin](../tasks/asking-martin.md) names.
 Everything else is decided here: apply the goal, standards, the app's pattern,
 then documented platform behaviour and established engineering practice.
 A question established practice answers is yours even about privacy, security
@@ -81,7 +76,7 @@ again. Decide them so:
   `document add`), replacing the numbered item that was wrong and leaving the
   rest; record the finding and the new text in LOG.md; then `mc goal ready`. A goal still in `draft` is read with `mc goal plan-review` before it moves. The
   goal continues in its stage.
-- If the amendment changes what users are promised, it is a brief for Martin:
+- If the amendment would change a text Martin holds, it is a brief for Martin:
   the goal stays `Martin`.
 - A second defect or stop on a goal whose text has not been amended since the
   one before is briefed for Martin and the goal is not set ready again: the
@@ -102,15 +97,20 @@ Write `brief.md` beside the item, in Swedish, with these parts and no others:
 - One recommendation with its reason.
 - What stands still until Martin answers.
 - Whether the choice can be changed afterwards.
-- For a judgement only: the material to look at, with paths.
-- For a reserved act only: the exact act and what it changes.
+- For a reserved act only: the exact act, its steps and what it changes.
+- For sort `product`: the first part names the text, quotes what it says and
+  gives the proposed wording and what was found; the options are the proposed
+  wording and the wording that stands.
 
-Then `mc martin item <id> brief --sort product|judgement|reserved --reversible
-yes|no --recommend <key>`, with the key of the option you recommend. The goal stays in status `Martin`. A reserved act is never reversible
+Then `mc martin item <id> brief --sort product|reserved --reversible
+yes|no --recommend <key>`, with the key of the option you recommend (sort
+`judgement` is still accepted by the verb, but no new brief is written with it;
+[asking-martin](../tasks/asking-martin.md) says what each sort means). The goal
+stays in status `Martin`. A reserved act is never reversible
 for automatic execution, regardless of whether its effects can be undone.
 An irreversible choice and a reserved act wait without limit.
 
-For a due item (state `for-martin`, reversible product choice or judgement,
+For a due item (state `for-martin`, reversible, of sort `product` or `judgement`,
 `due_at` passed), read its brief and carry out the recommendation as if Martin
 had chosen it. Reconcile the standard and goal, preserve the normal evidence
 and delivery handoffs, then close with `--by default`. Never default a reserved
