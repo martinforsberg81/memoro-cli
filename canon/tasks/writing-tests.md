@@ -3,38 +3,13 @@ name: writing-tests
 description: Designing, adding, changing or retiring a test or gate in memoro or memoro-cli. Load before any test work, including planning protection and reviewing test value.
 ---
 # Writing tests
-
 Protect a consequential behaviour, not the shape of its implementation.
 Read [the test strategy](references/test-strategy.md) before test work. It
 covers risk selection, levels, evidence and retirement; authority is in roles.
 
 ## What runs where
-
-Main is where work meets; production is what users have. A merge checks four
-things: a clean merge onto current main; the change's own tests; no command
-gates; and the review's verdict on the judged head. Review judges whether the
-change is well written, free of bugs and works as intended.
-
-The change's own tests are every added or modified test file, every test that
-directly imports an added or modified source (one hop, read at head), and, for
-a deleted or renamed source, its direct importer tests at the base. Memoro
-also runs the eight-file mandatory core in `config/testing-registry.mjs`.
-No transitive import closure, pin, scan, area blanket or registry target widens
-this set. Bare `mc gate` and the merge round use the same scope without cost
-deferral or command gates.
-
-The daily full run retains every test, including deferred tests and main-only
-ratchets, every CI binding command and all three contract suites, including
-`test:browser-contracts`. The wide selection remains available through
-`mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
-optional tools, never landing requirements. Wide regression protection belongs
-to the daily full run and before a deploy, not to a merge. Main may carry a
-red this merge did not look for: the daily run finds it within a day and sends
-it to a main-red mend; the deploy gate keeps it from production. Until the
-separate deploy-gate goal lands, the person deploying must read that full run.
-
+What a merge checks, the change's own test scope and the daily full run are in the publish-and-merge skill.
 ## Admission and evidence
-
 For each addition or change, name the concrete fault and consequence, the gap
 in existing protection, the cheapest credible test level, fault-sensitive
 proof, and execution/maintenance cost. Record this in the goal, PR or log,
@@ -45,7 +20,6 @@ before publication. Record exactly what ran; absent proof remains a gap.
 Do not manufacture permanent wording tests to prove this strategy exists.
 
 ## Construction
-
 Assert observable results through the real mechanism under test. Substitute
 external dependencies at their boundaries, not the mechanism being proved.
 Use small, isolated fixtures and deterministic clocks; avoid real waits,
@@ -61,7 +35,6 @@ network, repeated process launches and whole-system setup for local decisions.
   of code that reads disk itself reads the same set through that code.
 
 ## Cost and retirement
-
 Run each new or changed test through `mc gate <file>` and record its printed
 `test <file> › <name> — 0.xyz s` timings. Over 1 s is the slow-test indicator,
 per test and not red: a new or changed test over it is rebuilt, or the PR says why
