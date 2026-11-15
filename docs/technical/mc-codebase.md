@@ -74,9 +74,12 @@ its last row should read `0%`.
   Where an implementation lives in `src/mc/`, it is keyed by a mechanism name
   the adapter declares (`claude-stream`, `codex-session`, `tty`, `socket` …),
   never by tool name or id; an adapter imports only from `src/lib` and
-  `./_materialise.js`. The only exemptions are the provider implementation
+  `./_materialise.js`. A tool is added by one adapter, its entry in
+  `src/adapters/names.js` and its import in `src/adapters/index.js` (the registry
+  refuses to load when the tables and the adapters disagree). The only exemptions are the provider implementation
   modules (`claude-background.js`, `claude-capacity.js`, `claude-trust.js`,
-  `codex-capacity.js`, `codex-rpc.js`, `codex-sessions.js`, `hooks.js`),
+  `codex-capacity.js`, `codex-rpc.js`, `codex-sessions.js`, `agy-capacity.js`,
+  `hooks.js`),
   `tidyRoots` in `tidy.js`, and the `BACKGROUND_REFUSALS.codex` text.
 - Don't add a verb nothing reaches, or leave a module nothing reaches. Don't
   import a wrapper without checking that it loads (PR #28). Don't print to
