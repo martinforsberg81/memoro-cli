@@ -44,9 +44,15 @@ deployed. `REPO` is `memoro` in
 path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
 
 1. **Fetch and read.** `git fetch origin main` in `~/memoro`, then
-   `rev-parse origin/main` — the sha that would ship — and its subject. Refs
-   are shared by every worktree of a repository, so these reads stay here
-   whatever branch this checkout is on.
+   `rev-parse origin/main` — main's tip — and the first-parent chain of
+   `origin/main` after the live commit (step 3). The sha that would ship is the
+   **newest commit of that chain whose full run is green** (`pickCommit`): the
+   tip when the tip is green, an older commit when it is not. The reading says
+   how many commits behind the tip it is and why the tip was passed over (red,
+   stalled, stopped, not measured), listing every red name. With nothing green
+   after the live commit, the tip is prepared as it is, as before. Refs are
+   shared by every worktree of a repository, so these reads stay here whatever
+   branch this checkout is on.
 2. **Where the script will run.** `git worktree list --porcelain` in `~/memoro`,
    and the worktree whose branch is `refs/heads/main` is the one — git allows at
    most one, so there is nothing to choose between. When no worktree has `main`
@@ -54,12 +60,18 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    (`git worktree add`, from `main` or from `origin/main` when the branch is not
    local) and says so in one line. Then, in that worktree: `status --porcelain`,
    `rev-list --count origin/main..HEAD` and `rev-list --count HEAD..origin/main`
-   — dirty and diverged are refusals (below), behind is fast-forwarded in step 9.
+   — dirty and diverged are refusals (below); behind is fast-forwarded and past
+   the pick is reset back, both in step 9.
    `--dry-run` makes nothing: it names the worktree it *would* make.
 3. **What is live.** The last `deployed` row of `~/mc/runner/log/deploys.tsv`
    when there is one; otherwise `GET https://meetmemoro.app/api/version`, which
    is public, tiny (`{ commit, build, build_time }`) and asked with `no-store`.
-   The row is preferred because it is mc's own record of what mc shipped.
+   The row is preferred because it is mc's own record of what mc shipped. Of the
+   row, `live_commit` (what the script verified live) is read first, then `sha`;
+   `/api/version` is the last resort. With the live commit unknown, only the tip
+   is a candidate. **Production never moves backwards:** a pick that is the live
+   commit, or has it not as an ancestor, is refused — also under `--accept-red`,
+   and again under the register's lock at final admission.
 4. **The gap.** `git rev-list --count <live>..<sha>`. A sha the checkout does not
    have is *"the gap is unknown"*, never a number.
 5. **The nightly.** `readNightlyHistory`
@@ -67,7 +79,7 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    full-suite measurement per repository with the commit it measured. When that
    commit is not the one about to ship, the line says so plainly — it is a
    reading a person weighs, and the gate (step 6) is what decides.
-6. **The gate** ([`src/mc/deploy-gate.js`](../../src/mc/deploy-gate.js)), after
+6. **The gate**, on the pick, ([`src/mc/deploy-gate.js`](../../src/mc/deploy-gate.js)), after
    every refusal that costs nothing — a deploy running, a dirty or diverged
    `main`, no terminal — so none of them is found out after a full run. See
    *The gate* below. It prints its two readings beside the nightly line, and
@@ -85,11 +97,16 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    watching, not the deploy; `mc deploy --follow` watches the deploy going on
    again. No repository lease is taken: until ruling 30 the deploy waited up to
    eight minutes for a merge round to give it back, and gave up with exit 3.
-9. **The fast-forward**, in the deployer, when the worktree is behind: `git
-   merge --ff-only <sha>` in it, after the yes — to the sha the gate measured and
-   the question named, never to `origin/main` as it is by then. It is the one
-   movement of somebody else's checkout this verb makes, on a tree already proved
-   clean and not ahead. mc then reads `rev-parse HEAD` in that worktree: when it
+9. **Placing the worktree at the pick**, in the deployer, after the yes — at the
+   sha the gate measured and the question named, never at `origin/main` as it is
+   by then. When the worktree is behind: `git merge --ff-only <sha>`, on a tree
+   already proved clean and not ahead — the one movement of somebody else's
+   checkout this verb makes. When the pick is *behind* the worktree's HEAD (main's
+   tip was passed over): `git reset --keep <sha>`, **only in mc's own worktree**,
+   and only when the pick is an ancestor of HEAD, HEAD is an ancestor of
+   `origin/main` and the tracked tree is clean; in any other worktree, or when one
+   of those fails, nothing moves and the row is `moved`. A failed fast-forward or
+   reset is the row's `stopped_at: 'fast-forward'`. mc then reads `rev-parse HEAD` in that worktree: when it
    is the sha the question showed, that is what the success line names, the
    script is handed and the row records. When it is not — main moved on by
    somebody else between the question and the yes — the commit that stands there
@@ -97,12 +114,13 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    `failed`, stopped at `moved`, naming the sha that stood, and the verb says to
    run it again. (Until 2026-11-14 it deployed whatever stood there and said so in
    one line, *"main moved to `<y>` since the question; deploying `<y>`"*; before
-   2026-10-03 the row recorded the question's sha whatever went out.) What this
-   leaves open is `deploy.mjs`'s own `ensureUpToDateWithOrigin`, which fetches
-   and fast-forwards again before it builds — a window of seconds the script
-   owns and mc does not reimplement.
+   2026-10-03 the row recorded the question's sha whatever went out.)
 10. **The script.** `npm run deploy` in that worktree, the process's environment
-   passed through untouched, its output in the deployer's log as it happens.
+   passed through with one addition, `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`,
+   always. The script's own remote step (`ensureUpToDateWithOrigin`) would
+   otherwise fast-forward the worktree to the remote main and ship a commit that
+   was neither the pick nor measured; with the variable it checks the tree and
+   branch and leaves the commit alone. Its output is in the deployer's log as it happens.
    Its stdin is closed: a wrangler that wants a login stops with its own words
    in the log — `wrangler login` at a terminal, then `mc deploy` again.
 11. **The branch, when the script made one.** Whenever `deploy.mjs` changed a
@@ -142,6 +160,18 @@ mc: live now 08d5b46 (build 23779) — deploys.tsv, 2026-09-07 05:45
 mc: 1 commit would ship
 mc: the nightly measured eb592c4, 131 commits ago; this tree was not measured whole
 mc: --dry-run — nothing was deployed
+```
+
+The same reading when main's tip has no green full run (the shas are from the
+test's fixture, not a day's run) — the commit that ships is behind the tip, and
+the reading says how far and why:
+
+```
+mc: would deploy memoro 5b2d0000a1b2c3d4e5f60718293a4b5c6d7e8f90 — the change that would ship
+mc: live now 9f8e7d6 (build 812) — api/version, 2026-09-01 10:00
+mc: 2 commits would ship
+mc: 1 commit behind main's tip 1a2b3c4 — its full run is RED (2): tests/lib/money.test.js, command:lint
+mc: the nightly has measured nothing here — this tree was not measured whole
 ```
 
 The same reading with the repository checkout on a feature branch and `main`
@@ -202,11 +232,12 @@ rather than assumes wherever there is nobody to ask.
 | **`main` is dirty** where it is checked out | 1 | names the path and the first five files; refused row *"main is dirty in `<path>` — `<n>` file(s)"*. Nothing is stashed, reset or discarded — that tree may be somebody's |
 | **`main` has commits `origin/main` does not** | 1 | refused row *"main in `<path>` has `<n>` commit(s) not on origin/main"*: what would ship is not that tree |
 | `git worktree add` for mc's own `main` failed | 1 | says so; refused row. There is no checkout of `main` to run the script in |
-| the fast-forward failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
-| main stands on another commit than the one measured, after the yes | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
+| **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
+| the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
+| the worktree stands on another commit than the pick, after the yes, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
 | **a headless session** (`MC_HEADLESS=1`) | 1 | *"mc deploy is Martin's act"* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
-| **no full run of the exact commit is green** | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
+| **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a suite failed or could not run** | 1 | names the suite and its last lines; refused row |
 | **no TTY** | 2 | *"mc deploy asks before it deploys, and there is no terminal here to ask"* |
 | the question answered `no` | 1 | *"nothing was deployed"* |
@@ -218,7 +249,8 @@ rather than assumes wherever there is nobody to ask.
 
 `main` checked out **nowhere** is not on this list and is not a refusal: mc makes
 its own worktree and deploys from that. A `main` merely *behind* `origin/main` is
-not one either — it is fast-forwarded in step 9.
+not one either — it is fast-forwarded in step 9, and one that stands past the
+pick is reset back there in mc's own worktree.
 
 The decisions among them — `no`, no terminal, a deploy or a language run already running, and the three
 worktree refusals — are each written to the record as `outcome: refused` with
@@ -238,7 +270,17 @@ daily run. A merge no longer carries a whole-suite measure
 ([`mc-merge.md`](mc-merge.md)); what ships does, here. The gate is
 [`src/mc/deploy-gate.js`](../../src/mc/deploy-gate.js), called from
 `gateStage` in `commands/deploy.js`, and it measures the commit that would ship
-— `origin/main` as the reading saw it — and no other.
+— the pick of step 1, which is `origin/main`'s tip when that is green — and no other.
+
+**Which commit.** `pickCommit` walks the first-parent chain of `origin/main`
+newest first, stops at the live commit, and takes the first commit whose full run
+is `green`; a commit that is not a descendant of the live one is never a
+candidate. It may be behind the tip, and the reading says how far and why
+(*"1 commit behind main's tip 1a2b3c4 — its full run is RED (2): …"*, or *"not
+measured: no full run of it"*). The history is read as it stands and no run is
+started to find a candidate; only the pick itself is prepared. With
+`--accept-red` the tip is prepared, gated and shipped, and the reading names the
+green commit that would ship without it.
 
 **The whole suite.** `fullRunVerdict` reads the history the full run writes
 (`readNightlyHistory`) for a completed full run of *exactly* that sha. A green
@@ -270,7 +312,9 @@ accept_red, ended, result, error }`; the log is
 (`followLog`): ^C, a closed SSH session or a restarted page stops the
 watching, never the work, and the record is found again from disk.
 
-A preparation is **joined by exact sha**, decided under the register's lock so
+A preparation is **joined by exact sha**, and reused only while the history's
+current verdict for that sha equals the one recorded (a run that went red since
+is not trusted), decided under the register's lock so
 two terminals cannot both start one (`prepareStage`):
 
 | the record says | `mc deploy` |
@@ -335,22 +379,42 @@ record is settled by whoever reads it next (`settleInterruptedRounds`,
 appended under the round's own run id, and the page shows it for a day beside
 the deploy panel — never a round that is "running" forever.
 
-**The app, used.** `exerciseApp` reads the suites declared in memoro's
-`.mc/test.json` and runs them against a local server built from that sha,
-started the way `mc test dev` starts one (`ensureAppServer`). The server is the
-shared checkout's, `~/mc/self/memoro` (`sharedWorktree`) — not the worktree with
-main that the script runs in, which can be another checkout. That checkout must
-be clean and at the sha: `ensureDevServer` fast-forwards it (`followMain`) when
-it is clean and on main or on no branch, and otherwise serves what it holds.
-On no branch is the server's layout: the repository is bare, the deploy's
-worktree holds the branch `main`, and git gives a branch to one worktree, so
-the shared checkout stands detached at a commit of main and is fast-forwarded
-from there. So the gate refuses, as
-suites that cannot run, when the checkout has uncommitted changes
-(`git status --porcelain`, read before any server is asked for), when the
-server was started on uncommitted changes (`built_from.dirty`), or when the
-server serves another commit (off main, diverged, or held as it is). The tests
-assert the commit the server was started on. A suite that fails, or one that
+**The app, used — against exactly the pick.** `exerciseApp` reads the suites
+declared in memoro's `.mc/test.json` and runs them against a local server of
+*exactly* the pick, started the way `mc test dev` starts one (`ensureAppServer`).
+The server is the shared checkout's, `~/mc/self/memoro` (`sharedWorktree`) — not
+the worktree with main that the script runs in, which can be another checkout.
+The order is fixed: `git show <pick>:.mc/test.json` (the declaration, before
+anything moves), then the holds, then the checkout is placed, then the
+declaration is read from the tree, then the server is ensured. The checkout must
+be clean, on main or on no branch, and its HEAD an ancestor of `origin/main`;
+then `git checkout --detach <pick>` places it (the repository is bare, the
+deploy's worktree holds the branch `main`, and git gives a branch to one
+worktree, so the shared checkout stands detached). Otherwise every suite is
+*cannot run* with the reason and nothing is moved. The holds are asked before the
+checkout is detached, and a hold of either kind — busy (mc used the main server
+within its idle window) or a kept browser's (one stepped on it within
+`KEPT_HOLD_SECONDS`) — is waited out and asked again, with the checkout
+untouched: both end by themselves, so the deploy says what it waits for and asks
+nobody to close anything. The wait has one bound for the whole hold check,
+`HOLD_WAIT_MS` (ten minutes); a server still held when it has passed refuses,
+names the hold and leaves the checkout where it stood. Every ensure —
+the static server, the app server and each revive after a server left mid-run —
+**pins** the commit and never follows main, and the commit the server serves is
+checked against the pick after every ensure: a server of another commit makes the
+remaining suites cannot-run. So the gate refuses, as suites that cannot run, when
+the checkout has uncommitted changes (`git status --porcelain`, read before any
+server is asked for), when the server was started on uncommitted changes
+(`built_from.dirty`), or when the server serves another commit. The tests assert
+the commit the server was started on.
+
+**A suite that does not gate a deploy.** A suite in `.mc/test.json` declared
+`"gate": false` with a required, non-empty `"gate_why"` is not run
+by `mc deploy`, is never a refusal, and is named once with its reason in the
+reading. `mc test dev` and `mc test prod` run it as before. A declaration with
+`gate: false` and no `gate_why` is invalid.
+
+A suite that gates and fails, or one that
 cannot run (the server never came up, a suite never started), refuses and
 names the suite and its last lines. A suite that exits with the declared skip
 code (78) is named as skipped with its reason and does not refuse.
@@ -374,8 +438,9 @@ first line; the verb's own refusal is the second, and the only one under Codex,
 whose hook has no such rule.
 
 **What it never does.** It never refuses or delays a merge — it runs in this
-verb and in the runner's full run only — and it reimplements nothing of `deploy.mjs` and
-hands it no new flag. The record keeps the verdicts (below).
+verb and in the runner's full run only — and it reimplements nothing of `deploy.mjs`;
+the one thing it hands the script is `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`
+(step 10) — an environment variable, not a new flag. The record keeps the verdicts (below).
 
 ## No lease, and one deploy at a time
 
@@ -474,9 +539,10 @@ mc stamped, the verified line is what production answered. A deploy run with
 `MEMORO_DEPLOY_SKIP_LIVE_VERSION_VERIFY` therefore gets a row with a `build`, no
 `live_commit`, and the note *the script verified no live version*.
 
-`sha` and `live_commit` can still differ on a deploy that took: `deploy.mjs`'s own
-`ensureUpToDateWithOrigin` fetches and fast-forwards to `origin/main` again
-before it builds. The digest (`helper-collect.js`) therefore compares
+`sha` and `live_commit` can still differ on a deploy that took (a script that
+was not handed `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`, or a row from before it was
+always handed, fast-forwarded to `origin/main` again before it built); the live
+commit is therefore read as `live_commit` first and `sha` after it (step 3). The digest (`helper-collect.js`) therefore compares
 `/api/version` with the row's `live_commit` when it has one, and with `sha` only
 when it does not, so such a deploy is not reported as *somebody deployed another
 way*.
@@ -588,17 +654,22 @@ where they differ.
 The boundary is a rule, not a judgement call:
 
 - **mc does not deploy.** No step of `scripts/deploy.mjs` is reimplemented here,
-  no flag is invented for it, and it is not edited from this repository. If a
+  no flag is invented for it, and it is not edited from this repository. The
+  environment variable it is always handed is one the script itself reads. If a
   preflight mc wants is missing there, that is a memoro pull request made on its
   own terms.
 - **mc chooses where the script runs, and moves that checkout in one way only.**
-  `deploy.mjs` keeps its own preflight — it refuses a dirty tree, a branch that
-  is not `main`, and a `main` that is not `origin/main` (`REQUIRED_PROD_BRANCH`,
-  `ensureCleanWorktree`, `ensureUpToDateWithOrigin`) — and mc reimplements none
-  of it. What mc adds is a `cwd` that is always a `main`, and one
-  `git merge --ff-only <sha>` (the sha that was measured) after the yes, by the
-  deployer, on a tree it has just read as clean and not ahead. Anything else in that worktree is
-  refused with the path in the row; nothing is ever stashed, reset or discarded.
+  `deploy.mjs` keeps its own preflight — it refuses a dirty tree and a branch that
+  is not `main` (`REQUIRED_PROD_BRANCH`, `ensureCleanWorktree`) — and mc reimplements none
+  of it. Its remote step, `ensureUpToDateWithOrigin`, which would fast-forward to
+  the remote main, is skipped under `mc deploy` by
+  `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`: the commit was chosen here. What mc adds
+  is a `cwd` that is always a `main`, and one placement at the sha that was
+  measured after the yes, by the deployer: `git merge --ff-only <sha>` when
+  behind, and `git reset --keep <sha>` in mc's own worktree only, when the pick
+  is an ancestor of HEAD, HEAD is an ancestor of `origin/main` and the tracked
+  tree is clean. Anything else in that worktree is
+  refused with the path in the row; nothing is ever stashed or discarded.
   Before ruling 16 (2026-09-06) the spawn's `cwd` was `~/memoro` whatever branch
   it stood on, and two deploys died at *Deploy source preflight* for exactly
   that.
@@ -644,7 +715,12 @@ run starts one and follows it; `--dry-run` starts nothing; `--accept-red` reache
 the question with the reason and the record; every refused case asserts that
 `deploy.mjs` was not started. The suites have a modelled runner (all pass, one
 fails, one cannot start, one exits with the skip code) and assert the commit the
-server was started on. The headless cases assert that no git, history, full-run or
+server was started on. The pick has a case per decision (newest green after the live
+commit, red and stalled and unmeasured tips passed over, nothing green, live
+unknown, never backwards), the reading has the exact lines for four situations,
+and the exact-commit suites have cases for the hold order, a server that leaves
+mid-run and a revive at another commit. A non-gate suite and a stale preparation
+have one case each. The headless cases assert that no git, history, full-run or
 suite call was made. A fault check holds the first set: accepting a green run of
 an older commit makes the "older commit" case fail, and the test file is green
 again without it.

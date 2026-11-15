@@ -27,14 +27,15 @@
  * the mends, the servers, the suites — is on `deps`, so the whole gate runs in
  * a test with nothing real behind it.
  */
+import { KEPT_HOLD_SECONDS, mainIdleSecondsOf } from './dev-servers.js';
 import { run as runGit } from './git.js';
 import { readMainMends } from './main-repair.js';
 import { fullRun, RETRY_LATER, RETRY_NOW } from './nightly-loop.js';
 import { readNightlyHistory } from './nightly-history.js';
 import { mcHome, workRoot } from './paths.js';
 import {
-  answers, ensureAppServer, ensureDevServer, NO_SHARED_WORKTREE, readDeclaration,
-  runSuites, serviceFor, sharedWorktree, tierOf, tokenFor,
+  answers, ensureAppServer, ensureDevServer, isGate, mainHold, NO_SHARED_WORKTREE, parseDeclaration,
+  readDeclaration, runSuites, serviceFor, servingWorktree, sharedWorktree, tierOf, tokenFor,
 } from './test-environment.js';
 
 const REPO = 'memoro';
@@ -90,6 +91,32 @@ export function fullRunVerdict(runs, sha) {
 function classify(run) {
   if (run.measured) return run.red.length ? 'red' : 'green';
   return run.stopped_at === 'stalled' ? 'stalled' : 'unmeasured';
+}
+
+/**
+ * The commit `mc deploy` ships: the newest first-parent commit of origin/main
+ * after the live one whose full run is green, walking back from the tip.
+ *
+ * `chain` is `git rev-list --first-parent <live>..origin/main`, newest first —
+ * with the live commit unknown, the tip alone. A commit that is the live one is
+ * no candidate, and neither is a green one that does not descend from it
+ * (`descends(sha)`, asked only of a green commit): production never goes
+ * backwards. Every commit walked past is returned in `passed` with the verdict
+ * that passed it over, so the reading can say why the tip did not ship.
+ *
+ * Pure: the chain, the history and the ancestry are all handed in. `pick` is
+ * null when no commit of the chain is green.
+ */
+export function pickCommit({ chain = [], live = null, runs = [], descends = () => true }) {
+  const tip = chain[0] || null;
+  const passed = [];
+  for (const sha of chain) {
+    if (sha === live) continue;
+    const verdict = fullRunVerdict(runs, sha);
+    if (verdict.state === 'green' && descends(sha)) return { pick: sha, tip, passed };
+    passed.push({ sha, state: verdict.state, run: verdict.run, descends: verdict.state === 'green' ? false : null });
+  }
+  return { pick: null, tip, passed };
 }
 
 /**
@@ -214,7 +241,8 @@ export function fullRunLines({ state, run, sha, mends = [], started = false }) {
       return [`mc: full run — ${where} measured whole${started ? ' just now' : ''}: green, ${tests}${of}`];
     case 'red': {
       const files = mends.map((entry) => entry.file);
-      const names = run.red.slice(0, 5).join(', ') + (run.red.length > 5 ? `, … and ${run.red.length - 5} more` : '');
+      // Every name: a reading that says "and N more" hides what a person accepts or what passed the tip over.
+      const names = run.red.join(', ');
       return [
         `mc: full run — ${where} measured whole: RED, ${run.red.length} red, ${of}`,
         ...(files.length ? [`mc:   red files and commands: ${files.join(', ')}`] : []),
@@ -276,70 +304,127 @@ function pathsWords(paths) {
 }
 
 /**
- * Run the declared suites against a local server of the commit that would ship.
+ * How long the hold check waits, in all, for the main servers to be free before
+ * the exercise gives up. Both holds end by themselves — a busy one when mc has
+ * not used the server for the idle window, a kept browser's KEPT_HOLD_SECONDS
+ * after its last step — so the deploy waits rather than asking anybody to close
+ * anything; only a server somebody keeps using for this long refuses.
+ */
+export const HOLD_WAIT_MS = 10 * 60_000;
+const HOLD_POLL_MS = 5_000;
+
+function gitIn(worktree, args) {
+  const asked = runGit(worktree, args);
+  return { status: asked.status, stdout: String(asked.stdout || ''), stderr: String(asked.stderr || '') };
+}
+
+/**
+ * Run the declared suites against a local server of exactly the commit that
+ * would ship — the pick, which may be behind main's tip.
  *
- * The server is `mc test dev`'s: the shared checkout's own, started through the
- * same door (`ensureDevServer`, which follows main when it can), the static tier
- * first. A server that is not built from `sha` — the checkout is off main, or
- * the server is held as it is — measures another tree and so measures nothing:
- * every suite is then `cannot-run`, named with why. So does a checkout at `sha`
- * that is not clean: its server serves the uncommitted changes, which are not
- * the commit that would ship either. Read twice — the checkout's own
- * `git status --porcelain` before any server is asked for, and the server's
- * `built_from.dirty` (what was dirty when it started). The checkout's
- * `unfollowed` answer (why it was not fast-forwarded) names the cause of a
- * server at another commit.
+ * The server is `mc test dev`'s: the shared checkout's own, through the same
+ * door (`ensureDevServer`), the static tier first. What differs is the tree:
+ * the checkout is *placed* at `sha` once, and every ensure of the exercise — the
+ * static tier, the app tier, each revive — pins instead of following main, which
+ * would move it. In this order, and nothing is moved before the last step of it:
  *
- * Returns `{ suites, commit, error }`: one `{ name, state, seconds, tail }` per
- * declared suite, `state` one of `ok`, `red`, `skipped` (the declared skip code;
- * `tail` carries its reason) or `cannot-run`.
+ * 1. the checkout must be clean (read twice: its own `git status --porcelain`,
+ *    and each server's `built_from.dirty`);
+ * 2. the declaration of the commit, `git show <sha>:.mc/test.json`, names the
+ *    app service;
+ * 3. that service's main server is not held: a hold of either kind — busy (mc
+ *    used it within the idle window) or a kept browser's — is waited out and
+ *    asked again, within one bound for the whole check (`HOLD_WAIT_MS`); a hold
+ *    that outlasts it refuses and names the hold;
+ * 4. the checkout is on main or on no branch and its HEAD an ancestor of
+ *    origin/main, then `git checkout --detach <sha>`. Otherwise every suite is
+ *    cannot-run with the reason and nothing is moved;
+ * 5. the declaration is read from that tree, and only the suites that gate
+ *    (`gate: false` takes one out, with its reason, named once) are run.
+ *
+ * The served commit is compared with `sha` after every ensure, each revive
+ * included: a server at another commit measures another tree, so the suites that
+ * would run against it are `cannot-run`, as is a checkout whose server was
+ * started on uncommitted changes.
+ *
+ * Returns `{ suites, commit, error, not_gate }`: one `{ name, state, seconds,
+ * tail }` per suite that gates, `state` one of `ok`, `red`, `skipped` (the
+ * declared skip code; `tail` carries its reason) or `cannot-run`; `not_gate`
+ * the `{ name, why }` of those that do not.
  */
 export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {} }) {
   const d = {
-    sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf, ...deps,
+    sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
+    gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
+    ...deps,
   };
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
   if (dirtyNow === null) return cannot(`git status failed in ${worktree} — whether it is clean at ${short(sha)} is unknown`);
   if (dirtyNow.length) return cannot(`${worktree} has uncommitted changes (${pathsWords(dirtyNow)}) — a server of it serves them, not ${short(sha)} that would ship; it must be clean and on main`);
+
+  // The commit's own declaration names the app service, which is the main server whose hold is read.
+  const shown = d.gitIn(worktree, ['show', `${sha}:.mc/test.json`]);
+  if (shown.status !== 0) return cannot(`${short(sha)} does not declare .mc/test.json (${lastLines(shown.stderr, 1) || 'git show failed'}) — nothing there says what may be measured`);
+  const declared = parseDeclaration(shown.stdout, `${short(sha)}:.mc/test.json`);
+  if (!declared.ok) return cannot(declared.error);
+
+  const before = d.head(worktree);
+  if (!sameCommit(before, sha)) {
+    const held = await awaitHold({ d, worktree, services: [serviceFor(declared.declaration, 'app'), serviceFor(declared.declaration, 'static')], env, say });
+    if (held) return cannot(held);
+    const placed = placeCheckout({ d, worktree, sha });
+    if (placed) return cannot(placed);
+    say(`mc: suites — the shared checkout ${worktree} stands at ${short(sha)} now (it was at ${short(before)}), detached`);
+  }
+
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
+  const gating = declaration.suites.filter(isGate);
+  const notGate = declaration.suites.filter((suite) => !isGate(suite)).map((suite) => ({ name: suite.name, why: String(suite.gate_why || '') }));
+  const gated = { ...declaration, suites: gating };
 
   const staticService = serviceFor(declaration, 'static');
-  const wantsApp = declaration.suites.some((suite) => tierOf(suite) === 'app' || !staticService);
-  const wantsStatic = Boolean(staticService) && declaration.suites.some((suite) => tierOf(suite) === 'static');
-  const refuseTree = (what, server, unfollowed = null) => {
+  const wantsApp = gating.some((suite) => tierOf(suite) === 'app' || !staticService);
+  const wantsStatic = Boolean(staticService) && gating.some((suite) => tierOf(suite) === 'static');
+  const refuseTree = (what, server) => {
     const served = servedCommit(server, worktree, d.head);
     if (!sameCommit(served, sha)) {
-      return cannot(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} is not at origin/main (${unfollowed || 'off main, or its server was held as it is'}); it must be clean and on main`, served);
+      return cannot(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} was placed at ${short(sha)}, but this server was built from another tree and held as it is`, served, notGate);
     }
     const dirtyAtStart = Array.isArray(server?.built_from?.dirty) ? server.built_from.dirty.filter(Boolean) : [];
     if (dirtyAtStart.length) {
-      return cannot(`the ${what} server was started on uncommitted changes in ${worktree} (${pathsWords(dirtyAtStart)}) — it serves them, not ${short(sha)} that would ship; it must be clean and on main`, served);
+      return cannot(`the ${what} server was started on uncommitted changes in ${worktree} (${pathsWords(dirtyAtStart)}) — it serves them, not ${short(sha)} that would ship; it must be clean and on main`, served, notGate);
     }
     return null;
   };
+  // Every ensure pins: the checkout is where it was placed, and following main would move it.
+  const staticEnsure = () => d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService, pin: true });
+  const appEnsure = (json) => d.ensureAppServer(worktree, declaration, {
+    json,
+    stdout: { write: (text) => { if (!json) say(String(text).replace(/\n$/u, '')); } },
+    answer: { write: () => {} },
+    deps: { holderVerb: 'deploy', ...deps, pin: true },
+  });
 
   let server = null;
   let staticServer = null;
   let staticBaseUrl = null;
   let baseUrl = null;
   if (wantsStatic) {
-    const ensured = await d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService });
-    if (!ensured.ok) return cannot(ensured.error);
+    const ensured = await staticEnsure();
+    if (!ensured.ok) return cannot(ensured.error, null, notGate);
     staticServer = ensured.server;
     staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
-    const wrong = refuseTree('static', staticServer, ensured.unfollowed || null);
+    const wrong = refuseTree('static', staticServer);
     if (wrong) return wrong;
     say(`mc: static tier — ${staticBaseUrl} (${staticServer.instance_id})`);
   }
   if (wantsApp) {
-    const app = await d.ensureAppServer(worktree, declaration, {
-      json: false, stdout: { write: (text) => say(String(text).replace(/\n$/u, '')) }, answer: { write: () => {} }, deps: { holderVerb: 'deploy', ...deps },
-    });
-    if (!app.ok) return cannot(app.error);
+    const app = await appEnsure(false);
+    if (!app.ok) return cannot(app.error, null, notGate);
     server = app.server;
     baseUrl = app.baseUrl;
     const wrong = refuseTree('app', server);
@@ -350,22 +435,27 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
   const held = await d.tokenFor(declaration, env);
   const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
   const probeFor = (suite) => (tierOf(suite) === 'static' && staticServer ? staticServer : server || { health_url: `${baseUrl}/api/version` });
+  // A server brought back is checked like the first one: a revive that lands on another tree is no revive.
   const revive = async (tier) => {
     if (tier === 'static' && staticServer) {
-      const ensured = await d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService });
+      const ensured = await staticEnsure();
       if (!ensured.ok) return ensured;
+      const wrong = refuseTree('static', ensured.server);
+      if (wrong) return { ok: false, error: wrong.error };
       staticServer = ensured.server;
       staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
       return { ok: true, baseUrl: staticBaseUrl };
     }
-    const app = await d.ensureAppServer(worktree, declaration, { json: true, stdout: { write: () => {} }, answer: { write: () => {} }, deps: { holderVerb: 'deploy', ...deps } });
+    const app = await appEnsure(true);
     if (!app.ok) return app;
+    const wrong = refuseTree('app', app.server);
+    if (wrong) return { ok: false, error: wrong.error };
     server = app.server;
     baseUrl = app.baseUrl;
     return { ok: true, baseUrl };
   };
   const { results, gone, skipped: neverRan } = await d.runSuites({
-    declaration, worktree, baseUrl, staticBaseUrl, only: null, env: suiteEnvironment,
+    declaration: gated, worktree, baseUrl, staticBaseUrl, only: null, env: suiteEnvironment,
     stillThere: (suite) => (deps.answers || answers)(probeFor(suite)),
     revive,
     onStart: null,
@@ -384,21 +474,85 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
   for (const name of neverRan || []) {
     suites.push({ name, state: 'cannot-run', seconds: 0, status: null, tail: `never ran — ${gone?.length ? 'the server left before it' : 'it was not started'}` });
   }
-  return { suites, commit, error: null, base_url: baseUrl, static_base_url: staticBaseUrl };
+  return { suites, commit, error: null, base_url: baseUrl, static_base_url: staticBaseUrl, not_gate: notGate };
+}
+
+/**
+ * Wait out a held main server — busy or a kept browser's, both end by
+ * themselves — with the checkout untouched: `null` when none of the declared
+ * services' main servers is held (or running), else, once the one bound of the
+ * whole check has passed, why the exercise cannot go on. Each new hold waited
+ * for is said once; nobody is asked to do anything.
+ */
+async function awaitHold({ d, worktree, services, env, say }) {
+  const idleMs = mainIdleSecondsOf(env) * 1000;
+  const until = d.now() + HOLD_WAIT_MS;
+  const why = (hold) => (hold === 'kept'
+    ? `a kept browser stepped on it within the last ${KEPT_HOLD_SECONDS} s`
+    : `mc used it within the last ${Math.round(idleMs / 1000)} s`);
+  let saidFor = null;
+  for (;;) {
+    let held = null;
+    for (const service of services.filter(Boolean)) {
+      const running = d.servingWorktree(worktree, { root: d.root, service });
+      const hold = running ? d.mainHold(running, { now: d.now(), idleMs, dir: d.sessionsDir }) : null;
+      if (hold) { held = { running, hold }; break; }
+    }
+    if (!held) return null;
+    if (d.now() >= until) {
+      return `the main server ${held.running.instance_id} is still held (${why(held.hold)}) after ${Math.round(HOLD_WAIT_MS / 60_000)} min of waiting — the checkout is not moved under it`;
+    }
+    const key = `${held.running.instance_id}:${held.hold}`;
+    if (key !== saidFor) {
+      say(`mc: suites — the main server ${held.running.instance_id} is held (${why(held.hold)}); waiting up to ${Math.round(HOLD_WAIT_MS / 60_000)} min for the hold to end before the checkout is moved`);
+      saidFor = key;
+    }
+    await d.sleep(Math.min(HOLD_POLL_MS, Math.max(1, until - d.now())));
+  }
+}
+
+/**
+ * Put the shared checkout at `sha`, detached — or say why it is not: on another
+ * branch, or at a commit origin/main does not contain (local work), nothing is
+ * moved. The ancestor check is the point: a detached HEAD is moved only along
+ * origin/main's own line, never off a commit somebody made.
+ */
+function placeCheckout({ d, worktree, sha }) {
+  const branch = d.gitIn(worktree, ['branch', '--show-current']);
+  if (branch.status !== 0) return `git could not say which branch ${worktree} is on — it is not moved`;
+  const on = branch.stdout.trim();
+  if (on && on !== 'main') return `${worktree} is on ${on}, not main or a detached commit of it — it is not moved; it must be clean and on main`;
+  const contained = d.gitIn(worktree, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']);
+  if (contained.status !== 0) return `${worktree} stands on ${short(d.head(worktree))}, which origin/main does not contain — it is not moved; it must be clean and on main`;
+  const moved = d.gitIn(worktree, ['checkout', '--detach', sha]);
+  if (moved.status !== 0) return `git checkout --detach ${short(sha)} failed in ${worktree}: ${lastLines(moved.stderr, 2) || 'no message'}`;
+  return null;
 }
 
 /** An exercise that could not begin: every suite is unmeasured, named with one reason. */
-function cannot(error, commit = null) {
-  return { suites: [], commit, error };
+function cannot(error, commit = null, notGate = []) {
+  return { suites: [], commit, error, not_gate: notGate };
 }
 
-/** What the reading says about the suites. */
+/**
+ * What the reading says about the suites: each that gates, then — once, with
+ * the reason its declaration gives — each that does not. A suite with
+ * `gate: false` is not run by `mc deploy` and is never a refusal.
+ */
 export function suiteLines(exercise, { sha }) {
-  if (exercise.error) return [`mc: suites — cannot run: ${exercise.error}`];
-  const lines = [`mc: suites — ${exercise.suites.length} declared, run against a local server of ${short(exercise.commit || sha)}:`];
-  for (const suite of exercise.suites) {
-    const mark = { ok: 'ok', red: 'RED', skipped: 'skipped', 'cannot-run': 'CANNOT RUN' }[suite.state];
-    lines.push(`mc:   ${mark}  ${suite.name}${suite.seconds ? ` ${suite.seconds}s` : ''}${suite.state === 'skipped' && suite.tail ? ` — ${lastLines(suite.tail, 2).replace(/\n/gu, ' ')}` : ''}`);
+  const notGate = exercise.not_gate || [];
+  const lines = [];
+  if (exercise.error) lines.push(`mc: suites — cannot run: ${exercise.error}`);
+  else {
+    lines.push(`mc: suites — ${exercise.suites.length} declared, run against a local server of ${short(exercise.commit || sha)}:`);
+    for (const suite of exercise.suites) {
+      const mark = { ok: 'ok', red: 'RED', skipped: 'skipped', 'cannot-run': 'CANNOT RUN' }[suite.state];
+      lines.push(`mc:   ${mark}  ${suite.name}${suite.seconds ? ` ${suite.seconds}s` : ''}${suite.state === 'skipped' && suite.tail ? ` — ${lastLines(suite.tail, 2).replace(/\n/gu, ' ')}` : ''}`);
+    }
+  }
+  if (notGate.length) {
+    lines.push(`mc: suites — ${notGate.length} more declared, not run: they do not gate a deploy (gate: false):`);
+    for (const suite of notGate) lines.push(`mc:   not a gate  ${suite.name} — ${suite.why}`);
   }
   return lines;
 }

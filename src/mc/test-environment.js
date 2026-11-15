@@ -93,9 +93,34 @@ export function readDeclaration(worktree) {
   if (!existsSync(path)) {
     return { ok: false, error: `${worktree} does not declare ${DECLARATION_FILE} — nothing here says what may be measured` };
   }
+  let text = '';
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    return { ok: false, error: `${path}: ${error.message}` };
+  }
+  return parseDeclaration(text, path);
+}
+
+/**
+ * Does this suite guard a deploy? Every suite does unless it says `gate: false`
+ * (with a `gate_why`, which `parseDeclaration` requires). `mc deploy` runs and
+ * counts the suites that gate; `mc test dev` and `mc test prod` run them all.
+ */
+export function isGate(suite) {
+  return suite?.gate !== false;
+}
+
+/**
+ * The declaration as text — the file in a worktree (`readDeclaration`) or what
+ * `git show <commit>:.mc/test.json` printed — validated the same way. `label`
+ * is what an error names: the path, or the commit and file.
+ */
+export function parseDeclaration(text, label = DECLARATION_FILE) {
+  const path = label;
   let declaration = null;
   try {
-    declaration = JSON.parse(readFileSync(path, 'utf8'));
+    declaration = JSON.parse(text);
   } catch (error) {
     return { ok: false, error: `${path}: ${error.message}` };
   }
@@ -110,6 +135,15 @@ export function readDeclaration(worktree) {
     }
     if (suite.argv.some((part) => typeof part !== 'string' || !part.trim())) {
       return { ok: false, error: `${path}: ${suite.name}'s argv is a list of arguments, never a shell string` };
+    }
+    // `gate: false` takes a suite out of what a deploy waits for, so it is said
+    // with its reason or not at all: the reason is what a person reads later to
+    // know whether the suite should come back.
+    if (suite.gate !== undefined && typeof suite.gate !== 'boolean') {
+      return { ok: false, error: `${path}: ${suite.name}'s gate is true or false, not ${JSON.stringify(suite.gate)}` };
+    }
+    if (suite.gate === false && (typeof suite.gate_why !== 'string' || !suite.gate_why.trim())) {
+      return { ok: false, error: `${path}: ${suite.name} declares gate: false and no gate_why — say why it does not guard a deploy` };
     }
   }
   // What the repository says does not work against a local server — a
@@ -439,7 +473,9 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       };
     }
   }
-  const follow = isMain ? followMain(worktree, deps) : null;
+  // `deps.pin`: the caller has placed the checkout where it wants it (`mc deploy`'s gate, at the commit it
+  // will ship) and this ensure serves that tree — it never follows main, which would move it.
+  const follow = isMain && !deps.pin ? followMain(worktree, deps) : null;
   const followed = follow?.moved ? { from: follow.from, to: follow.to } : null;
   // Held back by the checkout itself: said, so a stale "how is it now" is not taken for main.
   const unfollowed = follow?.refused ? follow.why : null;
