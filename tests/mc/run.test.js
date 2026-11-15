@@ -5033,7 +5033,14 @@ test('a hold written while the dependencies attach starts no session: the goal s
 
 test('a hold written during a review admission, after the pick, starts no session and writes no entry', async () => {
   const f = reviewFixture();
-  dirtyTree(f, `${GOALS}/judged/memoro`, [' M src/x.js']);
+  const worktree = `${GOALS}/judged/memoro`;
+  dirtyTree(f, worktree, [' M src/x.js']);
+  const git = f.deps.git;
+  let statusReads = 0;
+  f.deps.git = (cwd, args) => {
+    if (cwd === worktree && args.join(' ') === 'status --porcelain') statusReads += 1;
+    return git(cwd, args);
+  };
   // The first disk reading is the top of the pass, before the pick; the runner's own line for the pick comes next, so the first reading after it is the admission (run.js, before the start check).
   let written = false;
   f.deps.freeBytes = () => {
@@ -5046,6 +5053,7 @@ test('a hold written during a review admission, after the pick, starts no sessio
   assert.equal(f.calls.sessions.length, 0, 'no review session');
   assert.equal(where(f, 'judged'), 'review · ready');
   assert.equal(goalEntries(f).length, before, 'no new entry');
+  assert.equal(statusReads, 0, 'the held goal\'s worktree status was not read after the hold');
 });
 
 test('a hold written while a review worktree is read starts no session and writes no entry', async () => {
