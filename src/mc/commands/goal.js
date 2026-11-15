@@ -75,6 +75,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { readAreas } from '../areas.js';
 import { checkVerdict, trippedAreas } from '../review-verdict.js';
+import { dropItems, evidenceIds, readEvidence, evidenceLines, evidenceRefusal, itemKey, makeRecord, removeCriterionItem, setItem as setEvidence, worktreeHeads } from '../goal-evidence.js';
 import { appendRecord, markerRecord, moveGate, planReviewCall, proposedStand, proposedWords, readRecords, showLine, verdictVerb } from '../plan-review.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
@@ -100,7 +101,7 @@ import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid'];
+const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
 /** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
 const REPEATABLE_FLAGS = ['--option', '--document'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
@@ -120,8 +121,9 @@ const VERB_FLAGS = {
   'criterion add': ['--criterion', '--check', '--evidence'],
   'criterion set': ['--criterion', '--check', '--evidence'],
   'criterion remove': ['--reason'],
-  'criterion met': [],
+  'criterion met': ['--evidence', '--evidence-file'],
   'criterion unmet': [],
+  evidence: ['--text', '--file'],
   convert: [],
   'from-project': [],
   log: ['--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--stage', '--status'],
@@ -239,7 +241,8 @@ export async function run(argv, deps = {}) {
   if (verb === 'criterion add') return addCriterion(rest, flags, ctx);
   if (verb === 'criterion set') return setCriterion(rest, flags, ctx);
   if (verb === 'criterion remove') return removeCriterion(rest, flags, ctx);
-  if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', ctx);
+  if (verb === 'criterion met' || verb === 'criterion unmet') return markCriterion(rest, verb === 'criterion met', flags, ctx);
+  if (verb === 'evidence') return evidenceVerb(rest, flags, ctx);
   if (verb === 'convert') return convert(rest, ctx);
   if (verb === 'from-project') return fromProject(rest, ctx);
   if (verb === 'log') {
@@ -395,6 +398,11 @@ function logEntry(args, fields, ctx) {
   if (fields.stage === 'review' && goal.stage !== 'review' && sessionNotPlan(env)) {
     const unmet = unmetGoalWords(goal, target.name);
     if (unmet) { stderr.write(`mc: ${target.name} is not moved to review — ${unmet}\n`); return 1; }
+    // Only a build session (a repair too) is asked for its evidence at the head it publishes; the desk's roles are not (D5).
+    if (writerRole(env) === 'build') {
+      const missing = evidenceRefusal({ goal, dir: target.dir, name: target.name, git: ctx.git, exists: ctx.exists, read });
+      if (missing) { stderr.write(`mc: ${target.name} is not moved to review — ${missing}\n`); return 1; }
+    }
   }
   if (fields.stage === 'review' || fields.stage === 'merge') {
     const conflicted = mainConflictRefusal(goal, target, ctx);
@@ -416,6 +424,11 @@ function logEntry(args, fields, ctx) {
       return 1;
     }
     now = outcome.goal;
+    // A review's rejection removes the records of the items it judged NOT OK: the repair gives new evidence for them (D2).
+    if (verdict.failed?.length) {
+      const dropped = dropItems(target.dir, verdict.failed, { read, write });
+      if (dropped.problem) stderr.write(`mc: ${dropped.problem} — the rejected items' records are not removed\n`);
+    }
     // A move into draft opens a new count of readings (D6).
     if (back && fields.stage === 'draft') appendRecord(target.dir, markerRecord(ctx.now, goal.stage), { read, write });
   } else {
@@ -758,7 +771,7 @@ function reviewMove(goal, target, to, ctx) {
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
   if (to === 'build' && !checked.failed.length) return { refusal: `${REVIEW_FILE} has no NOT OK line — every item is OK, so the goal is moved to merge: mc goal stage merge` };
   const prior = rejections(parseLog(read(join(target.dir, LOG_FILE)) ?? ''));
-  return { text, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS };
+  return { text, round: prior + 1, third: to === 'build' && prior >= MAX_REJECTIONS, failed: to === 'build' ? checked.failed.map((one) => one.id) : [] };
 }
 
 /** How many times a review may send a goal back to build: the next NOT OK is the desk's. */
@@ -915,16 +928,113 @@ function addCriterion(args, flags, ctx) {
  * `mc goal criterion met|unmet [<programme>/<goal>] <n>` — criterion `n`
  * (1-based) recorded as holding, after its check was run, or taken back.
  */
-function markCriterion(args, met, ctx) {
-  const { stderr } = ctx;
+function markCriterion(args, met, flags, ctx) {
+  const { stderr, env } = ctx;
   if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
   const [named, given] = args.length === 2 ? args : [undefined, args[0]];
   const n = Number(given);
   if (!Number.isInteger(n) || n < 1) { stderr.write(`mc: ${given} is not a criterion's number — 1, 2, …\n`); return 2; }
+  // The mark records the heads of the goal's worktrees and the evidence given (`goal-evidence.js`); a build session's is
+  // refused on an unclean or absent worktree and, for a version 2 goal, without evidence.
+  const written = met ? evidenceText(flags, ctx) : { text: null };
+  if (written.error) { stderr.write(`mc: ${written.error}\n`); return written.code; }
+  const build = writerRole(env) === 'build' && isSession(env);
+  let record = null;
   return changeGoal(named, ctx, (goal) => {
     if (n > goal.success_criteria.length) return { problems: [`it has ${goal.success_criteria.length} criteria, no criterion ${n}`], code: 2 };
+    if (met) {
+      const dir = goalNamed(named, ctx).dir;
+      const states = worktreeHeads({ goal, dir, git: ctx.git, exists: ctx.exists });
+      const problems = [];
+      if (build) {
+        for (const state of states.filter((one) => !one.present)) problems.push(`${state.repo} has no worktree at ${state.path} — a build session marks a criterion from its worktrees, after running the check there`);
+        for (const state of states.filter((one) => one.dirty)) problems.push(`${state.repo} has uncommitted changes — commit them, run the check at that head, then record it`);
+        if (goal.version === 2 && written.text === null) problems.push('criterion met needs --evidence "…" or --evidence-file <path|-> — what the check ran and what it showed');
+      }
+      const readable = readEvidence(dir, ctx.read);
+      if (readable.problem) problems.push(readable.problem);
+      if (problems.length) return { problems, code: 2 };
+      record = makeRecord({ states, at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), text: written.text ?? '', criterion: goal.success_criteria[n - 1].criterion });
+    }
     return { ...goal, success_criteria: goal.success_criteria.map((item, i) => (i === n - 1 ? { ...item, met } : item)) };
-  }, (goal) => `criterion ${n} ${met ? 'met' : 'unmet'} · ${criteriaWords(goal)}`);
+  }, (goal) => `criterion ${n} ${met ? 'met' : 'unmet'} · ${criteriaWords(goal)}`, (goal, target) => {
+    const io = { read: ctx.read, write: ctx.write };
+    const kept = met ? setEvidence(target.dir, `criterion ${n}`, record, io) : dropItems(target.dir, [`criterion ${n}`], io);
+    if (kept.problem) stderr.write(`mc: ${kept.problem} — criterion ${n}'s record is not ${met ? 'written' : 'removed'}\n`);
+  });
+}
+
+/**
+ * The evidence text of a call (`--evidence` or `--evidence-file`, `-` for stdin, one final newline left out as an
+ * entry's is), as `{ text }` (null when none or blank) or `{ error, code }` for both given or a file that cannot be read.
+ */
+function evidenceText(flags, ctx) {
+  if (flags.evidence !== null && flags['evidence-file'] !== null) return { error: '--evidence and --evidence-file are one or the other, not both', code: 2 };
+  let text = flags.evidence;
+  if (flags['evidence-file'] !== null) {
+    try { text = ctx.readFile(flags['evidence-file']).replace(/\n$/u, ''); }
+    catch (error) { return { error: `--evidence-file ${flags['evidence-file']} cannot be read — ${error.message}`, code: 1 }; }
+  }
+  return { text: text === null || !text.trim() ? null : text };
+}
+
+/**
+ * `mc goal evidence [<programme>/<goal>] <id> --text "…" | --file <path|->` — the evidence for a preserve item (its id)
+ * or a touched obligation (its area), recorded with the heads of the goal's worktrees as a criterion's mark is
+ * (`goal-evidence.js`), and not tied to a head: it is often a reading and not a run. The goal's text and LOG.md are not
+ * touched. A build session, a person, plan and the desk may call it; a review and a mend session are refused (the
+ * early refusals of `run` already hold plan-review, desk-prepare and learning).
+ */
+function evidenceVerb(args, flags, ctx) {
+  const { stdout, stderr, env, read } = ctx;
+  if (args.length < 1 || args.length > 2) { stderr.write(usage()); return 2; }
+  const [named, id] = args.length === 2 ? args : [undefined, args[0]];
+  const role = writerRole(env);
+  if (isSession(env) && ['review', 'mend'].includes(role)) { stderr.write(`mc: a ${role} session does not record evidence — the build records it, and a review reads it with mc goal show\n`); return 2; }
+  if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') { stderr.write('mc: the Martin role is interactive-only; unattended sessions cannot change goals\n'); return 2; }
+  if (flags.text !== null && flags.file !== null) { stderr.write('mc: --text and --file are one or the other, not both\n'); return 2; }
+  if (flags.text === null && flags.file === null) { stderr.write('mc: evidence needs --text "…" or --file <path|-> — what was read or run, and what it showed\n'); return 2; }
+  const target = goalNamed(named, ctx);
+  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
+  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot change ${target.name}\n`); return 2; }
+  const text = read(join(target.dir, GOAL_FILE));
+  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
+  const goal = parseGoal(text);
+  if (goal.problems) {
+    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
+    return 1;
+  }
+  const key = itemKey(goal, id);
+  if (key === null) {
+    const { preserve, areas } = evidenceIds(goal);
+    const ids = [...preserve, ...areas];
+    stderr.write(`mc: ${target.name}: ${id} is not a preserve item or a touched obligation — ${ids.length ? `the ids are ${ids.join(', ')}` : `it has none${goal.version === 2 ? '' : ' (a version 1 goal has no preserve items or obligations)'}`}\n`);
+    return 2;
+  }
+  let said = flags.text;
+  if (flags.file !== null) {
+    try { said = ctx.readFile(flags.file).replace(/\n$/u, ''); }
+    catch (error) { stderr.write(`mc: --file ${flags.file} cannot be read — ${error.message}\n`); return 1; }
+  }
+  if (!said.trim()) { stderr.write('mc: evidence needs text in it\n'); return 2; }
+  const states = worktreeHeads({ goal, dir: target.dir, git: ctx.git, exists: ctx.exists });
+  const record = makeRecord({ states, at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, text: said });
+  const kept = setEvidence(target.dir, key, record, { read, write: ctx.write });
+  if (kept.problem) { stderr.write(`mc: ${kept.problem}\n`); return 1; }
+  stdout.write(`mc: ${target.name} · evidence recorded for ${key}\n`);
+  return 0;
+}
+
+/** `text` with `stale` written beside each of the met criteria numbered in `numbers`; the goal's text itself is not changed. */
+function markStale(text, numbers) {
+  if (!numbers.length) return text;
+  let inCriteria = false;
+  return text.split('\n').map((line) => {
+    if (line.startsWith('CRITERIA')) inCriteria = true;
+    else if (/^\S/u.test(line)) inCriteria = false;
+    const found = inCriteria ? /^ {2}(\d+) ✓ /u.exec(line) : null;
+    return found && numbers.includes(Number(found[1])) ? `${line}  [stale — its mark is at an earlier head]` : line;
+  }).join('\n');
 }
 
 /**
@@ -967,6 +1077,7 @@ function setCriterion(args, flags, ctx) {
     ].filter(Boolean);
     const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment: `criterion ${n} rewritten, unmet — ${changed.join('; ')}`, next: null, stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
+    dropItems(target.dir, [`criterion ${n}`], { read: ctx.read, write: ctx.write });
     if (check !== null) warnAbsentTests(goal, target, check, ctx);
   });
 }
@@ -1000,6 +1111,7 @@ function removeCriterion(args, flags, ctx) {
     const comment = `criterion ${n} removed — "${oneLine(removed.criterion)}", check "${oneLine(removed.check)}", was ${removed.met ? 'met' : 'not met'}; reason: ${reason}`;
     const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role, done: null, comment, next: null, stage: goal.stage, status: goal.status };
     appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
+    removeCriterionItem(target.dir, n, { read: ctx.read, write: ctx.write });
   });
 }
 
@@ -1487,7 +1599,11 @@ function showGoal(args, ctx) {
   const reviewed = readRecords(target.dir, read);
   const reviewLine = reviewed.problem ? `plan review: ${reviewed.problem}` : showLine({ name: target.name, goal, stage: goal.stage, records: reviewed.records });
   if (reviewLine) stdout.write(`${reviewLine}\n`);
-  stdout.write(`\n${renderGoalText(goal)}`);
+  // The records are in a file of their own (`goal-evidence.js`): the goal's text is the same with or without them,
+  // and a met criterion whose record is at another head than the worktrees' has `stale` written beside it.
+  const evidence = evidenceLines({ goal, dir: target.dir, git: ctx.git, exists: ctx.exists, read });
+  stdout.write(`\n${markStale(renderGoalText(goal), evidence.stale)}`);
+  if (evidence.lines.length) stdout.write(`\nEVIDENCE\n${evidence.lines.join('\n')}\n`);
 
   const log = parseLog(read(join(target.dir, LOG_FILE)) ?? '');
   stdout.write('\nLOG\n');
