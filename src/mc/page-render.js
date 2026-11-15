@@ -936,6 +936,15 @@ export function renderPageLines(data, {
     panelEnd(lines, c, wide);
   }
   for (const repo of data.checks?.main_mend || []) if (repo.error) detail(lines, c, wide, 2, `${repo.repo}: ${repo.error}`, ['red']);
+  const deployMend = data.checks?.deploy_mend;
+  if (deployMend?.error) detail(lines, c, wide, 2, `deploy repair: ${deployMend.error}`, ['red']);
+  if (deployMend?.state === 'Martin') {
+    panelHeading(lines, c, wide, 'MARTIN QUEUE', '1 deploy repair waiting', 'mc martin get');
+    detail(lines, c, wide, 4, deployMend.line, ['red', 'bold']);
+    detail(lines, c, wide, 6, deployMend.reason, ['red']);
+    detail(lines, c, wide, 6, deployMend.session_log);
+    panelEnd(lines, c, wide);
+  } else if (deployMend?.line) detail(lines, c, wide, 2, deployMend.line.replace(/^mc: /u, ''), ['yellow']);
   mergesLines(lines, c, wide, data.merges, expand);
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
   lines.push('');

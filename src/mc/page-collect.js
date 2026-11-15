@@ -62,6 +62,7 @@ import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoal
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
+import { deployMendLine, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
@@ -1664,7 +1665,7 @@ export async function collectPage({
         return { name: repo.name, nightly, deps: loadSaved(repo.name, home) };
       }),
       now,
-    }), main_mend: repos.map((repo) => ({ repo: repo.name, ...mainMendReading({ root, repo: repo.name }) })) },
+    }), main_mend: repos.map((repo) => ({ repo: repo.name, ...mainMendReading({ root, repo: repo.name }) })), deploy_mend: deployMendPage(root) },
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     // What landed in the last 24 hours and what each goal took (landed.js).
@@ -1748,4 +1749,11 @@ function readProgrammeProposalCounts(home) {
     counts[programme.name] = files.filter((entry) => entry.isFile()).length;
   }
   return counts;
+}
+
+/** The open deploy repair as the page shows it: its state, its reading line and, when it waits on Martin, why. */
+function deployMendPage(root) {
+  const reading = deployMendReading({ root });
+  const entry = reading.entry;
+  return { error: reading.error, state: entry?.state || null, line: deployMendLine(entry), reason: entry?.reason || null, session_log: entry?.session_log || null };
 }
