@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { attemptDeadline, deployCheckTick, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
+import { attemptDeadline, deployCheckTick, killGroup, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
 import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
@@ -1064,6 +1064,18 @@ test('deploy check: an attempt alive past its deadline is killed by its pid, wri
   assert.deepEqual(c.seen.started, [], 'the slot is free, but the next row waits for a later pass');
   await c.runner.chores();
   assert.deepEqual(c.seen.started, [{ started: second.started, sha: SHA_B }]);
+});
+
+test('deploy check: the kill reaches the attempt\'s process group, and the process alone when it has no group', (t) => {
+  const calls = [];
+  t.mock.method(process, 'kill', (pid, signal) => { calls.push([pid, signal]); if (pid < 0) throw new Error('ESRCH'); return true; });
+  assert.equal(killGroup(4321), true);
+  assert.deepEqual(calls, [[-4321, 'SIGKILL'], [4321, 'SIGKILL']]);
+  calls.length = 0;
+  process.kill.mock.restore();
+  t.mock.method(process, 'kill', (pid, signal) => { calls.push([pid, signal]); return true; });
+  assert.equal(killGroup(4321), true);
+  assert.deepEqual(calls, [[-4321, 'SIGKILL']], 'the group is enough');
 });
 
 test('deploy check: a verdict file whose row has no check is written into it, and nothing is started for that row', async (t) => {
