@@ -25,7 +25,7 @@ import { devQueuePath, joinQueue } from '../../src/mc/dev-queue.js';
 import { devPoolPath, readReservations } from '../../src/mc/dev-reservations.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
-  accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isLoopback, notInDev, readDeclaration, runSuites,
+  accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isGate, isLoopback, parseDeclaration, notInDev, readDeclaration, runSuites,
   NO_SHARED_WORKTREE, followMain, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 import { shotWorktree } from '../../src/mc/shot.js';
@@ -164,6 +164,58 @@ describe('what the repository declares', () => {
     );
     assert.equal(calls[0].command, 'npm run test:shelly && rm -rf /');
     assert.equal(calls[0].options.shell, false, 'never a shell, whatever the declaration says');
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('a suite that does not gate a deploy says why: gate: false needs a gate_why, and a gate is anything else', () => {
+    const suite = (extra) => ({ name: 'flaky', argv: ['node', 'flaky.js'], needs_account: false, ...extra });
+    const parsed = (suites) => parseDeclaration(JSON.stringify({ ...DECLARATION, suites }), 'x/.mc/test.json');
+    const why = 'red on the server against the live commit; returns as a gate when green twenty runs in a row';
+
+    const ok = parsed([suite({ gate: false, gate_why: why }), suite({ name: 'solid' }), suite({ name: 'explicit', gate: true })]);
+    assert.equal(ok.ok, true, ok.error);
+    assert.deepEqual(ok.declaration.suites.map(isGate), [false, true, true], 'only gate: false takes a suite out');
+    assert.equal(ok.declaration.suites[0].gate_why, why);
+
+    for (const missing of [{ gate: false }, { gate: false, gate_why: '' }, { gate: false, gate_why: '   ' }, { gate: false, gate_why: 5 }]) {
+      const refused = parsed([suite(missing)]);
+      assert.equal(refused.ok, false, JSON.stringify(missing));
+      assert.match(refused.error, /flaky declares gate: false and no gate_why/u);
+    }
+    const loose = parsed([suite({ gate: 'no' })]);
+    assert.equal(loose.ok, false);
+    assert.match(loose.error, /flaky's gate is true or false, not "no"/u);
+  });
+
+  it('readDeclaration refuses a gate: false without its gate_why, for the file in the tree', () => {
+    const worktree = worktreeWith({
+      declaration: { ...DECLARATION, suites: [{ name: 'flaky', argv: ['node', 'flaky.js'], needs_account: false, gate: false }] },
+    });
+    const read = readDeclaration(worktree);
+    assert.equal(read.ok, false);
+    assert.match(read.error, /flaky declares gate: false and no gate_why/u);
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('mc test runs a suite that does not gate a deploy as it runs any other: the flag is the deploy\'s alone', async () => {
+    const worktree = worktreeWith({
+      declaration: {
+        ...DECLARATION,
+        suites: [
+          { name: 'flaky', argv: ['node', 'flaky.js'], needs_account: false, gate: false, gate_why: 'red on the server against the live commit, so it does not gate' },
+          { name: 'solid', argv: ['node', 'solid.js'], needs_account: false },
+        ],
+      },
+    });
+    const read = readDeclaration(worktree);
+    assert.equal(read.ok, true, read.error);
+    const ran = [];
+    const done = await runSuites(
+      { declaration: read.declaration, worktree, baseUrl: 'http://127.0.0.1:8787' },
+      { spawnSync: (command, args) => { ran.push(args[0]); return { status: 0 }; } },
+    );
+    assert.deepEqual(ran, ['flaky.js', 'solid.js'], 'both ran, in order');
+    assert.equal(done.results.length, 2);
     rmSync(worktree, { recursive: true, force: true });
   });
 
@@ -969,7 +1021,7 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
    * `usedSecondsAgo` ago, ensured the way `mc shot dev` ensures it. A kept browser
    * that stepped `session.usedSecondsAgo` ago holds it when one is given.
    */
-  async function ensureMain(git, { usedSecondsAgo = 600, session = null } = {}) {
+  async function ensureMain(git, { usedSecondsAgo = 600, session = null, pin = false } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
     const sessions = mkdtempSync(join(tmpdir(), 'mc-test-env-sessions-'));
@@ -994,6 +1046,7 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
       processCwd: () => null,
       freeMemory: () => null,
       git: git.git,
+      ...(pin ? { pin: true } : {}),
       stopServer: (server) => { stopped.push(server.instance_id); unregistered(root, server); return { ok: true, instance_id: server.instance_id }; },
       sleep: async () => {},
       spawn: (command, args) => {
@@ -1066,6 +1119,43 @@ describe('main: the shared checkout\'s server stays up and follows main', () => 
       assert.equal(run.ensured.unfollowed, 'uncommitted changes');
       assert.equal(run.git.merges, 0);
     } finally { run.cleanup(); }
+  });
+
+  it('main: a pinned ensure serves the checkout where the caller placed it and never fast-forwards it to origin/main', async () => {
+    // `mc deploy` placed the shared checkout at the commit it will ship (cccccccccc, behind origin/main's
+    // bbbbbbbbbb); the idle server was built from another tree. Followed, the checkout would move to origin/main.
+    const followed = await ensureMain(checkout({ head: 'cccccccccc3333' }), { usedSecondsAgo: 600 });
+    try {
+      assert.equal(followed.git.merges, 1, 'without the pin the checkout is moved to origin/main');
+      assert.equal(followed.git.head, 'bbbbbbbbbb2222');
+    } finally { followed.cleanup(); }
+    const pinned = await ensureMain(checkout({ head: 'cccccccccc3333' }), { usedSecondsAgo: 600, pin: true });
+    try {
+      assert.equal(pinned.ensured.ok, true, pinned.ensured.error);
+      assert.equal(pinned.git.merges, 0, 'no merge: the checkout stays where it was placed');
+      assert.equal(pinned.git.head, 'cccccccccc3333');
+      assert.deepEqual(pinned.stopped, ['dev-8900'], 'the server of another tree is replaced…');
+      assert.equal(pinned.spawned.length, 1, '…by one started on the placed checkout');
+      assert.equal(pinned.ensured.followed, null, 'and nothing was followed');
+      assert.equal(pinned.ensured.server.built_from.commit, 'cccccccccc3333');
+    } finally { pinned.cleanup(); }
+  });
+
+  it('main: a pinned ensure of a dirty or off-main checkout does not ask git to follow either', async () => {
+    const run = await ensureMain(checkout({ head: 'cccccccccc3333', dirty: ' M src/app.js\n' }), { usedSecondsAgo: 600, pin: true });
+    try {
+      assert.equal(run.git.merges, 0);
+      assert.equal(run.ensured.unfollowed ?? null, null, 'a pin is not a refused follow: nothing was tried');
+    } finally { run.cleanup(); }
+  });
+
+  it('ensureAppServer hands the pin on to the ensure it makes', async () => {
+    const seen = [];
+    await ensureAppServer('/w', DECLARATION, {
+      stdout: { write: () => {} },
+      deps: { pin: true, ensureDevServer: async (_worktree, _declaration, options) => { seen.push(options.pin); return { ok: false, error: 'stub' }; } },
+    });
+    assert.deepEqual(seen, [true]);
   });
 
   it('main: --main serves the shared checkout from inside a worktree; without it, the tree you stand in', () => {
