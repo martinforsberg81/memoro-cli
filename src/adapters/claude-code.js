@@ -652,3 +652,6 @@ export const TAIL_READER = 'claude-tail';
  * files, the reader of their lines, and the option that names their directory.
  */
 export const COST_SOURCE = Object.freeze({ files: 'claude-projects', reader: 'claude-messages', option: 'claudeDir' });
+
+/** Where the tool reads skills from; Claude honours its config directory override. */
+export const SKILLS_DIR = (env, home) => join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'skills');

@@ -8,6 +8,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
+import { adapterFor, toolsDeclaring } from '../adapters/index.js';
 import { canonRoot } from './canon.js';
 
 export const SKILL_PREFIX = 'mc-'; // Legacy installs, recognised by their source marker too.
@@ -25,10 +26,7 @@ function homeOf(env) {
 
 export function skillTargets(env = process.env) {
   const home = homeOf(env);
-  return [
-    { tool: 'claude', dir: join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'skills') },
-    { tool: 'codex', dir: join(home, '.agents', 'skills') },
-  ];
+  return toolsDeclaring('SKILLS_DIR').map((tool) => ({ tool, dir: adapterFor(tool).SKILLS_DIR(env, home) }));
 }
 
 export function parseSkill(text) {

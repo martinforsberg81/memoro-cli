@@ -726,3 +726,6 @@ export const TAIL_READER = 'codex-tail';
  * files, the reader of their lines, and the option that names their directory.
  */
 export const COST_SOURCE = Object.freeze({ files: 'codex-rollouts', reader: 'codex-readings', option: 'codexDir' });
+
+/** Where the tool reads skills from. */
+export const SKILLS_DIR = (_env, home) => join(home, '.agents', 'skills');
