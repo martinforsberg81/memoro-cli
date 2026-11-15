@@ -2904,3 +2904,343 @@ describe('mc deploy — a suite that does not gate a deploy', () => {
     assert.deepEqual(result.not_gate, [{ name: 'flaky', why: WHY }]);
   });
 });
+
+describe('mc deploy — the deployer puts mc\'s own worktree at the pick, and nothing else', () => {
+  const OWN = deployWorktreePath(process.env);
+  const FOREIGN = MAIN_WT;
+
+  /** One `ship` of MID, with the worktree at `head` and git as `options` say. */
+  async function shipping({ head = TIP, worktree = OWN, own = true, dirty = [], behind = 0, ...gitOptions } = {}) {
+    const git = walkingGit({ head, state: { [worktree]: { dirty, ahead: 0, behind } }, ...gitOptions });
+    const spawned = [];
+    const { out, stdout, stderr } = io();
+    const key = { started: '2026-11-15T10:00:00.000Z', sha: MID };
+    const d = {
+      ...deps({ git }),
+      stdout,
+      stderr,
+      runningRound: () => null,
+      readMerger: () => null,
+      spawnDeploy: async (options) => { spawned.push(options); return { code: 0 }; },
+    };
+    recordStart({ sha: MID, holder: 'test', pid: '', started: key.started, gate: {} }, d.env);
+    const code = await ship({ key, sha: MID, worktree, own, root: work }, d);
+    return { code, git, out, spawned, row: lastAttempt({ MC_WORK_ROOT: work }) };
+  }
+  const calls = (git, verb) => git.calls.filter((call) => call.args[0] === verb);
+
+  it('a worktree behind the pick is fast-forwarded to it, by sha', async () => {
+    const { code, git, spawned, out } = await shipping({
+      head: LOW, behind: 1, ancestors: (older, newer) => !(older === MID && newer === LOW),
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(calls(git, 'merge').map((call) => call.args), [['merge', '--ff-only', MID]]);
+    assert.deepEqual(calls(git, 'reset'), []);
+    assert.equal(spawned[0].sha, MID);
+    assert.match(out.stdout, /fast-forwarded main in .* to 5b2d000/u);
+  });
+
+  it('mc\'s own worktree at main\'s tip is put back to the pick with reset --keep, and the script runs there at the pick', async () => {
+    const { code, git, spawned, out, row } = await shipping({ head: TIP });
+    assert.equal(code, 0);
+    assert.deepEqual(calls(git, 'reset'), [{ cwd: OWN, args: ['reset', '--keep', MID] }]);
+    assert.equal(spawned.length, 1);
+    assert.deepEqual([spawned[0].sha, spawned[0].cwd], [MID, OWN]);
+    assert.match(out.stdout, /moved main in .* to 5b2d000/u);
+    assert.equal(git.head(), MID);
+    assert.equal(row.sha, MID);
+  });
+
+  it('untracked files do not stop the reset: they are removed after it, as after a fast-forward', async () => {
+    const { code, git } = await shipping({ head: TIP, dirty: ['?? artifacts/'] });
+    assert.equal(code, 0);
+    assert.equal(calls(git, 'reset').length, 1);
+  });
+
+  it('a worktree that is not mc\'s own is never reset: the commit that stood is named and nothing ships', async () => {
+    const { code, git, spawned, row, out } = await shipping({ head: TIP, worktree: FOREIGN, own: false });
+    assert.equal(code, 1);
+    assert.deepEqual(calls(git, 'reset'), [], 'somebody else\'s checkout is not moved');
+    assert.deepEqual(calls(git, 'merge'), []);
+    assert.equal(spawned.length, 0, 'the script was not started');
+    assert.deepEqual([row.outcome, row.stopped_at, row.sha], ['failed', 'moved', TIP]);
+    assert.match(out.stderr, /main in .* stands on 1a2b3c4, not 5b2d000/u);
+  });
+
+  it('a HEAD origin/main does not contain is not reset away', async () => {
+    const { code, git, spawned, row } = await shipping({ head: TIP, ancestors: (older, newer) => newer !== 'origin/main' });
+    assert.equal(code, 1);
+    assert.deepEqual(calls(git, 'reset'), []);
+    assert.equal(spawned.length, 0);
+    assert.equal(row.stopped_at, 'moved');
+  });
+
+  it('a tracked change is never reset over, however keep-safe git says it is', async () => {
+    const { code, git, spawned, row } = await shipping({ head: TIP, dirty: [' M src/app.js'] });
+    assert.equal(code, 1);
+    assert.deepEqual(calls(git, 'reset'), []);
+    assert.equal(spawned.length, 0);
+    assert.equal(row.stopped_at, 'moved');
+  });
+
+  it('a worktree whose state git cannot read is not reset', async () => {
+    const { code, git, spawned } = await shipping({ head: TIP, fails: ['status'] });
+    assert.equal(code, 1);
+    assert.deepEqual(calls(git, 'reset'), []);
+    assert.equal(spawned.length, 0);
+  });
+
+  it('a reset git refuses stops the deploy at the fast-forward, and says which commit', async () => {
+    const { code, spawned, row, out } = await shipping({ head: TIP, fails: ['reset'] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.deepEqual([row.outcome, row.stopped_at], ['failed', 'fast-forward']);
+    assert.match(out.stderr, /git reset --keep 5b2d000 failed in .* — nothing was deployed/u);
+  });
+
+  it('the script is always started with the remote preflight skipped: the question, not the script, chose the commit', async () => {
+    let seen = null;
+    const { stdout, stderr } = io();
+    await spawnDeployDefault({
+      cwd: OWN,
+      env: { PATH: process.env.PATH },
+      stdout,
+      stderr,
+      spawnProcess: (command, args, options) => {
+        seen = options.env;
+        return spawn('sh', ['-c', 'exit 0'], { stdio: 'ignore' });
+      },
+    });
+    assert.equal(seen.MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT, '1');
+    assert.equal(seen.PATH, process.env.PATH, 'the rest of the environment is handed on');
+  });
+});
+
+describe('mc deploy — through the verb: the older green commit is prepared, asked about and shipped', () => {
+  const OWN = deployWorktreePath(process.env);
+  const own = (extra = {}) => walkingGit({
+    chain: [TIP, MID, LOW], counts: COUNTS, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } }, ...extra,
+  });
+  const GATED = { head: TIP, served: 'checkout' };
+
+  it('a red tip with a green commit behind it: no full run starts, the question names the green commit, and it ships', async () => {
+    const git = own();
+    const { code, out, asked, spawned, calls, row, checkout } = await attempt([], { extra: { git }, runs: [redRun(TIP), greenRun(MID)], ...GATED });
+    assert.equal(code, 0);
+    assert.equal(calls.fullRun.length, 0, 'no full run was started: the older commit has one');
+    assert.deepEqual(asked, ['deploy 5b2d000 to production? [y/N]']);
+    assert.match(out.stdout, /mc: 1 commit behind main's tip 1a2b3c4 — its full run is RED \(2\): tests\/lib\/money\.test\.js, command:lint/u);
+    assert.match(out.stdout, /mc: full run — 5b2d000 measured whole: green/u);
+    assert.equal(spawned.length, 1);
+    assert.deepEqual([spawned[0].sha, spawned[0].cwd], [MID, OWN], 'the script runs at the pick, in mc\'s own worktree');
+    assert.equal(row.sha, MID, 'the row names what shipped, not what origin/main says');
+    assert.equal(row.outcome, 'deployed');
+    assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset').map((call) => call.args), [['reset', '--keep', MID]]);
+    assert.equal(checkout.head, MID, 'the suites were run against the pick');
+    assert.equal(calls.suites.length, 1);
+  });
+
+  it('--accept-red ships the tip itself, gated, with every red listed, and names the green commit it passes over', async () => {
+    const git = own();
+    const { code, out, asked, spawned, calls, row } = await attempt(['--accept-red', 'known'], {
+      extra: { git }, runs: [redRun(TIP), greenRun(MID)], ...GATED, served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(asked, ['deploy 1a2b3c4 to production, accepting red (known)? [y/N]']);
+    assert.match(out.stdout, /mc: --accept-red ships main's tip 1a2b3c4; without it 5b2d000, 1 commit behind the tip, would ship/u);
+    assert.match(out.stdout, /accepting 1 red:/u);
+    assert.match(out.stdout, /tests\/lib\/money\.test\.js/u);
+    assert.match(out.stdout, /command:lint/u);
+    assert.equal(calls.fullRun.length, 0);
+    assert.equal(calls.suites.length, 1, 'the tip was gated: its suites ran');
+    assert.equal(spawned[0].sha, TIP);
+    assert.equal(row.sha, TIP);
+    assert.equal(row.accepted_red, 'known');
+  });
+
+  it('a green tip ships the tip, and says nothing of the others', async () => {
+    const git = own();
+    const { code, out, asked, spawned, row } = await attempt([], { extra: { git }, runs: [greenRun(TIP), greenRun(MID)], ...GATED });
+    assert.equal(code, 0);
+    assert.deepEqual(asked, ['deploy 1a2b3c4 to production? [y/N]']);
+    assert.doesNotMatch(out.stdout, /behind main's tip|without it|has a green full run/u);
+    assert.equal(spawned[0].sha, TIP);
+    assert.equal(row.sha, TIP);
+    assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset'), []);
+  });
+
+  it('with no green commit after the live one the tip is prepared as it is, and its red refuses', async () => {
+    const { code, out, spawned, calls } = await attempt([], { extra: { git: own() }, runs: [redRun(TIP), stalledRun(MID)], ...GATED });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.equal(calls.fullRun.length, 0, 'the tip has a full run: it is red');
+    assert.match(out.stdout, /mc: no commit after the live one 9f8e7d6 has a green full run — the tip is prepared as it is/u);
+  });
+});
+
+describe('mc deploy — production never moves backwards', () => {
+  const chain = [TIP, MID, LOW];
+  const walk = (extra = {}) => walkingGit({ chain, counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)), ...extra });
+
+  it('the live commit is the last row\'s live_commit, which may be ahead of the sha it shipped', async () => {
+    const lastRow = { sha: LOW, live_commit: MID, live_build: '900', ended: '2026-11-14T10:00:00Z' };
+    const git = fakeGit({ counts: COUNTS, chain: (range) => (range === `${MID}..${TIP}` ? [TIP] : range === `${LOW}..${TIP}` ? [TIP, MID] : null) });
+    const plan = await planOf({ git, runs: [redRun(TIP), greenRun(MID)], lastDeploy: () => lastRow });
+    assert.deepEqual([plan.last.sha, plan.live, plan.last.build], [MID, MID, '900']);
+    assert.equal(plan.backwards, null);
+    assert.equal(plan.sha, TIP, 'the commit already live is no candidate, and the tip has no green one before it');
+    assert.equal(plan.pick.green, null);
+    assert.ok(git.calls.some((call) => call.args.join(' ') === `rev-list --first-parent ${MID}..${TIP}`));
+  });
+
+  it('a row that verified nothing has no live_commit, and its sha is what is live', async () => {
+    const git = fakeGit({ counts: COUNTS, chain: (range) => (range === `${MID}..${TIP}` ? [TIP] : null) });
+    const plan = await planOf({ git, runs: [greenRun(TIP)], lastDeploy: () => ({ sha: MID, live_commit: '', ended: '2026-11-14T10:00:00Z' }) });
+    assert.deepEqual([plan.live, plan.backwards], [MID, null]);
+    assert.equal(plan.sha, TIP);
+  });
+
+  for (const accept of [[], ['--accept-red', 'known']]) {
+    const how = accept.length ? 'under --accept-red too' : 'with a green tip';
+    it(`the tip is live: nothing newer can ship, nothing is prepared or started — ${how}`, async () => {
+      const { code, out, spawned, asked, calls, row } = await attempt(accept, {
+        extra: { git: walk({ chain: () => [] }), fetchVersion: async () => ({ commit: TIP, build: 900, build_time: '2026-11-14T10:00:00Z' }) },
+        runs: [accept.length ? redRun(TIP) : greenRun(TIP)],
+      });
+      assert.equal(code, 1);
+      assert.deepEqual([spawned.length, asked.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.deepEqual(readPreparation(work), null, 'no preparation was started');
+      assert.equal(row.outcome, 'refused');
+      assert.match(row.note, /the live commit 1a2b3c4 is main's tip — nothing newer can ship/u);
+      assert.match(out.stderr, /nothing newer can ship — nothing was deployed/u);
+    });
+
+    it(`a tip that does not descend from the live commit is refused, naming the live commit — ${how}`, async () => {
+      const git = walk({ ancestors: (older, newer) => !(older === LIVE && newer === TIP) });
+      const { code, spawned, asked, calls, row, out } = await attempt(accept, { extra: { git }, runs: [accept.length ? redRun(TIP) : greenRun(TIP), greenRun(MID)] });
+      assert.equal(code, 1);
+      assert.deepEqual([spawned.length, asked.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.equal(row.outcome, 'refused');
+      assert.match(row.note, /main's tip 1a2b3c4 does not descend from the live commit 9f8e7d6 .* nothing newer can ship/u);
+      assert.match(out.stderr, /nothing was deployed/u);
+    });
+  }
+
+  it('--dry-run reads the refusal out and deploys nothing', async () => {
+    const git = walk({ chain: () => [] });
+    const { code, out, spawned } = await attempt(['--dry-run'], {
+      extra: { git, fetchVersion: async () => ({ commit: TIP, build: 900 }) }, runs: [greenRun(TIP)],
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stdout, /the live commit 1a2b3c4 is main's tip — nothing newer can ship/u);
+    assert.match(out.stdout, /mc: --dry-run — nothing would be deployed/u);
+  });
+
+  it('a live commit this checkout does not have ships nothing: nothing newer than it can be told', async () => {
+    const git = walk({ unknown: [LIVE] });
+    const { code, spawned, row } = await attempt([], { extra: { git }, runs: [greenRun(TIP)] });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(row.note, /9f8e7d6 is not a commit this checkout has/u);
+  });
+
+  it('a deploy that landed while the question was open refuses a pick that no longer comes after what is live', async () => {
+    let answered = false;
+    const git = walk({ ancestors: (older, newer) => !(older === TIP && newer === MID) });
+    const { code, spawned, row, out } = await attempt([], {
+      extra: {
+        git,
+        ask: () => { answered = true; return 'y'; },
+        lastDeploy: () => (answered ? { sha: TIP, live_commit: TIP, ended: '2026-11-15T09:00:00Z' } : null),
+      },
+      runs: [redRun(TIP), greenRun(MID)],
+      head: TIP,
+      served: 'checkout',
+    });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the script was not started');
+    assert.equal(row.outcome, 'refused');
+    assert.match(row.note, /1a2b3c4 is live now and 5b2d000 does not come after it — nothing newer can ship/u);
+    assert.match(out.stderr, /nothing was deployed/u);
+  });
+
+  it('the same recheck lets a pick through that does come after the standing row', async () => {
+    let answered = false;
+    const { code, spawned, row } = await attempt([], {
+      extra: {
+        git: walk(),
+        ask: () => { answered = true; return 'y'; },
+        lastDeploy: () => (answered ? { sha: LOW, live_commit: LOW, ended: '2026-11-15T09:00:00Z' } : null),
+      },
+      runs: [redRun(TIP), greenRun(MID)],
+      head: TIP,
+      served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1);
+    assert.equal(row.sha, MID);
+  });
+});
+
+describe('mc deploy — a preparation is reused only while the history still says what it recorded', () => {
+  it('a full run written since — a red where it read green — makes it a measurement of an older state: prepared again, and refused on the red', async () => {
+    const runs = [fullRunOf(SHA)];
+    const fake = gateFake({ runs });
+    const { state, extra } = detachedPreparer(fake);
+    const asked = [];
+    const first = io();
+    const one = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'n'; } }),
+      stdout: first.stdout,
+      stderr: first.stderr,
+    });
+    assert.equal(one, 1, 'answered no');
+    assert.equal(state.starts, 1);
+    assert.equal(readPreparation(work).result.full.state, 'green');
+
+    // The same commit's run is judged red afterwards (the nightly measured it again).
+    runs.push(RED_RUN());
+    const second = io();
+    const two = await run([], {
+      ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: (question) => { asked.push(question); return 'y'; } }),
+      stdout: second.stdout,
+      stderr: second.stderr,
+    });
+    assert.match(second.out.stdout, /mc: the preparation of 1a2b3c4 read the full run as green, the history says red now — preparing again/u);
+    assert.equal(state.starts, 2, 'it was prepared again, not reused');
+    assert.equal(two, 1, 'and the red refuses');
+    assert.equal(asked.length, 1, 'nobody was asked the second time');
+  });
+
+  it('while the history says what it recorded, it is reused', async () => {
+    const fake = gateFake({ runs: [fullRunOf(SHA)] });
+    const { state, extra } = detachedPreparer(fake);
+    for (let round = 0; round < 2; round += 1) {
+      const { stdout, stderr } = io();
+      await run([], { ...deps({ ...extra, sleep: async () => { await state.pending(); }, ask: () => 'n' }), stdout, stderr });
+    }
+    assert.equal(state.starts, 1);
+  });
+});
+
+describe('mc deploy — every red name is listed, never a few', () => {
+  it('an --accept-red of a tip with six reds lists all six, where the reading and the suites\' exercise do', async () => {
+    const git = walkingGit({ chain: [TIP, MID], counts: COUNTS });
+    const { code, out } = await attempt(['--accept-red', 'known'], {
+      extra: { git }, runs: [redRun(TIP, SIX_RED), greenRun(MID)], head: TIP, served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.match(out.stdout, /the full run of 1a2b3c4 is red \(6\)/u);
+    const listed = out.stdout.split('\n').filter((line) => line.includes('red tests:'));
+    assert.equal(listed.length, 1);
+    for (const name of SIX_RED) assert.ok(listed[0].includes(name), `${name} is in the red tests line`);
+  });
+
+  it('a passed-over tip with six reds names six', async () => {
+    const git = walkingGit({ chain: [TIP, MID], counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)) });
+    const { out } = await attempt(['--dry-run'], { extra: { git }, runs: [redRun(TIP, SIX_RED), greenRun(MID)] });
+    const said = out.stdout.split('\n').find((line) => line.includes('its full run is RED'));
+    for (const name of SIX_RED) assert.ok(said.includes(name), `${name} is named`);
+  });
+});
