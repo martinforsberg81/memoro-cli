@@ -19,9 +19,9 @@ verdict on that head. Own tests means changed tests and one-hop source
 importers at head, or base importers for deleted/renamed sources, plus memoro's
 eight mandatory core files; no pin/scan/rule/area or transitive widening. Bare
 `mc gate` matches that set without deferral. Wide selection and all command
-gates remain in the daily full run and before a deploy; optional named gates,
+gates remain in the full run and before a deploy; optional named gates,
 `--whole-selection` and `mc test <repo> --full` are not landing requirements.
-The daily run repairs main's reds through a main-red mend; the deploy gate
+The full run repairs main's reds through a main-red mend; the deploy gate
 keeps them from production. Until that separate goal lands, a deploy's owner
 reads the full run. No broader regression green is implied by your verdict.
 

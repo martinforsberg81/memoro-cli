@@ -4,7 +4,7 @@
  * instead of starting another.
  *
  * Three doors start a full run — `mc deploy` (its preparation), `mc test
- * <repo> --full`, and the runner's daily run — and a full run is a suite's
+ * <repo> --full`, and the runner's full run — and a full run is a suite's
  * worth of cores for tens of minutes. Two of them on one `main` measured the
  * same tree twice (2026-11-14: a deploy's run and a hand-typed `--full` were
  * the same suite twice, and the second was lost to the merger's lease).

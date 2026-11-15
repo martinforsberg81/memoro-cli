@@ -8,7 +8,7 @@
  * affected-selection passed, because nothing ever looked at the whole.
  *
  * The schedule is a chore of the runner now (`runNightly` in `run.js`, due when
- * a day has passed since the last tick — `nightlyDue` in `run-plan.js`), and
+ * main moved since the last measured run — `fullRunDue` in `nightly-loop.js`), and
  * this file is what is left of the process that used to carry it: the
  * directory under mc's home and the log in it. Nothing here starts, stops or
  * looks for a process, and nothing writes a pid file.
