@@ -118,6 +118,7 @@ import { processAlive } from '../lease-owner.js';
 import { languageState as readLanguageState, liveRun } from '../language-runs.js';
 import { installedScript, readMerger } from '../merger.js';
 import { nightlyReading, readNightlyHistory } from '../nightly-history.js';
+import { takeBackCells, takeBackLines, takeBackReading } from '../take-back.js';
 import { mcHome, workRoot } from '../paths.js';
 import { realLock } from '../runner-lock.js';
 import { currentHolder } from '../repo-lease.js';
@@ -579,6 +580,8 @@ export function planLines(plan, { now = Date.now() } = {}) {
 
   if (plan.backwards) lines.push(`mc: ${plan.backwards}`);
   lines.push(...pickLines(plan));
+  // What the release would be, taken back: said whether or not anything refuses (nothing does).
+  lines.push(...takeBackLines(plan.take_back));
 
   if (!plan.nightly) {
     lines.push('mc: the nightly has measured nothing here — this tree was not measured whole');
@@ -770,6 +773,14 @@ export async function run(argv, deps = {}) {
     ahead: state.ahead,
     behind: state.behind,
   };
+  // Whether this release can be taken back, from git alone (memoro's scripts/release/reading.mjs, run as
+  // the pick has it): made once the plan is known, before anything else, and only for a pick that moves
+  // production forwards. It never refuses, holds or asks — a release that cannot be taken back deploys as
+  // it does today — and a reading that cannot be made is `no`, with its why.
+  plan.take_back = plan.backwards
+    ? null
+    : await (deps.takeBack || takeBackReading)({ path, from: plan.live, to: plan.sha });
+  const reading = takeBackCells(plan.take_back);
 
   // The gate's two measurements of the commit that would ship. A dry run makes
   // them too — the reading is only worth having with both — except that it
@@ -820,8 +831,11 @@ export async function run(argv, deps = {}) {
   let cells = {};
   const repairRoot = deps.root || workRoot(env);
   // A refusal says why it is one by a code (`NOT_TECHNICAL`, deploy-repair.js): only a technical one queues a repair.
+  // Every refusal here comes after the reading, so each carries its two cells.
   const refuse = (note, code = '') => {
-    const row = recordRefusal({ sha: plan.sha, holder: holder.name, note, gate: cells }, env);
+    const row = recordRefusal({
+      sha: plan.sha, holder: holder.name, note, gate: cells, takeBack: reading,
+    }, env);
     queueRepair({ row, code, holder: holder.name, acceptRed: opts.acceptRed, deps, root: repairRoot });
     return row;
   };
@@ -957,7 +971,9 @@ export async function run(argv, deps = {}) {
     if (deployer.pid) {
       stdout.write(`mc: deploying ${plan.short} to production${gate.accepted ? `, accepting red (${gate.accepted})` : ''} in its own process (pid ${deployer.pid}) — after the gate round in flight, if any; the merge queue waits for it\n`);
     }
-    recordStart({ sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells }, env);
+    recordStart({
+      sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells, takeBack: reading,
+    }, env);
     return { key, deployer };
   }, { name: 'deploy' });
   if (!started) return 1;

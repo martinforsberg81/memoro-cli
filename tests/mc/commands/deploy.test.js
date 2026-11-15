@@ -33,10 +33,13 @@ import { preparationLogPath, prepare, readPreparation, writePreparation } from '
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
-import { lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart } from '../../../src/mc/deploys.js';
+import {
+  DEPLOYS_HEADER, deploysPath, lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart,
+} from '../../../src/mc/deploys.js';
 import { endRun, startRun } from '../../../src/mc/language-runs.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
 import { realLock } from '../../../src/mc/runner-lock.js';
+import { whyCell } from '../../../src/mc/take-back.js';
 
 const SHA = '1a2b3c4d5e6f70819293a4b5c6d7e8f900112233';
 const LIVE = '9f8e7d6c5b4a39281706f5e4d3c2b1a099887766';
@@ -351,6 +354,9 @@ function refusingAdmission() {
   return { lock, raced, end, started, startDeployer };
 }
 
+/** The reading `deps()` hands in: the release can be taken back, as most of what is tested here is not about it. */
+const CAN_BE_TAKEN_BACK = { made: true, can: true, reasons: [], why: '' };
+
 function deps(extra = {}) {
   const fake = gateFake();
   return {
@@ -377,6 +383,8 @@ function deps(extra = {}) {
     // The preparation, run in the test's own process: the same `prepare` the
     // detached `deploy-prepare-run.js` runs, its record written for real.
     startPreparer: (job, d) => ({ pid: process.pid, inline: () => prepare(job, { stdout: d.stdout, env: d.env, deps: d }) }),
+    // The release reading runs memoro's script from git; here it is what the test says it is.
+    takeBack: async () => CAN_BE_TAKEN_BACK,
     ...extra,
   };
 }
@@ -2193,6 +2201,7 @@ describe('mc deploy — a headless session cannot deploy', () => {
         },
         spawnDeploy: spy('spawnDeploy'),
         startDeployer: spy('startDeployer'),
+        takeBack: spy('takeBack'),
       },
     };
   }
@@ -3787,6 +3796,167 @@ describe('mc deploy — which route: mc\'s own worktree, or the person\'s checko
     assert.deepEqual(calls.placed.map((one) => one.worktree), [OWN]);
     assert.deepEqual([...new Set(calls.ensuredIn)], [OWN]);
     assert.deepEqual(calls.ensures.map((ensure) => ensure.pin), [false]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whether the release can be taken back (goal release-reads-whether-it-can-be-taken-back):
+// memoro's script reads it from git, mc says it and keeps it in the row, and nothing
+// about whether, when or by whom a deploy starts depends on it.
+// ---------------------------------------------------------------------------
+
+describe('mc deploy — whether the release can be taken back', () => {
+  const reason = (n, extra = {}) => ({
+    kind: 'migration-before',
+    what: `migrations/05${String(n).padStart(2, '0')}_x.sql: \`auto before\`; the previous build is not known to run on the new schema`,
+    file: `migrations/05${String(n).padStart(2, '0')}_x.sql`,
+    commits: [{ sha: `abc00000${n}`, subject: `Add x${n} (#${n})` }],
+    ...extra,
+  });
+  const cannot = (count = 1) => {
+    const reasons = Array.from({ length: count }, (_, i) => reason(i + 1));
+    return { made: true, can: false, reasons, why: whyCell(reasons) };
+  };
+  /** The first JSON object a verb printed: `--json` pretty-prints one, and a deploy prints the gate's after it. */
+  const firstObject = (text) => JSON.parse(text.slice(0, text.indexOf('\n}\n') + 2));
+
+  it('--dry-run says a release that can be taken back in one line, asks for the plan\'s range, and writes no row', async () => {
+    const asked = [];
+    const { code, out } = await attempt(['--dry-run'], { extra: { takeBack: async (range) => { asked.push(range); return CAN_BE_TAKEN_BACK; } } });
+    assert.equal(code, 0);
+    assert.deepEqual(asked, [{ path: PATH, from: LIVE, to: SHA }], 'the repository run uses, the live commit, the pick');
+    assert.equal(out.stdout.match(/^mc: this release can be taken back/gmu).length, 1);
+    assert.doesNotMatch(out.stdout, /cannot be taken back/u);
+    assert.deepEqual(readDeploys({ MC_WORK_ROOT: work }), [], 'a reading writes nothing');
+  });
+
+  it('--dry-run says a release that cannot, with each reason and the commit that brought it', async () => {
+    const { code, out } = await attempt(['--dry-run'], { extra: { takeBack: async () => cannot(2) } });
+    assert.equal(code, 0);
+    assert.match(out.stdout, /^mc: this release cannot be taken back — 2 changes make it so:$/mu);
+    assert.match(out.stdout, /^mc:   migration-before: migrations\/0501_x\.sql: `auto before`[^\n]* \(abc000001 Add x1 \(#1\)\)$/mu);
+    assert.match(out.stdout, /^mc:   migration-before: migrations\/0502_x\.sql[^\n]* \(abc000002 Add x2 \(#2\)\)$/mu);
+    assert.doesNotMatch(out.stdout, /and \d+ more/u);
+  });
+
+  it('says at most five reasons and counts the rest', async () => {
+    const { out } = await attempt(['--dry-run'], { extra: { takeBack: async () => cannot(8) } });
+    assert.match(out.stdout, /cannot be taken back — 8 changes make it so:/u);
+    assert.equal(out.stdout.match(/^mc:   migration-before: /gmu).length, 5);
+    assert.match(out.stdout, /^mc:   … and 3 more$/mu);
+    assert.doesNotMatch(out.stdout, /0506_x\.sql/u, 'the sixth is counted, not shown');
+  });
+
+  it('--json carries take_back, with the reasons, on the dry run and on a deploy', async () => {
+    const reading = cannot(1);
+    const dry = await attempt(['--dry-run', '--json'], { extra: { takeBack: async () => reading } });
+    assert.deepEqual(firstObject(dry.out.stdout).take_back, reading);
+    const shipped = await attempt(['--json'], { extra: { takeBack: async () => reading } });
+    assert.equal(shipped.code, 0);
+    assert.deepEqual(firstObject(shipped.out.stdout).take_back, reading);
+  });
+
+  it('a release that cannot be taken back is deployed as it would have been: gated, started once, nothing asked, the row keeps the reading', async () => {
+    const reading = cannot(2);
+    const { code, out, started, spawned, row } = await attempt([], { extra: { takeBack: async () => reading } });
+    assert.equal(code, 0);
+    assert.equal(started.length, 1, 'the deployer started');
+    assert.equal(spawned.length, 1);
+    assert.match(out.stdout, /^mc: deploying 1a2b3c4 to production/mu);
+    assert.equal(row.outcome, 'deployed');
+    assert.equal(row.take_back, 'no');
+    assert.equal(row.take_back_why, reading.why);
+    assert.match(row.take_back_why, /migration-before: migrations\/0501_x\.sql.*\(abc000001\); migration-before: migrations\/0502_x\.sql/u);
+    assert.equal(row.full_verdict, 'green', 'the gate\'s cells stand beside them');
+  });
+
+  it('a release that can be taken back is a `yes` with nothing to say why', async () => {
+    const { code, row } = await attempt([]);
+    assert.equal(code, 0);
+    assert.equal(row.take_back, 'yes');
+    assert.equal(row.take_back_why, '');
+  });
+
+  it('a reading that was not made is `no` with its why — the real reading, in a repository that has no script, and with no live commit known', async () => {
+    // No `takeBack` on deps: `takeBackReading` itself, over a path git has nothing in.
+    const missing = await attempt([], { extra: { takeBack: undefined } });
+    assert.equal(missing.code, 0, 'a reading not made does not stop the deploy');
+    assert.equal(missing.started.length, 1);
+    assert.equal(missing.row.take_back, 'no');
+    assert.match(missing.row.take_back_why, /^reading not made: scripts\/release\/reading\.mjs is not on 1a2b3c4d5e/u);
+    assert.match(missing.out.stdout, /^mc: this release is read as one that cannot be taken back — reading not made: /mu);
+
+    const unknown = await attempt([], { extra: { takeBack: undefined, fetchVersion: async () => null } });
+    assert.equal(unknown.code, 0);
+    assert.equal(unknown.row.take_back, 'no');
+    assert.equal(unknown.row.take_back_why, 'reading not made: no live commit is known, so there is no range to read');
+  });
+
+  it('a refusal after the reading carries both cells: a red gate, and a deploy already running', async () => {
+    const reading = cannot(1);
+    const red = await attempt([], { runs: [RED_RUN()], extra: { takeBack: async () => reading } });
+    assert.equal(red.code, 1);
+    assert.equal(red.row.outcome, 'refused');
+    assert.equal(red.row.take_back, 'no');
+    assert.equal(red.row.take_back_why, reading.why);
+
+    recordStart({ sha: OLDER, holder: 'martin', pid: process.pid, started: new Date().toISOString() }, { MC_WORK_ROOT: work });
+    const busy = await attempt([], { extra: { takeBack: async () => CAN_BE_TAKEN_BACK, alive: () => true } });
+    assert.equal(busy.code, 1);
+    assert.equal(busy.row.outcome, 'refused');
+    assert.match(busy.row.note, /a deploy of 0123456 is running/u);
+    assert.equal(busy.row.take_back, 'yes');
+  });
+
+  it('a pick that moves production backwards is refused without a reading: no cells, and take_back is null', async () => {
+    const reads = [];
+    const extra = {
+      lastDeploy: () => ({ sha: SHA, build: '1', ended: '2026-11-14T08:00:00Z', outcome: 'deployed' }),
+      takeBack: async (range) => { reads.push(range); return CAN_BE_TAKEN_BACK; },
+    };
+    const refused = await attempt([], { extra });
+    assert.equal(refused.code, 1);
+    assert.equal(refused.row.outcome, 'refused');
+    assert.match(refused.row.note, /is main's tip — nothing newer can ship/u);
+    assert.equal(refused.row.take_back, '');
+    assert.equal(refused.row.take_back_why, '');
+    assert.doesNotMatch(refused.out.stdout, /taken back/u);
+    const json = await attempt(['--dry-run', '--json'], { extra });
+    assert.equal(firstObject(json.out.stdout).take_back, null);
+    assert.deepEqual(reads, [], 'nothing was read');
+  });
+
+  it('the headless refusal stays what it was: nothing is read, not the reading either', async () => {
+    const { extra, touched } = (() => {
+      const calls = [];
+      return { touched: calls, extra: { env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' }, takeBack: () => { calls.push('takeBack'); throw new Error('no'); } } };
+    })();
+    const { code, out } = await attempt([], { extra });
+    assert.equal(code, 1);
+    assert.deepEqual(touched, []);
+    assert.match(out.stderr, /an unattended session does not deploy/u);
+    assert.deepEqual(readDeploys({ MC_WORK_ROOT: work }), []);
+  });
+
+  it('a deploys.tsv with the 15-column header is given the new one, its old rows\' new cells empty, and still read by header', async () => {
+    const old = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red') + 1);
+    assert.equal(old.length, 15);
+    mkdirSync(dirname(deploysPath({ MC_WORK_ROOT: work })), { recursive: true });
+    const row = ['2026-11-13T08:00:00Z', '2026-11-13T08:09:00Z', OLDER, '700', 'martin', 'deployed', OLDER, '700', '', '', '42', OLDER, 'green', 'smoke:ok', ''];
+    writeFileSync(deploysPath({ MC_WORK_ROOT: work }), `${old.join('\t')}\n${row.join('\t')}\n`);
+
+    const { code, row: now } = await attempt([], { extra: { takeBack: async () => cannot(1) } });
+    assert.equal(code, 0);
+    const rows = readDeploys({ MC_WORK_ROOT: work });
+    assert.equal(rows.length, 2);
+    assert.deepEqual(Object.keys(rows[0]), DEPLOYS_HEADER, 'the file has the new header');
+    assert.deepEqual(
+      [rows[0].sha, rows[0].build, rows[0].note, rows[0].take_back, rows[0].take_back_why],
+      [OLDER, '700', '', '', ''],
+      'the old row reads as before, its new cells empty',
+    );
+    assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, SHA, 'the last deployed row is the new one');
+    assert.equal(now.take_back, 'no');
   });
 });
 

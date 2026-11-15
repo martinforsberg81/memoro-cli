@@ -81,6 +81,11 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    and again under the register's lock at final admission.
 4. **The gap.** `git rev-list --count <live>..<sha>`. A sha the checkout does not
    have is *"the gap is unknown"*, never a number.
+   **The reading.** With the live commit, the pick and the gap known, and the
+   pick not older than what is live, memoro's `scripts/release/reading.mjs` says
+   whether the release can be taken back and which change makes it not (*The
+   reading* below); it is printed after the pick's lines, on `--dry-run` too, and
+   changes nothing about what follows.
 5. **The nightly.** `readNightlyHistory`
    ([`src/mc/nightly-history.js`](../../src/mc/nightly-history.js)) has the last
    full-suite measurement per repository with the commit it measured. When that
@@ -211,6 +216,54 @@ mc: from /Users/martinforsberg/memoro — main, 1 behind origin/main, fast-forwa
   "worktree": "/Users/martinforsberg/memoro",
   "behind": 1,
 ```
+
+## The reading: whether the release can be taken back
+
+Once the plan is known — the live commit, the pick and the gap between them —
+and the pick is not older than what is live, `mc deploy` says whether the release
+for those commits can be taken back and, when it cannot, which change makes it
+so. It is a reading and nothing else: it never refuses, holds, asks or changes
+whether, when or by whom a deploy starts, and `--accept-red` has nothing to do
+with it. The rules are memoro's, in
+[`docs/technical/release-take-back.md`](../../../memoro/docs/technical/release-take-back.md)
+(a migration added, changed, removed or renamed; a Durable Object, binding,
+container or configuration change the provider cannot roll back; a production
+act declared in `scripts/release/production-acts.json`), and they are written once, in memoro's
+`scripts/_lib/release-reading.mjs`. mc runs the script and reads what it prints;
+it holds no rule of its own.
+
+[`src/mc/take-back.js`](../../src/mc/take-back.js) (`takeBackReading`) uses no
+checkout. `mc deploy` runs in the bare repository `~/mc/repos/memoro.git`, which
+has no working tree and so no script, and a checkout can be behind or on another
+branch, so the pick's own `scripts/` is written out as the pick has it
+(`git archive` into `tar -x`) into a directory of its own under the system's
+temporary directory, and `node <dir>/scripts/release/reading.mjs --repo <path>
+--from <live> --to <pick>` runs there, bounded at 60 s. The directory is removed
+whatever happened. The script prints one JSON object — `schema_version` 1,
+`can_take_back`, and `reasons[]` of `{ kind, what, file, commits[{ sha, subject }] }`
+— and exits 0; mc accepts exactly that object, and nothing else is a reading.
+
+A reading that could not be made is `no`, never "unknown, so yes": the script is
+not on the pick (a pick from before it existed), it exited non-zero, it printed
+something that is not the object, it did not finish in 60 s, or no live commit is
+known so there is no range. The line then says `this release is read as one that
+cannot be taken back — reading not made: <why>`, and the deploy goes on.
+
+The reading is made before `--dry-run` branches, so a dry run says it too, and it
+is printed after the pick's lines:
+
+```
+mc: this release cannot be taken back — 1 change makes it so:
+mc:   migration-before: migrations/0411_x.sql: `auto before`; the previous build is not known to run on the new schema (bc3de65e3c Add x (#1))
+```
+
+`mc: this release can be taken back — nothing in it is one the provider cannot roll back`
+is the line when it can. At most five reasons are spelled out, each with the
+commits that brought it; the rest are counted (`… and 2 more`). `--json` carries
+the reading as `take_back` — `{ made, can, reasons, why }` — beside the rest of
+the plan, on a dry run and on a deploy, and `take_back` is `null` when the pick
+is not newer than what is live, because no reading is made then. The record keeps it in
+`take_back` and `take_back_why` (*The record*).
 
 ## mc's own `main`, and why it is kept
 
@@ -651,6 +704,8 @@ header the file actually carries rather than the one this module knows.
 | `full_commit`, `full_verdict` | the commit the full run measured and its verdict — `green`, `red`, `stalled`, `unmeasured` or `moved`; empty when none was read |
 | `suites` | each suite's result, `name:state` joined by commas — `ok`, `red`, `skipped` or `cannot-run`; `cannot-run:<why>` when none could start; empty when the suites were not run |
 | `accepted_red` | the reason given to `--accept-red`, when a red was accepted |
+| `take_back` | `yes` when the release could be taken back, `no` when it could not — or when the reading could not be made; empty when no reading was made (a refusal before the plan was known or for a backwards pick) and in rows written before the column |
+| `take_back_why` | for `no`, the reasons on one line — `<kind>: <what> (<sha>, …)`, joined by `; `, at most five and `and N more` — or `reading not made: <why>`; empty for `yes` |
 
 Two properties are the point of it:
 
@@ -665,7 +720,10 @@ Two properties are the point of it:
   written by an older mc keeps its columns, and a column this mc sets that the
   file has no room for is dropped rather than shifting every cell after it. One
   `writeFileAtomic`, so a reader sees the file before or after and never
-  half-way.
+  half-way. `take_back` and `take_back_why` are the last two columns: a refusal
+  made after the reading carries them as the started row does, and a file with
+  the header of the version before them is given the new header on its next row,
+  its old rows' cells empty.
 
 `build` and `live_commit` are deliberately different claims: the banner is what
 mc stamped, the verified line is what production answered. A deploy run with
@@ -826,7 +884,9 @@ The boundary is a rule, not a judgement call:
   that ran.
 
 What is deliberately not here: **rollback** — a verb that puts a previous sha
-back is separate work, now that there is a record to roll back to — and
+back is separate work, now that there is a record to roll back to; mc says
+whether a release can be taken back (`take_back`, read by memoro's
+`scripts/release/reading.mjs`) and does not take one back — and
 memoro's **release race** (`scripts/release-race.mjs`), whose deploy stage could
 one day call this verb; whether it should is a question for after this change.
 

@@ -41,7 +41,7 @@ import { workRoot } from './paths.js';
  */
 export const DEPLOYS_HEADER = [
   'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note', 'pid',
-  'full_commit', 'full_verdict', 'suites', 'accepted_red',
+  'full_commit', 'full_verdict', 'suites', 'accepted_red', 'take_back', 'take_back_why',
 ];
 
 /**
@@ -55,15 +55,27 @@ export const DEPLOYS_HEADER = [
 export const GATE_COLUMNS = ['full_commit', 'full_verdict', 'suites', 'accepted_red'];
 
 /**
+ * The take-back reading's two columns (2026-11-15): `take_back`, `yes` or `no`
+ * — whether the release could be taken back, a reading that was not made being
+ * `no` — and `take_back_why`, the reasons joined in one line, or
+ * `reading not made: …`. Both are empty on a row written before the reading
+ * was made (a refusal for a headless session or a pick that moves production
+ * backwards) and on a row written before the columns existed.
+ */
+export const TAKE_BACK_COLUMNS = ['take_back', 'take_back_why'];
+
+/**
  * The headers earlier mc versions wrote, oldest first: before `pid`
- * (2026-10-07) and before the gate's columns (2026-11-14). A file with exactly
+ * (2026-10-07), before the gate's columns (2026-11-14) and before the
+ * take-back reading's (2026-11-15). A file with exactly
  * one of them is given the current header the next time a row is written, its
  * old rows with the new cells empty: without `pid`, a deploy in progress could
  * never be told from one that died, which is the one thing that column is for.
  * Any other header is kept as it is, and drops what it has no room for.
  */
 const PID_COLUMNS = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('pid') + 1);
-const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS].map((header) => header.join('\t'));
+const GATE_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red') + 1);
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
@@ -182,11 +194,11 @@ function append(row, env) {
  * deploy runs in, so that reader can tell a deploy going on from one that died.
  */
 export function recordStart({
-  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '', gate = {},
+  sha, build = '', holder = '', started = new Date().toISOString(), note = '', pid = '', gate = {}, takeBack = {},
 }, env = process.env) {
   const row = {
     started, ended: '', sha, build, holder, outcome: RUNNING,
-    live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate),
+    live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate), ...readingCells(takeBack),
   };
   append(row, env);
   return { started, sha };
@@ -225,17 +237,22 @@ export function recordEnd(key, patch = {}, env = process.env) {
  * end because nothing happened in between.
  */
 export function recordRefusal({
-  sha = '', holder = '', note = '', at = new Date().toISOString(), gate = {},
+  sha = '', holder = '', note = '', at = new Date().toISOString(), gate = {}, takeBack = {},
 }, env = process.env) {
   return append({
     started: at, ended: at, sha, build: '', holder, outcome: REFUSED,
-    live_commit: '', live_build: '', stopped_at: '', note, ...gateCells(gate),
+    live_commit: '', live_build: '', stopped_at: '', note, ...gateCells(gate), ...readingCells(takeBack),
   }, env);
 }
 
 /** The gate's cells of a row, from what the gate found; every one empty when it did not run. */
 function gateCells(gate) {
   return Object.fromEntries(GATE_COLUMNS.map((name) => [name, gate?.[name] ?? '']));
+}
+
+/** The take-back cells of a row, from the reading's cells; both empty when none was made. */
+function readingCells(takeBack) {
+  return Object.fromEntries(TAKE_BACK_COLUMNS.map((name) => [name, takeBack?.[name] ?? '']));
 }
 
 /**
