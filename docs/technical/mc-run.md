@@ -980,9 +980,10 @@ reading.
   item. Provider endings (quota, offline, refused login), a refusal at admission
   and a fetch failure count nothing.
 
-No reading or archive starts while an item is open. The item closes by source only
-when the programme directory is gone from the programmes home or `goals/` holds a
-live goal, and by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)).
+No reading, archive or record write starts while an item is open. The item closes
+by source only when the programme directory is gone from the programmes home (and
+no destination named in the state still has a record that does not read `done`)
+or `goals/` holds a live goal, and by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)).
 
 **The archive.** After an OK reading, and again on the next pick when the state
 keeps one (no new reading, no session), the runner:
@@ -993,14 +994,22 @@ keeps one (no new reading, no session), the runner:
 2. moves the top-level `proposals/*.md` to `~/mc/proposals/`, each with a first
    line naming the programme, never over a file already there;
 3. calls `archiveProgramme` with the runner's own git, gh, docs merge and release
-   and a `fence` (a goal that appeared, or a record no longer open, refuses it),
-   the same function `mc plan <p> --archive` calls;
+   and a `fence`, the same function `mc plan <p> --archive` calls. The fence
+   re-reads `goals/` and `~/mc/restricted/<p>/` after each docs PR merge, before
+   release and before shelving; a live goal or a restricted entry that has
+   appeared stops the archive with nothing local released, deleted or moved
+   (a landed docs PR stays). With a fence, `clearRestricted` is never called;
 4. records the destination it returns in the state file at once, then sets the
    record there to `done` (`setRecordState`) and clears the state.
 
 A state that names a destination whose record still reads `open` (the move
 happened and the write did not) is due that write alone on the next pick: no
-reading, no session, no second archive. An archive that fails is a counted
+reading, no session, no second archive. A write that throws (a filesystem
+error) is a refusal like any other: the destination stays, the failure is
+counted, and the second opens the `for-martin` item. While that item is open the
+write is not tried, and sync keeps it open although the directory has left the
+programmes home, so a write that keeps failing opens no further item; a record
+that already reads `done` is only cleared from the state. An archive that fails is a counted
 failure like a failed reading, and a retry is made with the kept reading while
 the done goals are the same; a goal that has appeared stops the retry.
 

@@ -105,11 +105,26 @@ export function archivedGoals({ home, programme, list, read }) {
 /** Whether `goals/` holds a live goal: any entry but a dot-entry. */
 export const liveGoals = ({ home, programme, list }) => list(join(home, programme, 'goals')).filter((name) => !name.startsWith('.'));
 
+/** Whether a desk item of kind archive is open for `programme`. */
+const openArchiveItem = (items, programme) => items.some((item) => item.kind === ARCHIVE_ITEM_KIND && item.reference === archiveReference(programme) && item.state !== 'closed');
+
+/**
+ * A destination named in the state whose record does not yet read done: the programme's directory has moved and the write
+ * that sets its record done has not finished. Null when there is none, or it reads done. The desk sync keeps the programme's
+ * archive item open while this holds, though the directory is gone from the programmes home.
+ */
+export function pendingDestination(state, { read }) {
+  const destination = state.status === 'valid' ? state.state.destination : null;
+  if (!destination) return null;
+  const found = readRecord(destination, { read });
+  return found.status === 'valid' && found.record.state === 'done' ? null : destination;
+}
+
 /**
  * Whether `programme` is due now, model-free: `{ due: true, mode: 'read', record, goals }` (a reading and, on OK, the
  * archive), `{ due: true, mode: 'archive', record, goals }` (an OK reading is kept for exactly the goals archived now:
  * the archive is tried again with no new reading), `{ due: true, mode: 'state', destination }` (the programme's directory
- * has moved and its record still reads open: that write alone), or `{ due: false, reason, notice }` where `notice` is the
+ * has moved and its record still reads open: that write alone, held while an archive item of the programme is open), or `{ due: false, reason, notice }` where `notice` is the
  * line the runner says once while it lasts. `items` are the desk items, `state` is `readArchiveState`'s answer.
  */
 export function archiveDue({ programme, home, root, list, read, items = [], state }) {
@@ -121,7 +136,12 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
     // The directory moved and the write that sets the record done did not finish: that write alone, with no reading. A record
     // that already reads done is only cleared from the state.
     const found = readRecord(pending, { read });
-    if (found.status === 'valid') return { due: true, mode: 'state', destination: pending };
+    if (found.status === 'valid') {
+      // A write that has failed opens an item at the second failure; while it is open no write is tried, so a write that keeps
+      // failing opens no further item. A record already done is only cleared from the state, item or not.
+      if (found.record.state !== 'done' && openArchiveItem(items, programme)) return { due: false, reason: 'an archive desk item is open', notice: null };
+      return { due: true, mode: 'state', destination: pending };
+    }
     return { due: false, reason: 'its destination record cannot be read', notice: `${programme}: the record at ${pending} cannot be read (${found.status}) — it is not set to done until it is repaired` };
   }
   const dir = join(home, programme);
@@ -130,7 +150,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
   if (record.record.state !== 'open') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
   if (liveGoals({ home, programme, list }).length) return { due: false, reason: 'it holds a live goal', notice: null };
-  if (items.some((item) => item.kind === ARCHIVE_ITEM_KIND && item.reference === archiveReference(programme) && item.state !== 'closed')) {
+  if (openArchiveItem(items, programme)) {
     return { due: false, reason: 'an archive desk item is open', notice: null };
   }
   const goals = archivedGoals({ home, programme, list, read });
@@ -356,6 +376,14 @@ export function moveProposals({ home, programme, target, list, read, write, remo
 }
 
 /**
+ * The record set done, a write that throws (EACCES, ENOSPC) answered as a refusal: `{ ok: false, status: 'unwritten',
+ * problems: [message] }`. The destination stays in the state and the failure is counted, never a throw out of the pass.
+ */
+function setDoneSafely(setDone, dir, seams) {
+  try { return setDone(dir, 'done', seams); } catch (error) { return { ok: false, status: 'unwritten', problems: [error?.message || String(error)] }; }
+}
+
+/**
  * The archive on an OK reading (C3): `{ ok: true, destination }` (the programme is archived and its record reads done),
  * `{ ok: false, restricted: [entries] }` (the programme holds restricted data: nothing is moved), or `{ ok: false, reason }`.
  *
@@ -386,7 +414,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
   if (noted) return { ok: false, reason: `the destination ${destination} was not recorded: ${noted.message || String(noted)}` };
   const where = destination || (exists(dir) ? dir : null);
   if (!where) return { ok: false, reason: 'the programme directory is gone and no destination was recorded' };
-  const set = setDone(where, 'done', { read, write: (path, text) => write(path, text) });
+  const set = setDoneSafely(setDone, where, { read, write: (path, text) => write(path, text) });
   if (!set.ok) return { ok: false, reason: `the record at ${where} could not be set to done: ${set.problems?.join('; ') || set.status}`, destination: where };
   try { clearDestination({ programme, ...seams }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}`, destination: where }; }
   return { ok: true, destination: where };
@@ -394,7 +422,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
 
 /** What the state write alone does (D: a destination named in the state and its record still open): sets it done, clears it. */
 export function finishDestination({ programme, destination, read, write, setDone = setRecordState, root, writeJson, lock }) {
-  const set = setDone(destination, 'done', { read, write });
+  const set = setDoneSafely(setDone, destination, { read, write });
   if (!set.ok) return { ok: false, reason: `the record at ${destination} could not be set to done: ${set.problems?.join('; ') || set.status}` };
   try { clearDestination({ programme, root, read, writeJson, lock }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}` }; }
   return { ok: true, destination };

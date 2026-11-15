@@ -11,7 +11,7 @@ import { ledgerPath, rowAnswer } from './jev.js';
 import { realLock } from './runner-lock.js';
 import { holdsGoals, readTurnState, turnStatePath } from './programme-turn.js';
 import { readRecord } from './programme-record.js';
-import { archiveStatePath, liveGoals, readArchiveState } from './archive-turn.js';
+import { archiveStatePath, liveGoals, pendingDestination, readArchiveState } from './archive-turn.js';
 import { readHorizon } from './desk-horizons.js';
 import { horizonHeldByItem, horizonStatePath, readHorizonState, scanRecords } from './manager-pulse.js';
 
@@ -147,7 +147,9 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       else if (holdsGoals({ home, programme, list })) summary = 'The programme now holds a goal.';
     } else if (item.kind === 'archive') {
       // An archive item is the archive turn's: it closes by source only when the programme directory is gone from the
-      // programmes home or its goals/ holds a live goal. A state file that cannot be read keeps it open, said.
+      // programmes home or its goals/ holds a live goal. A directory gone while the state still names a destination whose
+      // record does not read done is a record write that failed after the move: the item stays open until it is decided,
+      // so a write that keeps failing opens no new item. A state file that cannot be read keeps it open, said.
       const programme = item.reference.slice('archive:'.length);
       const turn = readArchiveState({ root, programme, read });
       if (turn.status === 'unreadable') {
@@ -155,7 +157,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
         issues.set(path, { path, error: turn.problem });
         continue;
       }
-      if (!exists(join(home, programme))) summary = 'The programme directory is gone.';
+      if (!exists(join(home, programme))) { if (!pendingDestination(turn, { read })) summary = 'The programme directory is gone.'; }
       else if (liveGoals({ home, programme, list }).length) summary = 'The programme now holds a live goal.';
     } else if (item.kind === 'manager') {
       // A manager item is the horizon turn's: it closes when the horizon is not open, a valid open programme record

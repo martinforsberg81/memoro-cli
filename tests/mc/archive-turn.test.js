@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archivedGoals, archiveStatePath, failuresSinceItem, finishDestination, keepReading, moveProposals, noteDestination, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from '../../src/mc/archive-turn.js';
+import { archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archivedGoals, archiveStatePath, failuresSinceItem, finishDestination, keepReading, moveProposals, pendingDestination, noteDestination, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from '../../src/mc/archive-turn.js';
 import { itemDirectory } from '../../src/mc/desk-items.js';
 import { renderGoal } from '../../src/mc/goals.js';
 
@@ -264,6 +264,36 @@ test('archive turn: a record that cannot be set done keeps the destination, and 
   assert.equal(stateOf(s).destination, null);
   const again = finishDestination({ programme: 'prog', destination: '/arch/prog', read: s.read, write: s.write, root: ROOT, writeJson: s.writeJson, lock: s.lock });
   assert.equal(again.ok, true, 'a record that already reads done is only cleared');
+});
+
+test('archive turn: a record write that throws after the move is a refusal, counted; the second opens the item, and while it is open no write is tried', async () => {
+  const s = finished({ '/arch/prog/PROGRAMME.json': RECORD });
+  // The real setRecordState, its write throwing as writeFileAtomic does on a filesystem error.
+  const throwing = (path, text) => { if (path === '/arch/prog/PROGRAMME.json') { const error = new Error(`EACCES: permission denied, open '${path}'`); error.code = 'EACCES'; throw error; } s.write(path, text); };
+  const refused = await onOk(s, async ({ onShelved }) => { onShelved('/arch/prog'); return 0; }, { write: throwing });
+  assert.deepEqual([refused.ok, refused.destination], [false, '/arch/prog'], 'the throw is answered, not thrown');
+  assert.match(refused.reason, /could not be set to done: EACCES: permission denied/u);
+  assert.equal(stateOf(s).destination, '/arch/prog');
+  const finish = () => finishDestination({ programme: 'prog', destination: '/arch/prog', read: s.read, write: throwing, root: ROOT, writeJson: s.writeJson, lock: s.lock });
+  const first = finish();
+  assert.equal(first.ok, false);
+  assert.match(first.reason, /could not be set to done: EACCES/u);
+  // The runner counts each refusal: the first is kept, the second since the last item opens the for-martin item.
+  assert.equal(fail(s, '2026-11-15T10:00:00Z', { reason: refused.reason }).item, null);
+  const item = fail(s, '2026-11-15T11:00:00Z', { reason: first.reason }).item;
+  assert.deepEqual([item.state, item.sort], ['for-martin', 'mechanical']);
+  const state = readArchiveState({ root: ROOT, programme: 'prog', read: s.read });
+  const held = archiveDue({ programme: 'prog', home: HOME, root: ROOT, list: s.list, read: s.read, state, items: [item] });
+  assert.deepEqual([held.due, held.reason], [false, 'an archive desk item is open'], 'no write and no new count while the item is open');
+  assert.equal(pendingDestination(state, { read: s.read }), '/arch/prog');
+  const decided = archiveDue({ programme: 'prog', home: HOME, root: ROOT, list: s.list, read: s.read, state, items: [{ ...item, state: 'closed' }] });
+  assert.deepEqual([decided.due, decided.mode], [true, 'state'], 'once the item is closed the write is tried again');
+  s.files['/arch/prog/PROGRAMME.json'] = JSON.stringify({ ...JSON.parse(RECORD), state: 'done' });
+  assert.equal(pendingDestination(state, { read: s.read }), null, 'a record set done by hand is no pending write');
+  const cleared = archiveDue({ programme: 'prog', home: HOME, root: ROOT, list: s.list, read: s.read, state, items: [item] });
+  assert.deepEqual([cleared.due, cleared.mode], [true, 'state'], 'a record that reads done is cleared from the state, item or not');
+  assert.equal(finish().ok, true, 'done is not written again, so the throwing write is never called');
+  assert.equal(stateOf(s).destination, null);
 });
 
 test('archive turn: a directory that did not move (no beside area) has its record set done in place', async () => {

@@ -226,7 +226,9 @@ reversible, no due time) with a Swedish `brief.md`; restricted data under
 naming `mc plan <programme> --archive`. Its source is the programme's directory
 and goals and the state file `runner/archive-turn/<programme>.json`. Sync closes
 it by source only when the programme directory is gone from the programmes home or
-`goals/` holds a live goal; an unreadable state file is reported and keeps it
+`goals/` holds a live goal; a directory gone while the state names a destination
+whose record does not read `done` (the record write failed after the move) keeps
+it open until it is decided; an unreadable state file is reported and keeps it
 open. A decision session answers a prepared one at its source (writes the missing
 statement within reach) and closes it `--by decision`, so the runner reads again;
 it never archives the programme. A `for-martin` mechanical one is among the stuck

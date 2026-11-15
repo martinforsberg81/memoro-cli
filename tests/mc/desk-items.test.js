@@ -619,6 +619,18 @@ test('an archive item closes by source only when its programme directory is gone
   assert.deepEqual([missing.state, missing.outcome.by, missing.outcome.summary], ['closed', 'source', 'The programme directory is gone.']);
 });
 
+test('an archive item stays open while the moved directory\'s record does not read done, and closes by source once it does', () => {
+  const f = fixture(); archiveItem(f, { state: 'for-martin' });
+  const moved = join(f.home, '.archive-dest', 'prog'); mkdirSync(moved, { recursive: true });
+  writeFileSync(join(moved, 'PROGRAMME.json'), PROGRAMME_RECORD);
+  rmSync(join(f.home, 'prog'), { recursive: true, force: true });
+  writeArchiveState(f, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'prog', failures: [], items: [], reading: null, destination: moved }));
+  assert.equal(syncArchive(f).item.state, 'for-martin', 'a record write still failing after the move keeps the item open');
+  writeFileSync(join(moved, 'PROGRAMME.json'), JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' }));
+  const closed = syncArchive(f).item;
+  assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme directory is gone.']);
+});
+
 test('an archive item whose state cannot be read stays open and the sync reports the file; it is labelled by the last failure', () => {
   const f = fixture();
   const item = archiveItem(f);

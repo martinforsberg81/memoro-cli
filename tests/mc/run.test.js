@@ -6931,9 +6931,11 @@ test('programme archive: a malformed or missing WRITE-BACK.md is a failed readin
   assert.equal(archiveRunnable(runner), false, 'and not again while the item is open');
 });
 
-test('programme archive: an OK reading is kept; a failed archive is tried again with no new reading, and the record write retries alone at the kept destination', async () => {
+test('programme archive: an OK reading is kept; a failed archive is tried again with no new reading, and the record write retries alone at the kept destination, a write that throws opening one item and holding while it is open', async () => {
   const f = archiveFixture({ archiveRc: 1 });
   const items = wireDesk(f);
+  let clock = Date.parse('2026-11-15T09:00:00Z');
+  f.deps.now = () => new Date(clock += 60_000);
   const runner = createRunner({ deps: f.deps });
   await runner.pass({ repo: 'memoro' });
   assert.equal(archiveSessions(f).length, 1);
@@ -6944,12 +6946,29 @@ test('programme archive: an OK reading is kept; a failed archive is tried again 
   // The archive moves the directory, then the record write fails: the destination stays in the state.
   f.rc.archive = 0;
   const write = f.deps.write;
-  f.deps.write = (path, text) => { if (path === `${ARCHIVED_TO}/PROGRAMME.json`) throw new Error('disk full'); write(path, text); };
+  f.deps.write = (path, text) => { if (path === `${ARCHIVED_TO}/PROGRAMME.json`) { const error = new Error('ENOSPC: no space left on device'); error.code = 'ENOSPC'; throw error; } write(path, text); };
   await runner.pass({ repo: 'memoro' });
   assert.equal(archiveSessions(f).length, 1, 'no new reading on a kept one');
   assert.equal(archiveState(f).destination, ARCHIVED_TO, 'the destination is recorded before the record is written');
   assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'open');
+  // The write that threw is the second failure: the item opens, and while it is open the write is not tried again.
+  const closeByDecision = (item) => { f.files[`${itemDirectory(item, f.deps.env)}/item.json`] = JSON.stringify({ ...item, state: 'closed', outcome: { by: 'decision', at: '2026-11-15T23:00:00Z' } }); };
+  const [first] = items();
+  assert.deepEqual([first.kind, first.state, first.sort], ['archive', 'for-martin', 'mechanical']);
+  assert.equal(runner.nextWork(), null, 'nothing is due while the item is open, though a destination is pending');
+  // Closed by decision with the disk still full: the write alone is tried in state mode, throws, and the lane goes on.
+  closeByDecision(first);
   assert.equal(runner.nextWork().name, 'archive:prog', 'the state alone is due although the programme directory is gone');
+  const thrown = await runner.pass({ repo: 'memoro' });
+  assert.equal(thrown.ran, 0, 'a write that throws in state mode is a counted failure, never a throw out of the pass');
+  assert.match(archiveState(f).failures.at(-1).reason, /could not be set to done: ENOSPC/u);
+  await runner.pass({ repo: 'memoro' });
+  const opened = items().filter((item) => item.state !== 'closed');
+  assert.equal(opened.length, 1, 'the second failure since the decision opens one item');
+  assert.equal(runner.nextWork(), null, 'and nothing more while it is open');
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(items().length, 2, 'no further item while it stands');
+  closeByDecision(opened[0]);
   f.deps.write = write;
   const result = await runner.pass({ repo: 'memoro' });
   assert.deepEqual([result.ran, result.name], [1, 'archive:prog']);

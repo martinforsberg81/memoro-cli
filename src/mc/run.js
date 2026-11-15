@@ -2030,7 +2030,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const { name, programme, archiveTurn: due } = item;
     if (due.mode === 'state') {
       // The directory moved and the record still reads open: that write alone, no reading and no session.
-      const finished = finishDestination({ ...archiveSeams(programme), destination: due.destination, write: deps.write });
+      let finished;
+      try { finished = finishDestination({ ...archiveSeams(programme), destination: due.destination, write: deps.write }); } catch (error) { finished = { ok: false, reason: error.message || String(error) }; }
       if (finished.ok) { say(`${name}: the record at ${due.destination} reads done`); return 'ran'; }
       countArchive(programme, { reason: finished.reason });
       return 'skipped:state-write';
