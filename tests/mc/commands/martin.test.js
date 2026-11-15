@@ -903,3 +903,49 @@ describe('mc martin prepare', () => {
     assert.equal(calls,1); assert.equal(JSON.parse(readFileSync(join(itemDirectory(record,env),'item.json'),'utf8')).state,'prepared');
   });
 });
+
+describe('mc martin brief for a programme whose record states its phases', () => {
+  const RECORD = { schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+  /** alpha holds goals in phases 1 (waiting on Martin), 2 and 3, as the opening store makes them; its record says what `phases` is. */
+  function stated(d, phases, { more = [] } = {}) {
+    writeFileSync(join(d.home, 'alpha', 'PROGRAMME.json'), phases === null ? '{ not json' : `${JSON.stringify({ ...RECORD, phases }, null, 2)}\n`);
+    for (const [name, phase] of more) {
+      const dir = join(d.home, 'alpha', 'goals', name); mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready', phase }));
+      writeFileSync(join(dir, 'LOG.md'), '');
+    }
+  }
+  const blocksLines = async (d) => {
+    const text = io();
+    assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    return text.out.stdout.split('\n').filter((line) => /\bblocks\b/u.test(line));
+  };
+
+  it('counts the goals of the phases that wait for the goal, directly or through another phase, and says so in the words of the stated rule', async () => {
+    const d = openingStore();
+    stated(d, { order: 'stated', after: { 3: [1] } });
+    let lines = await blocksLines(d);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /blocks 1 goal of alpha whose phase waits for it/u, 'phase 2 does not wait for phase 1 and is not counted');
+    // phase 6 waits for phase 3, which waits for phase 1; phase 5 waits for nothing
+    stated(d, { order: 'stated', after: { 3: [1], 6: [3] } }, { more: [['five', 5], ['six', 6]] });
+    lines = await blocksLines(d);
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /blocks 2 goals of alpha whose phases wait for it/u);
+  });
+
+  it('a stated programme with no dependency blocks nothing, and one whose record is invalid gives no blocks', async () => {
+    const d = openingStore();
+    stated(d, { order: 'stated' });
+    assert.deepEqual(await blocksLines(d), []);
+    stated(d, null);
+    assert.deepEqual(await blocksLines(d), []);
+  });
+
+  it('a programme with no phases in its record keeps the later-phase words', async () => {
+    const d = openingStore();
+    stated(d, undefined);
+    const lines = await blocksLines(d);
+    assert.deepEqual(lines.map((line) => line.match(/blocks \d+ later-phase goals? of alpha/u)?.[0]), ["blocks 2 later-phase goals of alpha", "blocks 1 later-phase goal of alpha"]);
+  });
+});
