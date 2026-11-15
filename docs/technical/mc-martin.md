@@ -143,6 +143,18 @@ three log entries and log/worktree/evidence paths. Each selected programme's
 README is included once per programme; no `docs/project/` file is read. Text and JSON share stable ordering. Existing sessions
 call `get` rather than starting another desk.
 
+**The `take-back` source.** With no selector, `get` also lists the red releases
+the runner did not take back, read from the red ledger
+(`~/mc/runner/check-red.json`, [mc-deploy.md](mc-deploy.md) *The take-back*):
+one `take-back` item per entry whose `desk` is `Martin`, reference
+`take-back:<started>`, status `Martin`, with the release's sha, what was red, the
+main-red repair and the entry's `steps` — the one path that can act in its case.
+The ledger's top-level `from` is when it began: a red recorded before it is no
+entry. The item is read, never synced: `desk-items.js` stores no `take-back`
+item, a later `deployed` row ends it, and so does `mc deploy take-back --end
+<started> --reason "…"`. A ledger or `deploys.tsv` that cannot be read is named
+with its path as an issue, never read as an empty queue.
+
 ## Authority and decision synthesis
 
 The role investigates each source question against relevant shared technical

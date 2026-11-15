@@ -797,8 +797,18 @@ died or passed its deadline, and copies a verdict file into its row. One start p
 pass; none under STOP or UPDATE, none while a deploy runs, none while a check is
 alive; a tick that throws is said (`deploy check: the pass failed — …`) and asked
 again on the next pass. It writes `~/mc/runner/deploy-check.json` and
-`~/mc/runner/log/deploy-check/`, and a verdict into `deploys.tsv`; a red does
-nothing else. See [`mc-deploy.md`](mc-deploy.md) § *The check after a deploy*.
+`~/mc/runner/log/deploy-check/`, and a verdict into `deploys.tsv`. A red is
+reacted to by `take-back-run.js`, which the check starts itself when it records the
+red. See [`mc-deploy.md`](mc-deploy.md) § *The check after a deploy*.
+
+**The take-back fallback** is the first step of every chore pass
+(`runTakeBackFallback`, `takeBackTick` in `take-back-run.js`), before the log
+rotates, the helper day and the desk turns: it starts a take-back reaction,
+detached, for every red row the red ledger does not show done when none is alive,
+and writes `desk: ended` for entries a later deployed row ended. The first pass
+only begins the ledger (what was red before it is not a reaction's to make);
+none starts under STOP or UPDATE; a tick that throws is said (`take back: …`) and
+asked again on the next pass. See [`mc-deploy.md`](mc-deploy.md) § *The take-back*.
 
 Nothing else runs beside it. There was a shell supervisor — it fetched,
 fast-forwarded `~/memoro-cli`, ran the runner for one pass and slept — written

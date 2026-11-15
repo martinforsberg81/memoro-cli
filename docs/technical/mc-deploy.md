@@ -310,6 +310,7 @@ the deploy, so it is refused.
 | **`main` has commits `origin/main` does not** | 1 | refused row *"main in `<path>` has `<n>` commit(s) not on origin/main"*: what would ship is not that tree |
 | `git worktree add` for mc's own `main` failed | 1 | says so; refused row. There is no checkout of `main` to run the script in |
 | **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
+| **the pick, or main's tip, is a taken-back commit or before one** | 1 | refused row, code `taken-back`, naming the take-back; also under `--accept-red` and again at final admission (*The gate*, the floor) |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | the worktree stands on another commit than the pick, at the deployer's placing, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
 | mc's own worktree is held by another process for 90 minutes (an exercise, a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. In the exercise the suites are cannot-run naming the holder |
@@ -367,6 +368,19 @@ measured: no full run of it"*). The history is read as it stands and no run is
 started to find a candidate; only the pick itself is prepared. With
 `--accept-red` the tip is prepared, gated and shipped, and the reading names the
 green commit that would ship without it.
+
+**The floor: a taken-back commit is no pick.** A commit that is the
+`takes_back_sha` of a take-back row, in any outcome, and every commit before it on
+the first-parent chain, is no candidate: `pickCommit` passes it over with state
+`taken-back` and the refusal code is `taken-back`, also under `--accept-red`
+and again at the final admission. A green full run does not bring back a commit
+that production's check found red; a later commit that is green does ship, and
+a later deployed row also ends the desk entry of *The take-back*. When main's
+tip is under the floor the reading says so (*"main's tip `<sha>` is a commit
+that was taken back from production after its check was red; nothing after it
+is green yet, so nothing ships, also with --accept-red"*), and the plan line
+names a take-back of the live row and an open desk entry. A commit the checkout
+does not have is no floor it can apply.
 
 **The whole suite.** `fullRunVerdict` reads the history the full run writes
 (`readNightlyHistory`) for a completed full run of *exactly* that sha. A green
@@ -712,6 +726,9 @@ header the file actually carries rather than the one this module knows.
 | `check` | the verdict of the check after the deploy (*The check after a deploy*): `green`, `red` or `could-not-run`; empty while it is not made, on a row that is not `deployed` and on a row written before the column |
 | `check_at` | when the verdict was reached (UTC, ISO) |
 | `check_why` | for `red` and `could-not-run`, what was found, `<part>: <why>` joined by `; ` — the parts are `version`, `database`, `suites` and `errors`, and a part that was not reached reads `<part>: not run`; empty for `green` |
+| `takes_back` | on a take-back row, the `started` of the release row it took back; empty on every other row (*The take-back*) |
+| `takes_back_sha` | on a take-back row, the commit of that release |
+| `takes_back_why` | on a take-back row, what asked for it: the runner's — the release's `check_why` — or the verb's, `typed: <reason>`, with `(despite the reading)` when `--despite` was given |
 
 Two properties are the point of it:
 
@@ -730,8 +747,13 @@ Two properties are the point of it:
   columns, which are the last: a refusal made after the reading carries the
   take-back's as the started row does, and a file with the header of any version
   before them is given the new header on its next row, its old rows' cells empty.
-  The three check columns are after those, and a file with any older header is
-  given the current one the same way.
+  The three check columns are after those, and the three take-back columns are
+  the last (26 columns in all); a file with any older header, the 23-column one
+  included, is given the current one the same way on its next row. An mc of the
+  version before keeps the 26-column header it finds only if it is one, and
+  otherwise writes its rows with the new columns empty: it reads a take-back
+  row as an ordinary `deployed` row, so what is live is right, and it lacks only
+  the pick floor.
 - **Every writer takes one lock, once.** `withDeploysLock` (`deploys.js`) is the
   `deploys` lock of the runner (`runner-lock.js`), held through an admission and
   re-entered by the writers inside it without taking it again; `recordStart`,
@@ -745,11 +767,10 @@ is returning it to the version it served before the deploy, so the row names
 that version and the one the deploy made. They are written when the script
 ends, from the script's own lines (below), and a script that printed none leaves
 `versions_why` saying so rather than three empty cells that read as a deploy that
-changed nothing. **Documentation rule for the phase that takes a release back:**
-a take-back reads `versions_before` and rolls each Worker to that version only
-when every Worker it must return is present there; a `missing` or an empty cell
-is a take-back that is not made, with the cell's `versions_why` as the reason,
-and never a guess from the latest deployment.
+changed nothing. A take-back reads `versions_before` and rolls each Worker to
+that version only when every Worker it must return is present there; a `missing`
+or an empty cell is a take-back that is not made, with the cell's `versions_why`
+as the reason, and never a guess from the latest deployment (*The take-back*, D5).
 
 `build` and `live_commit` are deliberately different claims: the banner is what
 mc stamped, the verified line is what production answered. A deploy run with
@@ -845,9 +866,13 @@ Every deploy that ends `deployed` is checked afterwards, with nobody present
 ([`src/mc/deploy-check.js`](../../src/mc/deploy-check.js)). The runner's chore
 pass starts it detached (`deploy-check-run.js`, its own process group, output in
 `~/mc/runner/log/deploy-check/<started>.log`); the verdict is the row's `check`,
-`check_at` and `check_why`. **A red does nothing else**: it does not take the
-release back, stop the runner, hold a merge or refuse the next deploy — it is a
-word on the page, in `mc deploy` and in the digest, for a person to read.
+`check_at` and `check_why`. **A red is acted on** (*The take-back*): a release
+whose reading said it can be taken back is taken back by the runner at once;
+any other red comes to the desk with the steps that can act in its case; and
+every red opens a main-red repair, one member per red part. A red does not stop
+the runner, hold a merge or refuse the next deploy, except that the commit
+taken back is no pick until a later one is green; it is also a word on the
+page, in `mc deploy` and in the digest.
 
 **The four parts.** The check is `green` only when all four are present and
 green; a `red` part beats a `could-not-run` one; `check_why` names each part
@@ -896,6 +921,120 @@ same round, still typed by a person and never run by itself.
 the helper's digest say it in the same words (`checkWords`): `checked green`,
 `check red: <why>`, `check could not run: <why>`, `checking` (an attempt of this
 row is alive) and `not checked`.
+
+## The take-back
+
+A release whose check is red is put back at once, whole, by the runner, when its
+reading says it can be; the same take-back is a verb for a person. It is
+[`src/mc/release-take-back.js`](../../src/mc/release-take-back.js) (the function,
+`takeBack`), [`src/mc/take-back-run.js`](../../src/mc/take-back-run.js) (the
+runner's reaction and the desk entries),
+[`src/mc/check-red-ledger.js`](../../src/mc/check-red-ledger.js) (the red
+ledger) and [`src/mc/commands/deploy-take-back.js`](../../src/mc/commands/deploy-take-back.js)
+(the verb). What a rollback does not undo, and how to take a release back by
+hand, are memoro's:
+[`docs/technical/release-take-back.md`](../../../memoro/docs/technical/release-take-back.md)
+and its `docs/runbooks/deploy.md`.
+
+**The provider call is memoro's.** mc calls no Wrangler and no Cloudflare API
+itself. It runs memoro's `scripts/release/take-back.mjs`, exported from the
+release's own sha (`scripts/` as that commit had it) into a scratch directory,
+with the deploy worktree as its working directory, under the holder verb `take
+back`. Its arguments are `--worker <name>=<from>:<to>` once per Worker, `--message`
+and `--dry-run`; it prints `{ schema_version: 1, ok, workers: [{ worker, from, to,
+state, serving, why }] }` and exits 0 when every Worker was taken back, 1 when not
+and 2 on a usage error. A Worker already serving `to` is counted as taken back,
+so a second attempt finishes what a first left. mc reads only that JSON, strictly:
+anything else is a take-back that did not take every Worker back.
+
+**The gate (what is refused, and the reason is said in words).** The release
+`R` is the last `deployed` row of the record, and:
+
+- it is not itself a take-back row (*a take-back is not taken back; ship a
+  later commit*);
+- no `deployed` take-back row names it (`takes_back` is its `started`);
+- `versions_made` has at least one Worker, each with an id there and in
+  `versions_before`, and `versions_why` is empty;
+- a `deployed` row exists before it, and what that row made equals `R`'s
+  `versions_before` (production was not changed between them);
+- `R`'s sha has `scripts/release/take-back.mjs` and the deploy worktree has
+  `node_modules/.bin/wrangler`.
+
+Each Worker goes from the id `R` made back to the one before it; a Worker `R`
+did not change is left alone, memoro before memoro-tail. The commit that is live
+again is the earlier row's `live_commit`, else its `sha`. `--despite` overrides
+the reading's `take_back` and nothing above. A `failed` take-back row blocks the
+runner, which takes a release back once, and not the verb, which finishes it.
+
+**The admission is atomic.** The function takes the deploy worktree's holder
+first (a busy one is waited for, up to 10 minutes, and the take-back is then not
+made and untried), then one `deploys` lock under which it reads the record again,
+asks the gate again, finds no deploy running and writes the take-back's `running`
+row, and only then runs the script. A deploy, another take-back, or a later
+release that came first makes it not made, with no row. The take-back row is an
+ordinary deploy row whose `sha` is the commit returned to, `take_back` is `no`
+(the reading of a take-back is not made) and `takes_back*` name `R`; it ends
+`deployed` only when every Worker was taken back, and `failed` with
+`stopped_at: take-back` otherwise, with `versions_before` the versions served
+before the take-back, `versions_made` those serving now (`<worker>:missing` for
+a Worker not taken back) and `versions_why` the reason for each. The check
+after a deploy runs on that row like any other.
+
+**The reaction.** When `executeCheck` records a `red` it starts
+`take-back-run.js <started>`, detached in its own process group, so the check's
+deadline kill does not reach it; the first step of every chore pass
+(`takeBackTick`, before the helper day and the desk turns) starts it for every
+red row whose entry is not done in the red ledger when no reaction for it is
+alive. The reaction holds the row's ledger entry by pid; a second for the same row
+exits at once. It takes `R` back when the gate holds, the row is `red`, the
+reading is `yes`, and `R` is still the last release; otherwise it records why not
+and acts on the desk path. It always asks for the repair. Under `MC_HEADLESS=1` it
+exits 2.
+
+**The repair.** One main-red member per red part, `check:<part>@<started>`, each
+with the part's reason, the verdict file's path and whether the release was taken
+back; once-only in any state, so two reds of different releases are two members
+and a repeat never asks again (`requestMainRepair`). The ledger records the
+member ids and the reaction asks only while that record is empty. The repair does
+not deploy: the next deploy of a later green commit ships it. `mainMendPrompt`
+words these members in the mend role's own terms
+(`canon/roles/mend-session.md`).
+
+**The red ledger,** `~/mc/runner/check-red.json` (`check-red-ledger.js`): `{
+version: 1, from, entries: { "<started>": { sha, parts, pid, repair, take_back,
+desk, reason, steps, created, done } } }`, written whole under a lock of its own
+and read strictly (a file that does not parse is an error said, not an empty
+ledger). `from` is when the ledger began: a red recorded before it is not a
+reaction's to make, and the first chore pass only begins the ledger.
+
+**What reaches the desk.** A red that was not taken back (the reading is `no` or
+empty, `R` fails the gate, the take-back failed or was partial, the red row is
+itself a take-back, or the holder stayed busy) has `desk: Martin` and `steps`:
+what was red, what serves now, the main-red mend, and the one path that acts —
+`mc deploy take-back --despite "<reason>"` with what the reading says would not
+be undone; or `mc deploy take-back`, which finishes a partial one, with the
+`npx wrangler rollback <id> --name <worker> --message "…"` lines still needed, run
+in the deploy worktree; or, for a take-back that is itself red, to ship the
+repair. `mc martin get` lists it as a `take-back` item (`take-back:<started>`,
+read from the ledger, not synced as a desk item). It ends when a later
+`deployed` row ships after it, or when a person ends it with `mc deploy
+take-back --end <started> --reason "…"`.
+
+**The verb.** `mc deploy take-back [--dry-run] [--despite "<reason>"] [--json]`
+calls the same function as the reaction with `by: 'verb'` and takes the last
+`deployed` row back, red or not. A reading that is `no` or empty is refused unless
+`--despite`, whose reason is the row's `takes_back_why`. `--dry-run` runs only the
+script's own `--dry-run` and writes nothing. Exit 0: every Worker was taken back;
+1: a take-back that ran and did not take every Worker back (its row is `failed`;
+the verb again finishes it); 2: a refusal, with the condition in words, and no
+row. Under `MC_HEADLESS=1` only `--dry-run` is allowed; the verb refuses the rest
+and the hook `headless-deploy` refuses it to a session. `mc deploy` itself gains
+no flag.
+
+**Refused to a session.** `take-back-run.js` exits 2 under `MC_HEADLESS=1`, and
+the hook `headless-take-back` (`hooks.js`, reserved act `deploy`) refuses a
+session command that runs it, or memoro's `scripts/release/take-back.mjs`
+without `--dry-run`. Taking production back is a person's act or the runner's.
 
 ## Who reads the record
 
@@ -985,12 +1124,10 @@ The boundary is a rule, not a judgement call:
 - **The exit code is the script's.** mc adds no verdict of its own to a deploy
   that ran.
 
-What is deliberately not here: **rollback** — a verb that puts a previous sha
-back is separate work, now that there is a record to roll back to; mc says
-whether a release can be taken back (`take_back`, read by memoro's
-`scripts/release/reading.mjs`) and does not take one back — and
-memoro's **release race** (`scripts/release-race.mjs`), whose deploy stage could
-one day call this verb; whether it should is a question for after this change.
+What is deliberately not here: memoro's **release race**
+(`scripts/release-race.mjs`), whose deploy stage could one day call this verb;
+whether it should is a question for after this change. Rollback is no longer
+among them: *The take-back*.
 
 ## How it is tested, and what has not been measured
 
