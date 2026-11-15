@@ -358,7 +358,9 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 
 - **`defect [<p>/<g>] --part "…" --found "…" [--evidence "…"|--evidence-file <f>] [--next "…"|--next-file <f>]`** —
   the goal's own text is wrong (a criterion that cannot hold, a check that
-  does not test it, a premise the code contradicts). Appends one entry with
+  does not test it, a check a headless session cannot run because it passes
+  through a reserved act or needs someone at a terminal, a premise the code
+  contradicts). Appends one entry with
   status `Martin` and the comment `goal defect: <part> — <found>`, plus an
   `Evidence:` line when given (redacted like any log text); the stage does not
   change. It asks nobody (no jev, no ledger) and offers no options: there is no

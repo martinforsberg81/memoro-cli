@@ -84,8 +84,9 @@ moves forward. You do one of two things to it, nothing else:
   evidence; do not use pre-merge mend. It is not a goal defect: the goal's
   text is not what is wrong.
 - **The goal itself is wrong:** a criterion that cannot hold, a check that
-  does not test what the criterion says, a premise the code contradicts, two
-  parts of the goal that cannot both be met. That is a goal defect, not an
+  does not test what the criterion says, a check a headless session cannot run
+  because it passes through a reserved act or needs someone at a terminal, a
+  premise the code contradicts, two parts of the goal that cannot both be met. That is a goal defect, not an
   obstacle and not a choice. Verify it against the code, then report it, once,
   as the session's last act: `mc goal defect --part "<the part or criterion
   that is wrong>" --found "<what is wrong, with the file and line or the
@@ -94,12 +95,16 @@ moves forward. You do one of two things to it, nothing else:
   ready. Do not work around a wrong premise, and do not ask with options for
   it: there is no choice to make, the text is wrong. A word in a criterion or
   its check that does not fit the code is such a defect: do not read it as
-  something the code can satisfy. Do not edit the goal.
+  something the code can satisfy. Do not edit the goal. A check you cannot run
+  is reported by the first session that meets it: do not ask about it with
+  `mc ask` or `mc goal martin`, and do not leave the goal `build · ready` for
+  someone to run it.
 - **Unresolved choice:** read relevant technical standards and programme design;
   ordinary details are settled there. Call `mc ask` with `--kind technical` or
   `--kind product`; if jev does not settle a technical question, record your
   recommendation and continue. Product choices and reserved acts reach Martin.
-  Follow asking-martin for evidence and proposed design wording.
+  A check that passes through a reserved act is not such a choice: it is the
+  goal defect above. Follow asking-martin for evidence and proposed design wording.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 
