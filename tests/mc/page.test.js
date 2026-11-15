@@ -5,9 +5,9 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { parseRuns } from '../../src/mc/brief-collect.js';
@@ -30,6 +30,14 @@ import { width } from '../../src/mc/status-render.js';
 import { codeCommit, pageKey, restartPage, run as page } from '../../src/mc/commands/home.js';
 import { RESTART } from '../../src/mc/page-live.js';
 import { goalJson } from './_helpers/goal-file.js';
+import { buildOpening, costReading } from '../../src/mc/desk-opening.js';
+import { deskRunsPath, readDeskText } from '../../src/mc/desk-budget.js';
+import { deskItemId, itemDirectory, writeDeskItem } from '../../src/mc/desk-items.js';
+import { deskKey, deskLines, readPageDesk } from '../../src/mc/page-desk.js';
+import { ledgerPath } from '../../src/mc/jev.js';
+import { holderPath, lockPath } from '../../src/mc/runner-lock.js';
+import { programsHome } from '../../src/mc/paths.js';
+import { RUNS_HEADER } from '../../src/mc/run-plan.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
@@ -2736,5 +2744,293 @@ describe('PULL REQUESTS', () => {
     const order = ['PLAN SESSIONS  1', "NOBODY'S  3"].map((head) => out.indexOf(head));
     assert.ok(order.every((n, i) => n > 0 && (i === 0 || n > order[i - 1])), out);
     assert.doesNotMatch(out, /ON A STEP/u);
+  });
+});
+
+describe('DESK — what waits for Martin, read by the page', () => {
+  const DESK_NOW = new Date('2026-11-14T12:00:00.000Z');
+  const LAST = '2026-11-14T08:00:00.000Z';
+
+  /**
+   * A work root with a desk: four texts (alpha/one blocks two goals and is an old `product`, one has no goal),
+   * three reserved acts (one without a brief.md), two stuck, a new and a failed prepared item, items closed
+   * inside and outside the interval, a ledger with one line that does not parse, and a ceiling.
+   */
+  function deskFixture(t) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-desk-'));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const env = { MC_WORK_ROOT: root, MC_HOME: join(root, 'home'), MC_REPOS_HOME: join(root, 'repos'), MC_REPOS: '' };
+    const store = join(root, 'martin', 'items');
+    mkdirSync(store, { recursive: true });
+    mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+    writeFileSync(join(store, '.store.json'), JSON.stringify({ schema: 'mc-desk-item-store', version: 1, first_sync_at: '2026-11-01T00:00:00.000Z' }));
+    writeFileSync(join(root, 'martin', 'last-open.json'), JSON.stringify({ at: LAST }));
+    const goal = (programme, name, { phase = 1, status = 'Martin' } = {}) => {
+      const dir = join(programsHome(env), programme, 'goals', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'GOAL.json'), goalJson({ status, phase }));
+      writeFileSync(join(dir, 'LOG.md'), '');
+    };
+    // alpha/one is the only phase-1 goal of alpha: it blocks alpha/two (phase 2) and alpha/three (phase 3).
+    goal('alpha', 'one'); goal('alpha', 'two', { phase: 2 }); goal('alpha', 'three', { phase: 3, status: 'ready' });
+    goal('beta', 'judge'); goal('beta', 'irr'); goal('gamma', 'res');
+    const put = ({ kind = 'goal', reference, source_at, state, brief = null, ...rest }) => {
+      const record = { schema: 'mc-desk-item', version: 1, id: deskItemId(kind, reference, source_at), kind, reference, source_at, opened_at: source_at, state, sort: null, reversible: null, due_at: null, outcome: null, ...rest };
+      writeDeskItem(record, { env });
+      if (brief !== null) writeFileSync(join(itemDirectory(record, env), 'brief.md'), brief);
+      return record;
+    };
+    // Waiting texts.
+    put({ reference: 'alpha/one', source_at: '2026-11-13T10:00:00.000Z', state: 'for-martin', sort: 'product', brief: '# Which rule of alpha should stand?\n\nMore.\n' });
+    put({ reference: 'beta/judge', source_at: '2026-11-12T09:00:00.000Z', state: 'for-martin', sort: 'text', goal: 'beta/judge', text: 'canon/mc.md', brief: '\n\nThe judge brief.\n' });
+    put({ kind: 'text', reference: 'text:canon/other.md', source_at: '2026-11-14T11:30:00.000Z', state: 'for-martin', sort: 'text', text: 'canon/other.md', brief: 'No goal here.' });
+    put({ reference: 'alpha/two', source_at: '2026-11-10T09:00:00.000Z', state: 'for-martin', sort: 'text', brief: 'The timing.' });
+    // Waiting reserved acts: one without a brief.md.
+    put({ reference: 'beta/irr', source_at: '2026-11-11T09:00:00.000Z', state: 'for-martin', sort: 'reserved', brief: '## The reserved act' });
+    put({ reference: 'gamma/res', source_at: '2026-11-09T09:00:00.000Z', state: 'for-martin', sort: 'reserved' });
+    put({ reference: 'gamma/res2', source_at: '2026-11-08T09:00:00.000Z', state: 'for-martin', sort: 'reserved', brief: 'An act, three days old.' });
+    // The runner's own stops: a sort that is not Martin's and none at all.
+    put({ reference: 'delta/stuck1', source_at: '2026-11-07T09:00:00.000Z', state: 'for-martin', sort: 'mechanical', brief: 'not yours' });
+    put({ reference: 'delta/stuck2', source_at: '2026-11-07T10:00:00.000Z', state: 'for-martin', brief: 'not yours either' });
+    // Not ready: a new one, a prepared one that failed.
+    put({ reference: 'eps/new', source_at: '2026-11-13T00:00:00.000Z', state: 'new' });
+    put({ reference: 'eps/prep', source_at: '2026-11-13T06:00:00.000Z', state: 'prepared', sort: 'technical', decision_failures: [{ at: '2026-11-14T01:00:00.000Z', reason: 'session exited' }] });
+    // Closed: two decided and a default inside (LAST, NOW], one decided before, one by source.
+    put({ reference: 'zeta/d1', source_at: '2026-11-01T08:00:00.000Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T07:00:00.000Z', summary: 'Before.' } });
+    put({ reference: 'zeta/d2', source_at: '2026-11-02T08:00:00.000Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T09:00:00.000Z', summary: 'In.' } });
+    put({ reference: 'zeta/d3', source_at: '2026-11-03T08:00:00.000Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T10:00:00.000Z', summary: 'In.' } });
+    put({ reference: 'zeta/d4', source_at: '2026-11-04T08:00:00.000Z', state: 'closed', outcome: { by: 'default', at: '2026-11-14T11:00:00.000Z', summary: 'Default.' } });
+    put({ reference: 'zeta/s1', source_at: '2026-11-05T08:00:00.000Z', state: 'closed', outcome: { by: 'source', at: '2026-11-14T09:30:00.000Z', summary: 'Source.' } });
+    // The jev ledger: three asks in the interval (one against the recommendation), one before it, a martin row, a broken line.
+    mkdirSync(join(env.MC_HOME, 'jev'), { recursive: true });
+    const row = (at, outcome, recommend, choice) => JSON.stringify({ at, outcome, recommend, question: 'q', answers: choice ? { answer: { choice } } : {} });
+    writeFileSync(ledgerPath(env.MC_HOME), `${[
+      row('2026-11-14T09:00:00.000Z', 'answered', 'a', 'b'), row('2026-11-14T09:30:00.000Z', 'answered', 'a', 'a'),
+      row('2026-11-14T10:00:00.000Z', 'decided', 'a', null), row('2026-11-13T10:00:00.000Z', 'answered', 'a', 'b'),
+      row('2026-11-14T10:30:00.000Z', 'martin', 'a', null), '{not json',
+    ].join('\n')}\n`);
+    writeFileSync(join(root, 'runner', 'desk.json'), JSON.stringify({ ceiling_usd_per_day: 5 }));
+    const run = (ts, name, kind, cost) => RUNS_HEADER.map((key) => ({ ts, name, kind, exit: '0', seconds: '60', cost, note: 'success' })[key] ?? '').join('\t');
+    writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), [
+      RUNS_HEADER.join('\t'),
+      run('2026-11-14T01:00:00.000Z', 'x', 'desk-prepare', '0.5'), run('2026-11-14T02:00:00.000Z', 'y', 'decision', '0.25'),
+      run('2026-11-13T02:00:00.000Z', 'z', 'learning', '1'), run('2026-11-14T03:00:00.000Z', 'w', 'step', '9'), '',
+    ].join('\n'));
+    return { root, env, home: programsHome(env), put };
+  }
+  const collect = (env) => collectPage({ env, repos: [], offline: true, now: DESK_NOW, alive: () => false, run: () => ({ status: 1, stdout: '' }), checkout: null });
+  const snapshot = (dir) => Object.fromEntries(readdirSync(dir, { recursive: true }).sort().map((name) => {
+    const path = join(dir, name);
+    return [name, statSync(path).isDirectory() ? 'dir' : readFileSync(path, 'utf8')];
+  }));
+
+  it('is the desk\'s own opening: the same items in the same order, the same figures, and the sums of the ask ledger', async (t) => {
+    const { env, home } = deskFixture(t);
+    const { desk } = await collect(env);
+    const opening = buildOpening({ env, home, now: DESK_NOW, last: LAST });
+    assert.deepEqual(desk.texts.map((item) => item.id), opening.texts.map((item) => item.id));
+    assert.deepEqual(desk.acts.map((item) => item.id), opening.acts.map((item) => item.id));
+    // The members beside the counts: texts block first (alpha/one blocks two), then the oldest; acts the same way.
+    assert.deepEqual(desk.texts.map((item) => [item.reference, item.blocks, item.sort, item.goal, item.text]), [
+      ['alpha/one', 2, 'product', 'alpha/one', 'alpha/one'],
+      ['alpha/two', 1, 'text', 'alpha/two', 'alpha/two'],
+      ['beta/judge', 0, 'text', 'beta/judge', 'canon/mc.md'],
+      ['text:canon/other.md', 0, 'text', null, 'canon/other.md'],
+    ]);
+    assert.deepEqual(desk.acts.map((item) => [item.reference, item.blocks, item.brief_line]), [
+      ['gamma/res2', 0, 'An act, three days old.'], ['gamma/res', 0, null], ['beta/irr', 0, 'The reserved act'],
+    ]);
+    assert.deepEqual(desk.texts.map((item) => item.brief_line), ['Which rule of alpha should stand?', 'The timing.', 'The judge brief.', 'No goal here.']);
+    assert.equal(desk.waiting, 7);
+    assert.equal(desk.waiting, opening.texts.length + opening.acts.length);
+    assert.deepEqual(desk.texts.map((item) => item.waited_minutes), [Math.floor((DESK_NOW - Date.parse('2026-11-13T10:00:00.000Z')) / 60000), 4 * 1440 + 180, 2 * 1440 + 180, 30]);
+    // Neither stuck item is among the waiting rows.
+    const waitingIds = [...desk.texts, ...desk.acts].map((item) => item.reference);
+    assert.equal(waitingIds.some((reference) => reference.startsWith('delta/')), false);
+    assert.deepEqual([desk.not_ready.stuck, desk.not_ready.count, desk.not_ready.failed, desk.not_ready.oldest_age_hours],
+      [opening.not_ready.stuck.length, opening.not_ready.count, opening.not_ready.failed.length, opening.not_ready.oldest.age_hours]);
+    assert.deepEqual([desk.not_ready.stuck, desk.not_ready.count, desk.not_ready.failed, desk.not_ready.oldest_age_hours], [2, 2, 1, 36]);
+    // a asks settled, k against the recommendation, m closed for him: the broken line is counted, not a row.
+    assert.deepEqual(desk.decided, { since: LAST, asks: 3, against: 1, closed_for_you: 3, unreadable_lines: 1, error: null });
+    assert.equal(desk.decided.closed_for_you, opening.decided.programmes.flatMap((group) => group.items).length);
+    assert.deepEqual(desk.cost, { day: opening.cost.day, today: opening.cost.today, ceiling: opening.cost.ceiling, error: null });
+    assert.deepEqual([desk.cost.today, desk.cost.ceiling], [0.75, 5]);
+    assert.deepEqual([desk.since, desk.last_opened, desk.error], [LAST, LAST, null]);
+  });
+
+  it('writes nothing, and does not wait for a runner that holds the lock', async (t) => {
+    const { root, env } = deskFixture(t);
+    const before = snapshot(join(root, 'martin'));
+    const { desk } = await collect(env);
+    assert.deepEqual(snapshot(join(root, 'martin')), before, 'the desk directory is byte-identical after the page reads it');
+    // The runner's lock held by a live process (this one), with its sidecar.
+    const lock = lockPath(root);
+    mkdirSync(dirname(lock), { recursive: true });
+    writeFileSync(lock, String(process.pid));
+    writeFileSync(holderPath(lock), JSON.stringify({ pid: process.pid, name: 'desk-sync' }));
+    const held = { lock: readFileSync(lock, 'utf8'), holder: readFileSync(holderPath(lock), 'utf8') };
+    const started = Date.now();
+    const direct = readPageDesk({ env, now: DESK_NOW });
+    assert.ok(Date.now() - started < 1000, `readPageDesk took ${Date.now() - started} ms with the lock held`);
+    assert.equal(direct.error, null);
+    assert.deepEqual((await collect(env)).desk, desk);
+    assert.deepEqual({ lock: readFileSync(lock, 'utf8'), holder: readFileSync(holderPath(lock), 'utf8') }, held, 'the lock and its sidecar are untouched');
+  });
+
+  it('reads the goals once and only when something waits', (t) => {
+    const empty = mkdtempSync(join(tmpdir(), 'mc-page-desk-empty-'));
+    t.after(() => rmSync(empty, { recursive: true, force: true }));
+    const env = { MC_WORK_ROOT: empty, MC_HOME: join(empty, 'home') };
+    // Programmes whose goals cannot be read would fail the read if it asked for them: with nothing waiting it does not.
+    mkdirSync(join(programsHome(env), 'broken', 'goals', 'x'), { recursive: true });
+    writeFileSync(join(programsHome(env), 'broken', 'goals', 'x', 'GOAL.json'), '{ not json');
+    const desk = readPageDesk({ env, now: DESK_NOW });
+    assert.deepEqual([desk.waiting, desk.error, desk.texts, desk.acts], [0, null, [], []]);
+    assert.deepEqual(desk.decided, { since: '1970-01-01T00:00:00.000Z', asks: 0, against: 0, closed_for_you: 0, unreadable_lines: 0, error: null });
+  });
+
+  it('says what it could not read, row by row, and the page still comes', async (t) => {
+    const invalid = deskFixture(t);
+    writeFileSync(join(invalid.root, 'martin', 'last-open.json'), '{ nope');
+    const first = (await collect(invalid.env)).desk;
+    assert.equal(first.decided.error, 'last-open.json is not valid — mc martin opens again once it is corrected or removed');
+    assert.equal(first.error, null);
+    assert.equal(first.waiting, 7, 'what waits is still shown');
+
+    const ledger = deskFixture(t);
+    rmSync(ledgerPath(ledger.env.MC_HOME));
+    mkdirSync(ledgerPath(ledger.env.MC_HOME));
+    const second = (await collect(ledger.env)).desk;
+    assert.match(second.decided.error, /^jev ledger unreadable — /u);
+    assert.deepEqual([second.decided.asks, second.decided.closed_for_you, second.error], [null, 3, null]);
+
+    const brief = deskFixture(t);
+    const record = JSON.parse(readFileSync(join(brief.root, 'martin', 'items', deskItemId('goal', 'alpha/one', '2026-11-13T10:00:00.000Z'), 'item.json'), 'utf8'));
+    const file = join(itemDirectory(record, brief.env), 'brief.md');
+    rmSync(file); mkdirSync(file);
+    const third = (await collect(brief.env)).desk;
+    assert.match(third.error, /EISDIR/u);
+    assert.deepEqual([third.waiting, third.texts, third.acts], [0, [], []]);
+  });
+
+  it('names a runs.tsv it cannot read as the opening always has: runs.tsv and the ceiling, with no ceiling', (t) => {
+    const { env } = deskFixture(t);
+    const read = (path) => { if (path === deskRunsPath(env)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return readDeskText(path); };
+    const cost = costReading({ env, now: DESK_NOW, read });
+    assert.equal(cost.error, 'runs.tsv unreadable: EACCES: permission denied; ceiling setting unreadable: EACCES: permission denied');
+    assert.deepEqual([cost.today, cost.ceiling], [null, null]);
+    assert.deepEqual(buildOpening({ env, home: programsHome(env), now: DESK_NOW, read }).cost, cost);
+  });
+
+  it('keeps the page\'s other sections in the data, with the desk as one more key', async (t) => {
+    const { env } = deskFixture(t);
+    const keys = Object.keys(await collect(env));
+    for (const key of ['runner', 'billing', 'providerPriority', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']) {
+      assert.ok(keys.includes(key), key);
+    }
+    assert.ok(keys.includes('desk'));
+  });
+
+  describe('drawn', () => {
+    const base = { ...DATA };
+    const waiting = (over = {}) => ({
+      since: LAST, last_opened: LAST, waiting: 3, error: null,
+      texts: [
+        { id: 't1', kind: 'goal', reference: 'alpha/one', sort: 'product', source_at: '2026-11-10T09:00:00.000Z', waited_minutes: 4 * 1440 + 180, blocks: 2, text: 'alpha/one', goal: 'alpha/one', brief_line: 'Which rule of alpha should stand?' },
+        { id: 't2', kind: 'text', reference: 'text:canon/x.md', sort: 'text', source_at: '2026-11-14T11:30:00.000Z', waited_minutes: 30, blocks: 0, text: 'canon/x.md', goal: null, brief_line: 'Ett långt svenskt stycke — med tankstreck och åäö som inte får plats på en rad av åttio kolumner, hur mycket vi än försöker pressa in det i panelen' },
+      ],
+      acts: [{ id: 'a1', kind: 'goal', reference: 'gamma/res', sort: 'reserved', source_at: '2026-11-14T06:00:00.000Z', waited_minutes: 360, blocks: 0, brief_line: null }],
+      decided: { since: LAST, asks: 3, against: 1, closed_for_you: 3, unreadable_lines: 0, error: null },
+      not_ready: { count: 2, oldest_age_hours: 36, failed: 1, stuck: 2 },
+      cost: { day: '2026-11-14', today: 0.75, ceiling: 5, error: null },
+      ...over,
+    });
+    const draw = (desk, columns = 80) => renderPageLines({ ...base, desk }, { columns, now: NOW });
+    const panel = (lines) => {
+      const start = lines.findIndex((line) => line.includes('┌─ DESK'));
+      return lines.slice(start, start + lines.slice(start).findIndex((line) => line.includes('└')) + 1);
+    };
+
+    it('is the first panel, under the header, with the order d opens', () => {
+      const lines = draw(waiting(), 100);
+      const text = lines.join('\n');
+      assert.ok(text.indexOf('┌─ DESK') > text.indexOf('MC'), 'under the header');
+      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('PROGRAMMES'), 'above PROGRAMMES');
+      assert.match(text, /┌─ DESK ─+ d {2}mc martin ┐/u);
+      assert.match(text, /^ {4}3 waiting for you$/mu);
+      assert.match(text, /d {2}mc martin {3}·   m {2}mc manager/u);
+    });
+
+    it('draws texts before acts with their lead, brief line, age and what they block', () => {
+      const rows = panel(draw(waiting(), 120)).filter((line) => /^ {4}(text|act) /u.test(line));
+      assert.equal(rows.length, 3);
+      assert.match(rows[0], /^ {4}text {2}alpha\/one · alpha\/one · Which rule of alpha should stand\? · waited 4d · blocks 2$/u);
+      assert.match(rows[1], /^ {4}text {2}canon\/x\.md · no goal · /u);
+      assert.match(rows[2], /^ {4}act {3}gamma\/res · brief\.md is missing · waited 6h$/u);
+      assert.doesNotMatch(rows.join('\n'), /due/u);
+      assert.match(rows[1], /waited 30m$/u);
+    });
+
+    it('shows five rows and a count for the rest, and one row when nothing waits', () => {
+      const many = waiting({ texts: Array.from({ length: 6 }, (_, n) => ({ ...waiting().texts[0], id: `t${n}`, reference: `alpha/g${n}`, text: `alpha/g${n}`, goal: `alpha/g${n}` })) });
+      const rows = panel(draw(many, 120));
+      assert.equal(rows.filter((line) => /^ {4}(text|act) /u.test(line)).length, 5);
+      assert.ok(rows.some((line) => /^ {4}\+2 more — d opens the desk$/u.test(line)), rows.join('\n'));
+      assert.deepEqual(rows.filter((line) => /g\d/u.test(line)).map((line) => /alpha\/g(\d)/u.exec(line)[1]), ['0', '1', '2', '3', '4']);
+      const none = panel(draw(waiting({ texts: [], acts: [], waiting: 0 }), 100)).join('\n');
+      assert.match(none, /^ {4}Nothing waits for you\.$/mu);
+      assert.doesNotMatch(none, /^ {4}(text|act) /mu);
+    });
+
+    it('always ends with what was decided without him, what is not ready and what it costs', () => {
+      const text = panel(draw(waiting(), 160)).join('\n');
+      assert.match(text, /Decided without you since 2026-11-14 08:00: 3 asks settled, 1 against the asking session's recommendation · 3 desk items closed for you/u);
+      assert.match(text, /^ {4}Not ready: 2 in preparation · 1 failed · oldest 36 h · 2 stuck, not yours$/mu);
+      assert.match(text, /^ {4}Cost: desk \$0\.75 today of \$5 ceiling$/mu);
+      const quiet = panel(draw(waiting({ not_ready: { count: 0, oldest_age_hours: null, failed: 0, stuck: 0 }, cost: { day: 'd', today: 0, ceiling: null, error: null } }), 120)).join('\n');
+      assert.match(quiet, /^ {4}Not ready: 0 in preparation · 0 failed$/mu);
+      assert.match(quiet, /^ {4}Cost: desk \$0\.00 today of ceiling off$/mu);
+      assert.match(panel(draw(waiting({ decided: { ...waiting().decided, unreadable_lines: 2 } }), 160)).join(' ').replace(/\s+/gu, ' '), /· 2 ledger lines unreadable/u);
+    });
+
+    it('draws each error as a row of its own', () => {
+      const lastOpen = panel(draw(waiting({ decided: { since: null, asks: null, against: null, closed_for_you: null, unreadable_lines: 0, error: 'last-open.json is not valid — mc martin opens again once it is corrected or removed' } }), 160)).join('\n');
+      assert.match(lastOpen, /last-open\.json is not valid — mc martin opens again once it is corrected or removed/u);
+      assert.match(lastOpen, /text {2}alpha\/one/u, 'what waits is still drawn');
+      const ledger = panel(draw(waiting({ decided: { since: LAST, asks: null, against: null, closed_for_you: 3, unreadable_lines: 0, error: 'jev ledger unreadable — EISDIR' } }), 160)).join('\n');
+      assert.match(ledger, /jev ledger unreadable — EISDIR · 3 desk items closed for you/u);
+      assert.match(panel(draw(waiting({ cost: { day: 'd', today: null, ceiling: null, error: 'runs.tsv unreadable: EACCES' } }), 120)).join('\n'), /desk cost — runs\.tsv unreadable: EACCES/u);
+      const whole = panel(draw({ ...waiting(), error: 'boom', waiting: 0, texts: [], acts: [] }, 100)).join('\n');
+      assert.match(whole, /^ {4}desk unreadable — boom$/mu);
+      assert.doesNotMatch(whole, /Not ready|Cost:/u);
+    });
+
+    it('clips a line longer than the page, with an ellipsis, so no panel line passes the width', () => {
+      for (const columns of [60, 80, 120]) {
+        const lines = draw(waiting(), columns);
+        const rows = panel(lines);
+        assert.ok(rows.every((line) => width(line) <= columns - 2 + 2 && width(line) <= columns), `${columns}: ${rows.map((line) => width(line))}`);
+        assert.ok(rows.some((line) => /Ett långt/u.test(line) && line.includes('…')) || columns >= 160, `${columns}: ${rows.join('\n')}`);
+      }
+      assert.ok(draw(waiting(), 100).filter((line) => /^ {4}text {2}canon/u.test(line)).every((line) => width(line) <= 98));
+    });
+
+    it('draws no panel for a page whose data has no desk', () => {
+      assert.equal(renderPageLines({ ...base }, { columns: 100, now: NOW }).some((line) => line.includes('┌─ DESK')), false);
+      const lines = []; deskLines(lines, (text) => text, 98, undefined);
+      assert.deepEqual(lines, []);
+    });
+
+    it('gives the live loop a key that moves with what waits and not with its age or its cost', () => {
+      const key = (desk) => pageKey({ ...base, desk });
+      assert.equal(key(waiting()), key(waiting({ cost: { day: 'd', today: 40, ceiling: 5, error: null } })), 'cost is not news');
+      assert.equal(key(waiting()), key(waiting({ texts: waiting().texts.map((item) => ({ ...item, waited_minutes: item.waited_minutes + 600 })) })), 'age is not news');
+      assert.notEqual(key(waiting()), key(waiting({ texts: [...waiting().texts, { ...waiting().texts[0], id: 't3' }] })), 'an item that came is');
+      assert.notEqual(key(waiting()), key(waiting({ acts: [] })), 'an act that went is');
+      assert.notEqual(key(waiting()), key(waiting({ not_ready: { count: 3, oldest_age_hours: 1, failed: 1, stuck: 2 } })));
+      assert.notEqual(key(waiting()), key(waiting({ decided: { ...waiting().decided, asks: 4 } })));
+      assert.notEqual(key(waiting()), key(waiting({ error: 'boom' })));
+      assert.equal(pageKey({}), '');
+    });
   });
 });

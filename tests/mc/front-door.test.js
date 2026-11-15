@@ -95,7 +95,7 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'language', 'mc', 'caches', 'notes']);
       assert.equal(page.providerPriority, 'auto');
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
@@ -337,7 +337,7 @@ describe('the menu under the page', () => {
     assert.equal(DATA.programmes.programmes.some((g) => 'projects' in g), false);
   });
 
-  function drive(answers) {
+  function drive(answers, extra = {}) {
     const written = [];
     const opened = [];
     const programmes = [];
@@ -356,6 +356,7 @@ describe('the menu under the page', () => {
         page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
         reader: plainReader({ stdout, ask: () => queue.shift() ?? null }),
         showGoal: async (argv) => { opened.push(argv[1]); return 0; },
+        ...extra,
       }),
     };
   }
@@ -368,6 +369,31 @@ describe('the menu under the page', () => {
     const second = drive(['2', 'q']);
     assert.equal(await second.run(), 0);
     assert.deepEqual(second.opened, ['mc/mc-ui']);
+  });
+
+  // `d` and `desk` are the desk: `mc martin`, which the page's DESK panel summarises. The order is injected, so no session opens.
+  it('opens the desk on d or desk, once, and returns its code', async () => {
+    for (const [answer, code] of [['d', 0], ['desk', 3]]) {
+      const calls = [];
+      const session = drive([answer, 'q'], { deskOrder: async (argv, io) => { calls.push([argv, Object.keys(io).sort()]); return code; } });
+      assert.equal(await session.run(), code);
+      assert.deepEqual(calls, [[[], ['env', 'stderr', 'stdout']]], answer);
+      assert.deepEqual(session.opened, []);
+    }
+    // Neither the manager's letter nor a goal's number is the desk's.
+    const calls = [];
+    const other = drive(['1', 'q'], { deskOrder: async () => { calls.push(1); return 9; } });
+    assert.equal(await other.run(), 0);
+    assert.deepEqual(calls, []);
+  });
+
+  it('names the desk in the first line of keys, and keeps every line of keys as short as the longest', async () => {
+    const session = drive(['q']);
+    await session.run();
+    const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
+    assert.ok(keys.some((line) => /^ {2}<n> {2}show that goal {3}· {3}a {2}all \/ collapse {3}· {3}d {2}desk {3}· {3}m {2}manager$/u.test(line)), keys.join('\n'));
+    const longest = Math.max(...keys.filter((line) => !/<n>/u.test(line)).map((line) => line.length));
+    assert.ok(keys.every((line) => line.length <= longest), keys.map((line) => line.length).join(','));
   });
 
   it('quits on q or on nothing', async () => {

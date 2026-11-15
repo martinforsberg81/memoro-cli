@@ -48,6 +48,7 @@ import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
+import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
@@ -727,7 +728,8 @@ function headerLines(lines, c, raw, wide, data, version) {
   lines.push('');
   rule('┌', '┐');
   const brand = `MC${version ? `  ${version}` : ''}`;
-  const action = 'mc manager';
+  // The two entrances of the page: the desk's, then the manager's.
+  const action = 'd  mc martin   ·   m  mc manager';
   frame(`${c(brand, 'bold')}${' '.repeat(Math.max(2, room - brand.length - action.length))}${c(action, 'cyan')}`);
   // Wrap complete fields so every count survives a narrow terminal.
   const summary = (parts) => {
@@ -922,6 +924,7 @@ export function renderPageLines(data, {
   const lines = [];
 
   headerLines(lines, c, paintText, wide, data, version);
+  deskLines(lines, c, wide, data.desk);
   const managers = data.sessions?.desk_sessions?.manager
     || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
   for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
