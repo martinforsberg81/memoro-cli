@@ -95,7 +95,7 @@ import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
-  runningDeploy,
+  runningDeploy, versionCells,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
@@ -268,6 +268,13 @@ const OUTPUT_TAIL = 256 * 1024;
  * And, from 2026-11-09, the last line of a deploy that made a change of its own
  * on a branch (`deploy-branch.js`):
  *   `Deploy branch: <branch>`                      — pushed; `ship` opens its pull request
+ * And, from 2026-11-15, the Worker versions of the deploy, printed as they are
+ * known and repeated in the closing block (the last one of a kind and a Worker
+ * wins), one for each Worker, `memoro` and `memoro-tail`:
+ *   `Worker version before: <worker> <id>`         — the version live before the deploy
+ *   `Worker version made: <worker> <id>`           — the version the deploy made; none
+ *                                                    for a Worker it did not change
+ *   `… <worker> missing — <why>`                   — either, when it is not known
  * Only the summary's lines count, the ones after `✗ Deploy failed`: a retry
  * prints `Production meanwhile: …` too, and a deploy that then went through is
  * not described by it.
@@ -288,8 +295,13 @@ export function readScriptOutput(text) {
   let production = '';
   let cause = '';
   let retries = 0;
+  const versionLines = new Map();
   const branch = branchNamed(lines);
   lines.forEach((line, index) => {
+    // A Worker's version, as the script prints it first and repeats in its
+    // closing block: the last line for a kind and a Worker is the one that counts.
+    const version = /^Worker version (before|made): (\S+) (?:missing — (.+)|(\S+))$/u.exec(line);
+    if (version) { versionLines.set(`${version[1]} ${version[2]}`, { kind: version[1], worker: version[2], why: version[3] || '', id: version[4] || null }); return; }
     const step = /^▸\s+(.+)$/u.exec(line);
     if (step) { stoppedAt = step[1].trim(); return; }
     const live = /^Live \/api\/version verified: build (\d+) · (\S+)$/u.exec(line);
@@ -323,7 +335,25 @@ export function readScriptOutput(text) {
     cause,
     retries,
     branch: branch || '',
+    versions: workerVersions(versionLines),
   };
+}
+
+/**
+ * The Worker versions the script printed, as `--json` and the row carry them:
+ * `before` and `made` map a Worker to its version id, or to null when the
+ * script said it is missing, and `why` holds one `<worker> before|made: <why>`
+ * for each that is. A script that printed no version line says so in `why`, so
+ * that an empty cell is never a deploy that printed nothing.
+ */
+function workerVersions(printed) {
+  const versions = { before: {}, made: {}, why: [] };
+  for (const { kind, worker, id, why } of printed.values()) {
+    versions[kind][worker] = id;
+    if (!id) versions.why.push(`${worker} ${kind}: ${why}`);
+  }
+  if (!printed.size) versions.why.push('not reported by the deploy script');
+  return versions;
 }
 
 /**
@@ -1157,6 +1187,7 @@ async function shipJob(job, deps = {}) {
   const { key, sha, worktree, own } = job;
   const progress = deployProgress(job, { env });
   let tail = '';
+  let scriptRan = false;
   let holding = false;
   let fastForwarded = false;
   let releaseHolder = null;
@@ -1294,6 +1325,7 @@ async function shipJob(job, deps = {}) {
     let result;
     try {
       progress.report('prepare', 'Starting deploy script');
+      scriptRan = true;
       const pending = spawnDeploy({ cwd: worktree, env, sha: shipping, onOutput, stdout, stderr });
       diskAdmission?.release?.();
       result = await pending;
@@ -1327,6 +1359,7 @@ async function shipJob(job, deps = {}) {
       live_build: said.live_build,
       stopped_at: ok ? '' : said.stopped_at,
       note: endNote({ result, said, ok, pin }),
+      ...versionCells(said.versions),
     }, env);
 
     if (result.error) stderr.write(`mc: could not run npm run deploy in ${worktree} — ${result.error}\n`);
@@ -1346,7 +1379,13 @@ async function shipJob(job, deps = {}) {
   } catch (error) {
     // A throw is not a deploy that finished: the row would otherwise stay
     // `running` for a failure mc itself caused, and the throw goes on up.
-    recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
+    const said = readScriptOutput(tail);
+    recordEnd(key, {
+      outcome: FAILED,
+      stopped_at: said.stopped_at,
+      note: `mc: ${error?.message || error}`,
+      ...(scriptRan ? versionCells(said.versions) : {}),
+    }, env);
     throw error;
   } finally {
     releaseHolder?.();
