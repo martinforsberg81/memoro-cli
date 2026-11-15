@@ -236,7 +236,7 @@ export async function run(argv, deps = {}) {
     signIn = { kind: 'none' };
     if (where === 'dev') {
       const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
-      if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
+      if (!app.ok) return answerStartFailure(app, { flags, stdout, stderr });
       baseUrl = app.baseUrl;
       serverTiming = app.timing ?? { slot_wait_ms: 0, server_ms: 0 };
       served = (deps.servedTree || servedTree)(worktree, app.server);
@@ -255,7 +255,7 @@ export async function run(argv, deps = {}) {
       if (!compareSelection.ok) { stderr.write(`${compareSelection.error.startsWith('mc:') ? '' : 'mc: '}${compareSelection.error}\n`); return compareSelection.code; }
     }
     const app = await (deps.ensureAppServer || ensureAppServer)(worktree, declaration, { json: flags.json, stdout: stderr, deps: { holderVerb: 'shot', ...deps } });
-    if (!app.ok) { stderr.write(`mc: ${app.error}\n`); return 1; }
+    if (!app.ok) return answerStartFailure(app, { flags, stdout, stderr });
     baseUrl = app.baseUrl;
     serverTiming = app.timing ?? { slot_wait_ms: 0, server_ms: 0 };
     served = (deps.servedTree || servedTree)(worktree, app.server);
@@ -420,6 +420,16 @@ function captureSet({ worktree, declared, request, env, flags, served, who, scru
  * The shot's own time in whole seconds: the slot wait and the server start where there was a server (ensureAppServer's
  * `timing`, in ms), then the capture's run. Prod has no server, so it is the capture alone.
  */
+function answerStartFailure(app, { flags, stdout, stderr }) {
+  const timing = timingOf(app.timing ?? { slot_wait_ms: 0, server_ms: 0 }, 0);
+  if (flags.json) stdout.write(`${JSON.stringify({ ok: false, error: app.error, timing }, null, 2)}\n`);
+  else {
+    stderr.write(`mc: ${app.error}\n`);
+    stderr.write(`mc: timing — ${timingText(timing)} (server start failed)\n`);
+  }
+  return 1;
+}
+
 function timingOf(server, shotMs) {
   const seconds = (ms) => Math.round(ms / 1000);
   return server

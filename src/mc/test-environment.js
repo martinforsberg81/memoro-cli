@@ -748,7 +748,11 @@ export async function ensureAppServer(worktree, declaration, {
     // the line says so, on stdout with the others.
     onSlowStart: quiet ? null : (line) => stdout.write(`${line}\n`),
   });
-  if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
+  if (!ensured.ok) {
+    const slotWaitMs = ensured.waited_ms ?? 0;
+    return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}),
+      timing: { slot_wait_ms: slotWaitMs, server_ms: Math.max(0, clock() - started - slotWaitMs) } };
+  }
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!quiet) {

@@ -577,6 +577,28 @@ describe('mc shot — the run', () => {
     assert.ok(!prod.stderr.includes('slot wait'), prod.stderr);
   });
 
+  it('reports failed server timing for signed-in and public shots, including JSON', async () => {
+    const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+    let t = 0;
+    const deps = {
+      clock: () => t,
+      ensureDevServer: async () => {
+        t += 12_000;
+        return { ok: false, error: 'start failed: database\nprocess exited\nlog tail', waited_ms: 3_000 };
+      },
+    };
+    for (const target of ['home', 'landing-sv']) {
+      const plain = await shot(['dev', target], fx, deps);
+      assert.equal(plain.code, 1);
+      assert.equal(plain.stdout, '');
+      assert.match(plain.stderr, /mc: start failed: database\nprocess exited\nlog tail\nmc: timing — slot wait 3 s, server start 9 s, shot 0 s \(server start failed\)\n$/u);
+      const json = await shot(['dev', target, '--json'], fx, deps);
+      assert.equal(json.code, 1);
+      assert.deepEqual(JSON.parse(json.stdout), { ok: false, error: 'start failed: database\nprocess exited\nlog tail', timing: { slot_wait_s: 3, server_start_s: 9, shot_s: 0 } });
+      assert.doesNotMatch(json.stderr, /mc: timing/u);
+    }
+  });
+
   it('the four first-criterion forms each build their request', async () => {
     const fx = fixture();
     const forms = [
