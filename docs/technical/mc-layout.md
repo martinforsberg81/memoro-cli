@@ -9,6 +9,7 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 ```
 ~/mc/programs/<programme>/
   README.md                         the programme's aim
+  PROGRAMME.json                    its record, when it has one (mc-plan.md)
   memoro/  memoro-cli/               plan/<programme> worktrees
   goals/<goal>/
     GOAL.json  LOG.md                brief, state and session log
@@ -99,7 +100,9 @@ The runner's queue lock is `runner/register.lock` (`runner-lock.js`).
 `programs/`, with id `goal-file`; a relative path is resolved against cwd.
 There is no escape for those tools. Bash writes naming GOAL.json are caught
 by a separate rule, with the usual `MC_HOOK_ALLOW=1` escape. Use the `mc goal`
-verbs so each write is validated. See [mc-hooks.md](mc-hooks.md).
+verbs so each write is validated. A file named PROGRAMME.json anywhere under
+`programs/` (the record sits directly in a programme's directory) is guarded the same way, with id `programme-file`; it changes through
+`mc programs create` and `mc programs record`. See [mc-hooks.md](mc-hooks.md).
 
 ## The repositories
 

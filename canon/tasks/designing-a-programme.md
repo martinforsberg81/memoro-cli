@@ -8,9 +8,15 @@ A programme is thought through once, before its goals are written. Its design is
 page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
 means the programme was not designed.
 
+A programme is of one of two kinds. One with a record (`PROGRAMME.json`, made by `mc programs create
+<programme> --end "…"`) is bounded: it serves a horizon and ends. Its page is [the record
+page](references/programme-record-readme.md); the enduring aim stays in the area pages it points to.
+It is done when its goals are done and what is now true is written back to `docs/technical/`. One
+without a record keeps [the programme page](references/programme-readme.md) and what speaks of its aim.
+
 ## Files
 
-- `README.md` — [the programme page](references/programme-readme.md): aim, measures, gap, next
+- `README.md` — the programme page of its kind: aim, measures, gap, next
   horizon, phases, Martin-only choices and pointers. Read first; keep its gap current each session.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
@@ -24,7 +30,8 @@ means the programme was not designed.
 1. Define the aim as the enduring state the area strives toward for its user: what they can do and
    rely on when it is as good as it can be. It is not work, has no end when goals land, and changes
    only with Martin. Define three to five observable or countable progress measures, each with its
-   first reading and date, or say what would give a reading.
+   first reading and date, or say what would give a reading. A programme with a record has no aim of
+   its own: write what it is for and its end as the record says it, and point to the area pages.
 2. Read affected code, technical standards, programme README and proposals; design claims cite files actually opened.
 3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal, or in the technical standard
    if it reaches beyond the programme, then in affected goals. Add needed standards within the app's
@@ -34,8 +41,8 @@ means the programme was not designed.
 5. Order by prerequisites and shared files: independent goals share a phase; dependent goals go later. A prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
-7. Write/read back the README as a headless session will: Aim, Measures, Gap, Next horizon,
-   Phases, Martin's, Where things are, in that order. Rewrite the dated Gap at every plan session's end.
+7. Write/read back the README as a headless session will, in the order of its page's headings (for a
+   programme without a record: Aim, Measures, Gap, Next horizon, Phases, Martin's, Where things are). Rewrite the dated Gap at every plan session's end.
    At its next plan session, bring an existing page to this template, settling its aim with Martin.
    Each goal stands on the design's decisions and prerequisites; landed sections leave the README.
 

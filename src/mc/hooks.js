@@ -207,6 +207,20 @@ export function protectedGoalFile(path, { programs = programsHome() } = {}) {
 }
 
 /**
+ * A programme's PROGRAMME.json is kept the same way: written by `mc programs
+ * create` and `mc programs record` only, and a catch for a mistake, not an intent.
+ */
+const PROTECTED_PROGRAMME = /^PROGRAMME\.json$/u;
+
+const PROGRAMME_FILE_REASON = 'This file is mc\'s: a programme\'s record is made by `mc programs create <programme> --end "…"` or, for an existing programme directory, `mc programs record <programme> --end "…"`. Run `mc programs show <programme>` to read it.';
+
+/** Whether `path` is a programme record anywhere under `programs`. */
+export function protectedProgrammeFile(path, { programs = programsHome() } = {}) {
+  const file = resolve(String(path));
+  return file.startsWith(`${resolve(programs)}${sep}`) && PROTECTED_PROGRAMME.test(basename(file));
+}
+
+/**
  * The shell commands that have an mc verb, and the verb. Matched on the
  * command's words, not its whole text, so `echo "gh pr create"` is left alone
  * only as far as a regular expression can tell — the escape covers the rest.
@@ -299,6 +313,11 @@ export const BASH_RULES = [
     // A write verb naming a goal file: a redirect, tee, sed -i, or a move, copy, removal or install of it.
     test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\bGOAL\.json\b/u,
     reason: GOAL_FILE_REASON,
+  },
+  {
+    id: 'programme-file',
+    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\bPROGRAMME\.json\b/u,
+    reason: PROGRAMME_FILE_REASON,
   },
 ];
 
@@ -754,6 +773,9 @@ export function preToolDecision(input, { inRepo = () => false, programs = progra
     // A relative path lands where the session's own cwd says, so it is resolved there.
     if (protectedGoalFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
       return { id: 'goal-file', reason: GOAL_FILE_REASON };
+    }
+    if (protectedProgrammeFile(resolve(String(input?.cwd || ''), String(args.file_path || '')), { programs })) {
+      return { id: 'programme-file', reason: PROGRAMME_FILE_REASON };
     }
   }
   if (tool === 'Write') {

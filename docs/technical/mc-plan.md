@@ -33,21 +33,92 @@ before the session starts, and the opening prompt says it is a template to
 fill in. An existing README is never touched by the command; its next plan
 session brings it to the template's shape, settling its aim with Martin.
 
-The page keeps an enduring user-state Aim, Measures, Gap, Next horizon,
-Phases, Martin's and Where things are, in that order (Martin, 2026-11-14).
+The page of a programme without a record keeps an enduring user-state Aim,
+Measures, Gap, Next horizon, Phases, Martin's and Where things are, in that
+order (Martin, 2026-11-14). A programme with a record has the other page, below.
 Measures are three to five observable signs, with dated readings or an explicit
 missing reading and how to obtain it. At plan end and when a goal lands, rewrite
 the dated Gap largest-first; the session taking a landing also rereads measures
 and replaces a reached horizon. Phases say which part of the horizon they serve.
 Landed functionality belongs in `docs/technical/`, not the Gap. The aim changes
 only with Martin; having no open goals does not finish it. Archive only when
-Martin says the aim is over or has moved to another programme.
+Martin says the aim is over or has moved to another programme. This is said of
+a programme without a record.
 
 With no programme named, `chooseProgramme` offers a numbered list, a new name,
 or an empty answer to leave. A pipe gets usage instead of a question. The
 list combines programmes read from the repositories (`listProgrammes`) and
 open planning areas on disk (`openPlanAreas`). A programme can be reopened
 before it has documents on main, or after all its goals have been archived.
+
+## A programme with a record
+
+A programme may have a record, `PROGRAMME.json` directly in its directory
+(`src/mc/programme-record.js`): a bounded piece of work that serves a horizon
+and ends. A programme without the file is a programme as above, and nothing
+about it changes. The file has seven keys, in this order, and no other:
+
+| key | value |
+|---|---|
+| `schema` | `"mc-programme"` |
+| `version` | `1` |
+| `horizon` | the slug of the horizon served, or `null` |
+| `end` | one non-empty sentence saying when the programme is done |
+| `state` | `open` or `done` |
+| `created` | an ISO instant in UTC to the second |
+| `created_by` | `person`, `martin` or `manager` |
+
+The slug is not checked against the desk's horizons: mc stores what it is
+given. Its reader says `none`, `valid` or `invalid` with the problems; a
+record is validated before every write and a write never replaces a file that
+is there (a temporary file linked into place). Nothing in this version sets
+`state` to `done`, and nothing reads `state` to decide anything: the list and
+the page show it. `mc plan <programme> --archive` archives a programme of
+either kind, as in [Archiving a programme](#archiving-a-programme).
+
+```
+mc programs create <programme> --end "…" [--horizon <slug>]
+mc programs record <programme> --end "…" [--horizon <slug>]
+mc programs show <programme> [--json]
+```
+
+`create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
+`open`, created now), `README.md` from the record page, and empty `goals/`,
+`proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
+works at once. It refuses a name that exists (exit 1) and, when the page
+template cannot be read, makes nothing. `record` gives an existing directory
+without a record its record and touches nothing else; it refuses a directory
+that is missing or already has a record (exit 1). Both refuse a bad name, a
+blank `--end` or a horizon that is not a slug with exit 2, before any write.
+`show` prints the record (`--json`: `{ "name", "record" }`, where `record` is
+`null` without one) or says the programme has none; a record that does not
+validate is printed as its problems with exit 1, a programme with no directory
+exits 1, and a word that is not a programme name exits 2.
+
+Who may write is decided from the environment alone: `MC_ROLE` through
+`normalizeSessionRole`, else `MC_GOAL` alone is a build session, else a person.
+A person, the interactive Martin role and the manager may create and record,
+and `created_by` says which (`person`, `martin`, `manager`). Every other role
+and a build session get exit 2 with the role named; the Martin role with
+`MC_HEADLESS=1` is refused too. A role added later is refused until it is
+named. `show` and `list` have no guard. The pre-tool hook refuses a direct
+write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
+
+`mc programs list` and the page's PROGRAMMES read the directory names that
+hold a `PROGRAMME.json`, valid or not, so a recorded programme is listed (and
+counted as dormant) before its first goal. `--json` adds a `record` key to
+each programme: `null`, `{ horizon, end, state, created, created_by }` or
+`{ problems }`. The text line gains a last cell, `record open · horizon <slug>`
+(`no horizon` without one) or `record invalid`; a programme without a record
+keeps its seven cells.
+
+The two kinds have two page templates, both under
+`canon/tasks/references/`. `programme-readme.md` (no record) has Aim, Measures,
+Gap, Next horizon, Phases, Martin's and Where things are.
+`programme-record-readme.md` has What it is for, End, Decisions, Phases and
+Where things are: the enduring aim belongs to the area pages. `create` fills in
+the name, the end sentence and the horizon; the plan session fills in the rest.
+`mc plan` still writes the first page only for a programme with no README.
 
 ## What the session is told
 
@@ -189,7 +260,8 @@ name if needed); its remaining documents are not deleted. A network failure
 leaves the planning area intact so a later attempt can continue.
 
 `--archive` refuses session-selection flags and requires an explicit name.
-No automatic pass can decide that a programme's aim is over.
+No automatic pass can decide that a programme's aim is over. A programme with
+a record is archived by this command too; nothing sets its `state` to `done`.
 
 ## How it is tested
 

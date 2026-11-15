@@ -2,7 +2,8 @@
 
 The shape of a programme's README. Every section is short; the detail stays
 where it is and the page points at it. Written and kept by the plan session
-([designing a programme](../designing-a-programme.md)).
+([designing a programme](../designing-a-programme.md)). A programme with a record
+(`PROGRAMME.json`) has [the other page](programme-record-readme.md).
 
 ```markdown
 # <programme> — <the aim in one line>
