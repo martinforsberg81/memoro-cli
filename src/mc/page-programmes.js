@@ -11,7 +11,7 @@ const one = (value) => String(value ?? '').replace(/\s+/gu, ' ').trim();
  * runner's refusal to archive it (`archive_refused`), or an open pull request
  * the archive would refuse it for. Words the line under NEEDS ATTENTION.
  */
-function notArchived(goal) {
+export function notArchived(goal) {
   if (goal.archive_refused) return `not archived — ${goal.archive_refused}`;
   if (goal.prs?.length) return `not archived — ${goal.prs.map((pr) => `${pr.repo || 'unknown'}#${pr.number}`).join(', ')} ${goal.prs.length === 1 ? 'is' : 'are'} open — land or close ${goal.prs.length === 1 ? 'it' : 'them'} first`;
   return null;

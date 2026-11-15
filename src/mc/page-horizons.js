@@ -149,11 +149,28 @@ const sectionHeading = (lines, c, wide, counts) => {
 const extraFor = (group) => (group.horizon ? [{ text: `${group.horizon} (${group.horizon_state})`, styles: ['yellow'] }] : []);
 
 /**
- * HORIZONS, drawn into `lines`. `data` is the page's data; `expand` (`a`) draws every programme as a row under its
- * horizon and no folded row; `sessions` are the runner's (`runner.sessions`). Nothing is drawn for a page without
- * `data.horizons` (a page from before this section).
+ * What a drawn HORIZONS can fold (`fold`, below), without drawing it: the programme rows under `Serving no horizon` and
+ * the programme rows under the open horizons, as the default page shows them (the ones under way).
  */
-export function horizonsLines(lines, c, wide, data, { expand = false, sessions = [] } = {}) {
+export function horizonsFoldable(data, { sessions = [] } = {}) {
+  const horizons = data.horizons;
+  if (!horizons) return { none: 0, horizons: 0 };
+  const groups = data.programmes?.programmes || [];
+  const byName = new Map(groups.map((group) => [group.programme, group]));
+  const shown = (name) => programmeFacts(byName.get(name), sessions).underway;
+  const named = (horizons.open || []).flatMap((horizon) => (horizon.programmes || []).filter((name) => byName.has(name) && shown(name)));
+  const none = (horizons.none || []).filter((name) => byName.has(name) && shown(name));
+  return { none: none.length, horizons: named.length };
+}
+
+/**
+ * HORIZONS, drawn into `lines`. `data` is the page's data; `expand` (`a`) draws every programme as a row under its
+ * horizon and no folded row; `sessions` are the runner's (`runner.sessions`). `fold` is what the overview's budget
+ * folds (page-overview.js): `none` programme rows from the end of `Serving no horizon`, and `horizons` programme rows
+ * from the last open horizon up, each horizon keeping its title and saying how many of its rows it folded. Nothing is
+ * drawn for a page without `data.horizons` (a page from before this section).
+ */
+export function horizonsLines(lines, c, wide, data, { expand = false, sessions = [], fold = {} } = {}) {
   const horizons = data.horizons;
   if (!horizons) return;
   const groups = data.programmes?.programmes || [];
@@ -173,22 +190,34 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
     .filter((group) => shown(group.programme))
     .forEach((group) => lines.push(programmeRow(c, wide, group, facts.get(group.programme), { digits, nameWidth, extra: extra(group) })));
 
+  // The rows each horizon folds: from the last horizon up, a horizon's rows all before the one above it.
+  const folded = new Map();
+  let left = expand ? 0 : fold.horizons || 0;
+  for (const horizon of [...open].reverse()) {
+    const count = (horizon.programmes || []).filter((name) => byName.has(name) && shown(name)).length;
+    folded.set(horizon, Math.min(left, count));
+    left -= folded.get(horizon);
+  }
   for (const horizon of open) {
     const title = horizon.title || horizon.slug;
     const place = horizon.position != null ? `${horizon.position}  ` : '';
     const slug = horizon.title && horizon.title !== horizon.slug ? `  ${horizon.slug}` : '';
     lines.push(`  ${c(`${place}${clip(title, Math.max(8, wide - 4 - place.length - slug.length))}`, 'bold')}${slug ? c(clip(slug, Math.max(0, wide - 6 - width(title) - place.length)), 'grey') : ''}`);
     const named = (horizon.programmes || []).filter((name) => byName.has(name) && shown(name));
-    if (named.length) rows(named);
+    const take = folded.get(horizon) || 0;
+    if (named.length) rows(named.slice(0, named.length - take));
     else lines.push(`${' '.repeat(INDENT)}${c('nothing under way', 'grey')}`);
+    if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} programme${take === 1 ? '' : 's'} folded — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
   }
   const none = (horizons.none || []).filter((name) => byName.has(name));
   const noneShown = none.filter(shown);
   if (noneShown.length) {
+    const take = expand ? 0 : Math.min(fold.none || 0, noneShown.length);
     lines.push(`  ${c('Serving no horizon', 'bold')}`);
-    rows(noneShown, extraFor);
+    rows(noneShown.slice(0, noneShown.length - take), extraFor);
+    if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} more not serving a horizon — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
   }
-  const folded = expand ? 0 : groups.filter((group) => !shown(group.programme)).length;
-  if (folded) lines.push(`  ${c(`▸ ${folded} with nothing under way`, 'grey')}`);
+  const nothing = expand ? 0 : groups.filter((group) => !shown(group.programme)).length;
+  if (nothing) lines.push(`  ${c(`▸ ${nothing} with nothing under way`, 'grey')}`);
   lines.push('');
 }

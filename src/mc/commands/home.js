@@ -41,6 +41,7 @@ import { collectPage } from '../page-collect.js';
 import { CLEAR_ALL } from '../page-frame.js';
 import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
 import { deskKey } from '../page-desk.js';
+import { attentionItems, flightRows, mergeDeployRows } from '../page-overview.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { childEnv, mcCheckout } from '../run-control.js';
@@ -82,6 +83,9 @@ export async function run(argv, deps = {}) {
   // The programme the page shows alone, or null for the overview. Held here beside `expand` for the same reason:
   // the live loop draws through this closure, so a frame keeps the view somebody opened.
   let view = null;
+  // Whether the operations view is open (`o`): a value of its own rather than a `view`, because a programme's name
+  // can never be taken by it and `h` closes it. The live loop's frames draw through this closure and keep it.
+  let operations = false;
   // At a terminal the page keeps its own pull requests current: every draw,
   // the live loop's included, asks GitHub when the cache is older than five
   // minutes (page-collect.js, `fresh: 'stale'`). A pipe reads the cache as it
@@ -138,6 +142,7 @@ export async function run(argv, deps = {}) {
         version,
         expand,
         view,
+        operations,
       }),
     };
   };
@@ -157,7 +162,7 @@ export async function run(argv, deps = {}) {
   const reader = typeof deps.reader === 'function' ? deps.reader({ page, first }) : deps.reader || readerFor({ stdout, lines: first.lines, page, key: first.key });
   return menu(first.data, {
     stdout, stderr, env, page, reader, expand: (on) => { expand = on; }, fresh: () => { freshOnce = true; },
-    current: () => latest, show: (name) => { view = name; },
+    current: () => latest, show: (name) => { view = name; operations = false; }, operate: (on) => { operations = on; },
     restart: () => (deps.restartPage || restartPage)({ stdout, env, from: startedOn, to: movedTo }),
   });
 }
@@ -274,7 +279,14 @@ export function pageKey(data) {
     (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}`).join(','),
     (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
   ].join('/');
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey].filter(Boolean).join('|');
+  // The overview's IN FLIGHT, NEEDS ATTENTION, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
+  const flight = flightRows(data || {});
+  const overviewKey = [
+    [...flight.desk, ...flight.interactive, ...flight.runner].map((row) => row.key).sort().join(','),
+    attentionItems(data || {}).map((item) => `${item.key}:${item.text}`).join(','),
+    mergeDeployRows(data || {}).map((row) => `${row.key}:${row.fact ?? row.text}`).join(','),
+  ].join('/');
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '//' ? '' : overviewKey].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -292,7 +304,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk',
+  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk',
   `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
@@ -359,6 +371,8 @@ export async function menu(first, {
   current = () => null,
   // Opens a programme's view (its name) or the overview (null) on the caller's closure, as `expand` does.
   show = () => {},
+  // Opens the operations view (`o`) on the caller's closure; `show` closes it.
+  operate = () => {},
   // Asks the next draw to go to GitHub for the pull requests (`f`).
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
@@ -399,7 +413,14 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
-    // The overview again, from whichever programme was open.
+    // The operations view: the hero frame and the panels the overview leaves out. No programme's name is `o`
+    // or `operations`: a programme opens by its number or by any other name (below).
+    if (answer === 'o' || answer === 'operations') {
+      operate(true);
+      data = await redraw();
+      continue;
+    }
+    // The overview again, from whichever programme or the operations view was open.
     if (answer === 'h' || answer === 'home') {
       show(null);
       data = await redraw();

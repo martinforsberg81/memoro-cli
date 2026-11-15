@@ -25,7 +25,8 @@ import {
 } from '../../src/mc/page-collect.js';
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
-import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
+import { colourFor, columnsFor, renderPageLines as drawPage } from '../../src/mc/page-render.js';
+import { OVERVIEW_ROWS, attentionItems, flightRows, mergeDeployRows } from '../../src/mc/page-overview.js';
 import { KIND_TONE, STATE_TONE } from '../../src/mc/page-grid.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
 import { width } from '../../src/mc/status-render.js';
@@ -42,6 +43,28 @@ import { programsHome } from '../../src/mc/paths.js';
 import { RUNS_HEADER } from '../../src/mc/run-plan.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
+
+/**
+ * The page as most of this file reads it: the operations view, which holds the hero frame and the panels the
+ * overview leaves out. A test of the overview, of a programme's own view or of `a` says so: `overview: true`
+ * (or `view`, or `expand` together with `overview`) draws the page `mc` opens on.
+ */
+const renderPageLines = (data, { overview = false, ...options } = {}) => drawPage(data, {
+  ...options, operations: !overview && options.view == null && options.operations !== false,
+});
+
+const renderPage = (data, options = {}) => `${renderPageLines(data, options).join('\n')}\n`;
+
+/** A page without its IN FLIGHT section: the rows of one session drawn once, where `a` and a programme's view draw them. */
+const withoutFlight = (lines) => {
+  const at = lines.findIndex((line) => /^ {2}IN FLIGHT/u.test(line.replace(/\u001b\[[0-9;]*m/gu, '')));
+  if (at < 0) return lines;
+  let end = at;
+  while (end < lines.length && lines[end].replace(/\u001b\[[0-9;]*m/gu, '').trim() !== '') end += 1;
+  return [...lines.slice(0, at), ...lines.slice(end)];
+};
+/** What `a` draws of a session: its activity frame, under its programme or as unassigned activity. */
+const activityPage = (data, options = {}) => withoutFlight(drawPage(data, { ...options, expand: true }));
 
 /**
  * Goals as `goalsOf` gives them to PROGRAMMES: two programmes, one goal a
@@ -133,10 +156,11 @@ describe('SESSIONS', () => {
     for (const columns of [60, 80, 120]) {
       const lines = renderPageLines(pageData({ runner }), { columns, now: NOW });
       assert.ok(lines.every((line) => width(line) <= columns));
-      assert.match(lines.join('\n'), /runner running · 5\/6 lanes/u);
-      assert.match(lines.join('\n'), /pid 98765/u);
+      assert.match(lines.join('\n'), /5\/6 lanes/u);
+      const activity = activityPage(pageData({ runner }), { columns, now: NOW });
+      assert.match(activity.join('\n'), /pid 98765/u);
       for (const name of ['mc/runner-sessions', 'docx-editor', 'mc/review-and-land', 'mc/headless-plan', 'mc-ui'])
-        assert.equal(lines.filter((line) => line.includes(` · ${name} · `)).length, 1, name);
+        assert.equal(activity.filter((line) => line.includes(` · ${name} · `)).length, 1, name);
     }
   });
 
@@ -159,7 +183,7 @@ describe('SESSIONS', () => {
     const prs = [14709, 14710, 14711, 14712].map((number) => ({ repo: 'memoro', number }));
     for (const session of runner.sessions) session.prs = prs;
     for (const columns of [80, 120]) {
-      const lines = renderPageLines(pageData({ runner }), { columns, version: '0.7.11', now: NOW });
+      const lines = activityPage(pageData({ runner }), { columns, version: '0.7.11', now: NOW });
       for (const line of lines) assert.ok(width(line) <= columns, `${columns}: ${line}`);
       for (const number of [14709, 14710, 14711, 14712]) assert.ok(lines.some((line) => line.includes(`#${number}`)));
     }
@@ -288,9 +312,9 @@ describe('SESSIONS', () => {
 
 
     const lines = renderPageLines(pageData({ runner }), { columns: 120, now: NOW, expand: true });
-    assert.match(lines.join('\n'), /docx-editor · 10 min · claude · sonnet/u);
-    assert.match(lines.join('\n'), /opus advisor/u);
-    assert.match(lines.join('\n'), /runner running · 2\/3 lanes/u);
+    assert.match(activityPage(pageData({ runner }), { columns: 120, now: NOW }).join('\n'), /docx-editor · 10 min · claude · sonnet/u);
+    assert.match(activityPage(pageData({ runner }), { columns: 120, now: NOW }).join('\n'), /opus advisor/u);
+    assert.match(lines.join('\n'), /2\/3 lanes/u);
     assert.doesNotMatch(lines.join('\n'), /^ +3 +idle$/mu);
   });
 
@@ -304,7 +328,7 @@ describe('SESSIONS', () => {
     });
     const rowFor = (billing) => {
       const runner = runnerSection({ runner: RUNNER, currents: [lane(billing)], repos: ['memoro-cli'], now: NOW, alive: live });
-      return { runner, row: strip(rowWith(paintedPage(pageData({ runner })), 'docx-editor')) };
+      return { runner, row: strip(rowWith(withoutFlight(paintedPage(pageData({ runner }), { overview: true, expand: true })), 'docx-editor')) };
     };
     const credits = rowFor('credits');
     assert.equal(credits.runner.sessions[0].billing, 'credits');
@@ -321,9 +345,9 @@ describe('SESSIONS', () => {
   it('summarizes occupied lanes at MC and retains activity without a duplicate session section', () => {
     const runner = runnerSection({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live });
     const lines = paintedPage(pageData({ runner }));
-    assert.match(lines.map(strip).join('\n'), /mc-ui · 20 min/u);
-    assert.match(lines.map(strip).join('\n'), /runner running · 1\/2 lanes/u);
-    assert.match(lines.map(strip).join('\n'), /runner pid 4242/u);
+    assert.match(withoutFlight(paintedPage(pageData({ runner }), { overview: true, expand: true })).map(strip).join('\n'), /mc-ui · 20 min/u);
+    assert.match(lines.map(strip).join('\n'), /1\/2 lanes/u);
+    assert.match(withoutFlight(paintedPage(pageData({ runner }), { overview: true, expand: true })).map(strip).join('\n'), /runner pid 4242/u);
     assert.doesNotMatch(lines.map(strip).join('\n'), /SESSIONS/u);
     assert.match(paintedPage(pageData()).map(strip).join('\n'), /runner not running.*mc run starts it/u);
   });
@@ -719,7 +743,10 @@ describe('LANGUAGE — the cached readings, the last run, and an open gap', () =
     const gap = rowWith(lines, 'mc language resume');
     assert.equal(strip(gap), '  language: sv-forms-cutover stopped after purge-wiktionary-forms — sv has no forms · mc language resume');
     assert.equal(signature(gap), 'red+bold');
-    assert.ok(lines.indexOf(gap) < lines.findIndex((line) => strip(line).startsWith('  PROGRAMMES')), 'above every section');
+    // Above every section of the overview and of the operations view alike.
+    const home = paintedPage(pageData({ language: { languages: [], last_run: LAST, open_gap: { manifest: 'sv-forms-cutover', act: 'purge-wiktionary-forms', says: 'sv has no forms', started: LAST.started } } }), { overview: true });
+    assert.ok(home.indexOf(rowWith(home, 'mc language resume')) < home.findIndex((line) => strip(line).startsWith('  IN FLIGHT')), 'above IN FLIGHT');
+    assert.ok(lines.indexOf(gap) < lines.findIndex((line) => strip(line).startsWith('  ┌─ MERGE & DEPLOY')), 'above the panels');
   });
 
   it('is gathered from the cache and the run records, offline', async () => {
@@ -1378,9 +1405,11 @@ describe('INTAKE', () => {
     const programmes = programmesSection({ programmes: ['mc'], proposalCounts: { mc: 2 } });
     for (const columns of [60, 80, 120, 160]) {
       const lines = renderPageLines(pageData({ intake, sessions, programmes }), { columns });
-      const header = lines.slice(0, lines.findIndex((line) => line.includes('PROGRAMMES'))).join('\n');
+      const header = lines.slice(0, lines.findIndex((line) => /^ {2}(?:┌─ )?(?:MERGE|DEV|MAINTENANCE)/u.test(line) || line.includes('── SYSTEM'))).join('\n');
       assert.match(header, /d {2}mc martin/u);
-      assert.match(header, /● · MANAGER · 60 min/u);
+      // The manager is a row of IN FLIGHT on the overview; the proposals frame is the operations view's.
+      const home = renderPageLines(pageData({ intake, sessions, programmes }), { columns, overview: true });
+      assert.ok(home.some((line) => /● manager +the desk +60 min/u.test(line)), `${columns}: the manager in IN FLIGHT`);
       assert.match(header, /┌─ proposals ─+┐/u);
       assert.match(header, /│ +3 +│/u);
       assert.ok(lines.some(line => /Last collection failed · 26 h ago/u.test(line)));
@@ -1653,8 +1682,7 @@ describe('operational panels', () => {
       assert.equal(lines.filter(line => line.includes('#99901')).length, 1);
       assert.ok(lines.slice(footer).map(line => line.trim()).join(' ').includes(data.billing), 'both provider routes survive billing wrapping');
       assert.ok(!lines.some(line => line.includes('#99902') || /^  (CHECKS|PULL REQUESTS) /u.test(line)));
-      const programmes = lines.findIndex(line => line.startsWith('  PROGRAMMES'));
-      assert.ok(lines.slice(0, programmes).some(line => line.includes('New sessions paused — low disk space')));
+      assert.ok(lines.slice(0, panels[0]).some(line => line.includes('New sessions paused — low disk space')));
     }
   });
 });
@@ -1666,7 +1694,7 @@ describe('the page', () => {
       billing: 'plan · available',
       mc: mcSection({ process: DATA.runner.process, commit: 'abc1234', main: 'def5678', behind: 2, now: NOW }),
     }, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['PROGRAMMES', '┌─ MERGE & DEPLOY', '┌─ DEV', '┌─ MAINTENANCE', '── SYSTEM', 'MC  ', 'BILLING'].map(head => text.indexOf(`\n${head.startsWith('    ') ? head : `  ${head}`}`));
+    const at = ['┌─ MERGE & DEPLOY', '┌─ DEV', '┌─ MAINTENANCE', '── SYSTEM', 'MC  ', 'BILLING'].map(head => text.indexOf(`\n${head.startsWith('    ') ? head : `  ${head}`}`));
     assert.doesNotMatch(text, /^ {2}INTAKE/mu, 'the intake is what lies on the helper\'s desk');
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MC {2}0\.7\.11/u);
@@ -1677,18 +1705,21 @@ describe('the page', () => {
     assert.match(text, /│ +1 +│ ─*▶ │ +0 +│/u);
     assert.doesNotMatch(text, /in flight ·|Goals: \d+ total/u, 'the old count lines are gone');
     assert.doesNotMatch(text.split('\n')[1], /queued/u, 'the headline remains unchanged');
-    assert.match(text, /runner pid 4242/u);
     assert.match(text, /■ stopping since an unknown time/u);
     assert.match(text, /runner running · 1\/2 lanes/u);
-    assert.match(text, /UNASSIGNED ACTIVITY/u);
+    // The overview: what moves is IN FLIGHT's rows, and the programmes with their goals.
+    const home = renderPage({ ...DATA, billing: 'plan · available' }, { columns: 120, version: '0.7.11', now: NOW, overview: true });
+    assert.ok(home.indexOf('\n  IN FLIGHT') < home.indexOf('\n  PROGRAMMES') || home.indexOf('\n  PROGRAMMES') < home.indexOf('\n  IN FLIGHT'));
+    assert.match(home, /UNASSIGNED ACTIVITY/u);
+    assert.match(home, /runner pid 4242/u);
     assert.match(text, /start takes over now/u);
-    assert.match(text, /● · HELPER · 60 min · claude · sonnet/u);
+    assert.match(home, /● helper +the desk +60 min +claude · sonnet/u);
     assert.doesNotMatch(text, /^  (HELPER|BRIEF)\b/mu);
     // No WORK: every session is a programme's or a desk's, and a tmux session
     // nobody's is a stray under PROGRAMMES (goal mc/no-work).
     assert.doesNotMatch(text, /^ {2}WORK/mu);
-    assert.match(text, /^ {7}not an area mc knows$/mu);
-    assert.match(text, /^ {7}mc-docx-editor\s+tmux session · open 60 min$/mu);
+    assert.match(home, /^ {7}not an area mc knows$/mu);
+    assert.match(home, /^ {7}mc-docx-editor\s+tmux session · open 60 min$/mu);
     // Per kind: the two old `step` rows are builds, and the triage row is not a
     // session of the runner's kinds, so it is `other`.
     assert.doesNotMatch(text, /^  NEXT /mu);
@@ -1697,9 +1728,9 @@ describe('the page', () => {
     assert.match(text, /^ {6}memoro\s+1\s+\?\s+\?$/mu);
     assert.match(text, /New \/ unassigned 1 · Unhandled 0/u);
     // Goal titles retain their numbers; canonical metadata follows on a child row.
-    assert.match(text, /^ +1 avatar-self-serve$/mu);
-    assert.match(text, /^ +2 docx-editor$/mu);
-    assert.match(text, /^ +3 mc-ui$/mu);
+    assert.match(home, /^ +1 avatar-self-serve$/mu);
+    assert.match(home, /^ +2 docx-editor$/mu);
+    assert.match(home, /^ +3 mc-ui$/mu);
     assert.doesNotMatch(text, /on a decision/u, 'no project rollup under BRIEF');
     assert.doesNotMatch(text, /unplanned-workareas/u);
     // mc itself is the last line: how long the runner has been up, on what, and
@@ -1727,8 +1758,8 @@ describe('the page', () => {
    */
   it('draws every programme on expand, keeping the same goal numbers', () => {
     const names = (lines) => lines.map((line) => /^ +[123] (avatar-self-serve|docx-editor|mc-ui)$/u.exec(line)?.[1]).filter(Boolean);
-    const folded = renderPageLines(DATA, { columns: 120, now: NOW });
-    const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true });
+    const folded = renderPageLines(DATA, { columns: 120, now: NOW, overview: true });
+    const all = renderPageLines(DATA, { columns: 120, now: NOW, expand: true, overview: true });
     assert.deepEqual(names(all), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.deepEqual(names(folded), ['avatar-self-serve', 'docx-editor', 'mc-ui']);
     assert.ok(folded.some((line) => /^ {2}▸ 1 dormant$/u.test(line)), folded.join('\n'));
@@ -1762,11 +1793,12 @@ describe('the page', () => {
     assert.match(shown[0], /#14008 +queued/u);
     assert.match(shown[0], /goal\/preview-only/u);
     assert.doesNotMatch(shown[1], /dormant-one|goal\/preview-only/u);
-    assert.match(shown[1], /#14008/u, 'all waiting PRs remain visible when details collapse');
+    assert.match(shown[1], /MERGE +memoro · 9 queued/u, 'the queue stays one row when details collapse');
     for (const text of shown) {
-      assert.match(text, /BUILD.*mc-ui/u, 'live activity never collapses');
-      assert.match(text, /stopping since an unknown time/u, 'runner stop remains visible');
+      assert.match(text, /● build +mc-ui/u, 'live activity never collapses');
     }
+    assert.match(shown[0], /stopping since an unknown time/u, 'runner stop is drawn in full on `a`');
+    assert.match(shown[1], /New sessions paused — runner stopping/u, 'runner stop remains visible when details collapse');
   });
 
   /**
@@ -1864,7 +1896,7 @@ describe('the page', () => {
       const env = { MC_WORK_ROOT: root };
       const shown = [];
       const output = [];
-      const asked = ['priority codex', 'q'];
+      const asked = ['o', 'priority codex', 'q'];
       const render = (providerPriority) => pageData({ providerPriority });
       const code = await page([], {
         env, collect: async () => render(readModels(env).providerPriority),
@@ -1875,8 +1907,8 @@ describe('the page', () => {
       assert.equal(code, 0);
       assert.equal(readModels(env).providerPriority, 'codex');
       assert.match(output.join(''), /provider priority: codex/u);
-      assert.match(shown[0].text, /PROVIDER PRIORITY  codex/u);
-      assert.notEqual(shown[0].key, '');
+      assert.match(shown.at(-1).text, /PROVIDER PRIORITY  codex/u, 'the operations view shows the setting');
+      assert.notEqual(shown.at(-1).key, '');
       for (const columns of [80, 120]) {
         const lines = renderPageLines(render('codex'), { columns, now: NOW }).join('\n');
         assert.match(lines, /PROVIDER PRIORITY  codex/u);
@@ -2267,7 +2299,7 @@ describe('collectPage', () => {
   it('draws HORIZONS in the default view, below the desk, with no goal row and no phase', async (t) => {
     const data = await overviewData(t);
     for (const columns of [160, 80]) {
-      const lines = renderPageLines(data, { columns, now: NOW });
+      const lines = renderPageLines(data, { columns, now: NOW, overview: true });
       const text = lines.join('\n');
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'the desk is above HORIZONS');
@@ -2314,7 +2346,7 @@ describe('collectPage', () => {
     const runner = Array.from({ length: 10 }, (_, i) => ({ kind: 'build', goal: `mc/waits-${i}` }));
     const page = { ...data, runner: { ...data.runner, sessions: runner } };
     for (const columns of [160, 80]) {
-      const lines = renderPageLines(page, { columns, now: NOW });
+      const lines = renderPageLines(page, { columns, now: NOW, overview: true });
       assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
       const row = between(lines, 'HORIZONS', 'UNASSIGNED ACTIVITY').find((line) => /^ {4} ?\d+ mc /u.test(line));
       assert.ok(row, lines.join('\n'));
@@ -2333,7 +2365,7 @@ describe('collectPage', () => {
       const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
       const text = lines.join('\n');
       assert.ok(lines.every((row) => width(row) <= columns));
-      assert.ok(text.includes('┌─ DESK'), 'everything above PROGRAMMES stays');
+      assert.ok(text.includes('┌─ DESK'), 'the desk stays');
       assert.doesNotMatch(text, /HORIZONS|Serving no horizon|UNASSIGNED ACTIVITY|MERGE & DEPLOY|MAINTENANCE|SYSTEM/u);
       const heading = lines.findIndex((row) => row.startsWith(`  ┌─ ${number} mc`));
       assert.ok(heading > lines.findIndex((row) => row.includes('┌─ DESK')), lines.join('\n'));
@@ -2353,10 +2385,10 @@ describe('collectPage', () => {
     const data = await overviewData(t);
     const without = { ...data, horizons: undefined };
     for (const columns of [160, 80]) {
-      const lines = renderPageLines(data, { columns, now: NOW, expand: true });
+      const lines = renderPageLines(data, { columns, now: NOW, expand: true, overview: true });
       assert.ok(lines.every((row) => width(row) <= columns));
       const programmes = between(lines, 'PROGRAMMES', 'MERGE & DEPLOY');
-      const before = between(renderPageLines(without, { columns, now: NOW, expand: true }), 'PROGRAMMES', 'MERGE & DEPLOY');
+      const before = between(renderPageLines(without, { columns, now: NOW, expand: true, overview: true }), 'PROGRAMMES', 'IN FLIGHT');
       assert.ok(programmes.length > 3);
       assert.deepEqual(programmes, before, 'the PROGRAMMES lines are the ones the page drew before HORIZONS');
       assert.ok(programmes.some((row) => /^ {2}┌─ mc · 1 goal/u.test(row)), 'the heading carries no number');
@@ -2369,7 +2401,7 @@ describe('collectPage', () => {
 
   it('says a horizon store that cannot be listed in red under HORIZONS', () => {
     const data = { ...DATA, horizons: { open: [], none: [], unreadable: [], error: 'ENOTDIR: not a directory' } };
-    const lines = renderPageLines(data, { columns: 100, now: NOW, colour: true });
+    const lines = renderPageLines(data, { columns: 100, now: NOW, colour: true, overview: true });
     const row = lines.find((line) => line.includes('horizons unreadable'));
     assert.ok(row.includes('\u001b[31m'), row);
   });
@@ -2388,7 +2420,7 @@ describe('collectPage', () => {
     assert.deepEqual(data.horizons.none, data.programmes.programmes.map((group) => group.programme));
     assert.ok(data.programmes.programmes.every((group) => Number.isInteger(group.number)));
     assert.equal(data.programmes.programmes.find((group) => group.programme === 'p-one').horizon_state, 'not held');
-    const lines = renderPageLines(data, { columns: 100, now: NOW });
+    const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
     assert.ok(lines.some((line) => /horizons unreadable/u.test(line)), lines.join('\n'));
   });
 
@@ -2603,7 +2635,7 @@ describe('collectPage', () => {
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /HORIZONS/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW, overview: true }), /HORIZONS/u);
   });
 
   it('collects repository pauses, merger liveness and landed PR history from the supplied homes', async (t) => {
@@ -2840,7 +2872,8 @@ describe('MC', () => {
   it('gives the live loop a key that moves with a goal and not with a clock', () => {
     const key = (over) => pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, ...over }) }));
     assert.notEqual(key({}), key({ priority: () => 10 }), 'a priority change refreshes programme headings');
-    assert.equal(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
+    assert.equal(key({ planning: { mc: { age_seconds: 600 } } }), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session getting older is not news');
+    assert.notEqual(key({}), key({ planning: { mc: { age_seconds: 60 } } }), 'a planning session starting is: IN FLIGHT draws it');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, running: true })) }), 'a goal the runner took is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, stage: 'review', state: 'review' })) }), 'a goal that moved is');
     assert.notEqual(key({}), key({ goalRows: GOALS.map((goal) => ({ ...goal, phase: 2 })) }), 'a phase move refreshes the tree');
@@ -2869,14 +2902,16 @@ describe('the palette', () => {
   it('paints nothing with the dim attribute, anywhere on the page', () => {
     // The palette's own floor: `ESC[2m` sat at or below the background on
     // Martin's terminal, so a row that carried it was a row nobody could read.
-    for (const [index, line] of paintedPage(DATA).entries()) {
-      assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('dim')),
-        `row ${index} is drawn dim: ${strip(line)}`);
+    for (const overview of [true, false]) {
+      for (const [index, line] of paintedPage(DATA, { overview }).entries()) {
+        assert.ok(!signature(line).split(' ').some((run) => run.split('+').includes('dim')),
+          `row ${index} is drawn dim: ${strip(line)}`);
+      }
     }
   });
 
   it('paints every row of the page, and the same colour for the same meaning', () => {
-    const lines = paintedPage(DATA);
+    const lines = [...paintedPage(DATA, { overview: true }), ...paintedPage(DATA)];
     assert.ok(lines.some((line) => /\x1b\[31mMartin/u.test(line)));
     assert.ok(lines.some((line) => /\x1b\[32mready/u.test(line)));
     assert.match(rowWith(lines, 'PROGRAMMES'), /\x1b\[[0-9;]*36mPROGRAMMES/u);
@@ -2884,10 +2919,10 @@ describe('the palette', () => {
   });
 
   it('adds every escape outside the width: a coloured row is as wide as its plain twin', () => {
-    for (const columns of [60, 80, 100, 120, 160]) {
+    for (const [columns, overview] of [60, 80, 100, 120, 160].flatMap((width) => [[width, true], [width, false]])) {
       const wide = Math.max(60, Math.min(columns, 160));
-      const plain = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW });
-      const painted = paintedPage(DATA, { columns });
+      const plain = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW, overview });
+      const painted = paintedPage(DATA, { columns, overview });
       assert.equal(painted.length, plain.length, `${columns} columns: a different number of rows`);
       for (const [index, line] of painted.entries()) {
         assert.equal(strip(line), plain[index], `${columns} columns, row ${index}: the text moved`);
@@ -2941,7 +2976,7 @@ describe('the palette', () => {
           alive: live,
         }),
       });
-      const lines = paintedPage(data);
+      const lines = paintedPage(data, { overview: true });
       const label = kind === 'step' ? 'BUILD' : kind.toUpperCase();
       const code = { green: 32, magenta: 35, blue: 34, cyan: 36, yellow: 33 }[tone];
       assert.ok(rowWith(lines, label).includes(`\x1b[${code}m${label}\x1b[0m`), `activity says ${kind} in ${tone}`);
@@ -2961,12 +2996,12 @@ describe('the palette', () => {
         alive: live,
       }),
     });
-    const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns)), 'BUILD');
+    const row = (spent, checkIns) => rowWith(paintedPage(stepAt(spent, checkIns), { overview: true }), 'BUILD');
     assert.doesNotMatch(row(600), /\x1b\[33m/u);
     assert.match(strip(row(47 * 60)), /47 min/u);
     assert.match(row(3600), /\x1b\[33m60 min/u);
     assert.match(row(600, 1), /\x1b\[33m10 min/u);
-    assert.match(paintedPage(stepAt(600, 1)).map(strip).join('\n'), /1 check-in/u);
+    assert.match(paintedPage(stepAt(600, 1), { overview: true }).map(strip).join('\n'), /1 check-in/u);
     assert.doesNotMatch(row(10 * 3600, 10), /\x1b\[31m|over budget/u);
   });
 
@@ -3005,10 +3040,13 @@ describe('the palette', () => {
     for (const line of doc.split('\n').filter((l) => l.startsWith('|'))) {
       assert.ok(!/\b(dim|white)\b/u.test(line), `a palette row still says dim or white: ${line}`);
     }
-    assert.deepEqual(signature(rowWith(paintedPage(pageData({
+    // The stray is drawn twice on the overview without horizons: in the legacy PROGRAMMES panel, and under NEEDS ATTENTION.
+    const stray = paintedPage(pageData({
       programmes: programmesSection({ strays: [{ name: 'jobbet', checkout: false, uncommitted: 0 }] }),
-    })), 'jobbet')).split(' '), ['bold', 'white'],
-    'a stray is its name and its facts in grey');
+    }), { overview: true }).filter((line) => strip(line).includes('jobbet'));
+    assert.equal(stray.length, 2);
+    assert.deepEqual(signature(stray[0]).split(' '), ['bold', 'white'], 'a stray is its name and its facts in grey');
+    assert.match(strip(stray[1]), /^ {4}jobbet {2}not an area mc knows/u);
   });
 
   it('says nothing about a watch in the header — there is none', () => {
@@ -3101,10 +3139,12 @@ describe('PULL REQUESTS', () => {
   it('puts a goal\'s pull request on its running lane, by the goal\'s branch', () => {
     const { pulls, runner } = build();
     assert.deepEqual(runner.sessions[0].prs.map((pr) => pr.number), [13048]);
-    const lines = renderPageLines(pageData({ runner, prs: pulls }), { columns: 120, now: AT });
+    const lines = activityPage(pageData({ runner, prs: pulls }), { columns: 120, now: AT });
     assert.ok(lines.some((line) => /p\/one-operation · 5 min · claude · opus/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => line.includes('memoro#13048')));
     assert.equal(lines.filter(line => line.includes('#13048')).length, 1, 'session PR is not repeated among loose PRs');
+    const operations = renderPageLines(pageData({ runner, prs: pulls }), { columns: 120, now: AT });
+    assert.equal(operations.filter(line => line.includes('#13048')).length, 0, 'nor on the operations view, which holds the loose ones');
   });
 
   it('lists every one the merger does not draw, the one nobody holds in yellow with the waiting mark', () => {
@@ -3332,7 +3372,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
       cost: { day: '2026-11-14', today: 0.75, ceiling: 5, error: null },
       ...over,
     });
-    const draw = (desk, columns = 80) => renderPageLines({ ...base, desk }, { columns, now: NOW });
+    const draw = (desk, columns = 80) => renderPageLines({ ...base, desk }, { columns, now: NOW, overview: true });
     const panel = (lines) => {
       const start = lines.findIndex((line) => line.includes('┌─ DESK'));
       return lines.slice(start, start + lines.slice(start).findIndex((line) => line.includes('└')) + 1);
@@ -3342,7 +3382,7 @@ describe('DESK — what waits for Martin, read by the page', () => {
       const lines = draw(waiting(), 100);
       const text = lines.join('\n');
       assert.ok(text.indexOf('┌─ DESK') > text.indexOf('MC'), 'under the header');
-      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'above HORIZONS');
+      assert.ok(text.indexOf('┌─ DESK') < text.search(/HORIZONS|PROGRAMMES|IN FLIGHT/u), 'above the programmes and IN FLIGHT');
       assert.match(text, /┌─ DESK ─+ d {2}mc martin ┐/u);
       assert.match(text, /^ {4}3 waiting for you$/mu);
       assert.match(text, /d {2}mc martin/u);

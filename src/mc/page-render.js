@@ -48,7 +48,7 @@ import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
-import { horizonsLines } from './page-horizons.js';
+import { overviewLines, warningLines } from './page-overview.js';
 import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
@@ -333,13 +333,6 @@ const PR_NUMBER = 7;
 /** The repository's cell on a PULL REQUESTS row. */
 const LANE_REPO = 11;
 
-
-/** The red line above every section while a run is stopped inside a gap. */
-function openGapLine(lines, c, wide, gap) {
-  if (!gap) return;
-  say(lines, c, wide, 2, `language: ${gap.manifest} stopped after ${gap.act} — ${gap.says} · mc language resume`, ['red', 'bold']);
-  lines.push('');
-}
 
 /** Past this, the age is the thing on the row worth looking at. */
 const STALE_SESSION_S = 24 * 60 * 60;
@@ -933,45 +926,13 @@ function pipelineLines(lines, c, raw, wide, data) {
 /* ------------------------------------------------------------------- page */
 
 /**
- * The whole page, as lines. `data` is exactly what `--json` prints: one key
- * per section, so the two can never say different things.
+ * The operations view's panels, and what `a` draws after the overview: MARTIN QUEUE, merges, pull requests, deploy,
+ * DEV, MAINTENANCE and SYSTEM. No budget applies to them.
  */
-export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null,
-} = {}) {
-  const paintText = painter(colour);
-  // Secondary information must remain readable on dark terminal palettes.
-  const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
-  const wide = Math.max(60, Math.min(columns, 160)) - 2;
-  const at = now instanceof Date ? now.getTime() : Number(now);
-  const lines = [];
-
-  headerLines(lines, c, paintText, wide, data, version);
-  deskLines(lines, c, wide, data.desk);
-  const managers = data.sessions?.desk_sessions?.manager
-    || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
-  for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
-  if (managers.length) lines.push('');
-  openGapLine(lines, c, wide, data.language?.open_gap);
-
-  const sessions = data.sessions || { desks: {} };
+function operationsBody(lines, c, wide, data, { expand, version, at }) {
   const runner = data.runner || {};
-  // Surface active resource holds beside the work, with current readings in SYSTEM.
-  if (runner.process?.alive) {
-    if (runner.pressure && (runner.pressure.admission_blocked ?? (runner.pressure.status !== 'healthy'))) detail(lines, c, wide, 2, 'New sessions paused — low disk space', ['yellow']);
-    if (runner.memory?.line) detail(lines, c, wide, 2, 'New sessions paused — low memory', ['yellow']);
-    if (runner.stop) detail(lines, c, wide, 2, 'New sessions paused — runner stopping', ['yellow']);
-  } else detail(lines, c, wide, 2, 'Runner not running — mc run starts it', ['yellow']);
-  // `view` is a programme's name: that programme's block alone, nothing below it. A name that is no longer listed is the overview.
-  const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
-  if (open) {
-    programmeViewLines(lines, c, wide, open, expand, runner.sessions || []);
-    return lines;
-  }
-  horizonsLines(lines, c, wide, data, { expand, sessions: runner.sessions || [] });
-  if (expand || !data.horizons) programmesLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
-  else unassignedLines(lines, c, wide, data.programmes, expand, runner.sessions || []);
-  lines.push('');
+  const sessions = data.sessions || { desks: {} };
+  if (lines.length && lines.at(-1) !== '') lines.push('');
   const mendMartin = (data.checks?.main_mend || []).flatMap((repo) => repo.entries.filter((entry) => entry.state === 'Martin').map((entry) => ({ ...entry, repo: repo.repo })));
   if (mendMartin.length) {
     panelHeading(lines, c, wide, 'MARTIN QUEUE', `${mendMartin.length} main-red files waiting`, 'mc martin get');
@@ -1015,6 +976,56 @@ export function renderPageLines(data, {
     if (/^PRs from cache|^no PR cache yet/u.test(note)) continue;
     say(lines, c, wide, 2, `note: ${note}`);
   }
+}
+
+/**
+ * The whole page, as lines. `data` is exactly what `--json` prints: one key
+ * per section, so the two can never say different things.
+ *
+ * Three pages are drawn from it: the overview (the default; at most `OVERVIEW_ROWS` lines, page-overview.js),
+ * the operations view (`operations`: the hero frame and the panels), and a programme's own view (`view`).
+ */
+export function renderPageLines(data, {
+  columns = 100, colour = false, version = '', now = new Date(), expand = false, view = null, operations = false,
+} = {}) {
+  const paintText = painter(colour);
+  // Secondary information must remain readable on dark terminal palettes.
+  const c = (text, ...styles) => paintText(text, ...styles.map((style) => style === 'grey' ? 'white' : style));
+  const wide = Math.max(60, Math.min(columns, 160)) - 2;
+  const at = now instanceof Date ? now.getTime() : Number(now);
+  const lines = [];
+  const runnerSessions = data.runner?.sessions || [];
+  const body = { expand, version, at };
+
+  if (operations) {
+    headerLines(lines, c, paintText, wide, data, version);
+    warningLines(lines, c, wide, data);
+    operationsBody(lines, c, wide, data, body);
+    return lines;
+  }
+  // `view` is a programme's name: that programme's block alone, nothing below it. A name that is no longer listed is the overview.
+  const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
+  if (open) {
+    headerLines(lines, c, paintText, wide, data, version);
+    deskLines(lines, c, wide, data.desk);
+    const managers = data.sessions?.desk_sessions?.manager
+      || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
+    for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
+    if (managers.length) lines.push('');
+    warningLines(lines, c, wide, data);
+    programmeViewLines(lines, c, wide, open, expand, runnerSessions);
+    return lines;
+  }
+  lines.push(...overviewLines(c, wide, data, {
+    version,
+    expand,
+    programmes: (into) => programmesLines(into, c, wide, data.programmes, expand, runnerSessions),
+  }));
+  if (expand && data.horizons) {
+    lines.push('');
+    programmesLines(lines, c, wide, data.programmes, expand, runnerSessions);
+  }
+  if (expand) operationsBody(lines, c, wide, data, body);
   return lines;
 }
 
