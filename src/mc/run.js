@@ -61,7 +61,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveLaunch } from '../adapters/index.js';
+import { adapterOfProvider, billingProviders, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
@@ -137,6 +137,35 @@ export const SETTLE_EVERY_MS = 5 * 60_000;
 const ADMISSION_RETRY_MS = 1000;
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/** The billing provider a launch is billed under; a tool whose adapter declares none is refused, naming the tool. */
+const providerOf = (launch) => requireCapability(launch.id, 'BILLING_PROVIDER');
+/** Whether a login interruption means this launch's plan refused it. */
+const loginRefusesPlan = (launch) => declared(launch.id, 'LOGIN_REFUSES_PLAN') === true;
+/** The dependency name a provider's capacity refresh is injected under: `refreshClaude`, `refreshCodex`. */
+const refreshDep = (provider) => `refresh${provider[0].toUpperCase()}${provider.slice(1)}`;
+
+/**
+ * The capacity readers, keyed by the mechanism an adapter declares
+ * (`CAPACITY_READER`). Each makes the provider's refresh for one runner.
+ */
+const CAPACITY_READERS = Object.freeze({
+  'claude-usage': (provider, env) => async () => {
+    const now = new Date();
+    const before = JSON.stringify(readCapacity({ root: runnerDir(env) }).providers[provider]);
+    const got = await collectClaudeCapacity();
+    const root = runnerDir(env);
+    // Network is over before the runner lock: patch the latest whole file
+    // so stream/refusal observations and the other provider survive.
+    const state = realLock(workRoot(env), () => {
+      const atWrite = readCapacity({ root });
+      const next = applyCollectedCapacity(atWrite, provider, got, now, before);
+      return writeCapacity(next, { root });
+    }, { name: 'claude-capacity' });
+    return { ...got, state };
+  },
+  'codex-rpc': (provider, env) => () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
+});
 
 /** The role each goal session kind runs with (`goalSession`). */
 const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
@@ -553,21 +582,11 @@ export function realDeps(env = process.env) {
     // The model catalog (`models.json`, model-config.js) and capacity snapshot are read at launch.
     catalog: () => readModels(env),
     capacity: { read: () => readCapacity({ root: runnerDir(env) }), write: (state) => writeCapacity(state, { root: runnerDir(env) }) },
-    refreshCodex: () => refreshCodexCapacity({ root: runnerDir(env), lockRoot: workRoot(env) }),
-    refreshClaude: async () => {
-      const now = new Date();
-      const before = JSON.stringify(readCapacity({ root: runnerDir(env) }).providers.claude);
-      const got = await collectClaudeCapacity();
-      const root = runnerDir(env);
-      // Network is over before the runner lock: patch the latest whole file
-      // so stream/refusal observations and the other provider survive.
-      const state = realLock(workRoot(env), () => {
-        const atWrite = readCapacity({ root });
-        const next = applyCollectedCapacity(atWrite, 'claude', got, now, before);
-        return writeCapacity(next, { root });
-      }, { name: 'claude-capacity' });
-      return { ...got, state };
-    },
+    // One reader per provider, by the mechanism its adapter declares (`CAPACITY_READER`); a dependency named `refresh<Provider>` stands in for it.
+    ...Object.fromEntries(billingProviders().flatMap((provider) => {
+      const reader = CAPACITY_READERS[adapterOfProvider(provider).CAPACITY_READER];
+      return reader ? [[refreshDep(provider), reader(provider, env)]] : [];
+    })),
     deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
     horizon: slug => readHorizon(slug, { env }),
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
@@ -871,7 +890,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
   /** Independent, provider-local polling; never waits for chores or a lane. */
   function startCapacityTicker() {
-    if (!deps.every || (!deps.refreshCodex && !deps.refreshClaude)) return () => {};
+    if (!deps.every || !billingProviders().some((provider) => deps[refreshDep(provider)])) return () => {};
     const inFlight = new Set();
     const lastAttempt = new Map();
     let stopped = false;
@@ -886,8 +905,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // An UPDATE pauses reads only: a handover that fails gives the runner
       // back its ticker; a successful one stops it (`runLoop`'s `update`).
       if (updateRequested()) return;
-      for (const provider of ['claude', 'codex']) {
-        const refresh = deps[`refresh${provider[0].toUpperCase()}${provider.slice(1)}`];
+      for (const provider of billingProviders()) {
+        const refresh = deps[refreshDep(provider)];
         if (!refresh || inFlight.has(provider)) continue;
         const item = capacity.read().providers[provider];
         const attempts = [item.observed_at, item.failure?.at, lastAttempt.get(provider)].map((at) => typeof at === 'number' ? at : Date.parse(at || '')).filter(Number.isFinite);
@@ -924,7 +943,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * positional and nothing watches it — so its stdin stays closed.
    */
   function watchFor(launch, settings, { prompt, name, onCheckIn = null, checkInText = goalCheckInPrompt }) {
-    if (launch.id === 'codex') return {};
+    if (requireCapability(launch.id, 'WATCH') === null) return {};
     return {
       prompt,
       checkInMs: settings.checkInMinutes * 60_000,
@@ -1386,7 +1405,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
   async function billingFor(launch, route) {
     return route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
-      provider: launch.id === 'codex' ? 'codex' : 'claude',
+      provider: providerOf(launch),
       capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
     });
   }
@@ -1402,7 +1421,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * one ran on — a hand-over instead of a sleep — or null.
    */
   function recordRefusal({ name, launch, route }, { interrupted: kind, quota, quotaReset, creditsUntil }, billing) {
-    if (launch.id !== 'claude-code' || !deps.billing?.patchState) return null;
+    if (declared(launch.id, 'PLAN_STATE') == null || !deps.billing?.patchState) return null;
     const nowMs = deps.now().getTime();
     try {
       if (quota && billing === 'plan') {
@@ -1423,13 +1442,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     } catch (error) {
       say(`${name}: the refusal was not recorded (${error.message})`);
     }
-    const next = billingRoute({ provider: launch.id === 'codex' ? 'codex' : 'claude', capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
+    const next = billingRoute({ provider: providerOf(launch), capacity: capacity.read(), state: deps.billing.readState?.(), api: deps.billing.readApi?.(), now: deps.now() });
     return next.billing === billing ? null : { from: billing, to: next.billing };
   }
 
   /** The plan's 5-hour and seven-day windows, as a claude stream last carried them: for status and subscription routing, and for the class router's snapshot (ruling 59). */
   function noteWindows({ name, launch }, stdout) {
-    if (launch.id !== 'claude-code') return;
+    if (declared(launch.id, 'PLAN_STATE') !== 'claude-stream') return;
     if (deps.billing?.patchState) {
       const windows = planWindows(stdout);
       try {
@@ -1678,7 +1697,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: decision starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: settings.tool, model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {
         const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
@@ -1694,13 +1713,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
       const ended = deps.deskItems.read(name);
       // An item the session left prepared is not a successful ending.
       const unfinished = decisionUnfinished(ended);
       // An ending the provider caused says nothing about the item: a quota, an unreachable API, or a login the refusal of the provider named.
       // It counts for nothing and writes nothing; the item is taken again when the provider answers.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       const reason = `decision session exited ${result.status ?? 1} without settling the item (${read.note}); log: ${out}.jsonl${result.stderr ? `; ${String(result.stderr).slice(0, 1000)}` : ''}`;
       if (unfinished && !providerEnding) {
         // The failure goes on the record read under the lock, by the runner's own lock and item seams; a record settled meanwhile gets none.
@@ -1980,7 +1999,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: main-red mend starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: worktree, logPath: `${out}.jsonl`,
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
@@ -1993,7 +2012,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(launch.id === 'codex' ? 'codex' : 'claude', read.quotaReset);
+      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2120,7 +2139,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       writeJson(currentPath, current);
       say(`${name}: deploy-mend starting (${settings.tool} ${settings.model})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       const pending = deps.session({ bin: tool.bin, args: tool.args, cwd, logPath: `${out}.jsonl`,
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the deploy-mend in these worktrees. No goal or LOG.md. Publish with mc publish, or end with mc repo mend deploy <id> repaired.' }),
@@ -2133,7 +2152,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(launch.id === 'codex' ? 'codex' : 'claude', read.quotaReset);
+      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2810,7 +2829,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const current = {
         name, step: null, kind, variant: goalVariant(kind), programme: goal.programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: goal.class, billing: picked.billing,
-        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0,
+        check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0,
         started: stamp(), pid, worktree: cwd,
         ...(marked?.generation ? { generation: marked.generation } : {}),
         ...(deps.identity?.(pid) || {}),
@@ -2835,7 +2854,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           if (heldBy(goal)) return 'skipped:held';
           goalState(goal, name, {}, { comment: 'starting blocked recovery' });
         }
-        const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+        const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
         const rechecked = await admission.recheck?.();
         if (rechecked && !rechecked.admitted) {
           say(rechecked.line);
@@ -2907,8 +2926,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      const provider = launch.id === 'codex' ? 'codex' : 'claude';
-      if ((read.quota || (provider === 'claude' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(provider, read.quotaReset);
+      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);

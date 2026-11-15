@@ -31,6 +31,7 @@ import { openSync, readSync, closeSync, lstatSync, readdirSync, rmSync, statSync
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { declared, toolShortName } from '../adapters/index.js';
 import { log, logPath } from './logger.js';
 import { normalizeSessionRole } from './session-role.js';
 
@@ -263,7 +264,8 @@ function provenIdentity(value, source) {
 export function conversationIdentityReader() {
   let launches = null;
   return (item) => {
-    if (item.tool === 'claude-code') {
+    const reader = declared(item.tool, 'IDENTITY_READER');
+    if (reader === 'launch-log') {
       launches ??= [
         ...readTailEntries(`${logPath()}.1`, WIDE_TAIL_BYTES),
         ...readTailEntries(logPath(), WIDE_TAIL_BYTES),
@@ -278,11 +280,11 @@ export function conversationIdentityReader() {
         && (entry.launched_id === item.id || (entry.run && runs.has(`${entry.run}:${entry.pid}`)))
         && entry.tool === item.tool
         && entry.cwd === item.cwd && entry.instructions === true
-        && entry.instruction_channel === 'append-system-prompt');
+        && entry.instruction_channel === declared(item.tool, 'INSTRUCTIONS')?.channel);
       const identities = records.map((entry) => provenIdentity({ role: entry.role, programme: entry.programme }, 'launch-log'));
       return consistentIdentity(identities);
     }
-    if (item.tool !== 'codex' || !item.path) return null;
+    if (reader !== 'developer-instructions' || !item.path) return null;
     const identities = [];
     for (const entry of readHeadEntries(item.path)) {
       const payload = entry?.payload;
@@ -387,7 +389,7 @@ export function contextWindowFor(model) {
 }
 
 export function contextUsage(tool, entries) {
-  if (tool === 'codex') return null;
+  if (declared(tool, 'CONTEXT_READER') !== 'assistant-usage') return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if (entry.type !== 'assistant') continue;
@@ -406,9 +408,11 @@ export function contextUsage(tool, entries) {
 
 /** The same question, asked of transcript entries someone already read. */
 export function lastModel(tool, entries) {
+  const reader = declared(tool, 'MODEL_READER');
+  if (reader !== 'turn-context' && reader !== 'assistant-message') return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
-    const model = tool === 'codex'
+    const model = reader === 'turn-context'
       ? (entry.type === 'turn_context' ? entry.payload?.model : null)
       : (entry.type === 'assistant' ? entry.message?.model : null);
     // Claude stamps `<synthetic>` on messages the model never produced.
@@ -509,18 +513,20 @@ function mtimeOf(path) {
  */
 export function deleteConversation(entry, env = process.env) {
   if (!entry?.id) return { ok: false, reason: 'no-conversation' };
-  if (entry.tool === 'codex') {
+  const removal = declared(entry.tool, 'CONVERSATION_DELETE');
+  if (!removal) return { ok: false, reason: `${toolShortName(entry.tool) || entry.tool || 'no tool'} declares no CONVERSATION_DELETE` };
+  if (removal.mechanism === 'tool-verb') {
     try {
       // `--force` is Codex asking whether the user meant it. They already
       // answered that: mc printed what it was about to destroy and the user
       // ran it again with `--apply`. Asking twice from a place the user cannot
       // answer is how the deletion silently failed the first time.
-      execFileSync('codex', ['delete', '--force', entry.id], {
+      execFileSync(removal.bin, removal.args(entry.id), {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
       });
     } catch (error) {
-      log('conversations.codex-delete-failed', { id: entry.id, error: String(error?.message || error) });
-      return { ok: false, reason: 'codex-delete-failed' };
+      log(`conversations.${removal.failed}`, { id: entry.id, error: String(error?.message || error) });
+      return { ok: false, reason: removal.failed };
     }
     return { ok: true };
   }
@@ -541,8 +547,8 @@ export function deleteConversation(entry, env = process.env) {
       } catch { /* not empty, or already gone */ }
     }
   } catch (error) {
-    log('conversations.transcript-delete-failed', { path: entry.path, error: String(error?.message || error) });
-    return { ok: false, reason: 'transcript-delete-failed' };
+    log(`conversations.${removal.failed}`, { path: entry.path, error: String(error?.message || error) });
+    return { ok: false, reason: removal.failed };
   }
   return { ok: true };
 }

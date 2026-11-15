@@ -59,6 +59,25 @@ its last row should read `0%`.
   a new integration lane or an incidental change to the shared harness.
 - `src/adapters/index.js` is the launch adapter every verb that starts a tool
   goes through (`resolveLaunch`), so no verb spells out `claude` or `codex`.
+- No `src/mc/` module compares a tool's name, holds a list of tools or keys a
+  map by tool: what differs between tools is a named capability the adapter
+  declares, and `src/mc/` asks the registry (`src/adapters/index.js`) through
+  `declared`, `requireCapability`, `toolsDeclaring`/`toolsWith`, `idsWith`,
+  `implementedTools`, `processNames`, `billingProviders`/`apiProviders`,
+  `providerPriorities`, `adapterOfProvider`, `canonicalToolId`,
+  `toolShortName` and `resolveLaunch` (a module every verb loads, such as the
+  flag scanner, reads `implementedShortNames` from `src/adapters/names.js`,
+  the registry's name tables, which load no adapter). A launching, billing, routing or acting
+  seam refuses a tool that does not declare the capability, with an error that
+  names the tool and the capability (`requireCapability`); a reading seam gives
+  *unknown* (null, `-` or no match) and never guesses another tool's answer.
+  Where an implementation lives in `src/mc/`, it is keyed by a mechanism name
+  the adapter declares (`claude-stream`, `codex-session`, `tty`, `socket` …),
+  never by tool name or id; an adapter imports only from `src/lib` and
+  `./_materialise.js`. The only exemptions are the provider implementation
+  modules (`claude-background.js`, `claude-capacity.js`, `claude-trust.js`,
+  `codex-capacity.js`, `codex-rpc.js`, `codex-sessions.js`, `hooks.js`),
+  `tidyRoots` in `tidy.js`, and the `BACKGROUND_REFUSALS.codex` text.
 - Don't add a verb nothing reaches, or leave a module nothing reaches. Don't
   import a wrapper without checking that it loads (PR #28). Don't print to
   stdout in a way that breaks `--json` consumers. Don't add `--non-interactive`

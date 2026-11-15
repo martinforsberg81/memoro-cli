@@ -6,7 +6,7 @@
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveLaunch } from '../adapters/index.js';
+import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { runTool } from './child-async.js';
@@ -83,14 +83,14 @@ export async function runLearningPass({ env = process.env, now = () => new Date(
   if (!launch?.ok) return { started: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
   const role = (deps.role || readCanonRole)('learning');
   if (!role?.overlay) return { started: false, reason: 'learning role missing' };
-  const billing = (deps.billingRoute || billingRouteNow)(candidate.tool, { env, now: now(), route: { billing: route.billing, why: route.why } });
+  const billing = (deps.billingRoute || billingRouteNow)(requireCapability(launch.id, 'BILLING_PROVIDER'), { env, now: now(), route: { billing: route.billing, why: route.why } });
   if (billing.billing === 'unavailable') return { started: false, reason: billing.why };
   const dir = lessonsDir(env);
   mkdirSync(dir, { recursive: true });
   const started = now();
   const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: candidate.model, effort: candidate.effort,
     instructions: instructionsFor(launch.id, role.overlay), prompt: learningPrompt({ env, reason: due }), profileArgs, stream: false, cache: role.cache });
-  const processLaunch = gatewayLaunch({ provider: candidate.tool, model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
+  const processLaunch = gatewayLaunch({ provider: requireCapability(launch.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
   const childEnv = withoutSessionIdentity(env);
   for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SCRATCH']) delete childEnv[key];
   // MC_SESSION_STARTED is what makes a goal "created in this session" (goal.js).

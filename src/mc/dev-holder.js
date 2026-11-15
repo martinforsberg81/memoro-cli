@@ -26,6 +26,7 @@
  */
 import { execFileSync } from 'node:child_process';
 
+import { processNames } from '../adapters/index.js';
 import { MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from './goals.js';
 import { BUILD_ROLES } from './run-plan.js';
 
@@ -33,7 +34,7 @@ import { BUILD_ROLES } from './run-plan.js';
 export const SESSION_HOLDERS = Object.freeze(['build', 'review', 'finish', 'mend', 'plan', 'brief', 'helper', 'intake', 'gate', 'session']);
 
 /** The command names a coding agent's process has. */
-const AGENT = /(?:^|\/)(?:claude|codex)(?:$|[\s.-])/u;
+const AGENT = new RegExp(`(?:^|\\/)(?:${processNames().map((name) => name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('|')})(?:$|[\\s.-])`, 'u');
 
 /** `ps -o ppid=,comm= -p <pid>` as `{ ppid, command }`, or null. */
 function psOne(pid) {

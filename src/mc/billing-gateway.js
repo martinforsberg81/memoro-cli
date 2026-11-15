@@ -11,18 +11,24 @@ import { Readable } from 'node:stream';
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 
-const ROUTES = Object.freeze({
-  '/claude/v1/messages': { provider: 'claude', upstream: '/v1/messages', methods: ['POST'] },
-  '/claude/v1/messages/count_tokens': { provider: 'claude', upstream: '/v1/messages/count_tokens', methods: ['POST'] },
-  '/codex/v1/responses': { provider: 'codex', upstream: '/v1/responses', methods: ['POST'] },
-  '/codex/v1/responses/compact': { provider: 'codex', upstream: '/v1/responses/compact', methods: ['POST'] },
-  '/codex/v1/models': { provider: 'codex', upstream: '/v1/models', methods: ['GET'] },
-});
-const UPSTREAM = Object.freeze({ claude: 'https://api.anthropic.com', codex: 'https://api.openai.com' });
-// Codex with websockets upgrades on its HTTP path and then sends only what is
+import { adapterOfProvider, apiProviders } from '../adapters/index.js';
+
+// What the gateway forwards, and where, is each tool's declared `API_ROUTE`
+// (src/adapters): a tool is reached at `/<provider>/<its route path>`.
+const routeOf = (provider) => adapterOfProvider(provider).API_ROUTE;
+const ROUTES = Object.freeze(Object.fromEntries(apiProviders().flatMap((provider) => routeOf(provider).routes
+  .map((route) => [`/${provider}${route.path}`, { provider, upstream: route.path, methods: route.methods }]))));
+const UPSTREAM = Object.freeze(Object.fromEntries(apiProviders().map((provider) => [provider, routeOf(provider).upstream])));
+// A tool with websockets upgrades on its HTTP path and then sends only what is
 // new since the previous response on the open connection.
-const WEBSOCKET_ROUTE = '/codex/v1/responses';
-export const UPSTREAM_WEBSOCKET = 'wss://api.openai.com/v1/responses';
+const WEBSOCKETS = Object.freeze(Object.fromEntries(apiProviders().filter((provider) => routeOf(provider).websocket)
+  .map((provider) => [`/${provider}${routeOf(provider).websocket.path}`, { provider, ...routeOf(provider).websocket }])));
+export const UPSTREAM_WEBSOCKET = Object.values(WEBSOCKETS)[0]?.upstream ?? null;
+/** The header a provider's key rides in, as its adapter declares it. */
+function authorize(headers, provider, key) {
+  const { header, scheme } = routeOf(provider).auth;
+  headers.set(header, scheme ? `${scheme} ${key}` : key);
+}
 const FORWARD_REQUEST_HEADERS = Object.freeze(['content-type', 'anthropic-version', 'anthropic-beta']);
 const FORWARD_RESPONSE_HEADERS = Object.freeze(['content-type', 'retry-after', 'request-id', 'x-request-id', 'anthropic-ratelimit-requests-reset', 'anthropic-ratelimit-tokens-reset']);
 // Codex without websockets sends the whole thread on every request: a
@@ -46,11 +52,12 @@ function grantFor(req, grants, provider, now) {
     && Date.parse(grant.expiresAt) > now()) || null;
 }
 
+const aliasesOf = (provider) => (apiProviders().includes(provider) ? routeOf(provider).modelAliases : null);
+
 function modelAllowed(grant, model) {
   if (typeof model !== 'string' || !Array.isArray(grant.models)) return false;
   return grant.models.some((allowed) => allowed === '*' || allowed === model
-    || (grant.provider === 'claude' && ['opus', 'fable', 'sonnet', 'haiku'].includes(allowed)
-      && model.startsWith(`claude-${allowed}-`)));
+    || (aliasesOf(grant.provider)?.names.includes(allowed) && model.startsWith(`${aliasesOf(grant.provider).prefix}${allowed}-`)));
 }
 
 // Past the limit the rest is read and dropped rather than the stream torn
@@ -119,8 +126,7 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
     for (const name of FORWARD_REQUEST_HEADERS) {
       if (req.headers[name]) headers.set(name, String(req.headers[name]));
     }
-    if (route.provider === 'claude') headers.set('x-api-key', key);
-    else headers.set('authorization', `Bearer ${key}`);
+    authorize(headers, route.provider, key);
     try {
       const upstream = await fetchImpl(`${UPSTREAM[route.provider]}${route.upstream}`, {
         method: req.method, headers, body,
@@ -143,9 +149,13 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
   // frames are checked like HTTP bodies; provider frames pass through unread.
   const relays = new Set();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: maxBodyBytes });
-  const relay = (client, grant, key, beta) => {
-    const headers = { authorization: `Bearer ${key}` };
-    if (beta) headers['openai-beta'] = String(beta);
+  const relay = (client, grant, key, socketRoute, requestHeaders) => {
+    const sent = new Headers();
+    authorize(sent, socketRoute.provider, key);
+    const headers = Object.fromEntries(sent);
+    for (const name of socketRoute.forwardHeaders) {
+      if (requestHeaders[name]) headers[name] = String(requestHeaders[name]);
+    }
     const upstream = new WebSocket(websocketUpstream, { headers, maxPayload: maxBodyBytes });
     const pending = [];
     let done = false;
@@ -189,12 +199,13 @@ export function createBillingGateway({ keys, grants, fetchImpl = fetch, now = Da
   server.on('upgrade', (req, socket, head) => {
     socket.on('error', () => socket.destroy());
     const path = new URL(req.url || '/', 'http://localhost').pathname;
-    if (path !== WEBSOCKET_ROUTE) return refuseUpgrade(socket, 404, 'route unavailable');
-    const grant = grantFor(req, grants, 'codex', now);
+    const socketRoute = WEBSOCKETS[path];
+    if (!socketRoute) return refuseUpgrade(socket, 404, 'route unavailable');
+    const grant = grantFor(req, grants, socketRoute.provider, now);
     if (!grant) return refuseUpgrade(socket, 401, 'session grant unavailable');
-    const key = keys.codex;
+    const key = keys[socketRoute.provider];
     if (typeof key !== 'string' || !key) return refuseUpgrade(socket, 503, 'provider key unavailable');
-    sockets.handleUpgrade(req, socket, head, (client) => relay(client, grant, key, req.headers['openai-beta']));
+    sockets.handleUpgrade(req, socket, head, (client) => relay(client, grant, key, socketRoute, req.headers));
   });
   // An upgraded socket keeps server.close() waiting, so closing the gateway
   // ends every relay.

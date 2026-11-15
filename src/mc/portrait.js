@@ -24,14 +24,13 @@
  * history, and handing it over again would say the same thing twice.
  */
 
+import { requireCapability } from '../adapters/index.js';
+
 /**
- * How each tool takes it. A tool mc has no channel for simply gets nothing —
- * silently, because its absence is not a fault the user can act on at the
- * moment they are trying to start work.
+ * How each tool takes it: the channel its adapter declares (`INSTRUCTIONS`). A
+ * tool that declares none is refused, naming the tool and the capability.
  */
 export function profileArgs(toolId, markdown) {
   if (!markdown) return [];
-  if (toolId === 'claude-code') return ['--append-system-prompt', markdown];
-  if (toolId === 'codex') return ['-c', `instructions=${JSON.stringify(markdown)}`];
-  return [];
+  return requireCapability(toolId, 'INSTRUCTIONS').args(markdown);
 }

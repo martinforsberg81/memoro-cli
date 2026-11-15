@@ -11,16 +11,11 @@
 
 import * as claudeCode from './claude-code.js';
 import * as codex from './codex.js';
+import { PLANNED, SHORT_NAME_TO_ID, implementedShortNames } from './names.js';
 
 const ADAPTERS = {
   [claudeCode.ID]: claudeCode,
   [codex.ID]: codex,
-};
-
-const PLANNED = {
-  'cursor':     { label: 'Cursor',     note: 'Stubbed — writes to .cursorrules; adapter coming in PR 4.1' },
-  'windsurf':   { label: 'Windsurf',   note: 'Stubbed — writes to .windsurfrules; adapter coming in PR 4.1' },
-  'gemini-cli': { label: 'Gemini CLI', note: 'Stubbed — adapter coming in PR 4.1' },
 };
 
 export function getAdapter(id) {
@@ -59,10 +54,10 @@ export function detectInstalled() {
 
 /**
  * Two name spaces exist for the same tool, by accident of history:
- *   - **adapter ID** (e.g. `claude-code`, `codex`, `gemini-cli`) — what
+ *   - **adapter ID** (e.g. `claude-code`, `codex`, `antigravity-cli`) — what
  *     `mc adapter sync --tool` and `mc tool-switch` accept, and what
  *     `config.defaultTool` stores. Stable identifier across the contract.
- *   - **short name** (e.g. `claude`, `codex`, `gemini`) — what
+ *   - **short name** (e.g. `claude`, `codex`, `agy`) — what
  *     `mc auth <tool>` and `mc new --tool` accept. Closer to what users
  *     type at the prompt.
  *
@@ -71,15 +66,21 @@ export function detectInstalled() {
  * implemented adapter). Returns null when input is unknown so callers
  * can decide whether to error or fall back.
  */
-const SHORT_NAME_TO_ID = {
-  'claude':     'claude-code',
-  'codex':      'codex',
-  'gemini':     'gemini-cli',
-};
-
+// SHORT_NAME_TO_ID and PLANNED live in ./names.js, which imports nothing, so
+// the flag sugar reads the tools' names without loading the adapters.
 const ID_TO_SHORT_NAME = Object.fromEntries(
   Object.entries(SHORT_NAME_TO_ID).map(([s, id]) => [id, s]),
 );
+
+// One list of tools: the name tables and the imported adapters must agree,
+// or the registry does not load.
+{
+  const fromAdapters = Object.keys(ADAPTERS).map((id) => ID_TO_SHORT_NAME[id] || id);
+  const fromNames = implementedShortNames();
+  if (fromAdapters.join(',') !== fromNames.join(',')) {
+    throw new Error(`adapter registry: names.js lists ${fromNames.join(', ')} as implemented, index.js imports ${fromAdapters.join(', ')}`);
+  }
+}
 
 export function resolveToolInput(input) {
   if (typeof input !== 'string' || !input) return null;
@@ -132,7 +133,7 @@ export function isSameTool(a, b) {
  * Fails HIGH (never a silent no-op), distinguishing the failure modes so
  * the caller can surface a precise, actionable error:
  *   - unknown      → the name matches no adapter at all
- *   - planned      → a known-but-unimplemented adapter (e.g. gemini-cli)
+ *   - planned      → a known-but-unimplemented adapter (e.g. antigravity-cli)
  *   - missing-bin  → adapter exists but its binary isn't installed
  *
  * @param {string} toolInput — `claude` | `codex` | `claude-code` | …
@@ -221,4 +222,94 @@ export function listArtifactOwnershipProfiles() {
   return Object.values(ADAPTERS)
     .filter((adapter) => adapter.ARTIFACT_OWNERSHIP)
     .map((adapter) => ({ id: adapter.ID, profile: adapter.ARTIFACT_OWNERSHIP }));
+}
+
+/* ------------------------------------------------------------------ seams */
+
+/**
+ * What `src/mc/` asks of a tool, it asks here. An adapter declares a
+ * capability as a named export; `declared` reads it and `requireCapability`
+ * refuses a tool that does not. A declared `null` means "none" (the tool has
+ * no such thing); only `undefined` is "not declared".
+ *
+ * Two kinds of seam read this. A seam that launches, bills, routes or acts
+ * calls `requireCapability` and so refuses a tool without the declaration,
+ * naming the tool and the capability. A seam that reads a stored record calls
+ * `declared` and treats `undefined` as unknown.
+ */
+
+/** The implemented adapter for any name form, or null (unknown or planned). */
+export function adapterFor(value) {
+  const id = canonicalToolId(value);
+  return (id && ADAPTERS[id]) || null;
+}
+
+/** Short names of the implemented adapters, in registry order. */
+export function implementedTools() {
+  return Object.values(ADAPTERS).map((adapter) => ID_TO_SHORT_NAME[adapter.ID] || adapter.ID);
+}
+
+/** The adapter's declaration of `capability` for any name form; undefined when none is declared. */
+export function declared(value, capability) {
+  return adapterFor(value)?.[capability];
+}
+
+/**
+ * The declaration of `capability`, or an error naming the tool and the
+ * capability. A tool whose adapter lacks it is never run as another tool.
+ * `adapter` stands in for the registry's when a caller holds the live one.
+ */
+export function requireCapability(value, capability, adapter = adapterFor(value)) {
+  const found = adapter?.[capability];
+  if (found !== undefined) return found;
+  const name = toolShortName(value) || (typeof value === 'string' && value) || 'no tool';
+  const err = new Error(`${name} declares no ${capability}`);
+  err.capability = capability;
+  err.tool = name;
+  throw err;
+}
+
+/** Short names of the implemented adapters that declare `capability` (a declared null counts), in registry order. */
+export function toolsDeclaring(capability) {
+  return implementedTools().filter((tool) => adapterFor(tool)?.[capability] !== undefined);
+}
+
+/** Short names of the implemented adapters whose declaration of `capability` is neither undefined nor null. */
+export function toolsWith(capability) {
+  return implementedTools().filter((tool) => adapterFor(tool)?.[capability] != null);
+}
+
+/** The command names the implemented adapters' processes run under. */
+export function processNames() {
+  return toolsWith('PROCESS_NAME').map((tool) => adapterFor(tool).PROCESS_NAME);
+}
+
+/**
+ * The names tools are billed under, in registry order: the tools that declare
+ * `BILLING_PROVIDER` (a plan with windows). A tool on a plan with no API
+ * reserve is in this list and not in `apiProviders()`.
+ */
+export function billingProviders() {
+  return toolsWith('BILLING_PROVIDER').map((tool) => adapterFor(tool).BILLING_PROVIDER);
+}
+
+/** The billing provider names of the tools that declare an API-credit route (`API_ROUTE`), in registry order. */
+export function apiProviders() {
+  return toolsWith('API_ROUTE').filter((tool) => adapterFor(tool).BILLING_PROVIDER).map((tool) => adapterFor(tool).BILLING_PROVIDER);
+}
+
+/** Ids of the implemented adapters whose declaration of `capability` is neither undefined nor null. */
+export function idsWith(capability) {
+  return Object.values(ADAPTERS).filter((adapter) => adapter[capability] != null).map((adapter) => adapter.ID);
+}
+
+/** The provider priorities a catalog accepts: `auto`, then the implemented tools by their declared rank. */
+export function providerPriorities() {
+  const ranked = toolsWith('PROVIDER_PRIORITY_RANK').sort((a, b) => adapterFor(a).PROVIDER_PRIORITY_RANK - adapterFor(b).PROVIDER_PRIORITY_RANK);
+  return ['auto', ...ranked];
+}
+
+/** The implemented adapter billed under `provider`, or null. */
+export function adapterOfProvider(provider) {
+  return Object.values(ADAPTERS).find((adapter) => adapter.BILLING_PROVIDER === provider) || null;
 }

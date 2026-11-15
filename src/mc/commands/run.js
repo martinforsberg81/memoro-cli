@@ -48,6 +48,7 @@
  * `--no-caffeinate` is the way out for somebody who wants the machine to be
  * allowed to sleep.
  */
+import { billingProviders } from '../../adapters/index.js';
 import { commandUsage } from '../command-help.js';
 import { readBillingApi, readBillingState, writeBillingApi } from '../billing.js';
 import { billingRoute, billingStatus } from '../billing-route.js';
@@ -142,7 +143,7 @@ function billing(opts, deps) {
   const state = readState();
   const api = readApi();
   lines.push(`billing ${billingStatus({ capacity, state, api, now })}`);
-  for (const provider of ['claude', 'codex']) {
+  for (const provider of billingProviders()) {
     const next = billingRoute({ provider, capacity, state, api, now });
     lines.push(`next ${provider} session: ${next.billing === 'credits' ? 'API' : 'plan'} — ${next.why}`);
   }

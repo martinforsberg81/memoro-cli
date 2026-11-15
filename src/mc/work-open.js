@@ -26,7 +26,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 import { interactive, select } from './prompt.js';
-import { resolveLaunch } from '../adapters/index.js';
+import { canonicalToolId, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
 import { trustClaudeFolder } from './claude-trust.js';
 import { SESSION_IDENTITY_ENV, normalizeSessionRole, sessionLaunchEnvironment } from './session-role.js';
 import { conversationIdentityReader, conversationModel, launchIdentityMarker, listConversations } from './conversations.js';
@@ -44,10 +44,10 @@ import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { PROVIDER_API_ENV_NAMES, scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { BACKGROUND_REFUSALS, entersPersistentSession, prepareSessionEntrance, sessionName, withRemoteControl } from './session-entrance.js';
 
-/** Provider mechanics of a persistent entrance, by launch id; loaded only when one is used. */
+/** Provider mechanics of a persistent entrance, by the mechanism an adapter declares (`PERSISTENT_DRIVER`); loaded only when one is used. */
 const PERSISTENT_DRIVERS = {
-  'claude-code': async () => (await import('./claude-background.js')).claudeBackgroundDriver(),
-  codex: async () => (await import('./codex-sessions.js')).codexSessionDriver(),
+  'claude-background': async () => (await import('./claude-background.js')).claudeBackgroundDriver(),
+  'codex-session': async () => (await import('./codex-sessions.js')).codexSessionDriver(),
 };
 
 export async function interactiveLaunchPlan({
@@ -130,7 +130,7 @@ export async function interactiveLaunchPlan({
       + `identified role=${identity?.role || 'unknown'} programme=${identity ? identity.programme || 'none' : 'unknown'}`;
   };
   if (pick === true) {
-    const candidates = before.filter((item) => (!resumeTool || item.tool === (resumeTool === 'claude' ? 'claude-code' : resumeTool))
+    const candidates = before.filter((item) => (!resumeTool || item.tool === (canonicalToolId(resumeTool) || resumeTool))
       && (!guarded || compatible(identify(item))));
     if (!candidates.length) return { ok: false, reason: 'no compatible conversation here to resume' };
     const items = candidates.map((item, index) => ({
@@ -206,7 +206,7 @@ export async function interactiveLaunchPlan({
     : null;
   const planning = verb === 'plan';
   const chosenModel = planning
-    ? (model || (launch.id === 'codex' ? 'gpt-6.1-sol' : 'opus'))
+    ? (model || requireCapability(launch.id, 'PLAN_MODEL'))
     : chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
   if (chosen && !resuming) return { ok: false, reason: `cannot resume a ${toolId} conversation with this adapter` };
@@ -214,13 +214,15 @@ export async function interactiveLaunchPlan({
   // history: supply it on compatible resumes too. Codex uses its native
   // developer instruction setting (ordinary resume text cannot replace it).
   const roleInstructions = resuming && !guarded ? null : instructionsFor(toolId, overlay);
-  const instructions = toolId === 'codex' && guarded && roleInstructions
+  const channel = declared(toolId, 'INSTRUCTIONS');
+  const guardedChannel = guarded ? channel?.guarded : null;
+  const instructions = guardedChannel?.marker && roleInstructions
     ? `${roleInstructions}\n\n${launchIdentityMarker({ role: requestedRole, programme: requestedProgramme })}`
     : roleInstructions;
-  const handed = toolId === 'codex' && guarded && instructions
-    ? ['-c', `developer_instructions=${JSON.stringify(instructions)}`]
-    : (resuming && toolId !== 'claude-code' ? [] : profileArgs(toolId, instructions));
-  const launchedId = !resuming && guarded && handed.length && toolId === 'claude-code' ? randomUUID() : null;
+  const handed = guardedChannel && instructions
+    ? guardedChannel.args(instructions)
+    : (resuming && !channel?.onResume ? [] : profileArgs(toolId, instructions));
+  const launchedId = !resuming && guarded && handed.length && channel?.freshSessionId ? randomUUID() : null;
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL: on a resume too,
   // including the role-aware instruction configuration.
   const session = [...sessionSwitches(launch, cache), ...(planning ? launch.adapter?.effortArgs?.('medium') ?? [] : [])];
@@ -230,7 +232,7 @@ export async function interactiveLaunchPlan({
     : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...handed, ...session, ...(launchedId ? launch.adapter.newSessionArgs({ sessionId: launchedId }) : []), ...(prompt ? [prompt] : [])];
 
   const args = interactiveArgs(launch, baseArgs, { areaRoot, cwd: worktree.path, env });
-  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
   const billing = billingRoute(provider, { env });
   // An interactive session's grant names no model: `/model` inside it changes
   // the model, and a grant on the launch model answered every request after
@@ -238,7 +240,7 @@ export async function interactiveLaunchPlan({
   // still names the provider, expires and counts requests.
   // Every interactive Claude launch is in the Claude app through Remote Control, named after its session:
   // the name the desk gets with no other session (the background holder names its own, request.name).
-  const remoteControl = toolId === 'claude-code';
+  const remoteControl = declared(toolId, 'REMOTE_CONTROL') === true;
   const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin,
     args: remoteControl ? withRemoteControl(args, sessionName({ roleName, verb, programme }, [])) : args,
     billing: billing.billing });
@@ -268,7 +270,7 @@ export async function interactiveLaunchPlan({
     role: requestedRole,
     programme: requestedProgramme,
     launched_id: launchedId,
-    instruction_channel: handed.length ? (toolId === 'codex' && guarded ? 'developer_instructions' : toolId === 'claude-code' ? 'append-system-prompt' : 'instructions') : null,
+    instruction_channel: handed.length ? (guardedChannel?.channel || channel.channel) : null,
     role_digest: textDigest(instructions),
     prompt: resuming ? Boolean(resumePrompt) : Boolean(prompt),
     instructions: handed.length > 0,
@@ -295,17 +297,18 @@ export async function openInWorkArea(options = {}) {
         return findBackgroundConversation({ ...options, env }, prefix);
       }),
       resolved: async ({ launch, before, chosen }) => {
-        if (bg && launch.id !== 'claude-code') return { result: { ok: false, reason: BACKGROUND_REFUSALS.codex } };
-        if (!eligible || !(launch.id in PERSISTENT_DRIVERS)) return {};
+        if (bg && !declared(launch.id, 'BACKGROUND')) return { result: { ok: false, reason: BACKGROUND_REFUSALS.codex } };
+        const driver = declared(launch.id, 'PERSISTENT_DRIVER');
+        if (!eligible || !(driver in PERSISTENT_DRIVERS)) return {};
         const settings = { ...options, env, launch, before, chosen, bg };
         entrance = background ? await background(settings)
-          : await prepareSessionEntrance(settings, await PERSISTENT_DRIVERS[launch.id]());
+          : await prepareSessionEntrance(settings, await PERSISTENT_DRIVERS[driver]());
         return entrance;
       },
     });
     if (!plan.launch) return plan;
-    if (plan.launch.id === 'claude-code') {
-      // Every folder mc opens Claude in is trusted first (claude-trust.js).
+    if (declared(plan.launch.id, 'FOLDER_TRUST') === 'claude-trust') {
+      // Every folder mc opens a tool that declares folder trust in is trusted first (claude-trust.js).
       const trusted = trust(options.worktree.path, { env });
       if (!trusted.ok || trusted.changed) log(trusted.ok ? 'work.claude-trusted' : 'work.claude-trust-failed', trusted);
     }
@@ -499,13 +502,14 @@ function interactiveArgs(launch, args, context) {
 }
 
 /**
- * A resume's argv with the session switches in it. Codex's `resume` takes its
- * options before the session id it ends on (`codex resume [OPTIONS]
- * [SESSION_ID]`, see `resumeArgs`); claude takes them anywhere.
+ * A resume's argv with the session switches in it. A tool that declares
+ * `RESUME_ID_LAST` (Codex: `codex resume [OPTIONS] [SESSION_ID]`, see
+ * `resumeArgs`) takes its options before the session id it ends on; any other
+ * takes them anywhere.
  */
 function resumeWith(toolId, resumed, session) {
   if (!resumed.length || !session.length) return [...resumed, ...session];
-  if (toolId === 'codex') return [...resumed.slice(0, -1), ...session, resumed[resumed.length - 1]];
+  if (declared(toolId, 'RESUME_ID_LAST') === true) return [...resumed.slice(0, -1), ...session, resumed[resumed.length - 1]];
   return [...resumed, ...session];
 }
 
@@ -552,7 +556,7 @@ function launchCommand(launch, {
   // stopped — which is what somebody asking for both at once is asking for.
   // Nothing combined them before this, so no existing launch changes shape.
   if (task) baseArgs.push(task);
-  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
   const billing = billingRouteNow(provider, { env });
   // No model on the grant, as in `openInWorkArea`: `/model` must keep working.
   const toolLaunch = gatewayLaunch({ provider, model: null, bin: launch.spec.bin, args: interactiveArgs(launch, baseArgs, { areaRoot, cwd, env }), billing: billing.billing });

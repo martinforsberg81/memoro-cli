@@ -489,3 +489,169 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
     return entry?.sessionId || entry?.session_id || null;
   },
 });
+
+/* ------------------------------------------------------------------
+ * Seam declarations. `src/mc/` asks the registry (`index.js`) for these and
+ * never compares this tool's name. A declaration is a named export; a tool
+ * that lacks one is refused by a seam that launches, bills, routes or acts.
+ * ------------------------------------------------------------------ */
+
+/** The command name this tool's process runs under. */
+export const PROCESS_NAME = 'claude';
+
+/**
+ * The headless argument list: `pieces` are what the runner computed from this
+ * adapter's own switches (`modelArgs`, `effortArgs`, `advisorArgs`,
+ * `sessionArgs`), the role's instruction arguments, the prompt, and the
+ * resumed session id.
+ */
+export function headlessArgs({ modelArgs: model, effortArgs: effort, advisorArgs: advisor, session, instr, prompt, resume = null, stream = true, autocompact = null }) {
+  const tuning = [...effort, ...advisor];
+  const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
+  const io = stream
+    ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
+    : ['--output-format', 'json'];
+  // `--resume` keeps the session's id and its whole history; the message on
+  // stdin is the next turn of that conversation.
+  const resumed = resume ? ['--resume', resume] : [];
+  const tools = ['--tools', CLAUDE_TOOLS];
+  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...model, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
+}
+
+/** The mechanism `src/mc/run-plan.js` reads this tool's headless output with. */
+export const OUTPUT_READER = 'claude-stream';
+
+/** A running session is asked whether its step can be finished and is killed when silent too long. */
+export const WATCH = Object.freeze({ checkIn: true, stallGuard: true });
+
+/**
+ * What a session runs on when neither its step nor its plan says otherwise,
+ * per kind. A step is `opus` at `medium` effort with no advisor (2026-09-25,
+ * ruling 18's second addendum). These are claude's aliases and nobody else's.
+ */
+export const SESSION_DEFAULTS = Object.freeze({
+  step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
+  review: Object.freeze({ model: 'opus', effort: 'high', advisor: null }),
+});
+
+/** A named advisor model is kept (`--advisor`). */
+export const ADVISOR_SUPPORT = true;
+
+/** The name billing state, plan windows and the API gateway know this tool by. */
+export const BILLING_PROVIDER = 'claude';
+
+/** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
+export const PROVIDER_PRIORITY_RANK = 1;
+
+/** Intake and other catalog-routed turns may run on this tool's role model: no catalog candidate is required. */
+export const INTAKE_FROM_CATALOG = null;
+
+/** A plan review passes the checkout as an allowed directory, before the permission mode. */
+export const ALLOWED_DIR = Object.freeze({ flag: '--add-dir', before: '--permission-mode' });
+
+/** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */
+export const CAPACITY_READER = 'claude-usage';
+
+/** The plan windows a usage snapshot carries for this tool, in order. */
+export const PLAN_WINDOWS = Object.freeze(['five_hour', 'seven_day']);
+
+/** A login interruption means the plan refused the session. */
+export const LOGIN_REFUSES_PLAN = true;
+
+/**
+ * The plan's refusal is recorded in billing state (`plan.refused_until`) and
+ * its windows are read from the session's stream: the mechanism `src/mc/run.js`
+ * reads them with.
+ */
+export const PLAN_STATE = 'claude-stream';
+
+/**
+ * The standing rule for choosing a model of this tool (`model-choice.js`): an
+ * unknown capacity reading may bootstrap a choice, and candidates are not
+ * judged per model.
+ */
+export const MODEL_CHOICE = Object.freeze({ bootstrapsOnUnknown: true, perModel: false });
+
+/**
+ * The API-credit route: where the gateway forwards, how it authenticates, which
+ * model names a grant's aliases cover, and the settings the tool is started
+ * with so it talks to the gateway. No key or grant is held here: the gateway
+ * attaches the key, and `toolConfig` receives the session's grant.
+ */
+export const API_ROUTE = Object.freeze({
+  upstream: 'https://api.anthropic.com',
+  auth: Object.freeze({ header: 'x-api-key', scheme: null }),
+  routes: Object.freeze([
+    Object.freeze({ path: '/v1/messages', methods: Object.freeze(['POST']) }),
+    Object.freeze({ path: '/v1/messages/count_tokens', methods: Object.freeze(['POST']) }),
+  ]),
+  websocket: null,
+  modelAliases: Object.freeze({ names: Object.freeze(['opus', 'fable', 'sonnet', 'haiku']), prefix: 'claude-' }),
+  // An explicit `credits` billing mode moves this tool's sessions to the API.
+  creditsByMode: true,
+  toolConfig({ base, grant, args, env }) {
+    return { args, env: { ...env, ANTHROPIC_BASE_URL: `${base}/claude`, ANTHROPIC_AUTH_TOKEN: grant } };
+  },
+});
+
+/** The model a plan session runs on when none is named. */
+export const PLAN_MODEL = 'opus';
+
+/**
+ * How an interactive launch hands the role's instructions over: the
+ * channel's name, its arguments, whether a resume supplies them again, the
+ * channel a guarded launch uses instead (none here), and whether a guarded
+ * fresh launch names its own session id.
+ */
+export const INSTRUCTIONS = Object.freeze({
+  channel: 'append-system-prompt',
+  args: (markdown) => ['--append-system-prompt', markdown],
+  onResume: true,
+  guarded: null,
+  freshSessionId: true,
+});
+
+/** A resume's session switches may go anywhere in its arguments. */
+export const RESUME_ID_LAST = false;
+
+/** A session may be left running in the background. */
+export const BACKGROUND = true;
+
+/** Every interactive launch is in the Claude app through Remote Control. */
+export const REMOTE_CONTROL = true;
+
+/** The mechanism that trusts a folder before the tool opens in it; `src/mc/work-open.js` holds the code. */
+export const FOLDER_TRUST = 'claude-trust';
+
+/** The mechanism that keeps a persistent session; `src/mc/work-open.js` and `commands/session.js` hold the code. */
+export const PERSISTENT_DRIVER = 'claude-background';
+
+/** What a server session of this tool is on the wire: it is a terminal the client attaches to over ssh. */
+export const SERVER_SESSION = Object.freeze({ mechanism: 'tty', name: 'Claude' });
+
+/**
+ * How a conversation's launching role is proven (reading seam; `src/mc/conversations.js` holds the code by
+ * these names): from the launch log, bound to the id mc supplied, because the system prompt is not recorded.
+ */
+export const IDENTITY_READER = 'launch-log';
+
+/** How a transcript's context usage is read: the usage of the last assistant message. */
+export const CONTEXT_READER = 'assistant-usage';
+
+/** How a transcript's last model is read: the model of the last assistant message. */
+export const MODEL_READER = 'assistant-message';
+
+/** How a conversation is removed: the transcript is the conversation, so the file goes. */
+export const CONVERSATION_DELETE = Object.freeze({ mechanism: 'transcript-file', failed: 'transcript-delete-failed' });
+
+/** How the end of a transcript is read for what was said and whose turn it is (`src/mc/work-status.js` holds the code by this name). */
+export const TAIL_READER = 'claude-tail';
+
+/**
+ * Where the desk's cost is read from (`src/mc/desk-cost.js` holds the code by these names): the transcript
+ * files, the reader of their lines, and the option that names their directory.
+ */
+export const COST_SOURCE = Object.freeze({ files: 'claude-projects', reader: 'claude-messages', option: 'claudeDir' });
+
+/** Where the tool reads skills from; Claude honours its config directory override. */
+export const SKILLS_DIR = (env, home) => join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'skills');

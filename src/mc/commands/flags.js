@@ -23,6 +23,20 @@
  * --click`): each value, in order, in an array that is empty when the flag is
  * not given.
  */
+
+import { implementedShortNames } from '../../adapters/names.js';
+
+/**
+ * The tools a `--<tool>` flag names: the implemented tools' short names from the registry's name
+ * tables. Those tables import nothing; the registry itself loads every adapter (a static import of it
+ * added 0.04 s to every verb that reads flags), so flags.js reads the tables, not the registry.
+ */
+let sugared = null;
+function sugarTools() {
+  sugared ??= implementedShortNames();
+  return sugared;
+}
+
 export function scanArgs(argv, {
   booleans = [], values = [], strictValues = [], repeatable = [], toolSugar = false,
 } = {}) {
@@ -49,8 +63,8 @@ export function scanArgs(argv, {
     if (values.includes(arg)) { pending.add(arg); continue; }
     if (strictValues.includes(arg)) { strictPending = arg; continue; }
     if (repeatable.includes(arg)) { strictPending = arg; continue; }
-    if (toolSugar && arg === '--codex') { flags.tool = 'codex'; continue; }
-    if (toolSugar && arg === '--claude') { flags.tool = 'claude'; continue; }
+    const sugar = toolSugar && arg.startsWith('--') ? sugarTools().find((tool) => arg === `--${tool}`) : null;
+    if (sugar) { flags.tool = sugar; continue; }
     if (arg.startsWith('--')) return result(`unknown flag: ${arg}`);
     const waiting = values.find((name) => pending.has(name));
     if (waiting) {

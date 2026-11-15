@@ -25,14 +25,15 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { planWindows } from './billing.js';
+import { adapterOfProvider, billingProviders } from '../adapters/index.js';
 import { runnerDir } from './paths.js';
 
 export const CAPACITY_SCHEMA = 'mc-model-capacity';
 export const CAPACITY_VERSION = 1;
 export const CAPACITY_FILE = 'model-capacity.json';
-export const PROVIDERS = Object.freeze(['claude', 'codex']);
+export const PROVIDERS = Object.freeze(billingProviders());
 /** The windows each provider reports: Claude's five-hour and seven-day, Codex's primary and secondary. */
-export const WINDOWS = Object.freeze({ claude: Object.freeze(['five_hour', 'seven_day']), codex: Object.freeze(['primary', 'secondary']) });
+export const WINDOWS = Object.freeze(Object.fromEntries(PROVIDERS.map((provider) => [provider, adapterOfProvider(provider).PLAN_WINDOWS])));
 /** An observation older than this is stale: still shown, but never read as current. Codex is polled hourly. */
 export const STALE_MS = 3 * 60 * 60 * 1000;
 /** How often the runner reads each provider's capacity, both collectors alike. */
@@ -135,8 +136,8 @@ export function applyFailure(state, provider, { why }, now = new Date()) {
  * (null) keeps the one the snapshot holds, as observeClaudeStream keeps a window
  * a stream does not carry; its own reset still governs it (windowsAt).
  */
-function claudeWindowsOf(held, read) {
-  return Object.fromEntries(WINDOWS.claude.map((name) => [name, read?.[name] ?? held[name]]));
+function streamWindowsOf(provider, held, read) {
+  return Object.fromEntries(WINDOWS[provider].map((name) => [name, read?.[name] ?? held[name]]));
 }
 
 /**
@@ -150,7 +151,7 @@ export function applyCollectedCapacity(state, provider, answer, now = new Date()
   const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
   if (answer?.ok && changed) return current;
   if (answer?.ok) return applyObservation(current, provider, {
-    windows: provider === 'claude' ? claudeWindowsOf(current.providers.claude.windows, answer.windows) : answer.windows,
+    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? streamWindowsOf(provider, current.providers[provider].windows, answer.windows) : answer.windows,
     models: answer.models ?? null,
   }, now);
   return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
@@ -173,8 +174,10 @@ export function observeClaudeStream(state, stdout, now = new Date()) {
   const seen = planWindows(stdout);
   const current = normaliseCapacity(state);
   if (!seen || (!seen.five_hour && !seen.seven_day)) return current;
-  const previous = current.providers.claude.windows;
-  return applyObservation(current, 'claude', {
+  const provider = PROVIDERS.find((name) => adapterOfProvider(name).PLAN_STATE === 'claude-stream');
+  if (!provider) return current;
+  const previous = current.providers[provider].windows;
+  return applyObservation(current, provider, {
     windows: { five_hour: fraction(seen.five_hour) ?? previous.five_hour, seven_day: fraction(seen.seven_day) ?? previous.seven_day },
     models: null,
   }, now);

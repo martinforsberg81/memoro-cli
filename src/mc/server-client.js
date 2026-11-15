@@ -1,6 +1,7 @@
 /** Interactive routing before any local programme or desk is read or created. */
 import { interactive, select, ask } from './prompt.js';
 import { readServer } from './server-settings.js';
+import { declared } from '../adapters/index.js';
 
 const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
 
@@ -42,7 +43,8 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
   }
   if (snapshot.kind !== 'snapshot') throw new Error(`on ${link.destination}: expected a session list, got ${snapshot.kind}`);
   // Refused before any start: a Codex session has no client but the terminal, so there is nothing `--bg` could leave running.
-  if (flags.bg && snapshot.provider !== 'claude-code') { stderr.write(`mc: on ${link.destination}: ${BACKGROUND_REFUSALS.codex}\n`); return 1; }
+  const terminal = declared(snapshot.provider, 'SERVER_SESSION')?.mechanism === 'tty';
+  if (flags.bg && !declared(snapshot.provider, 'BACKGROUND')) { stderr.write(`mc: on ${link.destination}: ${BACKGROUND_REFUSALS.codex}\n`); return 1; }
   let rows = snapshot.sessions;
   let pending = null;
   const driver = {
@@ -50,14 +52,14 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
     discover: true,
     list: async () => rows,
     start: async () => {
-      if (snapshot.provider === 'claude-code') return { ok: true, session: { id: 'remote-start', name: `on ${link.destination}` } };
+      if (terminal) return { ok: true, session: { id: 'remote-start', name: `on ${link.destination}` } };
       pending = await link.connect('start', entrance, args, answers);
       return { ok: true, session: pending.session };
     },
     join: async (_options, session) => {
       const starting = Boolean(pending) || session.id === 'remote-start';
       const forwarded = [...args, ...(!starting ? ['--session', session.id] : [])];
-      const result = snapshot.provider === 'claude-code'
+      const result = terminal
         ? link.passthrough(starting ? 'start' : 'join', entrance, forwarded, answers)
         : await link.codexClient(pending || await link.connect('join', entrance, forwarded, answers));
       pending = null;

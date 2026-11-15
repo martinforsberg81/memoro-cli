@@ -4,13 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { resolveLaunch } from '../adapters/index.js';
+import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { registerForeground } from './foreground.js';
 import { runnerDir } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole, roleRecord, roleSourceOf } from './roles.js';
-import { headlessArgs, readSessionOutput, sessionResult, TIMEOUT_EXIT } from './run-plan.js';
+import { headlessArgs, readSessionOutput, sessionAnswer, TIMEOUT_EXIT } from './run-plan.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { DEFAULT_CATALOG, readModels } from './model-config.js';
@@ -55,7 +55,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   const instructions = instructionsFor(launch.id, role.overlay);
   const task = `You are running headless with nobody at the terminal. Carry out only the task below, then report what changed, what was checked and what remains. When a decision needs Martin, record the question with the affected goal or proposal and report it; do not guess his answer. Do not start another Manager session.\n\n${prompt}`;
   const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: selectedModel, effort: routeCandidate?.effort, instructions, prompt: task, profileArgs, stream: false, cache: role.cache });
-  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
   const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env, route: { billing: routeBilling, why: routeWhy } });
   if (billing.billing === 'unavailable') return { ok: false, reason: billing.why, providerPriority: priority, routeWhy };
   const processLaunch = gatewayLaunch({ provider, model: selectedModel, bin: launch.spec.bin, args, billing: billing.billing });
@@ -76,15 +76,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
     }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now });
     const ok = result.status === 0 && !result.timedOut && !summary.quota && !summary.interrupted && !['failed', 'no-json'].includes(summary.note);
-    let answer = launch.id === 'codex' ? '' : sessionResult(result.stdout)?.result || '';
-    if (launch.id === 'codex') {
-      for (const line of String(result.stdout || '').split('\n')) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text || answer;
-        } catch { /* not a JSON event */ }
-      }
-    }
+    const answer = sessionAnswer(launch.id, result.stdout);
     const receipt = { ...summary, answer, ok, status: result.status, tool: launch.shortName || launch.id, model: selectedModel, providerPriority: priority, routeWhy, billing: billing.billing, started: now.toISOString(), finished: new Date().toISOString(), prompt, stdout: result.stdout, stderr: result.stderr };
     writeFileSync(log, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
     return { ...receipt, log };

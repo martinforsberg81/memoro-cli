@@ -9,6 +9,7 @@ import { claudeBackgroundDriver } from '../claude-background.js';
 import { descriptor, sessionDescriptor, ENTRANCES } from '../server-protocol.js';
 import { pidAlive } from '../status-collect.js';
 import { chooseProgramme } from './plan.js';
+import { requireCapability } from '../../adapters/index.js';
 
 export const usage = () => 'usage — mc session version|list|start|join <entrance> [--json]\nInternal server protocol; use mc server on the client.\n';
 export const ROUTES = Object.fromEntries(['version', 'list', 'start', 'join'].map(key => [key, { booleans: ['--json'], check: () => null }]));
@@ -46,7 +47,8 @@ export async function run(argv, {
   run = spawnSync, load = name => import(`./${name}.js`),
   open = openInWorkArea, records = readRegister, alive = pidAlive, realpath = realpathSync,
   entranceDeps = {},
-  drivers = { codex: codexSessionDriver, 'claude-code': claudeBackgroundDriver },
+  // By the persistent mechanism a tool's adapter declares (`PERSISTENT_DRIVER`).
+  drivers = { 'codex-session': codexSessionDriver, 'claude-background': claudeBackgroundDriver },
 } = {}) {
   let request;
   const emit = value => stdout.write(`${JSON.stringify(value)}\n`);
@@ -72,18 +74,20 @@ export async function run(argv, {
       const settings = { ...options, env, isInteractive: () => true, choose, stdout: capture, stderr: capture, host: request.host };
       const mechanics = launch => {
         const provider = launch.id;
+        const wire = requireCapability(provider, 'SERVER_SESSION');
+        const driverOf = requireCapability(provider, 'PERSISTENT_DRIVER');
         const measured = run(launch.spec.bin, ['--version'], { encoding: 'utf8', env });
         if (measured.status !== 0 || !measured.stdout?.trim()) throw new Error(`${launch.spec.bin} --version: ${measured.error?.message || measured.stderr?.trim() || `exit ${measured.status}`}`);
         const providerVersion = measured.stdout.trim();
-        const describe = session => sessionDescriptor({ ...session, ...(provider === 'codex' ? { socket: realpath(session.socket) } : {}) }, provider, providerVersion);
-        return { provider, providerVersion, describe };
+        const describe = session => sessionDescriptor({ ...session, ...(wire.mechanism === 'socket' ? { socket: realpath(session.socket) } : {}) }, provider, providerVersion);
+        return { provider, providerVersion, describe, wire, driverOf };
       };
       return open({ ...settings, platform: 'linux', env: { ...env, SSH_CONNECTION: 'mc-session-protocol' },
         // Only the internal entrance forces persistent mechanics on the server.
         background: async resolved => {
-          const { provider, providerVersion, describe } = mechanics(resolved.launch);
+          const { provider, providerVersion, describe, wire, driverOf } = mechanics(resolved.launch);
           if (request.operation === 'list') {
-            const rows = await drivers[provider]().list(resolved);
+            const rows = await drivers[driverOf]().list(resolved);
             const sessions = deskSessions(resolved, rows, records(env), alive).map(describe);
             emit(descriptor('snapshot', { provider, providerVersion, chosen: resolved.chosen?.id || null, sessions }));
             emitted = true;
@@ -100,11 +104,11 @@ export async function run(argv, {
             for await (const line of lines) { if (line === 'end') clean = true; }
             return { status: clean ? 0 : 1, signal: null };
           };
-          const driver = drivers[provider](provider === 'codex' ? { run: attach } : {});
+          const driver = drivers[driverOf](wire.mechanism === 'socket' ? { run: attach } : {});
           const join = driver.join;
           driver.join = async (opts, row) => {
             attaching = row;
-            if (request.json && provider !== 'codex') throw new Error('Claude requires ssh -t, not a local Claude client');
+            if (request.json && wire.mechanism !== 'socket') throw new Error(`${wire.name} requires ssh -t, not a local ${wire.name} client`);
             return join(opts, row);
           };
           if (request.operation === 'join') {

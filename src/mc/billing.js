@@ -25,6 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { apiProviders, declared } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runnerDir } from './paths.js';
 
@@ -83,7 +84,7 @@ export function writeBillingMode(value, { root = runnerDir(), now = new Date() }
   return { ok: true, mode, set };
 }
 
-export const BILLING_PROVIDERS = Object.freeze(['claude', 'codex']);
+export const BILLING_PROVIDERS = Object.freeze(apiProviders());
 
 /**
  * Whether each provider may fall over to its API key once its plan is spent:
@@ -196,7 +197,7 @@ const after = (value, now) => {
  */
 export function billingFor({ mode = DEFAULT_BILLING, state, toolId, now = new Date() } = {}) {
   const read = normaliseBillingState(state);
-  if (toolId !== 'claude-code') return { billing: 'plan', why: `${toolId || 'no tool'} is never on credits` };
+  if (declared(toolId, 'API_ROUTE')?.creditsByMode !== true) return { billing: 'plan', why: `${toolId || 'no tool'} is never on credits` };
   if (after(read.credits.unusable_until, now)) {
     return { billing: 'plan', why: `credits unusable until ${read.credits.unusable_until}${read.credits.why ? ` — ${read.credits.why}` : ''}` };
   }
