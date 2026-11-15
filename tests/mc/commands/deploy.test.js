@@ -298,6 +298,10 @@ function deps(extra = {}) {
     env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '' },
     gate: fake.gate,
     suites: fake.suites,
+    // No gate round is in flight and no merger waits: a deployer that a test
+    // starts inline must not read this machine's live gate state and wait on it.
+    runningRounds: () => ({}),
+    readMerger: () => null,
     repos: REPOS,
     git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 } }),
     fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
