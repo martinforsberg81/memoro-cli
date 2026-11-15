@@ -2099,6 +2099,102 @@ describe('collectPage', () => {
     assert.equal(data.horizons.error, null);
   });
 
+  /** The overview's facts, collected from real records: two open horizons, one with a programme at work, one without. */
+  async function overviewData(t) {
+    const fx = horizonsFixture({ plan: ['plan-only', 'p-unheld'] });
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('second', 'open', 2);
+    fx.horizon('first', 'open', 1);
+    mkdirSync(join(horizonsDir(fx.env), 'broken'), { recursive: true });
+    writeFileSync(join(horizonsDir(fx.env), 'broken', 'horizon.json'), '{ not json');
+    fx.record('mc', 'first');
+    fx.record('p-second', 'second');
+    fx.record('p-unheld', 'ghost');
+    fx.record('p-none', null);
+    return fx.collect();
+  }
+  const between = (lines, from, to) => {
+    const start = lines.findIndex((line) => line.includes(from));
+    const end = lines.findIndex((line, i) => i > start && line.includes(to));
+    return lines.slice(start, end);
+  };
+
+  it('draws HORIZONS in the default view, below the desk, with no goal row and no phase', async (t) => {
+    const data = await overviewData(t);
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW });
+      const text = lines.join('\n');
+      assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
+      assert.ok(text.indexOf('┌─ DESK') < text.indexOf('HORIZONS'), 'the desk is above HORIZONS');
+      assert.doesNotMatch(text, /PROGRAMMES/u);
+      assert.doesNotMatch(text, /Phase \d|The page|stage build · status/u, 'no phase and no goal row in the overview');
+      const section = between(lines, 'HORIZONS', 'UNASSIGNED ACTIVITY').map((row) => row.trimEnd());
+      assert.match(section[0], /^ {2}HORIZONS {2}2 open horizons · 3 programmes under way$/u);
+      // The horizons in the desk's order, then the programme under the one it names, with its number.
+      assert.match(section[1], /^ {2}1 horizon record cannot be read: broken$/u);
+      assert.match(section[2], /^ {2}1 {2}Title of first {2}first$/u);
+      assert.match(section[3], /^ {4} ?2 mc +(phase 1 of 1 · )?1 build/u);
+      assert.match(section[4], /^ {2}2 {2}Title of second {2}second$/u);
+      assert.match(section[5], /^ {4}nothing under way$/u);
+      assert.equal(section[6], '  Serving no horizon');
+      // A programme only a plan pull request names has something under way, and is not folded.
+      assert.ok(section.some((row) => /^ {4} ?\d+ plan-only +1 PR/u.test(row)), section.join('\n'));
+      const unheld = section.find((row) => /p-unheld/u.test(row));
+      assert.match(unheld, /ghost \(not held\)/u);
+      assert.ok(!section.some((row) => /p-none|p-second/u.test(row)), 'nothing under way is folded, not drawn');
+      assert.ok(section.includes('  ▸ 2 with nothing under way'), section.join('\n'));
+      assert.match(text, /1 horizon record cannot be read: broken/u);
+    }
+  });
+
+  it('draws one programme alone: the desk, then its block with its number, and nothing below', async (t) => {
+    const data = await overviewData(t);
+    const number = data.programmes.programmes.find((group) => group.programme === 'mc').number;
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      const text = lines.join('\n');
+      assert.ok(lines.every((row) => width(row) <= columns));
+      assert.ok(text.includes('┌─ DESK'), 'everything above PROGRAMMES stays');
+      assert.doesNotMatch(text, /HORIZONS|Serving no horizon|UNASSIGNED ACTIVITY|MERGE & DEPLOY|MAINTENANCE|SYSTEM/u);
+      const heading = lines.findIndex((row) => row.startsWith(`  ┌─ ${number} mc`));
+      assert.ok(heading > lines.findIndex((row) => row.includes('┌─ DESK')), lines.join('\n'));
+      assert.match(lines[heading + 1], /^ {4}Phase 1$/u);
+      assert.match(lines[heading + 2], /^ {6} ?1 The page$/u);
+      assert.match(lines.at(-1), /^ {2}└─+┘$/u, 'the block closes the page');
+      // `a` expands the block, as it does in PROGRAMMES.
+      const wide = renderPageLines(data, { columns, now: NOW, view: 'mc', expand: true }).join('\n');
+      assert.ok(wide.length > text.length);
+      assert.match(wide, /mc-ui · memoro-cli|mc-ui · /u);
+    }
+    // A name the data no longer lists is the overview again.
+    assert.match(renderPageLines(data, { columns: 100, now: NOW, view: 'gone' }).join('\n'), /HORIZONS/u);
+  });
+
+  it('a unfolds every programme as a row under its horizon and draws PROGRAMMES as it always was, numbered nowhere', async (t) => {
+    const data = await overviewData(t);
+    const without = { ...data, horizons: undefined };
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, expand: true });
+      assert.ok(lines.every((row) => width(row) <= columns));
+      const programmes = between(lines, 'PROGRAMMES', 'MERGE & DEPLOY');
+      const before = between(renderPageLines(without, { columns, now: NOW, expand: true }), 'PROGRAMMES', 'MERGE & DEPLOY');
+      assert.ok(programmes.length > 3);
+      assert.deepEqual(programmes, before, 'the PROGRAMMES lines are the ones the page drew before HORIZONS');
+      assert.ok(programmes.some((row) => /^ {2}┌─ mc · 1 goal/u.test(row)), 'the heading carries no number');
+      assert.ok(programmes.some((row) => /┌─ plan-only · 0 goals/u.test(row)));
+      const section = between(lines, 'HORIZONS', 'PROGRAMMES');
+      assert.ok(section.some((row) => /p-second/u.test(row)) && section.some((row) => /p-none/u.test(row)), 'every programme is a row when unfolded');
+      assert.ok(!section.some((row) => /with nothing under way/u.test(row)), 'no folded row when unfolded');
+    }
+  });
+
+  it('says a horizon store that cannot be listed in red under HORIZONS', () => {
+    const data = { ...DATA, horizons: { open: [], none: [], unreadable: [], error: 'ENOTDIR: not a directory' } };
+    const lines = renderPageLines(data, { columns: 100, now: NOW, colour: true });
+    const row = lines.find((line) => line.includes('horizons unreadable'));
+    assert.ok(row.includes('\u001b[31m'), row);
+  });
+
   it('says a horizon store that cannot be listed in horizons.error, and still numbers the programmes', async (t) => {
     const fx = horizonsFixture();
     t.after(() => rmSync(fx.root, { recursive: true, force: true }));
