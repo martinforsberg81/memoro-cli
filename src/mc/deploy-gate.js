@@ -16,7 +16,8 @@
  *    near it.
  * 2. **The app, used.** The suites memoro's `.mc/test.json` declares, against a
  *    local server started the way `mc test dev` starts one, built from the
- *    commit that would ship. A failed suite or one that cannot run refuses; a
+ *    commit that would ship. Which of them gate is main's tip's declaration
+ *    (`gateSet`); how each runs is the shipped commit's. A failed suite or one that cannot run refuses; a
  *    suite exiting with the declared skip code is named as skipped, with its
  *    reason, and does not.
  *
@@ -347,8 +348,13 @@ function gitIn(worktree, args) {
  * 4. the checkout is on main or on no branch and its HEAD an ancestor of
  *    origin/main, then `git checkout --detach <sha>`. Otherwise every suite is
  *    cannot-run with the reason and nothing is moved;
- * 5. the declaration is read from that tree, and only the suites that gate
- *    (`gate: false` takes one out, with its reason, named once) are run.
+ * 5. the declaration is read from that tree, and of its suites only those that
+ *    main's tip declares as gates are run (`gateSet`): which suites gate is read
+ *    from `origin/main:.mc/test.json`, never from the commit that ships, so a
+ *    gating decision already on main applies to an older green pick too. A
+ *    `gate: false` on the tip takes a suite out, with the tip's reason, named
+ *    once; a tip gate the commit lacks and a suite the tip does not declare are
+ *    named and not run.
  *
  * The served commit is compared with `sha` after every ensure, each revive
  * included: a server at another commit measures another tree, so the suites that
@@ -360,10 +366,12 @@ function gitIn(worktree, args) {
  * its holder taken, the tree placed at `sha` by `placeWorktree`, the servers
  * ensured unpinned in it, and the shared checkout not touched at all.
  *
- * Returns `{ suites, commit, error, not_gate }`: one `{ name, state, seconds,
- * tail }` per suite that gates, `state` one of `ok`, `red`, `skipped` (the
- * declared skip code; `tail` carries its reason) or `cannot-run`; `not_gate`
- * the `{ name, why }` of those that do not.
+ * Returns `{ suites, commit, error, not_gate, not_in_commit, not_on_tip }`: one
+ * `{ name, state, seconds, tail }` per suite that gates, `state` one of `ok`,
+ * `red`, `skipped` (the declared skip code; `tail` carries its reason) or
+ * `cannot-run`; `not_gate` the `{ name, why }` of those main's tip says do not;
+ * `not_in_commit` the names of the tip's gates the commit does not have;
+ * `not_on_tip` the names of the commit's suites the tip does not declare.
  */
 export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {}, own = false }) {
   const d = {
@@ -453,9 +461,12 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
-  const gating = declaration.suites.filter(isGate);
-  const notGate = declaration.suites.filter((suite) => !isGate(suite)).map((suite) => ({ name: suite.name, why: String(suite.gate_why || '') }));
+  // Which suites gate is main's tip's to say, never the shipped commit's (Martin, 2026-11-15).
+  const tip = tipDeclaration(d, worktree);
+  if (!tip.ok) return cannot(tip.error);
+  const { gating, notGate, notInCommit, notOnTip } = gateSet({ tip: tip.declaration, shipped: declaration });
   const gated = { ...declaration, suites: gating };
+  const stopped = (error, commit = null) => cannotRun(error, commit, notGate, notInCommit, notOnTip);
 
   const staticService = serviceFor(declaration, 'static');
   const wantsApp = gating.some((suite) => tierOf(suite) === 'app' || !staticService);
@@ -463,11 +474,11 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   const refuseTree = (what, server) => {
     const served = servedCommit(server, worktree, d.head);
     if (!sameCommit(served, sha)) {
-      return cannot(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} was placed at ${short(sha)}, but this server was built from another tree and held as it is`, served, notGate);
+      return stopped(`the ${what} server serves ${short(served)}, not ${short(sha)} that would ship — ${worktree} was placed at ${short(sha)}, but this server was built from another tree and held as it is`, served);
     }
     const dirtyAtStart = Array.isArray(server?.built_from?.dirty) ? server.built_from.dirty.filter(Boolean) : [];
     if (dirtyAtStart.length) {
-      return cannot(`the ${what} server was started on uncommitted changes in ${worktree} (${pathsWords(dirtyAtStart)}) — it serves them, not ${short(sha)} that would ship; it must be clean and on main`, served, notGate);
+      return stopped(`the ${what} server was started on uncommitted changes in ${worktree} (${pathsWords(dirtyAtStart)}) — it serves them, not ${short(sha)} that would ship; it must be clean and on main`, served);
     }
     return null;
   };
@@ -486,7 +497,7 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   let baseUrl = null;
   if (wantsStatic) {
     const ensured = await staticEnsure();
-    if (!ensured.ok) return cannot(ensured.error, null, notGate);
+    if (!ensured.ok) return stopped(ensured.error);
     staticServer = ensured.server;
     staticBaseUrl = String(staticServer.url).replace(/\/+$/u, '');
     const wrong = refuseTree('static', staticServer);
@@ -495,7 +506,7 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   }
   if (wantsApp) {
     const app = await appEnsure(false);
-    if (!app.ok) return cannot(app.error, null, notGate);
+    if (!app.ok) return stopped(app.error);
     server = app.server;
     baseUrl = app.baseUrl;
     const wrong = refuseTree('app', server);
@@ -545,7 +556,55 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   for (const name of neverRan || []) {
     suites.push({ name, state: 'cannot-run', seconds: 0, status: null, tail: `never ran — ${gone?.length ? 'the server left before it' : 'it was not started'}` });
   }
-  return { suites, commit, error: null, base_url: baseUrl, static_base_url: staticBaseUrl, not_gate: notGate };
+  return {
+    suites, commit, error: null, base_url: baseUrl, static_base_url: staticBaseUrl,
+    not_gate: notGate, not_in_commit: notInCommit, not_on_tip: notOnTip,
+  };
+}
+
+/** The ref whose `.mc/test.json` says which suites gate a deploy: main's tip as the deploy's fetch left it. */
+export const GATE_REF = 'origin/main';
+
+/**
+ * The declaration of main's tip, `git show origin/main:.mc/test.json` in the
+ * tree the suites run in (it shares its refs with the checkout the deploy
+ * fetched in). One that cannot be read or is not valid refuses: without it
+ * nothing says which suites gate, and the shipped commit's is never asked.
+ */
+function tipDeclaration(d, worktree) {
+  const shown = d.gitIn(worktree, ['show', `${GATE_REF}:.mc/test.json`]);
+  if (shown.status !== 0) {
+    return { ok: false, error: `main's tip (${GATE_REF}) does not declare .mc/test.json (${lastLines(shown.stderr, 1) || 'git show failed'}) — it is what says which suites gate a deploy` };
+  }
+  return parseDeclaration(shown.stdout, `${GATE_REF}:.mc/test.json`);
+}
+
+/**
+ * Which suites gate a deploy: main's tip says it, the shipped commit's tree
+ * says how each is run. Pure. Returns
+ *
+ * - `gating` — the shipped commit's own suites (its argv, its tier, its order)
+ *   whose names the tip declares as gates, whatever the shipped commit says of
+ *   their `gate`;
+ * - `notGate` — `{ name, why }` of each suite the tip declares `gate: false`,
+ *   with the tip's `gate_why`;
+ * - `notInCommit` — the names the tip declares as gates and the shipped commit
+ *   does not have: named, not run, never a refusal;
+ * - `notOnTip` — the shipped commit's suites the tip does not declare at all:
+ *   named, not run, never a refusal.
+ */
+export function gateSet({ tip, shipped }) {
+  const tipSuites = tip?.suites || [];
+  const shippedSuites = shipped?.suites || [];
+  const gates = new Set(tipSuites.filter(isGate).map((suite) => suite.name));
+  const onTip = new Set(tipSuites.map((suite) => suite.name));
+  const inCommit = new Set(shippedSuites.map((suite) => suite.name));
+  return {
+    gating: shippedSuites.filter((suite) => gates.has(suite.name)),
+    notGate: tipSuites.filter((suite) => !isGate(suite)).map((suite) => ({ name: suite.name, why: String(suite.gate_why || '') })),
+    notInCommit: [...gates].filter((name) => !inCommit.has(name)),
+    notOnTip: shippedSuites.filter((suite) => !onTip.has(suite.name)).map((suite) => suite.name),
+  };
 }
 
 /**
@@ -601,14 +660,20 @@ function placeCheckout({ d, worktree, sha }) {
 }
 
 /** An exercise that could not begin: every suite is unmeasured, named with one reason. */
-function cannot(error, commit = null, notGate = []) {
-  return { suites: [], commit, error, not_gate: notGate };
+function cannot(error, commit = null) {
+  return cannotRun(error, commit);
+}
+
+/** The same, with what the gate set already said of the suites that are not run. */
+function cannotRun(error, commit = null, notGate = [], notInCommit = [], notOnTip = []) {
+  return { suites: [], commit, error, not_gate: notGate, not_in_commit: notInCommit, not_on_tip: notOnTip };
 }
 
 /**
  * What the reading says about the suites: each that gates, then — once, with
- * the reason its declaration gives — each that does not. A suite with
- * `gate: false` is not run by `mc deploy` and is never a refusal.
+ * the reason main's tip gives — each that does not, then each tip gate the
+ * commit does not have and each suite of the commit the tip does not declare.
+ * None of those is run by `mc deploy`, and none is ever a refusal.
  */
 export function suiteLines(exercise, { sha }) {
   const notGate = exercise.not_gate || [];
@@ -622,8 +687,18 @@ export function suiteLines(exercise, { sha }) {
     }
   }
   if (notGate.length) {
-    lines.push(`mc: suites — ${notGate.length} more declared, not run: they do not gate a deploy (gate: false):`);
+    lines.push(`mc: suites — ${notGate.length} more declared, not run: they do not gate a deploy (gate: false on main's tip):`);
     for (const suite of notGate) lines.push(`mc:   not a gate  ${suite.name} — ${suite.why}`);
+  }
+  const notInCommit = exercise.not_in_commit || [];
+  if (notInCommit.length) {
+    lines.push(`mc: suites — ${notInCommit.length} gate${notInCommit.length === 1 ? '' : 's'} on main's tip not run: not in this commit:`);
+    for (const name of notInCommit) lines.push(`mc:   not in this commit  ${name}`);
+  }
+  const notOnTip = exercise.not_on_tip || [];
+  if (notOnTip.length) {
+    lines.push(`mc: suites — ${notOnTip.length} more in this commit, not run: main's tip does not declare ${notOnTip.length === 1 ? 'it' : 'them'}:`);
+    for (const name of notOnTip) lines.push(`mc:   not on main's tip  ${name}`);
   }
   return lines;
 }
