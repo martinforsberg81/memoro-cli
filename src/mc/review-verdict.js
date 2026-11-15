@@ -12,14 +12,14 @@
  * the lines are present and consistent (`checkVerdict`), never the judgement
  * (docs/technical/mc-goals.md, "What a review session does").
  *
- * `trippedAreas` is the one function that decides which untouched areas a
- * branch changed: the review prompt (run.js) and the move to merge or build
+ * `trippedAreas` is the one function that decides which untouched rule areas a
+ * branch changed (a source area is never one): the review prompt (run.js) and the move to merge or build
  * (commands/goal.js) both call it, so what the reviewer is told and what mc
  * then requires are the same list.
  */
 import { join } from 'node:path';
 
-import { readAreas } from './areas.js';
+import { isSourceArea, readAreas } from './areas.js';
 
 /** The items every version 2 verdict holds, besides criteria, preserve ids and areas. */
 export const FIXED_IDS = Object.freeze(['change', 'out-of-scope', 'protection', 'bugs']);
@@ -109,7 +109,7 @@ export function underPath(file, path) {
  * For each repository of the goal with a worktree in `dir`: the first repository's head is `head` (MC_REVIEW_HEAD), any
  * other's its worktree's HEAD; the files are `git diff --name-only origin/main...<head>`; the areas are the repository's
  * at origin/main (`readAreas`), and the goal's obligation for `<repo>/<id>` must stand `untouched`. A file counts for an
- * area when it is under one of the area's paths. Version 1 goals and goals with no untouched obligation read no git.
+ * area when it is under one of the area's paths. A source area asks no stand and is never tripped. Version 1 goals and goals with no untouched obligation read no git.
  * `git(cwd, args)` answers `{ ok, stdout, stderr }`.
  */
 export function trippedAreas({ goal, dir, head, git, exists = () => true }) {
@@ -131,7 +131,7 @@ export function trippedAreas({ goal, dir, head, git, exists = () => true }) {
     const sha = heads[index].sha ?? 'HEAD';
     const declared = readAreas(cwd, { git, at: 'origin/main', repo });
     if (!declared.ok) return { error: declared.reason };
-    const areas = declared.areas.filter((area) => untouched.has(`${repo}/${area.id}`));
+    const areas = declared.areas.filter((area) => !isSourceArea(area) && untouched.has(`${repo}/${area.id}`));
     if (areas.length === 0) continue;
     const diff = git(cwd, ['diff', '--name-only', `origin/main...${sha}`]);
     if (!diff.ok) return { error: `could not list what ${repo} changed against origin/main — ${(diff.stderr || '').trim() || 'git failed'}` };

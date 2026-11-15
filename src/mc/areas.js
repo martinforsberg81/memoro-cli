@@ -1,16 +1,23 @@
 /**
- * A repository's rule areas: `.mc/areas.json`, read from the repository's `origin/main` as `.mc/ios.json` is
+ * A repository's areas: `.mc/areas.json`, read from the repository's `origin/main` as `.mc/ios.json` is
  * (`ios-build.js`), because a goal is written before its worktree exists and the areas that bind a goal are main's.
  *
- * Each area has an id, a name, what it covers, its standards, the paths where it lives and a short list of
- * questions, each with the condition under which it is asked. Only `mc goal areas` and `mc goal obligation set`
- * read it (`commands/goal.js`); nothing renders it into a goal and no goal file's validation knows of it.
+ * Each area has an id, a name, what it covers, its standards, the paths where it lives and a list of questions,
+ * each with the condition under which it is asked, and optionally a `page`: the repository-relative path of the
+ * markdown page that states the area's aim and decisions. There are two kinds. A rule area has at least one question
+ * and asks a stand of each goal. A source area has an empty `questions` list and must have a `page`; it asks no stand
+ * of a goal, is never a tripped area, and its `standards` may be empty (`isSourceArea`).
+ *
+ * The declaration is read by `mc goal areas` and `mc goal obligation set` (`commands/goal.js`), by the plan review's
+ * parts check and prompt (`plan-review.js`) and by the tripped areas of a review (`review-verdict.js`). Whether a
+ * page exists is asked by the parts check and shown by `mc goal areas`, never when the file is read. Nothing renders
+ * a declaration into a goal and no goal file's validation knows of it.
  */
 
 export const AREAS_PATH = '.mc/areas.json';
 const ID_RE = /^[a-z][a-z0-9-]*$/u;
 const FILE_KEYS = ['schema_version', 'areas'];
-const AREA_KEYS = ['id', 'name', 'covers', 'standards', 'paths', 'questions'];
+const AREA_KEYS = ['id', 'name', 'covers', 'standards', 'paths', 'questions', 'page'];
 const QUESTION_KEYS = ['when', 'ask'];
 
 const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -40,9 +47,12 @@ export function checkAreas(text, where) {
     if (seen.has(area.id)) return fail(`${at}.id`, `${area.id} is given twice`);
     seen.add(area.id);
     for (const key of ['name', 'covers']) if (!words(area[key])) return fail(`${at}.${key}`, 'must be a non-blank text');
-    if (!Array.isArray(area.standards) || area.standards.length === 0 || !area.standards.every(words)) return fail(`${at}.standards`, 'must be a non-empty array of non-blank paths');
+    if ('page' in area && !words(area.page)) return fail(`${at}.page`, 'must be a non-blank path');
+    if (!Array.isArray(area.questions)) return fail(`${at}.questions`, 'must be an array, empty only for a source area');
+    const source = area.questions.length === 0;
+    if (source && !('page' in area)) return fail(`${at}.questions`, 'is empty, which makes a source area, and a source area needs a page');
+    if (!Array.isArray(area.standards) || (area.standards.length === 0 && !source) || !area.standards.every(words)) return fail(`${at}.standards`, source ? 'must be an array of non-blank paths, possibly empty' : 'must be a non-empty array of non-blank paths');
     if (!Array.isArray(area.paths) || !area.paths.every(words)) return fail(`${at}.paths`, 'must be an array of non-blank strings, possibly empty');
-    if (!Array.isArray(area.questions) || area.questions.length === 0) return fail(`${at}.questions`, 'must be a non-empty array');
     for (const [q, question] of area.questions.entries()) {
       const where2 = `${at}.questions[${q}]`;
       if (!plain(question)) return fail(where2, 'must be an object');
@@ -53,6 +63,9 @@ export function checkAreas(text, where) {
   }
   return { ok: true, declared: true, areas: file.areas };
 }
+
+/** Whether a declared area is a source area: one with no question, which asks no stand of a goal. */
+export const isSourceArea = (area) => Array.isArray(area?.questions) && area.questions.length === 0;
 
 /** Git's words for a path that is not in the revision, as `onOriginMain` (commands/goal.js) reads them. */
 const NOT_IN_REVISION = /does not exist in|exists on disk, but not in/u;

@@ -66,7 +66,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    Read every `Decided by the session (technical)` entry in this goal's
    `LOG.md` and judge each as part of the review; a wrong decision is a review finding, and a rule that would have prevented it is recorded as a lesson: write `## What happened` (the goal and the decision), `## The rule` (one or two sentences, general) and `## Where the change belongs` (a named file in `src/mc/`, `canon/` or `docs/technical/`) to a file in `$MC_SCRATCH` and run `mc martin lesson add --kind review-finding --item <programme>/<goal> --place <file> --file <path>`. You add lessons; you never carry or dismiss one.
    The change holds to the `docs/technical/` standards it touches and sets no new
-   cross-programme standard in passing.
+   cross-programme standard in passing. Run `mc goal areas <programme>/<goal>`
+   and read, as files in the goal's worktree, the page of each area the change
+   touches: one the goal stands `touched` on, a tripped area, and a source area
+   whose `covers` or `paths` the diff falls under. A change that goes against an
+   aim or a decision a page states is a finding, under `obligation <area>` when
+   the goal stands `touched` on the area and under `change` otherwise.
 4. **Bugs.** Edge cases, error paths, and regressions in what the diff touches.
 5. **Test value.** Compare additions and removals with commissioned protection.
    Reject uncommissioned expansion, duplicate or implementation-pinning checks,
