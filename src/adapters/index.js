@@ -11,11 +11,13 @@
 
 import * as claudeCode from './claude-code.js';
 import * as codex from './codex.js';
+import * as antigravityCli from './antigravity-cli.js';
 import { PLANNED, SHORT_NAME_TO_ID, implementedShortNames } from './names.js';
 
 const ADAPTERS = {
   [claudeCode.ID]: claudeCode,
   [codex.ID]: codex,
+  [antigravityCli.ID]: antigravityCli,
 };
 
 export function getAdapter(id) {

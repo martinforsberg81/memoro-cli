@@ -173,3 +173,15 @@ it('preserves the API reserve decision for an unusable subscription and refuses 
     assert.equal(calls.length, 1, 'API off must launch neither API nor an unusable subscription');
   }
 });
+
+it('on agy a manager turn is finished by a SUCCESS result alone and its json output is priced for the model launched', async t => {
+  const f = fixture(t, 'agy');
+  const agy = () => ({ ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: getAdapter('antigravity-cli'), spec: { bin: '/fake/agy' } });
+  const result = (status, extra = {}) => JSON.stringify({ conversation_id: 'c1', status, response: 'Done', num_turns: 2, usage: { input_tokens: 10415, output_tokens: 657, cache_read_tokens: 8113 }, ...extra });
+  const run = async stdout => runManagerTurn({ ...f.options, model: 'gemini-4-argon-high', deps: { ...f.options.deps, launch: agy, session: async () => ({ status: 0, stdout, stderr: '' }) } });
+  const good = await run(result('SUCCESS'));
+  assert.deepEqual([good.ok, good.note, good.answer, good.model], [true, 'success', 'Done', 'gemini-4-argon-high']);
+  assert.ok(Math.abs(good.cost - 0.0282113) < 1e-9, 'priced as the model launched: 10415 uncached input, 657 output, 8113 cached' + ` (got ${good.cost})`);
+  assert.equal((await run(result('ERROR', { error: 'the model stopped' }))).ok, false);
+  assert.equal((await run('')).ok, false);
+});

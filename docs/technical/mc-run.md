@@ -336,7 +336,7 @@ says so in one line. Sessions already running are otherwise untouched.
 
 ### Launch settings
 
-`mc model priority [auto|codex|claude]` saves one global provider preference in
+`mc model priority [auto|codex|claude|agy]` saves one global provider preference in
 `runner/models.json`; an absent value is `auto`. The runner rereads it for each
 fresh class-routed build, review and plan launch, including headless programme
 planning, while an already-running conversation is unchanged. A preferred
@@ -351,7 +351,7 @@ API-off guards still apply.
 `auto` keeps capacity balancing. Manager and intake use role-appropriate
 provider models; manual explicit tool/model choices and interactive `mc plan`
 and `mc manager` retain their selections. The page displays this setting and
-its menu's `priority auto|codex|claude` command writes through `mc model`.
+its menu's `priority auto|codex|claude|agy` command writes through `mc model`.
 
 Class routing supplies the tool, model and effort. The shared internal
 `SESSION_DEFAULTS` fallback still has these rows (`step` is an internal key,
@@ -367,7 +367,10 @@ not a unit of runnable work):
 - **`model:`** — `opus` by default in shared settings; a goal's model comes
   from its catalog candidate, not from a field in its brief.
 - **`effort:`** is passed through the adapter: Claude `--effort`, Codex
-  `-c model_reasoning_effort=<level>`. Codex's model goes to
+  `-c model_reasoning_effort=<level>`; agy takes its effort in the model slug
+  (`gemini-4-argon-high`) and gets no effort flag, so the catalog refuses an agy
+  candidate whose effort differs from its slug's level (`mc model add` and `set`
+  say so, exit 2). Codex's model goes to
   `codex exec -m <name>`. The legacy schema names `haiku` and `opus` on claude,
   `gpt-6.1-sol` and `gpt-6-luna` on codex; catalog candidates are tool-specific.
 - **`check_in_minutes:`** — 60 minutes by default: Claude receives a prompt
@@ -382,13 +385,42 @@ The headless argument shapes include:
 ```
 claude -p [--effort …] [--advisor …] --autocompact 150000
 codex exec [-m …] [-c model_reasoning_effort=…]
+agy -p '<role instructions> --- TASK --- <task>' --output-format stream-json|json \
+    --dangerously-skip-permissions --disable-slash-commands [--model <slug>] [--conversation <id>]
 ```
+
+agy has no instructions flag: the role's markdown leads the one `-p` argument,
+behind a `--- TASK ---` separator, and a resumed conversation (`--conversation`)
+gets the task alone. A session whose output mc reads whole (plan review, the
+helper and manager turns) takes `--output-format json`; plan review adds
+`--add-dir <checkout>` before it. That one argument stays within Linux's 128 KiB
+single-argument limit (`MAX_ARG_STRLEN`); the largest role text is about 18 KB
+with the shared text. agy's output is read by the `agy-stream` reader: the
+`result` event's (or the json object's) `status`, `response`, `num_turns`,
+`usage` and `error`, tokens as reported (`input_tokens` is the uncached input,
+`output_tokens` holds the thinking, cache reads are read beside the input and
+never subtracted). A non-`SUCCESS` status, an `error`, a non-zero exit or an
+empty stdout at exit 0 is a failed session; a quota text is `quota`; a missing
+sign-in or a locked keyring is a `login` refusal, which agy's plan counts as a
+plan refusal (`LOGIN_REFUSES_PLAN`).
 
 `AUTOCOMPACT_TOKENS` (150 000) bounds Claude's context; Codex has no equivalent
 flag here. Both use the shared instruction assembler and their native tool
 adapters. Native delegation is the tool's; mc starts and counts no subagents.
 Claude's allowlist stays narrow and strict MCP configuration excludes
 user-level servers.
+
+**Installing agy** is Martin's act, once: put `agy` on the runner's `PATH`, sign
+in (`agy` once, interactively), and leave the `login` keyring collection
+unlocked, since agy keeps its sign-in in the Secret Service and a locked
+collection reads as a login refusal. The runner's child already has the user's
+D-Bus session bus, so mc adds nothing; an empty-password login keyring, or
+unlocking it at login, lets an unattended session reach it. Then add agy to
+the catalog with `mc model` (`mc model add review agy:gemini-4-argon-high:high`,
+`mc model priority agy`); the defaults already list it first in review. agy
+runs unattended sessions only: `mc plan`, `manager`, `martin`, `helper`,
+`mc session` and the work-area opener refuse it with exit 2, before writing
+anything, and name `--claude` and `--codex` instead.
 
 ## What the runner writes
 
@@ -435,7 +467,10 @@ are recorded separately for the next launch.
 
 ### Billing
 
-Every MC session starts on its selected provider's subscription. A current plan
+Every MC session starts on its selected provider's subscription. agy runs on
+its plan only: it declares no API route, so the reserve below never launches it
+and an agy candidate that is spent or refusing is passed by, never routed to a
+key. A current plan
 window below 100% remains eligible. At 100%, or after that provider refuses a
 plan request, the next launch uses its API key through the local billing gateway.
 This applies to every current MC session path: build, review, repair, mend,
@@ -553,6 +588,18 @@ unknown, stale, failed or reset usage ahead of known Codex capacity; unknown
 does not mean zero. With no usable subscription, priority orders API reserve
 candidates. The review waits when the selected API is off.
 
+**Review's first candidate is its first choice.** Whenever the catalog's first
+review candidate can run (not refused, not exhausted, its tool launchable, and
+either known under the plan limit or unknown on a tool that bootstraps) review
+takes it, whatever the others' headroom, and a provider priority does not
+outrank it. Only build-model avoidance does: when the first candidate's model
+built the goal, or in plan review when it wrote the text, the ranking above
+chooses, as it does among the rest when the first cannot run. The API reserve
+takes only a candidate whose tool declares an API route; a list whose
+candidates have none waits, naming each and "no API route". A candidate whose
+tool cannot be launched here (agy not on `PATH`) is *unavailable*, never
+chosen, and review falls through to the next.
+
 **The catalog** is Martin's. `mc model` is its only writer, and the file is
 written whole or not at all:
 
@@ -573,8 +620,8 @@ written whole or not at all:
 With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6-luna:high`; `large`, `claude:opus:medium` then
 `codex:gpt-6.1-sol:high`; `medium`, `claude:sonnet:high` then
-`codex:gpt-6.1-terra:high`; review, `claude:opus:medium` then
-`codex:gpt-6.1-sol:medium`; finish, `claude:opus:high` then
+`codex:gpt-6.1-terra:high`; review, `agy:gemini-4-argon-high:high`, then
+`claude:opus:medium`, then `codex:gpt-6.1-sol:medium`; finish, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
 `codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
@@ -601,6 +648,28 @@ never zero.
   (`observeClaudeStream`). A refusal a session got is written as the provider's
   refusal until its reset, or for the quota sleep when none is named
   (`refuseProvider`). No account read and no extra turn.
+- **agy is read by `agy -p /usage --output-format text`** (`agy-capacity.js`,
+  the `agy-usage` reader), at startup and every 15 minutes, in the runner's
+  environment less the provider API keys and agy's dropped variables, bounded to
+  60 s and 1 MiB; agy has no usage API. Per model group it takes "Five Hour
+  Limit Remaining" and "Weekly Limit Remaining" percentages (fraction used is
+  one minus remaining) and the tightest group is the provider's. Only what was
+  read is stored: a window with a printed reset is a window; one with none is not
+  stored, reads *unknown*, and agy bootstraps on it (no reset is invented); a
+  window at its limit with no reset is a refusal until the read's time plus the
+  quota sleep, renewed by each read while it stays full. Output holding no limit
+  line is a failed read: the last valid snapshot is kept and marked failed, the
+  choice is judged on it, and the reader stops for the life of the runner after
+  the first one (the runner log says so once), so a `/usage` that agy took as a
+  prompt costs one turn, not one per poll. The format is documented, not
+  recorded (`tests/fixtures/agy/README`).
+- **A plan refusal is written by every unattended caller.** A session whose
+  read is `quota`, or a `login` on a tool whose plan counts it as a refusal
+  (agy, claude), on the plan route, is written as the provider's refusal until
+  the reset it names, else for the quota sleep, by one function
+  (`plan-refusal.js`) the runner's `refuseProvider`, plan review, the helper
+  and manager turns, the learning pass and desk preparation all call; a write
+  that fails is said and the session's result stands.
 - **Both providers are polled independently** at startup when no recent attempt
   exists, then every 15 minutes, outside chores and lanes. Reads do not overlap
   per provider; failures suppress retries for 15 minutes. A pending UPDATE

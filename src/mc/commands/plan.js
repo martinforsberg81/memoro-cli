@@ -48,6 +48,7 @@ import { run as runGit } from '../git.js';
 import { planSessionRefusal } from '../session-role.js';
 import { PLAN_ROLE } from '../goals.js';
 import { scanArgs } from './flags.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 import { commandUsage } from '../command-help.js';
 import { canonRoot } from '../canon.js';
 
@@ -159,6 +160,13 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  const tool = opts.tool || role.tools?.[0] || 'claude';
+  const notInteractive = interactiveToolRefusal(tool);
+  if (notInteractive) {
+    stderr.write(`mc: ${notInteractive}\n`);
+    return 2;
+  }
+
   const ready = (deps.ensure || ensurePlanArea)(programme, { repos, env, stdout, stderr, git: deps.git });
   if (!ready.ok) return 1;
 
@@ -178,7 +186,7 @@ export async function run(argv, deps = {}) {
     programme,
     areaRoot: ready.path,
     worktree: { repo: null, path: ready.path, is_git: false },
-    tool: opts.tool || role.tools?.[0] || 'claude',
+    tool,
     pick: opts.fresh ? 'new' : opts.resume,
     resumeTool: opts.tool,
     stdout,

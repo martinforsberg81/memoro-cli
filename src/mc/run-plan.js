@@ -642,7 +642,18 @@ export function sessionResult(stdout) {
  * wall-clock cap, which that lane keeps, and stays `timeout`.
  */
 /** The output readers this module implements, by the name an adapter declares. */
-const OUTPUT_READERS = new Set(['claude-stream', 'codex-events']);
+const OUTPUT_READERS = new Set(['claude-stream', 'codex-events', 'agy-stream']);
+
+/**
+ * Whether a headless session finished its work as its read says, for every
+ * tool alike: it exited 0 without timing out, hit no quota, was not
+ * interrupted, and its read is neither `failed` nor `no-json` (a non-SUCCESS
+ * result, an error, or an empty stdout at exit 0 is one of those). The outward
+ * `ok` of the manager turn and the helper turn.
+ */
+export function sessionFinished(result, read) {
+  return result.status === 0 && !result.timedOut && !read.quota && !read.interrupted && !['failed', 'no-json'].includes(read.note);
+}
 
 /**
  * The text a headless session answered with, read by the output reader its
@@ -651,6 +662,7 @@ const OUTPUT_READERS = new Set(['claude-stream', 'codex-events']);
 export function sessionAnswer(toolId, stdout) {
   const reader = requireCapability(toolId, 'OUTPUT_READER');
   if (reader === 'claude-stream') return sessionResult(stdout)?.result || '';
+  if (reader === 'agy-stream') return readAgyOutput(stdout).result?.response || '';
   if (reader !== 'codex-events') throw new Error(`${toolId} declares output reader ${reader}, which mc cannot read`);
   let answer = '';
   for (const line of String(stdout || '').split('\n')) {
@@ -672,6 +684,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   // runner slept 30 min and left a finished PR unmerged on exactly that.
   if (stalled) return { ...dash, note: 'stalled', quota: false };
   if (timedOut) return { ...dash, note: 'timeout', quota: false };
+  if (reader === 'agy-stream') return readAgySession({ stdout, stderr, exitCode, now, model, dash });
   if (reader === 'codex-events') {
     // Codex's own refusals are its `error` and `turn.failed` events; the rest
     // of the stream is the session's work, which may well say "quota" — on
@@ -738,6 +751,79 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     note: quota ? 'quota' : (interrupted ? (interrupted.kind === 'offline' ? 'offline' : 'interrupted') : (json.is_error ? 'failed' : pick(json.subtype ?? '-'))),
     quota,
     quotaReset: quota ? quotaResetAt(text, now) : null,
+  };
+}
+
+/**
+ * What agy printed, from either documented shape: stream-json's NDJSON events
+ * (`init`, `step_update`, `result`, each payload under its own name) or the
+ * json mode's one terminal object, unwrapped. `result` is the terminal object
+ * (`conversation_id`, `status`, `response`, `num_turns`, `usage`, `error`), or
+ * null when none was printed (a session ended before its result); `session` is
+ * the conversation id of the result, else of `init`.
+ */
+export function readAgyOutput(stdout) {
+  const text = String(stdout || '');
+  let init = null;
+  let result = null;
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('{')) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.event === 'init') init = { conversation_id: event.conversation_id ?? event.init?.conversation_id, ...(event.init || {}) };
+    if (event?.event === 'result' && event.result && typeof event.result === 'object') result = { conversation_id: event.conversation_id, ...event.result };
+  }
+  if (!result) {
+    let whole = null;
+    try { whole = JSON.parse(text); } catch { whole = null; }
+    if (whole && typeof whole === 'object' && !Array.isArray(whole) && !whole.event && ('status' in whole || 'response' in whole || 'usage' in whole)) result = whole;
+  }
+  return { init, result, session: result?.conversation_id ?? init?.conversation_id ?? null };
+}
+
+const AGY_LOGIN_RE = /authentication required|please sign in|secret keyring is locked|keyring is locked|collection is locked/iu;
+const agyText = (value) => (typeof value === 'string' ? value : value && typeof value === 'object' ? String(value.message ?? value.error ?? JSON.stringify(value)) : '');
+
+/**
+ * agy's session, read for the runner's row (ruling D6). Tokens as agy reports
+ * them: `input_tokens` is the uncached input and cache reads are never taken
+ * out of it, `output_tokens` already holds the thinking, `cache_read_tokens`
+ * is read beside input, and there is no cache write. A result whose status is
+ * not SUCCESS or that carries an `error`, a non-zero exit, and an empty stdout
+ * at exit 0 are each a failed session, never a finished one. A result that was
+ * never printed (the session was ended) is `no-json`. A quota text in the
+ * error or on stderr is `quota`; a missing sign-in, or a locked keyring, is a
+ * `login` interruption.
+ */
+function readAgySession({ stdout, stderr, exitCode, now, model, dash }) {
+  const { result, session } = readAgyOutput(stdout);
+  const usage = result?.usage || {};
+  const pick = (value) => (value == null ? '-' : String(value));
+  const counts = {
+    turns: pick(result?.num_turns),
+    session: session ?? '-',
+    input: pick(usage.input_tokens),
+    output: pick(usage.output_tokens),
+    cacheRead: pick(usage.cache_read_tokens),
+    cacheWrite: result?.usage ? '0' : '-',
+  };
+  const priced = result?.usage && usage.output_tokens != null
+    ? estimateCost({ input: Number(usage.input_tokens) || 0, output: Number(usage.output_tokens) || 0, cacheRead: Number(usage.cache_read_tokens) || 0 }, model)
+    : null;
+  const errorText = `${agyText(result?.error)}\n${stderr || ''}`;
+  const status = result ? String(result.status ?? '') : '';
+  const failed = exitCode !== 0 || (result ? (status !== 'SUCCESS' || result.error != null) : !String(stdout || '').trim());
+  if (!failed && result) return { ...dash, ...counts, cost: priced, note: 'success', quota: false };
+  if (!failed) return { ...dash, ...counts, cost: priced, note: 'no-json', quota: false };
+  const login = AGY_LOGIN_RE.test(errorText);
+  const quota = !login && quotaSeen(errorText);
+  const said = errorText.trim().split('\n')[0].slice(0, 200);
+  return {
+    ...dash, ...counts, cost: priced,
+    ...(quota || login ? { interrupted: quota ? 'quota' : 'login', said, creditsUntil: null } : {}),
+    note: quota ? 'quota' : (login ? 'interrupted' : 'failed'),
+    quota,
+    quotaReset: quota ? quotaResetAt(errorText, now) : null,
   };
 }
 

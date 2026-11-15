@@ -58,7 +58,8 @@ import { programsHome } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
-import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
+import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, sessionFinished, TIMEOUT_EXIT } from './run-plan.js';
+import { refusePlanOnRead } from './plan-refusal.js';
 
 /** One turn over one file. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
@@ -363,12 +364,13 @@ export async function runHelperTurn({
     release();
   }
   const read = readSessionOutput({
-    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now,
+    toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now, model: selectedModel,
   });
+  refusePlanOnRead({ read, launch, billing: billing.billing, env, now, say: deps.say });
   const after = listAll(env);
   const wrote = after.filter((p) => !before.has(p.path));
   return {
-    ok: result.status === 0 && !result.timedOut,
+    ok: sessionFinished(result, read),
     status: result.status,
     note: read.note,
     quota: read.quota,
@@ -381,6 +383,7 @@ export async function runHelperTurn({
     output: read.output,
     cacheRead: read.cacheRead,
     cacheWrite: read.cacheWrite,
+    cost: read.cost,
     stdout: result.stdout,
     stderr: result.stderr,
     model: selectedModel,

@@ -32,6 +32,7 @@
  */
 import { spawnSync } from 'node:child_process';
 
+import { providerPriorities } from '../../adapters/index.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { run as runGit } from '../git.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
@@ -292,7 +293,7 @@ export function parsePageArgs(argv) {
 
 const KEYS = [
   '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk',
-  '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
+  `  p  plan a programme   ·   priority <${providerPriorities().join('|')}>   ·   f  fresh from GitHub   ·   q  quit`,
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',

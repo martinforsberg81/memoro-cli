@@ -12,9 +12,23 @@
  * tie. A provider priority ranks its eligible subscription candidates first,
  * and the other provider's eligible subscriptions before either API reserve.
  *
- * Review chooses the plan with most known headroom. On equal headroom it
- * prefers a model other than the build model, then catalog order. Unknown
- * capacity ranks after measured capacity. API reserve remains the fallback.
+ * Review's first candidate is its first choice: it runs whenever it can (not
+ * refused, not exhausted, its tool launchable, and known under the plan limit or
+ * unknown on a tool that bootstraps). Only build-model avoidance outranks it:
+ * when the first candidate's model built the goal, or when the caller says the
+ * catalog's first is not in the list (`first: null`, plan review having removed
+ * the author), the ranking below chooses, as it does among the rest when the
+ * first cannot run.
+ *
+ * Otherwise review chooses the plan with most known headroom. On equal headroom
+ * it prefers a model other than the build model, then catalog order. Unknown
+ * capacity ranks after measured capacity. API reserve remains the fallback, and
+ * it takes only a candidate whose tool declares an API route (`apiProviders()`):
+ * a tool with none is never launched on a spent or refusing plan, and when no
+ * candidate has a route the list waits (`ok: false, transient: true`).
+ *
+ * Whether a tool can launch is the caller's to say (`launchable`, a tool name
+ * to a boolean): this module reads no file and no process. The default says yes.
  *
  * A candidate is judged at `now` as:
  *   - refused: its provider refused and the refusal has not passed. Never chosen.
@@ -34,7 +48,7 @@
  *     the ChatGPT entitlement and a failed one as its absence. That is an
  *     inference; an `account/read` would make it a fact.
  */
-import { declared } from '../adapters/index.js';
+import { apiProviders, declared } from '../adapters/index.js';
 import { candidateSpec, LISTS } from './model-config.js';
 import { codexCandidateAt, providerAt, STALE_MS } from './model-capacity.js';
 import { REVIEW_CLASS } from './plan-schema.js';
@@ -78,15 +92,42 @@ function judge(capacity, candidate, now) {
   return windowStanding(provider, standing);
 }
 
+/** Whether a candidate's tool declares an API route its reserve can use. */
+const hasApiRoute = (candidate) => apiProviders().includes(declared(candidate.tool, 'BILLING_PROVIDER'));
+const sameCandidate = (a, b) => a.tool === b.tool && a.model === b.model && a.effort === b.effort;
+
+/** The wait a list answers when its reserve has no candidate to take: each candidate and why, "no API route" where it has none. */
+function waiting(cls, judged) {
+  const instants = judged.map((entry) => entry.retry_at).filter(Boolean);
+  return {
+    ok: false,
+    transient: true,
+    class: cls,
+    reason: `no ${cls} candidate has capacity — ${judged.map((entry) => `${candidateSpec(entry.candidate)}: ${entry.why}${hasApiRoute(entry.candidate) ? '' : '; no API route'}`).join('; ')}`,
+    retry_at: instants.length ? earliest(instants) : null,
+  };
+}
+
 const answer = (cls, candidate, basis, headroom, why) => ({ ok: true, class: cls, candidate, spec: candidateSpec(candidate), basis, headroom, why });
 
-/** Review ranks provider preference first, then plan headroom; build-model avoidance breaks ties. */
-function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
+/**
+ * Review takes its first candidate when it can run; otherwise it ranks provider preference first, then plan
+ * headroom, and build-model avoidance breaks ties. `first` is the catalog's first candidate: absent, the list's
+ * own first; `null`, none (the catalog's first is not in this list).
+ */
+function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto', launchable = () => true, first = undefined) {
   const list = catalog.review;
   const builtOn = (value) => Boolean(avoid?.model) && value.model === avoid.model;
   const others = list.filter((value) => !builtOn(value));
   const order = [...others, ...list.filter(builtOn)];
-  const judged = order.map((value) => ({ candidate: value, ...judge(capacity, value, now) }));
+  const judged = order.map((value) => (launchable(value.tool)
+    ? { candidate: value, ...judge(capacity, value, now) }
+    : { candidate: value, state: 'unavailable', headroom: null, retry_at: null, why: `${value.tool} cannot be launched here` }));
+  const firstCandidate = first === undefined ? list[0] : first;
+  const firstEntry = firstCandidate && !builtOn(firstCandidate) ? judged.find((entry) => sameCandidate(entry.candidate, firstCandidate)) : null;
+  if (firstEntry && (firstEntry.state === 'known' || (firstEntry.state === 'unknown' && bootstraps(firstEntry.candidate.tool)))) {
+    return answer(cls, firstEntry.candidate, firstEntry.state === 'unknown' && priority !== 'auto' ? 'bootstrap' : 'preferred', firstEntry.headroom ?? null, `review candidate ${list.indexOf(firstEntry.candidate) + 1}, the first choice — ${firstEntry.why}`);
+  }
   const passed = (entry) => `${candidateSpec(entry.candidate)}: ${entry.why}`;
   const allKnown = judged.some((entry) => entry.state === 'known');
   const eligible = judged.filter((entry) => entry.state === 'known' || (!allKnown && entry.state === 'unknown' && bootstraps(entry.candidate.tool)));
@@ -112,9 +153,10 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
     return answer(cls, chosen.candidate, chosen.state === 'unknown' && priority !== 'auto' ? 'bootstrap' : 'preferred', chosen.headroom ?? null, `${reasons.length ? `${place} — ${reasons.join('; ')}` : `${place}, the first`}${fallback}`);
   }
   const ordered = priority === 'auto' ? judged : [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
-  const [first] = ordered;
+  const reserve = ordered.find((entry) => hasApiRoute(entry.candidate) && launchable(entry.candidate.tool));
+  if (!reserve) return waiting(cls, judged);
   const priorityWhy = priority === 'auto' ? '' : `; ${priority} priority has no usable subscription`;
-  return { ...answer(cls, first.candidate, 'api', null, `${judged.map(passed).join('; ')}${priorityWhy}; API reserve`), billing: 'credits' };
+  return { ...answer(cls, reserve.candidate, 'api', null, `${judged.map(passed).join('; ')}${priorityWhy}; API reserve`), billing: 'credits' };
 }
 
 /**
@@ -134,10 +176,13 @@ function chooseReview(cls, catalog, capacity, now, avoid, priority = 'auto') {
  *
  * `avoid` (`{ tool, model }`, review only) is the model a goal's last build
  * session ran on: review avoids it on equal headroom, and uses the API
- * reserve only when no candidate can run on its plan.
+ * reserve only when no candidate can run on its plan. `launchable` and `first`
+ * are review's too: whether a tool can launch (a function of the tool's name,
+ * default yes), and the catalog's first candidate when the list given is a
+ * reduction of it (`null` when the reduction removed it).
  */
-export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto' }) {
-  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority);
+export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoid = null, priority = 'auto', launchable = () => true, first }) {
+  if (cls === REVIEW_CLASS) return chooseReview(cls, catalog, capacity, now, avoid, priority, launchable, first);
   if (!LISTS.includes(cls)) throw new Error(`"${cls}" is not a list — ${LISTS.join(', ')}`);
   const judged = catalog[cls].map((candidate) => ({ candidate, ...judge(capacity, candidate, now) }));
   if (cls === 'decision') {
@@ -158,7 +203,7 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
       return answer(cls, best.candidate, best.state === 'unknown' ? 'bootstrap' : 'known', best.headroom, `${best.why} — ${priority} provider priority${fallback}`);
     }
     const ordered = [...judged.filter((entry) => entry.candidate.tool === priority), ...judged.filter((entry) => entry.candidate.tool !== priority)];
-    const reserve = ordered.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state));
+    const reserve = ordered.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && hasApiRoute(entry.candidate));
     if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; ${priority} priority has no usable subscription; API reserve`), billing: 'credits' };
   }
   const known = judged.filter((entry) => entry.state === 'known');
@@ -168,14 +213,7 @@ export function chooseCandidate({ cls, catalog, capacity, now = new Date(), avoi
   }
   const bootstrap = judged.find((entry) => entry.state === 'unknown' && bootstraps(entry.candidate.tool));
   if (bootstrap) return answer(cls, bootstrap.candidate, 'bootstrap', null, `${bootstrap.why} — bootstrapped on the included plan`);
-  const reserve = judged.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state));
+  const reserve = judged.find((entry) => ['exhausted', 'refused', 'unavailable'].includes(entry.state) && hasApiRoute(entry.candidate));
   if (reserve) return { ...answer(cls, reserve.candidate, 'api', null, `${reserve.why}; API reserve`), billing: 'credits' };
-  const instants = judged.map((entry) => entry.retry_at).filter(Boolean);
-  return {
-    ok: false,
-    transient: true,
-    class: cls,
-    reason: `no ${cls} candidate has capacity — ${judged.map((entry) => `${candidateSpec(entry.candidate)}: ${entry.why}`).join('; ')}`,
-    retry_at: instants.length ? earliest(instants) : null,
-  };
+  return waiting(cls, judged);
 }
