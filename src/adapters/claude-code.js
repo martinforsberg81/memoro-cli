@@ -543,6 +543,9 @@ export const BILLING_PROVIDER = 'claude';
 /** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
 export const PROVIDER_PRIORITY_RANK = 1;
 
+/** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */
+export const CAPACITY_READER = 'claude-usage';
+
 /** The plan windows a usage snapshot carries for this tool, in order. */
 export const PLAN_WINDOWS = Object.freeze(['five_hour', 'seven_day']);
 

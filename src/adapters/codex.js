@@ -601,6 +601,9 @@ export const BILLING_PROVIDER = 'codex';
 /** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
 export const PROVIDER_PRIORITY_RANK = 0;
 
+/** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */
+export const CAPACITY_READER = 'codex-rpc';
+
 /** The plan windows a usage snapshot carries for this tool, in order. */
 export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
 
