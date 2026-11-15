@@ -594,6 +594,9 @@ function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []
     lines.push(...body);
     lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'cyan')}`);
   }
+  // A last programme drawn as its heading alone has no border under it: a blank
+  // line keeps what follows (unassigned activity, strays) from reading as its rows.
+  if (alone) lines.push('');
   const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
   // Match identities rather than object references: cached JSON copies sessions.
   const identity = (session) => JSON.stringify([session.name, session.pid, session.started]);

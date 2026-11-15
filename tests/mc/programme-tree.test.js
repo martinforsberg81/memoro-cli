@@ -234,6 +234,17 @@ describe('PROGRAMMES without finished goals', () => {
     assert.ok(width(lines[first]) <= 120);
   });
 
+  it('separates a last programme drawn as its heading alone from the unassigned activity under it', () => {
+    const currents = [{ name: 'mend:main-red', kind: 'mend', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
+    const data = page([goal('z', 1, { programme: 'alpha' }), ...goalsFor(['x', 1, { stage: 'done' }])], { currents });
+    const lines = draw(data);
+    const heading = lines.findIndex((line) => /^  ┌─ inbox /u.test(line));
+    const unassigned = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
+    assert.ok(heading >= 0 && unassigned > heading, 'inbox is the last programme, the activity follows it');
+    assert.equal(lines[heading + 1], '', 'a blank line under the lone heading');
+    assert.equal(unassigned, heading + 2);
+  });
+
   it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {
     const currents = [{ name: 'goal:inbox/live', kind: 'build', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
     const data = page(goalsFor(['live', 1, { stage: 'done' }], ['gone', 1, { stage: 'done' }], ['open', 2]), { currents });
@@ -245,6 +256,35 @@ describe('PROGRAMMES without finished goals', () => {
     assert.ok(!lines.some((line) => /UNASSIGNED ACTIVITY/u.test(line)), 'its session is under it, not unassigned');
     const after = draw(page(goalsFor(['live', 1, { stage: 'done' }], ['open', 2])));
     assert.ok(!after.some((line) => line.includes('Title live')), 'once the session has ended it leaves');
+  });
+
+  it('keeps a running finished goal in its phase, not under NEEDS ATTENTION, also with a refusal in its log', () => {
+    const currents = [{ name: 'goal:inbox/live', kind: 'build', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
+    const goals = goalsFor(['live', 1, { stage: 'done', log: [entry('claude', 'done'), entry('runner', 'done', `not archived — ${REFUSAL}`)] }], ['open', 2]);
+    assert.equal(goalsOf({ goals, currents, alive: () => true }).find((row) => row.name === 'live').archive_refused, REFUSAL);
+    for (const expand of [false, true]) {
+      const lines = draw(page(goals, { currents }), { expand });
+      const phase = lines.findIndex((line) => /Phase 1/u.test(line));
+      const live = lines.findIndex((line) => line.includes('Title live'));
+      assert.ok(phase >= 0 && live > phase, `drawn in its phase, expand ${expand}`);
+      assert.ok(!lines.some((line) => /NEEDS ATTENTION/u.test(line)), 'at work beats a refusal');
+      // Expanded, a goal's last log comment is drawn as its detail; that is the log, not a refusal row.
+      if (!expand) assert.ok(!lines.some((line) => line.includes(REFUSAL)), 'no reason drawn while a session owns it');
+    }
+    const after = draw(page(goals));
+    assert.ok(after.some((line) => line.includes('NEEDS ATTENTION')), 'once the session has ended the refusal is drawn');
+  });
+
+  it('draws no finished goal for its status alone: a done goal that is Martin or blocked is not drawn by default', () => {
+    const goals = goalsFor(['asks', 1, { stage: 'done', status: 'Martin' }], ['halted', 1, { stage: 'dropped', status: 'blocked' }], ['open', 2]);
+    const data = page(goals);
+    assert.equal(data.programmes.programmes[0].finished, 2);
+    const lines = draw(data);
+    for (const name of ['asks', 'halted']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
+    assert.ok(!lines.some((line) => /Phase 1|NEEDS ATTENTION|▸ Finished/u.test(line)));
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), / · 2 done/u);
+    const expanded = draw(data, { expand: true });
+    for (const name of ['asks', 'halted']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
   });
 
   it('puts a finished goal the runner refused to archive under NEEDS ATTENTION with the reason, in both views', () => {
