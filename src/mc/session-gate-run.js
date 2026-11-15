@@ -17,6 +17,9 @@ import { captureWorktree, findResumable, gateReceipt, persistGateReceipt, persis
 import { classifiedEmptyChange, commandIdentity, emptyChangeCoverage } from './gate-greens.js';
 import { settleRed } from './gate-settle.js';
 
+/** How long an interrupted run may take to see its children close before the worker stops waiting. */
+const CUT_GRACE_MS = 2_000;
+
 export const quote = (word) => `'${String(word).replace(/'/gu, "'\\''")}'`;
 
 // A stop invalidates successful progress metadata, not the evidence collected.
@@ -121,21 +124,26 @@ export async function runSessionGate(request, {
     try {
       // Cut when the signal comes, as well as stopped by it: a child that ignores
       // its signal must not hold the gate past the ceiling (repo-gate.js's `untilCeiling`).
+      // The run gets a short grace to unwind first: its children's process groups
+      // are killed at the abort and are gone once the run has seen them close, so a
+      // worker that ends only after that leaves no test process behind it.
+      let execution = null;
       const cut = new Promise((resolve) => {
         const stop = () => {
           if (!stopped) stopped = { progress: tracker.read(), outcomes: tracker.outcomes() };
-          resolve(null);
+          const grace = setTimeout(() => resolve(null), CUT_GRACE_MS);
+          grace.unref?.();
+          Promise.resolve(execution).catch(() => {}).then(() => { clearTimeout(grace); resolve(null); });
         };
         if (signal.aborted) stop();
         else signal.addEventListener('abort', stop, { once: true });
       });
-      const result = await Promise.race([
-        executeSessionGate(request, { ...deps, prior, launched, spans, clock, onSelector: (read) => { selectorRead = read; }, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
+      execution = executeSessionGate(request, { ...deps, prior, launched, spans, clock, onSelector: (read) => { selectorRead = read; }, signal, track: tracker.track, complete: tracker.complete, read: tracker.read, outcomes: tracker.outcomes,
           onPhase: (next, active, files = []) => {
             if (active) activePhases.add(next); else activePhases.delete(next);
             if (files.length) pendingFiles = files;
-          }, onProgress: (next) => { live = next; } }), cut,
-      ]);
+          }, onProgress: (next) => { live = next; } });
+      const result = await Promise.race([execution, cut]);
       if (!timedOut) return result ?? stoppedResult(live, 'interrupted');
       // What did not finish is the red, and is named; the slowest files that did
       // finish are for the reader. Asked files that never started are unfinished too.
