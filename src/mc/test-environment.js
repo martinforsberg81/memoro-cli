@@ -157,9 +157,16 @@ export function mainCheckout(env = process.env) {
 }
 
 /**
- * Fast-forward the shared checkout to origin/main when it is on main and clean,
- * and say why not otherwise: `{ moved: true, from, to }` or `{ moved: false, why }`,
- * with `refused` when the checkout itself holds it back (off main, dirty, diverged).
+ * Fast-forward the shared checkout to origin/main when it is clean and on main
+ * or on no branch, and say why not otherwise: `{ moved: true, from, to }` or
+ * `{ moved: false, why }`, with `refused` when the checkout itself holds it back
+ * (on another branch, dirty, diverged).
+ *
+ * On no branch is how the checkout follows main where it cannot be on it: a
+ * repository kept bare with linked worktrees gives `main` to one worktree, the
+ * deploy's, and git refuses the branch to a second (the server, 2026-11-15: the
+ * shared checkout stood a week behind and the deploy's suites could not run). A
+ * detached HEAD that origin/main descends from is fast-forwarded the same way.
  *
  * Nothing else in mc fast-forwards `~/mc/self/memoro`. Deploy and language
  * fast-forward their own checkouts under mc's home, and `repo-merge` pulls mc's
@@ -170,7 +177,7 @@ export function mainCheckout(env = process.env) {
 export function followMain(worktree, deps = {}) {
   const git = deps.git || ((args) => runGit(worktree, args));
   const branch = String(git(['branch', '--show-current']).stdout || '').trim();
-  if (branch !== 'main') return { moved: false, refused: true, why: `on ${branch || 'no branch'}, not main` };
+  if (branch && branch !== 'main') return { moved: false, refused: true, why: `on ${branch}, not main or a detached commit of it` };
   const dirty = git(['status', '--porcelain']);
   if (dirty.status !== 0) return { moved: false, why: 'git status failed' };
   if (String(dirty.stdout || '').trim()) return { moved: false, refused: true, why: 'uncommitted changes' };
