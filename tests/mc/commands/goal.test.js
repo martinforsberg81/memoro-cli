@@ -1381,7 +1381,7 @@ test('mc goal convert gives every goal written with one status its stage: open i
     open: 'build · ready',
     judged: 'review · ready',
     queued: 'merge · ready',
-    'red-review': 'finish · blocked',
+    'red-review': 'build · blocked',
     'red-merge': 'merge · blocked',
     'no-verdict': 'review · blocked',
     asked: 'build · blocked',
