@@ -1076,6 +1076,50 @@ export async function runSuites({
   return { results, gone: [...gone], skipped: neverRan, revived };
 }
 
+/**
+ * One round of the declared suites against production: the base URL is the
+ * declaration's own (`environments.prod.base_url`), no server is started and
+ * none is revived, and the token mc holds for the test account is put into the
+ * environment of the whole round (`tokenFor`) — `suiteEnv` builds the account
+ * link only for a suite that needs one against a base that is not loopback.
+ * It is what `mc test prod` runs and what the runner's check after a deploy
+ * runs (`deploy-check.js`): one function, so the two cannot disagree about
+ * what a round against production is.
+ *
+ * `gateOnly` keeps only the suites that gate a deploy (`isGate`); `only` names
+ * one. `onReady({ held, account })` is called once the token is read and
+ * before the first suite starts, for a caller that says whom the round signs
+ * in as. Returns `runSuites`' own result with `held` (`{ name, from }`, never
+ * the token), `account` (`accountAvailable`) and `baseUrl`.
+ */
+export async function productionRound({
+  declaration, worktree, baseUrl, only = null, gateOnly = false, env = process.env,
+  onReady = null, onStart = null, onEnd = null,
+}, deps = {}) {
+  const read = deps.tokenFor || tokenFor;
+  const probe = deps.answers || answers;
+  const run = deps.runSuites || runSuites;
+  const held = await read(declaration, env);
+  const suiteEnvironment = held.token ? { ...env, [held.name]: held.token } : env;
+  const account = accountAvailable(declaration, suiteEnvironment);
+  onReady?.({ held: { name: held.name, from: held.from }, account });
+  const chosen = gateOnly ? { ...declaration, suites: declaration.suites.filter(isGate) } : declaration;
+  const outcome = await run({
+    declaration: chosen,
+    worktree,
+    baseUrl,
+    staticBaseUrl: null,
+    only,
+    env: suiteEnvironment,
+    // Production is asked too: a deploy mid-round is the same shape of lie.
+    stillThere: () => probe({ health_url: `${baseUrl}/api/version` }),
+    revive: null,
+    onStart,
+    onEnd,
+  }, deps.suiteDeps || {});
+  return { ...outcome, held: { name: held.name, from: held.from }, account, baseUrl };
+}
+
 function tailOf(finished, lines = 12) {
   const text = `${finished.stdout || ''}${finished.stderr || ''}`.trimEnd();
   if (!text) return finished.error ? String(finished.error.message || finished.error) : '';
