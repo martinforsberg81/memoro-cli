@@ -2418,7 +2418,9 @@ describe('collectPage', () => {
     for (const columns of [160, 80]) {
       const lines = renderPageLines(data, { columns, now: NOW, expand: true, overview: true });
       assert.ok(lines.every((row) => width(row) <= columns));
-      const programmes = between(lines, 'PROGRAMMES', 'MERGE & DEPLOY');
+      // PROGRAMMES ends where `a` goes on to the operations sections, at the hero frame's top rule.
+      const start = lines.findIndex((row) => row.includes('PROGRAMMES'));
+      const programmes = lines.slice(start, lines.findIndex((row, i) => i > start && /^ {2}┌─+┐$/u.test(row)));
       const before = between(renderPageLines(without, { columns, now: NOW, expand: true, overview: true }), 'PROGRAMMES', 'IN FLIGHT');
       assert.ok(programmes.length > 3);
       assert.deepEqual(programmes, before, 'the PROGRAMMES lines are the ones the page drew before HORIZONS');
@@ -3917,12 +3919,25 @@ describe('the overview fits one screen', () => {
     });
 
     it('draws, under `a`, every programme row and every session with no budget, then the operations sections; collapsing returns the budget', () => {
-      const data = heavyDay();
+      // The 24-hour figures, in landed.js's shape, so the hero frame `a` draws carries them.
+      const data = { ...heavyDay(), landed: { goals: 2, without_goal: 1, prs: 3, attempts: 4, measured: 0, first_pass: 0 } };
       const all = draw(data, { overview: true, expand: true, columns: 120 });
       assert.ok(all.length > OVERVIEW_ROWS, 'a has no budget');
       assert.ok(!all.some((row) => FOLD_ROW.test(row.trim())), 'a folds nothing');
       for (let n = 1; n <= 30; n += 1) assert.ok(all.some((row) => row.includes(`prog-${nn(n)}`)), `prog-${nn(n)} is drawn`);
       assert.ok(all.some((row) => /SYSTEM/u.test(row)), 'the operations sections follow');
+      // The operations sections begin, as in `o`, with the hero frame: its 24-hour figures and the pipeline boxes.
+      const at = (pattern) => all.findIndex((row) => pattern.test(row));
+      const order = [/PROGRAMMES/u, /Programs: \d+ active/u, /Landed 24 h/u, /┌─ proposals/u, /MERGE & DEPLOY/u, /SYSTEM/u].map(at);
+      assert.ok(order.every((i) => i >= 0), `${order}\n${all.join('\n')}`);
+      assert.deepEqual(order, [...order].sort((a, b) => a - b), `in order: ${order}`);
+      // Each Manager keeps its frame and pid under `a`, below the hero frame (D6).
+      for (const pid of [6000, 6001]) {
+        const rows = all.map((row, i) => [row, i]).filter(([row]) => row.includes(`pid ${pid}`));
+        assert.equal(rows.length, 1, `manager pid ${pid} once`);
+        assert.ok(rows[0][1] > order[3] && rows[0][1] < order[4], `manager pid ${pid} between the hero frame and the panels`);
+      }
+      assert.ok(!draw(data, { columns: 120 }).some((row) => /Landed 24 h|┌─ proposals|pid 600[01]/u.test(row)), 'not in the folded overview');
       assert.ok(draw(data, { columns: 120 }).length <= OVERVIEW_ROWS, 'collapsed again');
     });
 

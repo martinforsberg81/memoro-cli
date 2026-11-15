@@ -1008,10 +1008,7 @@ export function renderPageLines(data, {
   if (open) {
     headerLines(lines, c, paintText, wide, data, version);
     deskLines(lines, c, wide, data.desk);
-    const managers = data.sessions?.desk_sessions?.manager
-      || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
-    for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
-    if (managers.length) lines.push('');
+    managerFrames(lines, c, wide, data, expand);
     warningLines(lines, c, wide, data);
     programmeViewLines(lines, c, wide, open, expand, runnerSessions);
     return lines;
@@ -1025,8 +1022,23 @@ export function renderPageLines(data, {
     lines.push('');
     programmesLines(lines, c, wide, data.programmes, expand, runnerSessions);
   }
-  if (expand) operationsBody(lines, c, wide, data, body);
+  if (expand) {
+    // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero
+    // frame (the 24-hour figures and the pipeline), and each desk session's own frame with its trigger and pid (D6).
+    if (lines.at(-1) === '') lines.pop();
+    headerLines(lines, c, paintText, wide, data, version);
+    managerFrames(lines, c, wide, data, expand);
+    operationsBody(lines, c, wide, data, body);
+  }
   return lines;
+}
+
+/** Each Manager's frame, with its trigger and pid: under the hero frame in a programme's view and under `a`. */
+function managerFrames(lines, c, wide, data, expand) {
+  const managers = data.sessions?.desk_sessions?.manager
+    || (data.sessions?.desks?.manager ? [data.sessions.desks.manager] : []);
+  for (const session of managers) lines.push(...activityLines(c, wide, { ...session, kind: 'manager' }, { indent: 2, expand }));
+  if (managers.length) lines.push('');
 }
 
 export function renderPage(data, options = {}) {

@@ -46,12 +46,26 @@ describe('PROGRAMMES phase tree', () => {
       const programmes = lines.findIndex(line => line.includes('PROGRAMMES'));
       const flight = lines.findIndex(line => line.includes('IN FLIGHT'));
       assert.ok(programmes >= 0 && flight >= 0, 'the programmes and the sessions are both drawn');
-      // A desk session is one IN FLIGHT row, by name; its pid and its frame are in the operations view's drawing of it.
+      // A desk session is one IN FLIGHT row, by name; its frame, trigger and pid are drawn under `a` (D6, D10).
       for (const [name, age] of [['manager', '30 min'], ['manager', '20 min']]) {
         const rows = lines.filter((line, index) => index > flight && line.includes(`● ${name}  the desk`) && line.includes(age));
         assert.equal(rows.length, 1, `${name} ${age} is one IN FLIGHT row`);
       }
-      assert.ok(!lines.some(line => line.includes('pid 400') || line.includes('pid 401')), 'a desk session has no frame of its own in the overview');
+      if (expand) {
+        // Under `a` the hero frame follows PROGRAMMES, and each Manager has its own rounded frame below it.
+        const hero = lines.findIndex(line => line.includes('Programs:'));
+        const heroEnd = lines.findIndex((line, index) => index > hero && line.startsWith('  └'));
+        const panels = lines.findIndex(line => line.includes('MERGE & DEPLOY'));
+        assert.ok(hero > programmes && heroEnd > hero && panels > heroEnd, `hero ${hero}, end ${heroEnd}, panels ${panels}`);
+        for (const pid of [400, 401]) {
+          const at = lines.findIndex(line => line.includes(`pid ${pid}`));
+          assert.ok(at > heroEnd && at < panels, `Manager ${pid} below hero`);
+          const top = lines.findLastIndex((line, index) => index < at && line.startsWith('  ╭'));
+          assert.ok(top > heroEnd, 'Manager has its own rounded frame');
+          assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
+        }
+        assert.ok(lines.slice(heroEnd, panels).some(line => line.includes('manual_task')), 'the trigger is in the frame');
+      } else assert.ok(!lines.some(line => line.includes('pid 400') || line.includes('pid 401')), 'a desk session has no frame of its own in the overview');
       for (const [programme, pid] of [['inbox', 300], ['empty', 301]]) {
         const heading = lines.findIndex(line => line.startsWith(`  ┌─ ${programme}`));
         const close = lines.findIndex((line, index) => index > heading && line.startsWith('  └'));
