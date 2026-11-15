@@ -204,8 +204,8 @@ describe('mc programs', () => {
     const deps = { stdout: { write: (text) => { out += text; } }, stderr: { write: (text) => { err += text; } }, read };
     assert.equal(await programs([], deps), 0);
     assert.match(out, /^usage — mc programs list \[--json\]/u);
-    assert.equal(await programs(['show'], deps), 2);
-    assert.match(err, /mc programs has no show/u);
+    assert.equal(await programs(['archive'], deps), 2);
+    assert.match(err, /mc programs has no archive/u);
     assert.equal(await programs(['list', 'extra'], deps), 2);
     assert.equal(await programs(['list', '--all'], deps), 2);
   });

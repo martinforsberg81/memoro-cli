@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
-  ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedGoalFile, TOOLBOX,
+  ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedGoalFile, protectedProgrammeFile, TOOLBOX,
   readClaudeSettings, repoHookDecision, reviewStopDecision,
   repoPreToolHooks, sessionStartContext, shellCommands, warningsFor, worktreeState, worktreesAt,
 } from '../../src/mc/hooks.js';
@@ -230,6 +230,36 @@ describe('mc hook — a goal file under ~/mc/programs is mc\'s to change', () =>
     for (const command of ['cat GOAL.json', 'jq . GOAL.json', 'mc goal set x/y title --text z']) {
       assert.equal(preToolDecision(bash(command), { programs }), null, command);
     }
+    assert.equal(preToolDecision(bash(`${ALLOW_MARK} jq . > ${file}`), { programs }), null, 'the escape lets it through');
+  });
+
+  it('refuses a Write, Edit or MultiEdit of a programme record with id programme-file, and keeps the goal file at goal-file', () => {
+    const record = join(programs, 'a', 'PROGRAMME.json');
+    assert.equal(protectedProgrammeFile(record, { programs }), true);
+    assert.equal(protectedProgrammeFile(join(programs, 'a', 'goals', 'x', 'GOAL.json'), { programs }), false);
+    assert.equal(protectedProgrammeFile(`${programs}-other/a/PROGRAMME.json`, { programs }), false, 'a sibling directory is not under it');
+    for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+      const decision = deny({ tool_name: tool, tool_input: { file_path: record } });
+      assert.equal(decision?.id, 'programme-file', tool);
+      assert.match(decision.reason, /mc programs create/u);
+      assert.match(decision.reason, /mc programs record/u);
+      assert.equal(deny({ tool_name: tool, tool_input: { file_path: join(programs, 'a', 'goals', 'x', 'GOAL.json') } })?.id, 'goal-file', `${tool}: a goal file is still a goal file`);
+    }
+    assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: join('/elsewhere', 'a', 'PROGRAMME.json') } }), null);
+    assert.equal(deny({ tool_name: 'Edit', tool_input: { file_path: join(programs, 'a', 'README.md') } }), null);
+  });
+
+  it('refuses a shell command that writes a programme record, with the escape named, and lets a read through', () => {
+    const file = join(programs, 'a', 'PROGRAMME.json');
+    for (const command of [`jq . > ${file}`, "sed -i '' s/a/b/ PROGRAMME.json", 'mv x.json PROGRAMME.json', 'echo x | tee PROGRAMME.json']) {
+      const decision = preToolDecision(bash(command), { programs });
+      assert.equal(decision?.id, 'programme-file', command);
+      assert.match(decision.reason, /Escape, when the raw command is really meant/u, `${command}: the escape is named`);
+    }
+    for (const command of ['cat PROGRAMME.json', 'jq . PROGRAMME.json', 'mc programs show x', 'mc programs create x --end y']) {
+      assert.equal(preToolDecision(bash(command), { programs }), null, command);
+    }
+    assert.equal(preToolDecision(bash('jq . > GOAL.json'), { programs })?.id, 'goal-file');
     assert.equal(preToolDecision(bash(`${ALLOW_MARK} jq . > ${file}`), { programs }), null, 'the escape lets it through');
   });
 
