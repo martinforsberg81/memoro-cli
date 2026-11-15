@@ -408,7 +408,7 @@ export function curationPrompt({ paths, branches, pages, backlog, moved = [] }) 
   const list = backlog.length ? backlog.map((entry) => `- ${entry.path}`).join('\n') : '(no proposals)';
   const since = moved.length ? ` Main has moved since the last curation in: ${moved.join(', ')}.` : '';
   return `You are the headless manager, curating the area texts with nobody present.${since} Your worktrees, made from origin/main, are ${trees}. The area pages are ${where}. `
-    + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say, and add a dated decision of Martin's only where his recorded words are the source. Change nothing under ## Aim or ## Decisions of a page, nothing outside \`docs/technical/\`, and no line holding a dated decision of Martin's; \`mc publish\` refuses it. `
+    + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say. Change nothing under ## Aim or ## Decisions of a page, nothing outside \`docs/technical/\`, and no line holding a dated decision of Martin's; \`mc publish\` refuses it. `
     + `Publish each worktree you changed with \`mc publish --no-merge\`; a worktree you did not change needs nothing, and a turn that finds nothing to change is a success. What waits on Martin goes to the desk with \`mc martin propose\`; do not make a horizon or a goal. `
     + `Proposals, oldest first — turn a proposal into a programme only through \`mc programs create --area <repo>/<id> --purpose "…" --from-proposal <path>\`, which refuses while an open programme already repairs that area:\n${list}`;
 }
