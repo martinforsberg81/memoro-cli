@@ -21,7 +21,10 @@ What the verb adds is everything around the script:
   deploy wants it"*): once the reading is printed and the gate has passed the
   deployer starts, from a terminal or from a session's shell. `--dry-run` is the
   reading and ships nothing. An unattended session (`MC_HEADLESS=1`) is refused
-  before anything is read: nobody typed that deploy;
+  before anything is read: nobody typed that deploy. Deploy is not one of the
+  acts that reach Martin ([canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md)),
+  and the refusal to an unattended session stays until a release is checked where
+  users meet it and can be taken back (Martin, 2026-11-15);
 - **its own process**, the deployer, so the deploy runs beside the merger and
   neither waits for the other, and a ^C at the terminal stops only the
   watching (ruling 30);
@@ -227,8 +230,7 @@ slower, never less than the deploy asked for.
 
 ## What it refuses, and with what code
 
-Deploying to production is Martin's act, and typing `mc deploy` is his word
-(2026-11-15), so the verb asks nothing: every refusal below is made before the
+Typing `mc deploy` is the decision (Martin, 2026-11-15), so the verb asks nothing: every refusal below is made before the
 deployer starts and ships nothing. An unattended session has nobody who typed
 the deploy, so it is refused.
 

@@ -97,11 +97,13 @@ call `get` rather than starting another desk.
 
 The role investigates each source question against relevant shared technical
 contracts and the programme README and design. Details answered there are
-resolved without escalation. A remaining choice for Martin, classified by the question contract in
-[mc-jev.md](mc-jev.md), is presented only after synthesis, in the brief's parts
-(what he would notice; the options as their consequences; one recommendation
-and its reason; what waits; whether it can be changed afterwards; the material
-paths for judgement; the exact act for a reserved one). When a standard
+resolved without escalation. What remains for Martin, as
+[canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md) names it and
+[mc-jev.md](mc-jev.md) routes it by kind, is presented only after synthesis, in
+the brief's parts (what he would notice; the options as their consequences; one
+recommendation and its reason; what waits; whether it can be changed afterwards;
+the material paths for a brief of sort `judgement`; the exact act for a `reserved`
+one). When a standard
 changes, the brief names its exact `docs/technical/` destination. The
 original queue question/options/jev reading remain source evidence, distinct
 from the synthesis. After Martin decides, record the canonical standard and
@@ -366,23 +368,29 @@ and merge remain mandatory. Only the merger marks done. Martin's interactive
 role remains refused unattended. Headless deploy, admin override, production
 data and credential hooks still apply to decision sessions.
 
-Only three kinds reach Martin: an unanswered product direction changing user
-promises, product cost, personal-data handling or test strategy; a judgement
-(look, listen, try); or a reserved act. Everything technical is decided by the
-goal, standards, app patterns and established practice, even a privacy,
-security or cost question labelled policy. Required admin audit records are
+What reaches Martin is the rule in
+[canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md). Everything
+else is decided by the goal, standards, app patterns and established practice,
+even a privacy, security or cost question labelled policy. Required admin audit records are
 one such established practice: inability to write the audit record does not
 justify proceeding without it (Martin, 2026-11-14). One root cause across items
 is one decision applied to each, not repeated questions. No budget, allocation,
 exception or new rule is added without measured need.
+
+What the rule names and mc does not do yet, as of today and with no date
+promised: a horizon is recorded and shown in the opening (*Horizons*), but a
+change to a text Martin holds is briefed in the brief's existing parts, not in a
+form of its own; a change with no goal has no way to the desk, since a goal-less
+`product` ask exits 1 and opens no item; and a brief of sort `product` or
+`judgement` marked reversible is still carried out after two days.
 
 Settled work is carried out or handed to the appropriate goal stage, then
 closed `--by decision` with a two- or three-sentence Swedish summary; a sync that
 closed the item by source in between does not prevent that close. What is
 Martin's gets `brief.md` in Swedish, with only: what the user would notice;
 options as consequences; one recommendation and reason; what waits; whether
-it can be changed afterwards; for a judgement, material paths; for a reserved
-act, the exact act and its effects. `brief --sort … --reversible yes|no` leaves
+it can be changed afterwards; for a brief of sort `judgement` that already
+waits, material paths; for a reserved act, the exact act and its effects. `brief --sort … --reversible yes|no` leaves
 the goal in `Martin`. Only reversible product/judgement briefs past `due_at`
 are picked for default execution: carry out the recommendation as if chosen
 and close `--by default`. Irreversible and reserved items never default,
@@ -393,7 +401,7 @@ finish session) is `technical`; a stop for no progress (`no progress: …`, the
 runner after three build sessions that committed nothing and met no criterion)
 is `mechanical`. Preparation names the sort; the decision verifies the claim,
 amends the goal with the verbs, records it and sets it ready with
-`mc goal ready`. An amendment that changes what users are promised is a brief
+`mc goal ready`. An amendment that would change a text Martin holds is a brief
 for Martin. A second defect or stop on a goal whose text has not been amended
 since the one before is briefed for Martin and the goal is not set ready again
 (the bound on a report that does not hold coming back); so is a second one on

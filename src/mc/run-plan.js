@@ -307,7 +307,7 @@ function withBrief(prompt, brief) {
 
 /** One unattended planning assignment; the role keeps interactive planning separate. */
 export function goalPlanPrompt({ name, dir, worktree, branch, brief = null }) {
-  return withBrief(`You are the headless plan session for the next draft ${name}. Read the programme README at \`${dir}/../../README.md\` first. Its other goals are done, dropped or draft. Your assignment is to complete exactly this draft: investigate its code and decided standards, finish its parts as \`mc goal show\` names them, its stand on every rule area, its documents and executable success checks, reconcile the programme README and phases, run \`mc goal plan-review\` on it, repair what the reading finds, and move it to build when it reads OK (or after two rounds, with \`--reason\`) using mc goal. Use goal-bound mc ask for an unresolved product or policy choice. Do not implement the draft or process other drafts/proposals in this turn. Your directory is \`${dir}\`; your worktree is \`${worktree}\`, on branch \`${branch}\`. Use the headless next-draft section of your plan role.`, brief);
+  return withBrief(`You are the headless plan session for the next draft ${name}. Read the programme README at \`${dir}/../../README.md\` first. Its other goals are done, dropped or draft. Your assignment is to complete exactly this draft: investigate its code and decided standards, finish its parts as \`mc goal show\` names them, its stand on every rule area, its documents and executable success checks, reconcile the programme README and phases, run \`mc goal plan-review\` on it, repair what the reading finds, and move it to build when it reads OK (or after two rounds, with \`--reason\`) using mc goal. Use goal-bound mc ask for a change to a text Martin holds. Do not implement the draft or process other drafts/proposals in this turn. Your directory is \`${dir}\`; your worktree is \`${worktree}\`, on branch \`${branch}\`. Use the headless next-draft section of your plan role.`, brief);
 }
 
 /**
@@ -376,7 +376,7 @@ export function goalMendCheckInPrompt({ minutes, count }) {
     'If you can still make useful progress, say so in one line and go on. This check-in is not a deadline.',
     '',
     'Your job is the merge failure: diagnose it, resolve it within the contract, and requeue the merge with `mc goal stage merge`. Preserve acceptance and gate requirements.',
-    'Mend is merge recovery only. Resolve merge failures within the contract, or ask directly with `mc ask` for an actual design choice or reserved act; continue when jev answers, otherwise wait on Martin.',
+    'Mend is merge recovery only. Resolve merge failures within the contract, or ask directly with `mc ask` for a choice the contract does not settle or for a reserved act; continue when jev answers, otherwise wait on Martin.',
   ].join('\n');
 }
 
@@ -386,7 +386,7 @@ export function goalMendCheckInPrompt({ minutes, count }) {
  * asked to judge whether it is still moving the goal.
  */
 export function goalPlanCheckInPrompt({ minutes, count }) {
-  return `Planning check-in after ${minutes} minutes (${count}). Complete the selected draft, read it with \`mc goal plan-review\`, and move it to build when the reading is OK. Resolve technical details locally; use goal-bound mc ask for a remaining policy choice. Keep this turn to the one draft's planning assignment.`;
+  return `Planning check-in after ${minutes} minutes (${count}). Complete the selected draft, read it with \`mc goal plan-review\`, and move it to build when the reading is OK. Resolve technical details locally; use goal-bound mc ask for a change to a text Martin holds. Keep this turn to the one draft's planning assignment.`;
 }
 
 export function goalCheckInPrompt({ minutes, count }) {

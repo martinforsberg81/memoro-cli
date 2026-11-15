@@ -224,9 +224,8 @@ finished goal set in `build` in its phase rather than parked in `draft` — is
 A plan session writes a review or build follow-up as a goal without asking
 Martin when its investigation is complete and its change applies a decided
 standard (a `docs/technical/` document or a programme ruling) or repairs a
-defect against one (Martin, 2026-11-08). What it still asks him is a new
-product or policy choice, an exception to a decided standard, or a reserved
-act, through `mc goal martin`, as `canon/tasks/asking-martin.md` says. The
+defect against one (Martin, 2026-11-08). What it still asks him is what `canon/tasks/asking-martin.md` names, through
+`mc goal martin` as that page says. The
 reason: plan sessions put "write this goal now" questions to jev, which could
 not settle them (on 2026-11-08, 67 jev calls showed `settled` below 0.70 on 20
 such questions).

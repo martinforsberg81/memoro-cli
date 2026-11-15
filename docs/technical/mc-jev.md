@@ -4,9 +4,11 @@ An options question is read by TypeSafe's Jev model first (Martin,
 2026-11-07; programme `jev`). Jev is a System One model: it generates no
 text; it takes a `state` and typed questions and returns probabilities. When
 jev settles the question with high probability, the answer goes back to the
-calling session, which keeps working. Otherwise an unsettled technical question
-is decided by the session's recommendation; product choices and reserved acts
-reach Martin. The shared code is `src/mc/jev.js`;
+calling session, which keeps working. Otherwise an unsettled `technical` call
+is decided by the session's recommendation, and an unsettled `product` call
+leaves the goal `Martin`. What reaches Martin, and what `product` and
+`technical` mean, is the rule in
+[canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md). The shared code is `src/mc/jev.js`;
 `mc goal martin` is `askMartin` in `src/mc/commands/goal.js`, and `mc ask` is
 in `src/mc/commands/ask.js`.
 
@@ -16,11 +18,8 @@ Normal build questions are answered by the technical standards and programme
 design. Apply those answers without asking; investigate a detail-level question
 as a possible missing general rule before escalating it.
 
-A remaining decision reaches Martin as a brief in the parts that
-[canon/roles/decision.md](../../canon/roles/decision.md) sets: what he would
-notice; the options as their consequences; one recommendation and its reason;
-what waits if he does not answer; whether it can be changed afterwards; the
-material paths for judgement; and, for a reserved act, the exact act. The
+What remains for Martin is shown as a brief in the parts that
+[canon/roles/decision.md](../../canon/roles/decision.md) sets. The
 desk's opening shows each waiting item with its brief ([mc-martin](mc-martin.md)).
 Preserve concrete action identifiers and evidence when needed. After the
 answer, reconcile the standard, programme design and affected goal contracts;
@@ -35,13 +34,8 @@ session continues with jev's answer and names it in its account; otherwise the
 technical/product flow below applies. A goal-bound `mc ask` or compatible `mc goal
 martin` call makes one jev consultation. An answer leaves stage/status unchanged,
 appends the trace and continues. Martin's mandate of 2026-11-14 is that the system
-decides every technical question itself and reports afterwards. A session labels
-`product` as a choice of direction that the goal, programme page and standards do not
-already answer, and that changes what users are promised, product cost, personal-data
-handling or test strategy. `technical` is everything else, including implementation,
-architecture, tooling, environment, order of work, whether a goal adopts or changes
-what its own criteria need, and carrying out an already decided design, even when
-users see the result. The session's kind determines the route; jev's product reading
+decides every technical question itself and reports afterwards. A session gives each call a kind, `product` or
+`technical`, as asking-martin defines them. The session's kind determines the route; jev's product reading
 is recorded but never moves a technical question to Martin. An unsettled technical
 call, whatever that reading, or any unavailable jev result, records the session's
 recommendation and continues. An unresolved product call stores the sanitized

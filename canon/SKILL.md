@@ -34,7 +34,7 @@ Paths below are relative to this skill's directory. Do not preload the tree.
 | Screenshot, measure or interact with the app | [tasks/measure-the-app.md](tasks/measure-the-app.md) |
 | Stop a process or investigate a hung one | [tasks/processes.md](tasks/processes.md) |
 | Handle a finding outside the task | [tasks/proposals.md](tasks/proposals.md) |
-| Ask Martin or report the outcome | [tasks/asking-martin.md](tasks/asking-martin.md) |
+| Before deciding what no text answers, before bringing Martin anything, before the account | [tasks/asking-martin.md](tasks/asking-martin.md) |
 | Read or write agent memory | [tasks/memory.md](tasks/memory.md) |
 
 Keep task rules in their reference; a role says purpose and authority.

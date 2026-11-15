@@ -675,8 +675,8 @@ export function shellCommands(line) {
 const begins = (command, ...want) => want.every((word, k) => (k === 0 ? basename(command.words[0] ?? '') : command.words[k]) === word);
 
 /**
- * What a headless session may not do: Martin's acts, which happen only with
- * him at the terminal. This is the one place mc forbids an act by who runs
+ * What a headless session may not do: the reserved acts, which happen only in
+ * an interactive session. This is the one place mc forbids an act by who runs
  * it; canon's skills say how and what breaks, never who may (canon-text test).
  * `MC_HEADLESS=1` is set by the runner and the intake turn on every session
  * they start; an interactive session never carries it. No escape: the rules
@@ -736,7 +736,7 @@ export function headlessRule(command) {
 
 /** What a headless session is told about a refused act: the way forward is `mc ask` with its reserved name. */
 function headlessReason(rule) {
-  return `${rule.reason} is Martin's act and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Ask for it: mc ask <programme>/<goal> --kind technical --reserved ${rule.act} --reason "…" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> records the question and sets the goal Martin. A session without a goal says in its step note what waits on it.`;
+  return `${rule.reason} is refused to an unattended session and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Ask for it: mc ask <programme>/<goal> --kind technical --reserved ${rule.act} --reason "…" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> records the question and sets the goal Martin. A session without a goal says in its step note what waits on it.`;
 }
 
 /** Whether the session was started by the runner or the intake turn, with nobody at the terminal. */

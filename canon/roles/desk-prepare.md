@@ -21,8 +21,8 @@ Write `prepared.md` in the item's directory with these parts:
 - What could not be established.
 
 The sorts are `mechanical` (a session or merge stopped and no choice is
-involved), `technical`, `product`, `judgement` (someone must look, listen or
-try), and `reserved` (deploy, production data, credentials, admin).
+involved), `technical`, `product`, `judgement` and `reserved`; what the last
+three mean is in [asking-martin](../tasks/asking-martin.md).
 An item whose first line begins `goal defect:` is a session reporting that the
 goal itself is wrong: its sort is `technical`. An item whose reason begins
 `no progress:` is the runner stopping a build that made none: its sort is
