@@ -34,7 +34,7 @@ import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
 import {
-  DEPLOYS_HEADER, deploysPath, lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart,
+  DEPLOYS_HEADER, deploysPath, lastAttempt, lastDeploy, readDeploys, recordEnd, recordStart, versionCells,
 } from '../../../src/mc/deploys.js';
 import { endRun, startRun } from '../../../src/mc/language-runs.js';
 import { claimLease, readLease, releaseLease } from '../../../src/mc/repo-lease.js';
@@ -1661,6 +1661,7 @@ describe('what the script said', () => {
     assert.deepEqual(readScriptOutput('some other tool wrote this\n'), {
       stopped_at: '', build: '', live_commit: '', live_build: '', verified: false, failure: '',
       production: '', cause: '', retries: 0, branch: '',
+      versions: { before: {}, made: {}, why: ['not reported by the deploy script'] },
     });
     assert.equal(readScriptOutput('').stopped_at, '');
     assert.equal(readScriptOutput(null).build, '');
@@ -3957,6 +3958,157 @@ describe('mc deploy — whether the release can be taken back', () => {
     );
     assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, SHA, 'the last deployed row is the new one');
     assert.equal(now.take_back, 'no');
+  });
+});
+
+describe('mc deploy — the Worker versions the script printed', () => {
+  const B = { memoro: 'b0000000-0000-4000-8000-00000000000a', 'memoro-tail': 'b0000000-0000-4000-8000-00000000000b' };
+  const M = { memoro: 'c0000000-0000-4000-8000-0000000000aa', 'memoro-tail': 'c0000000-0000-4000-8000-0000000000bb' };
+  const before = (w) => `Worker version before: ${w} ${B[w]}`;
+  const made = (w) => `Worker version made: ${w} ${M[w]}`;
+  const missingMade = (w, why) => `Worker version made: ${w} missing — ${why}`;
+  const ALL = [before('memoro'), before('memoro-tail'), made('memoro'), made('memoro-tail')];
+  /** A script that prints the version lines where the real one does: as they are known, and again in the closing block. */
+  const printing = ({ lines = ALL, code = 0 } = {}) => async ({ onOutput }) => {
+    onOutput(stepLine('Read live Worker versions'));
+    for (const line of lines.filter((l) => l.includes(' before: '))) onOutput(`${line}\n`);
+    onOutput(stepLine('wrangler deploy'));
+    for (const line of lines.filter((l) => l.includes(' made: '))) onOutput(`\n${line}\n`);
+    if (code === 0) onOutput(`\n${GREEN}${BOLD}✓ Deploy complete${RESET} ${DIM}build 23533 · ${SHA}${RESET}\n`);
+    else onOutput(`\n${RED}✗ Deploy failed${RESET}\n${DIM}npx wrangler deploy exited 1${RESET}\n`);
+    for (const line of lines) onOutput(`${line}\n`);
+    return { code };
+  };
+  /** The object `--json` prints for the deploy itself: the one with `exit_code`. */
+  const result = (text) => {
+    const at = text.indexOf('"exit_code"');
+    const start = text.lastIndexOf('\n{\n', at) + 1;
+    return JSON.parse(text.slice(start, text.indexOf('\n}\n', at) + 2));
+  };
+
+  it('reads each kind and Worker, the last line winning, through the colours, and a Worker with no made line has none', () => {
+    const said = readScriptOutput([
+      `${before('memoro')}\n`, `${DIM}${before('memoro-tail')}${RESET}\n`,
+      `${GREEN}${made('memoro')}${RESET}\n`,
+      `${before('memoro')}\n`, `${DIM}${before('memoro-tail')}${RESET}\n`, `${GREEN}${made('memoro')}${RESET}\n`,
+    ].join(''));
+    assert.deepEqual(said.versions, { before: { memoro: B.memoro, 'memoro-tail': B['memoro-tail'] }, made: { memoro: M.memoro }, why: [] });
+    assert.deepEqual(versionCells(said.versions), {
+      versions_before: `memoro:${B.memoro},memoro-tail:${B['memoro-tail']}`, versions_made: `memoro:${M.memoro}`, versions_why: '',
+    });
+    const later = readScriptOutput(`${before('memoro')}\nWorker version before: memoro other-id\n`);
+    assert.equal(later.versions.before.memoro, 'other-id', 'the last line wins');
+  });
+
+  it('reads a missing version as null with its reason, and a line that is not a whole line is not read', () => {
+    const said = readScriptOutput([
+      'Worker version before: memoro missing — split deployment (2 versions: a at 70%, b at 30%)',
+      missingMade('memoro-tail', 'wrangler deployments status exited 1: ✘ [ERROR] boom'),
+      'noise Worker version made: memoro nope',
+      'Worker version made: memoro',
+    ].join('\n'));
+    assert.deepEqual(said.versions, {
+      before: { memoro: null },
+      made: { 'memoro-tail': null },
+      why: ['memoro before: split deployment (2 versions: a at 70%, b at 30%)', 'memoro-tail made: wrangler deployments status exited 1: ✘ [ERROR] boom'],
+    });
+    assert.deepEqual(versionCells(said.versions), {
+      versions_before: 'memoro:missing',
+      versions_made: 'memoro-tail:missing',
+      versions_why: 'memoro before: split deployment (2 versions: a at 70%, b at 30%); memoro-tail made: wrangler deployments status exited 1: ✘ [ERROR] boom',
+    });
+  });
+
+  it('a script that printed no version line says so, so an empty cell is never a deploy that changed nothing', () => {
+    const said = readScriptOutput(`${stepLine('wrangler deploy')}✓ Deploy complete build 1 · ${SHA}\n`);
+    assert.deepEqual(said.versions, { before: {}, made: {}, why: ['not reported by the deploy script'] });
+    assert.deepEqual(versionCells(said.versions), { versions_before: '', versions_made: '', versions_why: 'not reported by the deploy script' });
+  });
+
+  it('a deploy that went through writes both versions of both Workers, and none missing', async () => {
+    const { code, row } = await attempt([], { extra: { spawnDeploy: printing() } });
+    assert.equal(code, 0);
+    assert.equal(row.outcome, 'deployed');
+    assert.equal(row.versions_before, `memoro:${B.memoro},memoro-tail:${B['memoro-tail']}`);
+    assert.equal(row.versions_made, `memoro:${M.memoro},memoro-tail:${M['memoro-tail']}`);
+    assert.equal(row.versions_why, '');
+    const stored = readDeploys({ MC_WORK_ROOT: work }).at(-1);
+    assert.equal(stored.versions_before, row.versions_before, 'in the file, not only in the reading of it');
+  });
+
+  it('a deploy that failed after one Worker was made records what it knew, and why the other is missing', async () => {
+    const lines = [before('memoro'), before('memoro-tail'), made('memoro'), missingMade('memoro-tail', 'forced exit before it was known whether this Worker changed')];
+    const { code, row } = await attempt([], { extra: { spawnDeploy: printing({ lines, code: 1 }) } });
+    assert.equal(code, 1);
+    assert.equal(row.outcome, 'failed');
+    assert.equal(row.versions_before, `memoro:${B.memoro},memoro-tail:${B['memoro-tail']}`);
+    assert.equal(row.versions_made, `memoro:${M.memoro},memoro-tail:missing`);
+    assert.equal(row.versions_why, 'memoro-tail made: forced exit before it was known whether this Worker changed');
+  });
+
+  it('a Worker the deploy did not change has no entry in versions_made', async () => {
+    const { row } = await attempt([], { extra: { spawnDeploy: printing({ lines: [before('memoro'), before('memoro-tail'), made('memoro')] }) } });
+    assert.equal(row.versions_made, `memoro:${M.memoro}`);
+    assert.equal(row.versions_why, '');
+  });
+
+  it('a script that prints none writes versions_why, and the deploy is recorded as it was', async () => {
+    const { code, row } = await attempt([], { extra: { spawnDeploy: fakeScript({ steps: FULL_RUN }) } });
+    assert.equal(code, 0);
+    assert.equal(row.outcome, 'deployed');
+    assert.equal(row.versions_before, '');
+    assert.equal(row.versions_made, '');
+    assert.equal(row.versions_why, 'not reported by the deploy script');
+  });
+
+  it('a deploy that throws after the script began records what it printed; one that never began leaves the cells empty', async () => {
+    const throwing = async ({ onOutput }) => { onOutput(`${before('memoro')}\n`); throw new Error('spawn exploded'); };
+    await assert.rejects(attempt([], { extra: { spawnDeploy: throwing } }), /spawn exploded/u);
+    const thrown = lastAttempt({ MC_WORK_ROOT: work });
+    assert.equal(thrown.outcome, 'failed');
+    assert.equal(thrown.versions_before, `memoro:${B.memoro}`);
+    assert.equal(thrown.versions_why, '');
+
+    const never = await attempt([], { extra: { startDeployer: () => ({ pid: null, error: 'spawn EACCES' }) } });
+    assert.equal(never.row.outcome, 'failed');
+    assert.deepEqual([never.row.versions_before, never.row.versions_made, never.row.versions_why], ['', '', '']);
+  });
+
+  it('a row that was refused has the three cells empty', async () => {
+    const refused = await attempt([], { extra: { lastDeploy: () => ({ sha: SHA, build: '1', ended: '2026-11-14T08:00:00Z', outcome: 'deployed' }) } });
+    assert.equal(refused.row.outcome, 'refused');
+    assert.deepEqual([refused.row.versions_before, refused.row.versions_made, refused.row.versions_why], ['', '', '']);
+  });
+
+  it('--json carries the versions, null for a missing one', async () => {
+    const lines = [before('memoro'), before('memoro-tail'), made('memoro'), missingMade('memoro-tail', 'the read failed')];
+    const shipped = await attempt(['--json'], { extra: { spawnDeploy: printing({ lines }) } });
+    assert.equal(shipped.code, 0);
+    assert.deepEqual(result(shipped.out.stdout).versions, {
+      before: { memoro: B.memoro, 'memoro-tail': B['memoro-tail'] },
+      made: { memoro: M.memoro, 'memoro-tail': null },
+      why: ['memoro-tail made: the read failed'],
+    });
+  });
+
+  it('a deploys.tsv with the 17-column header is given the new one, its old rows\' version cells empty, and still read by header', async () => {
+    const old = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('take_back_why') + 1);
+    assert.equal(old.length, 17);
+    mkdirSync(dirname(deploysPath({ MC_WORK_ROOT: work })), { recursive: true });
+    const row = ['2026-11-15T08:00:00Z', '2026-11-15T08:09:00Z', OLDER, '700', 'martin', 'deployed', OLDER, '700', '', '', '42', OLDER, 'green', 'smoke:ok', '', 'yes', ''];
+    writeFileSync(deploysPath({ MC_WORK_ROOT: work }), `${old.join('\t')}\n${row.join('\t')}\n`);
+
+    const { code, row: now } = await attempt([], { extra: { spawnDeploy: printing() } });
+    assert.equal(code, 0);
+    const rows = readDeploys({ MC_WORK_ROOT: work });
+    assert.equal(rows.length, 2);
+    assert.deepEqual(Object.keys(rows[0]), DEPLOYS_HEADER, 'the file has the new header');
+    assert.deepEqual(
+      [rows[0].sha, rows[0].build, rows[0].take_back, rows[0].versions_before, rows[0].versions_made, rows[0].versions_why],
+      [OLDER, '700', 'yes', '', '', ''],
+      'the old row reads as before, its new cells empty',
+    );
+    assert.equal(now.versions_made, `memoro:${M.memoro},memoro-tail:${M['memoro-tail']}`);
   });
 });
 
