@@ -829,10 +829,12 @@ landed prerequisite or demonstrated upstream acceptance obstacle follows
 after item until the criteria hold, and ends at a boundary between two only when the work is
 done, when it is blocked, or when its turns cost more than a fresh session
 reading the log would — a finished part that reads well is not a reason to
-stop. It runs each criterion's check at a committed head and records the ones that hold with
+stop. It runs `mc gate` and commits, then runs each criterion's check at that
+committed head and records the ones that hold with
 `mc goal criterion met <n> --evidence "…"`, and a preserve item or touched obligation with
-`mc goal evidence <id> --text "…"`. It runs `mc gate`, commits, and publishes with
-`mc publish --no-merge` (without the flag mc still queues nothing for a goal
+`mc goal evidence <id> --text "…"`; a commit or an integration of main after a
+mark makes every mark stale, and every check is run and recorded again. Then it
+publishes with `mc publish --no-merge` (without the flag mc still queues nothing for a goal
 before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
 them, or, when the goal's own text is wrong, reports it with `mc goal defect`
