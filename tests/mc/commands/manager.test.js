@@ -4,10 +4,12 @@
  * words — Martin types the first message; nothing is gathered for it.
  */
 import assert from 'node:assert/strict';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { managerLaunch, run } from '../../../src/mc/commands/manager.js';
+import { interactiveToolRefusal } from '../../../src/mc/interactive-tool.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
 
 function io() {
@@ -20,6 +22,29 @@ describe('the manager launch', () => {
     const launch = managerLaunch({ role: readCanonRole('manager') });
     assert.equal(launch.prompt, null);
     assert.equal(launch.model, 'opus');
+  });
+});
+
+describe('an interactive entrance on a tool that has no interactive form', () => {
+  it('refuses --agy with exit 2 naming --claude and --codex, before the desk directory is made or a session is opened', async () => {
+    const { out, stdout, stderr } = io();
+    const root = process.env.MC_WORK_ROOT;
+    const before = existsSync(root) ? readdirSync(root) : null;
+    let opened = 0;
+    const code = await run(['--agy'], { stdout, stderr, open: async () => { opened += 1; return { ok: true, code: 0 }; }, mkdir: () => assert.fail('no directory is made') });
+    assert.equal(code, 2);
+    assert.equal(out.stderr, 'mc: agy runs unattended sessions only; an interactive session takes --claude or --codex\n');
+    assert.equal(out.stdout, '');
+    assert.equal(opened, 0);
+    assert.equal(existsSync(join(root, 'manager')), false);
+    assert.deepEqual(existsSync(root) ? readdirSync(root) : null, before, 'the state directory is as it was');
+  });
+
+  it('is one registry-read check: a tool with a persistent driver and a name the registry does not know pass, agy does not', () => {
+    assert.equal(interactiveToolRefusal('claude'), null);
+    assert.equal(interactiveToolRefusal('codex'), null);
+    assert.equal(interactiveToolRefusal('antigravity-cli'), 'agy runs unattended sessions only; an interactive session takes --claude or --codex');
+    assert.equal(interactiveToolRefusal('no-such-tool'), null, 'an unknown name is another check\'s to refuse');
   });
 });
 

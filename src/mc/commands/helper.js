@@ -33,6 +33,7 @@ import { readCanonRole, roleSourceOf } from '../roles.js';
 import { INTAKE_PER_ROUND } from '../run-plan.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 
 const USAGE = commandUsage('helper');
 
@@ -186,6 +187,13 @@ async function openDesk({ flags, resume, stdout, stderr, deps }) {
     return 1;
   }
 
+  const tool = flags.tool || role.tools?.[0] || 'claude';
+  const notInteractive = interactiveToolRefusal(tool);
+  if (notInteractive) {
+    stderr.write(`mc: ${notInteractive}\n`);
+    return 2;
+  }
+
   const dir = helperDir();
   const proposals = proposalsDir();
   const mkdir = deps.mkdir || mkdirSync;
@@ -200,7 +208,7 @@ async function openDesk({ flags, resume, stdout, stderr, deps }) {
   const opened = await (deps.open || openInWorkArea)({
     areaRoot: dir,
     worktree: { repo: null, path: dir, is_git: false },
-    tool: flags.tool || role.tools?.[0] || 'claude',
+    tool,
     pick: flags.new ? 'new' : resume,
     resumeTool: flags.tool,
     stdout,

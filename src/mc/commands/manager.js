@@ -6,6 +6,7 @@ import { managerDir, workRoot } from '../paths.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
+import { interactiveToolRefusal } from '../interactive-tool.js';
 import { commandUsage } from '../command-help.js';
 
 export function usage() {
@@ -51,6 +52,12 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: the manager role is missing from this install — expected canon/roles/manager.md with an overlay body\n');
     return 1;
   }
+  const tool = flags.tool || role.tools?.[0] || 'claude';
+  const notInteractive = interactiveToolRefusal(tool);
+  if (notInteractive) {
+    stderr.write(`mc: ${notInteractive}\n`);
+    return 2;
+  }
   const launch = managerLaunch({ role });
   const root = managerDir();
   (deps.mkdir || mkdirSync)(root, { recursive: true });
@@ -58,7 +65,7 @@ export async function run(argv, deps = {}) {
     areaRoot: root,
     conversationRoots: [root, join(workRoot(), 'brief')],
     worktree: { repo: null, path: root, is_git: false },
-    tool: flags.tool || role.tools?.[0] || 'claude',
+    tool,
     pick: flags.new ? 'new' : flags.resume ? positional[0] || true : null,
     resumeTool: flags.tool,
     stdout: deps.stdout || process.stdout,

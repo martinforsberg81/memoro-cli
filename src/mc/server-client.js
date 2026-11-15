@@ -2,6 +2,7 @@
 import { interactive, select, ask } from './prompt.js';
 import { readServer } from './server-settings.js';
 import { declared } from '../adapters/index.js';
+import { interactiveToolRefusal } from './interactive-tool.js';
 
 const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
 
@@ -32,6 +33,9 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
   choose = select, question = ask } = {}) {
   const { prepareSessionEntrance, BACKGROUND_REFUSALS } = await import('./session-entrance.js');
   const { flags, programme } = await readEntranceArgs(entrance, args);
+  // Refused before the server is asked for anything: an agy session has no interactive form.
+  const notInteractive = (flags.tool && interactiveToolRefusal(flags.tool)) || null;
+  if (notInteractive) { stderr.write(`mc: ${notInteractive}\n`); return 2; }
   const answers = [];
   let snapshot;
   for (;;) {
@@ -42,6 +46,8 @@ export async function remoteEntrance(entrance, args, link, { stdout = process.st
     answers.push(answer);
   }
   if (snapshot.kind !== 'snapshot') throw new Error(`on ${link.destination}: expected a session list, got ${snapshot.kind}`);
+  const providerRefusal = interactiveToolRefusal(snapshot.provider);
+  if (providerRefusal) { stderr.write(`mc: on ${link.destination}: ${providerRefusal}\n`); return 2; }
   // Refused before any start: a Codex session has no client but the terminal, so there is nothing `--bg` could leave running.
   const terminal = declared(snapshot.provider, 'SERVER_SESSION')?.mechanism === 'tty';
   if (flags.bg && !declared(snapshot.provider, 'BACKGROUND')) { stderr.write(`mc: on ${link.destination}: ${BACKGROUND_REFUSALS.codex}\n`); return 1; }
