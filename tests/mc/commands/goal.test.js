@@ -10,6 +10,7 @@ import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { goalHash, RECORDS_FILE } from '../../../src/mc/plan-review.js';
 import { runModule } from '../../../src/mc-verbs.js';
+import { phaseOpen, programmeOrder, programsGoals } from '../../../src/mc/goals.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from '../_helpers/goal-file.js';
 
 const HOME = '/work/programs';
@@ -3344,4 +3345,87 @@ test('mc goal show says where the plan review stands in four states, and areas p
   assert.equal(await run(['areas', 'mc/plain'], f.deps), 0, f.err());
   assert.match(f.out(), /memoro-cli\/documentation — The documentation\n  no stand\n  proposed stand: touched — C1 changes a path of the area \(advisory\)\n/u);
   assert.match(f.out(), /memoro-cli\/operations — The operations\n  no stand\n  proposed stand: untouched — no change item names a path of the area \(advisory\)\n/u);
+});
+
+/* ------------------------------ phases stated in the programme's record */
+
+const STATED_RECORD = { schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+const PROG_RECORD_PATH = `${HOME}/prog/PROGRAMME.json`;
+const statedRecord = (after) => `${JSON.stringify({ ...STATED_RECORD, phases: after === undefined ? { order: 'stated' } : { order: 'stated', after } }, null, 2)}\n`;
+const plainRecord = () => `${JSON.stringify(STATED_RECORD, null, 2)}\n`;
+/** A goal of programme `prog` in `stage` and `phase`. */
+const progGoal = (name, stage, phase) => ({
+  [`${HOME}/prog/goals/${name}/GOAL.json`]: withGoal(GOAL_TEXT, { stage, phase }),
+  [`${HOME}/prog/goals/${name}/LOG.md`]: '',
+});
+const progRecordOf = (f) => JSON.parse(f.store[PROG_RECORD_PATH]);
+const phaseLines = (text) => text.trim().split('\n').filter((line) => !line.startsWith(' ')).map((line) => line.split(' · ').slice(0, 5).join(' · '));
+
+/** The arrangement of criterion 5: phases 1 and 2 in build, 3 in build after 1 and 2, 4 done, 5 in build after 4. */
+const arranged = (record = statedRecord({ 3: [1, 2], 5: [4] })) => fixture({
+  files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), ...progGoal('four', 'done', 4), ...progGoal('five', 'build', 5), [PROG_RECORD_PATH]: record },
+});
+
+test('mc goal list says what a stated phase waits for, in the words of the stated rule', async () => {
+  const f = arranged();
+  assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+  assert.deepEqual(phaseLines(f.out()), [
+    'prog · phase 1 · in progress',
+    'prog · phase 2 · in progress',
+    'prog · phase 3 · waiting · after phase 1, 2',
+    'prog · phase 4 · done',
+    'prog · phase 5 · in progress · after phase 4',
+  ]);
+});
+
+test('mc goal list of a programme whose record is not JSON says the record is invalid and every unfinished phase waits', async () => {
+  const f = arranged('{ not json');
+  assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+  const lines = f.out().trim().split('\n');
+  assert.equal(lines[0], 'prog · record invalid — no phase is open');
+  assert.deepEqual(phaseLines(f.out()).slice(1), [
+    'prog · phase 1 · waiting',
+    'prog · phase 2 · waiting',
+    'prog · phase 3 · waiting',
+    'prog · phase 4 · done',
+    'prog · phase 5 · waiting',
+  ]);
+});
+
+test('mc goal list of a programme with no record, or a record without phases, says in progress and after phase 1, never waiting', async () => {
+  for (const [kind, extra] of [['no record', {}], ['a record without phases', { [PROG_RECORD_PATH]: plainRecord() }]]) {
+    const f = fixture({ files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...extra } });
+    assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+    assert.deepEqual(phaseLines(f.out()), ['prog · phase 1 · in progress', 'prog · phase 2 · after phase 1'], kind);
+    assert.doesNotMatch(f.out(), /waiting/u, kind);
+  }
+});
+
+test('mc goal phase of the only goal of a phase another phase waits for is refused, and nothing is written', async () => {
+  const files = { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), [PROG_RECORD_PATH]: statedRecord({ 3: [2] }) };
+  const f = fixture({ files });
+  const before = JSON.stringify(f.store);
+  assert.equal(await run(['phase', 'prog/two', '1'], f.deps), 2);
+  assert.match(f.err(), /phase 3/u);
+  assert.match(f.err(), /mc programs after prog 3/u);
+  assert.equal(JSON.stringify(f.store), before, 'every goal, log and the record are as they were');
+  // once phase 3 no longer waits for phase 2 the same move goes through
+  f.store[PROG_RECORD_PATH] = statedRecord({ 3: [1] });
+  assert.equal(await run(['phase', 'prog/two', '1'], f.deps), 0, f.err());
+  const phases = Object.fromEntries(['one', 'two', 'three'].map((name) => [name, parseGoal(f.store[`${HOME}/prog/goals/${name}/GOAL.json`]).phase]));
+  assert.deepEqual(phases, { one: 1, two: 1, three: 2 });
+  assert.deepEqual(progRecordOf(f).phases, { order: 'stated', after: { 2: [1] } });
+});
+
+test('mc goal phase that empties a phase says in one line what it no longer waits for, and a goal later made in that number is open', async () => {
+  const f = fixture({ files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), [PROG_RECORD_PATH]: statedRecord({ 3: [1] }) } });
+  assert.equal(await run(['phase', 'prog/three', '2'], f.deps), 0, f.err());
+  assert.equal(Object.hasOwn(progRecordOf(f).phases.after ?? {}, '3'), false);
+  assert.equal(f.out().split('\n').filter((line) => /no longer waits/u.test(line)).length, 1);
+  assert.match(f.out(), /phase 3 no longer waits for phase 1/u);
+  assert.equal(await run(newArgs('prog/fresh', '--phase', '3'), f.deps), 0, f.err());
+  const goals = programsGoals({ home: HOME, list: f.deps.list, read: f.deps.read });
+  const fresh = goals.find((goal) => goal.goal === 'fresh');
+  assert.equal(fresh.phase, 3);
+  assert.equal(phaseOpen(fresh, goals.filter((goal) => goal.programme === 'prog'), programmeOrder('prog', { home: HOME, read: f.deps.read })), true, 'no old dependency stays on the freed number');
 });
