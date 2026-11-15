@@ -9,6 +9,8 @@ import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE } fr
 import { mcHome, martinDir, programsHome, workRoot } from './paths.js';
 import { ledgerPath } from './jev.js';
 import { realLock } from './runner-lock.js';
+import { holdsGoals, readTurnState, turnStatePath } from './programme-turn.js';
+import { readRecord } from './programme-record.js';
 
 export const ITEM_STATES = ['new', 'prepared', 'for-martin', 'closed'];
 const open = (item) => item.state !== 'closed';
@@ -95,7 +97,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
     write(join(dir, id, 'item.json'), item); existing.set(id, item);
   }
   for (const item of existing.values()) {
-    if (!open(item) || !['goal', 'main-red'].includes(item.kind)) continue;
+    if (!open(item) || !['goal', 'main-red', 'programme'].includes(item.kind)) continue;
     let summary = null;
     if (item.kind === 'goal') {
       const [programme, goal] = item.reference.split('/'); const gd = join(home, programme, 'goals', goal);
@@ -122,6 +124,20 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
           if (Date.parse(question?.at) > Date.parse(item.source_at)) summary = `A later question now waits at ${question.at}.`;
         }
       }
+    } else if (item.kind === 'programme') {
+      // A programme item is the planning turn's: it closes when the programme holds a goal, its record no longer
+      // reads valid and open, or its directory is gone. A state file that cannot be read keeps it open, said.
+      const programme = item.reference.slice('programme:'.length);
+      const turn = readTurnState({ root, programme, read });
+      if (turn.status === 'unreadable') {
+        const path = turnStatePath(root, programme);
+        issues.set(path, { path, error: turn.problem });
+        continue;
+      }
+      const record = exists(join(home, programme)) ? readRecord(join(home, programme), { read }) : null;
+      if (!record) summary = 'The programme directory is gone.';
+      else if (record.status !== 'valid' || record.record.state !== 'open') summary = 'The programme record no longer reads valid and open.';
+      else if (holdsGoals({ home, programme, list })) summary = 'The programme now holds a goal.';
     } else {
       const [, repoAndId] = item.reference.split(':'); const slash = repoAndId.indexOf('/'); const repo = repoAndId.slice(0, slash); const id = repoAndId.slice(slash + 1);
       const entries = sourceMends(repo);
@@ -148,6 +164,11 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
   if (item.kind === 'decision') {
     const row = ledgerRows(read(ledgerPath(mcHome(env)))).find(row => row.at === item.source_at);
     return firstLine(row?.question || row?.reason || 'Source decision unavailable.');
+  }
+  if (item.kind === 'programme') {
+    const state = readTurnState({ root, programme: item.reference.slice('programme:'.length), read });
+    const last = state.status === 'valid' ? state.state.failures.at(-1) : null;
+    return firstLine(last?.reason || 'Source reason unavailable.');
   }
   const match = item.reference.match(/^main-red:([^/]+)\/(.+)$/u);
   try {

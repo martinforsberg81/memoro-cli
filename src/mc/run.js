@@ -99,6 +99,8 @@ import { drainDeskPreparation } from './desk-prepare.js';
 import { deskBudget } from './desk-budget.js';
 import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './desk-items.js';
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
+import { readHorizon } from './desk-horizons.js';
+import { goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName, turnStatePath } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
@@ -122,7 +124,7 @@ import { SCRATCH_MARKER, SCRATCH_SCHEMA } from './tidy.js';
 import { dockerStep, tidyStep } from './disk-admission.js';
 import {
   DEPS_KIND, DEPS_NAME, TIDY_KIND, HELPER_KIND, HELPER_NAME, INTAKE_KIND, INTAKE_PER_ROUND, NIGHTLY_KIND, NIGHTLY_NAME, QUOTA_SLEEP_MS, RESULT_GRACE_MS, TIMEOUT_EXIT,
-  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
+  BUILD_ROLES, collectNote, goalCheckInPrompt, goalMendCheckInPrompt, goalMendPrompt, goalPlanCheckInPrompt, goalPlanPrompt, goalPrompt, programmePlanCheckInPrompt, programmePlanPrompt, goalRepairPrompt, goalReviewPrompt, headlessArgs, helperDue, intakeNote, nightlyDue, quietPrompt,
   readSessionOutput, sessionResult, routedSettings, streamSummary, describeSettings, describeWatch, tsvHeader, tsvRow, userMessageLine,
 } from './run-plan.js';
 
@@ -565,6 +567,7 @@ export function realDeps(env = process.env) {
       return { ...got, state };
     },
     deskItems: { list: () => listDeskItems({ env }), read: id => readDeskItem(id, { env }) },
+    horizon: slug => readHorizon(slug, { env }),
     attachDeps: (worktree) => attachRepoDepsAsync(worktree),
     role: readCanonRole,
     launch: resolveLaunch,
@@ -1483,8 +1486,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json'))
       && (orders.get(goal.programme).kind === 'stated'
         // Stated phases: this draft's own name and any plan session of the programme hold it; delivery sessions of other phases do not.
-        ? !held.has(goalName(goal)) && ![...held].some(name => !name) && planSessions(goal.programme, all).size === 0
-        : ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`))) && !heldBy(goal))
+        ? !held.has(goalName(goal)) && ![...held].some(name => !name) && planSessions(goal.programme, all).size === 0 && !held.has(turnName(goal.programme))
+        : ![...held].some(name => !name || name === turnName(goal.programme) || name.startsWith(`goal:${goal.programme}/`))) && !heldBy(goal))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
@@ -1703,6 +1706,157 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       try {
         if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
       } finally { admission?.release?.(); dropSlot(); }
+    }
+  }
+
+  /* ------------------------------------------------- programme planning turn */
+
+  /** `programme`: its notice, said once while it lasts (an unreadable state file, a horizon that is not open). */
+  const turnSaid = new Map();
+  const turnItems = () => { try { return deps.deskItems?.list() || []; } catch { return []; } };
+  /** Whether `programme` is due a planning turn now (D3), read through the runner's own list and read. */
+  function turnDue(programme, items = turnItems()) {
+    const state = readTurnState({ root, programme, read: deps.read });
+    return programmeDue({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, items, horizon: slug => deps.horizon?.(slug) ?? null, state });
+  }
+  function programmeWork(names, passed = new Set()) {
+    if (!names.length) return [];
+    const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
+    const items = turnItems();
+    const home = programsHome(deps.env);
+    return programmeDirs({ home, list: deps.list }).flatMap(programme => {
+      const name = turnName(programme);
+      if (passed.has(name) || held.has(name)) return [];
+      const due = turnDue(programme, items);
+      if (due.notice) {
+        if (turnSaid.get(programme) !== due.notice) { say(due.notice); turnSaid.set(programme, due.notice); }
+      } else turnSaid.delete(programme);
+      if (!due.due) return [];
+      return [{ name, repo: names[0], kind: 'plan', variant: null, since: due.record.created, resumed: false,
+        programmeTurn: { record: due.record }, programme, priority: readProgrammePriority(programme, { home, read: deps.read }) }];
+    });
+  }
+  async function programmePass(item, { lane }) {
+    const { name, repo: repoName } = item;
+    const claimed = lock(root, () => {
+      if (claims.has(name) || stepsHeld().some(x => x.name === name)) return false;
+      claims.add(name); claimRepos.set(name, repoName);
+      return true;
+    }, { strict: true, name: 'programme-claim' });
+    if (!claimed) return { ran: 0 };
+    try {
+      const outcome = await runProgramme(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, goal: false } : { ran: 0, reason: outcome };
+    } finally { claims.delete(name); claimRepos.delete(name); }
+  }
+  /** A failure of the turn, counted under the lock (D6); one that cannot be written is said, never a missing run row. */
+  function countTurnFailure(programme, reason, log) {
+    try {
+      const failed = recordTurnFailure({ root, programme, reason, log, at: stamp(), env: deps.env, read: deps.read, write: deps.write, writeJson, lock, itemDirectory });
+      if (failed.item) say(`${turnName(programme)}: planning failed ${failed.count} times — desk item ${failed.item.id} (${failed.item.state}) opened`);
+      return failed;
+    } catch (error) { say(`${turnName(programme)}: the failure was not counted — ${error.message || String(error)}`); return null; }
+  }
+  const retainedSaid = new Set();
+  async function runProgramme(item, { lane }) {
+    const { name, repo: repoName, programme } = item;
+    const dir = join(programsHome(deps.env), programme);
+    const roleName = GOAL_ROLES.plan;
+    const role = deps.role(roleName);
+    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const route = routeClass('large');
+    if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+    if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
+    let admission; let scratch; let marker; let result; let set = null;
+    const currentPath = paths.currentFor(repoName, lane);
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
+      // Read again after admission: a goal cut, a record changed or an item opened meanwhile leaves nothing to plan (D3).
+      const due = turnDue(programme);
+      if (!due.due) { say(`${name}: programme changed during admission — planning deferred (${due.reason})`); return 'skipped:programme-changed'; }
+      set = setUpReadCheckouts({ git: deps.git, root, programme, repos, exists: deps.exists });
+      if (!set.ok) {
+        const refused = set;
+        set = null;
+        // A fetch that fails is the network's, not the programme's: nothing is counted.
+        if (refused.fetch) { say(`${name}: ${refused.reason} — skip`); return 'skipped:fetch'; }
+        if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${name}: no session started — ${refused.reason}`); }
+        countTurnFailure(programme, refused.reason, null);
+        return 'skipped:setup';
+      }
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      const prompt = programmePlanPrompt({ programme, dir, horizon: due.record.horizon, repos: repos.map(repo => repo.name), checkouts: set.paths });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const stem = `programme-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
+      const out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      try {
+        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
+          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
+          ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
+          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        admission.release?.();
+        result = await pending;
+      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout || '');
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
+      // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
+      if (count === 0 && !providerEnding) {
+        const reason = `planning session exited ${result.status ?? 1} with the programme holding no goal (${read.note})`;
+        countTurnFailure(programme, reason, `${out}.jsonl`);
+        note = reason;
+      }
+      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      say(`${name}: plan done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+      return 'ran';
+    } finally {
+      remove(currentPath);
+      try {
+        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
+      } finally {
+        try {
+          if (set?.ok) {
+            const kept = removeReadCheckouts({ git: deps.git, root, programme, repos, exists: deps.exists });
+            for (const path of kept) say(`${name}: read checkout ${path} holds work and was kept`);
+          }
+        } finally { admission?.release?.(); dropSlot(); }
+      }
     }
   }
 
@@ -2376,7 +2530,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
         const others = order?.kind === 'stated' ? [...planSessions(goal.programme, listed)].filter(other => other !== name) : [];
         const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')));
-        if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length)) {
+        // The programme turn's claim or current record holds the programme: the drafts it creates are its own until it ends (D7).
+        const turnHolds = planning && (claims.has(turnName(goal.programme)) || stepsHeld().some(item => item.name === turnName(goal.programme)));
+        if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length || turnHolds)) {
           say(`${name}: programme changed during admission — planning deferred`);
           return 'skipped:programme-changed';
         }
@@ -2560,11 +2716,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...decisionWork(names, passed)];
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision) continue;
+      if (item.mainMend || item.decision || item.programmeTurn) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -2671,6 +2827,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       say(`${label}: next — ${pick.name} (${pick.variant ? `${pick.kind} ${pick.variant}` : pick.kind})`);
       const ran = pick.decision
         ? await decisionPass(pick, { lane })
+        : pick.programmeTurn
+        ? await programmePass(pick, { lane })
         : pick.mainMend
         ? await mainMendPass(pick, { lane })
         : await goalPass(pick.goal, { lane, label });

@@ -2,6 +2,8 @@
 import { join } from 'node:path';
 import { itemDirectory, updateDeskItem } from './desk-items.js';
 import { recordUnsettled } from './desk-lessons.js';
+import { programsHome, workRoot } from './paths.js';
+import { turnStatePath } from './programme-turn.js';
 
 export function decisionDue(item, now) {
   return item.state === 'for-martin' && item.reversible === true
@@ -11,10 +13,17 @@ export function decisionDue(item, now) {
 export function decisionEligible(item, now) {
   return item?.state === 'prepared' || Boolean(item && decisionDue(item, now));
 }
+/** What a programme item adds: the programme's directory and the planning turn's state file, where its failures are kept. */
+function programmeLine(item, env) {
+  const programme = item.reference.slice('programme:'.length);
+  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The planning turn's failures are in ${turnStatePath(workRoot(env), programme)}; read them and each session log they name. Repair what failed within your reach, then close --by decision so the runner plans the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
+}
+
 export function decisionPrompt(item, { env, goal, now }) {
   const dir = itemDirectory(item, env);
   return `Decide desk item ${item.id}. Item directory: ${dir}. Read prepared.md there first, then mc martin item ${item.id} for the live source and state.\n`
-    + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : 'No goal identity is assigned; work in the item directory.\n')
+    + (item.kind === 'programme' ? programmeLine(item, env) : '')
+    + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : item.kind === 'programme' ? '' : 'No goal identity is assigned; work in the item directory.\n')
     + (decisionDue(item, now)
       ? `This item is DUE: its reversible ${item.sort} brief waited until ${item.due_at}. Read brief.md, carry out its recommendation as if Martin chose it, and close --by default.\n`
       : 'Settle and close --by decision, or write brief.md in Swedish and mark brief --sort product|judgement|reserved --reversible yes|no.\n')

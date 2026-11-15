@@ -393,6 +393,25 @@ export function goalPlanCheckInPrompt({ minutes, count }) {
   return `Planning check-in after ${minutes} minutes (${count}). Complete the selected draft, read it with \`mc goal plan-review\`, and move it to build when the reading is OK. Resolve technical details locally; use goal-bound mc ask for a change to a text Martin holds. Keep this turn to the one draft's planning assignment.`;
 }
 
+/**
+ * What the headless programme turn is told (mc-run.md, "Programme planning
+ * turn"): the programme to plan, its page, the commands that read it, and the
+ * read checkouts of the served repositories. The rest is the plan role's
+ * headless programme-turn section. `checkouts` is `{ repo: path }`; `horizon`
+ * is the slug the record names, or null.
+ */
+export function programmePlanPrompt({ programme, dir, horizon = null, repos = [], checkouts = {} }) {
+  const read = Object.entries(checkouts).map(([repo, path]) => `${repo}: \`${path}\``).join('; ') || '(none)';
+  const horizonLine = horizon ? ` Its record names the horizon ${horizon}: read it with \`mc martin horizon show ${horizon}\`.` : '';
+  const areas = repos.length ? ` Read the rule areas of each repository with \`mc goal areas <repo>\` (${repos.join(', ')}).` : '';
+  return `You are the headless plan session: plan programme ${programme}, with nobody present. Its directory is \`${dir}\`; read its page \`${dir}/README.md\` and \`mc programs show ${programme}\` first.${horizonLine}${areas} Read checkouts of the served repositories, detached at origin/main, are ${read}; read code there and change nothing in them. Cut the goals inside the page's End and nowhere else. First create every goal as a draft with its title, phase and outcome through the mc verbs; then complete each, read it with \`mc goal plan-review\`, repair what the reading finds, and move it to build in its phase, one after the other. State a stated programme's dependencies with \`mc programs after\`. A product question, or a text of Martin's that would change, goes through goal-bound \`mc ask --kind product\` on the draft that needs it; the others go on. Do not implement a goal, process proposals or commit. Your plan role's headless programme-turn section says the rest.`;
+}
+
+/** `checkInPrompt` for the programme turn: the same judgement as a plan session's, over every goal the turn cuts. */
+export function programmePlanCheckInPrompt({ minutes, count }) {
+  return `Programme planning check-in after ${minutes} minutes (${count}). Keep cutting the goals inside the page's End, completing each draft, reading it with \`mc goal plan-review\` and moving it to build in turn. Resolve technical details locally; use goal-bound mc ask --kind product for a text of Martin's that would change. Do not implement, process proposals or commit.`;
+}
+
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,
