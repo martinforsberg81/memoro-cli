@@ -7,7 +7,7 @@ import { collectMartinQueue, currentQuestion } from './martin-collect.js';
 import { mainMendPath, readMainMends } from './main-repair.js';
 import { archiveDirIn, listDirsOf, parseGoal, parseLog, GOAL_FILE, LOG_FILE } from './goals.js';
 import { mcHome, martinDir, programsHome, workRoot } from './paths.js';
-import { ledgerPath } from './jev.js';
+import { ledgerPath, rowAnswer } from './jev.js';
 import { realLock } from './runner-lock.js';
 import { holdsGoals, readTurnState, turnStatePath } from './programme-turn.js';
 import { readRecord } from './programme-record.js';
@@ -85,7 +85,11 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
   for (const row of ledgerRows(readLedger(ledgerPath(mc)))) {
     const chosen = row.answers?.answer?.choice;
     const product = row.answers?.product;
-    const flagged = row.outcome === 'decided' && ((typeof chosen === 'string' && chosen !== row.recommend) || (typeof product === 'number' && product >= 0.70));
+    const answer = rowAnswer(row);
+    // A row since the one way to ask: every answer that is not the asker's recommendation, and every unread one. An older row keeps its rule.
+    const flagged = answer.old
+      ? row.outcome === 'decided' && ((typeof chosen === 'string' && chosen !== row.recommend) || (typeof product === 'number' && product >= 0.70))
+      : answer.unread || (typeof answer.chosen === 'string' && answer.chosen !== row.recommend);
     if (!flagged || Date.parse(row.at) < Date.parse(store.first_sync_at)) continue;
     opens.push({ kind: 'decision', reference: `decision:${row.at}`, source_at: row.at, question: firstLine(row.question || row.reason || 'Decision record') });
   }

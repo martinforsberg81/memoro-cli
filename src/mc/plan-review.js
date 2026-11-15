@@ -332,7 +332,7 @@ function realCheckout({ repos, dir }) {
 }
 
 /** The checkout the call made, writable again and removed. */
-function realDiscard(dir, identity) {
+export function realDiscard(dir, identity) {
   const recheck = () => {
     const current = checkoutIdentity(dir);
     if (!identity || current.dev !== identity.dev || current.ino !== identity.ino || current.birthtimeMs !== identity.birthtimeMs) {
@@ -347,19 +347,19 @@ function realDiscard(dir, identity) {
 }
 
 /** Do not follow a replacement symlink when proving the directory belongs to this call. */
-function checkoutIdentity(dir) {
+export function checkoutIdentity(dir) {
   const stat = lstatSync(dir);
   if (!stat.isDirectory()) throw new Error('the checkout identity is not a directory');
   return { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
 }
 
-function appendRun(row, env) {
+export function appendRun(row, env) {
   const path = deskRunsPath(env);
   mkdirSync(join(runnerDir(env), 'log'), { recursive: true });
   appendFileSync(path, `${existsSync(path) ? '' : `${tsvHeader()}\n`}${tsvRow(row)}\n`);
 }
 
-async function realSession({ bin, args, ...options }) {
+export async function realSession({ bin, args, ...options }) {
   const result = await runTool(bin, args, options);
   const timedOut = result.error?.code === 'ETIMEDOUT';
   return { ...result, status: timedOut ? TIMEOUT_EXIT : result.status ?? 1, timedOut, stderr: result.stderr || result.error?.message || '' };

@@ -150,7 +150,7 @@ preparation, decisions and the interactive desk. Its schema is
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
 (`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written only by the runner when a horizon turn of the manager has failed twice; see below). A goal's source time
-is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing.
+is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing. A `decision:<at>` item opens for a new ledger row of `mc ask` whose chosen key differs from the recommendation and for every unread row (`answered_by: "session"`), with the answer's who and why ([mc-jev.md](mc-jev.md), *The ledger*).
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
 also has `text` (the text it changes) and `goal` (the goal it blocks, or null).
@@ -240,7 +240,9 @@ writes an item of kind `text`, sort `text`, state `for-martin`, `reversible` and
 and prints its id. `--text` is one line. `--goal` names a readable goal whose later
 phases wait for the change; with none, the item blocks nothing. The same open text
 with the same "Vad som föreslås" part (whitespace aside) is not written again: the
-verb prints the existing id and exits 0. A brief not in the form, a missing or
+verb prints the existing id and exits 0; an open duplicate that names no goal
+takes the caller's goal, so a second goal's `mc ask` that finds the same text is
+recorded against the item (`other_goal` in the ledger row, [mc-jev.md](mc-jev.md)). A brief not in the form, a missing or
 multi-line `--text`, an unreadable file, an unreadable `--goal` and a role that
 may not propose (`desk-prepare` only prepares) are refused with exit 2 and nothing
 written; a lock that cannot be had is exit 1 with its message. Every other role,
@@ -403,8 +405,8 @@ contains the ask/stop in two sentences, sourced facts, existing rules, the
 sort and its reason, visual evidence paths from `mc shot` when applicable,
 and anything not established. It makes no recommendation or decision, asks
 nobody, and changes no goal, log, ledger or repository file. Goal verbs refuse
-every write for this role (including criteria, PRs and creation); `mc ask` and
-`mc goal martin` refuse before consulting jev. Its only item mutation is
+every write for this role (including criteria, PRs and creation); `mc ask` refuses before consulting jev
+(`mc goal martin` is gone). Its only item mutation is
 `prepared --sort mechanical|technical|text|reserved`. A goal
 defect is sorted `technical`, a no-progress stop `mechanical`.
 
@@ -483,8 +485,10 @@ No clock changes anything on the desk. A brief waits for Martin without limit; n
 carries out its recommendation, closes it or moves it after a time, and the
 decision pass takes `prepared` items only. A horizon is recorded and shown in the opening
 (*Horizons*); a change to a text he holds is brought in the form above; and a
-change with no goal reaches the desk by `mc martin propose`, which a goal-less
-`product` ask that jev does not settle names ([mc-jev.md](mc-jev.md)).
+change with no goal reaches the desk by `mc martin propose`, which the
+reader of an `mc ask` call that finds a text of Martin's would change
+runs for the asker ([mc-jev.md](mc-jev.md)); the asker continues inside the
+wording that stands.
 
 Settled work is carried out or handed to the appropriate goal stage, then
 closed `--by decision` with a two- or three-sentence Swedish summary; a sync that

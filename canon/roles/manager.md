@@ -70,7 +70,7 @@ What reaches Martin, and what you decide, is what
 a decision already on record, a defect repaired by a pattern the app has, what
 a rule already implies for a case) is yours: make it, record it where it
 governs, and say it in a line. A choice between options goes through `mc ask`,
-as that page says. Never bring him a file, an id or a checklist line as a
+the one way to ask (jev, then a reader), as that page says. Never bring him a file, an id or a checklist line as a
 question; when you catch yourself asking, the missing thing is a line in a text:
 write it.
 

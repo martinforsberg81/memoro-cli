@@ -805,8 +805,8 @@ origin/main. The prompt is `programmePlanPrompt` (`run-plan.js`), and the plan
 role's headless programme-turn section says the rest. In order, the session
 creates every goal as a draft with its title, phase and outcome; then completes,
 plan-reviews and moves each to build in turn, stating dependencies of a stated
-programme with `mc programs after`. A product question is a goal-bound
-`mc ask --kind product` on the draft that needs it, and the other drafts go on.
+programme with `mc programs after`. A question is a goal-bound
+`mc ask` on the draft that needs it (one way to ask: jev, then a reader), and the other drafts go on.
 Drafts it leaves are not set to Martin: the next-draft sessions take them.
 Proposals are not processed.
 
