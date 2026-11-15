@@ -169,7 +169,11 @@ fresh session that reads and does not edit.
   stand and text, the text of the section its `standard` names (read from the
   goal's worktree, else the programme's checkout), and the area's other pages
   (`page` and `standards` in the repository's `.mc/areas.json`) by their path in
-  the copy. An area or section that cannot be read is said in the prompt. The
+  the copy. The anchor after `#` names a heading by its text with inline markup
+  stripped (`mc hook pre-tool` names ``## `mc hook pre-tool` ``) or by its
+  GitHub-style slug (`one-usage-per-verb` names `## One usage per verb`), since
+  goals write anchors both ways (`sectionOf`). An area or section that cannot be
+  read is said in the prompt. The
   pages are listed, not inlined: a goal's areas hold hundreds of kilobytes of
   standards, and the reader reads them in the copy as the plan review does.
   Nothing in it holds a key-source value.

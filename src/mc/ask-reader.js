@@ -111,11 +111,33 @@ export function snapshotTree({ source, into, secrets = [], git = realGit, maxByt
 
 const oneLine = (value) => String(value ?? '').replace(/\s*\n\s*/gu, ' ').trim();
 
-/** The text of the section a heading names in a markdown page — from the heading to the next of its level or above — or null. */
+/** A heading's text with inline markup stripped: code spans, emphasis and links read as their text. */
+export function headingText(value) {
+  return String(value ?? '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/`+([^`]*)`+/gu, '$1')
+    .replace(/(\*{1,3})(\S(?:.*?\S)?)\1/gu, '$2')
+    .replace(/(?<![\p{L}\p{N}])(_{1,3})(\S(?:.*?\S)?)\1(?![\p{L}\p{N}])/gu, '$2')
+    .trim();
+}
+
+/** A heading's GitHub-style anchor: its text, lowercased, punctuation dropped, spaces to hyphens. */
+export function headingSlug(value) {
+  return headingText(value).toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/gu, '-');
+}
+
+/**
+ * The text of the section a heading names in a markdown page — from the heading to the next of its level or above — or
+ * null. The anchor matches a heading by its text with inline markup stripped (`mc hook pre-tool` names ## `mc hook
+ * pre-tool`) or by its GitHub-style slug (`one-usage-per-verb` names ## One usage per verb), since goals write both.
+ */
 export function sectionOf(page, heading) {
   if (!heading) return null;
   const lines = String(page).split('\n');
-  const at = lines.findIndex((line) => { const m = /^(#{1,6})\s+(.*?)\s*#*\s*$/u.exec(line); return m && m[2] === heading; });
+  const headings = lines.map((line) => /^(#{1,6})\s+(.*?)\s*#*\s*$/u.exec(line)?.[2] ?? null);
+  const wanted = headingText(heading);
+  let at = headings.findIndex((text) => text !== null && headingText(text) === wanted);
+  if (at < 0) { const slug = headingSlug(heading); at = headings.findIndex((text) => text !== null && headingSlug(text) === slug); }
   if (at < 0) return null;
   const level = /^#+/u.exec(lines[at])[0].length;
   let end = lines.findIndex((line, index) => index > at && /^(#{1,6})\s/u.test(line) && /^#+/u.exec(line)[0].length <= level);

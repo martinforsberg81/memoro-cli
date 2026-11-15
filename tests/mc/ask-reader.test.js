@@ -210,6 +210,37 @@ test('one way to ask: the prompt carries the standards of the rule areas the goa
   assert.doesNotMatch(askReaderPrompt({ id: ID, question: 'q', options: OPTIONS, recommend: 'a', trees: [], treeRoot: '/t/tree' }), /THE STANDARDS OF THE RULE AREAS/u);
 });
 
+test('one way to ask: a stand\'s anchor names a heading with inline code by its text, and any heading by its GitHub-style slug', (t) => {
+  const page = '# Hooks\n\n## `mc hook pre-tool`\n\nThe pre-tool rule.\n\n## One usage per verb\n\nOne usage.\n\n## Shared documents and the changelog\n\nThe changelog rule.\n\n## Other\n\nNot this.\n';
+  assert.equal(sectionOf(page, 'mc hook pre-tool'), '## `mc hook pre-tool`\n\nThe pre-tool rule.', 'the heading\'s text with its code span stripped');
+  assert.equal(sectionOf(page, '`mc hook pre-tool`'), '## `mc hook pre-tool`\n\nThe pre-tool rule.', 'the heading as written');
+  assert.equal(sectionOf(page, 'mc-hook-pre-tool'), '## `mc hook pre-tool`\n\nThe pre-tool rule.', 'the slug of a heading with inline code');
+  assert.equal(sectionOf(page, 'one-usage-per-verb'), '## One usage per verb\n\nOne usage.');
+  assert.equal(sectionOf(page, 'shared-documents-and-the-changelog'), '## Shared documents and the changelog\n\nThe changelog rule.');
+  assert.equal(sectionOf(page, 'one-usage'), null, 'a slug matches a whole heading, not a prefix of one');
+
+  const root = tmpRoot(t);
+  const goalDir = join(root, 'goals', 'g');
+  const repo = join(goalDir, 'memoro-cli');
+  mkdirSync(join(repo, '.mc'), { recursive: true });
+  mkdirSync(join(repo, 'docs', 'technical'), { recursive: true });
+  writeFileSync(join(repo, '.mc', 'areas.json'), JSON.stringify({ schema_version: 1, areas: [
+    { id: 'reserved-acts', name: 'Reserved acts', covers: 'what headless may not do', standards: ['docs/technical/hooks.md'], paths: ['src'], questions: [{ when: 'always', ask: 'which act?' }] },
+    { id: 'command-contract', name: 'Command contract', covers: 'usage', standards: ['docs/technical/hooks.md'], paths: ['src'], questions: [{ when: 'always', ask: 'which verb?' }] },
+  ] }));
+  writeFileSync(join(repo, 'docs', 'technical', 'hooks.md'), page);
+  const standards = areaStandards({ goalDir, goal: { obligations: [
+    { area: 'memoro-cli/reserved-acts', stand: 'touched', text: 'Refusals hold.', standard: 'memoro-cli/docs/technical/hooks.md#mc hook pre-tool' },
+    { area: 'memoro-cli/command-contract', stand: 'touched', text: 'One usage.', standard: 'memoro-cli/docs/technical/hooks.md#one-usage-per-verb' },
+  ] } });
+  assert.deepEqual(standards.map((one) => [one.section?.text ?? null, one.problem]), [
+    ['## `mc hook pre-tool`\n\nThe pre-tool rule.', null],
+    ['## One usage per verb\n\nOne usage.', null],
+  ]);
+  const prompt = askReaderPrompt({ id: ID, question: 'q', options: OPTIONS, recommend: 'a', goalName: 'p/g', standards, trees: [{ repo: 'memoro-cli' }], treeRoot: '/t/tree' });
+  assert.doesNotMatch(prompt, /has no section/u, 'the prompt does not say a section it found is missing');
+});
+
 // ---------------------------------------------------------------------- the launch
 
 test('one way to ask: the reader is launched in the copy as the ask-reader role, headless, with the token only in its environment and its hash in the launch file', async (t) => {
