@@ -780,7 +780,10 @@ function reviewMove(goal, target, to, ctx) {
   if (text === null) return { refusal: `a review moves a goal to ${to} with ${REVIEW_FILE} — write ${file} first: a \`head: <repo> <sha>\` line per repository, then \`<id>: OK\` or \`<id>: NOT OK — <what and where>\` per item` };
   const found = trippedAreas({ goal, dir: target.dir, head: env.MC_REVIEW_HEAD, git: ctx.git, exists: ctx.exists });
   if (found.error) return { refusal: found.error };
-  const checked = checkVerdict({ text, goal, tripped: found.tripped, heads: found.heads });
+  // The areas the review was told of at its launch, never asked of main again (`seenAreas`, run.js): a session started
+  // before an area declared `seen`, or by a runner from before the key, is held to no `seen` line.
+  const seen = String(env.MC_REVIEW_SEEN ?? '').split(/\s+/u).filter(Boolean);
+  const checked = checkVerdict({ text, goal, tripped: found.tripped, heads: found.heads, seen, isFile: (path) => ctx.exists(join(target.dir, path)) });
   if (checked.problems.length) return { refusal: `${file} is not complete for the head judged (${env.MC_REVIEW_HEAD}) —\n  ${checked.problems.join('\n  ')}` };
   const ids = checked.failed.map((one) => one.id).join(', ');
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };
@@ -1669,6 +1672,7 @@ function areaBlock(repo, path, area, at, ctx, stand = undefined, proposal = null
   if (stand !== undefined && (stand || !source)) lines.push(stand ? `  stand: ${stand.stand} — ${oneLine(stand.text)}${stand.standard ? ` [${stand.standard}]` : ''}` : '  no stand');
   if (stand === null && proposal && !source) lines.push(proposedWords(proposal));
   lines.push(`  covers: ${area.covers}`);
+  if (area.seen === true) lines.push('  seen: work on it is judged as the user sees it — the goal review names the screenshots it judged, or says none and why');
   if (area.page) lines.push(`  page: ${marked([area.page])}`);
   lines.push(`  standards: ${area.standards.length ? marked(area.standards) : 'none'}`, `  paths: ${area.paths.length ? marked(area.paths) : 'none'}`);
   if (source) return `${lines.join('\n')}\n`;

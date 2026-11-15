@@ -12,7 +12,7 @@ import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
 import { parseGoal, parseLog, redMergeText, STAGES } from '../../src/mc/goals.js';
-import { trippedAreas } from '../../src/mc/review-verdict.js';
+import { seenAreas, trippedAreas } from '../../src/mc/review-verdict.js';
 import { mcCheckout, startRunner } from '../../src/mc/run-control.js';
 import { TIDY_KIND } from '../../src/mc/run-plan.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
@@ -4641,15 +4641,15 @@ test('a goal a person moved to merge and back after a rejection is not a repair:
 });
 
 /* The untouched areas the branch changed, listed in the review prompt by the function the move out of review checks with. */
-const OPS_AREAS = (paths, more = []) => JSON.stringify({ schema_version: 1, areas: [{ id: 'ops', name: 'Operations', covers: 'deploys', standards: ['docs/technical/ops.md'], paths, questions: [{ when: 'always', ask: 'Does anything deploy?' }] }, ...more] });
-function trippedReview({ repos = ['memoro'], obligations, paths = { memoro: ['src/ops'] }, diffs = {}, sources = [] }) {
+const OPS_AREAS = (paths, more = [], seen = false) => JSON.stringify({ schema_version: 1, areas: [{ id: 'ops', name: 'Operations', covers: 'deploys', standards: ['docs/technical/ops.md'], paths, questions: [{ when: 'always', ask: 'Does anything deploy?' }], ...(seen ? { seen: true } : {}) }, ...more] });
+function trippedReview({ repos = ['memoro'], obligations, paths = { memoro: ['src/ops'] }, diffs = {}, sources = [], seen = false }) {
   const f = reviewFixture();
   f.files[`${GOALS}/judged/GOAL.json`] = goalJsonV2({ stage: 'review', repos, obligations });
   for (const repo of repos.slice(1)) f.dirs.add(`${GOALS}/judged/${repo}`);
   const base = f.deps.git;
   f.deps.git = (cwd, args) => {
     const repo = repos.find((one) => cwd === `${GOALS}/judged/${one}`);
-    if (repo && args[0] === 'show' && args[1] === 'origin/main:.mc/areas.json') return { ok: true, stdout: OPS_AREAS(paths[repo] ?? [], sources) };
+    if (repo && args[0] === 'show' && args[1] === 'origin/main:.mc/areas.json') return { ok: true, stdout: OPS_AREAS(paths[repo] ?? [], sources, seen) };
     if (repo && args[0] === 'diff') return { ok: true, stdout: (diffs[repo] ?? []).join('\n') };
     if (repo && repo !== repos[0] && args[0] === 'rev-parse' && args[1] === 'HEAD') return { ok: true, stdout: 'second0head\n' };
     return base(cwd, args);
@@ -4710,6 +4710,58 @@ test('the prompt\'s list of tripped areas and the move out of review\'s check co
   });
   assert.equal(rc, 2, out.join(''));
   assert.match(out.join(''), /no line for untouched memoro\/ops/u);
+});
+
+/* The areas judged as the user sees it: one list, asked once at the launch, in the prompt and in MC_REVIEW_SEEN. */
+const touchedOps = (repo) => ({ area: `${repo}/ops`, stand: 'touched', text: 'It deploys.', standard: `${repo}/docs/technical/ops.md#Deploy` });
+const reviewSession = (f) => f.calls.sessions.find((call) => call.env.MC_ROLE === 'review-session:goal');
+
+test('a review of a goal touched on an area that declares seen is told to write a seen line for it, and MC_REVIEW_SEEN names the same area; an untouched area the branch changed is listed too', async () => {
+  const f = trippedReview({ seen: true, obligations: [touchedOps('memoro')], diffs: { memoro: ['src/ops/deploy.js'] } });
+  const prompt = await reviewPrompt(f);
+  assert.match(prompt, /judged as the user sees it; write a `seen <area>` line for each/u);
+  assert.match(prompt, /seen memoro\/ops: OK — shots\/<name>\.png/u);
+  assert.equal(reviewSession(f).env.MC_REVIEW_SEEN, 'memoro/ops');
+  const tripped = trippedReview({ seen: true, obligations: [untouchedOps('memoro')], diffs: { memoro: ['src/ops/deploy.js'] } });
+  const trippedPrompt = await reviewPrompt(tripped);
+  assert.match(trippedPrompt, /write an `untouched <area>` line for each:\nmemoro\/ops: src\/ops\/deploy\.js/u);
+  assert.match(trippedPrompt, /seen memoro\/ops: OK/u);
+  assert.equal(reviewSession(tripped).env.MC_REVIEW_SEEN, 'memoro/ops');
+});
+
+test('a review with no area that declares seen, or whose stand on it asks none, has no seen text in its prompt and no MC_REVIEW_SEEN key', async () => {
+  for (const f of [
+    trippedReview({ obligations: [touchedOps('memoro')], diffs: { memoro: ['src/ops/deploy.js'] } }),
+    trippedReview({ seen: true, obligations: [untouchedOps('memoro')], diffs: { memoro: ['src/other.js'] } }),
+    trippedReview({ seen: true, obligations: [{ area: 'memoro/other', stand: 'untouched', text: 'x' }], diffs: {} }),
+  ]) {
+    const prompt = await reviewPrompt(f);
+    assert.doesNotMatch(prompt, /judged as the user sees it|`seen <area>`|seen memoro\/ops/u);
+    assert.equal('MC_REVIEW_SEEN' in reviewSession(f).env, false);
+  }
+});
+
+test('the prompt\'s seen areas, the session\'s MC_REVIEW_SEEN and the move out of review\'s check come from one list: the env handed to the move refuses a missing seen line and asks none without it', async () => {
+  const f = trippedReview({ seen: true, obligations: [touchedOps('memoro')], diffs: { memoro: ['src/ops/deploy.js'] } });
+  const prompt = await reviewPrompt(f);
+  const goal = parseGoal(f.files[`${GOALS}/judged/GOAL.json`]);
+  const found = seenAreas({ goal, dir: `${GOALS}/judged`, tripped: [], git: f.deps.git, exists: () => true });
+  assert.deepEqual(found.seen, ['memoro/ops']);
+  assert.ok(prompt.includes(`seen ${found.seen[0]}: OK`), 'the prompt names what the function returns');
+  assert.equal(reviewSession(f).env.MC_REVIEW_SEEN, found.seen.join(' '));
+  const verdict = `head: memoro ${HEAD}\ncriterion 1: OK\nV1: OK\nobligation memoro/ops: OK\nchange: OK\nout-of-scope: OK\nprotection: OK\nbugs: OK\n`;
+  const move = async (env) => {
+    const out = [];
+    const rc = await goalCommand(['stage', 'merge'], { ...f.deps, env, home: '/w/programs', known: () => ['/home/memoro'], stdout: { write() {} }, stderr: { write: (text) => out.push(text) }, queue: () => {} });
+    return { rc, text: out.join('') };
+  };
+  f.files[`${GOALS}/judged/REVIEW.md`] = verdict;
+  const env = { ...reviewSession(f).env };
+  const refused = await move(env);
+  assert.equal(refused.rc, 2, refused.text);
+  assert.match(refused.text, /no line for seen memoro\/ops/u);
+  const { MC_REVIEW_SEEN, ...without } = env;
+  assert.doesNotMatch((await move(without)).text, /seen memoro\/ops/u, 'a review started without the list is asked none');
 });
 
 /* ---------------------------------------------------------------- no loop */

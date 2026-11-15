@@ -479,6 +479,20 @@ test('the prompt gives a rule area\'s page as a path under the checkout before i
   assert.doesNotMatch(plain, /page |SOURCE AREAS/u, 'no page and no source area give no line and no section');
 });
 
+test('the prompt marks an area that declares seen and asks question 8 only when the goal stands touched on one; the prompt is the same without seen', () => {
+  const goalWith = (stand) => parseGoal(goalJsonV2({ stage: 'draft', obligations: [{ area: 'r/rule', stand, text: 't', ...(stand === 'touched' ? { standard: 'r/docs/rule.md#Rule' } : {}) }] }));
+  const prompt = (stand, area) => readerPrompt({ name: 'p/g', goal: goalWith(stand), declared: [{ repo: 'r', path: '/r', areas: [area] }], dir: '/g', checkout: '/c' });
+  const seen = prompt('touched', { ...PAGED, seen: true });
+  assert.match(seen, /\n  r\/rule — Rule · judged as the user sees it\n/u);
+  assert.match(seen, /\nQUESTION 8 IS ASKED: the goal stands touched on r\/rule, judged as the user sees it — answer it for that area\n/u);
+  const untouched = prompt('untouched', { ...PAGED, seen: true });
+  assert.match(untouched, /r\/rule — Rule · judged as the user sees it/u, 'the area is still marked');
+  assert.doesNotMatch(untouched, /QUESTION 8/u, 'a goal untouched on it is not asked question 8');
+  const plain = prompt('touched', PAGED);
+  assert.doesNotMatch(plain, /QUESTION 8|judged as the user sees it/u);
+  assert.equal(plain, prompt('touched', { ...PAGED, seen: undefined }), 'no seen key and an absent one give one prompt');
+});
+
 const GOAL_OF_RULE = { version: 2, repos: ['r'], outcome: ['x'], change: [{ id: 'C1', where: 'src/rule/b.js', what: 'y' }], success_criteria: [{ criterion: 'c', check: 'k', met: false }], obligations: [{ area: 'r/rule', stand: 'untouched', text: 't' }] };
 const lacksWith = (answers = {}, areas = [PAGED, SOURCE]) => partsLacks(GOAL_OF_RULE, 'p/g', { declarations: () => ({ declared: [{ repo: 'r', path: '/r', areas }] }), onMain: (repo, path) => answers[path] ?? { state: 'present' } });
 

@@ -225,7 +225,7 @@ export function unsupportedClaims(goal) {
 /** The prompt of the reading: the goal as `mc goal show` renders it, the areas' questions, the claims to judge. */
 export function readerPrompt({ name, goal, declared, dir, checkout }) {
   const lines = [
-    `Read the plan of goal ${name} before it is built. You are the plan-review role: follow your role page, answer its seven questions in order, and change nothing but ${REVIEW_TEXT_FILE}.`,
+    `Read the plan of goal ${name} before it is built. You are the plan-review role: follow your role page, answer its questions in order, and change nothing but ${REVIEW_TEXT_FILE}.`,
     `The goal's repositories at origin/main are checked out, read-only, under ${checkout}${declared.length ? ` (${declared.map((one) => `${checkout}/${one.repo}`).join(', ')})` : ''}.`,
     `Write ${join(dir, REVIEW_TEXT_FILE)} (first line OK or NOT OK), then end with mc goal plan-review ${name} verdict ok|not-ok, saying the same word.`,
     '', 'THE GOAL, as mc goal show renders it', '', renderGoalText(goal).trimEnd(), '',
@@ -235,10 +235,13 @@ export function readerPrompt({ name, goal, declared, dir, checkout }) {
   if (!areas.length) lines.push('  none declared');
   const rules = areas.filter(({ area }) => !isSourceArea(area));
   for (const { repo, area } of rules) {
-    lines.push(`  ${repo}/${area.id} — ${area.name}`);
+    lines.push(`  ${repo}/${area.id} — ${area.name}${area.seen === true ? ' · judged as the user sees it' : ''}`);
     if (area.page) lines.push(`    page ${checkout}/${repo}/${area.page}`);
     for (const question of area.questions) lines.push(`    when ${question.when}`, `      ask ${question.ask}`);
   }
+  const stands = new Map((goal.obligations ?? []).map((one) => [one.area, one.stand]));
+  const seen = rules.filter(({ repo, area }) => area.seen === true && stands.get(`${repo}/${area.id}`) === 'touched').map(({ repo, area }) => `${repo}/${area.id}`);
+  if (seen.length) lines.push('', `QUESTION 8 IS ASKED: the goal stands touched on ${seen.join(', ')}, judged as the user sees it — answer it for ${seen.length === 1 ? 'that area' : 'those areas'}`);
   const sources = areas.filter(({ area }) => isSourceArea(area));
   if (sources.length) {
     lines.push('', 'THE SOURCE AREAS OF ITS REPOSITORIES, which ask no stand — read the page of each the goal touches');
@@ -472,7 +475,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       if (launched.id === 'claude' && at > 0) args.splice(at, 0, '--add-dir', checkout);
       const spawned = gatewayLaunch({ provider: candidate.tool, model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
+      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: PLAN_REVIEW_ROLE, MC_HEADLESS: '1', MC_GOAL: target.name, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_PLAN_REVIEW_TOKEN: token });
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
