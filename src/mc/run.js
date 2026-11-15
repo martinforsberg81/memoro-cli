@@ -22,7 +22,7 @@
  * `--once` is one session, for a person watching.
  *
  * The chores take away what is finished and keep the machine fit: a goal
- * done or dropped for 24 hours is archived (`archiveGoalsDue`, goal-archive.js),
+ * done or dropped is archived at the next pass (`archiveGoalsDue`, goal-archive.js),
  * every repository is fetched and asked what is open for the page
  * (`askGithub`), a merger that should be running is started (`wakeMerger`),
  * orphaned dev processes are reaped, Docker is swept. Beside them a timer
@@ -685,14 +685,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const alive = deps.alive || pidAlive;
 
   // The disk policy (disk-pressure.js), on this runner's doors. Its pressure
-  // pass is, in order: finished goals archived without the 24 hours, tidy's
+  // pass is, in order: finished goals archived, tidy's
   // file rules, Docker's images on a runtime that is already up. Only with a
   // reader: a deps object without `freeBytes` has no disk policy.
   const disk = deps.freeBytes ? createDiskPressure({
     path: paths.scratch, stateDir: join(root, 'runner'), freeBytes: deps.freeBytes, read: deps.read, writeJson,
     now: deps.now, pid, alive, lock: (fn) => lock(root, fn, { strict: true, name: 'disk-pressure' }), say,
     steps: [
-      { name: 'archive', run: async () => archiveGoalsDue({ holdMs: 0 }) },
+      { name: 'archive', run: async () => archiveGoalsDue({ convert: false }) },
       ...(deps.pressureTidy ? [{ name: 'tidy', run: async () => tidyStep(await deps.pressureTidy()) }] : []),
       ...(deps.pressureDocker ? [{ name: 'docker-images', run: async () => dockerStep(await deps.pressureDocker()) }] : []),
     ],
@@ -966,21 +966,26 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   /* ------------------------------------------------------------- archiving */
 
   /**
-   * Dropped goals are finalized immediately; done goals retain the 24-hour
-   * hold (`goalArchiveDue`). Both use the archive safety checks (`mc goal
-   * archive` archives one (`archiveGoal`): the worktrees and the branch go
-   * through git, the directory moves to `goals/.archive/`, a row goes to
-   * `goals/goal_log.md`. A goal the archive refuses stays, and the refusal is
-   * written into its LOG.md once, as a runner entry, not at every pass.
+   * Every finished goal is archived at the pass, a dropped one by
+   * `finalizeDroppedGoal` and a done one by `archiveGoal`, both through the
+   * archive safety checks (`mc goal archive` archives one): the worktrees and
+   * the branch go through git, the directory moves to `goals/.archive/`, a row
+   * goes to `goals/goal_log.md`. A goal a live session owns is left for the
+   * next pass, with no log entry: the session's end resolves it. Any other
+   * refusal stays with the goal and is written into its LOG.md once, as a
+   * runner entry, not at every pass. The disk-pressure step passes
+   * `convert: false` and so skips `convertAfter()`.
    */
-  function archiveGoalsDue({ holdMs } = {}) {
-    if (holdMs === undefined) convertAfter();
+  function archiveGoalsDue({ convert = true } = {}) {
+    if (convert) convertAfter();
     const all = goals();
     const now = deps.now();
     const answer = { ok: true, removed: 0, kept: [], errors: [] };
+    const owned = (candidate) => stepsHeld().some((held) => held.name === goalName(candidate));
     for (const goal of all) {
       if (goal.problems.length || !FINISHED.includes(goal.stage)) continue;
-      if (!goalArchiveDue({ goal, nowMs: now.getTime(), ...(holdMs === undefined ? {} : { holdMs }) }).due) continue;
+      if (!goalArchiveDue({ goal }).due) continue;
+      if (owned(goal)) continue;
       const archive = {
         home: programsHome(deps.env), git: deps.git, gh: deps.gh, known: () => repos.map((repo) => repo.path),
         move: (from, to) => { if (!deps.move(from, to)) throw new Error('the move failed'); },
@@ -988,13 +993,13 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       };
       const result = goal.stage === 'dropped' ? finalizeDroppedGoal(goal, {
         ...archive, allGoals: () => goalReferences({ home: programsHome(deps.env), list: deps.list, read: deps.read }),
-        active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)), root, lock,
+        active: owned, root, lock,
         readQueue: deps.read,
         writeQueue: (path, entries) => writeJson(path, entries),
-      }) : archiveGoal(goal, { ...archive, active: (candidate) => stepsHeld().some((held) => held.name === goalName(candidate)) });
+      }) : archiveGoal(goal, { ...archive, active: owned });
       if (result.refused) { refuseGoalOnce(goal, result.refused); answer.kept.push({ path: goal.dir, why: `not archived — ${result.refused}` }); continue; }
       answer.removed += 1;
-      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}${holdMs === 0 ? ' (disk pressure: without the 24 hours)' : ''}`);
+      say(`${goalName(goal)}: ${goal.stage} — archived to ${result.to}`);
       for (const move of result.renumbered) say(`${goalName(move.goal)}: phase ${move.from} → ${move.to}`);
     }
     return answer;
@@ -2761,7 +2766,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     // `askGithub()` has just fetched every repository, mc's own checkout among
     // them, so origin/main is as fresh as it gets without another fetch.
     noticeNewCode();
-    // A goal finished for 24 hours is archived (`goal-archive.js`); a programme never is.
+    // A finished goal is archived at once (`goal-archive.js`); a programme never is.
     archiveGoalsDue();
     await reapOrphans();
     await sweepDockerChore();

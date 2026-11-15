@@ -236,7 +236,7 @@ export function briefLesson({ env = process.env, name, brief, now = new Date(), 
 /**
  * The runner's reconciliation, and the only way a lesson becomes `landed`: an `in-goal` lesson whose
  * goal is done becomes `landed` with the goal's pull request; one whose goal was dropped is `open`
- * again. Done goals are archived after a day and dropped ones at once, so the archive is read too.
+ * again. Finished goals are archived at the runner's next pass, so the archive is read too.
  * A goal that cannot be found leaves its lessons where they are.
  */
 export function reconcileLessons({ env = process.env, home = programsHome(env), now = new Date(), goals = null } = {}) {
