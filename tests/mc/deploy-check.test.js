@@ -26,7 +26,7 @@ import {
   BEFORE_WINDOW_MS, CHECK_RUN, COULD_NOT_RUN, GREEN, RED, SETTLE_MS, SURVEY_SCRIPT,
   attemptDeadline, attemptInFlight, ask, beforePath, checkCells, checkDatabase, checkWords, combine, deployCheckTick,
   executeCheck, startReactionDefault, judgeErrors, judgeSuites, judgeVersion, parseSurvey, readBeforeFile, readSurvey, readStored,
-  readVerdictFile, readVersion, runCheck, statePath, storedTime, takeBeforeReading, verdictPath, writeVerdictFile,
+  gatedByTip, readVerdictFile, readVersion, runCheck, statePath, storedTime, takeBeforeReading, verdictPath, writeVerdictFile,
 } from '../../src/mc/deploy-check.js';
 import {
   DEPLOYS_HEADER, DEPLOYED, deploysPath, readDeploys, recordEnd, recordStart,
@@ -391,7 +391,7 @@ test('runCheck: green asks version and database, runs the gating suites at the r
   assert.deepEqual(seen.placed, [['/deploy/worktree', SHA]]);
   assert.deepEqual(seen.held, ['deploy check']);
   assert.equal(seen.released, 1, 'the holder is let go');
-  assert.deepEqual(seen.declared, [SHA]);
+  assert.deepEqual(seen.declared, [SHA, 'origin/main'], "the row's commit, then main's tip for which suites gate");
   assert.deepEqual(time.state.slept, [SETTLE_MS], 'waited until ended + 30 min');
   assert.deepEqual(seen.survey, ['2026-11-15 12:00:00'], 'since the deploy began, in the stored form');
 });
@@ -859,4 +859,26 @@ test('the header of a file the chore writes into is the current one', () => {
     const at = DEPLOYS_HEADER.indexOf('check');
     assert.deepEqual(DEPLOYS_HEADER.slice(at, at + 3), ['check', 'check_at', 'check_why']);
   } finally { cleanup(); }
+});
+
+test("runCheck: which suites gate is main's tip's word, not the deployed commit's (Martin, 2026-11-15)", async () => {
+  // The deployed commit makes `slow` a gate and `api` not one; the tip says the opposite.
+  const shipped = { ...DECLARATION, suites: [{ name: 'smoke', argv: ['node', 'smoke.js'] }, { name: 'api', argv: ['node', 'api.js'], gate: false, gate_why: 'old' }, { name: 'slow', argv: ['x'] }, { name: 'gone', argv: ['y'] }] };
+  const tip = { ...DECLARATION, suites: [{ name: 'smoke', argv: ['other'] }, { name: 'api', argv: ['other'] }, { name: 'slow', argv: ['x'], gate: false, gate_why: 'measures time' }] };
+  const { deps, seen } = boundaries({ declare: (at) => ({ ok: true, declaration: at === 'origin/main' ? tip : shipped }) });
+  const verdict = await runCheck({ row: ROW, env: {}, deps });
+  assert.equal(verdict.check, GREEN, verdict.check_why);
+  const suites = seen.round[0].declaration.suites;
+  assert.deepEqual(suites.filter((s) => s.gate !== false).map((s) => s.name), ['smoke', 'api']);
+  assert.deepEqual(suites.find((s) => s.name === 'slow'), { name: 'slow', argv: ['x'], gate: false, gate_why: 'measures time' });
+  assert.deepEqual(suites.find((s) => s.name === 'gone'), { name: 'gone', argv: ['y'], gate: false, gate_why: "not on main's tip" });
+  assert.deepEqual(suites.find((s) => s.name === 'smoke').argv, ['node', 'smoke.js'], "the deployed commit's argv runs");
+
+  const unread = boundaries({ declare: (at) => (at === 'origin/main' ? { ok: false, error: 'no tip' } : { ok: true, declaration: shipped }) });
+  const refused = await runCheck({ row: ROW, env: {}, deps: unread.deps });
+  const suitesPart = refused.parts.find((p) => p.part === 'suites');
+  assert.equal(suitesPart.verdict, COULD_NOT_RUN);
+  assert.match(suitesPart.why, /main's tip declaration could not be read: no tip/u);
+  assert.equal(unread.seen.round.length, 0);
+  assert.equal(gatedByTip(shipped, tip).suites.length, 4);
 });

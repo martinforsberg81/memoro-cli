@@ -562,9 +562,11 @@ made them gates, so they ran under load, went red and refused the deploy. Now
 
 The tip is `origin/main` as it stands when the suites start, after the deploy's
 fetch; a full run started by the deploy may have fetched again, and a newer tip
-is still main's word. The check after a deploy (`deploy-check.js`) is not
-changed by this: it runs the gating suites of the row's own declaration against
-production.
+is still main's word. The check after a deploy (`deploy-check.js`) reads the
+gate set the same way. `gatedByTip` keeps the deployed commit's suites and
+how they run, and lets main's tip say which of them gate. A suite the tip does
+not declare does not gate. When the tip's declaration cannot be read, the
+suites part is could-not-run.
 
 **A suite that does not gate a deploy.** A suite in main's tip `.mc/test.json`
 declared `"gate": false` with a required, non-empty `"gate_why"` is not run

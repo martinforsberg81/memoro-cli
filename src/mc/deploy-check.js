@@ -407,6 +407,29 @@ export function declarationAt(worktree, sha, { git = tryGit } = {}) {
   return parseDeclaration(text, `${short(sha)}:.mc/test.json`);
 }
 
+/** The ref whose `.mc/test.json` says which suites gate: main's tip (Martin, 2026-11-15; deploy-gate.js GATE_REF). */
+export const CHECK_GATE_REF = 'origin/main';
+
+/**
+ * The deployed commit's declaration with its gates as main's tip declares
+ * them: a suite gates when the tip declares it a gate, whatever the deployed
+ * commit says; every other suite is `gate: false` with the tip's reason, or
+ * "not on main's tip". The suites still run as the deployed commit declares
+ * them, against production. Pure.
+ */
+export function gatedByTip(declaration, tip) {
+  const tipSuites = new Map((tip?.suites || []).map((suite) => [suite.name, suite]));
+  return {
+    ...declaration,
+    suites: declaration.suites.map((suite) => {
+      const onTip = tipSuites.get(suite.name);
+      const { gate: _gate, gate_why: _why, ...rest } = suite;
+      if (onTip && isGate(onTip)) return rest;
+      return { ...rest, gate: false, gate_why: onTip ? String(onTip.gate_why || '') : "not on main's tip" };
+    }),
+  };
+}
+
 /**
  * The check of one deployed row: `{ check, check_at, check_why, parts }`.
  *
@@ -441,7 +464,13 @@ export async function runCheck({ row, env = process.env, deps = {} }) {
   const database = await guarded('database', () => checkDatabase(baseUrl, requests));
   parts.push(database);
   if (version.verdict === GREEN && database.verdict === GREEN) {
-    parts.push(await guarded('suites', () => checkSuites({ sha, declaration, baseUrl, env, say }, deps.suites || {})));
+    // Which suites gate is main's tip's word, as for the deploy itself; the
+    // deployed commit says how each runs.
+    parts.push(await guarded('suites', async () => {
+      const tip = (deps.declare || ((at) => declarationAt(worktree, at)))(CHECK_GATE_REF);
+      if (!tip.ok) return part('suites', COULD_NOT_RUN, `main's tip declaration could not be read: ${oneLine(tip.error)}`);
+      return checkSuites({ sha, declaration: gatedByTip(declaration, tip.declaration), baseUrl, env, say }, deps.suites || {});
+    }));
   }
   if (parts.some((p) => p.verdict === RED)) return finish(parts);
 
