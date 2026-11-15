@@ -7,7 +7,8 @@
  * Written by `mc programs create` and `mc programs record` only (the pre-tool
  * hook keeps a session's hand off it, as it does GOAL.json); read by `mc
  * programs show`, the list and the page. Each write is validated before it is
- * made and never replaces a file that is there.
+ * made. Creation never replaces a file; phase and state replacement take the
+ * runner's strict lock around their fresh read and atomic write.
  */
 import { linkSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,6 +16,8 @@ import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
 import { NAME_RE } from './plan-schema.js';
+import { workRoot } from './paths.js';
+import { realLock } from './runner-lock.js';
 
 export const RECORD_FILE = 'PROGRAMME.json';
 export const RECORD_SCHEMA = 'mc-programme';
@@ -149,7 +152,7 @@ export function recordedProgrammes(home) {
 }
 
 /**
- * The only writer: the record is validated, written whole to a temporary file
+ * Create only: the record is validated, written whole to a temporary file
  * beside its place and linked there, which fails when the file exists — so a
  * record is never replaced, not even by a caller that raced this one.
  */
@@ -170,16 +173,11 @@ export function writeRecord(dir, record) {
  * was, in its place. An invalid record or none is never touched. Returns
  * `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
-export function changePhases(dir, change, { read, write = writeFileAtomic } = {}) {
-  const found = readRecord(dir, read ? { read } : {});
-  if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
-  const phases = change(found.record.phases);
-  const record = phases === undefined ? found.record : { ...found.record, phases };
-  const problems = validateRecord(record);
-  if (problems.length) return { ok: false, status: 'refused', problems };
-  const changed = JSON.stringify(record) !== JSON.stringify(found.record);
-  if (changed) write(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
-  return { ok: true, record, changed };
+export function changePhases(dir, change, options = {}) {
+  return replaceRecord(dir, (record) => {
+    const phases = change(record.phases);
+    return phases === undefined ? record : { ...record, phases };
+  }, options, 'programme-phases');
 }
 
 /**
@@ -188,15 +186,22 @@ export function changePhases(dir, change, { read, write = writeFileAtomic } = {}
  * other key as it was, in its place; a record already in that state is not written again. An invalid record or none is never
  * touched. Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
  */
-export function setRecordState(dir, state, { read, write = writeFileAtomic } = {}) {
-  const found = readRecord(dir, read ? { read } : {});
-  if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
-  const record = { ...found.record, state };
-  const problems = validateRecord(record);
-  if (problems.length) return { ok: false, status: 'refused', problems };
-  const changed = found.record.state !== state;
-  if (changed) write(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
-  return { ok: true, record, changed };
+export function setRecordState(dir, state, options = {}) {
+  return replaceRecord(dir, (record) => ({ ...record, state }), options, 'programme-state');
+}
+
+/** Fresh read, validation and atomic replacement share the runner's strict lock. Create stays create-only. */
+function replaceRecord(dir, change, { root = workRoot(), lock = realLock, read, write = writeFileAtomic }, name) {
+  return lock(root, () => {
+    const found = readRecord(dir, read ? { read } : {});
+    if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
+    const record = change(found.record);
+    const problems = validateRecord(record);
+    if (problems.length) return { ok: false, status: 'refused', problems };
+    const changed = JSON.stringify(record) !== JSON.stringify(found.record);
+    if (changed) write(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
+    return { ok: true, record, changed };
+  }, { strict: true, name });
 }
 
 /** The record page's fenced markdown block in the packaged canon, or null when it cannot be read. */

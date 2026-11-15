@@ -13,7 +13,9 @@ import { describe, it } from 'node:test';
 import { run as goal } from '../../src/mc/commands/goal.js';
 import { listingText, programmesListing, recordWriter, run as programs } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
-import { newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord } from '../../src/mc/programme-record.js';
+import { changePhases, newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord } from '../../src/mc/programme-record.js';
+import { lockPath, realLock } from '../../src/mc/runner-lock.js';
+import { goalJson } from './_helpers/goal-file.js';
 
 const NOW = new Date('2026-11-14T10:20:30.456Z');
 
@@ -504,6 +506,105 @@ describe('setRecordState: the runner sets state done on a record that is there',
       const empty = join(a.home, 'none');
       mkdirSync(empty);
       assert.equal(setRecordState(empty, 'done', { write: () => assert.fail('written') }).status, 'none');
+    } finally { a.done(); }
+  });
+});
+
+describe('record replacement shares the strict runner lock', () => {
+  const phases = { order: 'stated', after: { 2: [1] } };
+  const writers = [
+    { name: 'phase', run: (dir, options) => changePhases(dir, (old) => ({ ...old, after: { ...old.after, 3: [2] } }), options),
+      concurrent: { ...GOOD, state: 'done', phases }, expected: { ...GOOD, state: 'done', phases: { ...phases, after: { 2: [1], 3: [2] } } } },
+    { name: 'state', run: (dir, options) => setRecordState(dir, 'done', options),
+      concurrent: { ...GOOD, phases }, expected: { ...GOOD, phases, state: 'done' } },
+  ];
+
+  for (const writer of writers) {
+    it(`${writer.name} replacement reads after acquisition and retains a competing writer's fields`, () => {
+      const a = area();
+      try {
+        const dir = join(a.home, 'p');
+        mkdirSync(dir);
+        const path = join(dir, RECORD_FILE);
+        writeFileSync(path, JSON.stringify({ ...GOOD, phases: { order: 'stated' } }));
+        const events = [];
+        const result = writer.run(dir, {
+          root: a.root,
+          lock: (root, fn, options) => {
+            assert.equal(root, a.root);
+            // Another writer completed before this writer acquired the shared lock.
+            writeFileSync(path, JSON.stringify(writer.concurrent));
+            return realLock(root, () => { events.push('acquired'); return fn(); }, options);
+          },
+          read: (file) => {
+            assert.ok(existsSync(lockPath(a.root)), 'the fresh read holds the shared lock');
+            events.push('read');
+            return readFileSync(file, 'utf8');
+          },
+          write: (file, text) => {
+            assert.ok(existsSync(lockPath(a.root)), 'replacement holds the same lock');
+            events.push('write');
+            writeFileSync(file, text);
+          },
+        });
+        assert.deepEqual(events, ['acquired', 'read', 'write']);
+        assert.deepEqual(result, { ok: true, changed: true, record: writer.expected });
+        assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), writer.expected);
+        assert.equal(existsSync(lockPath(a.root)), false, 'the lock is released after replacement');
+      } finally { a.done(); }
+    });
+
+    it(`${writer.name} replacement refuses an unavailable strict lock without reading or writing`, () => {
+      const a = area();
+      try {
+        const dir = join(a.home, 'p');
+        mkdirSync(dir);
+        const path = join(dir, RECORD_FILE);
+        const before = JSON.stringify({ ...GOOD, phases });
+        writeFileSync(path, before);
+        const events = [];
+        assert.throws(() => writer.run(dir, {
+          root: a.root,
+          lock: (root, fn, options) => realLock(root, fn, {
+            ...options,
+            open: () => { throw Object.assign(new Error('lock denied'), { code: 'EACCES' }); },
+            log: () => {},
+          }),
+          read: (file) => { events.push('read'); return readFileSync(file, 'utf8'); },
+          write: () => { events.push('write'); },
+        }), /lock denied/u);
+        assert.deepEqual(events, [], 'strict lock refusal has no read/modify/write effects');
+        assert.equal(readFileSync(path, 'utf8'), before);
+      } finally { a.done(); }
+    });
+  }
+
+  it('programs after uses its environment root and reports lock refusal without effects', async () => {
+    const a = area();
+    try {
+      const dir = join(a.home, 'p');
+      for (const phase of [1, 2]) {
+        const goalDir = join(dir, 'goals', `g${phase}`);
+        mkdirSync(goalDir, { recursive: true });
+        writeFileSync(join(goalDir, 'GOAL.json'), goalJson({ phase }));
+      }
+      const path = join(dir, RECORD_FILE);
+      const before = JSON.stringify({ ...GOOD, phases: { order: 'stated' } });
+      writeFileSync(path, before);
+      const result = await call(['after', 'p', '2', '1'], a.env, {
+        lock: (root, fn, options) => {
+          assert.equal(root, a.root);
+          return realLock(root, fn, {
+            ...options,
+            open: () => { throw Object.assign(new Error('lock denied'), { code: 'EACCES' }); },
+            log: () => {},
+          });
+        },
+      });
+      assert.equal(result.code, 1);
+      assert.match(result.err, /could not change p's record: lock denied/u);
+      assert.equal(result.out, '');
+      assert.equal(readFileSync(path, 'utf8'), before);
     } finally { a.done(); }
   });
 });

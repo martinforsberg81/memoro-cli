@@ -92,8 +92,13 @@ entrance.
 
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
-record is validated before every write and a write never replaces a file that
-is there (a temporary file linked into place). `state` is read by the programme
+record is validated before every write. Creation never replaces a file that
+is there (a temporary file linked into place). Existing phase and state writers
+take the shared runner lock with `strict: true` around a fresh read, validation
+and atomic replacement, retaining the other fields. They refuse rather than
+write without that lock; archive destination bookkeeping takes its own lock
+separately, never wrapping the record writer in a nested acquisition.
+`state` is read by the programme
 planning turn and the manager's horizon turn (a turn starts only for `open`),
 and by the archive turn, and the list and the page show it. Only the runner
 sets it to `done` (`setRecordState`), once it has archived the programme

@@ -202,6 +202,16 @@ const onOk = (s, archive, extra = {}) => archiveOnOk({ programme: 'prog', home: 
 
 test('archive turn: on OK the archive runs fenced, the destination is recorded, the record is set done there and the state cleared', async () => {
   const s = finished({ [`${HOME}/prog/proposals/p.md`]: 'P\n' });
+  const locked = [];
+  let holding = false;
+  s.lock = (root, fn, options) => {
+    assert.equal(root, ROOT);
+    assert.equal(options.strict, true);
+    assert.equal(holding, false, 'archive bookkeeping does not nest a record lock');
+    locked.push(options.name);
+    holding = true;
+    try { return fn(); } finally { holding = false; }
+  };
   let seen = null;
   const result = await onOk(s, async ({ fence, onShelved }) => {
     seen = { fence: fence() };
@@ -216,6 +226,7 @@ test('archive turn: on OK the archive runs fenced, the destination is recorded, 
   assert.equal(seen.fence, null);
   assert.match(s.files['/pr/p.md'], /^From programme prog/u, 'proposals moved before the archive');
   assert.equal(JSON.parse(s.files['/arch/prog-2/PROGRAMME.json']).state, 'done');
+  assert.ok(locked.includes('programme-state'), 'the real record writer uses the archive caller lock and root');
   assert.equal(stateOf(s).destination, null);
   assert.equal(stateOf(s).reading, null);
 });
@@ -258,8 +269,19 @@ test('archive turn: a record that cannot be set done keeps the destination, and 
   assert.equal(stateOf(s).destination, '/arch/prog');
   const state = readArchiveState({ root: ROOT, programme: 'prog', read: s.read });
   assert.equal(archiveDue({ programme: 'prog', home: HOME, root: ROOT, list: s.list, read: s.read, state }).mode, 'state');
-  const done = finishDestination({ programme: 'prog', destination: '/arch/prog', read: s.read, write: s.write, root: ROOT, writeJson: s.writeJson, lock: s.lock });
+  const locked = [];
+  let holding = false;
+  const lock = (root, fn, options) => {
+    assert.equal(root, ROOT);
+    assert.equal(options.strict, true);
+    assert.equal(holding, false, 'destination recovery does not nest a record lock');
+    locked.push(options.name);
+    holding = true;
+    try { return fn(); } finally { holding = false; }
+  };
+  const done = finishDestination({ programme: 'prog', destination: '/arch/prog', read: s.read, write: s.write, root: ROOT, writeJson: s.writeJson, lock });
   assert.deepEqual(done, { ok: true, destination: '/arch/prog' });
+  assert.ok(locked.includes('programme-state'), 'recovery passes the same lock and root to the record writer');
   assert.equal(JSON.parse(s.files['/arch/prog/PROGRAMME.json']).state, 'done');
   assert.equal(stateOf(s).destination, null);
   const again = finishDestination({ programme: 'prog', destination: '/arch/prog', read: s.read, write: s.write, root: ROOT, writeJson: s.writeJson, lock: s.lock });

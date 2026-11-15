@@ -379,7 +379,7 @@ const phaseWords = (phases) => `phase ${phases.join(', ')}`;
  * goals before the one write, a change of `phases` in the record
  * (`changePhases`) that touches nothing else.
  */
-function afterVerb({ positional, flags }, { env, stdout, stderr, read }) {
+function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   const writer = afterWriter(env);
   if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
   const [name, waitingWord, ...words] = positional;
@@ -407,7 +407,10 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read }) {
   };
   const cycle = cycleOf(stated(found.record.phases).after);
   if (cycle) return refuse(`phases ${cycle.join(', ')} would wait for one another in a cycle — nothing is changed`);
-  const outcome = changePhases(dir, stated);
+  let outcome;
+  try { outcome = changePhases(dir, stated, { root: workRoot(env), lock }); } catch (error) {
+    return refuse(`could not change ${name}'s record: ${error.message}`);
+  }
   if (!outcome.ok) return refuse(`could not change ${name}'s record: ${outcome.problems.join('; ')}`);
   stdout.write(`mc: ${name} · phase ${waiting} · ${named.length ? `after ${phaseWords(named)}` : 'waits for no phase'}\n`);
   return 0;
