@@ -768,7 +768,8 @@ below (Martin, 2026-11-09). Goal delivery recovery stays with two roles:
 - **A repair build** (`MC_ROLE=build-session:goal`, `canon/roles/build-session.md`)
   takes a goal in `build · ready` that a review moved back, after the last
   move into draft and with no person's move since. It reads REVIEW.md, fixes the
-  NOT OK items, runs the criteria's checks and `mc gate`, publishes and moves the
+  NOT OK items, runs every criterion's check again and records it at the new
+  head (*Evidence and heads*), runs `mc gate`, publishes and moves the
   goal to `review`. It changes code within contract, not goal text or product
   scope, and resolves its own acceptance obstacles; an unresolved design
   choice or reserved act goes directly to Martin. It runs on the `finish`
@@ -988,8 +989,11 @@ the criterion's now counts as none.
   the evidence is good: that is the review's.
 - **Rejection.** A review's move back to build removes the records of the items
   its REVIEW.md marks NOT OK (`criterion <n>`, a preserve id,
-  `obligation <area>`), so the repair records them again at its own head. A
-  person's move back and the third rejection remove none.
+  `obligation <area>`), so the repair gives them new evidence. The repair's
+  commit makes every other criterion's mark stale, so the repair build runs
+  every criterion's check again and records it at its new head; preserve items
+  and obligations judged OK keep their records. A person's move back and the
+  third rejection remove none.
 - **Reading.** `mc goal show` prints an EVIDENCE part, one entry per record with
   its heads, time, tool, model and text, and marks `stale` beside a met
   criterion whose record is at another head. A review reads the evidence there.
