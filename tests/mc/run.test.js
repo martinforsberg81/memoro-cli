@@ -4972,28 +4972,49 @@ test('a plan that ends on a held draft leaves it as it is: no runner entry, one 
   assert.equal(f.calls.sessions.length, 2);
 });
 
-test('a build that ends on a held goal leaves it build · ready with no runner entry, whether or not it wrote an entry of its own', async () => {
+test('a build that ends on a held goal without an entry of its own leaves it build · ready with no runner entry', async () => {
   const bare = goalFixture({ a: {} });
   bare.answer = holdsMidSession(bare, 'a');
   const before = bare.files[`${GOALS}/a/LOG.md`];
   assert.equal((await createRunner({ deps: bare.deps }).pass()).ran, 1);
   assert.equal(where(bare, 'a'), 'build · ready');
   assert.equal(bare.files[`${GOALS}/a/LOG.md`], before, 'no entry of its own, no runner entry');
-
-  const wrote = goalFixture({ a: {} });
-  wrote.answer = (call) => { wrote.files[`${GOALS}/a/.hold.json`] = HOLD(); return logsItself(wrote, 'a')(call); };
-  assert.equal((await createRunner({ deps: wrote.deps }).pass()).ran, 1);
-  assert.equal(where(wrote, 'a'), 'build · ready');
-  const entries = goalEntries(wrote, 'a');
-  assert.equal(entries.length, 1, 'its own entry is the only one');
-  assert.notEqual(entries[0].tool, 'runner');
 });
 
-test('a repair that ends on a held goal leaves it in build with no runner entry', async () => {
+test('a build that ends on a held goal with an entry of its own and no progress gets no no-progress entry', async () => {
+  // Unheld, a build that writes its own entry, meets nothing and commits nothing gets a no-progress entry (afterBuild).
+  const free = noProgressFixture();
+  await stuckPass(free, builds(free));
+  assert.equal(noProgressEntries(free).length, 1, 'unheld: the runner writes its no-progress entry');
+  const held = noProgressFixture();
+  const heldBefore = stuckEntries(held).length;
+  await stuckPass(held, (call) => { held.files[`${GOALS}/stuck/.hold.json`] = HOLD(); return builds(held)(call); });
+  assert.equal(stuckWhere(held), 'build · ready');
+  assert.equal(stuckEntries(held).length, heldBefore + 1, 'its own entry is the only new one');
+  assert.equal(stuckEntries(held).filter((entry) => entry.tool === 'runner').length, 0, 'no runner entry: no no-progress entry');
+});
+
+/** A rejected goal `stuck` in build whose worktree HEAD stays put, so a repair that commits nothing makes no progress. */
+function repairFixture() {
   const f = goalFixture({ stuck: { stage: 'build', verdict: VERDICT, log: rejectedLog() } });
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (cwd === `${GOALS}/stuck/memoro` && args.join(' ') === 'rev-parse HEAD' ? { ok: true, stdout: 'head-0\n' } : git(cwd, args));
+  return f;
+}
+
+test('a repair that ends on a held goal leaves it in build with no runner entry', async () => {
+  const free = repairFixture();
+  free.answer = logsItself(free, 'stuck');
+  assert.equal((await createRunner({ deps: free.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.match(free.calls.sessions[0].prompt, /REVIEW\.md/u, 'a repair session');
+  assert.equal(goalEntries(free, 'stuck').at(-1).tool, 'runner', 'unheld: the runner writes its no-progress entry');
+  assert.match(goalEntries(free, 'stuck').at(-1).comment, /^no progress this session/u);
+
+  const f = repairFixture();
   f.answer = (call) => { f.files[`${GOALS}/stuck/.hold.json`] = HOLD(); return logsItself(f, 'stuck')(call); };
   const before = goalEntries(f, 'stuck').length;
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.match(f.calls.sessions[0].prompt, /REVIEW\.md/u, 'a repair session');
   assert.equal(where(f, 'stuck'), 'build · ready', 'stage and status stay');
   assert.equal(goalEntries(f, 'stuck').length, before + 1, 'its own entry, and no runner entry');
   assert.notEqual(goalEntries(f, 'stuck').at(-1).tool, 'runner');
@@ -5008,16 +5029,41 @@ test('a review that ends on a held goal leaves it review · ready with no runner
   assert.equal(goalEntries(f).length, before, 'no runner entry');
 });
 
-test('a mend that ends on a held goal leaves it merge · ready and its log as it was', async () => {
+/**
+ * A mend on the red goal `red`: its session puts the pull request in the merger's line again, sets the status
+ * `left` when given (`blocked`: the obstacle unresolved), and writes the hold when `hold`. Returns the fixture after one pass.
+ */
+async function mendPass({ hold = false, left = null } = {}) {
   const f = goalFixture({ red: { stage: 'merge', log: redMerge } });
   f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { prs: ['memoro#31'] });
-  f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 31, state: 'red' }];
-  f.answer = holdsMidSession(f, 'red');
-  const before = f.files[`${GOALS}/red/LOG.md`];
+  let line = [{ repo: 'memoro', pr: 31, state: 'red' }];
+  f.deps.pendingMerges = () => line;
+  f.answer = (call) => {
+    line = [{ repo: 'memoro', pr: 31, state: 'queued' }];
+    if (left) f.files[`${GOALS}/red/GOAL.json`] = withGoal(f.files[`${GOALS}/red/GOAL.json`], { status: left });
+    if (hold) f.files[`${GOALS}/red/.hold.json`] = HOLD();
+    return okSession()(call);
+  };
+  f.logBefore = f.files[`${GOALS}/red/LOG.md`];
   assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 1);
   assert.equal(f.calls.sessions[0].env.MC_ROLE, 'mend-session');
+  return f;
+}
+
+test('a mend that ends on a held goal leaves it merge · ready and its log as it was', async () => {
+  // Unheld, a mend that leaves the goal as it was, its pull request queued again, gets the runner's entry (afterMend).
+  const free = await mendPass();
+  assert.equal(parseLog(free.files[`${GOALS}/red/LOG.md`]).at(-1).done, 'mend session took the red; the pull request is in the merger\'s line again');
+  const f = await mendPass({ hold: true });
   assert.equal(where(f, 'red'), 'merge · ready');
-  assert.equal(f.files[`${GOALS}/red/LOG.md`], before, 'no mend entry, no runner entry');
+  assert.equal(f.files[`${GOALS}/red/LOG.md`], f.logBefore, 'no mend entry, no runner entry');
+
+  // Unheld, a mend that leaves the goal blocked is set Martin (B2's shape); held, its status stays as the session left it.
+  const freeBlocked = await mendPass({ left: 'blocked' });
+  assert.equal(where(freeBlocked, 'red'), 'merge · Martin', 'unheld: the runner sets Martin');
+  const blocked = await mendPass({ hold: true, left: 'blocked' });
+  assert.equal(where(blocked, 'red'), 'merge · blocked', 'no status change');
+  assert.equal(blocked.files[`${GOALS}/red/LOG.md`], blocked.logBefore, 'no runner entry');
 });
 
 test('a hold written while the dependencies attach starts no session: the goal stays as it was, with no entry, and the line says why', async () => {
