@@ -72,7 +72,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
-| `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
+| `manager` | opus | `manager` | `mc run`, the manager's horizon and curation turns ([mc-run.md](mc-run.md)); `mc manager --headless`, an explicit fresh task; never a conversation |
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
@@ -85,7 +85,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 ### Martin's decision desk
 
 `mc martin` is a foreground-only desk in `~/mc/martin/`, distinct from
-manager, plan and helper. It cannot be launched by the runner or an unattended
+the manager, plan and helper. It cannot be launched by the runner or an unattended
 session. Its `get` subcommand is a model-free, read-only view over live
 goal records, not a cache or a second queue store; see [mc-martin.md](mc-martin.md).
 A resumed conversation receives a fresh queue snapshot so remembered goals are
@@ -99,7 +99,7 @@ move stages backward or forward, or drop. The goal verbs enforce it and log
 validation and acceptance, review, gate, publish and merge evidence. It cannot
 mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
-Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
+Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached and may propose one as a text item, and never creates one. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 
 `MC_ROLE=learning` is refused every goal verb except reading (`show`, `list`),
 `new`, and `set`, `document add`, `criterion add`, `item add|set|remove`,
@@ -212,7 +212,7 @@ Four paths launch a session with instructions, and all four call it:
 
 | path | the session |
 |---|---|
-| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc martin`, `mc plan` |
+| `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc helper`, `mc martin`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
 | `run.js` (`runGoal`) | a selected-draft plan, build, review or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
@@ -431,7 +431,7 @@ verified by opening a real planning session with it (2026-09-05, #614).
 
 Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
 accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
-`manager`, `helper` and `intake`. The launch clears inherited session
+`helper` and `intake`; `manager` is launched headless, by the runner or by a person. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
 Runner roles are `build-session:goal`, `review-session:goal`
 and `mend-session`; `plan` serves interactive planning and next-draft assignment.

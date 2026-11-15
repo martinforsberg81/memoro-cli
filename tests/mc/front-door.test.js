@@ -211,7 +211,7 @@ describe('the workarea verbs are gone', () => {
         assert.equal(result.stdout, '', what);
         assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — every session belongs to a programme or a desk$`, 'mu'), what);
         assert.match(result.stderr, /mc plan <programme>/u, what);
-        assert.match(result.stderr, /mc manager · mc helper/u, what);
+        assert.match(result.stderr, /mc helper · mc martin/u, what);
       }
       assert.equal(existsSync(join(fx.workRoot, 'work')), false, 'nothing made ~/mc/work/');
     } finally { fx.cleanup(); }
@@ -387,11 +387,22 @@ describe('the menu under the page', () => {
     assert.deepEqual(calls, []);
   });
 
+  // The interactive manager is gone (D10): its old letters print the refusal and the page stays; no session opens.
+  it('answers m, manager, b and brief with the refusal and draws the page again', async () => {
+    for (const answer of ['m', 'manager', 'b', 'brief']) {
+      const session = drive([answer, '1', 'q']);
+      assert.equal(await session.run(), 0, answer);
+      const said = session.written.join('');
+      assert.match(said, /mc: the interactive manager is gone — talk to the desk with `mc martin`, or give the manager one task with `mc manager --headless --prompt/u, answer);
+      assert.deepEqual(session.opened, ['docx-editing-surface/docx-editor'], `${answer}: the page is still there to answer`);
+    }
+  });
+
   it('names the desk in the first line of keys, and keeps every line of keys as short as the longest', async () => {
     const session = drive(['q']);
     await session.run();
     const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
-    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}h {2}home {3}· {3}d {2}desk {3}· {3}m {2}manager$/u.test(line)), keys.join('\n'));
+    assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}h {2}home {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
     const longest = Math.max(...keys.filter((line) => !/<n>/u.test(line)).map((line) => line.length));
     assert.ok(keys.every((line) => line.length <= longest), keys.map((line) => line.length).join(','));
   });
@@ -428,9 +439,10 @@ describe('the menu under the page', () => {
     const keys = shown.written.join('');
     // `p` takes no name: `mc plan` asks which programme when it is not told,
     // and the page is where being shown the list beats remembering a name.
-    for (const key of ['<n>  show a goal or open a programme', 'a  all / collapse', 'h  home', 'm  manager', 'p  plan a programme', 'q  quit']) {
+    for (const key of ['<n>  show a goal or open a programme', 'a  all / collapse', 'h  home', 'd  desk', 'p  plan a programme', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
+    assert.ok(!keys.includes('m  manager'), 'the interactive manager is gone (D10)');
     assert.ok(!keys.includes('s <name>'), 'the menu offers no project');
     assert.ok(!keys.includes('watch'), 'the menu offers no watch');
     assert.ok(!keys.includes('start something new'), 'the menu starts no workarea');

@@ -6,8 +6,8 @@ The provider mechanics below also serve that server half.
 
 ## Platform boundary
 
-On Linux, an interactive `mc plan <programme>`, `mc manager` (`mc brief`),
-`mc helper` or `mc martin` launched through SSH keeps its provider alive past
+On Linux, an interactive `mc plan <programme>`, `mc martin`,
+or `mc helper` launched through SSH keeps its provider alive past
 the terminal: a Claude Code background session, or a Codex `app-server` of its
 own. Eligibility requires Linux, `SSH_CONNECTION` or `SSH_TTY`, an interactive
 terminal and absence of `MC_HEADLESS=1`. No tmux is used by either provider.
@@ -52,7 +52,7 @@ holder adds it to the `--bg` start it runs. It is not recorded per session, and
 no Claude setting is written under `~/.claude`. Headless runs, runner goal
 sessions, helper intake and collect, and Codex get no flag.
 
-`--bg` is decided by the invocation of `mc plan`, `mc manager`, `mc martin` or
+`--bg` is decided by the invocation of `mc plan`, `mc martin` or
 `mc helper`, never remembered per session.
 
 - Without `--bg`, nothing changes: the terminal attaches, `Ctrl+Z` detaches,

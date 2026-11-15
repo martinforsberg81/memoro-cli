@@ -291,7 +291,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk   ·   m  manager',
+  '  <n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk',
   '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
@@ -328,12 +328,6 @@ async function archiveAllVerb(io) {
 async function deskVerb(argv, io) {
   const martin = await import('./martin.js');
   return martin.run(argv, io);
-}
-
-/** `mc manager` — loaded when `m` is typed. */
-async function managerVerb(argv, io) {
-  const manager = await import('./manager.js');
-  return manager.run(argv, io);
 }
 
 /** `mc goal <argv>` — the goal verbs, loaded when a goal's number is typed. */
@@ -379,8 +373,6 @@ export async function menu(first, {
   archiveOrder = null,
   // `mc martin` for `d` — a dependency, as runOrder is, so a test drives the menu without opening a session.
   deskOrder = null,
-  // `mc manager` for `m` — a dependency, as deskOrder is, so a test tells it from a programme named `manager`.
-  managerOrder = null,
   // The page on newer code, when a frame said mc moved under it (`RESTART`).
   restart = () => 0,
 }) {
@@ -433,8 +425,12 @@ export async function menu(first, {
     }
     // The desk: `mc martin`, whose own opening is what the DESK panel above summarises.
     if (answer === 'd' || answer === 'desk') return (deskOrder || deskVerb)([], { stdout, stderr, env });
+    // The interactive manager is gone (D10): its old letters say what remains, and the page stays.
     if (['m', 'manager', 'b', 'brief'].includes(answer)) {
-      return (managerOrder || managerVerb)([], { stdout, stderr });
+      const { MANAGER_GONE } = await import('./manager.js');
+      stderr.write(`\n${MANAGER_GONE}\n`);
+      data = await redraw();
+      continue;
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);

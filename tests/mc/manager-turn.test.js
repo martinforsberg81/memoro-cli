@@ -51,7 +51,7 @@ it('starts a new unattended session every time for either provider and isolates 
       for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY']) assert.equal(call.env[key], undefined);
       assert.ok(!call.args.includes('resume') && !call.args.includes('--resume'));
       assert.ok(call.args.some(arg => arg.includes('Resolve the blocked merge')));
-      assert.ok(call.args.some(arg => arg.includes('You are the manager session')));
+      assert.ok(call.args.some(arg => arg.includes('You are the headless manager for all mc programmes')));
       if (tool === 'codex') {
         assert.equal(call.args[0], 'exec');
         assert.ok(call.args.includes('--skip-git-repo-check'));

@@ -157,8 +157,8 @@ runner's programme planning turns appeared there too, with their trigger; the
 runner starts none now, and a lane file from then is still drawn as it was.)
 A finish or mend session appears under its goal, or as unassigned activity
 when the goal is missing. Each open Manager session has its own rounded activity frame
-directly below the hero, with its trigger when recorded; the hero keeps the
-`mc manager` entry point. Quiet dormant
+directly below the hero, with its trigger when recorded; the hero offers no
+manager entry point, since the manager runs headless (mc-manager.md). Quiet dormant
 programmes fold into a single count; `a` shows every programme. The collector's
 active/dormant classification and full JSON listing remain unchanged.
 
@@ -728,9 +728,10 @@ The name is bold in the terminal's own foreground; a count is bold above zero
 and grey at zero; the arrows are grey; `⚑` keeps its yellow and `⊘` its red, and
 a blocked goal changes nothing else. `done` and
 `dropped` have no box; what landed is in the hero frame. Complete header fields
-wrap within the hero frame on narrow terminals. The header's action reads `d  mc martin   ·   m  mc manager`: `mc martin` (or `d`
-at the page prompt) opens the desk, `mc manager` (or `m`) opens the session for priorities, blockers and proposals across all
-programmes. Manager's open state is shown below the pipeline, including
+wrap within the hero frame on narrow terminals. The header's action reads `d  mc martin`: `mc martin` (or `d`
+at the page prompt) opens the desk. The interactive manager is gone: `m`, `manager`, `b` or `brief` at the page
+prompt prints the refusal `mc manager` gives, naming `mc martin` and `mc manager --headless --prompt`, and draws the
+page again. Manager's open state is shown below the pipeline, including
 foreground records from before the rename.
 
 Maintenance groups repository measurements beneath their names. Below its
