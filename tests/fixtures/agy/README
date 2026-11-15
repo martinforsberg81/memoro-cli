@@ -1,5 +1,7 @@
 agy fixtures: documented, not recorded.
 
+The fixtures are synthesised from the documentation of 2026-11-15.
+
 No live agy ran for the antigravity programme's unattended goal. Every agy
 text in the tests is synthesised from Google's Antigravity CLI documentation
 and the numbers it prints, so what the tests prove is mc's reading of the
