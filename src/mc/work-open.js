@@ -367,7 +367,7 @@ export async function openInWorkArea(options = {}) {
     });
     if (!plan.launch) return plan;
     const mechanism = declared(plan.launch.id, 'FOLDER_TRUST');
-    const trustFolder = trust || FOLDER_TRUSTS[mechanism];
+    const trustFolder = mechanism ? (trust || FOLDER_TRUSTS[mechanism]) : null;
     if (trustFolder) {
       // Every folder mc opens a tool that declares folder trust in is trusted first (claude-trust.js, agy-trust.js).
       const trusted = trustFolder(options.worktree.path, { env });
