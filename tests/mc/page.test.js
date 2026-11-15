@@ -185,6 +185,10 @@ describe('SESSIONS', () => {
     // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
     assert.equal(dayAt(140), `${counts} · ≈$4.78 list`);
     assert.equal(dayAt(122), counts);
+    // A repair session is counted after review, where finish was; the day
+    // above has none, and prints none.
+    runner.day.by_kind = dayByKind([row('review', 'success,queued'), row('repair', 'success,built')]);
+    assert.match(dayAt(160), /· review 1 \(1 queued\) · repair 1 \(1 built\)/u);
   });
 
   // The section is the machine and nothing else now: a person's session is
@@ -2527,10 +2531,10 @@ describe('the palette', () => {
   });
 
   it('gives a session kind one colour wherever a kind is printed', () => {
-    // The runner's four kinds, `step` as the build it was before, `plan` as a
-    // lane file from before 2026-11-07 names it, and the foreground verbs a
-    // lane file could name.
-    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['finish', 'blue'], ['mend', 'yellow'], ['plan', 'blue'], ['triage', 'blue'], ['brief', 'cyan']]) {
+    // The runner's kinds, `repair` among them, `step` as the build it was
+    // before, `plan` as a lane file from before 2026-11-07 names it, and the
+    // foreground verbs a lane file could name.
+    for (const [kind, tone] of [['build', 'green'], ['step', 'green'], ['review', 'magenta'], ['repair', 'blue'], ['finish', 'blue'], ['mend', 'yellow'], ['plan', 'blue'], ['triage', 'blue'], ['brief', 'cyan']]) {
       const data = pageData({
         runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },

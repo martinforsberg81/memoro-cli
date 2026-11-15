@@ -295,9 +295,10 @@ function dayLine(lines, c, wide, day) {
   const dot = { text: ' · ', styles: ['grey'] };
   const parts = [{ text: '24 h', styles: ['grey'] }];
   // `plan` includes historical sessions and the focused next-draft assignment.
-  for (const kind of ['build', 'review', 'finish', 'mend', 'plan']) {
+  // A kind that is not always running (repair, finish, mend, plan) prints only when the day has one.
+  for (const kind of ['build', 'review', 'repair', 'finish', 'mend', 'plan']) {
     const counted = kinds[kind];
-    if (!counted || (['finish', 'mend', 'plan'].includes(kind) && !counted.sessions)) continue;
+    if (!counted || (['repair', 'finish', 'mend', 'plan'].includes(kind) && !counted.sessions)) continue;
     parts.push(dot, { text: `${kind} ${counted.sessions}`, styles: kindTone(kind) });
     const outcomes = DAY_OUTCOMES.filter(([key]) => counted[key]);
     outcomes.forEach(([key, label, styles], index) => {
@@ -792,12 +793,14 @@ export function pipelineStages(data) {
   return PIPELINE.map((stage) => {
     const here = goals.filter(goal => (goal.stage || 'unknown') === stage);
     // Every plan session, interactive or headless, is a mark on draft; proposals has none.
+    // A build and a repair (a build after a rejection) are both marks on build, the repair in its own blue.
     // A session's mark takes its stage's colour; a mend, which has no box, is yellow.
     const tone = STAGE_TONE[stage];
     const marks = stage === 'proposals' ? []
       : stage === 'draft' ? [{ mark: '●', count: interactive + ofKind('plan'), styles: tone }]
         : stage === 'merge' ? [{ mark: '◎', count: rounds, styles: tone }, { mark: '↺', count: ofKind('mend'), styles: kindTone('mend') }]
-          : [{ mark: '●', count: ofKind(stage), styles: tone }];
+          : stage === 'build' ? [{ mark: '●', count: ofKind('build'), styles: tone }, { mark: '●', count: ofKind('repair'), styles: kindTone('repair') }]
+            : [{ mark: '●', count: ofKind(stage), styles: tone }];
     return {
       stage,
       count: stage === 'proposals' ? proposals : here.length,
