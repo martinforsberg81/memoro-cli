@@ -912,6 +912,58 @@ describe('bringing one up', () => {
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
 
+  it('reuses a server registered during the retry pause without another spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    let spawned = 0;
+    const pauses = [];
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => {
+        pauses.push(ms);
+        t += ms;
+        if (ms === 5000) registerServer(root, worktree, { port: 8901 });
+      },
+      spawn: () => { spawned += 1; return { pid: 4242, unref() {} }; },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.started, false);
+    assert.equal(result.server.url, 'http://127.0.0.1:8901');
+    assert.equal(spawned, 1);
+    assert.deepEqual(pauses, [1000, 5000]);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('does not attribute the first attempt log to a silent second exit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    let t = 0;
+    let spawned = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t, sleep: async (ms) => { t += ms; },
+      spawn: () => {
+        spawned += 1;
+        if (spawned === 1) writeFileSync(join(dir, 'dev-first.log'), 'start failed: first cause\n');
+        return { pid: 4242, unref() {} };
+      },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(spawned, 2);
+    assert.match(result.error, /exited before it registered/u);
+    assert.match(result.error, /no log for this attempt/u);
+    assert.doesNotMatch(result.error, /first cause/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
   it('leaves no keys child file in the temp directory once its start registered', async () => {
     const { ensured, left } = await decidedStart({ registers: true, wrapperAlive: true });
     assert.equal(ensured.ok, true, ensured.error);
