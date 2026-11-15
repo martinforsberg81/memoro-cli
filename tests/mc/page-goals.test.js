@@ -86,7 +86,7 @@ describe('goal rows on the page', () => {
     assert.deepEqual(merges.landings.map((item) => item.pr), [31]);
     assert.deepEqual(merges.queued.items.map((item) => item.pr), [32, 33]);
     for (const columns of [60, 80, 120]) {
-      const text = renderPageLines(pageData({ merges, programmes, runner }), { columns, now: NOW }).join('\n');
+      const text = renderPageLines(pageData({ merges, programmes, runner }), { columns, now: NOW, expand: true }).join('\n');
       const programme = text.slice(0, text.indexOf('MERGE & DEPLOY'));
       assert.match(programme, /stage merge · status ready/u);
       assert.match(programme, /memoro-cli#31 · merging/u);
@@ -338,7 +338,7 @@ describe('programme pull requests', () => {
       [34, null], [33, 'mc'], [32, 'study'], [31, 'mc'],
     ]);
     for (const columns of [60, 80, 120, 160]) {
-      const lines = renderPageLines(pageData({ programmes, prs: pulls }), { columns, now: NOW });
+      const lines = renderPageLines(pageData({ programmes, prs: pulls }), { columns, now: NOW, expand: true });
       const divider = lines.findIndex((line) => line.includes('PRs outside goals'));
       assert.match(lines[divider + 1], /1 open · 1 nobody's/u);
       for (const number of [31, 32, 33, 34]) {

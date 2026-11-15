@@ -10,7 +10,9 @@ import {
   intakeSection, mcSection, mergesSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { CLEAR_ALL, frameWrites, topOffScreen } from '../../src/mc/page-frame.js';
-import { renderPageLines } from '../../src/mc/page-render.js';
+import { renderPageLines as drawPageLines } from '../../src/mc/page-render.js';
+// the rows of the page is in the operations view (`o`); the overview carries only its rows.
+const renderPageLines = (data, options = {}) => drawPageLines(data, { operations: true, ...options });
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 

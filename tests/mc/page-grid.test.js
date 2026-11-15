@@ -78,25 +78,24 @@ function threeRows({ long = false } = {}) {
   return pageData({ programmes, runner, merges, dev });
 }
 
-/** The three rows, found by their pull request: goal, lane, merge. */
-function rowsOf(lines) {
-  return [1102, 1103, 1104].map((number) => {
-    const found = lines.map(plain).filter((line) => line.includes(`#${number}`));
-    assert.equal(found.length, 1, `one row with #${number}:\n${lines.map(plain).join('\n')}`);
-    return found[0];
-  });
-}
-
 describe('page layouts', () => {
   it('keeps goal PRs, unassigned activity and environment addresses visible at every width', () => {
     for (const columns of [60, 80, 100, 120, 160]) {
       const lines = renderPageLines(threeRows(), { columns, now: NOW }).map(plain);
-      const rows = rowsOf(lines);
-      assert.match(rows[0], /↳ memoro-cli#1102/u);
-      assert.match(rows[1], /memoro-cli#1103/u, 'unassigned activity retains its PR');
-      assert.match(rows[2], /Queue: #1104/u);
-      assert.ok(lines.some((line) => /SLOT +:8920 +leased/u.test(line)));
-      assert.ok(lines.every((line) => width(line) <= columns));
+      const operations = renderPageLines(threeRows(), { columns, now: NOW, operations: true }).map(plain);
+      // The goal's PR and the unassigned activity are the overview's; the queue and the environment addresses are the
+      // operations view's, where the merge is told by its pull request.
+      const one = (rows, number) => {
+        const found = rows.filter((line) => line.includes(`#${number}`));
+        assert.equal(found.length, 1, `one row with #${number}:\n${rows.join('\n')}`);
+        return found[0];
+      };
+      assert.match(one(lines, 1102), /↳ memoro-cli#1102/u);
+      assert.match(one(lines, 1103), /memoro-cli#1103/u, 'unassigned activity retains its PR');
+      assert.match(one(operations, 1104), /Queue: #1104/u);
+      assert.ok(lines.some((line) => /MERGE +memoro-cli · 1 queued/u.test(line)), 'the overview says a merge is queued');
+      assert.ok(operations.some((line) => /SLOT +:8920 +leased/u.test(line)));
+      assert.ok(lines.every((line) => width(line) <= columns) && operations.every((line) => width(line) <= columns));
       assert.ok(!lines.some((line) => /^  SESSIONS/u.test(line)));
     }
   });

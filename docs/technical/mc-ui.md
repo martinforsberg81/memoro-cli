@@ -24,20 +24,76 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` draws DESK first, directly under the header, then HORIZONS (in `a`, PROGRAMMES after it, as below), UNASSIGNED ACTIVITY and the strays, and
-three work panels: MERGE & DEPLOY, DEV and MAINTENANCE. Orange opening and closing rules distinguish these
-panels from cyan programme boundaries. SYSTEM follows a horizontal separator
-at the bottom, containing MC, runner diagnostics, Docker when present and BILLING. There is no
-separate SESSIONS section. A stopped language run inside an open gap still
-puts its warning above everything else.
+The page has two views of the whole: the overview, which is what `mc` opens on, and
+the operations view behind `o`. A programme has a third, its own view (HORIZONS,
+below).
+
+**The overview** (`page-overview.js`, `overviewLines`) is one screen on a normal
+day. In order: the header (two rows), DESK, the warnings, HORIZONS, IN FLIGHT,
+NEEDS ATTENTION, then one MERGE row per repository with a landing or a queue and a
+DEPLOY row while a deploy or its preparation runs. It draws from `data` alone,
+which is what `mc --json` prints. A stopped language run inside an open gap
+puts its warning above everything else, and the runner's pause and not-running
+warnings follow it.
+
+**The operations view** (`o`, below) draws the hero frame, MARTIN QUEUE, MERGE &
+DEPLOY, DEV, MAINTENANCE and SYSTEM, which the overview no longer carries. Orange
+opening and closing rules distinguish its panels from cyan programme boundaries.
+SYSTEM follows a horizontal separator at the bottom, containing MC, runner
+diagnostics, Docker when present and BILLING. There is no separate SESSIONS section.
 
 One `a` / `all` toggles all folded content and details across the page;
-the next press returns to the normal view. In the overview it unfolds the
-folded HORIZONS row and draws PROGRAMMES below it; in a programme's view it
+the next press returns to the normal view. In the overview it draws every row with
+no budget, unfolds the folded HORIZONS row and draws PROGRAMMES and then the
+operations sections below it, expanded: the hero frame with its 24-hour figures and
+the pipeline, each Manager's activity frame with its trigger and pid, then MARTIN
+QUEUE, MERGE & DEPLOY, DEV, MAINTENANCE and SYSTEM; in a programme's view it
 expands that programme's block. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
 remain visible in both modes. Normal headings use spacing and indentation,
 without repeated table headers; programme blocks have opening and closing rules.
+
+### The overview
+
+**The budget.** The overview is at most `OVERVIEW_ROWS = 50` lines at every width
+the page draws (60–160). The menu's key block and prompt are not counted. A page
+over the budget is folded, one row at a time, in this order (`FOLDS`):
+
+1. IN FLIGHT's runner-session rows, from the last;
+2. the programme rows under `Serving no horizon`, from the last;
+3. NEEDS ATTENTION's rows beyond the fifth (`ATTENTION_KEPT`);
+4. the programme rows of the horizons, from the last horizon up;
+5. last of all, the blank rows between sections, keeping the one under the header.
+
+Every fold row says how many rows it holds and that `a` shows them (`▸ 3 more
+sessions — a shows them`); a fold of one row is drawn as the row it holds. A row
+therefore never disappears without a count. Never folded: the header, DESK, the
+warnings, the MERGE and DEPLOY rows, the section headings, the horizon titles,
+`▸ <n> with nothing under way`, the desk sessions and the interactive sessions.
+When those alone pass the budget the page is drawn whole after everything
+foldable is folded, and is longer than 50 rows. `a` draws no budget.
+
+**The header** is at most two rows with no frame, then one blank row. The first
+reads `MC <version> · runner on|off · <n>/<m> lanes · runner ≈$<x> today · deploy
+<when>`, with `d  mc martin` at the right edge. The hero frame, the 24-hour figures
+and the pipeline are in the operations view and under `a`. A programme's own view keeps the
+header and the frame it had.
+
+**IN FLIGHT.** The heading reads `IN FLIGHT  <n> sessions`, or `nothing running`.
+One row per session, its kind first: the desk's sessions of every kind by name,
+interactive plan and programme sessions, and the runner's sessions (BUILD, REVIEW
+and the like, with their goal).
+
+**NEEDS ATTENTION.** The heading reads `NEEDS ATTENTION  <n>` and is not drawn
+when nothing needs attention. One row per item, in this order: a malformed goal, a
+held goal, a blocked goal, a goal stopped for no progress, a failed merge, a
+finished goal not archived, a Martin-waiting main-red file or deploy repair, a
+failed deploy preparation, a failed deploy attempt and a stray area. A goal
+waiting on Martin with a question is on DESK through its desk item and is not
+repeated here; each goal is one item.
+
+**MERGE and DEPLOY** rows are not drawn when both are idle; the detail is in the
+operations view.
 
 ### DESK
 
@@ -115,8 +171,8 @@ the HORIZONS row and on the programme view's heading, not on the PROGRAMMES
 headings `a` draws. Both are `number` in `--json`.
 
 **A programme's view.** Typing a programme's number, or its exact name, at the
-prompt opens that programme alone: everything above PROGRAMMES (the header, the
-DESK) then the programme's block with its number on the heading, as `a` draws
+prompt opens that programme alone: the top of the page (the header and its
+hero frame, the DESK) then the programme's block with its number on the heading, as `a` draws
 it (expanded when `a` is on), and nothing below it. `h` or `home` is the
 overview again; a programme that is no longer listed is the overview again too.
 The view is part of what the page is, so a live frame draws it, not the overview.
@@ -194,8 +250,9 @@ inside the frame within the terminal width. Positive check-in counts appear
 at the end of the activity inside the frame, in yellow, and its yellow clock
 remains visible without expansion; repository, advisor, pid and zero check-ins
 are expanded details. A session
-with no matching goal appears under UNASSIGNED ACTIVITY, including its name
-and PR references, so removing SESSIONS cannot hide it. Rendering joins the
+with no matching goal appears under UNASSIGNED ACTIVITY in the PROGRAMMES panel
+`a` draws, including its name and PR references, so removing SESSIONS cannot hide
+it; the overview's IN FLIGHT names every session whether or not it has a goal. Rendering joins the
 existing `runner.sessions` and programme records; their JSON shapes remain.
 
 Foreground plan sessions appear directly below their programme heading,
@@ -203,8 +260,10 @@ including programmes that otherwise count as dormant. (Until 2026-11-07 the
 runner's programme planning turns appeared there too, with their trigger; the
 runner starts none now, and a lane file from then is still drawn as it was.)
 A finish or mend session appears under its goal, or as unassigned activity
-when the goal is missing. Each open Manager session has its own rounded activity frame
-directly below the hero, with its trigger when recorded; the hero offers no
+when the goal is missing. In a programme's view each open Manager session has its own rounded activity frame
+directly below the DESK, with its trigger when recorded, and under `a` the overview
+draws the same frame below the hero frame; in the overview it is one
+IN FLIGHT row, `manager  the desk`, with its age and tool. The hero offers no
 manager entry point, since the manager runs headless (mc-manager.md). Quiet dormant
 programmes fold into a single count; `a` shows every programme. The collector's
 active/dormant classification and full JSON listing remain unchanged.
@@ -321,7 +380,7 @@ GitHub failures and quota warnings remain visible; reasons and billing wrap.
 Disk and memory values still come from the runner's hold records, not a new
 resource sampler. A dead runner's old resource holds do not describe now.
 While a live runner stops new sessions for disk, memory or STOP, a short
-consequence also appears above PROGRAMMES; full readings remain in SYSTEM.
+consequence also appears in the warnings above HORIZONS; full readings remain in SYSTEM.
 A stopped runner has the same nearby warning with its restart command.
 `a` shows the full daily outcome/cost breakdown.
 
@@ -441,8 +500,9 @@ painted rows occupy the same columns.
 | a goal's number | `mc goal show` for that numbered goal, then redraw; from the overview and from a programme's view alike |
 | a programme's number | open that programme alone (its view), then redraw |
 | a programme's exact name | the same; looked up last, so no programme name takes a word of this table, and a number is a goal's before it is a programme's |
-| `h` / `home` | the overview again; the key line reads `h  home` |
-| `a` / `all` | toggle all folded rows and details across every surface |
+| `o` / `operations` | the operations view: the hero frame, MARTIN QUEUE, MERGE & DEPLOY, DEV, MAINTENANCE and SYSTEM; no programme takes `o` or `operations` as a name; the key line reads `o  operations` |
+| `h` / `home` | the overview again, from the operations view and from a programme's view; the key line reads `h  home` |
+| `a` / `all` | toggle all folded rows and details across every surface; in the overview, every row with no budget, then the operations sections expanded: the hero frame with its 24-hour figures and pipeline, each Manager's frame, then the panels |
 | `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
 | `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
 | `p [<programme>]` | open plan, asking which programme if unnamed |
@@ -478,13 +538,18 @@ retain the last observed step; an unfamiliar step is shown without guessing
 its phase. Like the rest of the page, progress refreshes every 30 seconds or
 immediately with `r`.
 
-The key line reads `<n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk`.
+The key line reads `<n>  show a goal or open a programme   ·   a  all / collapse   ·   o  operations   ·   h  home   ·   d  desk`.
+
+The operations view is held by `run()` in its own value, next to the programme's
+view, and not in `page-live.js`: a live frame draws it, as it draws a programme's
+view, so it survives every refresh until `h`, a goal's number or a programme's
+number or name leaves it. `o` from a programme's view opens it.
 
 The prompt answers against the page on the screen: `run()` numbers each draw as it starts, keeps its data for the menu only if no later-started draw was kept, and the menu reads it through `current`, so a slow older collect never puts older numbers under a newer page, and a number typed after a frame that added a goal means the number that frame drew.
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal or opens a programme; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. It also includes the overview's rows: which sessions are in flight (not their ages), each NEEDS ATTENTION item and its text, and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.
@@ -706,6 +771,7 @@ checks that routing without opening a coding tool.
 - `src/mc/page-desk.js`: the DESK section — `readPageDesk`, `deskLines` and `deskKey`.
 - `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost and `last-open.json`), shared by `mc martin` and the page, and the page's own reader of the ask ledger (`ledgerAsks`), which the opening does not use; it has no sync, lock or writer.
 - `src/mc/page-horizons.js`: the HORIZONS section — `horizonsLines`, `programmeRow`, `programmeFacts`.
+- `src/mc/page-overview.js`: the overview — `OVERVIEW_ROWS`, `FOLDS`, `headerRows`, `flightRows` (IN FLIGHT), `attentionItems` (NEEDS ATTENTION), `mergeDeployRows` and `overviewLines`, which folds to the budget.
 - `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
@@ -719,13 +785,15 @@ checks that routing without opening a coding tool.
 stage frame counts; `tests/mc/desk-cost.test.js` pins which transcripts are
 interactive, the incremental reading and the partial first reading. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
-menu routing, including `d` and `desk`, the programme's number and name, `h` and `home`, and piped output. The horizons collector cases (on a temporary home), the HORIZONS and programme-view renders at 160 and 80 columns, and `run()`'s view and numbers across live frames are in `tests/mc/page.test.js`. The DESK section's fixture, its agreement with the opening, its held-lock and error cases and its render are in `tests/mc/page.test.js`. `tests/mc/page-live.test.js` and
+menu routing, including `d` and `desk`, the programme's number and name, `h` and `home`, and piped output. The horizons collector cases (on a temporary home), the HORIZONS and programme-view renders at 160 and 80 columns, and `run()`'s view and numbers across live frames are in `tests/mc/page.test.js`. The DESK section's fixture, its agreement with the opening, its held-lock and error cases and its render are in `tests/mc/page.test.js`. `tests/mc/page.test.js` also holds the overview's budget and folds, drawn from a normal-day and a heavy-day fixture (every row accounted for by identity, at 60 to 160 columns), the operations view, and `a` drawing the hero frame and each Manager's frame after PROGRAMMES. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
 
-## Manager header
+## The header and the operations view's hero frame
 
-The framed MC header says what mc is and what came out of it; the pipeline
-under it says where work stands now.
+The overview's header is two rows (above); the framed MC header below is the
+top of the operations view and of a programme's view. It says what mc is and what
+came out of it; the pipeline under it says where work stands now. The overview
+carries neither.
 
 **Hero frame.** Active and dormant programmes, the runner's list-price cost
 today (`runner ≈$…`, its own sessions only), busy lanes of the lanes set, and
