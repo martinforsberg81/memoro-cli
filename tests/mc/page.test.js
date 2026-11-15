@@ -3462,3 +3462,224 @@ describe('DESK — what waits for Martin, read by the page', () => {
     });
   });
 });
+
+/**
+ * The overview fits one screen (docs/technical/mc-ui.md, The overview). Two fixtures hold the budget: a normal day, which fits
+ * whole, and a heavy day, which folds. Every number below is the fixture's, written out where it is built.
+ */
+describe('the overview fits one screen', () => {
+  const at = (minutes) => new Date(NOW.getTime() - minutes * 60_000).toISOString();
+  const nn = (n) => String(n).padStart(2, '0');
+  const TEXT = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
+
+  const deskOf = (n) => ({
+    since: at(600), last_opened: at(600), waiting: n, error: null,
+    texts: Array.from({ length: n }, (_, i) => ({
+      id: `t${i}`, kind: 'goal', reference: `desk-${i}/ask`, sort: 'text', source_at: at(120 + i), waited_minutes: 120 + i, blocks: 0,
+      text: `desk-${i}/ask`, goal: `desk-${i}/ask`, brief_line: `Question number ${i}`,
+    })),
+    acts: [],
+    decided: { since: at(600), asks: 0, against: 0, closed_for_you: 0, unreadable_lines: 0, error: null },
+    not_ready: { count: 0, oldest_age_hours: null, failed: 0, stuck: 0 },
+    cost: { day: '2026-08-29', today: 0.5, ceiling: 5, error: null },
+  });
+
+  /**
+   * A day: `open` horizons with `per` programmes each under them and `none` programmes under no horizon, every one with a goal
+   * at work; `runner` runner sessions, `managers` manager sessions and `plans` plan sessions; the attention items and the
+   * merge and deploy facts asked for. Programmes are `prog-01…`, in horizon order and then the ones serving none.
+   */
+  function day({
+    open = 3, per = 3, none = 5, runner = 7, managers = 2, plans = 0, desk = 2, held = 0, blocked = 0, failedMerges = 0, strays = 0,
+    queued = {}, deploy = null, preparation = null, failedAttempt = false, martin = true,
+  } = {}) {
+    const total = open * per + none;
+    const names = Array.from({ length: total }, (_, i) => `prog-${nn(i + 1)}`);
+    const goals = names.map((programme, i) => {
+      const extra = {};
+      if (i < held) extra.hold = { by: 'martin', at: '2026-08-28T10:00:00Z', reason: 'wait for the deploy' };
+      else if (i < held + blocked) extra.status = 'blocked';
+      else if (i < held + blocked + failedMerges) Object.assign(extra, { stage: 'merge', prs: [{ repo: 'memoro', number: 900 + i, merge_red: 'merge: X not mergeable' }] });
+      return { ...goalRow(`goal-${nn(i + 1)}`, programme, { repos: ['memoro-cli'] }), ...extra };
+    });
+    const planning = Object.fromEntries(names.slice(total - plans).map((name, i) => [name, [{
+      verb: 'plan', area: `programs/${name}`, tool: 'claude', model: 'opus', pid: 7000 + i, started: at(30 + i), age_seconds: (30 + i) * 60,
+    }]]));
+    const foreground = [
+      ...Array.from({ length: managers }, (_, i) => ({ verb: 'manager', area: null, tool: 'claude', model: 'opus', pid: 6000 + i, started: at(60 + i) })),
+      ...(martin ? [{ verb: 'martin', area: null, tool: 'claude', model: 'opus', pid: 6500, started: at(15) }] : []),
+      ...Object.values(planning).flat().map((session) => ({ verb: 'plan', area: session.area, tool: 'claude', model: 'opus', pid: session.pid, started: session.started })),
+    ];
+    const currents = Array.from({ length: runner }, (_, i) => ({
+      name: `goal:${names[i % total]}/goal-${nn((i % total) + 1)}`, kind: i % 5 === 4 ? 'review' : 'build', repo: 'memoro-cli', tool: 'claude', model: 'opus',
+      check_in_minutes: 60, check_ins: 0, started: at(5 + i), pid: 5000 + i,
+    }));
+    const base = pageData({
+      runner: runnerSection({ runner: { pid: 4242, started: at(600) }, currents, rows: [], now: NOW, alive: live }),
+      sessions: sessionsSection({ foreground, now: NOW, alive: live }),
+      merges: mergesSection({
+        now: NOW, merger: { pid: 4242 },
+        queued: Object.entries(queued).flatMap(([repo, count]) => Array.from({ length: count }, (_, i) => ({ repo, pr: 100 + i, since: at(20), state: 'queued', branch: `b${i}` }))),
+      }),
+      programmes: programmesSection({
+        goalRows: goals, planningSessions: planning, strays: Array.from({ length: strays }, (_, i) => ({ name: `stray-${i}`, checkout: false, uncommitted: 0 })),
+      }),
+    });
+    const production = { ...base.runner.production };
+    if (deploy) production.running = deploy;
+    if (preparation) production.preparation = preparation;
+    if (failedAttempt) production.failed = { short: 'abc1234', stopped_at: 'the bundle build' };
+    return {
+      ...base,
+      runner: { ...base.runner, production },
+      desk: desk ? deskOf(desk) : undefined,
+      horizons: {
+        open: Array.from({ length: open }, (_, h) => ({
+          slug: `horizon-${h + 1}`, title: `Horizon ${h + 1}`, position: h + 1, programmes: names.slice(h * per, (h + 1) * per),
+        })),
+        none: names.slice(open * per), unreadable: [], error: null,
+      },
+    };
+  }
+  /** 3 open horizons; 15 programmes, 10 under the horizons and 5 under none; 9 sessions and the desk's `martin`; 2 desk items; 2 attention items; 1 merge queued. */
+  const normalDay = () => day({ open: 3, per: 3, none: 5, runner: 7, managers: 2, plans: 0, desk: 2, held: 1, blocked: 1, queued: { memoro: 1 } });
+  /** 5 open horizons; 30 programmes; 14 runner sessions, 2 managers and 3 plan sessions; 8 attention items; 6 desk items; 2 repositories merging; a deploy. */
+  const heavyDay = () => day({
+    open: 5, per: 5, none: 5, runner: 14, managers: 2, plans: 3, desk: 6, held: 2, blocked: 2, failedMerges: 1, strays: 1, queued: { memoro: 3, 'memoro-cli': 2 },
+    deploy: { short: 'def5678', age_seconds: 240, late: false },
+    preparation: { state: 'failed', short: '0a1b2c3', error: 'the full run was red' }, failedAttempt: true,
+  });
+
+  const WIDTHS = [60, 80, 100, 120, 160];
+  const draw = (data, options = {}) => renderPageLines(data, { columns: 160, now: NOW, version: '0.7.11', overview: true, ...options }).map(TEXT);
+  const FOLD_ROW = /▸ \d+ (more sessions?|programmes? folded|more not serving a horizon|more needs? attention) — a shows (it|them)$/u;
+
+  it('draws the normal day whole: within the budget, at every width, with no fold row at 160 and 120', () => {
+    const data = normalDay();
+    assert.equal(OVERVIEW_ROWS, 50);
+    for (const columns of WIDTHS) {
+      const lines = draw(data, { columns });
+      assert.ok(lines.length <= OVERVIEW_ROWS, `${columns}: ${lines.length} rows\n${lines.join('\n')}`);
+      assert.ok(lines.every((row) => width(row) <= columns), `${columns}: a row over the width`);
+      if (columns >= 120) assert.ok(!lines.some((row) => FOLD_ROW.test(row.trim())), `${columns}: a normal day folds nothing\n${lines.join('\n')}`);
+    }
+    const lines = draw(data);
+    assert.equal(flightRows(data).desk.length + flightRows(data).interactive.length + flightRows(data).runner.length, 10, 'seven runner sessions, two managers and the desk\'s martin');
+    assert.ok(lines.some((row) => /^ {2}IN FLIGHT {2}10 sessions$/u.test(row)), lines.join('\n'));
+    assert.ok(lines.some((row) => /^ {2}NEEDS ATTENTION {2}2$/u.test(row)));
+    assert.ok(lines.some((row) => /^ {2}MERGE {2}memoro · 1 queued$/u.test(row)));
+    assert.ok(lines.some((row) => /DESK/u.test(row)) && lines.some((row) => /2 waiting for you/u.test(row)));
+  });
+
+  /** Every section's rows drawn, plus the counts its fold rows name, are what the section holds — each row by identity. */
+  function account(data, columns) {
+    const lines = draw(data, { columns });
+    const section = (heading, stop = /^ {2}\S|^$/u) => {
+      const start = lines.findIndex((row) => row.startsWith(`  ${heading}`));
+      if (start < 0) return [];
+      const rows = [];
+      for (let i = start + 1; i < lines.length && /^ {4}/u.test(lines[i]); i += 1) rows.push(lines[i]);
+      return rows;
+    };
+    const counted = (rows) => rows.map((row) => /▸ (\d+) /u.exec(row)?.[1]).filter(Boolean).reduce((sum, n) => sum + Number(n), 0);
+    const result = { lines };
+
+    // IN FLIGHT: the rows are the first k of the sessions, the desk and interactive ones all among them.
+    const flight = flightRows(data);
+    const all = [...flight.desk, ...flight.interactive, ...flight.runner];
+    const rows = section('IN FLIGHT');
+    const drawn = rows.filter((row) => !FOLD_ROW.test(row.trim()));
+    assert.equal(drawn.length + counted(rows.filter((row) => FOLD_ROW.test(row.trim()))), all.length, `${columns}: IN FLIGHT holds ${all.length}`);
+    drawn.forEach((row, i) => assert.ok(new RegExp(`^ {4}● ${all[i].kind} +${all[i].on.replace(/[/.]/gu, '\\$&')}( |$)`, 'u').test(row), `${columns}: row ${i} is ${all[i].kind} ${all[i].on}: ${row}`));
+    assert.ok(drawn.length >= flight.desk.length + flight.interactive.length, `${columns}: a desk or interactive session is never folded`);
+    result.flight = { drawn: drawn.length, total: all.length, folded: counted(rows.filter((row) => FOLD_ROW.test(row.trim()))) };
+
+    // NEEDS ATTENTION: the first k items, five at least.
+    const items = attentionItems(data);
+    const attention = section('NEEDS ATTENTION');
+    const shown = attention.filter((row) => !FOLD_ROW.test(row.trim()));
+    assert.equal(shown.length + counted(attention.filter((row) => FOLD_ROW.test(row.trim()))), items.length, `${columns}: NEEDS ATTENTION holds ${items.length}`);
+    shown.forEach((row, i) => assert.ok(row.trim().startsWith(items[i].label.slice(0, 12)), `${columns}: attention row ${i} is ${items[i].label}: ${row}`));
+    result.attention = { drawn: shown.length, total: items.length };
+
+    // HORIZONS: the programme rows under each horizon are a prefix of the horizon's programmes; folded counts make up the rest.
+    const byNumber = new Map(data.programmes.programmes.map((group) => [group.programme, group.number]));
+    const nameOf = (row) => /^ {4} ?(?:\d+ )? ?(prog-\d+)/u.exec(row)?.[1];
+    let drawnRows = 0;
+    let foldedRows = 0;
+    const groups = [...data.horizons.open.map((horizon) => ({ title: horizon.title, programmes: horizon.programmes })), { title: 'Serving no horizon', programmes: data.horizons.none }];
+    for (const group of groups) {
+      const start = lines.findIndex((row) => row.includes(group.title));
+      assert.ok(start >= 0, `${columns}: ${group.title} is never folded away`);
+      const rowsOf = [];
+      for (let i = start + 1; i < lines.length && /^ {4}/u.test(lines[i]); i += 1) rowsOf.push(lines[i]);
+      const names = rowsOf.map(nameOf).filter(Boolean);
+      const folded = counted(rowsOf.filter((row) => FOLD_ROW.test(row.trim())));
+      assert.deepEqual(names, group.programmes.slice(0, names.length), `${columns}: ${group.title} draws the first of its programmes`);
+      assert.equal(names.length + folded, group.programmes.length, `${columns}: ${group.title} holds ${group.programmes.length}`);
+      drawnRows += names.length; foldedRows += folded;
+    }
+    assert.ok(byNumber.size > 0);
+    result.programmes = { drawn: drawnRows, folded: foldedRows, total: data.programmes.programmes.length };
+    return result;
+  }
+
+  it('draws the heavy day within the budget at 160 and 80 columns, folds in the order, and accounts for every row', () => {
+    const data = heavyDay();
+    for (const columns of [160, 80]) {
+      const result = account(data, columns);
+      assert.ok(result.lines.length <= OVERVIEW_ROWS, `${columns}: ${result.lines.length} rows\n${result.lines.join('\n')}`);
+      assert.ok(result.lines.some((row) => FOLD_ROW.test(row.trim())), `${columns}: a heavy day folds`);
+      assert.equal(result.programmes.drawn + result.programmes.folded, 30, `${columns}: 30 programmes under way`);
+      assert.equal(result.flight.total, 20, `${columns}: 14 runner sessions, 2 managers, 3 plan sessions and martin`);
+      assert.equal(result.attention.total, 8, `${columns}: eight attention items`);
+      // The folds are in order: sessions first, then no-horizon programmes, then attention beyond five, then the horizons.
+      const { lines } = result;
+      const folds = (pattern) => lines.filter((row) => pattern.test(row.trim())).length;
+      if (folds(/programmes? folded/u)) {
+        assert.ok(folds(/more sessions?/u) && folds(/more not serving a horizon/u) && folds(/more needs? attention/u), `${columns}: a horizon is folded only after the three before it`);
+        assert.equal(result.attention.drawn, 5, `${columns}: attention keeps five`);
+      }
+      // What is never folded is all there.
+      const text = lines.join('\n');
+      for (const heading of ['DESK', 'IN FLIGHT', 'NEEDS ATTENTION', 'Serving no horizon', 'Horizon 1', 'Horizon 5']) assert.ok(text.includes(heading), `${columns}: ${heading}`);
+      assert.ok(lines.filter((row) => /^ {2}MERGE {2}/u.test(row)).length === 2, `${columns}: both merging repositories`);
+      assert.ok(lines.some((row) => /^ {2}DEPLOY {2}/u.test(row)), `${columns}: the deploy`);
+    }
+  });
+
+  it('draws the heavy day within the budget at 100 and 120 columns too', () => {
+    for (const columns of [100, 120]) {
+      const result = account(heavyDay(), columns);
+      assert.ok(result.lines.length <= OVERVIEW_ROWS, `${columns}: ${result.lines.length} rows`);
+    }
+  });
+
+  it('packs the blank rows away last, and at 60 columns the heavy day then holds the budget too', () => {
+    const lines = draw(heavyDay(), { columns: 60 });
+    assert.ok(lines.length <= OVERVIEW_ROWS, `${lines.length} rows`);
+    assert.equal(lines.filter((row) => row === '').length, 1, 'only the row under the header stays');
+    assert.equal(draw(heavyDay(), { columns: 160 }).filter((row) => row === '').length > 1, true, 'the page that fits keeps its blank rows');
+  });
+
+  it('draws what is never folded whole even when it alone passes the budget, after folding everything foldable', () => {
+    const lines = draw(day({ open: 5, per: 5, none: 5, runner: 14, managers: 2, plans: 14, desk: 6, held: 2, blocked: 2, failedMerges: 1, strays: 1, queued: { memoro: 3, 'memoro-cli': 2 }, deploy: { short: 'def5678', age_seconds: 240, late: false } }), { columns: 60 });
+    assert.ok(lines.length > OVERVIEW_ROWS, `${lines.length} rows: the never-folded rows pass the budget`);
+    const text = lines.join('\n');
+    assert.ok(!/^ {4} ?(\d+ +)?prog-\d+(?![\d/])/mu.test(text), `every programme row is folded:\n${text}`);
+    for (const fold of ['▸ 5 more not serving', '▸ 14 more sessions']) assert.ok(text.includes(fold), `${fold}:\n${text}`);
+    for (const heading of ['DESK', 'IN FLIGHT', 'NEEDS ATTENTION', 'Serving no horizon', 'Horizon 1', 'Horizon 5']) assert.ok(text.includes(heading), heading);
+    assert.equal(lines.filter((row) => /^ {4}● (manager|martin|plan) /u.test(row)).length, 17, 'the desk and plan sessions stay');
+    assert.equal(lines.filter((row) => /^ {2}(MERGE|DEPLOY) /u.test(row)).length, 3);
+  });
+
+  it('draws a fold of one row as the row it holds: never `▸ 1 …`, and always every row accounted for', () => {
+    for (const runner of [1, 2, 3, 10, 12, 13, 14, 15, 16]) {
+      for (const columns of [100, 160]) {
+        const data = day({ open: 5, per: 5, none: 5, runner, plans: 3, desk: 6, held: 2, blocked: 2, failedMerges: 1, strays: 1, queued: { memoro: 3, 'memoro-cli': 2 } });
+        const result = account(data, columns);
+        assert.ok(!result.lines.some((row) => /▸ 1 (more session|programme folded|more not serving|more need)/u.test(row)), `${runner} runner sessions at ${columns}:\n${result.lines.join('\n')}`);
+      }
+    }
+  });
+});

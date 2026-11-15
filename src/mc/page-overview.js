@@ -340,7 +340,7 @@ function mergeDeployLines(lines, c, wide, rows) {
 
 /**
  * The overview, as lines. `expand` (`a`) draws every row and folds nothing; otherwise rows are folded, in the order of
- * `FOLDS`, until the page is at most `OVERVIEW_ROWS` lines or nothing foldable is left. `version` is mc's.
+ * `FOLDS`, then the blank rows between sections, until the page is at most `OVERVIEW_ROWS` lines or nothing is left. `version` is mc's.
  * `programmes(lines)` draws PROGRAMMES where HORIZONS would be, for a page from before HORIZONS.
  */
 export function overviewLines(c, wide, data, { version = '', expand = false, programmes = null } = {}) {
@@ -355,7 +355,7 @@ export function overviewLines(c, wide, data, { version = '', expand = false, pro
     horizons: horizonsFoldable(data, { sessions }).horizons,
   };
 
-  const draw = (fold) => {
+  const draw = (fold, tight = false) => {
     const lines = headerRows(c, wide, data, version);
     lines.push('');
     const before = lines.length;
@@ -371,7 +371,9 @@ export function overviewLines(c, wide, data, { version = '', expand = false, pro
     if (attention.length) { attentionLines(lines, c, wide, attention, fold.attention); lines.push(''); }
     if (merges.length) { mergeDeployLines(lines, c, wide, merges); lines.push(''); }
     if (lines.at(-1) === '') lines.pop();
-    return lines;
+    // Packed: the blank rows between sections go, the one under the header stays.
+    const first = lines.indexOf('');
+    return tight ? lines.filter((row, at) => row !== '' || at === first) : lines;
   };
 
   const fold = { sessions: 0, none: 0, attention: 0, horizons: 0 };
@@ -385,5 +387,6 @@ export function overviewLines(c, wide, data, { version = '', expand = false, pro
     }
     if (fold[name] === 1) { fold[name] = 0; lines = draw(fold); }
   }
-  return lines;
+  // Everything foldable is folded and the page is still long: the blank rows between its sections give way last.
+  return lines.length > OVERVIEW_ROWS ? draw(fold, true) : lines;
 }
