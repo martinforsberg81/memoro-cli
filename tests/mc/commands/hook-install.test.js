@@ -86,3 +86,58 @@ describe('mc hook install — the command', () => {
     assert.match(stderr.text, /mc hook install takes only --check/u);
   });
 });
+
+describe('mc hook install — a tool with its own hooks file (agy)', () => {
+  const FOREIGN_ENTRY = { SessionStart: [{ type: 'command', command: '/x/their-hook.sh' }] };
+  const hooksPath = (home) => join(home, '.gemini', 'config', 'hooks.json');
+  const only = (tools) => (tool) => tools.includes(tool);
+  const withAgy = { installed: () => true };
+
+  it('writes mc\'s one entry, keeps a foreign entry and every other key, and syncs the skills there', async () => {
+    const { home } = setup();
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true });
+    writeFileSync(hooksPath(home), JSON.stringify({ theirs: FOREIGN_ENTRY, setting: 7 }));
+    const out = sink();
+    assert.equal(await run(['install'], { home, stdout: out, stderr: sink(), ...withAgy }), 0);
+    assert.match(out.text, /hooks registered in .*\.gemini\/config\/hooks\.json/u);
+    const written = JSON.parse(readFileSync(hooksPath(home), 'utf8'));
+    assert.deepEqual(written.theirs, FOREIGN_ENTRY, 'a foreign entry is left exactly as it was');
+    assert.equal(written.setting, 7);
+    const commands = JSON.stringify(written.mc);
+    for (const word of ['session-start', 'pre-tool', 'stop']) assert.ok(commands.includes(`mc hook ${word} --tool agy 2>/dev/null || true`), word);
+    assert.equal(written.mc.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_to_file');
+    assert.equal(existsSync(join(home, '.gemini', 'antigravity-cli', 'skills', 'mc', 'SKILL.md')), true);
+    assert.equal(existsSync(join(home, '.claude', 'settings.json')), true, 'the Claude file is still written');
+  });
+
+  it('--check is 1 until the entry is there, then 0, and a second install writes nothing', async () => {
+    const { home } = setup();
+    const before = sink();
+    assert.equal(await run(['install', '--check'], { home, stdout: sink(), stderr: before, ...withAgy }), 1);
+    assert.equal(existsSync(hooksPath(home)), false, '--check writes nothing');
+    assert.equal(await run(['install'], { home, stdout: sink(), stderr: sink(), ...withAgy }), 0);
+    assert.equal(await run(['install', '--check'], { home, stdout: sink(), stderr: sink(), ...withAgy }), 0);
+    const text = readFileSync(hooksPath(home), 'utf8');
+    const again = sink();
+    assert.equal(await run(['install'], { home, stdout: again, stderr: sink(), ...withAgy }), 0);
+    assert.match(again.text, /hooks\.json/u);
+    assert.equal(readFileSync(hooksPath(home), 'utf8'), text);
+  });
+
+  it('a tool that is not installed has no file made for it', async () => {
+    const { home } = setup();
+    assert.equal(await run(['install'], { home, stdout: sink(), stderr: sink(), installed: () => false }), 0);
+    assert.equal(existsSync(hooksPath(home)), false);
+  });
+
+  it('a hooks file that is not JSON is refused and left alone', async () => {
+    const { home } = setup();
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true });
+    const text = '{"token": "sk-agy-secret", nope';
+    writeFileSync(hooksPath(home), text);
+    const stderr = sink();
+    assert.equal(await run(['install'], { home, stdout: sink(), stderr, ...withAgy }), 1);
+    assert.doesNotMatch(stderr.text, /sk-agy-secret/u);
+    assert.equal(readFileSync(hooksPath(home), 'utf8'), text);
+  });
+});

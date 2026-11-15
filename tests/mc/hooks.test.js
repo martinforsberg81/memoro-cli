@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 
 import { run } from '../../src/mc/commands/hook.js';
 import {
+  agyHookInput, agyHooksEntry, hookTargets, hookTargetsDrift, targetInstall, targetRegistration,
   ALLOW_MARK, HEADLESS_RULES, hookDrift, hookRegistration, inMcTerritory, installHooks, knownRepo, MC_HOOKS, preToolDecision, protectedGoalFile, protectedProgrammeFile, TOOLBOX,
   readClaudeSettings, repoHookDecision, reviewStopDecision,
   repoPreToolHooks, sessionStartContext, shellCommands, warningsFor, worktreeState, worktreesAt,
@@ -752,5 +753,71 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
     assert.deepEqual(words('mc ask alpha/one --option "a: $(mc deploy)"'), [['mc', 'deploy'], ['mc', 'ask', 'alpha/one', '--option', 'a: $(mc deploy)']]);
     assert.deepEqual(words('echo ${X:-$(mc deploy)}'), [['mc', 'deploy'], ['echo', '${X:-$(mc deploy)}']]);
     assert.equal(shellCommands('echo "unterminated'), null);
+  });
+});
+
+describe('agy: its own hooks file and its own hook input', () => {
+  const agy = (home = '/h') => hookTargets({ env: {}, home, installed: () => true }).find((target) => target.dialect === 'agy-hooks');
+
+  it('a tool that declares hooks and is installed is a target; one that is not installed is not', () => {
+    const present = hookTargets({ env: {}, home: '/h', installed: () => true });
+    assert.deepEqual(present.map((target) => target.dialect).sort(), ['agy-hooks', 'claude']);
+    assert.equal(agy().path, '/h/.gemini/config/hooks.json');
+    assert.deepEqual(hookTargets({ env: {}, home: '/h', installed: () => false }).map((target) => target.dialect), ['claude'], 'Claude always has one');
+    assert.deepEqual(hookTargets({ env: {}, home: '/h', installed: () => { throw new Error('no'); } }).map((target) => target.dialect), ['claude']);
+  });
+
+  it('the entry runs mc with --tool agy, ends each command in `|| true`, and matches the five file tools', () => {
+    const entry = agyHooksEntry(agy().spec);
+    assert.deepEqual(Object.keys(entry), ['SessionStart', 'PreToolUse', 'Stop']);
+    for (const command of [entry.SessionStart[0].command, entry.PreToolUse[0].hooks[0].command, entry.Stop[0].command]) assert.match(command, /^mc hook (session-start|pre-tool|stop) --tool agy 2>\/dev\/null \|\| true$/u);
+    assert.equal(entry.PreToolUse[0].matcher, 'run_command|read_file|view_file|edit_file|write_to_file');
+  });
+
+  it('registration: absent, other, then right; install adds the entry and keeps the rest', () => {
+    const target = agy();
+    assert.equal(targetRegistration(target, {}).ok, false);
+    assert.equal(targetRegistration(target, { mc: { SessionStart: [{ type: 'command', command: 'x' }] } }).ok, false);
+    const installed = targetInstall(target, { theirs: { a: 1 }, other: true });
+    assert.deepEqual(installed.theirs, { a: 1 });
+    assert.equal(installed.other, true);
+    assert.equal(targetRegistration(target, installed).ok, true);
+    assert.equal(targetRegistration(target, targetInstall(target, installed)).ok, true, 'installing twice is the same file');
+  });
+
+  it('drift names the tool when its file is missing or wrong, and is null when every file is right', () => {
+    const targets = hookTargets({ env: {}, home: '/h', installed: () => true });
+    const files = (agyFile) => (path) => (path.endsWith('hooks.json') ? agyFile : installHooks({}));
+    const right = targetInstall(agy(), {});
+    assert.equal(hookTargetsDrift(targets, files(right)), null);
+    assert.match(hookTargetsDrift(targets, files(null)), /^agy: hooks not registered$/u);
+    assert.match(hookTargetsDrift(targets, files({ mc: {} })), /^agy: session-start not registered/u);
+  });
+
+  it('agy\'s tool calls reach the same decisions as Claude\'s', () => {
+    assert.deepEqual(agyHookInput({ cwd: '/w', toolCall: { name: 'run_command', args: { CommandLine: 'mc deploy' } } }),
+      { tool_name: 'Bash', tool_input: { command: 'mc deploy' }, cwd: '/w' });
+    assert.deepEqual(agyHookInput({ toolCall: { name: 'write_to_file', args: { TargetFile: '/a/GOAL.json' } } }), { tool_name: 'Write', tool_input: { file_path: '/a/GOAL.json' } });
+    assert.equal(agyHookInput({ toolCall: { name: 'edit_file', args: { AbsolutePath: '/a' } } }).tool_name, 'Edit');
+    for (const name of ['read_file', 'view_file']) assert.equal(agyHookInput({ toolCall: { name, args: { path: '/a' } } }).tool_name, 'Read');
+    assert.equal(agyHookInput({ toolCall: { name: 'browse', args: { x: 1 } } }).tool_name, 'browse', 'a tool no rule knows keeps its name');
+    assert.deepEqual(agyHookInput(null), { tool_name: '', tool_input: {} });
+    const seen = agyHookInput({ toolCall: { name: 'run_command', args: { CommandLine: 'mc deploy' } } });
+    assert.equal(preToolDecision(seen, { inRepo: () => false, programs: '/p', env: { MC_HEADLESS: '1' } })?.id, preToolDecision(bash('mc deploy'), { inRepo: () => false, programs: '/p', env: { MC_HEADLESS: '1' } })?.id);
+  });
+
+  it('the agy dialect answers in agy\'s shape: a deny, a continue and an injected message', async () => {
+    const out = [];
+    const stdout = { write: (text) => out.push(JSON.parse(text)) };
+    const input = JSON.stringify({ cwd: '/w', toolCall: { name: 'run_command', args: { CommandLine: 'mc deploy' } } });
+    const deps = { stdout, stderr: { write() {} }, readStdin: async () => input, env: { MC_HEADLESS: '1' }, inMcTerritory: () => true, repoHookDecision: () => null, pathInKnownRepo: () => false,
+      reviewStopDecision: () => ({ reason: 'not yet' }), syncSkills: () => [], worktreesAt: () => ({ inside: false, worktrees: [] }), listServers: () => ({ servers: [] }) };
+    assert.equal(await run(['pre-tool', '--tool', 'agy'], deps), 0);
+    assert.equal(out[0].decision, 'deny');
+    assert.match(out[0].reason, /^mc: /u);
+    assert.equal(await run(['stop', '--tool', 'agy'], deps), 0);
+    assert.equal(out[1].decision, 'continue');
+    assert.match(out[1].reason, /not yet/u);
+    assert.equal(await run(['pre-tool', '--tool', 'nobody'], { ...deps, stderr: { write() {} } }), 2);
   });
 });
