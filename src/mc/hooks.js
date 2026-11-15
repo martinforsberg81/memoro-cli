@@ -720,7 +720,13 @@ export const HEADLESS_RULES = [
     id: 'headless-deploy-check',
     act: 'production-data',
     reason: 'the check after a deploy (deploy-check-run.js; it holds production tokens, and only the runner starts it)',
-    test: (command) => command.words.some((word) => basename(word) === 'deploy-check-run.js'),
+    // The script run directly, or by node as its first non-option word: never a
+    // word of another command's arguments (grep, git commit -m, mc ask).
+    test: (command) => {
+      const [first = '', ...rest] = command.words;
+      if (basename(first) === 'deploy-check-run.js') return true;
+      return ['node', 'nodejs', 'bun'].includes(basename(first)) && basename(rest.find((word) => !word.startsWith('-')) ?? '') === 'deploy-check-run.js';
+    },
   },
 ];
 

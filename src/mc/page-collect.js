@@ -53,6 +53,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, parseRuns, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
+import { attemptInFlight } from './deploy-check.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
@@ -216,6 +217,9 @@ export function productionSection({
   // The deploy's preparation record (`deploy-prepare.json`) and the gate
   // rounds settled as interrupted, newest first (`settleInterruptedRounds`).
   preparation = null, interrupted = [],
+  // The check after the deploy that is running now (`attemptInFlight`): its
+  // row's key, when its process is alive. The row's own cells say the rest.
+  checking = null,
 } = {}) {
   // Keep the first attempt even when it failed or was refused before any
   // successful deployment or production reading.
@@ -266,6 +270,11 @@ export function productionSection({
     sha: deploy?.sha || null,
     short: shortSha(deploy?.sha),
     build: deploy?.build || null,
+    // The verdict of the check after this deploy (D8): empty cells are "not checked".
+    check: deploy?.check || '',
+    check_at: deploy?.check_at || null,
+    check_why: deploy?.check_why || '',
+    checking: Boolean(deploy?.sha && !deploy.check && checking?.started === deploy.started),
     holder: deploy?.holder || null,
     at: when,
     age_seconds: when ? age(when) : null,
@@ -292,7 +301,7 @@ export function runnerSection({
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
   deploy = null, attempt = null, live = null, progress = null, repos = REPO_NAMES,
-  preparation = null, interrupted = [],
+  preparation = null, interrupted = [], checking = null,
   // What `mc run lanes` set: how many sessions run at once, across every
   // repository. The rows are one per lane, so the page needs the number.
   lanes: setting = { lanes: DEFAULT_LANES },
@@ -345,7 +354,7 @@ export function runnerSection({
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
-    production: productionSection({ deploy, attempt, live, progress, now, alive, preparation, interrupted }),
+    production: productionSection({ deploy, attempt, live, progress, now, alive, preparation, interrupted, checking }),
     day: {
       ...summariseRuns(rows),
       by_kind: dayByKind(rows),
@@ -1647,6 +1656,7 @@ export async function collectPage({
     // here, so the log says so too.
     preparation: readPreparation(root),
     interrupted: settleInterruptedRounds({ root: home, alive, now }),
+    checking: attemptInFlight(env, { alive }),
     now,
     alive,
   });

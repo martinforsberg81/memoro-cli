@@ -70,6 +70,19 @@ const short = (sha) => String(sha || '').slice(0, 7);
 const oneLine = (text) => String(text ?? '').replace(/\s+/gu, ' ').trim();
 const realSleep = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
+/**
+ * The verdict in the words every place says it in (D8): the page's RECORDED line,
+ * `mc deploy`'s plan, the helper digest. `checking` is an attempt whose process
+ * is alive; an empty cell with none is "not checked" — a row older than the
+ * chore, one the runner never reached. Without the leading `· `.
+ */
+export function checkWords({ check = '', check_why: why = '' } = {}, { checking = false } = {}) {
+  if (check === GREEN) return 'checked green';
+  if (check === RED) return `check red${why ? `: ${why}` : ''}`;
+  if (check === COULD_NOT_RUN) return `check could not run${why ? `: ${why}` : ''}`;
+  return checking ? 'checking' : 'not checked';
+}
+
 /* ------------------------------------------------------------------ places */
 
 /** Where the check keeps what it writes: the verdicts, the before-readings, the logs. */

@@ -97,6 +97,7 @@ import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
   runningDeploy, versionCells, withDeploysLock,
 } from '../deploys.js';
+import { attemptInFlight, checkWords, takeBeforeReading } from '../deploy-check.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
@@ -425,6 +426,9 @@ export async function deployPlan({
     last = {
       sha: ref, short: short(ref), build: (row.live_commit ? row.live_build : '') || row.build || null,
       at: row.ended || row.started || null, source: 'deploys.tsv',
+      // The check after the deploy (D8): what its row keeps of it, and whether one is running now.
+      check: row.check || '', check_at: row.check_at || '', check_why: row.check_why || '',
+      checking: !row.check && attemptInFlight(env)?.started === row.started,
     };
   } else {
     const version = await fetchVersion(env);
@@ -598,7 +602,8 @@ export function planLines(plan, { now = Date.now() } = {}) {
     lines.push('mc: what is live is unknown — no deploy of mc\'s own, and /api/version did not answer');
   } else {
     const when = plan.last.at ? `, ${String(plan.last.at).slice(0, 16).replace('T', ' ')}` : '';
-    lines.push(`mc: live now ${plan.last.short}${plan.last.build ? ` (build ${plan.last.build})` : ''} — ${plan.last.source}${when}`);
+    const verdict = plan.last.source === 'deploys.tsv' ? ` · ${checkWords(plan.last, { checking: plan.last.checking })}` : '';
+    lines.push(`mc: live now ${plan.last.short}${plan.last.build ? ` (build ${plan.last.build})` : ''} — ${plan.last.source}${when}${verdict}`);
     if (plan.gap === null) {
       lines.push(`mc: the gap is unknown — ${plan.last.short} is not a commit this checkout has`);
     } else if (plan.gap === 0) {
@@ -1285,6 +1290,23 @@ async function shipJob(job, deps = {}) {
     }
 
     const spawnDeploy = deps.spawnDeploy || spawnDeployDefault;
+    // What production's errors were in the 24 hours before this deploy, kept for
+    // the check that follows it (docs/technical/mc-deploy.md, *The check after a
+    // deploy*). Bounded at a minute and never anything but a note: a script that
+    // fails, hangs or is missing is written into the before file and the deploy
+    // goes on, as if nothing had been asked. Only the real spawn reads for real:
+    // a fixture with its own spawn reads what `deps.beforeReading` gives, or
+    // nothing, and no fixture reaches production.
+    const beforeReading = deps.beforeReading || (deps.spawnDeploy ? null : takeBeforeReading);
+    if (beforeReading) {
+      progress.report('prepare', 'Reading production errors before the deploy');
+      try {
+        const reading = await beforeReading({ path: worktree, sha: shipping, started: key.started, env });
+        if (reading && reading.ok === false) {
+          (job.json ? stderr : stdout).write(`mc: the error reading before the deploy was not made (${reading.why}) — the deploy goes on; its check will say it could not compare\n`);
+        }
+      } catch { /* a reading that throws is a reading not made; the deploy is unchanged */ }
+    }
     // The disk (disk-pressure.js), asked at the spawn itself: under 20 GB a
     // pressure pass first, and no script unless it restores the line. A
     // reading that fails refuses too. Only on the real spawn: a fixture with
