@@ -530,7 +530,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   appends one entry; at least one field is needed. `--stage` and `--status`
   also set them. The goal is `MC_GOAL`'s when none is named. `--status Martin`
   is refused (exit 2, nothing written) with a return instruction pointing at
-  `mc goal martin`: a question for Martin carries its options.
+  `mc ask`: a question carries its options, and a goal waits on Martin only for a reserved act or a goal defect.
 - **`stage [<p>/<g>] <stage> [--reason "…"]`** — moves the stage
   (`log --stage <stage> --comment <reason>`); a stage moved to is `ready`.
   `merge` records the review's decision (or a mend
@@ -539,11 +539,12 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
 - **`hold [<p>/<g>] --reason "…"` · `release [<p>/<g>] [--reason "…"]`** — an interactive session's hold. `hold` writes `.hold.json` (`by`, `tool`, `at`, `reason`) in the goal's directory and a log entry; stage and status stay, so nothing is asked of Martin and no desk item opens. The runner starts no session on a held goal — delivery, plan or decision — and when a session that was already running ends on a goal that is held, it sets no stage or status on the goal and writes no entry: the hold's owner decides the goal's state. A running session, the merger and landing are not stopped. `release` removes the file and logs each worktree's state: changed files, commits past `origin/main`, last commit. Both are refused with `MC_HEADLESS=1`. A draft made by `mc goal new` without `MC_HEADLESS=1` is held from creation (`created: true` in the file); a stage move out of `draft` by a caller without `MC_HEADLESS=1`, or `release`, frees it. `blocked` is not a hold: outside merge the runner reconciles it to Martin.
-- **`martin [<p>/<g>] --kind technical|product --reason "<question>" --option "<key>: <text>"… --recommend <key>`** —
-  the compatible goal-bound question command. Optional evidence, documents,
-  reserved acts, caller validation, recording and routing are specified once
-  in [mc-jev.md](mc-jev.md). Who may set `Martin` (`refusedMove`) is unchanged,
-  and so are the runner's own recovery settings of `Martin`.
+- **`martin …`** — gone: `mc goal martin` exits 2 in every role and prints the
+  `mc ask` call to make. A question goes through `mc ask` ([mc-jev.md](mc-jev.md)),
+  which asks jev and then a reader inside the one call. A goal waits on Martin only
+  for a reserved act (`mc ask --reserved <act>`) and for a goal defect (`mc goal
+  defect`); who may set `Martin` (`refusedMove`) is unchanged, and so are the
+  runner's own recovery settings of `Martin`.
 - **`done [<p>/<g>] [--reason "…"]`** — stage `done`, a person's (or plan's) act;
   the merger sets it when the pull request lands.
 - **`drop [<p>/<g>] --reason "…"`** — abandons delivery: stage `dropped`, never
@@ -605,7 +606,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   caller with `MC_GOAL` set and `MC_TOOL` not `person`. Ordinary sessions cannot move a
   stage backward. A person, interactive `MC_ROLE=martin` or unattended `MC_ROLE=decision` may; the entry names
   the actor (`moved back from merge to review by martin`). The interactive plan session (`MC_ROLE=plan`)
-  makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for what asking-martin names (an unsettled `--kind product` call, or a reserved act). Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
+  makes any forward move and sets any status. A mend session (`mend-session`) exists only for merge failures and requeues a goal already in `merge` with `mc goal stage merge`; every stage move is refused. Build moves `build` to `review`, may set `blocked` for compatibility, or set `Martin` directly for what asking-martin names (a reserved act, or a goal defect). Review moves `review` to `merge` or `build`, may set `Martin` directly, and requires REVIEW.md in its fixed form, with every line OK for `merge` and a NOT OK line for `build`. Nobody moves a goal into `finish`: `mc goal stage finish` is refused, naming `mc goal stage build`. A session other than plan is refused `review` while a
   criterion is not met, or while the goal has none: `mc: mc/g is not moved to
   review — criterion 2 is not met — run its check and record it with mc goal
   criterion met mc/g 2` (`unmetGoalWords`). A build session's move to review is also refused without
@@ -1032,10 +1033,10 @@ before stage `merge`). It ends with `mc goal log` and does one of two things:
 `--stage review` when every criterion is met and the pull request carries
 them, or, when the goal's own text is wrong, reports it with `mc goal defect`
 and ends (*The verbs*). An acceptance obstacle it cannot repair within its
-scope goes to Martin with `mc goal martin` (or goal-bound `mc ask`) and its
-evidence; it is not a goal defect, since the goal's text is not what is wrong.
-Questions use goal-bound `mc ask` under the question contract in
-[mc-jev.md](mc-jev.md). No build exit goes through pre-merge mend.
+scope is asked with `mc ask` and its evidence (`mc goal martin` is gone); it is
+not a goal defect, since the goal's text is not what is wrong. Questions use
+`mc ask` under the question contract in [mc-jev.md](mc-jev.md): jev first, then a
+reader, and only a reserved act or a defect waits on Martin. No build exit goes through pre-merge mend.
 
 **A build that makes no progress stops.** After each build session that spoke
 (and did not end by quota, login or interruption), the runner reads the goal's
