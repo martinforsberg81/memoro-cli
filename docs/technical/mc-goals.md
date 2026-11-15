@@ -996,8 +996,10 @@ that ends the session and releases its lane. Neither performs what is refused to
 deploy, production data, credentials or admin override. The programme turns
 headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
 disabled: their instructions were too poor to use (Martin, 2026-11-07), and
-`programme-plan.js` and `MC_PLAN_REASON` remain removed. Next-draft planning
-below uses the existing goal-session mechanism instead.
+`programme-plan.js` and `MC_PLAN_REASON` remain removed. The proposal and daily
+turns stay disabled. Next-draft planning below uses the existing goal-session
+mechanism instead, and a recorded open programme with no goals is planned by the
+programme planning turn ([mc-run.md](mc-run.md#programme-planning-turn)).
 
 ## What a build session does
 
@@ -1438,8 +1440,8 @@ Martin, 2026-11-09 supersedes the prohibition on all headless programme planning
 when a programme has at least one draft and all its goals are `draft`, `done`
 or `dropped`, the runner may start one plan session to complete its next draft.
 Any build/review/merge goal excludes it, regardless of status; unreadable
-goal data excludes it too. Empty programmes and programmes with no drafts launch
-nothing. `dropped` has the same terminal meaning as in phase eligibility.
+goal data excludes it too. An empty programme without a valid open record, and a
+programme with no drafts, launch no next-draft session. `dropped` has the same terminal meaning as in phase eligibility.
 
 The next draft is selected by ascending phase, creation instant, then name.
 Compare creation instants chronologically regardless of offset or precision;
@@ -1476,5 +1478,7 @@ choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implemen
 proposal backlog in the headless planning turn. A completed session leaving
 `draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set; provider
 refusals/offline failures keep their existing retries. Broader programme design
-and proposal intake remain interactive. This restores neither no-draft nor
-daily-proposal turns.
+and proposal intake remain interactive. This restores neither the no-draft
+nor the daily-proposal turn: a programme with no goals is planned only when its
+record is valid and open (*Programme planning turn* in [mc-run.md](mc-run.md#programme-planning-turn)),
+and while that turn is claimed or current no next draft is planned in it.

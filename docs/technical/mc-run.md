@@ -185,7 +185,7 @@ order without a model call:
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
-   delivery session. A focused plan session may complete the next draft under the programme rule below.
+   delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded open programme that holds no goal gets the programme planning turn (*Programme planning turn*).
 3. Hold any goal whose phase is not open in its programme. The runner reads
    each programme's record at every pick (`programmeOrder`), as it reads
    `PRIORITY.json`, so a dependency stated, removed or renumbered counts at the
@@ -202,7 +202,7 @@ order without a model call:
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
+5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
    jumps ahead of recovery or review.
@@ -770,6 +770,76 @@ retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing
 remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-planning).
+
+
+## Programme planning turn
+
+Martin, 2026-11-15: a programme with a valid open record and a README page and
+no goals is planned into its phases and goals with nobody present. The record
+is the trigger: `mc plan` and `mc programs` create it, and a programme with no
+record, or an invalid one, starts nothing (the programmes' rules are in
+[mc-plan.md](mc-plan.md#a-programme-with-a-record)). `programmeDue`
+(`programme-turn.js`) is model-free and reads at every pick. A turn is due when
+all hold:
+
+- the record is valid and `open`, and `README.md` exists;
+- `goals/` holds only dot-entries and `goals/.archive/` is empty, so a programme
+  that ever held a goal is never planned again by this turn;
+- no open desk item of kind `programme` has the reference `programme:<p>`;
+- when the record names a horizon, that horizon reads `open`.
+
+Otherwise no turn starts. A horizon that is missing or not open, a record that
+is invalid and a state file that is unreadable are each said once in
+`runner.log`; a programme that simply is not due is silent.
+
+**The session.** One turn runs per programme and it is named `programme:<p>` in
+the claim and the current record, kind `plan`, class large, with a `runs.tsv`
+row and the programme directory as its cwd. Role `plan`, `MC_HEADLESS=1`,
+`MC_PROGRAMME=<p>` and no `MC_GOAL`; routing, admission, provider refusals,
+offline holds, STOP and UPDATE are those of every session. It never uses a
+`plan/<programme>` worktree and commits nothing: the served repositories are
+given as read checkouts at `runner/work/programme-turn-<p>/<repo>`, detached at
+origin/main. The prompt is `programmePlanPrompt` (`run-plan.js`), and the plan
+role's headless programme-turn section says the rest. In order, the session
+creates every goal as a draft with its title, phase and outcome; then completes,
+plan-reviews and moves each to build in turn, stating dependencies of a stated
+programme with `mc programs after`. A product question is a goal-bound
+`mc ask --kind product` on the draft that needs it, and the other drafts go on.
+Drafts it leaves are not set to Martin: the next-draft sessions take them.
+Proposals are not processed.
+
+**Next-draft planning waits.** While a programme turn is claimed or current in a
+programme, no next-draft plan session starts in it: the sequential pick filter,
+the stated-programme pick filter (`planSessions`) and the recheck after
+admission (`skipped:programme-changed`) each ask it, and the turn holds the
+programme until it ends.
+
+**Read checkouts.** Before the launch the runner fetches every served
+repository (a fetch failure ends the pick for that programme and counts
+nothing), then makes each checkout. A leftover is replaced only if it is clean
+(`status --porcelain` empty) and its HEAD is reachable from origin/main
+(`merge-base --is-ancestor`): it is removed with `git worktree remove`, without
+force, and added again. A dirty or unreachable leftover is never touched: the
+turn does not launch, the refusal is a failure with the reason
+`read checkout retained: <path>`, and the line is said once in `runner.log`. A
+checkout made earlier in the same setup is undone. Another add failure is a
+failure with the reason `setup: <git's last line>`. After the session the
+checkouts are removed, and any a refusal kept are named.
+
+**Failure.** A session that ends with the programme holding no goal is a
+failure, with its reason and its log kept in `runner/programme-turn/<p>.json`.
+Provider endings (quota, offline, refused login), a refusal at admission and a
+fetch failure count nothing. The first failure retries on the next pick. The
+second opens a desk item of kind `programme`, reference `programme:<p>`: the
+first such item is `prepared`, with a model-free `prepared.md` of the failures
+and their logs, so a decision session repairs it; a later one is `for-martin`,
+sort `mechanical`, `reversible: false`, `due_at: null`, with a `brief.md` in
+Swedish. No turn starts while an item is open. A failure is counted again only
+after the item closed. The item closes by source when the programme holds a
+goal, the record no longer reads valid and open, or the directory is gone, and
+by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
+file that cannot be read starts no turn and counts nothing; the decision lane
+reports it and the item stays open.
 
 
 ## Goal-less main-red mend
