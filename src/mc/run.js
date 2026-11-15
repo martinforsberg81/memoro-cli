@@ -63,6 +63,7 @@ import { fileURLToPath } from 'node:url';
 
 import { adapterOfProvider, billingProviders, declared, requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { PROVIDER_API_ENV_NAMES } from './runtime-secrets.js';
 import { defaultRepos } from './brief-collect.js';
 import { run as runGit } from './git.js';
 import { gitDirOf } from './repos.js';
@@ -141,6 +142,8 @@ export const REPO_NAMES = ['memoro', 'memoro-cli'];
 
 /** The billing provider a launch is billed under; a tool whose adapter declares none is refused, naming the tool. */
 const providerOf = (launch) => requireCapability(launch.id, 'BILLING_PROVIDER');
+/** The variables taken out of an unattended launch's environment: every provider API key, and the tool's own declared extras. */
+const dropEnv = (launch) => [...PROVIDER_API_ENV_NAMES, ...(declared(launch.id, 'LAUNCH_DROP_ENV') ?? [])];
 /** Whether a login interruption means this launch's plan refused it. */
 const loginRefusesPlan = (launch) => declared(launch.id, 'LOGIN_REFUSES_PLAN') === true;
 /** The dependency name a provider's capacity refresh is injected under: `refreshClaude`, `refreshCodex`. */
@@ -1709,7 +1712,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
             ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
-          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
+          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', ...dropEnv(launch)].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1845,20 +1848,20 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
       const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
         effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
-        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
+        check_in_minutes: requireCapability(launch.id, 'WATCH')?.checkIn ? settings.checkInMinutes : null, check_ins: 0, started: stamp(), pid, worktree: dir,
         ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
         role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
       writeJson(currentPath, current);
       say(`${name}: plan starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
       const t0 = deps.now().getTime();
-      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      const tool = gatewayLaunch({ provider: providerOf(launch), model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
       try {
         const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
           onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
           ...watchFor(launch, settings, { prompt, name, checkInText: programmePlanCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
           env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
-          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', ...dropEnv(launch)] });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1867,11 +1870,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      if ((read.quota || (loginRefusesPlan(launch) && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(providerOf(launch), read.quotaReset);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
       if (count === 0 && !providerEnding) {
         const reason = `planning session exited ${result.status ?? 1} with the programme holding no goal (${read.note})`;
@@ -2009,7 +2012,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the main-red mend in this worktree. No goal or LOG.md. Publish with mc publish after the named fresh gate and whole-selection acceptance.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
-        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', ...dropEnv(launch)] });
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
@@ -2149,7 +2152,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         onSpawn: (childPid) => { current.session_pid = childPid; writeJson(currentPath, current); },
         ...watchFor(launch, settings, { prompt, name, checkInText: () => 'Continue the deploy-mend in these worktrees. No goal or LOG.md. Publish with mc publish, or end with mc repo mend deploy <id> repaired.' }),
         env: { MC_HEADLESS: '1', MC_ROLE: MEND_ROLE, MC_REPO: repoName, MC_DEPLOY_MEND: request.id, MC_WORKAREA: cwd, MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch },
-        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', ...dropEnv(launch)] });
       admission.release?.();
       result = await pending;
       writeSessionLogs(out, result);
@@ -2911,7 +2914,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
             ...scratchEnv,
           },
-          unsetEnv: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'],
+          unsetEnv: dropEnv(launch),
         });
         admission.release?.();
         result = await pendingSession;
