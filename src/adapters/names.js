@@ -13,7 +13,6 @@
 export const PLANNED = {
   'cursor':     { label: 'Cursor',     note: 'Stubbed — writes to .cursorrules; adapter coming in PR 4.1' },
   'windsurf':   { label: 'Windsurf',   note: 'Stubbed — writes to .windsurfrules; adapter coming in PR 4.1' },
-  'antigravity-cli': { label: 'Antigravity CLI', note: 'Planned — the adapter is phase 2 of the antigravity programme' },
 };
 
 /** Short name → adapter id, in registry order. See `resolveToolInput` in `index.js`. */
