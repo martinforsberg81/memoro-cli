@@ -2,7 +2,7 @@
 
 Work is a goal: GOAL.json and LOG.md under a programme, with repository
 worktrees on its branch. `mc run` starts headless build, review and plan
-sessions; `mc plan`, `mc martin` and bare `mc helper` are the person's
+sessions; `mc plan` and `mc martin` are the person's
 interactive entrances. `mc` is the page. No resident model keeps sessions
 moving or invents work for them.
 
@@ -18,8 +18,7 @@ file of answered decisions for the runner to turn into work.
 Projects went on 2026-11-03; [mc-goals.md § From a project](mc-goals.md#from-a-project)
 describes the migration. Free-standing workarea and worker entrances also
 went on that date ([mc-work.md](mc-work.md)). Every current session belongs
-to a programme or a desk. `roles.js` reserves only `helper`, the desk's
-identity; old PM names no longer reserve a workspace.
+to a programme or a desk. `roles.js` reserves `helper` (the eye) and `martin`; old PM names no longer reserve a workspace.
 
 ## What is still a watcher
 

@@ -1,7 +1,7 @@
 /**
  * Whose a session is. Every session belongs to a programme — its planning
  * session, a build or review the runner starts, a project opened from the
- * page — or to a desk: the brief and the helper. There is no third kind
+ * page — or to a desk: the desk (`mc martin`), or the eye's intake turn, which keeps the name `helper`. There is no third kind
  * (goal mc/no-work, Martin 2026-11-03: *"sessioner hör alltid till ett
  * program eller så är det t ex BRIEF"*).
  *
@@ -15,7 +15,7 @@ import { areaKindOf } from './paths.js';
 export const DESKS = Object.freeze(['helper', 'manager', 'martin']);
 
 /**
- * `{ kind: 'desk', name }` for `mc manager`, `mc helper` and `mc martin`, `{ kind:
+ * `{ kind: 'desk', name }` for the desks and the eye's intake turn (verb `helper`), `{ kind:
  * 'programme', name }` for a planning session in a programme's directory (or
  * one that names its programme) and for a project opened from the page, and
  * null for anything else.
@@ -33,4 +33,4 @@ export function ownerOf(item) {
 }
 
 /** What a launch with no owner is told: what it should belong to. */
-export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to a desk (mc helper, mc martin)';
+export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to the desk (mc martin)';

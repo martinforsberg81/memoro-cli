@@ -10,7 +10,7 @@
  * same arrangement `tests/mc/page.test.js` uses for the palette tables.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
@@ -37,11 +37,12 @@ describe('docs/technical/mc-helper.md says what the code does', () => {
    * wrong thing. So both are pinned — the room the desk stands in, and the
    * role each half wears.
    */
-  it('names the desk\'s room and the role each half wears', () => {
+  it('names the eye\'s room and the intake role, and no desk role file', () => {
     assert.ok(DOC.includes('`~/mc/helper/`'), 'the doc no longer names the desk\'s room');
     assert.match(helperDir({ MC_WORK_ROOT: '/work' }), /\/helper$/u);
     assert.ok(DOC.includes(`\`canon/roles/${INTAKE_ROLE}.md\``), `the doc does not name canon/roles/${INTAKE_ROLE}.md`);
-    assert.ok(DOC.includes('`canon/roles/helper.md`'), 'the doc does not name the desk\'s role file');
+    assert.ok(!DOC.includes('`canon/roles/helper.md`'), 'the doc still names a desk role file that is gone');
+    assert.equal(existsSync(fileURLToPath(new URL('../../canon/roles/helper.md', import.meta.url))), false, 'canon/roles/helper.md is back');
   });
 
   it('states the flag defaults the code exports', () => {

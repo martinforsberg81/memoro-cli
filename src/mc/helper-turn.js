@@ -17,9 +17,9 @@
  * after round until nothing is left. `mc run` and `mc helper --intake` both go
  * through it, so there is one drain and one archive rather than two.
  *
- * The bare `mc helper` is the other half of the verb and is not here: it is a
- * session with Martin in it, taking his own reports (`commands/helper.js`).
- * Both write into the same `proposals/`, and neither reads the other.
+ * The verb has no other half: `~/mc/helper/` holds the retired desk's old
+ * conversations, and the desk is `mc martin` (`commands/helper.js`).
+ * The turn writes into `proposals/`, where the owning programme's plan session reads it.
  *
  * The file is **named**, not inlined. Everything else the turn judges against
  * is in the prompt — the project log, every plan on main with the step it is
@@ -65,9 +65,8 @@ import { refusePlanOnRead } from './plan-refusal.js';
 export const DEFAULT_TURN_MINUTES = 10;
 
 /**
- * The role this turn wears. It is `intake`, not `helper`: `helper` is the
- * session Martin sits in, and one name for two different jobs is how a role
- * file ends up trying to be both.
+ * The role this turn wears. It is `intake`; the turn's live record keeps the
+ * verb `helper`, which the page's intake panel reads.
  */
 export const INTAKE_ROLE = 'intake';
 

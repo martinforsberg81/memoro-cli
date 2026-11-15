@@ -40,16 +40,16 @@ import { mcHome } from './paths.js';
 import { mcSkillPath } from './skills.js';
 
 /**
- * Reserved as an identity, not as a word: `mc helper` owns `~/mc/helper/`
- * outright, and a workarea of that name would be a second thing living in the
- * same directory.
+ * Reserved as an identity, not as a word: `~/mc/helper/` is the eye's own
+ * state home (the retired desk's old conversations), and a workarea of that
+ * name would be a second thing living in the same directory.
  *
  * `pm` and `pm-helper` were reserved beside it, for the same reason and for a
  * pair of roles that no longer exist. They are ordinary names again.
  */
 export const RESERVED_ROLE_NAMES = Object.freeze(['helper', 'martin']);
 
-const ROLE_COMMANDS = { helper: 'mc helper', martin: 'mc martin' };
+const ROLE_COMMANDS = { helper: 'mc helper --intake', martin: 'mc martin' };
 
 export function reservedRoleName(name) {
   // Case-insensitively: the filesystems this runs on mostly are, and `PM`

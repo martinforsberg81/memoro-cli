@@ -5,7 +5,7 @@ import { declared, idsWith } from '../adapters/index.js';
 
 export const MC_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 export const DESCRIPTOR_VERSION = 1;
-export const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
+export const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin']);
 const string = value => typeof value === 'string' && value.length > 0;
 /** A provider whose server session is a socket the client forwards (`SERVER_SESSION.mechanism`). */
 const socketed = provider => declared(provider, 'SERVER_SESSION')?.mechanism === 'socket';

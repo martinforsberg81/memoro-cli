@@ -19,8 +19,7 @@
  * only: both tools take it as the last positional argument. A resumed
  * conversation already has its own history and is not spoken over — unless
  * the caller hands a `resumePrompt`, which lands as a reply to wherever that
- * conversation stopped. Nothing hands one today: `mc brief` resumes where the
- * session was, as `mc helper` does.
+ * conversation stopped. Nothing hands one today.
  */
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';

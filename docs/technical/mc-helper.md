@@ -1,33 +1,38 @@
-# mc helper — the desk, and the eye on production
+# mc helper — the eye on production
 
 Linux SSH interactive launches keep their provider alive past the terminal ([Claude background session or Codex app-server](mc-interactive-sessions.md)); macOS retains the existing foreground terminal.
 
-Two things get noticed about memoro: what production says, and what Martin
-says. `mc helper` is the door for both, and **the only thing either of them
-produces is a proposal** — a file in `~/mc/proposals/` that nobody
-acts on until Martin picks it up at `mc martin` or `mc plan`, or the manager's
-curation turn reads it ([mc-manager.md](mc-manager.md)).
+`mc helper` is the eye: what production says, read each day and written as a
+digest, and the inbox of files drained one turn at a time. Martin's own word —
+a bug, something that should be better — is not here: it is said at the desk,
+`mc martin`, which places it ([mc-martin.md](mc-martin.md), *Placing*). **The
+only thing the eye produces is a proposal** — a file in `~/mc/proposals/` that
+nobody acts on until Martin picks it up at `mc martin` or `mc plan`, or the
+manager's curation turn reads it ([mc-manager.md](mc-manager.md)).
 
 | | what it does |
 |---|---|
-| `mc helper` | **the desk.** A foreground session in `~/mc/helper/` — resumed if one is there — that takes Martin's report of a bug or something that should be better, and writes it as a proposal. No digest, no production, no fix |
-| `--new` | the desk again, but a fresh conversation rather than the one already there |
 | `mc helper --intake` | **the eye.** The day's digest per repository, then the inbox drained: one headless turn per file, oldest first, each file archived the moment its turn ends |
 | `mc helper --collect` | the eye's script half alone: write `~/mc/intake/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
 | `--since <iso>` | the window; default is the last 24 h |
 | `--limit <n>` | fingerprints asked for; default 50, the route caps at 200 |
 | `--threshold <n>` | hits at or above which a *new* fingerprint is marked `!`; default 20 |
-| `--model <model>` | override the role's model — the turn's, or the desk session's |
+| `--model <model>` | override the role's model for the intake turns |
 
-The three digest flags belong to the eye. On the bare verb they are refused
-by name: somebody who types `mc helper --since` is asking for a digest
-window, and opening a session that ignores them would answer a question they
-did not ask.
+**The bare verb is refused.** A call with neither `--intake` nor `--collect` —
+bare, `--new`, `--resume`, `--bg`, `--local`, a tool or model flag alone, a
+digest flag alone — writes `mc: mc helper is no longer a way in — the desk is mc martin` and
+`mc: mc helper --collect and mc helper --intake are unchanged` to stderr and
+exits 2, before anything is read, made or started. The desk that used to answer
+it is `mc martin`; there is no `helper` role and no role file for it.
+
+The directory `~/mc/helper/` is left alone: the eye's state and the old desk's
+conversations stay where they are, and nothing creates or reads it for a
+session any more.
 
 Nothing here changes a goal. A proposal is read at the next brief and
 Martin queues it or drops it — that is the arrangement that lets the eye run
-unattended every day, and it is why the desk can hand him something without
-having decided anything.
+unattended every day.
 
 ## The inbox
 
@@ -61,37 +66,6 @@ The runner's current files, logs and per-goal LOG.md entries stay beside the
 work they describe. Repeated machine output is not a file somebody dropped
 in an inbox. The drain lists files, not directories, so an archive directory
 inside intake is not itself drained.
-
-## The desk
-
-`mc helper` with no flags opens the interactive session; the conversation already in `~/mc/helper/` resumed with no
-intro, a fresh one when there is none or on `--new` (Martin, 2026-09-13) —
-standing in `~/mc/helper/`, wearing the
-`helper` role (`canon/roles/helper.md`, Sonnet). It has
-a room of its own under the work root, no repository, no workarea.
-
-It stands in `~/mc/helper/` and **not** `~/mc/intake/`, which is the eye's
-material and none of the desk's business. The role says so in the same
-words: it does not read the digest, and it does not list, edit or delete a
-proposal that is already waiting. Deciding one is Martin's, at the desk or in
-planning, or the manager's curation turn's for a defect against an area text. Adding
-is all the desk does.
-
-It also does not fix anything — no code change, no branch, no PR, no deploy.
-A report becomes a proposal and the work happens later, through `mc plan` and
-`mc run`. What it *may* do is read: if Martin says the inbox is slow again,
-going and looking at the code before writing is what makes the proposal worth
-reading a week later. The repositories are elsewhere on the disk and open to
-it; the one directory it writes to is `proposals/`.
-
-Two things it nearly always has to ask, because they cannot be read out of
-anything: which repository, and whether this is a new goal or work already covered
-by an existing goal. Both are frontmatter keys — a habit of the desk's proposals, not something mc
-reads.
-
-Both directories — the room and `proposals/` — are made by the verb before
-the session starts. A session told to write into a path that does not exist
-has one avoidable way to fail.
 
 ## What the eye reads
 
@@ -312,9 +286,10 @@ One headless session with the `intake` role (`canon/roles/intake.md`,
 Sonnet), standing in `~/mc/intake/`, timeout 10 minutes, given **one file by
 name** and asked for one outcome.
 
-The role is `intake` and not `helper` because `helper` is the desk, and the
-two want opposite things: the desk asks Martin, and the turn is told there is
-nobody to ask. One file trying to be both is how a role stops being either.
+The role is `intake`, and the eye keeps the name `helper` for its verb, its
+run rows and its state under `~/mc/helper/`: a name that is only an identifier
+in those places is not worth a migration. The turn is told there is nobody to
+ask; the desk (`mc martin`) is where Martin is asked.
 
 **The file is named; the ground is given.** The prompt carries the filename and
 then what the turn judges it against — every unfinished goal under `~/mc/programs/`, with its stage, status and
@@ -442,7 +417,7 @@ inside one, and a turn that hit the quota pauses the runner through its shared q
 
 `mc helper --intake` at a terminal goes through the same `drainIntake`, the same
 cap and the same archive — one drain, not two. The desk has no schedule at all:
-it runs when Martin has something to say.
+it runs when Martin opens it.
 
 ## Who acts on it
 
@@ -454,7 +429,7 @@ No session turns a proposal into work on its own, with one bounded exception.
   text, in an area with no repair in flight, may become that area's repair
   programme (`mc programs create … --area … --from-proposal`); the others wait.
 - **Martin**, at `mc martin` or in `mc plan`, has one become a goal, or
-  archived to `~/mc/proposals/archive/`. The desk's proposals and the eye's are
+  archived to `~/mc/proposals/archive/`. The proposals the desk files and the eye's are
   read the same way, because they are the same file.
 - **`mc plan <programme>`** is the other way in: open the programme the
   proposal belongs to, with the proposal in front of you. Nothing automatic
@@ -474,14 +449,11 @@ No session turns a proposal into work on its own, with one bounded exception.
 
 - The eye **reads** production. It never writes to it — no purge, no status
   change on an error, no deploy, not even `/ping-kv`'s probe key.
-- The desk never reads the digest, and neither half lists, edits or deletes a
-  proposal that is already waiting. Both only add.
-- Neither changes a goal. Proposals are the only output.
-- The desk changes no code and opens no PR. A report becomes a proposal, and
-  the work happens later, elsewhere.
+- The eye never lists, edits or deletes a proposal that is already waiting.
+  It only adds.
+- It changes no goal. Proposals are its only output.
 - No resident session, no watcher, no pulse. The eye runs when the runner
-  runs it and exits; the desk runs when Martin opens it and closes when he
-  closes it.
+  runs it and exits.
 - Alerting beyond the page — push, mail, macOS notification — is a separate
   decision, not part of this.
 
@@ -489,8 +461,7 @@ No session turns a proposal into work on its own, with one bounded exception.
 
 | file | what |
 |---|---|
-| `src/mc/commands/helper.js` | the verb: the desk, and behind `--intake` the collect and the same drain the runner uses |
-| `canon/roles/helper.md` | the desk: what it takes, what it writes, what it never touches |
+| `src/mc/commands/helper.js` | the verb: the refusal of the bare call, and behind `--intake` the collect and the same drain the runner uses |
 | `src/mc/helper-collect.js` | the eight sources, the delta, the state block, the rendered digest, `helperDir`, `intakeDir`, `intakeArchiveDir` |
 | `src/mc/helper-turn.js` | the prompt over one named file, `repoOfFile`, the ground: the unfinished goals under `~/mc/programs/` and each checkout's historical log, the headless session, the measured `wrote` — and `drainIntake`, the loop that archives every file the moment its turn ends |
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
@@ -500,10 +471,9 @@ No session turns a proposal into work on its own, with one bounded exception.
 | `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them — and the three sections read from `~/mc/runner/` |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
 
-Both role files reach their session the same way every other role file does —
+The intake role file reaches its session the same way every other role file does —
 `canon/roles/all-sessions.md`, then the role's own words,
-assembled by `instructionsFor`. That mechanism is [`mc-roles.md`](mc-roles.md);
-what is written here is only which file each of the two halves wears.
+assembled by `instructionsFor`. That mechanism is [`mc-roles.md`](mc-roles.md).
 
 mc does not read a proposal. It used to parse a fixed frontmatter and fixed
 section names out of every file, in three places that disagreed with each
@@ -518,9 +488,9 @@ Tests: `tests/mc/helper-collect.test.js` (the digest on stubbed script output
 and stubbed routes, the delta against a previous digest, the failure domains
 kept separate), `tests/mc/helper-turn.test.js` (the prompt as a pure function over a named
 file, `repoOfFile`, and the drain — including the file that is archived after a
-turn that threw), `tests/mc/commands/helper.test.js` — where the desk's own
-cases hold the thing worth holding down, that the bare verb reaches neither the
-collect step nor the model, and where the verb's drain is handed its own `files`
+turn that threw), `tests/mc/commands/helper.test.js` — where the refusal cases hold the thing
+worth holding down, that a call without `--intake` or `--collect` reaches
+neither the collect step nor the model and exits 2, and where the verb's drain is handed its own `files`
 and `move` so the real inbox is out of reach even when the suite is run without
 `tests/_isolate-home.mjs` — `tests/mc/run-plan.test.js` (`intakeQueue`'s order,
 `intakeNote`, the two gates), the helper and intake blocks of

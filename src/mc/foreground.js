@@ -3,7 +3,7 @@
  *
  * The runner writes `current-<repo>.json` while a lane's step is in flight,
  * so NOW can name it. A session somebody opens themselves — `mc brief`, `mc plan <name>`,
- * `mc helper`, a project opened from the page — leaves no such
+ * `mc martin`, a project opened from the page — leaves no such
  * trace: it is a child of mc holding the terminal, and nothing on disk says it
  * exists. NOW would then say "nothing is running" while the machine is busy,
  * which is the one thing the page must never do.
