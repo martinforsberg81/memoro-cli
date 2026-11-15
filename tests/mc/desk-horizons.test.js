@@ -223,7 +223,6 @@ describe('who may write a horizon (criterion 2)', () => {
   }
 
   it('(c) reached is open to the desk, a person and the unattended manager only', async () => {
-    const reachedOf = (h) => call(h, ['horizon', 'reached', 'open-one', '--file', '-'], { stdin: 'Done.\n' });
     for (const [caller, by] of [[{ role: 'martin' }, 'martin'], [{ role: null }, 'person'], [{ role: 'manager', headless: true }, 'manager']]) {
       const h = await held(); const r = await call(h, ['horizon', 'reached', 'open-one', '--file', '-'], { ...caller, stdin: 'Done.\n' });
       ok(r); assert.equal(read(h, 'open-one').reached_by, by);
@@ -235,7 +234,6 @@ describe('who may write a horizon (criterion 2)', () => {
       refused(r, caller.label ?? caller.role); assert.deepEqual(tree(h.root), before, caller.label);
       if (caller.role === 'manager' && !caller.headless) assert.match(r.stderr, /mc martin/u);
     }
-    assert.ok(reachedOf);
   });
 
   it('(d) the role is judged before the arguments', async () => {
@@ -324,11 +322,17 @@ describe('every write is one read-modify-write under the strict lock (criterion 
   });
 
   it('(c) judges the transition on the state found in the hold: a drop after a competitor marked it reached is refused', async () => {
-    const h = home(); ok(await set(h, 'only-one')); let competitor;
-    const lock = (root, fn) => { competitor = call(h, ['horizon', 'reached', 'only-one', '--file', '-'], { role: 'manager', headless: true, stdin: 'Done.\n' }); return fn(); };
+    const h = home(); ok(await set(h, 'only-one')); let competitor; let left;
+    const lock = (root, fn) => {
+      competitor = call(h, ['horizon', 'reached', 'only-one', '--file', '-'], { role: 'manager', headless: true, stdin: 'Done.\n' }); // runs to its write before it returns a promise
+      left = tree(join(h.dir, 'only-one')); // what the competitor wrote, before the drop decides
+      return fn();
+    };
     const r = await call(h, ['horizon', 'drop', 'only-one', '--reason', 'r'], { lock });
     refused(r); assert.match(r.stderr, /reached/u); ok(await competitor);
-    assert.equal(read(h, 'only-one').state, 'reached'); assert.equal(read(h, 'only-one').reached_by, 'manager');
+    assert.deepEqual(Object.keys(left).map((path) => path.slice(h.dir.length + 1)), ['only-one/horizon.json', 'only-one/playback.md', 'only-one/reached.md']);
+    assert.equal(JSON.parse(left[join(h.dir, 'only-one', 'horizon.json')]).reached_by, 'manager');
+    assert.deepEqual(tree(join(h.dir, 'only-one')), left, 'the horizon\'s files are byte for byte what the competitor wrote');
   });
 
   it('(d) a lock that cannot be had ends each write with exit 1, its own message, and nothing written', async () => {
