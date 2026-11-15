@@ -18,10 +18,10 @@
  * `step` was a project's build, `goal` a goal's session (a build, or until
  * then its review too), and `review` a project's review step.
  */
-export const SESSION_KINDS = Object.freeze(['plan', 'build', 'review', 'finish', 'mend']);
+export const SESSION_KINDS = Object.freeze(['plan', 'build', 'review', 'repair', 'finish', 'mend']);
 export const BUILD_VARIANTS = Object.freeze(['project', 'goal']);
 /** The kinds without a variant: one way to start each. */
-const PLAIN_KINDS = Object.freeze(['plan', 'finish', 'mend']);
+const PLAIN_KINDS = Object.freeze(['plan', 'repair', 'finish', 'mend']);
 
 const OLD = Object.freeze({
   step: { kind: 'build', variant: 'project' },

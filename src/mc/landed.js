@@ -76,7 +76,7 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
     if (!goal || row.kind === 'merge' || row.kind === 'plan' || row.kind === 'plan-review') continue;
     goal.seconds += number(row.seconds);
     goal.sessions += 1;
-    if (row.kind === 'finish' || row.kind === 'mend') goal.again = true;
+    if (row.kind === 'repair' || row.kind === 'finish' || row.kind === 'mend') goal.again = true;
     const cost = rowCost(row, RUNNER_MODEL);
     if (cost == null) { if (number(row.output) > 0) goal.unpriced += 1; }
     else { goal.cost += cost; goal.priced += 1; }
@@ -97,7 +97,7 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
     without_goal: withoutGoal.size,
     prs: landed.length,
     attempts: merges.length,
-    // A goal that never needed a finish or mend session went through review the first time.
+    // A repair, old finish or mend means the goal did not pass first time.
     first_pass: measured.length ? measured.filter((goal) => !goal.again).length : null,
     measured: measured.length,
     sessions_per_goal: measured.length ? Math.round((measured.reduce((n, goal) => n + goal.sessions, 0) / measured.length) * 10) / 10 : null,

@@ -33,7 +33,7 @@
 function rankOf(item) {
   if (item.kind === 'mend' || item.goal?.status === 'blocked') return 0;
   if (item.kind === 'decision') return 1;
-  if (item.kind === 'finish') return 2;
+  if (item.kind === 'repair' || item.kind === 'finish') return 2;
   if (item.kind === 'review') return 3;
   if (item.kind === 'plan') return 6;
   return item.variant === 'goal' ? 5 : 4;
