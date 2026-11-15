@@ -26,7 +26,7 @@ import {
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
 import { readDeployMends } from '../../../src/mc/deploy-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
-import { exerciseApp, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
+import { exerciseApp, gateSet, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
 import {
   HOLDER_WAIT_MS, holderPath, placeWorktree, readHolder, takeHolder,
 } from '../../../src/mc/deploy-worktree.js';
@@ -2971,7 +2971,7 @@ describe('mc deploy — a suite that does not gate a deploy', () => {
     assert.equal(spawned.length, 1, 'the deploy went on');
     assert.deepEqual(calls.suites[0].names, ['smoke'], 'only the suites that gate were run');
     assert.match(out.stdout, /mc: suites — 1 declared, run against a local server of 1a2b3c4:/u);
-    assert.match(out.stdout, /mc: suites — 1 more declared, not run: they do not gate a deploy \(gate: false\):\nmc: {3}not a gate {2}flaky — red on the server against the live commit d1dda92/u);
+    assert.match(out.stdout, /mc: suites — 1 more declared, not run: they do not gate a deploy \(gate: false on main's tip\):\nmc: {3}not a gate {2}flaky — red on the server against the live commit d1dda92/u);
     assert.equal(out.stdout.match(/not a gate {2}flaky/gu).length, 1, 'named once');
     assert.equal(row.suites, 'smoke:ok', 'the row keeps what ran');
     assert.equal(row.outcome, 'deployed');
@@ -2989,6 +2989,74 @@ describe('mc deploy — a suite that does not gate a deploy', () => {
     const result = await exerciseApp({ sha: MID, env: {}, deps: fake.suites });
     assert.deepEqual(result.suites.map((suite) => suite.name), ['smoke']);
     assert.deepEqual(result.not_gate, [{ name: 'flaky', why: WHY }]);
+  });
+});
+
+describe('mc deploy — which suites gate is main\'s tip\'s, not the shipped commit\'s', () => {
+  const TIP_WHY = 'measures wall-clock time; the server\'s load decides its verdict (memoro #15421)';
+  const env = { dev: { service: 'app' } };
+  /** The `.mc/test.json` main's tip holds, as `git show origin/main:.mc/test.json` prints it. */
+  const tipText = (suites) => JSON.stringify({
+    schema_version: 1, environments: env, suites: suites.map((suite) => ({ argv: ['node', `${suite.name}.js`], ...suite })),
+  });
+  // The shipped commit (an older green pick) still makes msr-performance a gate.
+  const shipped = { suites: [{ name: 'smoke' }, { name: 'msr-performance' }], environments: env };
+  const tipSaysNotGate = { 'origin/main': tipText([{ name: 'smoke' }, { name: 'msr-performance', gate: false, gate_why: TIP_WHY }]) };
+
+  it('a suite the tip declares gate: false is not run and does not refuse, though the shipped commit makes it a gate', async () => {
+    const { code, out, spawned, calls, row } = await attempt([], { declared: shipped, shown: tipSaysNotGate, outcomes: { 'msr-performance': 'red' } });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1, 'the deploy went on');
+    assert.deepEqual(calls.suites[0].names, ['smoke'], 'only the tip\'s gates were run');
+    assert.match(out.stdout, /not a gate {2}msr-performance — measures wall-clock time; the server's load decides its verdict/u, 'named with the tip\'s reason');
+    assert.equal(row.suites, 'smoke:ok');
+    assert.ok(calls.git.some((call) => call.args.join(' ') === 'show origin/main:.mc/test.json'), 'the gate set was read from main\'s tip');
+  });
+
+  it('the suites that run are the shipped commit\'s own: its argv, not the tip\'s', async () => {
+    const shippedArgv = { suites: [{ name: 'smoke', argv: ['node', 'old-smoke.js'] }], environments: env };
+    const fake = gateFake({ declared: shippedArgv, head: MID, served: 'checkout', shown: { 'origin/main': tipText([{ name: 'smoke', argv: ['node', 'new-smoke.js'] }]) } });
+    let ran = null;
+    const runSuites = async (options) => { ran = options.declaration.suites; return { results: [], gone: [], skipped: [] }; };
+    await exerciseApp({ sha: MID, env: {}, deps: { ...fake.suites, runSuites } });
+    assert.deepEqual(ran.map((suite) => suite.argv), [['node', 'old-smoke.js']]);
+  });
+
+  it('a tip gate the shipped commit does not have is named "not in this commit" and does not refuse', async () => {
+    const shown = { 'origin/main': tipText([{ name: 'smoke' }, { name: 'msr-performance' }, { name: 'new-journey' }]) };
+    const { code, out, spawned, calls } = await attempt([], { declared: shipped, shown });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1, 'the deploy went on');
+    assert.deepEqual(calls.suites[0].names, ['smoke', 'msr-performance']);
+    assert.match(out.stdout, /mc: suites — 1 gate on main's tip not run: not in this commit:\nmc: {3}not in this commit {2}new-journey/u);
+  });
+
+  it('a suite of the shipped commit the tip does not declare is not run, and is named', async () => {
+    const shown = { 'origin/main': tipText([{ name: 'smoke' }]) };
+    const fake = gateFake({ declared: shipped, head: MID, served: 'checkout', shown, outcomes: { 'msr-performance': 'red' } });
+    const result = await exerciseApp({ sha: MID, env: {}, deps: fake.suites });
+    assert.deepEqual(result.suites.map((suite) => suite.name), ['smoke']);
+    assert.deepEqual(result.not_on_tip, ['msr-performance']);
+    assert.deepEqual(result.not_in_commit, []);
+  });
+
+  it('a tip whose declaration cannot be read refuses as cannot-run, and the shipped commit\'s is not asked in its place', async () => {
+    const fake = gateFake({ declared: shipped, head: MID, served: 'checkout', shown: { 'origin/main': '{ not json' } });
+    const result = await exerciseApp({ sha: MID, env: {}, deps: fake.suites });
+    assert.match(result.error, /origin\/main:\.mc\/test\.json/u);
+    assert.deepEqual(result.suites, []);
+    assert.equal(fake.calls.suites.length, 0, 'no suite ran');
+  });
+
+  it('gateSet: the tip names the gates, the shipped commit gives the suites', () => {
+    const tip = { suites: [{ name: 'a' }, { name: 'b', gate: false, gate_why: 'slow' }, { name: 'c' }] };
+    const commit = { suites: [{ name: 'd', argv: ['d'] }, { name: 'b', argv: ['b'] }, { name: 'a', argv: ['a'], gate: false, gate_why: 'old' }] };
+    assert.deepEqual(gateSet({ tip, shipped: commit }), {
+      gating: [{ name: 'a', argv: ['a'], gate: false, gate_why: 'old' }],
+      notGate: [{ name: 'b', why: 'slow' }],
+      notInCommit: ['c'],
+      notOnTip: ['d'],
+    });
   });
 });
 

@@ -480,7 +480,8 @@ appended under the round's own run id, and the page shows it for a day beside
 the deploy panel — never a round that is "running" forever.
 
 **The app, used — against exactly the pick.** `exerciseApp` reads the suites
-declared in memoro's `.mc/test.json` and runs them against local servers of
+declared in memoro's `.mc/test.json` — the pick's tree for how each runs, main's
+tip for which of them gate (below) — and runs them against local servers of
 *exactly* the pick, started the way `mc test dev` starts one (`ensureAppServer`).
 Which tree they are served from depends on where main is held — one of two routes,
 chosen by `isOwnWorktree` on the worktree step 2 found:
@@ -532,11 +533,51 @@ on the shared route), when the server was started on uncommitted changes
 (`built_from.dirty`), or when the server serves another commit. The tests assert
 the commit the server was started on.
 
-**A suite that does not gate a deploy.** A suite in `.mc/test.json` declared
-`"gate": false` with a required, non-empty `"gate_why"` is not run
+**Which suites gate: main's tip says it (Martin, 2026-11-15).** A deploy exists
+to get main into production, so the set of suites that gate it is read from
+**origin/main's tip**, `git show origin/main:.mc/test.json` in the tree the suites
+run in (it shares its refs with the checkout the deploy fetched in), never from
+the commit being shipped. The suites themselves — argv, tier, order — still come
+from the shipped commit's tree and run against its local server; only the gate
+set (`gate`, `gate_why`, and which names gate) is the tip's. This matters when
+the pick is an older green commit: on 2026-11-15 the tip had declared
+`msr-performance` and `msr-reliability-closure` `gate: false` (memoro #15421),
+the tip had no green full run yet, and the older pick's own `.mc/test.json` still
+made them gates, so they ran under load, went red and refused the deploy. Now
+(`gateSet` in `deploy-gate.js`):
+
+- a suite the tip declares as a gate, and the shipped commit has, is run — the
+  shipped commit's version of it, whatever that commit says of its `gate`;
+- a suite the tip declares `gate: false` is not run and is named with the
+  **tip's** `gate_why`, even where the shipped commit still makes it a gate;
+- a suite the tip declares as a gate and the shipped commit does not have is
+  named *not in this commit* and does not refuse;
+- a suite of the shipped commit that the tip does not declare at all is not run,
+  and is named *not on main's tip* (a suite removed on main is a decision already
+  on main, like a `gate: false`);
+- a tip whose `.mc/test.json` is missing or invalid makes every suite *cannot
+  run*, which refuses: nothing then says which suites gate, and the shipped
+  commit's declaration is not asked in its place. The shipped commit's own
+  declaration must still be valid — it is what the suites run from.
+
+The tip is `origin/main` as it stands when the suites start, after the deploy's
+fetch; a full run started by the deploy may have fetched again, and a newer tip
+is still main's word. The check after a deploy (`deploy-check.js`) is not
+changed by this: it runs the gating suites of the row's own declaration against
+production.
+
+**A suite that does not gate a deploy.** A suite in main's tip `.mc/test.json`
+declared `"gate": false` with a required, non-empty `"gate_why"` is not run
 by `mc deploy`, is never a refusal, and is named once with its reason in the
 reading. `mc test dev` and `mc test prod` run it as before. A declaration with
 `gate: false` and no `gate_why` is invalid.
+
+**A suite that only measures time is never a gate** (Martin, 2026-11-15). A
+suite whose verdict is wall-clock time — a latency budget, a timeout under
+load — measures the machine as much as the tree: the server's load decides it.
+It is declared `"gate": false` with a `gate_why` that says so. mc cannot tell
+such a suite from its argv, so this is a rule for whoever writes the
+declaration, not something mc checks.
 
 A suite that gates and fails, or one that
 cannot run (the server never came up, a suite never started), refuses and
