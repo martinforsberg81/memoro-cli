@@ -52,24 +52,7 @@ its check, and each worktree's state.
   line of REVIEW.md is OK) or back to `build` (`mc goal stage build`, when a line
   is NOT OK; a repair build session takes it; the third rejection stays in review
   with status Martin); the merger sets
-  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing. `mc goal martin` asks jev once; session callers require `--kind technical|product`, while a person may omit it:
-  `mc goal martin --kind technical|product --reason "<the question>" --option "<key>: <text>"
-  --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
-  <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys
-  `^[a-z][a-z0-9_]{0,31}$`, the recommendation one of them. A call without them is refused with a return
-  instruction (exit 2, nothing written): fix it and call again. When jev
-  settles the question it prints `mc: jev answered <key> … — continue with:
-  <option text>`, the status stays, and the session continues with that answer.
-  Every unsettled technical call, whatever jev reads or if jev is unavailable,
-  logs and continues with the session's recommendation, without changing
-  stage/status. An unsettled goal-bound `product` call sets the goal `Martin`
-  and exits 1; what the kinds mean is in
-  [asking-martin](../tasks/asking-martin.md). `mc decisions` lists answered and
-  session-decided records read-only. A call with
-  `--reserved deploy|production-data|credentials|admin` never goes to jev. Interactive Martin may use `mc ask` for a newly
-  synthesized question after investigating the standards; do not repeat jev for
-  the same recorded live question. `mc goal log --status Martin` is refused: use
-  `mc goal martin` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
+  `done`. Legacy `blocked` outside merge is reconciled to Martin with prior evidence retained; only a merge failure wakes mend, which repairs and returns merge to ready. The first two failed merges run mend; the third sets Martin. `Martin` waits on Martin and wakes nothing, and only a reserved act (`mc ask --reserved <act>`) or a reader's finding that the goal is wrong (`mc goal defect`) sets it. `mc goal martin` is gone: it exits 2 and prints the `mc ask` call to make. A question goes through `mc ask [<programme>/<goal>] --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> [--evidence "…"] [--document <repo>/<path>] [--reserved <act>]` — 2 to 4 options, keys `^[a-z][a-z0-9_]{0,31}$`, the recommendation one of them. A call without them is refused with a return instruction (exit 2, nothing written): fix it and call again. jev reads it first; when jev does not settle it a fresh read-only reader answers inside the same call, and the call prints which of four answers it is (continue with an option, a goal defect, a text of Martin's that would change, or unread), so the session continues without a wait on Martin. What each answer means is in [asking-martin](../tasks/asking-martin.md). `mc decisions` lists the answers read-only, with who answered. A call with `--reserved deploy|production-data|credentials|admin` never goes to jev or a reader. `mc goal log --status Martin` is refused: use `mc ask` (docs/technical/mc-jev.md). `mc goal ready` keeps the stage.
 - **A wrong goal.** `mc goal defect [<programme>/<goal>] --part "<the part or
   criterion that is wrong>" --found "<what is wrong, with the file and line or
   the command and output>" [--evidence "…"] [--next "…"]` is how a build,
@@ -101,9 +84,7 @@ its check, and each worktree's state.
   interactive decision desk. That role investigates it against technical and
   programme design, resolves settled details, records actual decisions
   canonically, reconciles the goal, then finishes or explicitly returns/hands it off.
-  In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` (or compatible `mc goal martin`) with its kind. An unsettled technical call continues on the session's recommendation; what reaches Martin is in [asking-martin](../tasks/asking-martin.md). Continue if jev answers. A `--kind product` ask names the text, what it says and the proposed wording. The compatible call is `mc goal martin --kind technical|product --reason "…" --option "<key>: <text>"… --recommend
-  <key>` in its current stage with exactly what is needed; when jev answers, it
-  continues with jev's answer instead of ending.
+  In a headless session, follow the assigned role: build/review resolve their own acceptance obstacles and report a wrong goal with `mc goal defect`; only merge failure uses mend. An actual choice uses goal-bound `mc ask` in its current stage with exactly what is needed (the one way to ask, `mc goal martin` being gone); the call answers inside itself and the session continues with the answer. What reaches Martin is in [asking-martin](../tasks/asking-martin.md).
 - **Refused.** mc refuses every session except the interactive Martin and unattended decision roles a backward move, naming both stages
   — a person (`MC_TOOL=person`, or none) and interactive Martin or decision may move a stage back, with truthful attribution. It refuses `done` from every session but plan, and also refuses Martin's administrative `done`; `dropped` is allowed for plan or interactive Martin or decision, any
   move but `build → review` from a build session, any but `review →

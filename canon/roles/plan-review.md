@@ -47,5 +47,5 @@ says which question each part of the evidence answered.
 Your last act is `mc goal plan-review <programme>/<goal> verdict ok` or
 `verdict not-ok`, the same word as the first line. Write only `PLAN-REVIEW.md`.
 Change no goal, log, hold, criterion or repository file; run no check that
-writes. Ask nobody: `mc ask` and `mc goal martin` are refused. The headless
+writes. Ask nobody: `mc ask` is refused (`mc goal martin` is gone). The headless
 rules apply unchanged.
