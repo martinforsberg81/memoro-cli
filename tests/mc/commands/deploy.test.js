@@ -23,6 +23,7 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
+import { exerciseApp, HOLD_MARGIN_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
 import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
@@ -146,7 +147,11 @@ function fakeGit({
     if (args[0] === 'reset') return '';
     if (args[0] === 'clean') return '';
     if (args[0] === 'diff') return diff;
-    if (args[0] === 'rev-list' && args[1] === '--first-parent') return (chain || [sha]).join('\n');
+    if (args[0] === 'rev-list' && args[1] === '--first-parent') {
+      // `chain` is the line of commits, or a function of the range asked for (null: git failed).
+      const listed = typeof chain === 'function' ? chain(args.at(-1)) : (chain || [sha]);
+      return listed === null ? null : listed.join('\n');
+    }
     if (args[0] === 'rev-list') {
       const range = args.at(-1);
       if (range === 'origin/main..HEAD') return String(at(cwd).ahead);
@@ -183,8 +188,9 @@ function gateFake({
   runs = [fullRunOf()], started = null, mends = [], suites = ['smoke'], outcomes = {}, served = SHA, declared = null,
   appError = null, dirtyNow = [], servedDirty = undefined,
   head = SHA, branch = '', contained = true, held = {}, shown = null, checkoutFails = false, revive = null,
+  staticServed = null, runner = null, origin = SHA,
 } = {}) {
-  const calls = { fullRun: [], history: 0, servers: [], suites: [], mends: 0, git: [], holds: [], follows: 0, ensures: [], sleeps: [] };
+  const calls = { fullRun: [], history: 0, servers: [], statics: [], suites: [], mends: 0, git: [], holds: [], follows: 0, ensures: [], sleeps: [], order: [] };
   const declaration = declared || { suites: suites.map((name) => ({ name })), environments: { dev: { service: 'app' } } };
   // The checkout, as the exercise places it: `checkout --detach` moves it, and the
   // fake servers are built from wherever it stands when they are (re)started.
@@ -197,6 +203,7 @@ function gateFake({
   });
   const gitIn = (worktree, args) => {
     calls.git.push({ worktree, args });
+    calls.order.push(`git:${args[0]}`);
     const out = (status = 0, stdout = '', stderr = '') => ({ status, stdout, stderr });
     if (args[0] === 'show') return out(0, declarationText(args[1].split(':')[0]));
     if (args[0] === 'branch') return out(0, `${branch}\n`);
@@ -208,6 +215,8 @@ function gateFake({
     }
     return out(1, '', 'not faked');
   };
+  // What an ensure that is not pinned does to the checkout, as `followMain` does: fast-forwards it to origin/main.
+  const follow = (pinned) => { if (!pinned) { calls.follows += 1; checkout.head = origin; } };
   const resultOf = (name) => {
     const how = outcomes[name] || 'ok';
     return {
@@ -228,11 +237,12 @@ function gateFake({
     readDeclaration: () => ({ ok: true, declaration }),
     gitIn,
     servingWorktree: (worktree, { service }) => held[service] || null,
-    mainHold: (server, { now, idleMs }) => { calls.holds.push({ id: server.instance_id, now, idleMs }); return server.hold ? (typeof server.hold === 'function' ? server.hold(now) : server.hold) : null; },
+    mainHold: (server, { now, idleMs }) => { calls.order.push('hold'); calls.holds.push({ id: server.instance_id, now, idleMs }); return server.hold ? (typeof server.hold === 'function' ? server.hold(now) : server.hold) : null; },
     now: () => calls.clock ?? 0,
     sleep: async (ms) => { calls.sleeps.push(ms); calls.clock = (calls.clock ?? 0) + ms; },
     ensureAppServer: async (worktree, declared, options = {}) => {
       calls.ensures.push({ tier: 'app', pin: options.deps?.pin === true, head: checkout.head });
+      follow(options.deps?.pin === true);
       if (appError) return { ok: false, error: appError };
       const commit = revive && calls.servers.length ? revive(calls.servers.length) : (served === 'checkout' ? checkout.head : served);
       calls.servers.push({ worktree, commit });
@@ -241,14 +251,21 @@ function gateFake({
     },
     ensureDevServer: async (worktree, declared, options = {}) => {
       calls.ensures.push({ tier: 'static', pin: options.pin === true, head: checkout.head });
-      return { ok: false, error: 'no static tier in this test' };
+      follow(options.pin === true);
+      if (staticServed === null) return { ok: false, error: 'no static tier in this test' };
+      const commit = staticServed === 'checkout' ? checkout.head : typeof staticServed === 'function' ? staticServed(calls.statics.length) : staticServed;
+      calls.statics.push({ worktree, commit });
+      return { ok: true, server: { url: 'http://127.0.0.1:2/', instance_id: 'static-1', built_from: { commit } } };
     },
     tokenFor: async () => ({ name: null, token: null, from: null }),
     head: () => checkout.head,
     dirty: () => dirtyNow,
     answers: async () => true,
-    runSuites: async ({ declaration: declared, worktree }) => {
+    runSuites: async (options) => {
+      const { declaration: declared, worktree } = options;
       calls.suites.push({ worktree, names: declared.suites.map((suite) => suite.name) });
+      // A runner of the test's own: a suite that finds its server gone calls `revive`, as the real one does.
+      if (runner) return runner(options, resultOf, calls, checkout);
       return { results: declared.suites.map((suite) => resultOf(suite.name)), gone: [], skipped: [] };
     },
   };
@@ -1854,7 +1871,7 @@ async function attempt(argv, { extra = {}, ...fakeOptions } = {}) {
     stderr,
   });
   return {
-    code, out, spawned, asked, calls: fake.calls, row: lastAttempt({ MC_WORK_ROOT: work }),
+    code, out, spawned, asked, calls: fake.calls, checkout: fake.checkout, row: lastAttempt({ MC_WORK_ROOT: work }),
   };
 }
 
@@ -2420,5 +2437,470 @@ describe('mc deploy — the preparation, in a process of its own', () => {
     assert.deepEqual(JSON.parse(calls[0].args[1]), job);
     assert.equal(calls[0].options.detached, true, 'its own process group: a lost terminal does not reach it');
     assert.equal(calls[0].options.stdio[0], 'ignore', 'the preparation asks nothing');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The newest green commit after the live one (goal mc-tests/deploy-ships-newest-green):
+// what is picked, what the suites are run against, what is shipped.
+// ---------------------------------------------------------------------------
+
+const TIP = SHA;
+const MID = '5b2d0000a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const LOW = '3c4e0000b1c2d3e4f5061728394a5b6c7d8e9fa0';
+const NONE = 'ab120000c1d2e3f4051627384950a1b2c3d4e5f6';
+const SHARED = '/tmp/does-not-exist/shared/memoro';
+const RED_NAMES = ['tests/lib/money.test.js', 'command:lint'];
+const SIX_RED = ['tests/a.test.js', 'tests/b.test.js', 'tests/c.test.js', 'tests/d.test.js', 'tests/e.test.js', 'command:lint'];
+/** Commits between each pair, as `git rev-list --count` says them. */
+const COUNTS = {
+  [`${LIVE}..${TIP}`]: 3, [`${LIVE}..${MID}`]: 2, [`${LIVE}..${LOW}`]: 1, [`${MID}..${TIP}`]: 1, [`${LOW}..${TIP}`]: 2, [`${LOW}..${MID}`]: 1,
+};
+const greenRun = (commit) => fullRunOf(commit);
+const redRun = (commit, red = RED_NAMES) => fullRunOf(commit, { outcome: 'failed', red, tests: 904 });
+const stalledRun = (commit) => fullRunOf(commit, { outcome: 'stalled', red: null, stopped_at: 'stalled', reason: 'tests/slow.test.js never ended' });
+const stoppedRun = (commit) => fullRunOf(commit, { outcome: 'failed', red: null, stopped_at: 'install', reason: 'npm ci failed' });
+
+/** The reading of main's history over live → tip, with nothing real behind it. */
+function planOf({ runs = [], chain = [TIP, MID, LOW], git = null, acceptRed = false, ...over } = {}) {
+  return deployPlan({
+    path: PATH,
+    env: { MC_WORK_ROOT: work },
+    git: git || fakeGit({ chain, counts: COUNTS }),
+    fetchVersion: async () => ({ commit: LIVE, build: 812, build_time: '2026-09-01T10:00:00Z' }),
+    lastDeploy: () => null,
+    nightly: noNightly,
+    languageState: () => null,
+    history: () => runs,
+    acceptRed,
+    ...over,
+  });
+}
+
+/**
+ * A repository whose worktree walks with `merge` and `reset`: HEAD is tracked
+ * for the worktree and moves to wherever either of them is asked to go, so a
+ * test says where the deployer put it and what the script was handed.
+ */
+function walkingGit({ head = TIP, ...options } = {}) {
+  const base = fakeGit({ head, ...options });
+  let at = head;
+  const git = (cwd, args) => {
+    if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD') { base.calls.push({ cwd, args }); return at; }
+    const out = base(cwd, args);
+    if (out !== null && (args[0] === 'reset' || args[0] === 'merge')) at = args.at(-1);
+    return out;
+  };
+  git.calls = base.calls;
+  git.head = () => at;
+  return git;
+}
+
+describe('mc deploy — which commit ships: the newest one after the live commit whose full run is green', () => {
+  const chain = [TIP, MID, LOW];
+
+  it('a green tip is the pick, and nothing was passed over', () => {
+    const found = pickCommit({ chain, live: LIVE, runs: [greenRun(TIP), greenRun(MID)] });
+    assert.deepEqual(found, { pick: TIP, tip: TIP, passed: [] });
+  });
+
+  it('a red tip with a green commit behind it picks the green one, and says what passed the tip over', () => {
+    const found = pickCommit({ chain, live: LIVE, runs: [redRun(TIP), greenRun(MID)] });
+    assert.equal(found.pick, MID, 'the tip is red: it is not what ships');
+    assert.equal(found.tip, TIP);
+    assert.deepEqual(found.passed.map((entry) => [entry.sha, entry.state]), [[TIP, 'red']]);
+  });
+
+  it('of two green commits the newer ships, never the older', () => {
+    const found = pickCommit({ chain, live: LIVE, runs: [greenRun(LOW), greenRun(MID), redRun(TIP)] });
+    assert.equal(found.pick, MID);
+  });
+
+  it('a stalled, a stopped and a never-measured commit are each passed over under their own state', () => {
+    const found = pickCommit({ chain: [TIP, NONE, MID, LOW], live: LIVE, runs: [stalledRun(TIP), stoppedRun(MID), greenRun(LOW)] });
+    assert.equal(found.pick, LOW);
+    assert.deepEqual(found.passed.map((entry) => [entry.sha, entry.state]), [[TIP, 'stalled'], [NONE, 'none'], [MID, 'unmeasured']]);
+  });
+
+  it('a green commit that does not descend from the live one is no candidate, and the next green one is', () => {
+    const runs = [redRun(TIP), greenRun(MID), greenRun(LOW)];
+    const found = pickCommit({ chain, live: LIVE, runs, descends: (sha) => sha !== MID });
+    assert.equal(found.pick, LOW, 'production does not move backwards: MID is green and still not a candidate');
+    const none = pickCommit({ chain, live: LIVE, runs, descends: () => false });
+    assert.equal(none.pick, null);
+    assert.deepEqual(none.passed.map((entry) => [entry.sha, entry.descends]), [[TIP, null], [MID, false], [LOW, false]]);
+  });
+
+  it('the live commit is never a candidate, however green its run', () => {
+    const found = pickCommit({ chain: [TIP, LIVE], live: LIVE, runs: [redRun(TIP), greenRun(LIVE)] });
+    assert.equal(found.pick, null);
+    assert.deepEqual(found.passed.map((entry) => entry.sha), [TIP]);
+  });
+
+  it('with no green commit after the live one there is no pick', () => {
+    assert.equal(pickCommit({ chain, live: LIVE, runs: [redRun(TIP), stalledRun(MID)] }).pick, null);
+    assert.equal(pickCommit({ chain: [], live: LIVE, runs: [] }).pick, null);
+  });
+
+  it('deployPlan plans the green commit behind a red tip: its sha, the tip, and how far behind', async () => {
+    const git = fakeGit({ chain, counts: COUNTS });
+    const plan = await planOf({ runs: [redRun(TIP), greenRun(MID)], git });
+    assert.equal(plan.sha, MID, 'the sha is the pick, not what rev-parse origin/main says');
+    assert.equal(plan.short, '5b2d000');
+    assert.equal(plan.tip, TIP);
+    assert.equal(plan.backwards, null);
+    assert.deepEqual(
+      [plan.pick.older, plan.pick.green, plan.pick.behind, plan.pick.tip_state, plan.pick.tip_red],
+      [true, MID, 1, 'red', RED_NAMES],
+    );
+    assert.equal(plan.gap, 2, 'the gap is counted to the commit that would ship');
+    assert.deepEqual(
+      git.calls.find((call) => call.args[0] === 'rev-list' && call.args[1] === '--first-parent').args,
+      ['rev-list', '--first-parent', `${LIVE}..${TIP}`],
+      'the candidates are the first-parent commits between the live one and main\'s tip',
+    );
+  });
+
+  it('deployPlan asks git whether a green commit descends from the live one, and passes over one that does not', async () => {
+    const git = fakeGit({ chain, counts: COUNTS, ancestors: (older, newer) => !(older === LIVE && newer === MID) });
+    const plan = await planOf({ runs: [redRun(TIP), greenRun(MID), greenRun(LOW)], git });
+    assert.equal(plan.sha, LOW);
+    assert.ok(git.calls.some((call) => call.args.join(' ') === `merge-base --is-ancestor ${LIVE} ${MID}`), 'asked of the green commit');
+  });
+
+  it('with the live commit unknown only the tip is a candidate, and no history is walked', async () => {
+    const git = fakeGit({ chain, counts: COUNTS });
+    const known = await planOf({ runs: [greenRun(TIP)], git, fetchVersion: async () => null });
+    assert.equal(known.sha, TIP);
+    assert.equal(known.backwards, null);
+    const red = await planOf({ runs: [redRun(TIP), greenRun(MID)], git, fetchVersion: async () => null });
+    assert.equal(red.sha, TIP, 'an older green commit is not told apart from one already live');
+    assert.equal(red.pick.green, null);
+    assert.equal(git.calls.some((call) => call.args[0] === 'rev-list' && call.args[1] === '--first-parent'), false);
+  });
+
+  it('with no green commit after the live one the tip is planned as it is', async () => {
+    const plan = await planOf({ runs: [redRun(TIP), redRun(MID)] });
+    assert.equal(plan.sha, TIP);
+    assert.equal(plan.pick.green, null);
+    assert.equal(plan.pick.older, false);
+    assert.equal(plan.backwards, null);
+  });
+});
+
+describe('mc deploy — the reading says which commit ships, how far behind main\'s tip, and why', () => {
+  const READING_HEAD = [
+    'mc: live now 9f8e7d6 (build 812) — api/version, 2026-09-01 10:00',
+  ];
+  const NIGHTLY = 'mc: the nightly has measured nothing here — this tree was not measured whole';
+
+  it('(a) the tip is green: it reads as it always did, with no word about the others', async () => {
+    const plan = await planOf({ runs: [greenRun(TIP), greenRun(MID)] });
+    assert.deepEqual(planLines(plan), [
+      `mc: would deploy memoro ${TIP} — the change that would ship`,
+      ...READING_HEAD,
+      'mc: 3 commits would ship',
+      NIGHTLY,
+    ]);
+  });
+
+  it('(b) an older green commit with a red tip: how far behind and every red name', async () => {
+    const plan = await planOf({ runs: [redRun(TIP), greenRun(MID)] });
+    assert.deepEqual(planLines(plan), [
+      `mc: would deploy memoro ${MID} — the change that would ship`,
+      ...READING_HEAD,
+      'mc: 2 commits would ship',
+      'mc: 1 commit behind main\'s tip 1a2b3c4 — its full run is RED (2): tests/lib/money.test.js, command:lint',
+      NIGHTLY,
+    ]);
+  });
+
+  it('(c) an older green commit with a tip no full run has measured: says so', async () => {
+    const plan = await planOf({ runs: [greenRun(MID)] });
+    assert.deepEqual(planLines(plan), [
+      `mc: would deploy memoro ${MID} — the change that would ship`,
+      ...READING_HEAD,
+      'mc: 2 commits would ship',
+      'mc: 1 commit behind main\'s tip 1a2b3c4 — not measured: no full run of it',
+      NIGHTLY,
+    ]);
+  });
+
+  it('(d) nothing after the live commit is green: the tip is prepared as it is, and the reading says so', async () => {
+    const plan = await planOf({ runs: [redRun(TIP), stalledRun(MID)] });
+    assert.deepEqual(planLines(plan), [
+      `mc: would deploy memoro ${TIP} — the change that would ship`,
+      ...READING_HEAD,
+      'mc: 3 commits would ship',
+      'mc: no commit after the live one 9f8e7d6 has a green full run — the tip is prepared as it is',
+      NIGHTLY,
+    ]);
+  });
+
+  it('a stalled or stopped tip is named for what it is, not as red', async () => {
+    const stalled = planLines(await planOf({ runs: [stalledRun(TIP), greenRun(MID)] }));
+    assert.ok(stalled.includes('mc: 1 commit behind main\'s tip 1a2b3c4 — its full run STALLED'), stalled.join('\n'));
+    const stopped = planLines(await planOf({ runs: [stoppedRun(TIP), greenRun(MID)] }));
+    assert.ok(stopped.includes('mc: 1 commit behind main\'s tip 1a2b3c4 — its full run stopped at install and measured nothing'), stopped.join('\n'));
+  });
+
+  it('under --accept-red the tip is what ships, and the reading names the green commit that would have without it', async () => {
+    const plan = await planOf({ runs: [redRun(TIP), greenRun(MID)], acceptRed: true });
+    assert.equal(plan.sha, TIP);
+    const lines = planLines(plan);
+    assert.ok(lines.includes('mc: --accept-red ships main\'s tip 1a2b3c4; without it 5b2d000, 1 commit behind the tip, would ship'), lines.join('\n'));
+  });
+
+  it('every red name of the passed-over tip is listed — six, none cut', async () => {
+    const plan = await planOf({ runs: [redRun(TIP, SIX_RED), greenRun(MID)] });
+    const said = planLines(plan).find((line) => line.includes('its full run is RED'));
+    assert.match(said, /RED \(6\):/u);
+    for (const name of SIX_RED) assert.ok(said.includes(name), `${name} is named`);
+    assert.doesNotMatch(said, /more|…/u);
+  });
+});
+
+describe('mc deploy — the suites are run against exactly the commit that would ship', () => {
+  const exercise = async (fakeOptions = {}, over = {}) => {
+    const fake = gateFake({ head: TIP, ...fakeOptions });
+    const said = [];
+    const result = await exerciseApp({ sha: MID, env: {}, say: (line) => said.push(line), deps: fake.suites, ...over });
+    return { result, fake, calls: fake.calls, said };
+  };
+  const checkouts = (calls) => calls.git.filter((call) => call.args[0] === 'checkout');
+
+  it('the shared checkout is placed at the pick, detached, and every ensure serves it pinned', async () => {
+    const { result, calls, fake } = await exercise({ served: 'checkout' });
+    assert.equal(result.error, null);
+    assert.equal(result.commit, MID, 'the suites ran against a server of the pick');
+    assert.deepEqual(checkouts(calls), [{ worktree: SHARED, args: ['checkout', '--detach', MID] }]);
+    assert.deepEqual(calls.ensures, [{ tier: 'app', pin: true, head: MID }], 'the ensure is pinned and finds the checkout where it was placed');
+    assert.equal(calls.follows, 0, 'main was not followed');
+    assert.equal(fake.checkout.head, MID);
+    assert.deepEqual(result.suites.map((suite) => [suite.name, suite.state]), [['smoke', 'ok']]);
+  });
+
+  it('the declaration read first is the pick\'s own, before anything is moved', async () => {
+    const { calls } = await exercise({ served: 'checkout' });
+    const shows = calls.git.filter((call) => call.args[0] === 'show');
+    assert.deepEqual(shows[0].args, ['show', `${MID}:.mc/test.json`]);
+    assert.ok(calls.order.indexOf('git:show') < calls.order.indexOf('git:checkout'));
+  });
+
+  it('a checkout already at the pick is not moved, and no hold is asked', async () => {
+    const { result, calls } = await exercise({ head: MID, served: 'checkout', held: { app: { instance_id: 'main-1', hold: 'busy' } } });
+    assert.equal(result.error, null);
+    assert.deepEqual(checkouts(calls), []);
+    assert.equal(calls.holds.length, 0);
+  });
+
+  it('a checkout at a commit origin/main does not contain is not moved: every suite is cannot-run, with the reason', async () => {
+    const { result, calls } = await exercise({ contained: false });
+    assert.match(result.error, /stands on 1a2b3c4, which origin\/main does not contain — it is not moved/u);
+    assert.deepEqual(result.suites, []);
+    assert.deepEqual(checkouts(calls), [], 'the detach is behind the ancestor check');
+    assert.deepEqual(calls.ensures, [], 'and no server was started');
+    assert.ok(calls.git.some((call) => call.args.join(' ') === 'merge-base --is-ancestor HEAD origin/main'), 'the question was asked of git');
+  });
+
+  it('a checkout on another branch is not moved', async () => {
+    const { result, calls } = await exercise({ branch: 'language-content-open-decisions' });
+    assert.match(result.error, /is on language-content-open-decisions, not main or a detached commit of it — it is not moved/u);
+    assert.deepEqual(checkouts(calls), []);
+    assert.deepEqual(calls.ensures, []);
+  });
+
+  it('a checkout on main is moved, as one on no branch is', async () => {
+    const { result, calls } = await exercise({ branch: 'main', served: 'checkout' });
+    assert.equal(result.error, null);
+    assert.equal(checkouts(calls).length, 1);
+  });
+
+  it('a detach git refuses is said, and nothing is started on the checkout', async () => {
+    const { result, calls } = await exercise({ checkoutFails: true });
+    assert.match(result.error, /git checkout --detach 5b2d000 failed in .*: error: cannot detach/u);
+    assert.deepEqual(calls.ensures, []);
+  });
+
+  it('a dirty checkout is refused before git is asked anything about the pick', async () => {
+    const { result, calls } = await exercise({ dirtyNow: [' M src/app.js'] });
+    assert.match(result.error, /has uncommitted changes \(M src\/app\.js\)/u);
+    assert.deepEqual(calls.git, [], 'nothing was read and nothing was moved');
+  });
+
+  it('a declaration of the pick that cannot be read refuses before anything is moved', async () => {
+    const { result, calls } = await exercise({ shown: { [MID]: '{ not json' } });
+    assert.match(result.error, /5b2d000:\.mc\/test\.json/u);
+    assert.deepEqual(checkouts(calls), []);
+    assert.deepEqual(calls.holds, []);
+  });
+
+  it('a server that serves another commit than the pick measures another tree: no suite runs', async () => {
+    const { result, calls } = await exercise({ served: TIP });
+    assert.match(result.error, /the app server serves 1a2b3c4, not 5b2d000 that would ship/u);
+    assert.deepEqual(result.suites, []);
+    assert.equal(calls.suites.length, 0);
+  });
+
+  it('through the verb: the suites of a red tip\'s older green commit are run on that commit, and the reading says so', async () => {
+    const git = fakeGit({ chain: [TIP, MID], counts: COUNTS });
+    const { code, out, calls, checkout } = await attempt(['--dry-run'], { extra: { git }, runs: [redRun(TIP), greenRun(MID)], head: TIP, served: 'checkout' });
+    assert.equal(code, 0);
+    assert.equal(calls.fullRun.length, 0);
+    assert.match(out.stdout, /mc: suites — the shared checkout .* stands at 5b2d000 now \(it was at 1a2b3c4\), detached/u);
+    assert.match(out.stdout, /mc: suites — 1 declared, run against a local server of 5b2d000:/u);
+    assert.equal(checkout.head, MID);
+  });
+});
+
+describe('mc deploy — a busy or kept main server is asked before the checkout is moved', () => {
+  const exercise = async (fakeOptions, over = {}) => {
+    const fake = gateFake({ head: TIP, served: 'checkout', ...fakeOptions });
+    const said = [];
+    const result = await exerciseApp({ sha: MID, env: {}, say: (line) => said.push(line), deps: fake.suites, ...over });
+    return { result, calls: fake.calls, said };
+  };
+  const checkoutIndex = (calls) => calls.order.indexOf('git:checkout');
+
+  it('a busy server is waited out, and only then is the checkout detached', async () => {
+    const { result, calls, said } = await exercise({ held: { app: { instance_id: 'main-1', hold: (now) => (now < 20_000 ? 'busy' : null) } } });
+    assert.equal(result.error, null);
+    assert.deepEqual(calls.sleeps, [5000, 5000, 5000, 5000], 'polled until idle, on the injected clock');
+    assert.ok(calls.holds.length >= 5);
+    assert.ok(checkoutIndex(calls) > calls.order.lastIndexOf('hold'), 'the detach is after the last time the hold was asked');
+    assert.ok(calls.order.indexOf('git:show') < calls.order.indexOf('hold'), 'the pick\'s declaration names the service whose hold is read');
+    assert.equal(said.filter((line) => /in use; waiting for it to be idle/u.test(line)).length, 1, 'said once');
+  });
+
+  it('a server that stays busy beyond the idle window and its margin refuses, and the checkout is untouched', async () => {
+    const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: () => 'busy' } } });
+    assert.match(result.error, /the main server main-1 is in use \(mc used it within 60 s\) and stayed in use for 90 s — the checkout is not moved under it/u);
+    assert.deepEqual(result.suites, []);
+    assert.ok(calls.clock >= 60_000 + HOLD_MARGIN_MS - 5000 && calls.clock <= 60_000 + HOLD_MARGIN_MS + 5000, `waited ${calls.clock} ms`);
+    assert.deepEqual(calls.git.filter((call) => ['checkout', 'branch', 'merge-base'].includes(call.args[0])), [], 'the shared checkout was not touched');
+    assert.deepEqual(calls.ensures, []);
+  });
+
+  it('a kept browser\'s hold refuses at once, names it, and the checkout is untouched', async () => {
+    const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: 'kept' } } });
+    assert.match(result.error, /a kept browser stepped on the main server main-1 within the last minute — mc does not move the checkout under it; close it \(mc shot close\)/u);
+    assert.deepEqual(calls.sleeps, [], 'not waited for');
+    assert.equal(checkoutIndex(calls), -1);
+    assert.deepEqual(calls.git.map((call) => call.args[0]), ['show'], 'the only git call is the read of the pick\'s declaration');
+    assert.deepEqual(calls.ensures, []);
+  });
+
+  it('the static service\'s main server is asked as well as the app\'s', async () => {
+    const declared = { suites: [{ name: 'smoke' }], environments: { dev: { service: 'app', static_service: 'static' } } };
+    const { result, calls } = await exercise({ declared, held: { static: { instance_id: 'static-9', hold: 'kept' } } });
+    assert.match(result.error, /kept browser stepped on the main server static-9/u);
+    assert.equal(checkoutIndex(calls), -1);
+  });
+
+  it('no server running is no hold: nothing is asked of it and the checkout moves', async () => {
+    const { result, calls } = await exercise({});
+    assert.equal(result.error, null);
+    assert.equal(calls.holds.length, 0);
+    assert.ok(checkoutIndex(calls) > -1);
+  });
+});
+
+describe('mc deploy — both tiers, and a server that leaves mid-run, stay on the pick', () => {
+  const BOTH = {
+    suites: [{ name: 'static-suite', server: 'static' }, { name: 'app-suite' }],
+    environments: { dev: { service: 'app', static_service: 'static' } },
+  };
+  /** A runner that finds, before each suite after the first, its server gone — and asks for it back. */
+  const leaving = (log = []) => async ({ declaration, revive }, resultOf) => {
+    const results = [];
+    const skipped = [];
+    let broken = false;
+    for (const [index, suite] of declaration.suites.entries()) {
+      if (broken) { skipped.push(suite.name); continue; }
+      if (index > 0) {
+        const back = await revive(suite.server === 'static' ? 'static' : 'app');
+        log.push({ suite: suite.name, ok: back.ok, error: back.error || null });
+        if (!back.ok) { broken = true; results.push({ ...resultOf(suite.name), ok: false, unmeasured: true, status: 1 }); continue; }
+      }
+      results.push(resultOf(suite.name));
+    }
+    return { results, gone: [], skipped };
+  };
+  const exercise = async (fakeOptions) => {
+    const fake = gateFake({ head: TIP, served: 'checkout', staticServed: 'checkout', origin: TIP, ...fakeOptions });
+    const result = await exerciseApp({ sha: MID, env: {}, deps: fake.suites });
+    return { result, fake, calls: fake.calls };
+  };
+
+  it('the checkout stays at the pick through the static ensure, the app ensure and a revive of each', async () => {
+    const log = [];
+    const declared = { suites: [{ name: 'static-suite', server: 'static' }, { name: 'app-suite' }, { name: 'static-again', server: 'static' }], environments: BOTH.environments };
+    const { result, calls, fake } = await exercise({ declared, runner: leaving(log) });
+    assert.equal(result.error, null);
+    assert.deepEqual(calls.ensures.map((ensure) => [ensure.tier, ensure.pin, ensure.head]), [
+      ['static', true, MID], ['app', true, MID], ['app', true, MID], ['static', true, MID],
+    ], 'the static ensure, the app ensure, then each revive — all pinned, all at the pick');
+    assert.equal(calls.follows, 0, 'followMain is not called');
+    assert.equal(fake.checkout.head, MID);
+    assert.deepEqual(log.map((entry) => entry.ok), [true, true]);
+    assert.deepEqual(result.suites.map((suite) => suite.state), ['ok', 'ok', 'ok']);
+  });
+
+  it('an app server that comes back at another commit makes the rest cannot-run, the first included', async () => {
+    const declared = { suites: [{ name: 'one' }, { name: 'two' }, { name: 'three' }], environments: { dev: { service: 'app' } } };
+    const { result } = await exercise({ declared, runner: leaving(), revive: () => TIP });
+    assert.deepEqual(result.suites.map((suite) => [suite.name, suite.state]), [['one', 'ok'], ['two', 'cannot-run'], ['three', 'cannot-run']]);
+    assert.match(result.suites[2].tail, /never ran/u);
+  });
+
+  it('a static server that comes back at another commit makes the rest cannot-run', async () => {
+    const log = [];
+    const declared = { suites: [{ name: 'app-suite' }, { name: 'static-suite', server: 'static' }, { name: 'app-last' }], environments: BOTH.environments };
+    const { result } = await exercise({ declared, runner: leaving(log), staticServed: (n) => (n === 0 ? MID : TIP) });
+    assert.deepEqual(result.suites.map((suite) => [suite.name, suite.state]), [['app-suite', 'ok'], ['static-suite', 'cannot-run'], ['app-last', 'cannot-run']]);
+    assert.match(log[0].error, /the static server serves 1a2b3c4, not 5b2d000/u);
+  });
+
+  it('a first ensure that follows main would move the checkout off the pick, and is caught', async () => {
+    // An unpinned ensure fast-forwards the checkout, as `followMain` does; the served commit is then not the pick.
+    const fake = gateFake({ head: TIP, served: 'checkout', origin: TIP });
+    const loose = { ...fake.suites, ensureAppServer: (worktree, declared, options) => fake.suites.ensureAppServer(worktree, declared, { ...options, deps: { ...options.deps, pin: false } }) };
+    const result = await exerciseApp({ sha: MID, env: {}, deps: loose });
+    assert.match(result.error, /serves 1a2b3c4, not 5b2d000/u);
+    assert.equal(fake.calls.follows, 1);
+  });
+});
+
+describe('mc deploy — a suite that does not gate a deploy', () => {
+  const WHY = 'red on the server against the live commit d1dda92 (2026-11-15); returns as a gate when green there twenty runs in a row';
+  const declared = {
+    suites: [{ name: 'smoke' }, { name: 'flaky', gate: false, gate_why: WHY }],
+    environments: { dev: { service: 'app' } },
+  };
+
+  it('is not run, is named once with its reason, and is never a refusal — even when it would be red', async () => {
+    const { code, out, spawned, calls, row } = await attempt([], { declared, outcomes: { flaky: 'red' } });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1, 'the deploy went on');
+    assert.deepEqual(calls.suites[0].names, ['smoke'], 'only the suites that gate were run');
+    assert.match(out.stdout, /mc: suites — 1 declared, run against a local server of 1a2b3c4:/u);
+    assert.match(out.stdout, /mc: suites — 1 more declared, not run: they do not gate a deploy \(gate: false\):\nmc: {3}not a gate {2}flaky — red on the server against the live commit d1dda92/u);
+    assert.equal(out.stdout.match(/not a gate {2}flaky/gu).length, 1, 'named once');
+    assert.equal(row.suites, 'smoke:ok', 'the row keeps what ran');
+    assert.equal(row.outcome, 'deployed');
+  });
+
+  it('a red gate suite beside it still refuses', async () => {
+    const { code, spawned, out } = await attempt([], { declared, outcomes: { smoke: 'red' } });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.match(out.out?.stderr ?? out.stderr, /suite smoke failed/u);
+  });
+
+  it('exerciseApp hands back the suites that gate, and the reason of each that does not', async () => {
+    const fake = gateFake({ declared, head: MID, served: 'checkout' });
+    const result = await exerciseApp({ sha: MID, env: {}, deps: fake.suites });
+    assert.deepEqual(result.suites.map((suite) => suite.name), ['smoke']);
+    assert.deepEqual(result.not_gate, [{ name: 'flaky', why: WHY }]);
   });
 });
