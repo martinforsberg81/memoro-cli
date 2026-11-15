@@ -136,7 +136,7 @@ export async function runGate({
   // nightly`, which calls this function with this flag rather than copying
   // what it does.
   full = false,
-  // The full run of the default branch — the daily one, a deploy's, a hand-typed
+  // The full run of the default branch — the runner's, a deploy's, a hand-typed
   // `mc test <repo> --full` — beside the merge lane rather
   // than in it (Martin, 2026-11-13): no round lock, no phase notes in the lane's
   // lock file, and its own measurement checkout (`<slug>/full`) instead of the
@@ -242,6 +242,13 @@ export async function runGate({
   const lane = gateLaneOf(repoPath);
   // Beside the lane: only a whole suite of the default branch, no pull request.
   const beside = Boolean(isolated) && Boolean(full) && pr == null && !(Array.isArray(prs) && prs.length);
+  // A full run measures to the end of its list (mc-tests/full-run-follows-main,
+  // D2): a red suite batch, a failed declared or selected gate and a red file or
+  // gate in the alone phase are each recorded here, and the round goes on. A merge
+  // round and a session's gate stop at the first red, as they always did.
+  const toEnd = beside;
+  const reds = [];
+  let measuredToEnd = false;
   const say = (message) => {
     log('gate.say', { text: message });
     if (!beside) noteGatePhase({ root, message, lane });
@@ -459,9 +466,20 @@ export async function runGate({
   };
 
   const finish = (stoppedAt, reason) => {
+    // A full run's recorded reds are its answer: the end of the list is red when
+    // any of them is, and a stop that ends the round early still names them.
+    if (toEnd && reds.length) {
+      const named = reds.map((one) => one.reason).join(' — and ');
+      if (stoppedAt === null) {
+        stoppedAt = reds.some((one) => one.stopped_at === 'red') ? 'red' : 'selected-gate';
+        reason = named;
+      } else {
+        reason = `${reason}; red before it: ${named}`;
+      }
+    }
     report.stopped_at = stoppedAt;
     const unmeasured = [...report.unmeasured.files, ...report.unmeasured.gates];
-    report.reason = reason && ['red', 'pr-tests', 'selected-gate', 'extra-gate'].includes(stoppedAt) && unmeasured.length
+    report.reason = reason && !measuredToEnd && ['red', 'pr-tests', 'selected-gate', 'extra-gate'].includes(stoppedAt) && unmeasured.length
       ? `${reason}; not measured in the initial run: ${unmeasured.join(', ')}` : reason;
     report.slow_tests = slowTests(measuredTests);
     report.ok = stoppedAt === null;
@@ -470,6 +488,14 @@ export async function runGate({
     report.finished_at = new Date(ended).toISOString();
     report.duration_ms = ended - startedAt;
     return report;
+  };
+  // A red a round stops at: the finished report, or for a full run null after the
+  // red is recorded (`reds`) so that the caller goes on to the rest of its list.
+  const stopsHere = (stoppedAt, reason) => {
+    if (!toEnd) return finish(stoppedAt, reason);
+    reds.push({ stopped_at: stoppedAt, reason });
+    say(`${reason} — recorded; measuring the rest of the list`);
+    return null;
   };
 
   if (holdLease) {
@@ -926,7 +952,7 @@ export async function runGate({
       if (!measuringAlone) classifyUnmeasured(result);
       if (!result.red.length) return null;
       const never = (result.red_tests || []).filter(test => /timed out after\s+600000\s*ms/iu.test((test.error || []).join(' ')));
-      if (never.length) return finish('red', `never ends: ${never.map(test => test.name).join(', ')}`);
+      if (never.length) return stopsHere('red', `never ends: ${never.map(test => test.name).join(', ')}`);
       // Every red file in it, and every red test located in one: a red name
       // no file accounts for is nobody's to excuse.
       const within = (files) => Boolean(result.red_files?.length)
@@ -1005,7 +1031,7 @@ export async function runGate({
         return `${test.file}: ${kind} hook failed — ${test.error[1] || 'unknown error'}`;
       });
       const errors = (result.red_tests || []).filter(test => !hooks.includes(test)).flatMap(test => test.error || []);
-      return finish('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${hookReasons.length ? `; ${hookReasons.join('; ')}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
+      return stopsHere('red', `${result.red.length} test${result.red.length === 1 ? '' : 's'} red: ${nameSome(result.red)}${hookReasons.length ? `; ${hookReasons.join('; ')}` : ''}${errors.length ? ` — ${errors.join('; ')}` : ''}${mainRedClause(report.main_red)}`);
     };
 
     // What this change reaches, asked of the repository rather than assumed.
@@ -1256,7 +1282,8 @@ export async function runGate({
     // change that breaks one is red whatever its tests did. They all ran; the
     // stop names every one that failed rather than the first.
     if (failedGates.length) {
-      return finish('selected-gate', failedGatesText(failedGates));
+      const stop = stopsHere('selected-gate', failedGatesText(failedGates));
+      if (stop) return stop;
     }
 
     // The pull request's own tests (D-0157). The suite answers "did anything
@@ -1331,8 +1358,9 @@ export async function runGate({
       if (gateInterrupted(report.extra_gates.at(-1))) { queueGate(report.extra_gates.at(-1)); continue; }
       if (!head.ran) return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
       if (!head.ok) {
-        return finish('extra-gate', `${gate.name} failed (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
+        const stop = stopsHere('extra-gate', `${gate.name} failed (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
           + (head.red?.length ? ` — ${head.red.length} red: ${nameSome(head.red)}` : ''));
+        if (stop) return stop;
       }
     }
 
@@ -1362,6 +1390,18 @@ export async function runGate({
         if (ran.result.red.length) {
           const stop = await stopRed(ran.result, { alone: true, measuringAlone: true });
           if (stop) { report.candidate = { ...ran.result, tree: report.candidate.tree }; return stop; }
+          // A full run goes on to the next file: its reds are gathered, in the
+          // order met, beside the suite batch's (the round's red list and the
+          // main-red repair's files come from here).
+          if (toEnd && ran.result.red.length) {
+            const have = report.candidate;
+            report.candidate = {
+              ...have,
+              red: [...(have.red || []), ...ran.result.red],
+              red_files: [...new Set([...(have.red_files || []), ...(ran.result.red_files || [])])],
+              red_tests: [...(have.red_tests || []), ...(ran.result.red_tests || [])],
+            };
+          }
         }
         break;
       }
@@ -1383,10 +1423,14 @@ export async function runGate({
           if (++kills >= 2) return finish('stalled', `${name} interrupted three times; load ${loadavg()[0]}`);
           continue;
         }
-        if (!ran.ok) return finish('selected-gate', failedGatesText([ran]));
+        if (!ran.ok) {
+          const stop = stopsHere('selected-gate', failedGatesText([ran]));
+          if (stop) return stop;
+        }
         break;
       }
     }
+    measuredToEnd = true;
     return finish(null, null);
   } catch (error) {
     if (error instanceof RoundAborted && stalled) return finish('stalled', stallReason);

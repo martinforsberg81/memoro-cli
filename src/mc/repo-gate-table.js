@@ -131,7 +131,7 @@ export const SHIPPED = Object.freeze({
       + 'measures the resolution itself, so a package that stops resolving stops the round rather '
       + 'than shrinking the suite',
     // Merge and bare session gates ask for changed tests and one-hop source
-    // importers, using base importers for deletions. Wide and daily full plans
+    // importers, using base importers for deletions. Wide and full plans
     // are separate declarations so neither can silently replace that scope.
     select: 'node scripts/affected-tests.js --base-ref origin/main',
     select_whole: 'node scripts/affected-tests.js --whole-selection --base-ref origin/main',
@@ -633,7 +633,7 @@ function normalise(entry, env) {
     // round that let each side choose would compare 56 files against 6 and
     // report main's own red as this change's doing.
     select: entry.select ?? null,
-    // The optional wide, per-diff plan and the complete daily plan. The
+    // The optional wide, per-diff plan and the complete full plan. The
     // ordinary selector measures only the change; neither is a landing gate.
     select_whole: entry.select_whole ?? null,
     select_full: entry.select_full ?? null,
@@ -693,7 +693,7 @@ function normalise(entry, env) {
     // files cannot run without. Declared here, the round measures with the
     // repository's own environment rather than an inference about it.
     pr_tests_flags: Array.isArray(entry.pr_tests_flags) ? entry.pr_tests_flags.map(String) : [],
-    // Repository-owned instrumentation needed only by the daily/full plan.
+    // Repository-owned instrumentation needed only by the full plan.
     full_tests_imports: Array.isArray(entry.full_tests_imports) ? entry.full_tests_imports.map(String) : [],
     // Commands whose first line of stdout `mc deps` prints as a note of its
     // own — run in the primary checkout, because the script is the

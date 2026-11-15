@@ -191,7 +191,8 @@ export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC }
 }
 
 /**
- * The nightly's chore: a full run of every repository mc knows, once a day.
+ * The nightly's chore: the full run of every repository mc knows, which follows
+ * main (`fullRunDue`, `nightly-loop.js`) and is no longer gated by a day.
  *
  * Its `runs.tsv` rows carry `nightly` in both the name and the kind column, as
  * the helper's carry `helper`, and for the same reason: the row is the whole
@@ -213,9 +214,9 @@ export const DEPS_NAME = 'deps';
 export const TIDY_KIND = 'tidy';
 
 /**
- * Once a day: the cadence of the full run and of the daily chores that are
- * gated by their own row (`NIGHTLY_KIND`, `DEPS_KIND`, `TIDY_KIND`). The full
- * run stays once a day (Martin, 2026-11-13).
+ * A day: the cadence of the daily chores that are gated by their own row
+ * (`DEPS_KIND`, `TIDY_KIND`). The full run is not one of them: it follows main
+ * (Martin, 2026-11-15).
  */
 export const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 

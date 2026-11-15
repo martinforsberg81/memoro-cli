@@ -33,7 +33,7 @@ import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '.
 import { currentHolder } from '../work-identity.js';
 import { fullRunLanes, runGate, verdictHeadline } from '../repo-gate.js';
 import { awaitClaim, claimFullRun, releaseClaim } from '../full-run-claim.js';
-import { runOfReport } from '../nightly-loop.js';
+import { repairFromRun, runOfReport } from '../nightly-loop.js';
 import { readNightlyHistory, recordNightlyRun } from '../nightly-history.js';
 import { slowTestLines } from '../test-times.js';
 import { runMergeRound } from '../repo-merge.js';
@@ -44,7 +44,7 @@ import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 import { repoNameOf } from '../repos.js';
-import { answerHeldMend } from '../main-repair.js';
+import { answerHeldMend, requestMainRepair } from '../main-repair.js';
 import { knownRepositories } from '../work-area.js';
 import { writerRole } from './martin.js';
 import { commandUsage } from '../command-help.js';
@@ -374,7 +374,7 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
   }
 
   // The full run of the default branch, asked for by hand, is the one the
-  // daily run and `mc deploy` take: beside the merge lane, in its own checkout,
+  // runner's run and `mc deploy` take: beside the merge lane, in its own checkout,
   // with no lease (it merges nothing, so a merger holding the repository could
   // stop it at `lease` twice on 2026-11-14), and written to the history the
   // page and the deploy gate read. Only one of them measures a tree at a time:
@@ -420,7 +420,20 @@ export async function gate(opts, { stdout, stderr, ...deps }) {
     });
     report = opts.check ? await (deps.runGate || runGate)(round) : await (deps.mergeRound || runMergeRound)(round);
     recordRound(report, { mode });
-    if (alone) recordNightlyRun(runOfReport(repoRef, report), { root: historyRoot });
+    if (alone) {
+      // The same record the runner's run writes, and the same hand-over of its
+      // reds to main's repair: a full run typed by hand is not a quieter one.
+      const run = runOfReport(repoRef, report);
+      recordNightlyRun(run, { root: historyRoot });
+      try {
+        repairFromRun(repoRef, report, run, {
+          repair: deps.repair || requestMainRepair,
+          say: (message) => stderr.write(`mc: ${message}\n`),
+        });
+      } catch (error) {
+        stderr.write(`mc: main's repair could not be asked for — ${error?.message || error}\n`);
+      }
+    }
   } finally {
     if (claim) releaseClaim(claim, { root: historyRoot, ...claims });
   }
