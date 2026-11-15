@@ -91,7 +91,7 @@ so the page and the desk agree on what waits, in what order and what was decided
 The default page draws HORIZONS where per-programme blocks used to be
 (`page-horizons.js`, `horizonsLines`, from `data.horizons` and `data.programmes`
 alone). Under the heading, which counts the open horizons and the programmes
-under way, come the open horizons in the desk's order (`position`, then slug),
+under way, come the open horizons in the desk's order (`position`, then set time, then slug),
 each with one row under it for every programme whose record names it and that
 has something under way: an unfinished goal, a session, an open pull request or
 an item needing attention. A horizon with no such programme says `nothing under

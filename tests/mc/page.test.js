@@ -2236,6 +2236,40 @@ describe('collectPage', () => {
     }
   });
 
+  it("a programme's row carries its sessions, ⚑ ⊘ ! flags, record invalid, done and priority at 160 and 80", async (t) => {
+    const data = await overviewData(t);
+    const group = data.programmes.programmes.find((item) => item.programme === 'mc');
+    const [base] = group.goals;
+    const goal = (name, extra) => ({ ...base, name, title: name, prs: [], running: false, ...extra });
+    const waiting = goal('waits', { status: 'Martin' });
+    const blocked = goal('stuck', { status: 'blocked' });
+    const done = goal('over', { stage: 'done', status: 'done', phase: 3 });
+    const broken = goal('malformed', { problems: ['GOAL.json does not parse'], phase: null });
+    group.goals = [...group.goals, waiting, blocked, done, broken];
+    group.phases = [
+      { ...group.phases[0], goals: [...group.phases[0].goals, waiting, blocked] },
+      { number: 3, goals: [done] },
+      { number: null, goals: [broken] },
+    ];
+    group.finished = 1;
+    group.priority = 5;
+    group.record_invalid = true;
+    group.planning_sessions = [{ kind: 'plan', name: 'plan:mc' }];
+    const runner = Array.from({ length: 10 }, (_, i) => ({ kind: 'build', goal: `mc/waits-${i}` }));
+    const page = { ...data, runner: { ...data.runner, sessions: runner } };
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(page, { columns, now: NOW });
+      assert.ok(lines.every((row) => width(row) <= columns), `${columns}: ${lines.filter((row) => width(row) > columns).join('\n')}`);
+      const row = between(lines, 'HORIZONS', 'UNASSIGNED ACTIVITY').find((line) => /^ {4} ?\d+ mc /u.test(line));
+      assert.ok(row, lines.join('\n'));
+      assert.match(row, /3 build/u, `${columns}: the unfinished goals by stage`);
+      assert.match(row, /record invalid/u, `${columns}: ${row}`);
+      assert.match(row, /●×10 ●/u, `${columns}: ten runner sessions and the plan session are marked`);
+      assert.match(row, /⚑1 ⊘1 !1$/u, `${columns}: the goal waiting on Martin, the blocked one and the malformed one`);
+      if (columns === 160) assert.match(row, /phase 1 of 3 · 3 build · 1 done · priority 5 · record invalid/u, row);
+    }
+  });
+
   it('draws one programme alone: the desk, then its block with its number, and nothing below', async (t) => {
     const data = await overviewData(t);
     const number = data.programmes.programmes.find((group) => group.programme === 'mc').number;

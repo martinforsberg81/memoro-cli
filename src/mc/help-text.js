@@ -57,10 +57,13 @@ WHO USES THE VERBS
 
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
-                                    you, what waits in intake, and every
-                                    goal numbered, by programme. At a
-                                    terminal it ends in a way in — a number
-                                    shows that goal. No model; reads only
+                                    you, what waits in intake, and the open
+                                    horizons with one numbered row per
+                                    programme. At a terminal it ends in a
+                                    way in — a number shows that goal or
+                                    opens that programme (h returns), a
+                                    name opens it, a unfolds every goal.
+                                    No model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
