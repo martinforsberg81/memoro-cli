@@ -99,7 +99,7 @@ describe('PROGRAMMES phase tree', () => {
     assert.ok(folded.some((line) => line.includes('Title later')));
     assert.ok(!folded.some((line) => line.includes('Title finished')));
     assert.ok(folded.some((line) => /Phase 3 · after phase 1/u.test(line)));
-    assert.ok(folded.some((line) => /▸ Finished · 1 goal/u.test(line)));
+    assert.ok(!folded.some((line) => /▸ Finished/u.test(line)), 'no fold of finished goals is drawn');
     assert.ok(folded.some((line) => line.includes('Title stuck-later')));
     assert.ok(folded.some((line) => line.includes('Phase 4 · after phase 1')));
     assert.ok(folded.findIndex((line) => line.includes('Phase 3')) < folded.findIndex((line) => line.includes('Phase 4')), 'folded and expanded phases retain numeric order');
@@ -115,7 +115,9 @@ describe('PROGRAMMES phase tree', () => {
     const withFinishedPr = draw(fixture({ finishedPr: true }));
     const finishedAt = withFinishedPr.findIndex((line) => line.includes('Title finished'));
     assert.ok(finishedAt > 0, 'an open PR keeps even its finished goal visible');
-    assert.match(withFinishedPr[finishedAt + 2], /memoro#14859/u);
+    assert.ok(finishedAt > withFinishedPr.findIndex((line) => line.includes('NEEDS ATTENTION')) && withFinishedPr.findIndex((line) => line.includes('NEEDS ATTENTION')) >= 0, 'under NEEDS ATTENTION');
+    assert.match(withFinishedPr[finishedAt + 2], /not archived — memoro#14859 is open — land or close it first/u);
+    assert.match(withFinishedPr[finishedAt + 3], /memoro#14859/u, 'the PR is a child row');
   });
 
   it('puts live sessions beneath their goals, exposes future activity and retains unassigned sessions', () => {
@@ -177,5 +179,123 @@ describe('PROGRAMMES phase tree', () => {
       assert.ok(plainLines.some((line) => line.includes('repos names no repository')));
       assert.ok(plainLines.some((line) => line.includes('memoro#14857')), 'PR number stays whole');
     }
+  });
+});
+
+/**
+ * Finished goals leave the page (finished-goals-leave-the-page): the default
+ * view draws no done or dropped goal but one still at work, a phase with
+ * nothing drawn is not drawn, a programme with nothing to draw is its heading
+ * row, and what needs a person (a refused archive, an open PR) goes under
+ * NEEDS ATTENTION in both views.
+ */
+describe('PROGRAMMES without finished goals', () => {
+  const entry = (tool, stage, comment = null) => ({ at: '2026-11-05T07:00Z', tool, model: null, stage, status: 'ready', done: tool === 'runner' ? null : 'x', comment, next: null });
+  const REFUSAL = "memoro's worktree has uncommitted changes (src/a.js)";
+  const goalsFor = (...rows) => rows.map(([name, phase, over]) => goal(name, phase, over));
+  function page(goals, { currents = [], prs = [], programmes = [] } = {}) {
+    const section = programmesSection({ goalRows: goalsOf({ goals, currents, alive: () => true }), programmes });
+    const pulls = prsSection({ now: NOW, fetched: NOW.toISOString(), prs });
+    attachPrs({ programmes: section, pulls });
+    return { programmes: section, prs: pulls, runner: runnerSection({ now: NOW, currents, runner: { pid: 7 }, alive: () => true }), sessions: sessionsSection({ now: NOW }),
+      merges: mergesSection({}), intake: intakeSection({ now: NOW }), language: {}, notes: [] };
+  }
+  const programmeOf = (lines, name) => {
+    const start = lines.findIndex((line) => new RegExp(`^  ┌─ ${name}(?: |$)`, 'u').test(line));
+    assert.ok(start >= 0, `${name} has its heading`);
+    const end = lines.findIndex((line, index) => index > start && /^  (?:└|┌)/u.test(line));
+    return lines.slice(start, end < 0 ? undefined : (lines[end].startsWith('  └') ? end + 1 : end));
+  };
+
+  it('counts the finished goals on the heading, draws none by default and not a phase of nothing else', () => {
+    const data = page(goalsFor(['a', 1, { stage: 'done' }], ['b', 1, { stage: 'dropped' }], ['c', 2], ['d', 2, { stage: 'done' }]));
+    const [group] = data.programmes.programmes;
+    assert.equal(group.finished, 3);
+    const lines = draw(data);
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), /inbox.* · 3 done/u);
+    assert.ok(lines.some((line) => line.includes('Title c')));
+    for (const name of ['a', 'b', 'd']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
+    assert.ok(!lines.some((line) => /Phase 1/u.test(line)), 'phase 1 holds nothing drawn');
+    assert.ok(lines.some((line) => /Phase 2/u.test(line)));
+    const expanded = draw(data, { expand: true });
+    for (const name of ['a', 'b', 'c', 'd']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
+    assert.ok(expanded.some((line) => /Phase 1/u.test(line)));
+  });
+
+  it('draws a programme with nothing unfinished as its heading row alone, the next one directly beneath', () => {
+    const data = page([...goalsFor(['x', 1, { stage: 'done' }]), goal('y', 1, { programme: 'second', stage: 'dropped' }), goal('z', 1, { programme: 'third' })]);
+    const lines = draw(data);
+    const first = lines.findIndex((line) => /^  ┌─ inbox /u.test(line));
+    assert.match(lines[first], /· 1 done/u);
+    assert.match(lines[first + 1], /^  ┌─ second /u, 'the next heading follows at once');
+    assert.match(lines[first + 1], /· 1 done/u);
+    assert.ok(!programmeOf(lines, 'inbox').some((line) => /Phase|Title x|NEEDS/u.test(line)));
+    assert.ok(programmeOf(lines, 'third').some((line) => line.includes('Title z')));
+    assert.ok(width(lines[first]) <= 120);
+  });
+
+  it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {
+    const currents = [{ name: 'goal:inbox/live', kind: 'build', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
+    const data = page(goalsFor(['live', 1, { stage: 'done' }], ['gone', 1, { stage: 'done' }], ['open', 2]), { currents });
+    const lines = draw(data);
+    assert.ok(lines.some((line) => line.includes('Title live')), 'the running finished goal stays');
+    assert.ok(lines.some((line) => /Phase 1/u.test(line)));
+    assert.ok(!lines.some((line) => line.includes('Title gone')));
+    assert.ok(!lines.some((line) => /NEEDS ATTENTION/u.test(line)), 'a goal at work is not needing attention');
+    const after = draw(page(goalsFor(['live', 1, { stage: 'done' }], ['open', 2])));
+    assert.ok(!after.some((line) => line.includes('Title live')), 'once the session has ended it leaves');
+  });
+
+  it('puts a finished goal the runner refused to archive under NEEDS ATTENTION with the reason, in both views', () => {
+    const goals = goalsFor(['stuck', 1, { stage: 'done', log: [entry('claude', 'done'), entry('runner', 'done', `not archived — ${REFUSAL}`)] }],
+      ['older', 1, { stage: 'done', log: [entry('claude', 'done'), entry('runner', 'done', 'not archived — a stale reason'), entry('claude', 'build'), entry('claude', 'done')] }], ['open', 2]);
+    const rows = goalsOf({ goals, currents: [], alive: () => true });
+    assert.deepEqual(rows.map((row) => [row.name, row.archive_refused]).sort(), [['older', null], ['open', null], ['stuck', REFUSAL]]);
+    for (const expand of [false, true]) {
+      const lines = draw(page(goals), { expand });
+      const attention = lines.findIndex((line) => line.includes('NEEDS ATTENTION'));
+      assert.ok(attention >= 0, `expand ${expand}`);
+      const stuck = lines.findIndex((line, index) => index > attention && line.includes('Title stuck'));
+      assert.ok(stuck > attention);
+      assert.ok(lines.slice(stuck, stuck + 5).some((line) => line.trim() === `not archived — ${REFUSAL}`), 'the reason is on the row');
+      assert.equal(lines.filter((line) => line.includes('Title stuck')).length, 1, 'drawn once');
+      assert.equal(lines.some((line) => line.includes('a stale reason')), false, 'a refusal older than the stage entry is no reason');
+    }
+    const coloured = renderPageLines(page(goals), { columns: 120, now: NOW, colour: true });
+    assert.ok(coloured.some((line) => line.includes(`\u001b[31mnot archived — ${REFUSAL}`)), 'in red');
+  });
+
+  it('puts a finished goal with an open PR under NEEDS ATTENTION with the PR as its child row, in both views', () => {
+    const data = page(goalsFor(['landed', 1, { stage: 'done' }], ['open', 2]), { prs: [{ repo: 'memoro', number: 77, headRefName: 'goal/landed', title: 'Last change' }] });
+    for (const expand of [false, true]) {
+      const lines = draw(data, { expand });
+      const attention = lines.findIndex((line) => line.includes('NEEDS ATTENTION'));
+      const landed = lines.findIndex((line) => line.includes('Title landed'));
+      assert.ok(attention >= 0 && landed > attention, `expand ${expand}`);
+      assert.match(lines[landed + 2], /not archived — memoro#77 is open — land or close it first/u);
+      assert.match(lines[landed + 3], /↳ memoro#77/u, 'the PR is a child row');
+      assert.equal(lines.filter((line) => line.includes('#77')).length, 2, 'once as the reason, once as the row');
+    }
+  });
+
+  it('keeps a malformed goal under NEEDS ATTENTION in both views', () => {
+    const data = page([goal('bad', null, { problems: ['repos names no repository'] }), goal('fine', 1)]);
+    for (const expand of [false, true]) {
+      const lines = draw(data, { expand });
+      const attention = lines.findIndex((line) => line.includes('NEEDS ATTENTION'));
+      assert.ok(attention >= 0);
+      assert.ok(lines.slice(attention).some((line) => line.includes('repos names no repository')));
+    }
+  });
+
+  it('keeps every key of the collector and adds finished and archive_refused to it', () => {
+    const goals = goalsFor(['a', 1, { stage: 'done' }], ['b', 1]);
+    const [row] = goalsOf({ goals: [goals[1]], currents: [], alive: () => true });
+    for (const key of ['programme', 'name', 'title', 'phase', 'stage', 'status', 'repos', 'criteria', 'running', 'last', 'hold', 'problems', 'sessions']) assert.ok(key in row, `${key} is kept`);
+    assert.equal(row.archive_refused, null, 'null for a goal that is not finished');
+    const [group] = page(goals).programmes.programmes;
+    for (const key of ['programme', 'dormant', 'goals', 'phases', 'proposals']) assert.ok(key in group, `${key} is kept`);
+    assert.equal(group.finished, 1);
+    assert.equal(JSON.parse(JSON.stringify(group)).finished, 1, 'in mc --json');
   });
 });

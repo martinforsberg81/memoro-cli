@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ARCHIVE_HOLD_MS, archiveGoal, finalizeDroppedGoal, goalArchiveDue } from '../../src/mc/goal-archive.js';
+import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from '../../src/mc/goal-archive.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { goalReferences } from '../../src/mc/goals.js';
@@ -40,26 +40,23 @@ function ctxOf({ git = () => ok(), gh = () => ok('[]'), move, now = new Date(NOW
   return { ctx, calls };
 }
 
-test('a goal is due once it has been done or dropped for the hold, counted from the entry that set the stage', () => {
-  assert.equal(ARCHIVE_HOLD_MS, 24 * 60 * 60 * 1000);
-  const done = (at, stage = 'done') => goal({ stage, log: [{ at, stage, status: 'ready', tool: 'claude', done: 'x' }] });
-  assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T11:00Z'), nowMs: NOW }), { due: false, why: 'done 23h ago — archived after 24h' });
-  assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T10:00Z'), nowMs: NOW }), { due: true, why: 'done 24h ago' });
-  assert.equal(goalArchiveDue({ goal: done('2026-08-31T10:00Z'), nowMs: NOW - 60_000 }).due, false, 'a minute short is not due');
-  assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T10:00Z', 'dropped'), nowMs: NOW }), { due: true, why: 'dropped — abandoned work is finalized immediately' });
-  assert.deepEqual(goalArchiveDue({ goal: done('2026-08-31T10:00Z'), nowMs: NOW - 60 * 60 * 1000, holdMs: 60 * 60 * 1000 }).due, true, 'takes the hold it is given');
+test('a finished goal is due at once: done or dropped, however recent its entry and with or without a stage timestamp', () => {
+  const entry = (at, stage) => ({ at, stage, status: 'ready', tool: 'claude', done: 'x' });
+  const finished = (stage, log) => goal({ stage, log });
+  assert.deepEqual(goalArchiveDue({ goal: finished('done', [entry('2026-09-01T09:59Z', 'done')]), nowMs: NOW }), { due: true, why: 'done' }, 'done a minute ago');
+  assert.deepEqual(goalArchiveDue({ goal: finished('done', [entry('2026-08-01T10:00Z', 'build')]), nowMs: NOW }), { due: true, why: 'done' }, 'a hand-set done, the log not saying when');
+  assert.deepEqual(goalArchiveDue({ goal: finished('done', []), nowMs: NOW }), { due: true, why: 'done' }, 'no log at all');
+  assert.deepEqual(goalArchiveDue({ goal: finished('dropped', []), nowMs: NOW }), { due: true, why: 'dropped — abandoned work is finalized at once' });
+  assert.deepEqual(goalArchiveDue({ goal: finished('done', [entry('2026-09-01T09:59Z', 'done')]) }), { due: true, why: 'done' }, 'no clock is read');
 });
 
-test('a goal is not due when it is not finished, or the log does not say when it was finished', () => {
+test('no hold is left in the module: the due test takes no hold and exports none', async () => {
+  const module = await import('../../src/mc/goal-archive.js');
+  assert.equal('ARCHIVE_HOLD_MS' in module, false);
   const open = goal({ stage: 'build', log: [{ at: '2026-08-01T10:00Z', stage: 'build', status: 'ready' }] });
   assert.deepEqual(goalArchiveDue({ goal: open, nowMs: NOW }), { due: false, why: 'the goal is in build' });
-  const handSet = goal({ stage: 'done', log: [{ at: '2026-08-01T10:00Z', stage: 'build', status: 'ready' }] });
-  assert.deepEqual(goalArchiveDue({ goal: handSet, nowMs: NOW }), { due: false, why: 'the log does not say when it was done' });
-});
-
-test('dropped goals are due without a stage timestamp; done retains its hold', () => {
-  assert.equal(goalArchiveDue({ goal: goal({ stage: 'dropped', log: [] }), nowMs: NOW }).due, true);
-  assert.equal(goalArchiveDue({ goal: goal({ stage: 'done', log: [] }), nowMs: NOW }).due, false);
+  assert.deepEqual(goalArchiveDue({ goal: goal({ stage: 'review', status: 'blocked' }), nowMs: NOW }), { due: false, why: 'the goal is in review' });
+  assert.equal(goalArchiveDue({ goal: goal({ stage: 'done' }), nowMs: NOW, holdMs: 60 * 60 * 1000 }).due, true, 'a hold passed in is ignored');
 });
 
 test('drop finalization closes exclusive PRs, removes their queue row under lock, then archives', () => {
