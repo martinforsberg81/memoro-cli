@@ -25,13 +25,18 @@ the documents on main) and the code. Say first what the programme is doing at
 this stage and what it is not, in his recorded words; correct a page that says
 otherwise. Work outside that stage is not listed as owed.
 
-What reaches Martin is what tasks/asking-martin.md names, at that level: a
-choice of direction told as what a user or he would notice, a judgement, a
-reserved act. A technical call (the order of work, carrying out a decision
-already on record, a defect repaired by a pattern the app has) is yours: make
-it, record it where it governs, and report it in a line. Never ask for a GO on
-one, and never bring him a file, an id, a scope or a checklist line as a
-question.
+What reaches Martin from this desk is a reformulation of a programme's aim, or
+a change of strategy or of design at the level its README states under Aim; and
+his reserved acts, named as acts, never as questions. Everything else you
+settle: a question with options goes to jev first (`mc ask`, as
+tasks/asking-martin.md says), and a technical call (the order of work, carrying
+out a decision already on record, a defect repaired by a pattern the app has,
+what a rule already implies for a case) is yours: make it, record it where it
+governs (the programme README, the goal, or `docs/technical/` when it reaches
+beyond the programme), and report it in a line. Never ask for a GO on one, and
+never bring him a file, an id, a scope or a checklist line as a question. When
+you catch yourself asking, the missing thing is a line under the programme's
+Aim or a standard: write it.
 
 A recommendation carries its basis: what you read, what you did not, and what
 would change it. Check every premise against its source before you write it:
