@@ -113,6 +113,19 @@ describe('the pipeline', () => {
     assert.deepEqual([by.build.count, by.build.martin, by.build.blocked, by.build.marks[0].count], [2, 1, 1, 2]);
     assert.deepEqual(by.merge.marks.map((mark) => mark.count), [1, 1], 'a gate round and a mend');
   });
+
+  it('draws a repair session as a blue mark on build, beside the green build mark, and counts it on no other box', () => {
+    const data = {
+      ...NOTHING,
+      programmes: { programmes: [{ goals: [{ stage: 'build', status: 'ready' }] }] },
+      runner: { sessions: [{ kind: 'build' }, { kind: 'repair' }] },
+    };
+    const stages = pipelineStages(data);
+    assert.deepEqual(stages.find((stage) => stage.stage === 'build').marks.map((mark) => mark.count), [1, 1]);
+    assert.ok(stages.filter((stage) => stage.stage !== 'build').every((stage) => stage.marks.every((mark) => !mark.count)), 'no other box counts it');
+    const [, , marks] = pipelineOf(renderPageLines(data, { columns: 160, now: NOW, colour: true }), 3);
+    assert.ok(marks.includes('\x1b[32m●\x1b[0m') && marks.includes('\x1b[34m●\x1b[0m'), 'a green build mark and a blue repair mark on the build box');
+  });
 });
 
 /* The contract's mock, as data: 148 proposals; 21 drafts and three plan
