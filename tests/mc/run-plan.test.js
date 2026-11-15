@@ -14,6 +14,7 @@ import { instructionsFor, readCanonRole } from '../../src/mc/roles.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../src/adapters/codex.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
+import { programmePlanPrompt, programmePlanCheckInPrompt } from '../../src/mc/run-plan.js';
 
 test('repair and narrow review prompts carry the rejected items and judged heads', () => {
   const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g' };
@@ -780,4 +781,23 @@ test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => 
   assert.equal(claudeAdapter.cacheTtlMs(undefined), 60 * 60_000);
   assert.equal(codexAdapter.cacheTtlMs('1h'), 5 * 60_000);
   assert.equal(codexAdapter.cacheTtlMs('5m'), 5 * 60_000);
+});
+
+test('programmePlanPrompt names the programme directory, its README, the checkouts, and the horizon command only with a horizon', () => {
+  const checkouts = { memoro: '/w/runner/work/programme-turn-prog/memoro', 'memoro-cli': '/w/runner/work/programme-turn-prog/memoro-cli' };
+  const plain = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', repos: ['memoro', 'memoro-cli'], checkouts });
+  assert.ok(plain.includes('plan programme prog, with nobody present'));
+  assert.ok(plain.includes('Its directory is `/p/prog`'));
+  assert.ok(plain.includes('`/p/prog/README.md`'));
+  assert.ok(plain.includes('`mc programs show prog`'));
+  for (const path of Object.values(checkouts)) assert.ok(plain.includes(`\`${path}\``), path);
+  assert.ok(plain.includes('mc goal areas <repo>'));
+  assert.doesNotMatch(plain, /mc martin horizon show/u, 'no horizon command without a horizon');
+  assert.match(plain, /mc programs after/u);
+  assert.match(plain, /mc ask --kind product/u);
+  assert.match(plain, /Do not implement a goal, process proposals or commit/u);
+  const horizon = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', horizon: 'h', repos: ['memoro'], checkouts: { memoro: '/c/memoro' } });
+  assert.ok(horizon.includes('`mc martin horizon show h`'));
+  assert.ok(horizonLessCheckIn().includes('Programme planning check-in after 20 minutes (2)'));
+  function horizonLessCheckIn() { return programmePlanCheckInPrompt({ minutes: 20, count: 2 }); }
 });

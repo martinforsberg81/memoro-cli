@@ -12,6 +12,8 @@ import { readCanonRole } from '../../src/mc/roles.js';
 import { applyObservation, applyRefusal, normaliseCapacity } from '../../src/mc/model-capacity.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
 import { goalJson } from './_helpers/goal-file.js';
+import { deskItemId, writeDeskItem } from '../../src/mc/desk-items.js';
+import { mkdirSync } from 'node:fs';
 import { fixture, NOW, result } from './_helpers/decision-fixture.js';
 const sink = { write() {} };
 
@@ -243,4 +245,23 @@ test('an entry written before the state was recorded counts as prepared, so the 
   assert.deepEqual(ended.decision_failures.map(x => x.state ?? null), [null, 'prepared']);
   assert.match(readFileSync(join(itemDirectory(item, f.env), 'brief.md'), 'utf8'), /an earlier session exited/u);
   assert.equal(listLessons({ env: f.env }).length, 1);
+});
+
+test('the decision prompt of a programme item names the programme directory and the planning turn\'s state file', async t => {
+  const f = fixture(t);
+  const dir = join(f.root, 'programs', 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
+  writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }));
+  writeFileSync(join(dir, 'README.md'), '# prog\n');
+  const at = '2026-11-14T10:00:00Z';
+  const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', at), kind: 'programme', reference: 'programme:prog', source_at: at, opened_at: at, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null };
+  writeDeskItem(item, { env: f.env });
+  writeFileSync(join(itemDirectory(item, f.env), 'prepared.md'), 'Prepared evidence.');
+  f.deps.session = async call => { f.seen = call.prompt; await f.close(item); return result; };
+  await f.runner().pass();
+  assert.match(f.seen, new RegExp(`Decide desk item ${item.id}\\.`, 'u'));
+  assert.ok(f.seen.includes(`Programme: prog. Programme directory: ${dir}.`), 'the programme directory');
+  assert.ok(f.seen.includes(join(f.root, 'runner', 'programme-turn', 'prog.json')), 'the turn state file');
+  assert.match(f.seen, /close --by decision so the runner plans the programme again/u);
+  assert.doesNotMatch(f.seen, /No goal identity is assigned/u);
+  assert.equal(f.state(item).state, 'closed');
 });

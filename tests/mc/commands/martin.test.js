@@ -949,3 +949,26 @@ describe('mc martin brief for a programme whose record states its phases', () =>
     assert.deepEqual(lines.map((line) => line.match(/blocks \d+ later-phase goals? of alpha/u)?.[0]), ["blocks 2 later-phase goals of alpha", "blocks 1 later-phase goal of alpha"]);
   });
 });
+
+describe('mc martin brief with a programme item', () => {
+  it('lists a programme planning turn\'s item under the programme\'s name, and its brief among the items waiting for Martin', async () => {
+    const d = openingStore();
+    const dir = join(d.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
+    writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }));
+    writeFileSync(join(dir, 'README.md'), '# prog\n');
+    const put = (source_at, fields, text = null) => {
+      const record = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', source_at), kind: 'programme', reference: 'programme:prog', source_at, opened_at: source_at, state: 'closed', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
+      writeDeskItem(record, { env: d.env });
+      if (text) writeFileSync(join(itemDirectory(record, d.env), 'brief.md'), text);
+      return record;
+    };
+    put('2026-11-14T09:00:00Z', { outcome: { by: 'decision', at: '2026-11-14T10:20:00.000Z', summary: 'The state file was repaired.' } });
+    put('2026-11-14T11:00:00Z', { state: 'for-martin', reversible: false }, '## Vad det gäller\nPlaneringspasset för prog slutade igen.');
+    const text = io();
+    assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    const out = text.out.stdout;
+    assert.ok(out.includes('\nprog\n- 2026-11-14T10:20:00.000Z · The state file was repaired. (programme:prog, decision)'), 'decided without you, under the programme\'s name');
+    assert.match(out, /### 5\. programme:prog · mechanical · not reversible/u);
+    assert.match(out, /Planeringspasset för prog slutade igen\./u);
+  });
+});
