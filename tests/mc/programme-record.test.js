@@ -833,7 +833,9 @@ describe('signed record transitions', () => {
       try {
         writeFileSync(join(a.dir, 'SIGNED.md'), 'unchanged');
         for (const state of ['draft', 'open', 'done', 'dropped'].filter((s) => s !== transition.from)) {
-          const before = JSON.stringify({ ...(state === 'open' || state === 'done' ? SIGNED : DRAFT), state });
+          // Unsigned legacy open/done can otherwise validate as dropped: prove the state guard itself.
+          const base = state === 'open' || state === 'done' ? (transition.name === 'drop' ? LEGACY : SIGNED) : DRAFT;
+          const before = JSON.stringify({ ...base, state });
           writeFileSync(a.file, before);
           const result = transition.run(a, a.options);
           assert.equal(result.ok, false, state);
