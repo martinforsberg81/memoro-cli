@@ -15,7 +15,7 @@ const after = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.p
  * own refusal instead of the API key. Absent, both are on.
  */
 export function billingRoute({ provider, capacity, state, api, now = new Date() } = {}) {
-  if (!billingProviders().includes(provider)) throw new Error('unknown billing provider');
+  if (!billingProviders().includes(provider)) throw new Error(`unknown billing provider: ${provider} declares no BILLING_PROVIDER`);
   const standing = providerAt(capacity, provider, now);
   const refused = standing.refusal_until || (adapterOfProvider(provider).PLAN_STATE != null && after(state?.plan?.refused_until, now) ? state.plan.refused_until : null);
   const full = Object.values(standing.windows).filter((window) => window.status === 'known' && window.fraction_used >= 1);
