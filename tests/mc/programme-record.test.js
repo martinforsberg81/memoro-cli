@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import { run as goal } from '../../src/mc/commands/goal.js';
 import { listingText, programmesListing, recordWriter, run as programs } from '../../src/mc/commands/programs.js';
 import { readProgrammes } from '../../src/mc/page-collect.js';
-import { newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, validateRecord } from '../../src/mc/programme-record.js';
+import { newRecord, readRecord, recordedProgrammes, recordPage, recordPageTemplate, RECORD_FILE, setRecordState, validateRecord } from '../../src/mc/programme-record.js';
 
 const NOW = new Date('2026-11-14T10:20:30.456Z');
 
@@ -461,6 +461,49 @@ describe('mc programs create as the manager', () => {
       for (const extra of [{}, { MC_ROLE: 'martin' }]) {
         assert.equal((await call(['create', `p-${extra.MC_ROLE ?? 'person'}`, '--end', 'e', '--horizon', 'h-never-heard-of'], { ...a.env, ...extra }, { horizons: () => OPEN_HORIZONS })).code, 0);
       }
+    } finally { a.done(); }
+  });
+});
+
+describe('setRecordState: the runner sets state done on a record that is there', () => {
+  const put = (dir, record) => writeFileSync(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
+
+  it('writes the record whole with state done, every other key as it was and in its place, atomically', () => {
+    const a = area();
+    try {
+      const dir = join(a.home, 'p');
+      mkdirSync(dir);
+      const before = { ...GOOD, phases: { order: 'stated', after: { 2: [1] } } };
+      put(dir, before);
+      const writes = [];
+      const result = setRecordState(dir, 'done', { write: (path, text) => { writes.push(path); writeFileSync(path, text); } });
+      assert.equal(result.ok, true);
+      assert.equal(result.changed, true);
+      assert.deepEqual(writes, [join(dir, RECORD_FILE)]);
+      assert.deepEqual(recordOf(a.home, 'p'), { ...before, state: 'done' });
+      assert.deepEqual(Object.keys(recordOf(a.home, 'p')), Object.keys(before), 'the keys keep their order');
+      assert.equal(readdirSync(dir).length, 1, 'no temporary file is left');
+    } finally { a.done(); }
+  });
+
+  it('a record already in that state is not written again; an invalid record, none and a state the record does not know are never touched', () => {
+    const a = area();
+    try {
+      const dir = join(a.home, 'p');
+      mkdirSync(dir);
+      put(dir, { ...GOOD, state: 'done' });
+      assert.deepEqual(setRecordState(dir, 'done', { write: () => assert.fail('written again') }), { ok: true, record: { ...GOOD, state: 'done' }, changed: false });
+      put(dir, GOOD);
+      const refused = setRecordState(dir, 'closed', { write: () => assert.fail('written') });
+      assert.equal(refused.ok, false);
+      assert.equal(refused.status, 'refused');
+      assert.match(refused.problems[0], /^state:/u);
+      writeFileSync(join(dir, RECORD_FILE), '{ not json');
+      assert.equal(setRecordState(dir, 'done', { write: () => assert.fail('written') }).status, 'invalid');
+      assert.equal(readFileSync(join(dir, RECORD_FILE), 'utf8'), '{ not json');
+      const empty = join(a.home, 'none');
+      mkdirSync(empty);
+      assert.equal(setRecordState(empty, 'done', { write: () => assert.fail('written') }).status, 'none');
     } finally { a.done(); }
   });
 });

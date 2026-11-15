@@ -1,13 +1,9 @@
 /**
- * `mc helper` — the desk, and the eye on production behind the same verb.
- *
- * The bare verb is **the desk**: a foreground session standing in
- * `~/mc/helper/` — resumed if one is there, fresh with `--new` or when there
- * is none — with Martin in it, whose whole job is to take what he says
- * is broken or should be better and write it down as a proposal in the
- * `proposals/` of the programme that owns it, or `~/mc/proposals/` when none
- * does. It reads no digest and it does not touch the
- * proposals already waiting — adding is all it does.
+ * `mc helper` — the eye on production. The verb used to carry a desk as well
+ * (a foreground session Martin talked to); the desk is `mc martin` now
+ * (reach/helper-goes-into-the-desk), and every call that names neither
+ * `--intake` nor `--collect` is refused before it reads a role, makes a
+ * directory or opens a session.
  *
  * `--intake` is **the eye**: the script that reads the five sources memoro
  * already records into `~/mc/intake/errors-<repo>-<date>.md`, and then the
@@ -16,29 +12,30 @@
  * — no model, no network writes. `mc run` runs both halves on its own cadence,
  * through the modules, not this verb.
  *
+ * The verb keeps the name `helper` for the eye's sake: the intake turn
+ * registers its live record with verb `helper`, which the page's intake panel
+ * reads, and `~/mc/helper/` holds the retired desk's old conversations.
+ *
  * Nothing here writes `queue.md`. Whichever half wrote a proposal, it is read
- * at the next `mc brief` and Martin queues it or drops it; that is the whole
- * arrangement, and it is why the intake half can run unattended every day.
+ * at Martin's desk (`mc martin`) or by the owning programme's plan session;
+ * that is the whole arrangement, and it is why the intake half can run
+ * unattended every day.
  */
-import { mkdirSync } from 'node:fs';
-
 import { commandUsage } from '../command-help.js';
 import {
-  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, HELPER_REPOS, proposalsDir,
+  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, HELPER_REPOS, proposalsDir,
   unreadableSections,
 } from '../helper-collect.js';
-import { describeTurn, drainIntake, NO_DESCRIPTION, programmeRoutes } from '../helper-turn.js';
+import { describeTurn, drainIntake } from '../helper-turn.js';
 import { programsHome } from '../paths.js';
-import { readCanonRole, roleSourceOf } from '../roles.js';
 import { INTAKE_PER_ROUND } from '../run-plan.js';
-import { openInWorkArea } from '../work-open.js';
 import { scanArgs } from './flags.js';
-import { interactiveToolRefusal } from '../interactive-tool.js';
 
 const USAGE = commandUsage('helper');
 
-/** The flags that only mean something to the digest, named once for the refusal. */
-const DIGEST_FLAGS = ['--since', '--limit', '--threshold'];
+/** What a call that names neither `--intake` nor `--collect` is told: the desk is `mc martin`, and the eye is unchanged. */
+export const DESK_GONE = 'mc: mc helper is no longer a way in — the desk is mc martin\n'
+  + 'mc: mc helper --collect and mc helper --intake are unchanged\n';
 
 export function usage() {
   return commandUsage('helper');
@@ -48,23 +45,22 @@ export function usage() {
 /** `check`: what the scanned arguments may not be — null, or what is wrong; the verb runs it, and help-routes.test.js walks the help with it. */
 export const ROUTES = {
   '': {
-    booleans: ['--local', '--intake', '--collect', '--new', '--resume', '--bg'],
+    booleans: ['--intake', '--collect'],
     strictValues: ['--since', '--limit', '--threshold', '--model'],
     toolSugar: true,
-    check: ({ flags, positional }) => {
-      if (positional.length > (flags.resume ? 1 : 0)) return `unknown argument ${positional[flags.resume ? 1 : 0]}`;
-      if (flags.resume && flags.new) return '--resume and --new cannot be combined';
-      if (flags.resume && positional[0] === 'new') return '--resume expects a conversation ID or prefix';
-      if (flags.resume && (flags.intake || flags.collect)) return '--resume requires an interactive session';
-      if (flags.bg && (flags.intake || flags.collect)) return '--bg needs an interactive session';
-      return null;
-    },
+    check: ({ positional }) => (positional.length ? `unknown argument ${positional[0]}` : null),
   },
 };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  // The desk is `mc martin`. A call that names neither half of the eye is refused whole, whatever else it says
+  // (bare, --new, --resume, --bg, --local, a tool or model alone, a digest flag alone), before anything is read or made.
+  if (!argv.includes('--intake') && !argv.includes('--collect')) {
+    stderr.write(DESK_GONE);
+    return 2;
+  }
   const scanned = scanArgs(argv, ROUTES['']);
   const refused = scanned.error || ROUTES[''].check(scanned);
   if (refused) {
@@ -72,11 +68,7 @@ export async function run(argv, deps = {}) {
     stderr.write(USAGE);
     return 2;
   }
-  const { flags, positional } = scanned;
-
-  // The desk. `--collect` still reaches the digest on its own, because it
-  // always has and a script that says it wants only the file means it.
-  if (!flags.intake && !flags.collect) return openDesk({ flags, resume: flags.resume ? positional[0] || true : null, stdout, stderr, deps });
+  const { flags } = scanned;
 
   const since = parseSince(flags.since);
   if (flags.since && !since) {
@@ -160,101 +152,6 @@ export async function run(argv, deps = {}) {
   // line above already named where each one went.
   if (wrote) stdout.write(`mc: each programme's plan session reads its own — ${programsHome()}/<programme>/proposals, the rest in ${proposalsDir()}\n`);
   return worst;
-}
-
-/**
- * The bare verb: the foreground conversation in `~/mc/helper/` wearing the
- * `helper` role — the one already there, resumed with no intro, or a new one
- * when there is none or `--new` says so (Martin, 2026-09-13). Same shape as
- * `mc brief` — with the shared SSH transport when applicable — and its own directory
- * rather than `~/mc/intake/`, which is the intake turn's material and none of
- * its business.
- *
- * The directories are made here rather than by the session: a session told to
- * write into a path that does not exist has one avoidable way to fail.
- */
-async function openDesk({ flags, resume, stdout, stderr, deps }) {
-  const stray = DIGEST_FLAGS.filter((name) => flags[name.slice(2)] !== null);
-  if (stray.length) {
-    stderr.write(`mc: ${stray[0]} is the digest's flag — say mc helper --intake ${stray[0]} …\n`);
-    stderr.write(USAGE);
-    return 2;
-  }
-
-  const role = (deps.role || readCanonRole)('helper');
-  if (!role?.overlay) {
-    stderr.write('mc: the helper role is missing from this install — expected canon/roles/helper.md with an overlay body\n');
-    return 1;
-  }
-
-  const tool = flags.tool || role.tools?.[0] || 'claude';
-  const notInteractive = interactiveToolRefusal(tool);
-  if (notInteractive) {
-    stderr.write(`mc: ${notInteractive}\n`);
-    return 2;
-  }
-
-  const dir = helperDir();
-  const proposals = proposalsDir();
-  const mkdir = deps.mkdir || mkdirSync;
-  mkdir(dir, { recursive: true });
-  mkdir(proposals, { recursive: true });
-  const programs = programsHome();
-  stdout.write(`mc: ${dir} — tell it what is broken; proposals land in ${programs}/<programme>/proposals, or ${proposals} when no programme owns it\n`);
-
-  const launch = helperLaunch({
-    proposalsPath: proposals, programsPath: programs, programmes: (deps.routes || programmeRoutes)(), role,
-  });
-  const opened = await (deps.open || openInWorkArea)({
-    areaRoot: dir,
-    worktree: { repo: null, path: dir, is_git: false },
-    tool,
-    pick: flags.new ? 'new' : resume,
-    resumeTool: flags.tool,
-    stdout,
-    stderr,
-    // NOW says "mc helper" while this is up. Its room is nobody's workarea,
-    // so there is no area name to give it.
-    verb: 'helper',
-    bg: flags.bg,
-    roleName: role.name || 'helper',
-    roleSource: roleSourceOf(role),
-    model: flags.model,
-    overlay: role.overlay,
-    prompt: launch.prompt,
-    defaultModel: role.model,
-    defaultModelTool: role.tools?.[0] || null,
-  });
-  if (!opened.ok) {
-    stderr.write(`mc: ${opened.reason}${opened.hint ? ` — ${opened.hint}` : ''}\n`);
-    return 1;
-  }
-  return opened.code ?? 0;
-}
-
-/**
- * What the desk session is told first. There is no file to hand it — the
- * report is in Martin's head — so the opening words are the date its
- * filenames need and the one instruction the role does not already carry:
- * ask first, write after.
- */
-export function helperLaunch({
-  proposalsPath = proposalsDir(), programsPath = programsHome(), programmes = [], role = null, now = new Date(),
-} = {}) {
-  const date = now.toISOString().slice(0, 10);
-  const lines = [
-    `Today is ${date}. Martin is here with something that is broken, or something he wants better.`,
-    'Take his report. Ask only what you cannot read for yourself, then write it as',
-    `\`${date}-<mc|memoro>-<slug>.md\` in the shape your role gives, into the programme that owns the question:`,
-    `\`${programsPath}/<programme>/proposals/\`. When no programme owns it, it goes in \`${proposalsPath}\`.`,
-    '',
-    'The programmes, one line each:',
-  ];
-  if (!programmes.length) lines.push('_none_');
-  else for (const p of programmes) lines.push(`- ${p.name} — ${p.line || NO_DESCRIPTION}`);
-  lines.push('', 'Open by asking what he has. Write nothing until you have it.');
-  const prompt = lines.join('\n');
-  return { prompt, overlay: role?.overlay || null, model: role?.model || null };
 }
 
 function parseSince(value) {

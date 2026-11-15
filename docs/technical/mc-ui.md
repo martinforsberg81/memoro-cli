@@ -745,7 +745,7 @@ hours' outcome, from runs.tsv alone (`landed.js`, `data.landed`):
 - **Session time per goal:** the same sessions' time, as a histogram over
   `<15, <30, <60, <120, <240, ≥240` minutes, then median, p25–p75, p90 and max.
 - **Planning & desks 24 h:** the list cost of every interactive session in the
-  last 24 hours — plan, manager, Martin's desk, the helper, on claude or
+  last 24 hours — plan, manager, Martin's desk, and the sessions of the helper desk that is gone, on claude or
   codex — and how many, then the headless plan sessions' cost from runs.tsv.
   runs.tsv holds no interactive session, so these are read from the tools' own
   transcripts (`desk-cost.js`, `data.desk_cost`): a claude transcript whose
@@ -796,5 +796,5 @@ page again. Manager's open state is shown below the pipeline, including
 foreground records from before the rename.
 
 Maintenance groups repository measurements beneath their names. Below its
-title it carries the interactive helper's open state and last collection from
+title it carries the eye's open state and last collection from
 runs.tsv, including a failed run or an explicit absence of a record.

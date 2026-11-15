@@ -381,7 +381,7 @@ describe('mc martin brief', () => {
     assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
     const out = text.out.stdout;
     const at = (part) => { const index = out.indexOf(part); assert.notEqual(index, -1, part); return index; };
-    const headings = ['## Proposed changes to your texts (4)', '## Your acts (1)', '## Decided without you', '## Not ready', '## Cost', '## What the system changed'].map(at);
+    const headings = ['## Proposed changes to your texts (4)', '## Your acts (1)', '## Decided without you', '## Not ready', '## Cost', '## What the system changed', '## Where a new thing goes'].map(at);
     assert.deepEqual([...headings].sort((a, b) => a - b), headings);
     assert.match(out, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\. Decided-without-you covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z\./u);
     const texts = ['### 1. alpha/one', '### 2. alpha/two', '### 3. beta/judge', '### 4. canon/roles/martin.md#Authority'].map(at);
@@ -402,6 +402,36 @@ describe('mc martin brief', () => {
     assert.match(out, /2 items still new or prepared\. Oldest: delta\/p1 \(prepared\), waiting 124 hours since 2026-11-09T08:00Z\./u);
     assert.match(out, /Failed: delta\/p2 \(preparation failed 0 times, decision 1 time\)\./u);
     assert.match(out, /Today \(UTC 2026-11-14\): \$0\.0000\. Last seven days: \$0\.0000\. Ceiling: off\./u);
+  });
+  it('ends with Where a new thing goes: the UTC date of generated_at, the name shape, both destinations and one line per programme', async () => {
+    const d = openingStore();
+    for (const [name, readme] of [['alpha', '# Alpha\n\nAlpha aim.\n'], ['beta', ''], ['gamma', 'Gamma line\n']]) {
+      mkdirSync(join(d.env.MC_WORK_ROOT, 'programs', name), { recursive: true });
+      writeFileSync(join(d.env.MC_WORK_ROOT, 'programs', name, 'README.md'), readme);
+    }
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date('2026-11-14T23:30:00.000Z') }), 0, text.out.stderr);
+    const out = text.out.stdout;
+    const part = out.slice(out.indexOf('## Where a new thing goes'));
+    assert.ok(out.indexOf('## What the system changed') < out.indexOf('## Where a new thing goes'), 'after What the system changed');
+    assert.equal(out.split('\n').filter((line) => line.startsWith('## ')).at(-1), '## Where a new thing goes', 'the last part');
+    assert.match(part, /^Today is 2026-11-14\. A proposal is a file named `2026-11-14-<mc\|memoro>-<slug>\.md`, in `.*\/programs\/<programme>\/proposals\/` when a programme owns it, else in `.*\/mc\/proposals`\./mu);
+    assert.ok(part.includes(`\`${d.home}/<programme>/proposals/\``), 'the programmes destination is the programs home, absolute');
+    assert.ok(part.includes(`else in \`${join(d.env.MC_WORK_ROOT, 'proposals')}\``), 'the fallback destination is absolute');
+    assert.ok(part.includes('\n- alpha — Alpha aim.\n- beta — (no description)\n- gamma — Gamma line\n'), part);
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date('2026-11-14T23:30:00.000Z') }), 0, json.out.stderr);
+    const { placing } = JSON.parse(json.out.stdout);
+    assert.deepEqual(placing, {
+      date: '2026-11-14', file_name: '2026-11-14-<mc|memoro>-<slug>.md', programs_path: d.home, proposals_path: join(d.env.MC_WORK_ROOT, 'proposals'),
+      programmes: [{ name: 'alpha', line: 'Alpha aim.' }, { name: 'beta', line: '(no description)' }, { name: 'gamma', line: 'Gamma line' }],
+    });
+    assert.equal(renderOpening(JSON.parse(json.out.stdout)), out);
+  });
+  it('says _none_ when there are no programmes', async () => {
+    const d = openingStore();
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    assert.ok(text.out.stdout.endsWith('The programmes, one line each:\n_none_\n'), text.out.stdout.slice(-200));
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    assert.deepEqual(JSON.parse(json.out.stdout).placing.programmes, []);
   });
   it('--json carries the same data as the text, and brief writes no file', async () => {
     const d = openingStore(); const deps = { env: d.env, home: d.home, now: () => new Date(NOW) };
@@ -435,7 +465,7 @@ describe('mc martin brief', () => {
     lesson('2026-11-12-dismissed', { at: '2026-11-12T12:00:00Z', state: 'dismissed', dismissed_at: '2026-11-14T10:30:00Z', reason: 'One accident: the disk was full.' });
     const before = snapshot(d.root);
     const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
-    const part = text.out.stdout.slice(text.out.stdout.indexOf('## What the system changed'));
+    const part = `${text.out.stdout.slice(text.out.stdout.indexOf('## What the system changed'), text.out.stdout.indexOf('## Where a new thing goes')).trimEnd()}\n`;
     assert.deepEqual(part.split('\n').slice(0, 9), [
       '## What the system changed', '',
       '- Make the goal plain — code (src/mc/desk-decision.js) — memoro-cli#1501',
@@ -914,8 +944,8 @@ describe('mc martin propose', () => {
 
 describe('mc martin brief with horizons', () => {
   const NEXT = '## Proposed changes to your texts'; // the part that follows the horizons
-  const HEADS = ['Proposed changes to your texts (3)', 'Your acts (1)', 'Decided without you', 'Not ready', 'Cost', 'What the system changed'].map((h) => `## ${h}`);
-  const KEYS = ['generated_at', 'last_opened', 'since', 'texts', 'acts', 'decided', 'not_ready', 'cost', 'changes'];
+  const HEADS = ['Proposed changes to your texts (3)', 'Your acts (1)', 'Decided without you', 'Not ready', 'Cost', 'What the system changed', 'Where a new thing goes'].map((h) => `## ${h}`);
+  const KEYS = ['generated_at', 'last_opened', 'since', 'texts', 'acts', 'decided', 'not_ready', 'cost', 'changes', 'placing'];
   const headingsOf = (text) => text.split('\n').filter((line) => line.startsWith('## '));
   const PLAYBACK = ['How it is read', 'How one sees it is reached', 'What is built first', 'What is not built', 'The strangest thing the wording permits'].map((h) => `## ${h}\n\ntext\n`).join('\n');
   const STATEMENT = '\nLine one.\n\nLine two.\nLine three.\nLine four.';

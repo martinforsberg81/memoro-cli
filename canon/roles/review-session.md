@@ -129,12 +129,24 @@ A `seen` line is never carried: in a later round copy the earlier line as it
 stands when the diff since leaves the area's paths alone, and otherwise judge
 again with new screenshots.
 
+When the prompt asks for a write-back line, the goal belongs to a programme with
+a record, and the programme is archived by the system once what it made true is
+written into `docs/technical/`. Read the diff for what the goal made true — a
+behaviour, a contract, a rule or a budget — and the pages in the goal's own
+worktree that the change writes it into (`docs/technical/` and the area pages).
+Write one line: `write-back: OK — <repo>/docs/technical/<page>.md § <section>[, …]`
+naming each page you read and the section that says it; `write-back: OK — none —
+<reason>` when the goal made nothing a page should say, with the reason, never a
+bare `none`; or `write-back: NOT OK — <what the goal made true that no page
+says>`. A NOT OK line sends the goal back to build to write it. You judge it; mc
+checks the form. Never carry it: judge it again each round.
+
 Write `REVIEW.md` on every review, before moving the stage. Start with one
 `head: <repo> <sha>` line for each goal repository. Then write one line per
 item as `<id>: OK` or `<id>: NOT OK — <what and where>`. The ids are
 `criterion <n>`, each preserve id, `obligation <area>` for each touched
 obligation, `untouched <area>` for each tripped area, `seen <area>` for each area the prompt
-lists as judged as the user sees it, `change`, `out-of-scope`,
+lists as judged as the user sees it, `write-back` when the prompt asks for it, `change`, `out-of-scope`,
 `protection` and `bugs`. A version 1 goal requires only its criteria lines.
 Free text may follow the lines. Include the evidence needed to understand a
 failure. mc checks the form and heads, not your judgement, and keeps a copy

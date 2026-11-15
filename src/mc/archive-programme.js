@@ -1,6 +1,7 @@
 /**
- * `mc plan <programme> --archive` — a programme that is over, taken off main
- * and off this machine.
+ * A programme that is over, taken off main and off this machine: `mc plan
+ * <programme> --archive` for a person, and the runner's archive turn for a
+ * programme with a record (archive-turn.js).
  *
  * A project's plan used to be archived by `mc run` the round it said done,
  * and that is where the machinery stopped: the programme
@@ -8,8 +9,23 @@
  * rulings — and the programme's planning directory kept two worktrees on
  * `plan/<programme>`, for ever. Nothing can decide that a programme is over;
  * a programme whose projects are all done is also exactly the place the next
- * piece of that work belongs. So this is typed, never triggered (Martin,
- * 2026-10-06).
+ * piece of that work belongs. So this was typed, never triggered (Martin,
+ * 2026-10-06) — until a programme got a record that says when it is done:
+ * Martin, 2026-11-15, decided that a programme with a record is archived by
+ * the system once its goals are finished and its write-back reads OK. The
+ * runner calls this for such a programme and for no other, with `fence`; for
+ * every other programme archiving is still a person's act.
+ *
+ * `fence` is the runner's guard on the local half and is passed by nobody
+ * else. It is asked after each docs PR has landed and again immediately before
+ * the planning session is released and before the directory moves; a reason
+ * it returns (a live goal, restricted data that appeared) stops the archive
+ * there with nothing local released, deleted or moved — the landed docs PR
+ * stays, and a later pass finds the programme as it was. With a fence the
+ * restricted data is never cleared: deleting it stays a person's act. The
+ * person's call passes none and runs as it always did. `onShelved(destination)`
+ * is told where the directory went (its `-2` or `-3` suffix included) the
+ * moment it has moved, so the runner records it before anything else can fail.
  *
  * Two halves, in this order, and everything checked before either starts:
  *
@@ -127,11 +143,19 @@ export function archiveVerdict({
  *   release(name, { env, dryRun }) → `releaseWorkArea`'s result
  * Returns the exit code.
  */
-export async function archiveProgramme(programme, { repos, env = process.env, areaName, areaPath, stdout, stderr, deps, now = () => new Date() }) {
+export async function archiveProgramme(programme, { repos, env = process.env, areaName, areaPath, stdout, stderr, deps, now = () => new Date(), fence = null, onShelved = null }) {
   const say = (line) => stdout.write(`mc: ${line}\n`);
   const gitOut = (cwd, args) => {
     const r = deps.git(cwd, args);
     return r.ok ? r.stdout.trimEnd() : null;
+  };
+
+  /** True, with the reason said, when the fence stops the local half. */
+  const fenced = () => {
+    const reason = fence ? fence() : null;
+    if (!reason) return false;
+    stderr.write(`mc: ${programme} is not archived any further — ${reason}; nothing local was released, deleted or moved.\n`);
+    return true;
   };
 
   const present = repos.filter((repo) => existsSync(repo.path));
@@ -173,9 +197,11 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
       return 1;
     }
     say(`${repo.name}: merged #${pr} — docs/project/${programme}/ is off main`);
+    if (fenced()) return 1;
   }
 
   if (areaExists) {
+    if (fenced()) return 1;
     const released = deps.release(areaName, { env, dryRun: false });
     for (const item of released.removed) say(`${item.path} — ${item.what} removed${item.branch ? ` (${item.branch})` : ''}`);
     // In layout 2 the directory is the programme's: release leaves it, and
@@ -189,18 +215,23 @@ export async function archiveProgramme(programme, { repos, env = process.env, ar
     }
     if (beside) {
       // Its restricted evidence goes before the directory moves, so a failed
-      // move is run again from programs/ with nothing restricted left.
-      try {
-        for (const line of clearRestricted(restricted, restrictedDir, areaPath)) say(line);
-      } catch (error) {
-        stderr.write(`mc: ${tilde(restrictedDir)}/ could not be cleared — ${error.message}. Run it again to carry on.\n`);
-        return 1;
+      // move is run again from programs/ with nothing restricted left. The
+      // runner's call never clears it: its fence has just said there is none.
+      if (fenced()) return 1;
+      if (!fence) {
+        try {
+          for (const line of clearRestricted(restricted, restrictedDir, areaPath)) say(line);
+        } catch (error) {
+          stderr.write(`mc: ${tilde(restrictedDir)}/ could not be cleared — ${error.message}. Run it again to carry on.\n`);
+          return 1;
+        }
       }
       // The programme is over, so its directory leaves programs/ whole — its
       // projects and documents with it — for archive/programs/ (ruling 57).
       let moved;
       try {
         moved = shelveProgramme(areaPath, programme, env);
+        onShelved?.(moved);
       } catch (error) {
         stderr.write(`mc: ${tilde(areaPath)}/ could not be moved to ${tilde(archivedProgramsHome(env))}/ — ${error.message}. Run it again to carry on.\n`);
         return 1;

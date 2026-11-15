@@ -124,7 +124,7 @@ describe('the deploy mend role page', () => {
 
 describe('role context is loaded on demand', () => {
   it('launches each role without task catalogues or task bodies', () => {
-    for (const ref of ['manager', 'build-session:goal', 'review-session:goal', 'mend-session', 'helper', 'intake', 'plan']) {
+    for (const ref of ['manager', 'build-session:goal', 'review-session:goal', 'mend-session', 'intake', 'plan']) {
       const told = instructionsFor('codex', readCanonRole(ref).overlay);
       assert.match(told, /skills\/mc\/SKILL\.md/u);
       assert.doesNotMatch(told, /^@skill |Skills this role uses:|mc-publish-and-merge/mu);

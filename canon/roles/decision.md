@@ -40,6 +40,18 @@ then close it with `mc martin item <id> close --by decision --summary …` so th
 runner plans the programme again. A text of Martin's that would have to change
 goes to a brief instead; do not edit the page's End yourself.
 
+An archive item is a finished programme with a record whose write-back reading
+found a gap (`prepared.md` names the NOT OK lines: what the programme made true
+that no page says), or whose archive failed after an OK reading. Read the
+programme's README, the done goals under `goals/.archive/` and the pages the
+lines name. Repair within your reach what the item names: write the missing
+statement into the right `docs/technical/` page or area page through a pull
+request, as a document change, within what the goal decided; a rule the goals did
+not settle, or a text of Martin's that would have to change, goes to a brief
+instead. Then close it with `mc martin item <id> close --by decision --summary …`
+so the runner reads the programme again. You do not archive the programme, set its
+record or edit its goals: the runner does that when the reading is OK.
+
 ## Decide here
 
 What is Martin's is what [asking-martin](../tasks/asking-martin.md) names.

@@ -14,7 +14,7 @@ import { select } from './prompt.js';
 import { log } from './logger.js';
 
 const failure = reason => ({ ok: false, reason });
-const ENTRANCES = new Set(['plan', 'manager', 'brief', 'helper', 'martin']);
+const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin']);
 
 /** Linux SSH entrances of the four person roles keep their provider alive past the terminal. */
 export function entersPersistentSession({ env = process.env, platform = process.platform, isInteractive, verb } = {}) {

@@ -68,9 +68,18 @@ The opening has these parts, in this order (Horizons only when the desk holds on
    or `off`.
 7. **What the system changed** — from the lessons and the item store only (see
    *Lessons and the learning pass*). It never lists lessons or prints their text.
+8. **Where a new thing goes** — what the session needs to place a thing Martin
+   says that answers no waiting item (*Placing*, below): the UTC date of the
+   opening, the proposal file name shape `<date>-<mc|memoro>-<slug>.md`, the two
+   destinations as absolute paths (`<programs home>/<programme>/proposals/` when a
+   programme owns it, else `~/mc/proposals`) and every programme with one line, in
+   alphabetical order, from the same reader the intake turn routes by
+   (`programmeRoutes`, [mc-helper.md](mc-helper.md)); `_none_` when there are none.
+   It is read from the disk at the opening and stores nothing.
 
 `brief --json` carries `texts`, `acts` and `not_ready.stuck` for these parts, and no
-`yours`.
+`yours`; its last key, `placing`, is `{ date, file_name, programs_path,
+proposals_path, programmes: [{ name, line }] }`.
 
 The interval is `(since, now]`, where `since` is the time of the last
 successful opening, or the store's `first_sync_at` before the first opening.
@@ -87,6 +96,20 @@ phase, directly or through other phases; a phase that waits for none is blocked
 by nothing, and a programme whose record is invalid counts none (`laterPhaseGoals`,
 by the rule of `phaseStanding`, [mc-goals.md](mc-goals.md#phases)). Goals of one
 phase block the same set and are ordered by age.
+
+## Placing
+
+The desk takes the place of the old helper desk. When Martin says something
+that answers no waiting item, the desk session reads it against the texts
+(`docs/technical/`, the programme README and goals, and the texts he holds),
+says back in Swedish where it lands and places it on his word
+(`canon/roles/martin.md`, *Placing*): a deviation that a goal waiting in status
+`Martin` can settle within its scope is settled there; any other deviation is a
+proposal file as [proposals](../../canon/tasks/proposals.md) says; a change to a
+text he holds goes through `mc martin propose`; a new aim is a horizon, played
+back and set as under *Horizons*. A candidate horizon is said to him and never
+stored. `mc helper` without `--intake` or `--collect` is refused with a pointer
+to `mc martin` ([mc-helper.md](mc-helper.md)).
 
 ## Read-only queue
 
@@ -149,7 +172,7 @@ preparation, decisions and the interactive desk. Its schema is
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
-(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written only by the runner when a horizon turn of the manager has failed twice; see below). A goal's source time
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written only by the runner when a horizon turn of the manager has failed twice; see below) and `archive` (`archive:<programme>`, written only by the runner when a finished programme's write-back reading found a gap, failed twice or found restricted data; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing. A `decision:<at>` item opens for a new ledger row of `mc ask` whose chosen key differs from the recommendation and for every unread row (`answered_by: "session"`), with the answer's who and why ([mc-jev.md](mc-jev.md), *The ledger*).
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
@@ -191,6 +214,25 @@ reach and closes it `--by decision`, so the runner plans again, and a text of
 Martin's that would have to change goes to a brief. The opening lists one decided
 under the programme's name, and a `for-martin` one, being mechanical, among the
 stuck items of **Not ready**: it is the runner's, not his.
+
+An `archive` item is the programme archive turn's
+([mc-run.md](mc-run.md#programme-archive-turn)); its reference is
+`archive:<programme>` and one is open at a time per programme. A NOT OK reading
+opens it `prepared` (sort mechanical) with a model-free `prepared.md` carrying
+the NOT OK lines; a NOT OK after an item was closed by decision, and the second
+failure since the last item, open it `for-martin` (sort mechanical, not
+reversible, no due time) with a Swedish `brief.md`; restricted data under
+`~/mc/restricted/<programme>/` opens one `for-martin` with sort `reserved`
+naming `mc plan <programme> --archive`. Its source is the programme's directory
+and goals and the state file `runner/archive-turn/<programme>.json`. Sync closes
+it by source only when the programme directory is gone from the programmes home or
+`goals/` holds a live goal; a directory gone while the state names a destination
+whose record does not read `done` (the record write failed after the move) keeps
+it open until it is decided; an unreadable state file is reported and keeps it
+open. A decision session answers a prepared one at its source (writes the missing
+statement within reach) and closes it `--by decision`, so the runner reads again;
+it never archives the programme. A `for-martin` mechanical one is among the stuck
+items of **Not ready**, like a `programme` item; a reserved one is his.
 
 A `manager` item is the manager's horizon turn's second failure since its last
 item ([mc-run.md](mc-run.md#the-managers-turns)): the first is `prepared` with a

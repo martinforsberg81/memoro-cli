@@ -11,6 +11,7 @@ import { ledgerPath, rowAnswer } from './jev.js';
 import { realLock } from './runner-lock.js';
 import { holdsGoals, readTurnState, turnStatePath } from './programme-turn.js';
 import { readRecord } from './programme-record.js';
+import { archiveStatePath, liveGoals, pendingDestination, readArchiveState } from './archive-turn.js';
 import { readHorizon } from './desk-horizons.js';
 import { horizonHeldByItem, horizonStatePath, readHorizonState, scanRecords } from './manager-pulse.js';
 
@@ -103,7 +104,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
     write(join(dir, id, 'item.json'), item); existing.set(id, item);
   }
   for (const item of existing.values()) {
-    if (!open(item) || !['goal', 'main-red', 'programme', 'manager'].includes(item.kind)) continue;
+    if (!open(item) || !['goal', 'main-red', 'programme', 'manager', 'archive'].includes(item.kind)) continue;
     let summary = null;
     if (item.kind === 'goal') {
       const [programme, goal] = item.reference.split('/'); const gd = join(home, programme, 'goals', goal);
@@ -144,6 +145,20 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       if (!record) summary = 'The programme directory is gone.';
       else if (record.status !== 'valid' || record.record.state !== 'open') summary = 'The programme record no longer reads valid and open.';
       else if (holdsGoals({ home, programme, list })) summary = 'The programme now holds a goal.';
+    } else if (item.kind === 'archive') {
+      // An archive item is the archive turn's: it closes by source only when the programme directory is gone from the
+      // programmes home or its goals/ holds a live goal. A directory gone while the state still names a destination whose
+      // record does not read done is a record write that failed after the move: the item stays open until it is decided,
+      // so a write that keeps failing opens no new item. A state file that cannot be read keeps it open, said.
+      const programme = item.reference.slice('archive:'.length);
+      const turn = readArchiveState({ root, programme, read });
+      if (turn.status === 'unreadable') {
+        const path = archiveStatePath(root, programme);
+        issues.set(path, { path, error: turn.problem });
+        continue;
+      }
+      if (!exists(join(home, programme))) { if (!pendingDestination(turn, { read })) summary = 'The programme directory is gone.'; }
+      else if (liveGoals({ home, programme, list }).length) summary = 'The programme now holds a live goal.';
     } else if (item.kind === 'manager') {
       // A manager item is the horizon turn's: it closes when the horizon is not open, a valid open programme record
       // names it or a text item horizon:<slug> is open. A state file that cannot be read keeps it open, said.
@@ -191,6 +206,11 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
     const state = readTurnState({ root, programme: item.reference.slice('programme:'.length), read });
     const last = state.status === 'valid' ? state.state.failures.at(-1) : null;
     return firstLine(last?.reason || 'Source reason unavailable.');
+  }
+  if (item.kind === 'archive') {
+    const state = readArchiveState({ root, programme: item.reference.slice('archive:'.length), read });
+    const last = state.status === 'valid' ? state.state.failures.at(-1) : null;
+    return firstLine(last?.reason || 'The write-back reading found a gap.');
   }
   if (item.kind === 'manager') {
     const state = readHorizonState({ root, slug: item.reference.slice('manager:'.length), read });

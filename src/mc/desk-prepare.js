@@ -78,7 +78,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
       instructions: instructionsFor(launch.id, role.overlay), prompt: `Prepare only desk item ${id}. Read it with mc martin item ${id}. Write prepared.md here, then mc martin item ${id} prepared --sort <sort> and stop.`, profileArgs, stream: false, cache: role.cache });
     const processLaunch = gatewayLaunch({ provider, model: candidate.model, bin: launch.spec.bin, args, billing: billing.billing });
     const childEnv = withoutSessionIdentity(env);
-    for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
+    for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
     Object.assign(childEnv, { MC_ROLE: 'desk-prepare', MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model });
     const started = now();
     let result;

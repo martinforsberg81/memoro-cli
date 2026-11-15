@@ -23,7 +23,16 @@ const SERVICE = 'memoro-cli';
 const FALLBACK_DIR = join(homedir(), '.memoro');
 const FALLBACK_FILE = join(FALLBACK_DIR, 'secrets.json');
 
+/**
+ * A test-mode process never reaches the platform keychain: a locked host
+ * keyring makes `secret-tool` wait out KEYCHAIN_TIMEOUT_MS on every lookup,
+ * which stalled bare `mc` and `vault` runs in the full run for 30 s each. The
+ * file fallback sits under the isolated HOME.
+ */
+const testMode = () => process.env.MC_TEST_MODE === '1';
+
 export async function setSecret(account, value) {
+  if (testMode()) return fileSet(account, value);
   const p = platform();
   try {
     if (p === 'darwin')  return await macSet(account, value);
@@ -41,6 +50,7 @@ export async function setSecret(account, value) {
 }
 
 export async function getSecret(account) {
+  if (testMode()) return fileGet(account);
   const p = platform();
   try {
     if (p === 'darwin')  return await macGet(account);
@@ -53,6 +63,7 @@ export async function getSecret(account) {
 }
 
 export async function deleteSecret(account) {
+  if (testMode()) return fileDelete(account);
   const p = platform();
   try {
     if (p === 'darwin')  return await macDelete(account);

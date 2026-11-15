@@ -182,6 +182,23 @@ export function changePhases(dir, change, { read, write = writeFileAtomic } = {}
   return { ok: true, record, changed };
 }
 
+/**
+ * The one other change to a record that is there: its `state`. The runner sets it to `done` once it has archived a
+ * programme (archive-turn.js); `writeRecord` stays create-only. Validated and written whole and atomically (`write`), every
+ * other key as it was, in its place; a record already in that state is not written again. An invalid record or none is never
+ * touched. Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
+ */
+export function setRecordState(dir, state, { read, write = writeFileAtomic } = {}) {
+  const found = readRecord(dir, read ? { read } : {});
+  if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
+  const record = { ...found.record, state };
+  const problems = validateRecord(record);
+  if (problems.length) return { ok: false, status: 'refused', problems };
+  const changed = found.record.state !== state;
+  if (changed) write(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
+  return { ok: true, record, changed };
+}
+
 /** The record page's fenced markdown block in the packaged canon, or null when it cannot be read. */
 export function recordPageTemplate({ canon = canonRoot() } = {}) {
   let source;

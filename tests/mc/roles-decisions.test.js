@@ -95,7 +95,7 @@ describe('the decision shape every role writes', () => {
  */
 describe('the rules every session gets, whichever role it is', () => {
   const BUILDS = ['build-session:goal'];
-  const CANON_ROLES = ['manager', ...BUILDS, 'helper', 'intake', 'plan', 'mend-session'];
+  const CANON_ROLES = ['manager', ...BUILDS, 'intake', 'plan', 'mend-session'];
   const PUBLISHERS = ['manager', ...BUILDS, 'plan', 'mend-session'];
   const LOOSE_THREAD = phrase('What you found that is not your job is a proposal');
 

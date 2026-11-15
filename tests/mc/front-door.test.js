@@ -216,7 +216,8 @@ describe('the workarea verbs are gone', () => {
         assert.equal(result.stdout, '', what);
         assert.match(result.stderr, new RegExp(`^mc: mc ${args[0]} is gone — every session belongs to a programme or a desk$`, 'mu'), what);
         assert.match(result.stderr, /mc plan <programme>/u, what);
-        assert.match(result.stderr, /mc helper · mc martin/u, what);
+        assert.match(result.stderr, /mc martin {13}the desk/u, what);
+        assert.doesNotMatch(result.stderr, /mc helper/u, what);
       }
       assert.equal(existsSync(join(fx.workRoot, 'work')), false, 'nothing made ~/mc/work/');
     } finally { fx.cleanup(); }
