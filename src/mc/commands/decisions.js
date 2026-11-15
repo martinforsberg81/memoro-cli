@@ -56,7 +56,7 @@ function readingOf(row, by) {
   const answers = row.answers;
   if (!answers?.answer) return row.reason || 'jev unavailable';
   const choice = answers.answer.choice;
-  return `${choice} (p ${fixed(answers.answer.probabilities?.[choice])}, fits ${fixed(answers.fits)}, settled ${fixed(answers.settled)}${typeof answers.product === 'number' ? `, product ${fixed(answers.product)}` : ''}, ${row.model || '-'})`;
+  return `jev: ${choice} (p ${fixed(answers.answer.probabilities?.[choice])}, fits ${fixed(answers.fits)}, settled ${fixed(answers.settled)}${typeof answers.product === 'number' ? `, product ${fixed(answers.product)}` : ''}, ${row.model || '-'})`;
 }
 
 export function usage() { return commandUsage('decisions'); }
