@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { GOAL_FILE, LOG_FILE, parseGoal, parseLog, renderGoalText, waitsOnPerson } from './goals.js';
+import { deployMendPath, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { programsHome } from './paths.js';
 
@@ -92,6 +93,13 @@ export function collectMartinQueue({ selector = { kind: 'all' }, home = programs
         reason: entry.reason, pr: entry.pr || null, session_log: entry.session_log, worktree: entry.worktree,
       });
     }
+    // A deploy repair that reads Martin: its own file, never a desk item (the desk syncs goals and main-red only).
+    const deploy = deployMendReading({ root, read });
+    if (deploy.error) issues.push({ path: deployMendPath(root), error: deploy.error });
+    if (deploy.entry?.state === 'Martin') items.push({
+      kind: 'deploy-mend', reference: `deploy-mend:${deploy.entry.id}`, status: 'Martin', reason: deploy.entry.reason,
+      session_log: deploy.entry.session_log, worktrees: deploy.entry.worktrees || [],
+    });
   }
   // A pending structured question's timestamp is the ordering key. When a
   // runner blocked without one, retain its latest stage-entry time as evidence.
@@ -134,10 +142,14 @@ export function renderMartinQueue(result, { json = false } = {}) {
   if (json) return `${JSON.stringify({ ok: !result.error, ...result }, null, 2)}\n`;
   if (result.error) return `mc: ${result.error}\n`;
   if (!result.items.length) return `mc: no goals waiting on Martin${result.issues.length ? ` (${result.issues.length} unreadable/malformed source${result.issues.length === 1 ? '' : 's'} reported below)` : ''}\n${renderIssues(result.issues)}`;
-  const noun = result.items.some((item) => item.kind === 'main-red') ? 'item' : 'goal';
+  const noun = result.items.some((item) => item.kind === 'main-red' || item.kind === 'deploy-mend') ? 'item' : 'goal';
   const lines = [`mc: ${result.items.length} ${noun}${result.items.length === 1 ? '' : 's'} waiting on Martin`];
   const shownProgrammes = new Set();
   for (const item of result.items) {
+    if (item.kind === 'deploy-mend') {
+      lines.push('', `${item.reference} · Martin`, 'Repair a stopped deploy (mc repo mend deploy <id> requeue|drop --reason "…")', item.reason || 'Recovery exhausted', `Session log: ${item.session_log || 'not recorded'}`);
+      continue;
+    }
     if (item.kind === 'main-red') {
       lines.push('', `${item.reference} · Martin`, `Repair main's red: ${item.file}${item.pr ? ` · #${item.pr}` : ''}`, item.reason || 'Recovery exhausted', `Session log: ${item.session_log || 'not recorded'}`, `Worktree: ${item.worktree || 'not recorded'}`);
       continue;

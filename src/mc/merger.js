@@ -47,6 +47,7 @@ import {
   dequeue, enqueue, heldBy, inLine, markLanding, markOffline, markQueued, markRed, markRequeued, MERGE_BATCH_MAX, mergesPath, nextBatch, parseQueue,
   placeOf, queuedFor,
 } from './merge-queue.js';
+import { answerDeployMend, deployMendPath } from './deploy-repair.js';
 import { answerMainMend, mainMendPath, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
@@ -808,6 +809,11 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
       const swept = sweepMendWorktrees({ root, repo: job.repo, repoPath: job.repo_path, read });
       for (const { path, reason } of swept.kept) say(`${label}: landed main-red repair; worktree retained at ${path} — ${reason}`);
     }
+  }
+  // The same for a deploy repair: the pull request is recorded per repository by mc publish, and the runner decides repaired.
+  if (read(deployMendPath(root)) != null && (landed || (!back && !requeued && !offline))) {
+    try { answerDeployMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason || 'pull request closed without merging', read, write, lock }); }
+    catch (error) { say(`${label}: deploy-mend answer not recorded: ${error.message}`); }
   }
   for (const found of mainRepairsOf(report)) {
     const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files, tests: found.tests });

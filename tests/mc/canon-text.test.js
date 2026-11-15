@@ -107,6 +107,21 @@ describe('one home per rule in canon/', () => {
   });
 });
 
+describe('the deploy mend role page', () => {
+  const page = () => flat(read(join(canonRolesDir(), 'mend-session.md')));
+
+  it('says in its Deploy mend section never to run mc deploy, and that the runner retries once', () => {
+    assert.match(page(), /## Deploy mend — no goal/u);
+    assert.match(page(), /Never run `mc deploy`: the runner retries the deploy once/u);
+  });
+
+  it('ends with a published pull request or repaired for the request its prompt named, and a proposal of the design fault', () => {
+    assert.match(page(), /mc repo mend deploy <id> repaired --reason/u);
+    assert.match(page(), /only for the request your prompt named/u);
+    assert.match(page(), /proposal.*naming the fault of mc deploy's design/u);
+  });
+});
+
 describe('role context is loaded on demand', () => {
   it('launches each role without task catalogues or task bodies', () => {
     for (const ref of ['manager', 'build-session:goal', 'review-session:goal', 'mend-session', 'helper', 'intake', 'plan']) {

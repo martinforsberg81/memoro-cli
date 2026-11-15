@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { run } from '../../../src/mc/commands/repo.js';
+import { readDeployMends, requestDeployRepair, updateDeployMends } from '../../../src/mc/deploy-repair.js';
 import { mainMendReading, readMainMends, requestMainRepair } from '../../../src/mc/main-repair.js';
 import { mergesPath } from '../../../src/mc/merge-queue.js';
 
@@ -205,4 +206,67 @@ describe('mc repo mend refusals', () => {
     it(`refuses a ${label} --reason`, async () => { await refusedAs({ MC_TOOL: 'person' }, what); });
   }
   it('refuses a verb that is neither requeue nor drop', async () => { await refusedAs({ MC_TOOL: 'person' }, ['memoro', 'aaaa11', 'close', '--reason', 'x']); });
+});
+
+describe('mc repo mend deploy', () => {
+  /** A request seeded through the real writer, on the fixture's in-memory state. */
+  function deployFixture(change = {}) {
+    const f = fixture({ entries: [] });
+    f.state = { root: ROOT, read: f.read, write: f.write, lock: f.lock };
+    requestDeployRepair({ ...f.state, row: { started: '2026-11-14T09:00:00.000Z', sha: 'a'.repeat(40), stopped_at: 'deployer', note: 'wrangler fell over' }, holder: 'martin@laptop', now: () => new Date(AT), mkdir: () => {}, copy: () => {} });
+    updateDeployMends(f.state, (entries) => { Object.assign(entries[0], { state: 'Martin', failures: 2, reason: 'two attempts failed', ...change }); });
+    f.id = readDeployMends(f.state)[0].id;
+    f.deployEntry = () => readDeployMends(f.state)[0];
+    return f;
+  }
+
+  for (const [label, env] of [['a person', { MC_TOOL: 'person' }], ['the martin role', { MC_ROLE: 'martin' }], ['the decision role', { MC_ROLE: 'decision' }]]) {
+    it(`${label} requeues a held deploy repair: queued with no failures, the answer recorded`, async () => {
+      const f = deployFixture();
+      assert.equal(await f.mend(['deploy', f.id, 'requeue', '--reason', 'try again'], env), 0, f.err);
+      assert.deepEqual([f.deployEntry().state, f.deployEntry().failures], ['queued', 0]);
+      assert.equal(f.deployEntry().answered.reason, 'try again');
+    });
+  }
+
+  it('drop ends a held request, and asks GitHub nothing', async () => {
+    const f = deployFixture();
+    assert.equal(await f.mend(['deploy', f.id, 'drop', '--reason', 'the deploy shipped by hand']), 0, f.err);
+    assert.equal(f.deployEntry().state, 'dropped');
+    assert.deepEqual(f.events.filter((event) => event.startsWith('gh')), []);
+  });
+
+  it('a request that is not held cannot be requeued or dropped, and nothing is written', async () => {
+    const f = deployFixture({ state: 'running' });
+    const before = JSON.stringify(f.deployEntry());
+    f.writes = 0;
+    for (const verb of ['requeue', 'drop']) assert.equal(await f.mend(['deploy', f.id, verb, '--reason', 'x']), 2, verb);
+    assert.deepEqual([JSON.stringify(f.deployEntry()), f.writes], [before, 0]);
+  });
+
+  it('an unattended session and a role that is neither the desk nor a person cannot answer a held request', async () => {
+    const f = deployFixture();
+    assert.equal(await f.mend(['deploy', f.id, 'requeue', '--reason', 'x'], { MC_ROLE: 'martin', MC_HEADLESS: '1' }), 2);
+    assert.equal(await f.mend(['deploy', f.id, 'drop', '--reason', 'x'], { MC_ROLE: 'build-session' }), 2);
+    assert.equal(f.deployEntry().state, 'Martin');
+  });
+
+  it('repaired is the mend session\'s: a running request it was named for reads repaired, from the session and no one else', async () => {
+    const f = deployFixture({ state: 'running', failures: 0 });
+    assert.equal(await f.mend(['deploy', f.id, 'repaired', '--reason', 'removed a stale lock'], { MC_ROLE: 'mend-session' }), 2, 'the prompt named no request');
+    assert.equal(await f.mend(['deploy', f.id, 'repaired', '--reason', 'x'], { MC_TOOL: 'person' }), 2, 'a person is not the session');
+    assert.equal(f.deployEntry().state, 'running');
+    assert.equal(await f.mend(['deploy', f.id, 'repaired', '--reason', 'removed a stale lock'], { MC_ROLE: 'mend-session', MC_DEPLOY_MEND: f.id }), 0, f.err);
+    assert.equal(f.deployEntry().state, 'repaired');
+  });
+
+  it('a missing id, answer or reason is a usage error that reads nothing', async () => {
+    const f = deployFixture();
+    f.writes = 0;
+    assert.equal(await f.mend(['deploy']), 2);
+    assert.equal(await f.mend(['deploy', f.id]), 2);
+    assert.equal(await f.mend(['deploy', f.id, 'requeue']), 2);
+    assert.equal(await f.mend(['deploy', f.id, 'launch', '--reason', 'x']), 2);
+    assert.equal(f.writes, 0);
+  });
 });
