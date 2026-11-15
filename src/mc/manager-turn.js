@@ -65,7 +65,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
   mkdirSync(dir, { recursive: true });
   const log = join(dir, 'result.json');
   const childEnv = withoutSessionIdentity(env);
-  for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED']) delete childEnv[key];
+  for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED']) delete childEnv[key];
   Object.assign(childEnv, { MC_ROLE: 'manager', MC_HEADLESS: '1', MC_TOOL: launch.shortName || launch.id, MC_MODEL: selectedModel, MC_SCRATCH: dir });
   const release = (deps.register || registerForeground)({ verb: 'manager', tool: launch.shortName || launch.id, model: selectedModel, role: roleRecord({ ...role, source: roleSourceOf(role), instructions }), env });
   try {

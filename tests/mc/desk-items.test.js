@@ -583,3 +583,64 @@ test('one way to ask: the record — a text item proposed with a goal is found b
   assert.equal(third.duplicate,true); assert.equal(third.item.goal,'alpha/one','an item that names a goal keeps it');
   assert.equal(readDeskItem(first.item.id,{env:f.env}).goal,'alpha/one');
 });
+
+/* ---- an archive item: the programme archive turn's */
+
+function archiveItem(f, fields = {}) {
+  const dir = join(f.home, 'prog'); mkdirSync(join(dir, 'goals', '.archive', 'g1'), { recursive: true });
+  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n');
+  const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('archive', 'archive:prog', stamp), kind: 'archive', reference: 'archive:prog', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
+  writeDeskItem(item, { env: f.env });
+  return item;
+}
+const archiveStateAt = (f) => join(f.env.MC_WORK_ROOT, 'runner', 'archive-turn', 'prog.json');
+function writeArchiveState(f, text) { mkdirSync(join(f.env.MC_WORK_ROOT, 'runner', 'archive-turn'), { recursive: true }); writeFileSync(archiveStateAt(f), text); }
+function syncArchive(f) {
+  const issues = [];
+  const item = syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, reportIssue: (issue) => issues.push(issue) }).find((one) => one.reference === 'archive:prog');
+  return { item, issues };
+}
+
+test('an archive item closes by source only when its programme directory is gone or goals/ holds a live goal', () => {
+  const open = fixture(); archiveItem(open);
+  assert.equal(syncArchive(open).item.state, 'prepared', 'a finished programme keeps its item open');
+  writeFileSync(join(open.home, 'prog', 'goals', '.hold.json'), '{}');
+  assert.equal(syncArchive(open).item.state, 'prepared', 'a dot-entry of goals/ is no live goal');
+  const done = fixture(); archiveItem(done); writeFileSync(join(done.home, 'prog', 'PROGRAMME.json'), JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' }));
+  assert.equal(syncArchive(done).item.state, 'prepared', 'a record that reads done while the directory stands does not close it');
+
+  const live = fixture(); archiveItem(live);
+  mkdirSync(join(live.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(live.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
+  const held = syncArchive(live).item;
+  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'The programme now holds a live goal.']);
+
+  const gone = fixture(); archiveItem(gone); rmSync(join(gone.home, 'prog'), { recursive: true, force: true });
+  const missing = syncArchive(gone).item;
+  assert.deepEqual([missing.state, missing.outcome.by, missing.outcome.summary], ['closed', 'source', 'The programme directory is gone.']);
+});
+
+test('an archive item stays open while the moved directory\'s record does not read done, and closes by source once it does', () => {
+  const f = fixture(); archiveItem(f, { state: 'for-martin' });
+  const moved = join(f.home, '.archive-dest', 'prog'); mkdirSync(moved, { recursive: true });
+  writeFileSync(join(moved, 'PROGRAMME.json'), PROGRAMME_RECORD);
+  rmSync(join(f.home, 'prog'), { recursive: true, force: true });
+  writeArchiveState(f, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'prog', failures: [], items: [], reading: null, destination: moved }));
+  assert.equal(syncArchive(f).item.state, 'for-martin', 'a record write still failing after the move keeps the item open');
+  writeFileSync(join(moved, 'PROGRAMME.json'), JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' }));
+  const closed = syncArchive(f).item;
+  assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme directory is gone.']);
+});
+
+test('an archive item whose state cannot be read stays open and the sync reports the file; it is labelled by the last failure', () => {
+  const f = fixture();
+  const item = archiveItem(f);
+  const ask = () => deskItemQuestion(item, { env: f.env, home: f.home, read: fixtureRead });
+  assert.equal(ask(), 'The write-back reading found a gap.', 'no state file: the reading found a gap');
+  writeArchiveState(f, JSON.stringify({ schema: 'mc-archive-turn', version: 1, programme: 'prog', failures: [{ at: '2026-11-14T10:00:00Z', reason: 'archive failed: gh is down\nmore', log: null }], items: [], reading: null, destination: null }));
+  assert.equal(ask(), 'archive failed: gh is down');
+  mkdirSync(join(f.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(f.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
+  writeArchiveState(f, '{ not json');
+  const { item: kept, issues } = syncArchive(f);
+  assert.equal(kept.state, 'prepared', 'not closed on a source that could not be read');
+  assert.equal(issues.filter((issue) => issue.path === archiveStateAt(f)).length, 1);
+});

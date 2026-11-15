@@ -710,7 +710,10 @@ function reviewMove(goal, target, to, ctx) {
   // The areas the review was told of at its launch, never asked of main again (`seenAreas`, run.js): a session started
   // before an area declared `seen`, or by a runner from before the key, is held to no `seen` line.
   const seen = String(env.MC_REVIEW_SEEN ?? '').split(/\s+/u).filter(Boolean);
-  const checked = checkVerdict({ text, goal, tripped: found.tripped, heads: found.heads, seen, isFile: (path) => ctx.exists(join(target.dir, path)) });
+  // Likewise the write-back line: held only when the runner launched this review with MC_REVIEW_WRITE_BACK=1 (a version 2
+  // goal of a programme with a record), so a review launched without it is held to no such line.
+  const writeBack = env.MC_REVIEW_WRITE_BACK === '1' && goal.version === 2;
+  const checked = checkVerdict({ text, goal, tripped: found.tripped, heads: found.heads, seen, writeBack, isFile: (path) => ctx.exists(join(target.dir, path)) });
   if (checked.problems.length) return { refusal: `${file} is not complete for the head judged (${env.MC_REVIEW_HEAD}) —\n  ${checked.problems.join('\n  ')}` };
   const ids = checked.failed.map((one) => one.id).join(', ');
   if (to === 'merge' && checked.failed.length) return { refusal: `${REVIEW_FILE} has NOT OK lines (${ids}) — a goal with a rejected item does not merge: mc goal stage build` };

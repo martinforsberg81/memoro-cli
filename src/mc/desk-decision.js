@@ -5,6 +5,7 @@ import { recordUnsettled } from './desk-lessons.js';
 import { programsHome, workRoot } from './paths.js';
 import { horizonStatePath } from './manager-pulse.js';
 import { turnStatePath } from './programme-turn.js';
+import { archiveStatePath } from './archive-turn.js';
 
 /** The decision pass takes prepared items only: no clock brings one, and a for-martin item is Martin's. */
 export function decisionEligible(item) {
@@ -16,6 +17,12 @@ function programmeLine(item, env) {
   return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}. The planning turn's failures are in ${turnStatePath(workRoot(env), programme)}; read them and each session log they name. Repair what failed within your reach, then close --by decision so the runner plans the programme again. A text of Martin's that would have to change goes to a brief instead.\n`;
 }
 
+/** What an archive item adds: the programme's directory, the archive turn's state file and the reading's file. */
+function archiveLine(item, env) {
+  const programme = item.reference.slice('archive:'.length);
+  return `Programme: ${programme}. Programme directory: ${join(programsHome(env), programme)}; the archive reading's WRITE-BACK.md is there. The archive turn's failures are in ${archiveStatePath(workRoot(env), programme)}; read them and each session log they name. Close the gap the reading found — a goal that writes the missing pages into docs/technical/ and the area pages, or the repair of what failed — then close --by decision so the runner reads the write-back again. A text of Martin's that would have to change goes to a brief instead.\n`;
+}
+
 /** What a manager item adds: the horizon and the horizon turn's state file, where its failures are kept. */
 function managerLine(item, env) {
   const slug = item.reference.slice('manager:'.length);
@@ -25,8 +32,8 @@ function managerLine(item, env) {
 export function decisionPrompt(item, { env, goal }) {
   const dir = itemDirectory(item, env);
   return `Decide desk item ${item.id}. Item directory: ${dir}. Read prepared.md there first, then mc martin item ${item.id} for the live source and state.\n`
-    + (item.kind === 'programme' ? programmeLine(item, env) : item.kind === 'manager' ? managerLine(item, env) : '')
-    + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : item.kind === 'programme' || item.kind === 'manager' ? '' : 'No goal identity is assigned; work in the item directory.\n')
+    + (item.kind === 'programme' ? programmeLine(item, env) : item.kind === 'manager' ? managerLine(item, env) : item.kind === 'archive' ? archiveLine(item, env) : '')
+    + (goal ? `Goal: ${item.reference}. Goal directory: ${goal.dir}. Read the goal, its whole LOG.md, worktree state and stage role, and record takeover before acting.\n` : item.kind === 'programme' || item.kind === 'manager' || item.kind === 'archive' ? '' : 'No goal identity is assigned; work in the item directory.\n')
     + 'Settle and close --by decision. A remaining change to a text Martin holds is written to brief.md in Swedish, in the form of docs/technical/mc-martin.md (## Vad den säger, ## Vad som föreslås, ## Vad som hittades; no options, no recommendation) and marked brief --sort text --text \'<the text>\' --reversible yes|no; a reserved act is marked brief --sort reserved --reversible yes|no. No clock carries out a brief.\n'
     + 'Keep evidence, gate, review, publish and merge unchanged. Do not launch another decision or Martin session.';
 }
