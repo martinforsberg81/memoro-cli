@@ -1688,6 +1688,7 @@ function goalNamed(arg, { env, home }) {
  * decision or reserved act.
  */
 export function refusedMove({ from, to = null, status = null, env, reviewWritten = false, dir = 'the goal\'s directory' }) {
+  if (to === 'finish') return 'finish is no longer a goal stage to move to — use mc goal stage build for a rejected review';
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (env.MC_ROLE === 'plan-review') return 'a plan-review session reads and writes only PLAN-REVIEW.md, then records its verdict with mc goal plan-review <programme>/<goal> verdict ok|not-ok; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {

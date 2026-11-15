@@ -459,9 +459,9 @@ function reviewed({ files, env = REVIEW, pr = { number: 31, headRefOid: 'fff0000
   return f;
 }
 
-test('every move of the order, by its owner: draft → build by plan, build → review by build, review → merge or finish by review, finish → merge by plan, merge → done by a person; dropped from any stage by plan', async () => {
+test('stage moves by their owners, including recovery from historical finish', async () => {
   const moves = [
-    ['draft', 'build', PLAN], ['build', 'review', BUILD], ['review', 'merge', REVIEW], ['review', 'finish', REVIEW],
+    ['draft', 'build', PLAN], ['build', 'review', BUILD], ['review', 'merge', REVIEW],
     ['finish', 'merge', PLAN], ['merge', 'done', {}], ['draft', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
   ];
   for (const [from, to, env] of moves) {
@@ -723,14 +723,7 @@ test('a failed fetch before review is a warning: the goal moves, and its merge i
   assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'stage'), 'review');
 });
 
-test('a review\'s finish is refused until REVIEW.md is written; a review sets no status and moves only a goal in review, to merge or finish', async () => {
-  const f = reviewed({ files: inStage('review') });
-  assert.equal(await run(['stage', 'finish'], f.deps), 2);
-  assert.equal(f.err(), `mc: a review sends a goal to finish with REVIEW.md — write ${DIR}/REVIEW.md first: the head judged, what is wrong and where\n`);
-  f.store[`${DIR}/REVIEW.md`] = 'head abc1234def: criterion 2 fails\n';
-  assert.equal(await run(['stage', 'finish'], f.deps), 0, f.err());
-  assert.equal(stateOf(f), 'finish · ready');
-  assert.equal(f.queued.length, 0, 'nothing queued for a finish');
+test('a review sets no status and moves only a goal in review', async () => {
   for (const [from, argv, said] of [
     ['review', ['ready', '--reason', 'x'], /a review sets Martin for an unrecoverable in-role obstacle, or ends with mc goal stage merge \(OK to land\) or finish/u],
     ['review', ['stage', 'done'], /a review ends in merge or finish, not done/u],
@@ -742,14 +735,22 @@ test('a review\'s finish is refused until REVIEW.md is written; a review sets no
   }
 });
 
-test('refusedMove: a person may make any move; a plan session any forward one; nobody else more than their own', () => {
-  for (const to of STAGES) assert.equal(refusedMove({ from: 'merge', to, env: {} }), null, `a person to ${to}`);
-  for (const to of ['build', 'review', 'finish', 'merge', 'done', 'dropped']) assert.equal(refusedMove({ from: 'draft', to, env: PLAN }), null, `draft to ${to}`);
+test('refusedMove: a person may make other moves; a plan session other forward ones; nobody else more than their own', () => {
+  for (const to of STAGES.filter(x => x !== 'finish')) assert.equal(refusedMove({ from: 'merge', to, env: {} }), null, `a person to ${to}`);
+  for (const to of ['build', 'review', 'merge', 'done', 'dropped']) assert.equal(refusedMove({ from: 'draft', to, env: PLAN }), null, `draft to ${to}`);
   assert.equal(refusedMove({ from: 'build', status: 'blocked', env: PLAN }), null);
   assert.equal(refusedMove({ from: 'build', to: 'review', env: BUILD }), null);
   assert.equal(refusedMove({ from: 'review', to: 'merge', env: REVIEW }), null);
-  assert.equal(refusedMove({ from: 'review', to: 'finish', env: REVIEW, reviewWritten: true }), null);
   assert.equal(refusedMove({ from: 'build', env: BUILD }), null, 'an entry alone');
+});
+
+test('no caller can move a goal to finish', async () => {
+  for (const env of [{}, PLAN, { ...SESSION, MC_ROLE: 'martin' }, REVIEW, BUILD]) {
+    const f = fixture({ files: inStage('review'), env });
+    assert.equal(await run(['stage', 'mc/plain', 'finish'], f.deps), 2, env.MC_ROLE || 'person');
+    assert.match(f.err(), /mc goal stage build/u);
+    assert.equal(stateOf(f), 'review · ready');
+  }
 });
 
 test('mc goal set, document add and criterion add fill a goal through verbs; criterion met and unmet record it', async () => {
@@ -1855,7 +1856,7 @@ test('decision alone gains unattended desk moves, acceptance rewrites and attrib
   dropFixture(f);
   assert.equal(await run(['drop','mc/plain','--reason','Obsolete scope'], f.deps),0,f.err());
   for (const from of STAGES) {
-    for (const to of STAGES.filter(x=>x!=='done')) assert.equal(refusedMove({ from,to,env }),null,`${from} to ${to}`);
+    for (const to of STAGES.filter(x=>x!=='done' && x!=='finish')) assert.equal(refusedMove({ from,to,env }),null,`${from} to ${to}`);
     for (const status of ['ready','blocked','Martin']) assert.equal(refusedMove({ from,status,env }),null);
     assert.match(refusedMove({ from,to:'done',env }),/does not mark/u);
   }
