@@ -31,7 +31,7 @@ import { openSync, readSync, closeSync, lstatSync, readdirSync, rmSync, statSync
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { declared, toolShortName, toolsDeclaring } from '../adapters/index.js';
+import { canonicalToolId, declared, toolShortName, toolsDeclaring } from '../adapters/index.js';
 import {
   agyBrainDir, agyHeldOpen, agyHome, agyTranscriptPath, agyWorkspaces, conversationLaunch, firstUserContent,
 } from './agy-brain.js';
@@ -79,7 +79,7 @@ const SOURCES = { 'agy-brain': agyConversations };
 function mechanismConversations(areaRoot, env) {
   return toolsDeclaring('CONVERSATION_SOURCE').flatMap((tool) => {
     const collect = SOURCES[declared(tool, 'CONVERSATION_SOURCE')];
-    return collect ? collect(areaRoot, env, tool) : [];
+    return collect ? collect(areaRoot, env, canonicalToolId(tool)) : [];
   });
 }
 
