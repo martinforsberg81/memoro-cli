@@ -142,6 +142,9 @@ archives a programme of either kind, as in
 mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]
 mc programs record <programme> --end "…" [--horizon <slug>]
 mc programs show <programme> [--json]
+mc programs sign <programme> [--reason "…"]
+mc programs review <programme>
+mc programs review <programme> verdict ok|not-ok
 mc programs after <programme> <phase> <phase>… | --none
 ```
 
@@ -189,6 +192,60 @@ and a build session get exit 2 with the role named; the Martin role with
 `MC_HEADLESS=1` is refused too. A role added later is refused until it is
 named. `show` and `list` have no guard. The pre-tool hook refuses a direct
 write of the file (`programme-file`, [mc-hooks.md](mc-hooks.md)).
+
+### Sign-off and independent programme reading
+
+`sign` is interactive-Martin-only: exactly `MC_ROLE=martin` and
+`MC_HEADLESS` not `1`. Every other caller, including a bare shell, exits 2
+with `mc: only Martin at the desk signs a programme`, before effects. A bad
+request also exits 2. It exits 1 unless the record is draft, the complete
+[document structure](../../canon/tasks/references/programme-document.md) is present, and an independent
+reading judges the exact current README bytes. Each structural refusal names
+its heading/entry/Repositories line; this is not a prose-quality judgement.
+No reading or a stale reading refuses even with `--reason`, naming
+`mc programs review <programme>`. Current NOT OK needs nonempty `--reason`;
+current OK does not. A successful sign prints `<programme>: signed — goals may
+be cut` and appends Martin/time and any override reason to programme LOG.md.
+The record writer checks the current reading inside its strict lock before
+writing either sign-off file; normal record writes retain their other fields.
+
+`review` is an in-session call, not a runner lane or scheduled turn. A manager,
+interactive desk, interactive programme plan without MC_GOAL, or a person can
+call it; other roles and headless Martin/plan are refused (2) before effects.
+The Repositories line names known repository names (comma/space separated,
+optional terminal full stop); unknown names or no entries refuse (2), never
+turning document text into arbitrary filesystem paths. Read exports are the
+existing `git archive origin/main` mechanism, without repository metadata.
+Cleanup proves the owned export directory's device/inode/birthtime and retains
+and reports a replacement directory or symlink rather than deleting it.
+
+`src/mc/plan-review.js` shares reader selection, adapter/capability and billing
+routing, token/launch mechanics, session launch and report/verdict checks with
+goal plan review. It removes the caller's tool/model from the review catalogue
+when another can run (the catalogue first retains priority only if still
+present), with the same capacity/API-reserve and fallback rules. No provider
+command or extra routing policy is added. Goal plan review retains its
+20-minute/two-reading policy and draft-to-build gate. Programme review has a
+30-minute timeout and no reading cap, including a third call on the same text.
+
+The child has MC_ROLE=programme-review, MC_PROGRAMME and its own
+MC_PROGRAMME_REVIEW_TOKEN, not the caller's goal/session/review identity. The
+one in-flight `.programme-review-launch.json` holds only the token's sha256,
+programme/role, README hash, caller model and pid/start. Its verdict verb accepts
+only this role/programme/token while the launch is live; it rejects changed
+README bytes, an earlier report, conflicting verdict or missing findings count.
+The reader writes PROGRAMME-REVIEW.md with line one OK or NOT OK, line two
+`findings: <n>`, then findings naming part/entry/narrowest fix. The verdict binds
+the report hash too. On completion a strict-lock fresh-text check writes
+`.programme-review.json`: verdict, judged README sha256 (`hash`), ISO time
+(`at`), findings count, report sha256, tool/model and author. The report and
+metadata must still agree for sign to accept the current reading. No raw token
+is persisted. Calls print verdict/path and exit 0 for OK, 1 for NOT OK, 2 for
+refusal, timeout or no valid verdict (including changed judged files). Launch
+bookkeeping is removed; paid sessions retain the existing run-row accounting.
+Only report/metadata persist as the reading; no sign-off desk item is made here.
+The role's eight questions are owned by `canon/roles/programme-review.md`.
+It is a reader, with no goal mutation, sign-off or mc ask authority.
 
 `mc programs list` and the page's PROGRAMMES read the directory names that
 hold a `PROGRAMME.json`, valid or not, so a recorded programme is listed (and

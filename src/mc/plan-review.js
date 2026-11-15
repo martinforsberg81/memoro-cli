@@ -374,17 +374,17 @@ export async function realSession({ bin, args, ...options }) {
 const jsonOrNull = (text) => { try { return JSON.parse(text); } catch { return null; } };
 
 /** The launch in the goal's directory: `{ launch }`, `{ none: true }` or `{ problem }` for a file that is not one. */
-function readLaunch(dir, read) {
-  const text = read(join(dir, LAUNCH_FILE));
+function readLaunch(dir, read, file = LAUNCH_FILE) {
+  const text = read(join(dir, file));
   if (text === null) return { none: true };
   const launch = jsonOrNull(text);
-  return launch && typeof launch === 'object' ? { launch } : { problem: `${join(dir, LAUNCH_FILE)} is not a launch record` };
+  return launch && typeof launch === 'object' ? { launch } : { problem: `${join(dir, file)} is not a launch record` };
 }
 
 /** Whether a launch is live: its pid runs and its start is within the limit. */
-function liveLaunch(launch, now, alive) {
+function liveLaunch(launch, now, alive, limit = LIMIT_MS) {
   const start = Date.parse(launch.start);
-  return Number.isInteger(launch.pid) && alive(launch.pid) && Number.isFinite(start) && now.getTime() - start < LIMIT_MS;
+  return Number.isInteger(launch.pid) && alive(launch.pid) && Number.isFinite(start) && now.getTime() >= start && now.getTime() - start < limit;
 }
 
 // ------------------------------------------------------------ the call
@@ -408,17 +408,41 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   if (avoid !== null && !authorOf({}, avoid)) return refuse('--avoid is <tool>:<model>');
   if (declarations.error) return refuse(`the declared rule areas cannot be read: ${declarations.error}`);
 
+  return readerCall({ target, ctx, deps, policy: {
+    kind: 'plan-review', role: PLAN_REVIEW_ROLE, launchFile: LAUNCH_FILE, reviewFile: REVIEW_TEXT_FILE,
+    limitMs: LIMIT_MS, limitWords: 'twenty minutes', invalidExit: 1,
+    hash: goalHash(goal), round: state.readings.length + 1, author: authorOf(env, avoid),
+    checkoutName: `mc-plan-review-${target.programme}-${target.goal}-r${state.readings.length + 1}`,
+    identity: { MC_GOAL: target.name }, tokenEnv: 'MC_PLAN_REVIEW_TOKEN', runName: `goal:${target.name}`,
+    repos: declarations.declared, names: [GOAL_FILE, LOG_FILE, HOLD_FILE],
+    prompt: (checkout) => readerPrompt({ name: target.name, goal, declared: declarations.declared, dir: target.dir, checkout }),
+    beforeSession: (round) => {
+      if (round > 1) {
+        const earlier = read(join(target.dir, REVIEW_TEXT_FILE));
+        if (earlier !== null) write(join(target.dir, `PLAN-REVIEW-${round - 1}.md`), earlier);
+      }
+    },
+    store: ({ verdict, hash, round, candidate, author, at }) => {
+      appendRecord(target.dir, { kind: 'reading', verdict, hash, round, tool: candidate.tool, model: candidate.model, author, at: at.toISOString() }, { read, write });
+      const path = join(target.dir, REVIEW_TEXT_FILE);
+      appendEntry({ dir: target.dir, entry: { at: logStamp(at), tool: candidate.tool, model: candidate.model, role: PLAN_REVIEW_ROLE, stage: goal.stage, status: goal.status, done: `plan review round ${round}: ${verdictWord(verdict)}`, comment: `${candidate.tool} ${candidate.model}, judged text ${hash.slice(0, 12)}; ${path}`, next: null }, read, write });
+    },
+  } });
+}
+
+/** Shared adapter-based reader launch. Bindings own their state, prompt and persistence, not routing or cleanup. */
+export async function readerCall({ target, ctx, deps = {}, policy }) {
+  const { stdout, stderr, env, read, write } = ctx;
+  const { kind, role: roleName, launchFile, reviewFile, limitMs, limitWords, invalidExit, hash, round, author, names } = policy;
+  const refuse = (text) => { stderr.write(`mc: ${kind} ${target.name}: ${text}\n`); return 2; };
   const now = deps.now ?? (() => new Date());
   const alive = deps.alive ?? ctx.alive ?? pidAlive;
   const lockRoot = workRoot(env);
   const lock = deps.lock ?? ctx.lock;
   const pid = deps.pid ?? process.pid;
-  const hash = goalHash(goal);
-  const round = state.readings.length + 1;
-  const author = authorOf(env, avoid);
   // A dead call may leave its tree behind without recording a reading. Never reuse or remove that tree.
   const checkoutId = (deps.checkoutId ?? randomUUID)();
-  const checkout = join(deps.tmp ?? tmpdir(), `mc-plan-review-${target.programme}-${target.goal}-r${round}-${checkoutId}`);
+  const checkout = join(deps.tmp ?? tmpdir(), `${policy.checkoutName}-${checkoutId}`);
   const exists = deps.exists ?? existsSync;
   if (exists(checkout)) return refuse(`${checkout} exists and this call did not make it — nothing is launched and nothing removed`);
 
@@ -431,33 +455,34 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   };
   let route;
   try { route = candidateOf(); } catch (error) { route = { ok: false, reason: error.message || String(error) }; }
-  if (!route?.ok || !route.candidate) { stderr.write(`mc: plan-review ${target.name}: no review candidate can run — ${route?.reason || 'no answer'}\n`); return 1; }
+  if (!route?.ok || !route.candidate) { stderr.write(`mc: ${kind} ${target.name}: no review candidate can run — ${route?.reason || 'no answer'}\n`); return invalidExit; }
   const candidate = route.candidate;
   const launched = (deps.launch ?? resolveLaunch)(candidate.tool);
-  if (!launched?.ok) { stderr.write(`mc: plan-review ${target.name}: ${launched?.hint || launched?.reason || `${candidate.tool} is unavailable`}\n`); return 1; }
-  const role = (deps.role ?? readCanonRole)(PLAN_REVIEW_ROLE);
-  if (!role?.overlay) { stderr.write(`mc: plan-review ${target.name}: the plan-review role is missing\n`); return 1; }
+  if (!launched?.ok) { stderr.write(`mc: ${kind} ${target.name}: ${launched?.hint || launched?.reason || `${candidate.tool} is unavailable`}\n`); return invalidExit; }
+  const role = (deps.role ?? readCanonRole)(roleName);
+  if (!role?.overlay) { stderr.write(`mc: ${kind} ${target.name}: the ${roleName} role is missing\n`); return invalidExit; }
   const billing = (deps.billingRoute ?? billingRouteNow)(candidate.tool, { env, now: now(), route: { billing: route.billing, why: route.why } });
-  if (billing.billing === 'unavailable') { stderr.write(`mc: plan-review ${target.name}: ${billing.why}\n`); return 1; }
+  if (billing.billing === 'unavailable') { stderr.write(`mc: ${kind} ${target.name}: ${billing.why}\n`); return invalidExit; }
 
   // The claim: one launch at a time, a dead or expired one closed as no reading.
   const token = (deps.token ?? (() => randomBytes(24).toString('hex')))();
   const started = now();
   const claimed = lock(lockRoot, () => {
-    const existing = readLaunch(target.dir, read);
+    const existing = readLaunch(target.dir, read, launchFile);
     if (existing.problem) return { refused: existing.problem };
-    if (existing.launch && liveLaunch(existing.launch, now(), alive)) return { refused: `a reading of round ${existing.launch.round ?? '?'} is running (pid ${existing.launch.pid}, since ${existing.launch.start})` };
-    write(join(target.dir, LAUNCH_FILE), `${JSON.stringify({ round, hash, token_sha256: sha256(token), pid, start: started.toISOString(), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
+    if (existing.launch && liveLaunch(existing.launch, now(), alive, limitMs)) return { refused: `a reading of round ${existing.launch.round ?? '?'} is running (pid ${existing.launch.pid}, since ${existing.launch.start})` };
+    const problem = policy.check?.();
+    if (problem) return { refused: problem };
+    write(join(target.dir, launchFile), `${JSON.stringify({ binding: target.name, role: roleName, round, hash, token_sha256: sha256(token), pid, start: started.toISOString(), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
     return {};
-  }, { strict: true, name: 'plan-review-claim' });
+  }, { strict: true, name: `${kind}-claim` });
   if (claimed.refused) return refuse(claimed.refused);
 
-  const names = [GOAL_FILE, LOG_FILE, HOLD_FILE];
   const before = Object.fromEntries(names.map((file) => [file, read(join(target.dir, file))]));
   const discard = deps.discard ?? realDiscard;
   let made = false;
   let identity = null;
-  const closeLaunch = () => { try { (deps.remove ?? ctx.remove)(join(target.dir, LAUNCH_FILE)); } catch { /* none left */ } };
+  const closeLaunch = () => { try { (deps.remove ?? ctx.remove)(join(target.dir, launchFile)); } catch { /* none left */ } };
   let result = null;
   let summary = null;
   let verdict = null;
@@ -465,16 +490,13 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
   try {
     try { mkdirSync(checkout, { recursive: false }); made = true; identity = checkoutIdentity(checkout); } catch (error) { note = `the checkout could not be made: ${error.message}`; }
     if (made && !note) {
-      const done = (deps.checkout ?? realCheckout)({ repos: declarations.declared.map((one) => ({ repo: one.repo, path: one.path })), dir: checkout });
+      const done = (deps.checkout ?? realCheckout)({ repos: policy.repos.map((one) => ({ repo: one.repo, path: one.path })), dir: checkout });
       if (!done?.ok) note = done?.reason || 'the checkout failed';
     }
     if (!note) {
-      if (round > 1) {
-        const earlier = read(join(target.dir, REVIEW_TEXT_FILE));
-        if (earlier !== null) write(join(target.dir, `PLAN-REVIEW-${round - 1}.md`), earlier);
-      }
-      stdout.write(`mc: plan-review ${target.name}: round ${round} on ${candidate.tool} ${candidate.model}${author ? ` — the author is ${author.tool} ${author.model}${candidate.model === author.model && candidate.tool === author.tool ? ' (no other model could run)' : ''}` : ' — the author\'s model is unknown, none excluded'}\n`);
-      const prompt = readerPrompt({ name: target.name, goal, declared: declarations.declared, dir: target.dir, checkout });
+      policy.beforeSession?.(round);
+      stdout.write(`mc: ${kind} ${target.name}: round ${round} on ${candidate.tool} ${candidate.model}${author ? ` — the author is ${author.tool} ${author.model}${candidate.model === author.model && candidate.tool === author.tool ? ' (no other model could run)' : ''}` : ' — the author\'s model is unknown, none excluded'}\n`);
+      const prompt = policy.prompt(checkout);
       const args = headlessArgs({ toolId: launched.id, adapter: launched.adapter, model: candidate.model, effort: candidate.effort,
         instructions: instructionsFor(launched.id, role.overlay), prompt, profileArgs, stream: false, cache: role.cache });
       // A tool that takes the checkout as an allowed directory declares where its argument goes.
@@ -483,42 +505,48 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       if (at > 0) args.splice(at, 0, allowed.flag, checkout);
       const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
-      Object.assign(childEnv, { MC_ROLE: PLAN_REVIEW_ROLE, MC_HEADLESS: '1', MC_GOAL: target.name, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_PLAN_REVIEW_TOKEN: token });
-      try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
+      for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PLAN_REVIEW_TOKEN', 'MC_PROGRAMME_REVIEW_TOKEN']) delete childEnv[key];
+      Object.assign(childEnv, { MC_ROLE: roleName, MC_HEADLESS: '1', ...policy.identity, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, [policy.tokenEnv]: token });
+      try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: limitMs, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
-      refusePlanOnRead({ read: summary, launch: launched, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: plan-review ${target.name}: ${text}\n`) });
+      refusePlanOnRead({ read: summary, launch: launched, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: ${kind} ${target.name}: ${text}\n`) });
     }
   } finally {
     if (made) {
       try { discard(checkout, identity); }
       catch (error) {
         note = `the checkout ${checkout} is left in place — ${error.message}`;
-        stderr.write(`mc: plan-review ${target.name}: ${note}\n`);
+        stderr.write(`mc: ${kind} ${target.name}: ${note}\n`);
       }
     }
   }
 
   // What the turn left: the launch record's verdict, and whether the goal's own files stayed as they were.
-  const launch = readLaunch(target.dir, read).launch ?? null;
+  const launch = readLaunch(target.dir, read, launchFile).launch ?? null;
   verdict = launch && (launch.verdict === 'ok' || launch.verdict === 'not-ok') ? launch.verdict : null;
+  const invalidLaunch = policy.bound && (!launch || launch.binding !== target.name || launch.role !== roleName || launch.hash !== hash || launch.token_sha256 !== sha256(token) || launch.pid !== pid || launch.start !== started.toISOString());
   const changed = names.filter((file) => read(join(target.dir, file)) !== before[file]);
   closeLaunch();
   let code;
-  if (note) { stderr.write(`mc: plan-review ${target.name}: no reading — ${note}\n`); code = 1; }
-  else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: plan-review ${target.name}: no reading stored — ${note}\n`); code = 1; }
-  else if (result?.timedOut || !verdict) { note = result?.timedOut ? 'the reading exceeded twenty minutes' : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: plan-review ${target.name}: no reading stored — ${note}\n`); code = 1; }
+  if (note) { stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`); code = invalidExit; }
+  else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
+  else if (result?.timedOut || !verdict || invalidLaunch) { note = result?.timedOut ? `the reading exceeded ${limitWords}` : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
   else {
     const at = now();
-    appendRecord(target.dir, { kind: 'reading', verdict, hash, round, tool: candidate.tool, model: candidate.model, author, at: at.toISOString() }, { read, write });
-    const path = join(target.dir, REVIEW_TEXT_FILE);
-    appendEntry({ dir: target.dir, entry: { at: logStamp(at), tool: candidate.tool, model: candidate.model, role: PLAN_REVIEW_ROLE, stage: goal.stage, status: goal.status, done: `plan review round ${round}: ${verdictWord(verdict)}`, comment: `${candidate.tool} ${candidate.model}, judged text ${hash.slice(0, 12)}; ${path}`, next: null }, read, write });
-    stdout.write(`mc: plan-review ${target.name}: ${verdictWord(verdict)} (round ${round}) — ${path}\n`);
-    code = verdict === 'ok' ? 0 : 1;
+    const problem = policy.store({ verdict, hash, round, candidate, author, at, launch });
+    if (problem) {
+      stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${problem}\n`);
+      note = problem;
+      code = invalidExit;
+    } else {
+      const path = join(target.dir, reviewFile);
+      stdout.write(`mc: ${kind} ${target.name}: ${verdictWord(verdict)} (round ${round}) — ${path}\n`);
+      code = verdict === 'ok' ? 0 : 1;
+    }
   }
   if (summary) {
-    const row = { ...summary, ts: now().toISOString(), name: `goal:${target.name}`, kind: 'plan-review', exit: result?.status ?? 1,
+    const row = { ...summary, ts: now().toISOString(), name: policy.runName, kind, exit: result?.status ?? 1,
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: note ?? (verdict ? verdictWord(verdict) : null),
       model: candidate.model, cls: 'review', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
     (deps.logRun ?? ((one) => appendRun(one, env)))(row);
@@ -535,30 +563,135 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
  * the launch record and nothing else. Exit 0, or 2 with the reason.
  */
 export function verdictVerb({ target, word, ctx, deps = {} }) {
+  return readerVerdict({ target, word, ctx, deps, policy: {
+    kind: 'plan-review', role: PLAN_REVIEW_ROLE, launchFile: LAUNCH_FILE, reviewFile: REVIEW_TEXT_FILE,
+    tokenEnv: 'MC_PLAN_REVIEW_TOKEN', identityKey: 'MC_GOAL', identityLabel: 'goal',
+    limitMs: LIMIT_MS, limitWords: 'twenty minutes',
+  } });
+}
+
+/** Token, live-call and report checks shared by goal and programme readings. */
+export function readerVerdict({ target, word, ctx, deps = {}, policy }) {
   const { stdout, stderr, env, read, write } = ctx;
-  const refuse = (text) => { stderr.write(`mc: plan-review verdict: ${text}\n`); return 2; };
+  const { kind, role, launchFile, reviewFile, tokenEnv, identityKey, identityLabel, limitMs, limitWords } = policy;
+  const refuse = (text) => { stderr.write(`mc: ${kind} verdict: ${text}\n`); return 2; };
   if (word !== 'ok' && word !== 'not-ok') return refuse('the verdict is ok or not-ok');
-  if (env.MC_ROLE !== PLAN_REVIEW_ROLE) return refuse('only the plan-review session a call launched records a verdict');
-  if (env.MC_GOAL !== target.name) return refuse(`this session reads ${env.MC_GOAL || 'no goal'}, not ${target.name}`);
-  const token = env.MC_PLAN_REVIEW_TOKEN;
+  if (env.MC_ROLE !== role) return refuse(`only the ${role} session a call launched records a verdict`);
+  if (env[identityKey] !== target.name) return refuse(`this session reads ${env[identityKey] || `no ${identityLabel}`}, not ${target.name}`);
+  const token = env[tokenEnv];
   if (!token) return refuse('no launch token in this session');
-  const found = readLaunch(target.dir, read);
+  const found = readLaunch(target.dir, read, launchFile);
   if (found.none) return refuse(`${target.name} has no reading in progress`);
   if (found.problem) return refuse(found.problem);
   const launch = found.launch;
   if (launch.token_sha256 !== sha256(token)) return refuse('the token is not the one this reading was launched with');
   const now = (deps.now ?? ctx.now);
   const current = typeof now === 'function' ? now() : now;
-  if (!liveLaunch(launch, current, deps.alive ?? ctx.alive ?? pidAlive)) return refuse('the reading is not live: its call has ended or its twenty minutes have passed');
+  if (!liveLaunch(launch, current, deps.alive ?? ctx.alive ?? pidAlive, limitMs)) return refuse(`the reading is not live: its call has ended or its ${limitWords} have passed`);
   if (launch.verdict) return refuse(`a verdict is already recorded (${launch.verdict})`);
-  const path = join(target.dir, REVIEW_TEXT_FILE);
+  const path = join(target.dir, reviewFile);
   const text = read(path);
   if (text === null) return refuse(`${path} is not written`);
   const modified = (deps.mtime ?? ((file) => { try { return statSync(file).mtimeMs; } catch { return null; } }))(path);
   if (modified === null || modified < Date.parse(launch.start)) return refuse(`${path} was not written in this round — write it, then record the verdict`);
   const first = text.split('\n', 1)[0].trim();
   if (first !== verdictWord(word)) return refuse(`${path} starts with "${first}", and the verdict is ${verdictWord(word)} — the first line is OK or NOT OK, the same word`);
-  write(join(target.dir, LAUNCH_FILE), `${JSON.stringify({ ...launch, verdict: word }, null, 2)}\n`);
-  stdout.write(`mc: plan-review verdict ${verdictWord(word)} recorded for ${target.name}\n`);
+  const problem = policy.check?.({ launch, text });
+  if (problem) return refuse(problem);
+  write(join(target.dir, launchFile), `${JSON.stringify({ ...launch, verdict: word, ...policy.record?.(text) }, null, 2)}\n`);
+  stdout.write(`mc: ${kind} verdict ${verdictWord(word)} recorded for ${target.name}\n`);
   return 0;
+}
+
+
+// ---------------------------------------------------- programme binding
+
+export const PROGRAMME_REVIEW_ROLE = 'programme-review';
+export const PROGRAMME_REVIEW_FILE = 'PROGRAMME-REVIEW.md';
+export const PROGRAMME_REVIEW_RECORD = '.programme-review.json';
+export const PROGRAMME_REVIEW_LAUNCH = '.programme-review-launch.json';
+export const PROGRAMME_REVIEW_LIMIT_MS = 30 * 60_000;
+
+/** The signed report format, not a judgement of its findings. */
+export function programmeReport(text) {
+  if (typeof text !== 'string') return null;
+  const [verdict, count] = text.split(/\r?\n/u);
+  const findings = /^findings: (\d+)$/u.exec(count ?? '');
+  if (!['OK', 'NOT OK'].includes(verdict) || !findings || !Number.isSafeInteger(Number(findings[1]))) return null;
+  return { verdict: verdict === 'OK' ? 'ok' : 'not-ok', findings: Number(findings[1]) };
+}
+
+/** A current reading includes the report it recorded, so an unsuccessful newer call cannot substitute its report. */
+export function currentProgrammeReading(dir, text, read = readTextOrNull) {
+  const meta = jsonOrNull(read(join(dir, PROGRAMME_REVIEW_RECORD)));
+  const report = read(join(dir, PROGRAMME_REVIEW_FILE));
+  const parsed = programmeReport(report);
+  if (!meta || !parsed || meta.hash !== sha256(text) || meta.report_sha256 !== sha256(report)
+    || meta.verdict !== parsed.verdict || meta.findings !== parsed.findings || !Number.isFinite(Date.parse(meta.at))) return null;
+  return meta;
+}
+
+/** Only named, known repositories are exported. Never interpret a README entry as an arbitrary disk path. */
+export function programmeRepositories(text, known) {
+  const line = text.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u).find((one) => /^Repositories:/u.test(one));
+  const words = line?.slice('Repositories:'.length).trim().replace(/\.$/u, '').split(/[\s,]+/u).filter(Boolean) ?? [];
+  if (!words.length) return { error: 'README.md needs a nonempty Repositories: line' };
+  const repos = [];
+  for (const name of new Set(words)) {
+    const found = known.find((one) => one.repo === name);
+    if (!found) return { error: `Repositories: ${name} is not a repository mc knows` };
+    repos.push(found);
+  }
+  return { repos };
+}
+
+/** One programme reading, uncapped, bound to README bytes rather than goal records or draft rounds. */
+export async function programmeReviewCall({ target, ctx, text, repos, deps = {} }) {
+  const { read, write, env, stderr } = ctx;
+  if (text === null) { stderr.write(`mc: programme-review ${target.name}: README.md is missing\n`); return 2; }
+  const hash = sha256(text);
+  const check = () => read(join(target.dir, 'README.md')) !== text ? 'README.md changed during the reading — read its current text again' : null;
+  return readerCall({ target, ctx, deps, policy: {
+    kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
+    reviewFile: PROGRAMME_REVIEW_FILE, limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes', invalidExit: 2,
+    hash, round: 1, author: authorOf(env, null), bound: true,
+    checkoutName: `mc-programme-review-${target.name}`, identity: { MC_PROGRAMME: target.name },
+    tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', runName: `programme:${target.name}`, repos,
+    names: ['README.md', 'PROGRAMME.json', 'SIGNED.md', 'RETURNED.md'], check,
+    prompt: (checkout) => [
+      `Read the programme ${target.name}. Its directory is ${target.dir}.`,
+      `Judge README.md (sha256 ${hash}), not a goal. Read the horizon's playback and basis, the cited standards/code, the places it did not read, and the pictures.`,
+      'The repositories are read-only exports at origin/main (no repository metadata):',
+      ...repos.map(({ repo }) => `${repo}: ${join(checkout, repo)}`),
+      `Write only ${join(target.dir, PROGRAMME_REVIEW_FILE)}: line one OK or NOT OK; line two findings: <n>; then each finding with its part, entry and narrowest fix.`,
+      `Your last act is mc programs review ${target.name} verdict ok|not-ok, matching line one.`,
+      'README.md follows:', text,
+    ].join('\n\n'),
+    store: ({ verdict, at, candidate, author, launch }) => ctx.lock(workRoot(env), () => {
+      const changed = check();
+      if (changed) return changed;
+      const report = read(join(target.dir, PROGRAMME_REVIEW_FILE));
+      const parsed = programmeReport(report);
+      if (!parsed || parsed.verdict !== verdict || launch.report_sha256 !== sha256(report)) return 'PROGRAMME-REVIEW.md needs matching verdict and findings: <n> on its first two lines';
+      write(join(target.dir, PROGRAMME_REVIEW_RECORD), `${JSON.stringify({ verdict, hash, at: at.toISOString(), findings: parsed.findings,
+        report_sha256: sha256(report), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
+      return null;
+    }, { strict: true, name: 'programme-review-store' }),
+  } });
+}
+
+export function programmeVerdictVerb({ target, word, ctx, deps = {} }) {
+  return readerVerdict({ target, word, ctx, deps, policy: {
+    kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
+    reviewFile: PROGRAMME_REVIEW_FILE, tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', identityKey: 'MC_PROGRAMME', identityLabel: 'programme',
+    limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes',
+    record: (text) => ({ report_sha256: sha256(text) }),
+    check: ({ launch, text }) => {
+      if (launch.binding !== target.name || launch.role !== PROGRAMME_REVIEW_ROLE) return 'the launch is not for this programme reading';
+      const current = ctx.read(join(target.dir, 'README.md'));
+      if (current === null || launch.hash !== sha256(current)) return 'README.md changed during the reading — read its current text again';
+      if (!programmeReport(text)) return 'PROGRAMME-REVIEW.md needs findings: <n> on line two';
+      return null;
+    },
+  } });
 }

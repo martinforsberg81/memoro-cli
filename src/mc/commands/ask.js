@@ -37,6 +37,7 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   if (env.MC_ROLE === 'desk-prepare') { stderr.write('mc: desk-prepare cannot ask or decide\n'); return 2; }
+  if (env.MC_ROLE === 'programme-review') { stderr.write('mc: a programme-review session cannot ask or decide — it reads, writes PROGRAMME-REVIEW.md and records its verdict\n'); return 2; }
   if (env.MC_ROLE === 'plan-review') { stderr.write('mc: a plan-review session cannot ask or decide — it reads, writes PLAN-REVIEW.md and records its verdict\n'); return 2; }
   if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') {
     stderr.write('mc: the Martin role is interactive-only; unattended sessions cannot use mc ask\n');

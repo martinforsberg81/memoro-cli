@@ -1326,6 +1326,12 @@ existing decision and does not move a goal to `merge` on its own.
 
 ## Plan review
 
+When the programme has SIGNED.md, the reader also checks that the goal contains
+no solution, design or decision absent from its signed part; yes is NOT OK.
+Independent programme reading (`mc programs review`) is separate and cannot
+mutate a goal or replace its draft-to-build plan-review gate
+([mc-plan.md](mc-plan.md#sign-off-and-independent-programme-reading)).
+
 A goal leaves `draft` (to `build`, or to a later stage a plan or person names)
 only when it is complete and a fresh session has read it. Moving it to
 `dropped` is not checked. The gate is in `logEntry`, after `refusedMove`, so

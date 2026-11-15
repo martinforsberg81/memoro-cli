@@ -21,7 +21,8 @@ on, and a source area whose `covers` or `paths` the change falls under.
 `mc goal` is.
 
 Answer these questions, in this order, each with what you read; the eighth only
-when the prompt says `QUESTION 8 IS ASKED`:
+when the prompt says `QUESTION 8 IS ASKED`, the ninth only when the programme
+has a SIGNED.md:
 
 1. Is every premise true on main?
 2. Can every check run here and now, before merge?
@@ -36,6 +37,9 @@ when the prompt says `QUESTION 8 IS ASKED`:
    the goal state the intended result in each viewport and how `mc shot` checks
    it, and say which existing tokens, components, icons and assets it uses and what
    it adds, held against the documents the area names?
+
+9. Does the goal contain a solution, design or decision that its part of the
+   programme's SIGNED.md does not? Read that signed source; yes is NOT OK.
 
 Write `PLAN-REVIEW.md` in the goal's directory (the prompt names the path).
 Its first line is `OK` when no question found a defect the build would hit,

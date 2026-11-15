@@ -10,6 +10,11 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 ~/mc/programs/<programme>/
   README.md                         the programme's aim
   PROGRAMME.json                    its record, when it has one (mc-plan.md)
+  SIGNED.md                         held document plus signed design-file hashes
+  PROGRAMME-REVIEW.md                independent reading: verdict, findings count, findings
+  .programme-review.json            judged README/report hashes, verdict, findings/time/model
+  .programme-review-launch.json     bounded in-flight launch binding, hashed token, pid/start
+  LOG.md                            programme sign-off time/Martin and any override reason
   memoro/  memoro-cli/               plan/<programme> worktrees
   goals/<goal>/
     GOAL.json  LOG.md                brief, state and session log

@@ -68,6 +68,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `plan-review` | sonnet | `plan-review` | `mc goal plan-review`, one headless read-only turn on a draft goal, never the runner ([mc-goals.md](mc-goals.md) § *Plan review*) |
+| `programme-review` | sonnet | `programme-review` | `mc programs review`, an in-session independent document reading, never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#sign-off-and-independent-programme-reading)) |
 | `ask-reader` | fable | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `archive-reader` | sonnet | `archive-reader` | `mc run`, once per programme with a record whose goals are all finished: one headless read-only session on a fresh checkout at `origin/main` that writes `WRITE-BACK.md` in the programme directory ([mc-run.md](mc-run.md) § *Programme archive turn*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
@@ -79,6 +80,14 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `decision` | fable | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
 | `learning` | fable | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+
+`programme-review` reads the document, horizon playback/basis, cited code and
+standards, unread places and pictures at origin/main. Its eight questions and
+two-line PROGRAMME-REVIEW.md format live in its role, not a second question
+list. It records only a token-bound programme verdict; mc goal mutations and
+mc ask refuse it, and it has no signing authority. The shared reader launch
+clears inherited goal/session identity and assigns MC_PROGRAMME, its role and
+MC_PROGRAMME_REVIEW_TOKEN. Goal plan review's policy and gate stay separate.
 
 ## Parts: one role, started more than one way
 

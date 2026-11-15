@@ -24,9 +24,9 @@ import { repoNameOf } from '../repos.js';
 import { knownRepositories } from '../work-area.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, writeRecord,
+  AREA_RE, RECORD_FILE, changePhases, documentProblems, signRecord, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, writeRecord,
 } from '../programme-record.js';
-import { PLAN_ROLE, listDirsOf, programsGoals } from '../goals.js';
+import { PLAN_ROLE, listDirsOf, programsGoals, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { reservedRoleHint, reservedRoleName } from '../roles.js';
 import { normalizeSessionRole } from '../session-role.js';
@@ -34,6 +34,9 @@ import { readProgrammes } from '../page-collect.js';
 import { planProviders, statusRollup } from '../page-render.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
+import { writeFileAtomic } from '../atomic-write.js';
+import { realLock } from '../runner-lock.js';
+import { currentProgrammeReading, programmeRepositories, programmeReviewCall, programmeVerdictVerb } from '../plan-review.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -50,6 +53,11 @@ export const ROUTES = {
   ) },
   create: { strictValues: ['--end', '--horizon', '--area', '--purpose', '--from-proposal'], check: (scanned) => writeCheck('create', scanned) },
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
+  sign: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('sign', positional) || (flags.reason !== null && !flags.reason.trim() ? '--reason needs nonempty text' : null) },
+  review: { check: ({ positional }) => {
+    const [name, action, word] = positional;
+    return programmeNameCheck('review', [name]) || (positional.length === 1 || (positional.length === 3 && action === 'verdict' && ['ok', 'not-ok'].includes(word)) ? null : 'mc programs review needs <programme> or <programme> verdict ok|not-ok');
+  } },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
@@ -58,7 +66,11 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'after', 'show'];
+const VERBS = ['list', 'priority', 'create', 'record', 'after', 'show', 'sign', 'review'];
+
+function programmeNameCheck(verb, positional) {
+  return positional.length !== 1 || !NAME_RE.test(positional[0] ?? '') ? `mc programs ${verb} needs one programme name` : null;
+}
 
 const PHASE_RE = /^[1-9]\d{0,8}$/u;
 
@@ -142,6 +154,8 @@ export async function run(argv, deps = {}) {
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
   const env = deps.env || process.env;
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'sign') return signVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
@@ -414,4 +428,62 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   if (!outcome.ok) return refuse(`could not change ${name}'s record: ${outcome.problems.join('; ')}`);
   stdout.write(`mc: ${name} · phase ${waiting} · ${named.length ? `after ${phaseWords(named)}` : 'waits for no phase'}\n`);
   return 0;
+}
+
+
+/** The desk and document authors may commission a reading, never goal delivery or other readers. */
+function reviewAuthor(env) {
+  const role = normalizeSessionRole(env.MC_ROLE);
+  if (role === 'manager') return true;
+  if (role === 'martin') return env.MC_HEADLESS !== '1';
+  if (role === PLAN_ROLE) return env.MC_HEADLESS !== '1' && !env.MC_GOAL;
+  return !role && !env.MC_GOAL && env.MC_HEADLESS !== '1';
+}
+
+async function reviewVerb({ positional: [name, action, word] }, deps) {
+  const { env, stdout, stderr } = deps;
+  const target = { name, dir: join(programsHome(env), name) };
+  const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
+    lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
+  if (action === 'verdict') return programmeVerdictVerb({ target, word, ctx, deps: deps.review ?? {} });
+  if (!reviewAuthor(env)) { stderr.write('mc: only the manager, the interactive desk or programme plan, or a person calls a programme reading\n'); return 2; }
+  const text = ctx.read(join(target.dir, 'README.md'));
+  if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
+  const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
+  const found = programmeRepositories(text, known);
+  if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
+  try { return await programmeReviewCall({ target, ctx, text, repos: found.repos, deps: deps.review ?? {} }); }
+  catch (error) { stderr.write(`mc: programme-review ${name}: ${error.message}\n`); return 2; }
+}
+
+/** Sign checks the document and current independent reading inside the record writer's strict lock. */
+function signVerb({ positional: [name], flags }, { env, stdout, stderr, now = new Date(), lock }) {
+  if (env.MC_ROLE !== 'martin' || env.MC_HEADLESS === '1') {
+    stderr.write('mc: only Martin at the desk signs a programme\n'); return 2;
+  }
+  const dir = join(programsHome(env), name);
+  const reason = flags.reason?.trim() || null;
+  try {
+    const result = signRecord(dir, { at: typeof now === 'function' ? now() : now, root: workRoot(env), ...(lock ? { lock } : {}),
+      check: ({ text }) => {
+        const problems = documentProblems(text);
+        if (problems.length) return problems;
+        const reading = currentProgrammeReading(dir, text);
+        if (!reading) return [`${name} has no reading of its current text — mc programs review ${name}`];
+        if (reading.verdict === 'not-ok' && !reason) return [`${name}'s reading is NOT OK — repair PROGRAMME-REVIEW.md or sign with --reason "…"`];
+        return [];
+      },
+    });
+    if (!result.ok) {
+      const problems = result.problems.length ? result.problems : [`${name} has no valid record — mc programs show ${name}`];
+      for (const problem of problems) stderr.write(`mc: ${problem}\n`);
+      return 1;
+    }
+    // The command owns the human record of the act, not another PROGRAMME.json key.
+    const log = join(dir, 'LOG.md');
+    const before = readTextOrNull(log) ?? '';
+    writeFileAtomic(log, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${result.record.signed_at} · martin · signed${reason ? ` — ${reason}` : ''}\n`);
+    stdout.write(`${name}: signed — goals may be cut\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not sign ${name}: ${error.message}\n`); return 1; }
 }

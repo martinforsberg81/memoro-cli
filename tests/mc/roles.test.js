@@ -352,7 +352,7 @@ describe('the role catalogue', () => {
   // went with the finish stage (2026-11-15): a rejected goal returns to build.
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'archive-reader.md', 'ask-reader.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'programme-review.md', 'review-session.md',
     ]);
   });
 });

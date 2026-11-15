@@ -94,6 +94,12 @@ its check, and each worktree's state.
   runner starts no delivery session on `draft · ready`, no session on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
+- **Programme readers.** `mc programs review <programme>` commissions a
+  document reading before sign-off, not this goal's plan review. Its reader
+  writes only PROGRAMME-REVIEW.md and a token-bound verdict; it cannot mutate
+  goals or sign. When the programme has SIGNED.md, goal plan review also asks
+  whether the goal adds a solution, design or decision absent from its signed
+  part: yes is NOT OK.
 - **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs an OK reading of the current text (or two readings and `--reason`). Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and

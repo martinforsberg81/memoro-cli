@@ -703,7 +703,7 @@ describe('programme document structure at sign-off', () => {
     return { start, end: next < 0 ? text.length : next + 1 };
   };
 
-  it('requires every ordered nonempty heading/entry and each part label before either sign-off file is written', () => {
+  it('requires every ordered nonempty heading/entry and each part label before either sign-off file is written', async () => {
     const a = area();
     try {
       const dir = join(a.home, 'p'); mkdirSync(dir);
@@ -741,9 +741,13 @@ describe('programme document structure at sign-off', () => {
         writeFileSync(join(dir, RECORD_FILE), JSON.stringify(DRAFT));
         writeFileSync(join(dir, 'README.md'), one.text);
         const before = readFileSync(join(dir, RECORD_FILE), 'utf8');
-        const result = signRecord(dir, { root: a.root, at: NOW, check: ({ text }) => documentProblems(text) });
-        assert.equal(result.ok, false, one.name);
-        assert.ok(result.problems.some((p) => p.includes(one.entry)), `${one.name}: ${result.problems.join('; ')}`);
+        // An otherwise current independent reading isolates structure from the review precondition.
+        const report = 'OK\nfindings: 0\n';
+        writeFileSync(join(dir, 'PROGRAMME-REVIEW.md'), report);
+        writeFileSync(join(dir, '.programme-review.json'), JSON.stringify({ verdict: 'ok', hash: hash(one.text), at: NOW.toISOString(), findings: 0, report_sha256: hash(report) }));
+        const result = await call(['sign', 'p'], { ...a.env, MC_ROLE: 'martin' });
+        assert.equal(result.code, 1, one.name);
+        assert.ok(result.err.includes(one.entry), `${one.name}: ${result.err}`);
         assert.equal(readFileSync(join(dir, RECORD_FILE), 'utf8'), before, one.name);
         assert.equal(existsSync(join(dir, 'SIGNED.md')), false, one.name);
       }

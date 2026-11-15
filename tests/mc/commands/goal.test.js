@@ -3470,3 +3470,15 @@ test('one way to ask: the guard — mc goal in the ask-reader role allows show, 
     assert.doesNotMatch(f.err(), /ask-reader/u, `${argv.join(' ')} is not refused to the role`);
   }
 });
+
+
+test('programme-review is a reader: every goal mutation, including goal-less creation, is refused before effects', async () => {
+  for (const argv of [['new', 'p/new', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Do not create'], ['set', 'p/g', 'title', '--text', 'Do not rewrite'], ['stage', 'p/g', 'build'], ['log', '--done', 'Do not log'], ['plan-review', 'p/g']]) {
+    const f = fixture({ env: { MC_ROLE: 'programme-review', MC_PROGRAMME: 'p', MC_HEADLESS: '1' } });
+    const before = { ...f.store };
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), /programme-review session reads and writes only PROGRAMME-REVIEW.md/u);
+    assert.deepEqual(f.store, before);
+    assert.deepEqual(f.calls, []);
+  }
+});
