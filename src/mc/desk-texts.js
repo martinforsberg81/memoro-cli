@@ -7,7 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeFileAtomic } from './atomic-write.js';
+import { writeFileAtomic, writeJsonAtomic } from './atomic-write.js';
 import { deskItemId, itemDirectory, listDeskItems, updateDeskItem } from './desk-items.js';
 
 /** The three parts of a text change's brief, in order. The headings are Swedish: what is written to Martin is. */
@@ -69,7 +69,7 @@ function sameProposal(brief, proposed) {
 /**
  * Write a text item straight to for-martin, in one hold of the strict runner lock: the duplicate is looked for and the
  * record and its brief written in that hold, so two proposals of one wording make one item. Nothing existing is
- * changed. `{ item, duplicate }`, or `{ error }` for a brief not in the form; a lock that cannot be had throws.
+ * changed, except that a duplicate which names no goal takes `goal`. `{ item, duplicate }`, or `{ error }` for a brief not in the form; a lock that cannot be had throws.
  */
 export function proposeText({ env = process.env, text, brief, goal = null, now = new Date(), lock, read }) {
   const form = textForm(brief);
@@ -81,7 +81,12 @@ export function proposeText({ env = process.env, text, brief, goal = null, now =
   let duplicate = null;
   const { written } = updateDeskItem(item.id, (current) => {
     const same = openProposal({ env, text, proposed: form.parts.proposed, read: read || readBrief });
-    if (same) { duplicate = same; return null; }
+    if (same) {
+      // A duplicate that names no goal takes this call's goal, in this hold; one that names another goal is left as it is.
+      duplicate = goal && !same.goal ? { ...same, goal } : same;
+      if (duplicate !== same) writeJsonAtomic(join(itemDirectory(same, env), 'item.json'), duplicate);
+      return null;
+    }
     if (current) return null;
     writeFileAtomic(join(itemDirectory(item, env), 'brief.md'), `${String(brief).trim()}\n`);
     return item;
