@@ -53,12 +53,6 @@ Landed work is in `mc goal list` and `docs/technical/`, not Gap. Archive only wh
 
 ## Faithful scope correction and handoff
 
-Investigate until facts and remaining uncertainty are established. Separate technical gaps planning
-can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification,
-amend the README/design, standards, briefs and criteria consistently; change only clarified scope
-and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features
-does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README,
-briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build
-with a ceremonial LOG.md hold.
+Investigate until facts and remaining uncertainty are established. Separate technical gaps planning can resolve from what [asking-martin](asking-martin.md) names as his; the rest is decided and recorded. On clarification, amend the README/design, standards, briefs and criteria consistently; change only clarified scope and preserve other requirements/prerequisites unless Martin changes them. Deferring consumer features does not imply deferring provider, data or DPA prerequisites. Before handoff reconcile README, briefs, phases and actual stages; name remaining gaps. Do not hand unresolved prerequisites to build with a ceremonial LOG.md hold.
 
 A runner-assigned plan completes only its selected draft under the same rules; see [the plan role](../roles/plan-session.md) and mc-goals.md, Next draft planning.
