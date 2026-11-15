@@ -3,14 +3,15 @@
 ## Configuration and routing
 
 mc remains fully usable locally. An optional **single** server changes only the
-person's interactive entrances: `mc plan`, `mc manager` (`mc brief`), `mc martin`
-and `mc helper`.
+person's interactive entrances: `mc plan`, `mc martin` and `mc helper`. The manager
+has no interactive entrance: `mc manager` without `--headless` and `mc brief` are
+refused before routing and are never sent to a server ([mc-manager.md](mc-manager.md)).
 
 ```sh
 mc server set tc       # any single destination understood by the person's OpenSSH
 mc server              # saved destination and its current measured handshake
 mc server clear        # return to local entrances
-mc manager --local     # this entrance here, without changing the setting
+mc plan --local        # this entrance here, without changing the setting
 ```
 
 `set` runs a version handshake through `ssh <destination>` before saving. An
@@ -139,7 +140,7 @@ local TUI, not the server.
 Claude has no local terminal client. The remote driver runs
 `ssh -t <destination> <quoted mc session start|join …>` and returns its status.
 `--bg` is forwarded to the server unchanged as an entrance flag
-(`mc plan <programme> --bg`, `mc manager --bg`) and is never read as a programme
+(`mc plan <programme> --bg`) and is never read as a programme
 name. The server half prints the two `--bg` lines, naming the host, and returns
 0 without attaching; the client prints nothing of its own. Without `--bg` the
 server attaches over `ssh -t`, as the terminal entrance does. Every Claude

@@ -149,7 +149,7 @@ preparation, decisions and the interactive desk. Its schema is
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
-(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below). A goal's source time
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written only by the runner when a horizon turn of the manager has failed twice; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing.
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
@@ -191,6 +191,21 @@ reach and closes it `--by decision`, so the runner plans again, and a text of
 Martin's that would have to change goes to a brief. The opening lists one decided
 under the programme's name, and a `for-martin` one, being mechanical, among the
 stuck items of **Not ready**: it is the runner's, not his.
+
+A `manager` item is the manager's horizon turn's second failure since its last
+item ([mc-run.md](mc-run.md#the-managers-turns)): the first is `prepared` with a
+model-free `prepared.md`, a later one `for-martin` (sort mechanical, not
+reversible, no due time) with a Swedish `brief.md` under the five headings.
+Its reference is `manager:<slug>` of the open horizon; its source is the horizon,
+the open programme records that name it and the turn's state file
+`runner/manager-turn/horizon/<slug>.json`. Sync closes it by source when the horizon is
+no longer open, a valid open programme record names it or the text item
+`horizon:<slug>` is open; an unreadable state
+file is reported and keeps it open. A decision session answers it at its source
+and closes it `--by decision`, so the runner takes the turn again. A curation
+turn that fails opens no item. The opening lists a `for-martin` one among the
+stuck items of **Not ready**, like a `programme` item: it is the runner's, not
+his.
 
 A main-red item is answered at its source: `mc repo mend <repo> <id>
 requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item
@@ -334,8 +349,7 @@ record, so a record never points at a missing file.
 tool other than `person`, else the session's identity, else `person`. `set`,
 `move`, `reopen` and `drop` are open to the interactive `martin` and to a
 `person`, without `MC_HEADLESS=1`. `reached` is open to the same callers and
-also to the `manager` with `MC_HEADLESS=1`; the interactive manager is refused
-with a line that names the desk. Every other caller, every unknown role and every
+also to the `manager` with `MC_HEADLESS=1`; there is no interactive manager. Every other caller, every unknown role and every
 caller with `MC_HEADLESS=1` (the manager on `reached` aside) is refused. The role
 is judged before the arguments. `horizons` and `horizon show` are open to every
 caller. Nothing else in mc sets a horizon: no runner pass, no hook, no other verb.
@@ -364,7 +378,9 @@ those with `reached_at` in `(since, now]`, oldest first.
 
 **What does not read horizons.** The runner's pick, `PRIORITY.json`, `mc programs`
 and the page do not read horizons: the order of the horizons does not change
-which programme the runner works on.
+which programme the runner works on. The one reader besides the desk is the
+manager's horizon turn, which takes the open horizons in position order and
+creates the next programme of the first that has none ([mc-run.md](mc-run.md#the-managers-turns)).
 
 ## Unattended preparation
 

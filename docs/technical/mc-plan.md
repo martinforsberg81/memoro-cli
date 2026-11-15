@@ -55,20 +55,27 @@ before it has documents on main, or after all its goals have been archived.
 
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work that serves a horizon
-and ends. A programme without the file is a programme as above, and nothing
-about it changes. The file has seven keys, in this order, and an eighth,
-`phases`, that is optional, and no other:
+and ends, or that repairs one area's text. A programme without the file is a
+programme as above, and nothing about it changes. The file has seven keys, in
+this order, and two more that are optional (`area` after `horizon`, `phases`
+last), and no other:
 
 | key | value |
 |---|---|
 | `schema` | `"mc-programme"` |
 | `version` | `1` |
 | `horizon` | the slug of the horizon served, or `null` |
+| `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
 | `state` | `open` or `done` |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin` or `manager` |
 | `phases` | optional, last: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+
+A programme serves a horizon or repairs an area, never both (the record is
+invalid with both): an `area` programme is the repair of a deviation from an
+area text and has no horizon; it is made only by the manager from a proposal or
+by a person, and at most one is open per area.
 
 `phases` says how the programme's phases run. A record without it is a
 sequential programme: a phase starts when every lower phase is finished. With
@@ -97,7 +104,7 @@ the page show it. `mc plan <programme> --archive` archives a programme of
 either kind, as in [Archiving a programme](#archiving-a-programme).
 
 ```
-mc programs create <programme> --end "…" [--horizon <slug>]
+mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]
 mc programs record <programme> --end "…" [--horizon <slug>]
 mc programs show <programme> [--json]
 mc programs after <programme> <phase> <phase>… | --none
@@ -118,7 +125,16 @@ works at once. It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
 without a record its record and touches nothing else; it refuses a directory
 that is missing or already has a record (exit 1). Both refuse a bad name, a
-blank `--end` or a horizon that is not a slug with exit 2, before any write.
+blank `--end`, a blank `--purpose`, a horizon that is not a slug, an `--area` that is
+not `<repo>/<id>`, `--horizon` together with `--area`, and `--from-proposal`
+without `--area` with exit 2, before any write; `record` takes none of `--area`,
+`--purpose` and `--from-proposal`. `--purpose` is written under What it is for
+in the page. `--area` is refused (exit 1) when the repository is not known, does
+not declare the area at its origin/main, or a valid open record already names it.
+`--from-proposal <path>` names a file in `~/mc/proposals/` or a programme's
+`proposals/`; after the programme is made it is moved into the new programme's
+`proposals/` with a line saying where it came from, and one that cannot be moved
+is said with exit 1 after the programme exists.
 `show` prints the record (`--json`: `{ "name", "record" }`, where `record` is
 `null` without one; for a stated programme it also prints `phases: stated` and
 a line `phase <n> after phase <m>[, <m>…]` per waiting phase) or says the programme has none; a record that does not
@@ -128,7 +144,12 @@ exits 1, and a word that is not a programme name exits 2.
 Who may write is decided from the environment alone: `MC_ROLE` through
 `normalizeSessionRole`, else `MC_GOAL` alone is a build session, else a person.
 A person, the interactive Martin role and the manager may create and record,
-and `created_by` says which (`person`, `martin`, `manager`). Every other role
+and `created_by` says which (`person`, `martin`, `manager`). The manager
+differs in three ways ([mc-manager.md](mc-manager.md)): `create` needs `--purpose`
+and exactly one of `--horizon` and `--area`; a `--horizon` must be open and have
+no valid open record naming it; and `record` is refused to it. The page is
+written before the record, so the runner never offers a programme whose page
+is not whole. Every other role
 and a build session get exit 2 with the role named; the Martin role with
 `MC_HEADLESS=1` is refused too. A role added later is refused until it is
 named. `show` and `list` have no guard. The pre-tool hook refuses a direct
@@ -149,6 +170,11 @@ Gap, Next horizon, Phases, Martin's and Where things are.
 Where things are: the enduring aim belongs to the area pages. `create` fills in
 the name, the end sentence and the horizon; the plan session fills in the rest.
 `mc plan` still writes the first page only for a programme with no README.
+
+`mc goal new` in a programme that repairs an area is refused (exit 1) while
+that programme holds a live goal: one repair goal is in flight per area, and the
+next waits until it is done or dropped. `mc programs show` prints the `area`
+line and `--json` the key.
 
 ## What the session is told
 
