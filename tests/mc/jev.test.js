@@ -1,5 +1,5 @@
 /**
- * jev's request (src/mc/jev.js) through the real verb: the pinned model, the
+ * jev's request (src/mc/jev.js) through the real verb (mc ask): the pinned model, the
  * three questions, the state it carries and leaves out, the budget and its
  * trimming order, and the key — read from a fixture keys source
  * (MC_KEYS_FILE) — in the Authorization header and nowhere else. The transport
@@ -11,8 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { run } from '../../src/mc/commands/goal.js';
-import { askJev, buildState, defaultTransport, INSTRUCTIONS, JEV_MODEL, JEV_URL, judge, readMartinCall, retryAfterMs, STATE_BUDGET, THRESHOLDS, TRUNCATED, TIMEOUT_MS } from '../../src/mc/jev.js';
+import { run } from '../../src/mc/commands/ask.js';
+import { askJev, buildState, defaultTransport, INSTRUCTIONS, JEV_MODEL, JEV_URL, judge, readMartinCall, rowAnswer, retryAfterMs, STATE_BUDGET, THRESHOLDS, TRUNCATED, TIMEOUT_MS } from '../../src/mc/jev.js';
 import { parseLog } from '../../src/mc/goals.js';
 import { goalJson } from './_helpers/goal-file.js';
 
@@ -78,12 +78,15 @@ function fixture(files = {}) {
     git: () => ({ ok: true, stdout: '', stderr: '' }),
     jev: { transport: (url, init) => { requests.push({ url, init }); return ANSWER; }, sleep: async () => {}, timer: () => new Promise(() => {}) },
     ledger: (line) => ledger.push(line),
+    budget: () => ({ held: false }),
+    // jev is asked first; a reader is not launched in these tests, so a call jev does not settle ends unread.
+    askReader: async () => ({ read: false, reason: 'no reader in this test' }),
   };
   return { deps, store, requests, ledger, out: () => out.join(''), err: () => err.join('') };
 }
 
 const CALL = [
-  'martin', '--kind', 'product', '--reason', `Which timer should the timeout test use? (${KEY})`,
+  '--reason', `Which timer should the timeout test use? (${KEY})`,
   '--option', 'fake_timer: inject a timer that fires at once',
   '--option', `real_wait: wait the full 15 seconds, ${OTHER}`,
   '--recommend', 'fake_timer',
@@ -143,10 +146,10 @@ test('the state holds question, options, evidence, the goal with contract and cr
 });
 
 test('the key and every keys-source value of 8+ characters are in the Authorization header only: not in the body, LOG.md, the ledger, stdout or stderr', async () => {
-  for (const outcome of ['answered', 'martin']) {
+  for (const outcome of ['answered', 'decided']) {
     const f = fixture();
-    if (outcome === 'martin') f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 500, headers: { get: () => null }, text: async () => `echo ${KEY}` }; };
-    assert.equal(await run(CALL, f.deps), outcome === 'answered' ? 0 : 1, f.err());
+    if (outcome === 'decided') f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 500, headers: { get: () => null }, text: async () => `echo ${KEY}` }; };
+    assert.equal(await run(CALL, f.deps), 0, f.err());
     const body = f.requests[0].init.body;
     const written = Object.entries(f.store).filter(([path]) => path.startsWith(DIR) && !path.includes('/memoro-cli/')).map(([, text]) => text).join('\n');
     for (const [where, text] of [['body', body], ['GOAL.json and LOG.md', written], ['ledger', f.ledger.join('')], ['stdout', f.out()], ['stderr', f.err()]]) {
@@ -217,22 +220,23 @@ test('a state over jev\'s input limit is refused with max_tokens_exceeded, rebui
 test('a persistent max_tokens_exceeded is rebuilt twice, at 63,000 then 44,100 characters, and ends unavailable with the error_type in the reason, the LOG entry and the ledger', async () => {
   const f = fixture();
   f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return refusal(); };
-  assert.equal(await run(CALL, f.deps), 1, f.err());
+  assert.equal(await run(CALL, f.deps), 0, f.err());
   assert.equal(f.requests.length, 3, 'the state, and two rebuilds of it');
   const reason = 'jev unavailable: HTTP 400 (max_tokens_exceeded) after 2 rebuilds of the state, the last at 44100 characters';
   const ledger = JSON.parse(f.ledger[0]);
-  assert.deepEqual([ledger.outcome, ledger.reason, ledger.error_type, ledger.budget], ['martin', reason, 'max_tokens_exceeded', 44_100]);
+  assert.deepEqual([ledger.outcome, ledger.answered_by, ledger.error_type, ledger.budget], ['decided', 'session', 'max_tokens_exceeded', 44_100]);
   assert.ok(ledger.trimmed.includes('budget shrunk to 44100 characters after max_tokens_exceeded'));
-  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment.split('\n').at(-1), reason);
+  assert.ok(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment.split('\n').includes(`jev reading: ${reason}`), 'the reason is in the LOG entry');
 });
 
 test('a 400 without an error_type is unavailable as before, with no rebuild', async () => {
   const f = fixture();
   f.deps.jev.transport = (url, init) => { f.requests.push({ url, init }); return { status: 400, headers: { get: () => null }, text: async () => '{"detail":"bad request"}' }; };
-  assert.equal(await run(CALL, f.deps), 1, f.err());
+  assert.equal(await run(CALL, f.deps), 0, f.err());
   assert.equal(f.requests.length, 1, 'no rebuild');
   const ledger = JSON.parse(f.ledger[0]);
-  assert.deepEqual([ledger.outcome, ledger.reason, ledger.error_type, ledger.budget], ['martin', 'jev unavailable: HTTP 400', null, STATE_BUDGET]);
+  assert.deepEqual([ledger.outcome, ledger.error_type, ledger.budget], ['decided', null, STATE_BUDGET]);
+  assert.ok(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment.split('\n').includes('jev reading: jev unavailable: HTTP 400'));
 });
 
 test('askJev names the error_type of any other non-2xx body, and returns the input-limit 400 as its own result', async () => {
@@ -317,6 +321,21 @@ test('a 2xx body read is under the attempt timer, so a stalled text() is unavail
 
 test('readMartinCall keeps the option texts by key and the recommendation', () => {
   assert.deepEqual(readMartinCall({ reason: ' Which? ', option: ['a: one: with a colon', 'b_2: two'], recommend: 'b_2', reserved: null }),
-    { question: 'Which?', options: { a: 'one: with a colon', b_2: 'two' }, recommend: 'b_2', reserved: null, kind: null });
+    { question: 'Which?', options: { a: 'one: with a colon', b_2: 'two' }, recommend: 'b_2', reserved: null });
   assert.deepEqual(readMartinCall({ reason: 'q', option: [`${'k'.repeat(33)}: x`, 'b: y'], recommend: 'b' }).problems.length, 1, 'a key of 33 characters is refused');
+});
+
+test('one way to ask: --kind is not read by readMartinCall, and its answer carries no kind', () => {
+  const call = readMartinCall({ reason: 'q', option: ['a: x', 'b: y'], recommend: 'a', kind: 'product' });
+  assert.ok(!('kind' in call));
+  assert.equal(call.problems, undefined);
+  assert.equal(readMartinCall({ reason: 'q', option: ['a: x', 'b: y'], recommend: 'a', kind: 'nonsense' }).problems, undefined, 'any --kind value is accepted');
+});
+
+test('one way to ask: rowAnswer reads who answered a row, old or new', () => {
+  assert.deepEqual(rowAnswer({ outcome: 'answered', recommend: 'a', answers: { answer: { choice: 'b' } } }), { by: 'jev', chosen: 'b', unread: false, old: true });
+  assert.deepEqual(rowAnswer({ outcome: 'decided', recommend: 'a' }), { by: 'session', chosen: 'a', unread: false, old: true });
+  assert.deepEqual(rowAnswer({ outcome: 'martin', recommend: 'a' }), { by: 'martin', chosen: null, unread: false, old: true });
+  assert.deepEqual(rowAnswer({ outcome: 'read', answered_by: 'reader', chosen: 'b', recommend: 'a' }), { by: 'reader', chosen: 'b', unread: false, old: false });
+  assert.deepEqual(rowAnswer({ outcome: 'decided', answered_by: 'session', chosen: 'a', recommend: 'a' }), { by: 'session', chosen: 'a', unread: true, old: false });
 });
