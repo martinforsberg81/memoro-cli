@@ -135,6 +135,28 @@ it('receipt: acted answers every action kind and clicked remains valid for all-c
   assert.equal(mixed.code, 0, mixed.stderr);
 });
 
+it('not-loaded removes only the requested output and never opens or reports a failed picture', async () => {
+  const fx = fixture();
+  const requested = join(fx.home, 'requested.png');
+  const unrelated = join(fx.home, 'other.png');
+  writeFileSync(unrelated, 'keep');
+  let opened = false;
+  const result = await shot(['dev', 'home', '--out', requested, '--open', '--allow-unsettled'], fx, {
+    runCapture: ({ request }) => {
+      assert.equal(request.allow_unsettled, true);
+      writeFileSync(request.out, 'incomplete');
+      return { ok: true, result: { ok: false, code: 'not-loaded', error: '.app-loading still visible', file: unrelated } };
+    },
+    spawn: () => { opened = true; },
+  });
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /mc: the page did not load — \.app-loading still visible\n/u);
+  assert.equal(existsSync(requested), false);
+  assert.equal(readFileSync(unrelated, 'utf8'), 'keep');
+  assert.equal(opened, false);
+});
+
 it('receipt: incomplete answers are refused, but failed steps are not unsupported', async () => {
   const fx = fixture();
   const runResult = (result) => shot(['dev', 'home', '--click', '.a', '--click', '.b'], fx, {

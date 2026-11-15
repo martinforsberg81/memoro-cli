@@ -30,7 +30,7 @@
  * session is never printed, never in `--json`, never in argv.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -65,7 +65,7 @@ const PLACES = ['dev', 'prod'];
 export const ROUTES = {
   '*': {
     check: (scanned) => refuseShot(scanned)?.error ?? null,
-    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep', '--compare'],
+    booleans: ['--full', '--me', '--here', '--main', '--open', '--json', '--list', '--onboarding', '--keep', '--compare', '--allow-unsettled'],
     strictValues: [
       '--el', '--shell', '--viewport', '--theme', '--locale', '--out',
       '--safe-area', '--wait-for', '--scroll', '--measure', '--account', '--timeout',
@@ -303,6 +303,7 @@ export async function run(argv, deps = {}) {
     onboarding: resolved?.state === 'fresh',
     actions: acting.actions,
     timeoutMs: timeout.timeoutMs,
+    allowUnsettled: flags['allow-unsettled'],
     public: isPublic,
   });
   const scrub = scrubber(secrets);
@@ -397,7 +398,13 @@ export function answer(result, {
     return 1;
   }
   if (!result.ok) {
-    stderr.write(`mc: ${scrub(result.error || result.code || 'the capture failed')}\n`);
+    if (result.code === 'not-loaded' && typeof request?.out === 'string') {
+      rmSync(request.out, { force: true });
+    }
+    const message = result.code === 'not-loaded'
+      ? `the page did not load — ${result.error || 'no readiness reason was given'}`
+      : (result.error || result.code || 'the capture failed');
+    stderr.write(`mc: ${scrub(message)}\n`);
     // A page that crashed before the picture still says why.
     for (const line of errorLines(result)) stderr.write(`${scrub(line)}\n`);
     if (result.code === 'not-signed-in' && who === 'me') stderr.write('mc shot login prod\n');

@@ -432,7 +432,7 @@ export function outPath({
 export function buildRequest({
   baseUrl, account, signIn, target, element = null, shell = null, full = false, viewport,
   theme = null, locale = null, out, safeArea = null, scroll = null, measure = null,
-  onboarding = false, click = null, actions = null, timeoutMs = null, public: isPublic = false,
+  onboarding = false, click = null, actions = null, timeoutMs = null, allowUnsettled = false, public: isPublic = false,
 }) {
   const acts = Array.isArray(actions) && actions.length ? actions.map((a) => ({ ...a })) : null;
   const plain = acts
@@ -441,7 +441,7 @@ export function buildRequest({
   if (isPublic) {
     const signedOut = buildRequest({
       baseUrl, account: null, signIn: { kind: 'none' }, target, element, shell: null, full, viewport, theme,
-      locale: null, out, safeArea, scroll, measure, onboarding: false, click, actions, timeoutMs,
+      locale: null, out, safeArea, scroll, measure, onboarding: false, click, actions, timeoutMs, allowUnsettled,
     });
     delete signedOut.account;
     return signedOut;
@@ -466,6 +466,7 @@ export function buildRequest({
     click: plain,
     actions: acts,
     timeout_ms: timeoutMs ?? null,
+    ...(allowUnsettled ? { allow_unsettled: true } : {}),
   };
 }
 
