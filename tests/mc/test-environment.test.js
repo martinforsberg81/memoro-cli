@@ -871,17 +871,25 @@ describe('bringing one up', () => {
     let t = 0;
     const pauses = [];
     const progress = [];
+    const reservations = [];
     let spawned = 0;
     const result = await ensureDevServer(worktree, DECLARATION, {
       root, processCwd: () => null, freeMemory: () => null,
       now: () => t,
       sleep: async (ms) => { pauses.push(ms); t += ms; },
-      spawn: () => { spawned += 1; if (spawned === 2) registerServer(root, worktree, { port: 8900 }); return { pid: 4242, unref() {} }; },
+      spawn: (_command, _args, options) => {
+        reservations.push(options.env.MC_DEV_ADMITTED);
+        spawned += 1;
+        if (spawned === 2) registerServer(root, worktree, { port: 8900 });
+        return { pid: 4242, unref() {} };
+      },
       pidAlive: () => false, fetch: async () => ({ ok: true }), onRetry: (line) => progress.push(line),
     });
     assert.equal(result.ok, true, result.error);
     assert.equal(result.server.url, 'http://127.0.0.1:8900');
     assert.equal(spawned, 2);
+    assert.ok(reservations.every((id) => /^res-/u.test(id)));
+    assert.notEqual(reservations[0], reservations[1], 'each attempt is freshly admitted');
     assert.deepEqual(pauses, [1000, 5000, 1000]);
     assert.equal(progress.length, 1);
     assert.match(progress[0], /starting once more/u);
@@ -1819,6 +1827,52 @@ describe('editedSince — a change nobody committed', () => {
 });
 
 describe('ensureAppServer', () => {
+  it('keeps both admission waits separate from failed retry start time', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const temp = mkdtempSync(join(tmpdir(), 'mc-test-env-temp-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const waits = [3000, 4000];
+    const reservations = [];
+    const progress = [];
+    let spawned = 0;
+    try {
+      const result = await ensureAppServer(worktree, DECLARATION, {
+        stdout: { write: (line) => progress.push(line) },
+        deps: {
+          root, tmpDir: temp, processCwd: () => null, freeMemory: () => null,
+          clock: () => t, now: () => t,
+          sleep: async (ms) => { t += ms; },
+          admit: async () => {
+            const waited = waits.shift();
+            t += waited;
+            return { ok: true, waited_ms: waited };
+          },
+          spawn: (_command, _args, options) => {
+            spawned += 1;
+            reservations.push(options.env.MC_DEV_ADMITTED);
+            writeFileSync(options.env.MC_KEYS_CHILD_FILE, JSON.stringify({ pid: 4243, exit: 1 }));
+            return { pid: 4242, unref() {} };
+          },
+          pidAlive: (pid) => pid === 4242,
+          fetch: async () => ({ ok: true }),
+        },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(spawned, 2);
+      assert.deepEqual(waits, []);
+      assert.deepEqual(reservations, ['', '']);
+      assert.deepEqual(result.timing, { slot_wait_ms: 7000, server_ms: 7000 });
+      assert.match(result.error, /server \(pid 4243\) exited with code 1/u);
+      assert.match(result.error, /wrapper \(pid 4242\) is still alive/u);
+      assert.equal(progress.filter((line) => line.includes('starting once more')).length, 1);
+      assert.deepEqual(readdirSync(temp), []);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+    } finally {
+      for (const path of [root, temp, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('says a slot wait and a slow start apart, and neither throws (network-hub-avatars, 2026-11-02)', async () => {
     const said = [];
     const ensured = await ensureAppServer('/w', DECLARATION, {
