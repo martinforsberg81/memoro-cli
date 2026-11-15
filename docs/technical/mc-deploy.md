@@ -17,8 +17,12 @@ What the verb adds is everything around the script:
 - **the gate**, so the commit that ships is one that was measured whole and
   exercised: a completed full run of exactly that commit, and the app's own
   suites run against a local server of it (below);
-- **one question**, always, with no flag that skips it — and it is Martin's act:
-  a headless session is refused before anything is read;
+- **one question**, always, with no flag that skips it. A deploy is refused to
+  an unattended session and happens only in an interactive session; it is not one
+  of the acts that reach Martin (Martin, 2026-11-15,
+  [canon/tasks/asking-martin.md](../../canon/tasks/asking-martin.md)), and the
+  refusal stays until a release is checked where users meet it and can be taken
+  back. A headless session is refused before anything is read;
 - **its own process**, the deployer, so the deploy runs beside the merger and
   neither waits for the other, and a ^C at the terminal stops only the
   watching (ruling 30);
@@ -219,9 +223,8 @@ slower, never less than the deploy asked for.
 
 ## What it refuses, and with what code
 
-Deploying to production is Martin's word every time (his letter: *"Deploy till
-produktion"* is one of the things to ask about first), so the verb refuses
-rather than assumes wherever there is nobody to ask.
+Deploying to production needs a terminal and the one question that no flag
+skips, so the verb refuses rather than assumes wherever there is nobody to ask.
 
 | situation | code | what happens |
 |---|---|---|
@@ -235,7 +238,7 @@ rather than assumes wherever there is nobody to ask.
 | **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | the worktree stands on another commit than the pick, after the yes, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
-| **a headless session** (`MC_HEADLESS=1`) | 1 | *"mc deploy is Martin's act"* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
+| **a headless session** (`MC_HEADLESS=1`) | 1 | *"mc: mc deploy is refused to an unattended session and happens only in an interactive session; this one is headless (MC_HEADLESS=1) — nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a suite failed or could not run** | 1 | names the suite and its last lines; refused row |
@@ -431,7 +434,7 @@ without the flag refuses before the suites run; with the flag, and in
 whoever decides. `unmeasured` and `moved` are not red: they are not accepted.
 
 **Headless.** `MC_HEADLESS=1` refuses a deploy before any fetch, full run or
-suite. A headless session is told the deploy is Martin's act. `--dry-run` and
+suite. A headless session is told the deploy is refused to an unattended session. `--dry-run` and
 `--follow` stay allowed — they change nothing. The Claude hook rule
 `headless-deploy` ([`src/mc/hooks.js`](../../src/mc/hooks.js)) is kept as the
 first line; the verb's own refusal is the second, and the only one under Codex,
