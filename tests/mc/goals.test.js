@@ -8,6 +8,7 @@ import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_hel
 import { addPr, goalOfRecord, readHold } from '../../src/mc/goals.js';
 import { phaseGoals } from '../../src/mc/goal-convert.js';
 import { addItem, itemWords, removeItem } from '../../src/mc/goal-parts.js';
+import { phaseOrder, programmeOrder } from '../../src/mc/goals.js';
 
 const GOAL_TEXT = goalJson({ repos: ['memoro-cli', 'memoro'] });
 
@@ -801,4 +802,153 @@ test('readHold says created only when the hold file says created: true; a takeov
   assert.equal(hold(JSON.stringify({ ...base, created: 'true' })).created, false, 'only exactly true');
   assert.equal(hold('{ not json').created, false, 'an unreadable file is a hold, not a creation hold');
   assert.equal(hold(null), null, 'no file, no hold');
+});
+
+/* --------------------------------------- phases stated in the programme's record */
+
+const PROG_RECORD = { schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+const recordText = (phases) => `${JSON.stringify(phases === undefined ? PROG_RECORD : { ...PROG_RECORD, phases }, null, 2)}\n`;
+const RECORD_PATH = '/h/prog/PROGRAMME.json';
+/** The order of a programme as the runner reads it from the record file in the file model `store`. */
+const orderOfStore = (store) => (programme) => programmeOrder(programme, { home: '/h', read: (path) => store[path] ?? null });
+const statedStore = (after) => ({ [RECORD_PATH]: recordText(after === undefined ? { order: 'stated' } : { order: 'stated', after }) });
+const orderOf = (after) => orderOfStore(statedStore(after))('prog');
+
+test('a stated programme with no dependency opens every phase, and the pick takes the phase-3 goal when the others are held', () => {
+  const goals = [listed('prog/one', 'build', 1), listed('prog/two', 'build', 2), listed('prog/three', 'build', 3)];
+  const order = orderOf();
+  assert.deepEqual(order, { kind: 'stated', after: {} });
+  for (const goal of goals) assert.equal(phaseOpen(goal, goals, order), true, goal.goal);
+  const held = new Set(['goal:prog/one', 'goal:prog/two']);
+  assert.equal(nextGoal(goals, { repos: ['memoro-cli'], held, order: orderOfStore(statedStore()) }).goal, 'three');
+  assert.equal(nextGoal(goals, { repos: ['memoro-cli'], held }), null, 'with no order given the phases are sequential, as before');
+});
+
+test('a phase that waits for phase 1 opens when phase 1 is done or dropped, and not while it is in draft, build, review or merge; phase 2 is open throughout', () => {
+  const order = orderOf({ 3: [1] });
+  for (const stage of ['draft', 'build', 'review', 'merge']) {
+    const goals = [listed('prog/one', stage, 1), listed('prog/two', 'build', 2), listed('prog/three', 'build', 3)];
+    assert.equal(phaseOpen(goals[2], goals, order), false, `phase 3 waits while phase 1 is in ${stage}`);
+    assert.equal(phaseOpen(goals[1], goals, order), true, `phase 2 is open while phase 1 is in ${stage}`);
+  }
+  for (const stage of ['done', 'dropped']) {
+    const goals = [listed('prog/one', stage, 1), listed('prog/two', 'build', 2), listed('prog/three', 'build', 3)];
+    assert.equal(phaseOpen(goals[2], goals, order), true, `phase 3 opens when phase 1 is ${stage}`);
+    assert.equal(phaseOpen(goals[1], goals, order), true, `phase 2 is open when phase 1 is ${stage}`);
+  }
+});
+
+test('a phase may wait for a higher number: phase 1 waits for phase 3 in build, and phase 3 is open', () => {
+  const order = orderOf({ 1: [3] });
+  const goals = [listed('prog/one', 'build', 1), listed('prog/three', 'build', 3)];
+  assert.equal(phaseOpen(goals[0], goals, order), false);
+  assert.equal(phaseOpen(goals[1], goals, order), true);
+  assert.equal(nextGoal(goals, { repos: ['memoro-cli'], order: () => order }).goal, 'three');
+  assert.equal(phaseOpen(goals[0], [goals[0], { ...goals[1], stage: 'done' }], order), true);
+});
+
+test('a named phase with all goals dropped, with no goal, or whose only goal does not parse holds nothing', () => {
+  const order = orderOf({ 3: [1, 2] });
+  const waiting = listed('prog/three', 'build', 3);
+  const dropped = [listed('prog/one', 'dropped', 1), listed('prog/two', 'dropped', 2), waiting];
+  assert.equal(phaseOpen(waiting, dropped, order), true, 'every goal of the named phase is dropped');
+  const none = [listed('prog/two', 'done', 2), waiting];
+  assert.equal(phaseOpen(waiting, none, order), true, 'the programme has no goal in phase 1');
+  const broken = [{ ...listed('prog/one', null, null), problems: ['does not parse'] }, listed('prog/two', 'done', 2), waiting];
+  assert.equal(phaseOpen(waiting, broken, order), true, 'a goal that does not parse holds nothing');
+});
+
+test('the order of a programme is read from its record: none and a record without phases are sequential, an invalid record holds', () => {
+  const read = (files) => (programme) => programmeOrder(programme, { home: '/h', read: (path) => files[path] ?? null });
+  assert.deepEqual(read({})('prog'), { kind: 'sequential' });
+  assert.deepEqual(read({ [RECORD_PATH]: recordText() })('prog'), { kind: 'sequential' });
+  assert.equal(read({ [RECORD_PATH]: '{' })('prog').kind, 'invalid');
+  assert.equal(read({ [RECORD_PATH]: recordText({ order: 'stated', after: { 1: [2], 2: [1] } }) })('prog').kind, 'invalid', 'a cycle does not validate');
+  const goals = [listed('prog/one', 'build', 1), listed('prog/two', 'build', 2)];
+  assert.equal(phaseOpen(goals[0], goals, { kind: 'invalid', problems: ['x'] }), false);
+  assert.equal(phaseOpen(goals[1], goals, phaseOrder(undefined)), false, 'a programme read without its record is sequential');
+});
+
+test('a programme with no record, or a record without phases, gives the answers of the sequential rule on the existing goal sets', () => {
+  const stores = { 'no record': {}, 'a record without phases': { [RECORD_PATH]: recordText() } };
+  const sets = [
+    [listed('prog/a', 'done'), listed('prog/b', 'dropped'), listed('prog/c', 'build', 2), listed('prog/d', 'blocked', 3), listed('other/e', 'build')],
+    ...['build', 'review', 'finish', 'merge'].map((status) => [listed('prog/first', status, 1, { repos: ['memoro'] }), listed('prog/second', 'build', 2)]),
+    [listed('prog/first', 'done', 1, { repos: ['memoro'] }), listed('prog/gone', 'dropped', 1), listed('prog/second', 'build', 2)],
+    [listed('prog/a', 'build'), listed('prog/b', 'build'), listed('prog/later', 'build', 2)],
+  ];
+  for (const [kind, files] of Object.entries(stores)) {
+    const order = orderOfStore(files);
+    for (const goals of sets) {
+      for (const goal of goals) assert.equal(phaseOpen(goal, goals, order(goal.programme)), phaseOpen(goal, goals), `${kind}: ${goal.goal}`);
+      for (const held of [new Set(), new Set(['goal:prog/a']), new Set(['goal:prog/a', 'goal:prog/b'])]) {
+        assert.equal(nextGoal(goals, { repos: ['memoro-cli'], held, order })?.goal, nextGoal(goals, { repos: ['memoro-cli'], held })?.goal, `${kind}: pick`);
+      }
+    }
+    // The answers are today's: the phase-2 goals wait while phase 1 is in build.
+    const building = [listed('prog/first', 'build', 1), listed('prog/second', 'build', 2)];
+    assert.equal(phaseOpen(building[1], building, order('prog')), false, `${kind}: phase 2 waits for phase 1`);
+    assert.equal(nextGoal(building, { repos: ['memoro-cli'], held: new Set(['goal:prog/first']), order }), null, `${kind}: phase 2 is not picked`);
+    const draft = (name, fields = {}) => ({ programme: 'prog', goal: name, stage: 'draft', status: 'ready', phase: 1, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
+    const drafts = [[draft('b'), draft('later', { phase: 2 }), draft('a')], [draft('a', { status: 'Martin' }), draft('b')], [draft('one', { stage: 'build' }), draft('two', { phase: 2 })]];
+    for (const goals of drafts) assert.equal(nextDraft(goals, 'prog', { order: order('prog') }), nextDraft(goals, 'prog'), `${kind}: draft`);
+    assert.equal(nextDraft(drafts[0], 'prog', { order: order('prog') }).goal, 'a', `${kind}: the lowest phase, then the oldest and by name`);
+  }
+});
+
+test('nextDraft in a stated programme takes the draft of an open phase with no goal in build, review or merge', () => {
+  const draft = (name, phase, fields = {}) => ({ programme: 'prog', goal: name, stage: 'draft', status: 'ready', phase, created: '2026-11-01T00:00:00Z', problems: [], ...fields });
+  const built = listed('prog/built', 'build', 1);
+  const ready = draft('ready', 2);
+  assert.equal(nextDraft([built, ready], 'prog', { order: orderOf() }), ready, 'no dependency: phase 2 is planned while phase 1 builds');
+  assert.equal(nextDraft([built, ready], 'prog', { order: orderOf({ 2: [1] }) }), null, 'phase 2 waits for phase 1');
+  assert.equal(nextDraft([built, ready], 'prog'), null, 'no record: as today');
+  // (b) the phase of the draft holds a goal in build
+  const own = listed('prog/own', 'build', 2);
+  assert.equal(nextDraft([ready, own], 'prog', { order: orderOf() }), null);
+  assert.equal(nextDraft([ready, { ...own, stage: 'done' }], 'prog', { order: orderOf() }), ready);
+  // (c) a first draft waiting on Martin holds its phase only
+  const martin = draft('martin', 1, { status: 'Martin' });
+  assert.equal(nextDraft([martin, ready], 'prog', { order: orderOf() }), ready);
+  const youngerReady = draft('younger', 1, { created: '2026-11-02T00:00:00Z' });
+  const olderMartin = draft('older', 1, { status: 'Martin' });
+  assert.equal(nextDraft([youngerReady, olderMartin], 'prog', { order: orderOf() }), null, 'the older draft of a phase is not bypassed within it');
+  // (d) the lowest phase first; within a phase the oldest, then by name
+  assert.equal(nextDraft([draft('three', 3), draft('one', 1)], 'prog', { order: orderOf() }).goal, 'one');
+  assert.equal(nextDraft([draft('b', 1), draft('a', 1, { created: '2026-11-02T00:00:00Z' })], 'prog', { order: orderOf() }).goal, 'b');
+  assert.equal(nextDraft([draft('b', 1), draft('a', 1)], 'prog', { order: orderOf() }).goal, 'a');
+  // (e) a goal that does not parse holds the programme
+  assert.equal(nextDraft([ready, { ...listed('prog/bad', null, null), problems: ['x'] }], 'prog', { order: orderOf() }), null);
+  // an invalid record and an unavailable draft offer none
+  assert.equal(nextDraft([ready], 'prog', { order: { kind: 'invalid', problems: ['x'] } }), null);
+  assert.equal(nextDraft([ready], 'prog', { order: orderOf(), unavailable: () => true }), null);
+});
+
+test('renumberPhases keeps each stated dependency on the phase it was stated for', () => {
+  const files = {
+    '/h/prog/goals/b/GOAL.json': withGoal(GOAL_TEXT, { phase: 2 }),
+    '/h/prog/goals/c/GOAL.json': withGoal(GOAL_TEXT, { phase: 3 }),
+    '/h/prog/goals/e/GOAL.json': withGoal(GOAL_TEXT, { phase: 5 }),
+    ...statedStore({ 3: [2], 5: [2, 3] }),
+  };
+  const io = model(files);
+  const list = (path) => ({ '/h': ['prog'], '/h/prog/goals': ['b', 'c', 'e'] }[path] ?? []);
+  const made = renumberPhases({ home: '/h', programme: 'prog', list, read: io.read, write: io.write });
+  assert.deepEqual(made.map((move) => [move.goal.goal, move.from, move.to]), [['b', 2, 1], ['c', 3, 2], ['e', 5, 3]]);
+  assert.deepEqual(JSON.parse(io.store[RECORD_PATH]).phases, { order: 'stated', after: { 2: [1], 3: [1, 2] } });
+  assert.deepEqual(Object.keys(JSON.parse(io.store[RECORD_PATH])), [...Object.keys(PROG_RECORD), 'phases']);
+});
+
+test('renumberPhases writes no record where there is none, and leaves a record without phases or an invalid one as it is', () => {
+  const goals = {
+    '/h/prog/goals/b/GOAL.json': withGoal(GOAL_TEXT, { phase: 2 }),
+    '/h/prog/goals/c/GOAL.json': withGoal(GOAL_TEXT, { phase: 3 }),
+  };
+  const list = (path) => ({ '/h': ['prog'], '/h/prog/goals': ['b', 'c'] }[path] ?? []);
+  for (const [kind, record] of [['none', null], ['without phases', recordText()], ['invalid', '{ not json']]) {
+    const io = model({ ...goals, ...(record === null ? {} : { [RECORD_PATH]: record }) });
+    const made = renumberPhases({ home: '/h', programme: 'prog', list, read: io.read, write: io.write });
+    assert.deepEqual(made.map((move) => [move.from, move.to]), [[2, 1], [3, 2]], kind);
+    assert.equal(io.store[RECORD_PATH] ?? null, record, `${kind}: the record is as it was`);
+  }
 });
