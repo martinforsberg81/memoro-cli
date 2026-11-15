@@ -106,8 +106,18 @@ describe('the mc bundle', () => {
     assert.deepEqual(syncSkills(env).map(({ tool, name, did }) => [tool, name, did]), [
       ['claude', 'mc', 'installed'], ['claude', 'mc-old', 'removed'],
       ['codex', 'mc', 'installed'], ['codex', 'mc-old2', 'removed'],
+      ['agy', 'mc', 'installed'],
     ]);
     assert.deepEqual(syncSkills(env), []);
+  });
+
+  it('installs the bundle where agy loads skills from, beside the other two tools', () => {
+    const { env } = home();
+    const dirs = Object.fromEntries(skillTargets(env).map((target) => [target.tool, target.dir]));
+    assert.equal(dirs.agy, join(env.HOME, '.gemini', 'antigravity-cli', 'skills'));
+    syncSkills(env);
+    assert.equal(parseSkill(read(join(dirs.agy, 'mc/SKILL.md'))).name, 'mc');
+    assert.ok(skillStatus(env).rows.some((row) => row.tool === 'agy' && row.state === 'ok'));
   });
 
   it('refuses nested entrypoints before they can advertise more skills', () => {
