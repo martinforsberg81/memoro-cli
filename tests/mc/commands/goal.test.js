@@ -8,6 +8,7 @@ import { after, before, describe, test } from 'node:test';
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
 import { addGoalWorktree, FINISH_ROLE, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
+import { goalHash, RECORDS_FILE } from '../../../src/mc/plan-review.js';
 import { runModule } from '../../../src/mc-verbs.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from '../_helpers/goal-file.js';
 
@@ -24,6 +25,9 @@ const LOG_TEXT = [
   '## 2026-11-01T22:00Z · claude claude-opus-5-5 · build · ready', '', 'Done: the tests', 'Next: the page', '',
   '## 2026-11-01T23:00Z · runner · build · ready', '', 'Comment: no session ran', '',
 ].join('\n');
+
+/** `.plan-review.json` holding one OK reading of the text of `goalText`: what a plan review leaves, for the cases that move a goal out of draft. */
+const okReading = (goalText, round = 1) => JSON.stringify({ records: [{ kind: 'reading', verdict: 'ok', hash: goalHash(parseGoal(goalText)), round, tool: 'codex', model: 'gpt-5', at: '2026-11-01T19:00:00.000Z' }] });
 
 const ok = (stdout = '') => ({ ok: true, stdout, stderr: '' });
 const failed = (stderr = 'boom') => ({ ok: false, stdout: '', stderr });
@@ -149,16 +153,22 @@ test('mc goal new accepts medium and reads it back from GOAL.json', async () => 
   assert.match(f.out(), /draft · ready · phase 1 · memoro-cli · medium/u, 'show exposes medium in the goal status line');
 });
 
-test('mc goal new --stage build makes a goal ready to be built; no other stage is a new goal\'s', async () => {
+test('mc goal new --stage build is refused with exit 2 and creates nothing; --stage draft makes the goal; no other stage is a new goal\'s', async () => {
   const f = fixture();
-  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 0, f.err());
-  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).stage, 'build');
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 2);
+  assert.match(f.err(), /written in draft.*mc goal stage <programme>\/<goal> build after its plan review/u);
+  assert.equal(f.store[`${DIR}/GOAL.json`], undefined);
+  assert.equal(f.store[`${DIR}/LOG.md`], undefined);
+  assert.deepEqual(f.calls, [], 'nothing was fetched');
+  const d = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'draft'], d.deps), 0, d.err());
+  assert.equal(parseGoal(d.store[`${DIR}/GOAL.json`]).stage, 'draft');
   const g = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'review'], g.deps), 2);
-  assert.match(g.err(), /--stage is draft or build for a new goal, not review/u);
+  assert.match(g.err(), /--stage is draft for a new goal, not review/u);
   const h = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'plan'], h.deps), 2, 'the old word is not a new goal\'s stage');
-  assert.match(h.err(), /--stage is draft or build for a new goal, not plan/u);
+  assert.match(h.err(), /--stage is draft for a new goal, not plan/u);
   assert.equal(g.store[`${DIR}/GOAL.json`], undefined);
 });
 
@@ -394,7 +404,8 @@ test('dropping refuses to archive while a live current-*.json owns the goal', as
  * branch at `mc goal new`, before the phases ahead of it landed.
  */
 test('mc goal stage build remakes a branch with no commits of its own from origin/main, leaves one with commits alone, and says no worktree yet for a repository without one', async () => {
-  const planned = seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'draft' }) });
+  const draftText = withGoal(GOAL_TEXT, { stage: 'draft' });
+  const planned = seededGoal({ [`${DIR}/GOAL.json`]: draftText, [`${DIR}/${RECORDS_FILE}`]: okReading(draftText) });
   const counts = ({ own, behind }) => (cwd, args) => {
     if (args[0] === 'rev-list') return ok(`${args[2] === 'origin/main..HEAD' ? own : behind}\n`);
     return ok();
@@ -454,7 +465,8 @@ test('every move of the order, by its owner: draft → build by plan, build → 
     ['finish', 'merge', PLAN], ['merge', 'done', {}], ['draft', 'review', PLAN], ['finish', 'dropped', PLAN], ['build', 'dropped', PLAN],
   ];
   for (const [from, to, env] of moves) {
-    let f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n' }), env });
+    const reading = from === 'draft' ? { [`${DIR}/${RECORDS_FILE}`]: okReading(withGoal(GOAL_TEXT, { stage: 'draft', success_criteria: MET })) } : {};
+    let f = reviewed({ files: inStage(from, 'ready', { [`${DIR}/REVIEW.md`]: 'head abc1234def: the page is wrong\n', ...reading }), env });
     if (to === 'dropped') f = dropFixture(f);
     assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), to], f.deps), 0, `${from} → ${to}: ${f.err()}`);
     if (to === 'dropped') assert.equal(goalField(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped');
@@ -1870,8 +1882,9 @@ test('the learning role creates a goal and writes it: set, criterion add and dra
   for (const argv of [
     ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
     ['criterion', 'add', 'mc/plain', '--criterion', 'It holds', '--check', 'mc gate x'],
-    ['stage', 'mc/plain', 'build'],
   ]) assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
+  f.store[`${DIR}/${RECORDS_FILE}`] = okReading(f.store[`${DIR}/GOAL.json`]); // the reading its plan review leaves
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, `stage: ${f.err()}`);
   assert.equal(stateOf(f), 'build · ready');
   assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.length, 1);
 });

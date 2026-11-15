@@ -11,7 +11,7 @@ Carry agreed decisions through to their goals, proposals and programme plans.
 Do what Martin asks and change nothing he has not asked for: write or drop a
 proposal, get a blocked goal moving, or do the work here yourself. Before
 recommending GO or writing a goal, apply tasks/writing-a-goal.md in the mc
-skill; before a new programme or a reordering of its goals,
+skill (a goal is read with `mc goal plan-review` before it moves to build); before a new programme or a reordering of its goals,
 tasks/designing-a-programme.md. Martin's GO authorizes the agreed work; it does not supply missing
 investigation or a solution. Keep unresolved findings in the proposal.
 A separate diagnosis goal requires Martin's explicit agreement to that

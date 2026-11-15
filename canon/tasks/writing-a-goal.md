@@ -10,8 +10,8 @@ and know when it is done? If not, it is not a goal yet.
 A goal is numbered parts. Each answers one question the build session has, and the review checks the change against the same part: what a goal
 names is reviewed, what it does not name is not. [The parts](references/goal-design.md#the-parts) says what each holds.
 
-1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build]` — the
-   skeleton, in `draft` (nothing happens to it there) unless `--stage build`, and in phase 1 unless `--phase` says another.
+1. `mc goal new <programme>/<goal> --repo memoro|memoro-cli --class fast|medium|large --title "…" [--phase <n>]` — the skeleton, always in
+   `draft` (nothing happens to it there; `--stage build` is refused), and in phase 1 unless `--phase` says another.
 2. `mc goal set <p>/<g> aim|outcome|latitude|protection --text "…"` — why it is done, what is true when it is done, what the build chooses, what is tested.
 3. `mc goal item add <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope --text "…"` with the part's flags (`mc goal --help`). It
    prints the item's id (`P3`, `C1`); `item set <id>` changes one and `item remove <id> --reason "…"` takes it out. Cite the id, never a position.
@@ -19,12 +19,16 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
    area: `mc goal obligation set <p>/<g> <repo>/<id> --stand touched|untouched --text "…" [--standard "<repo>/<path>#<section>"]`.
 5. `mc goal criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]` per success criterion; the runner starts no goal without one.
    `mc goal document add <p>/<g> --label "…" --path "…"` for each document the build session must read.
-6. `mc goal show <p>/<g>` renders it as the build session will read it; `mc goal stage <p>/<g> build` once it is ready to be built.
+6. `mc goal show <p>/<g>` renders it as the build session will read it. Then `mc goal plan-review <p>/<g>`: a fresh session reads the goal in
+   `draft` against seven questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK). It takes up to 20 minutes: a session whose
+   tool call is shorter runs it in the background and waits. An interactive session passes `--avoid <tool>:<model>` with its own model.
+   Repair what it finds yourself and read again; after two rounds decide, and move with `mc goal stage <p>/<g> build --reason "…"`.
+   `mc goal stage <p>/<g> build` moves a goal that is complete and has an OK reading of its current text; any change to the text asks for a new one.
 
 Work that is several pieces in order is several goals, each in the phase after the one before: a goal starts only when every goal of its
 programme in a lower phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later; goals of one phase run side by side; phases
 may be renumbered; a `draft` goal holds later phases back too. The cut into goals and phases is
-[designing a programme](designing-a-programme.md): a finished brief stands in `build` in its phase.
+[designing a programme](designing-a-programme.md): a finished, read brief stands in `build` in its phase.
 
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others

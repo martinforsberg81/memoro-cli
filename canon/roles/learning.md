@@ -45,9 +45,9 @@ choose a stronger step in the order above, not to repeat the same one.
 ## Write one goal per group
 
 Each group becomes one goal: class `fast`, in the phase after the last open one
-of its programme, in `build`. Write it with `mc goal new`, `mc goal set`, `mc
+of its programme, in `build` after its reading. Write it with `mc goal new`, `mc goal set`, `mc
 goal item add`, `mc goal obligation set`, `mc goal criterion add`, `mc goal
-document add` and `mc goal stage <programme>/<goal> build`, as
+document add`, as
 [writing-a-goal](../tasks/writing-a-goal.md) requires: a goal that a headless
 build session, which has read nothing else, can build start to finish and know
 when it is done. It carries the lessons' evidence and the exact change: the
@@ -55,6 +55,11 @@ function and behaviour for code, the sentences to add, change or remove for a
 prompt or a standard. Several changes to the same file go in one goal. The
 lessons' evidence is the goal's `problem`, the exact change its `change` items,
 and it takes a stand on every rule area of its repository.
+
+Each goal you wrote gets one `mc goal plan-review <programme>/<goal>`, with
+the step in [writing-a-goal](../tasks/writing-a-goal.md): on OK, move it to
+`build`; otherwise it stays in `draft` with `PLAN-REVIEW.md` for the plan
+session, and you do not read it a second time.
 
 The goal is in programme `mc` when it changes memoro-cli, and in the programme
 whose aim it serves when it changes memoro's `docs/technical/`.

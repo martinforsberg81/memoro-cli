@@ -138,8 +138,8 @@ written, and a write that would make one is refused with the field named.
 ```
 
 - `stage` — `draft`, `build`, `review`, `finish`, `merge`, `done` or
-  `dropped` (*Stages*). A goal starts in `draft`, or `build` with `mc goal new
-  --stage build`. `draft` was written `plan` until 2026-11-07 (Martin: the
+  `dropped` (*Stages*). A goal always starts in `draft`: `mc goal new
+  --stage build` is refused (*Plan review*). `draft` was written `plan` until 2026-11-07 (Martin: the
   stage names the goal's state; plan is the session that writes drafts): a
   GOAL.json or a LOG.md heading saying `plan` reads as `draft` (`readStage`),
   `mc goal convert` and the runner's `convertAfter` rewrite the GOAL.json once
@@ -376,12 +376,13 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   stands in for the argument. Plan, a person and the learning role may run it;
   so may a build, review, finish or mend session, which only reads.
 
-- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft|build] [--structure 1|2]`** — makes a
+- **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
   goal, refused unless its flags are valid and its names are new. It writes
   version 2 (numbered parts) unless given `--structure 1`, which writes version 1
   (goal and contract prose); it prints one hint for the version it wrote. It is in
-  stage `draft` (awaiting planning; see *Next draft planning*), or
-  `build` with `--stage build`, and in phase `<n>`, 1 by default; a phase more than one past the programme's
+  stage `draft` (awaiting planning; see *Next draft planning*; `--stage build`
+  exits 2 and creates nothing: write the goal in draft and move it with
+  `mc goal stage` after its reading), and in phase `<n>`, 1 by default; a phase more than one past the programme's
   highest is refused (`phase 4 would leave a hole — mc's phases run to 2, so 3
   is the highest a goal may take`). Each
   repository is fetched first; then GOAL.json — a skeleton with the title and
@@ -958,13 +959,68 @@ The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
 
+## Plan review
+
+A goal leaves `draft` (to `build`, or to a later stage a plan or person names)
+only when it is complete and a fresh session has read it. Moving it to
+`dropped` is not checked. The gate is in `logEntry`, after `refusedMove`, so
+`mc goal stage`, `mc goal log --stage` and the status verbs share it; a refused
+move exits 1 and writes nothing.
+
+- **Parts** (version 2 goals only). The refusal names every lack at once: an
+  empty outcome, no change item, no criterion, a declared rule area without a
+  stand, a stand whose `--standard` path is not on origin/main of the repository
+  it names. A question mc cannot answer (a git failure, an unknown repository, a
+  failing declarations read) refuses with the reason. Items saying `every`,
+  `only` or `no other` (whole words) without a premise id are not refused; they
+  are listed for the reader.
+- **Reading** (both versions). The latest reading must be OK and judge the
+  current text, or two readings since the goal last entered draft must be
+  stored and `mc goal stage … build --reason "…"` be given; the log entry then
+  carries the reason and both verdicts. `log --stage` has no reason flag and is
+  refused in that case, naming the stage verb.
+- **The text's hash** is sha256 of `renderGoalText` with every criterion's met
+  set false, so met marks, stage, status, phase, repos, class, prs, the log and
+  the hold are not part of it; any other edit asks for a new reading.
+- **`.plan-review.json`** in the goal directory holds append-only records:
+  verdict, hash, round, tool, model, time; a move into draft from another stage
+  appends a marker. Readings and rounds count from the last marker. The goal
+  file format does not change. `PLAN-REVIEW.md` is the latest reading's text; an
+  earlier one is kept as `PLAN-REVIEW-<round>.md`.
+- **The call**: `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]`, for a
+  goal in `draft`, from a caller `refusedMove` would let move it draft→build
+  (a build, review, finish, mend, desk-prepare or plan-review session is
+  refused). The learning role runs one reading per goal it wrote. At most two
+  readings per stay in draft; a refused call exits 2 and launches nothing.
+  Exit 0 is OK, 1 is not OK, no verdict or a changed file.
+- **The reader** runs on the review list, never on the author's model while
+  another candidate can run (the author is the caller's `MC_TOOL`/`MC_MODEL`,
+  else `--avoid`; with neither, nothing is excluded and the call and the record
+  say the author is unknown). It is a child of the call with a 20-minute limit,
+  no runner lane, in a read-only checkout the call makes and removes. Its cost is
+  a run row `goal:<p>/<g>`, kind `plan-review`, in the desk's runs: plan cost in
+  `mc landed`, never the goal's own, and not the desk budget.
+- **The verdict** is recorded only by the launched session: `mc goal plan-review
+  <p>/<g> verdict ok|not-ok` needs `MC_ROLE=plan-review`, the launch's goal, the
+  token (only its sha256 is stored, in `.plan-review-launch.json`; the token goes
+  only in the child's environment), a live launch and a `PLAN-REVIEW.md` written
+  after the launch whose first line is `OK` or `NOT OK` matching. A reading during
+  which GOAL.json, LOG.md or `.hold.json` changed is discarded. From this role
+  `mc goal` accepts `show`, `list`, `areas` and the verdict only, and `mc ask` is
+  refused.
+- **Show and areas.** `mc goal show` says where the review stands (none, OK for
+  this text, OK for an earlier text, not OK with the round). `mc goal areas
+  <p>/<g>` proposes a stand for each area without one: touched, naming the change
+  items whose `where` holds a path under the area's paths (or a directory above),
+  otherwise untouched. The proposal is advisory.
+
 ## Stages
 
 Each stage has one owner, and a goal passes each once:
 
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
-  when it is ready to be built. (Named `plan` until 2026-11-07.)
+  when it is complete and has an OK reading (*Plan review*). (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — one finish session finishes it to `merge`; an unrecoverable role exit waits directly on Martin. A finish session that finds the goal wrong reports it with `mc goal defect`.
