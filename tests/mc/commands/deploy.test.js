@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import {
   deployPlan, deploySource, deployWorktreePath, leftoverStamps, parseDeployArgs, planLines, readScriptOutput, run,
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
-  worktreeState, DISK_BUSY_WAIT_MS,
+  worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
 import { readDeployMends } from '../../../src/mc/deploy-repair.js';
@@ -3274,6 +3274,125 @@ describe('mc deploy — production never moves backwards', () => {
     assert.equal(code, 0);
     assert.equal(spawned.length, 1);
     assert.equal(row.sha, MID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The take-back floor (goal red-release-taken-back, D7): a commit a take-back row names, and
+// every commit before it, is no pick — a green run does not bring it back, and --accept-red
+// does not either. The next green commit after it ships as before.
+// ---------------------------------------------------------------------------
+
+describe('mc deploy — the take-back floor', () => {
+  const chain = [TIP, MID, LOW];
+  // MID was taken back: LOW comes before it, TIP comes after it.
+  const beforeMid = (older, newer) => !(older === TIP && newer === MID);
+  const walk = (extra = {}) => walkingGit({
+    chain, counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)), ancestors: beforeMid, ...extra,
+  });
+
+  it('pickCommit passes a commit the floor covers over with state taken-back, and the next green one ships', () => {
+    const found = pickCommit({
+      chain, live: LIVE, runs: [greenRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: (sha) => sha === TIP || sha === MID,
+    });
+    assert.equal(found.pick, LOW);
+    assert.deepEqual(found.passed.map((p) => [p.sha, p.state]), [[TIP, 'taken-back'], [MID, 'taken-back']]);
+  });
+
+  it('a green full run does not bring a taken-back commit back: nothing is picked', () => {
+    const found = pickCommit({ chain, live: LIVE, runs: [greenRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: () => true });
+    assert.equal(found.pick, null);
+    assert.equal(found.tip, TIP);
+    assert.deepEqual(found.passed.map((p) => p.state), ['taken-back', 'taken-back', 'taken-back']);
+  });
+
+  it('without a floor the pick is as it was (the default covers nothing)', () => {
+    assert.equal(pickCommit({ chain, live: LIVE, runs: [greenRun(TIP)] }).pick, TIP);
+  });
+
+  it('the plan: a tip the floor covers is taken_back, with the reason, and nothing is picked', async () => {
+    const plan = await planOf({ runs: [greenRun(TIP)], takenBack: () => [TIP] });
+    assert.equal(plan.sha, TIP);
+    assert.match(plan.taken_back, /main's tip 1a2b3c4 is a commit that was taken back from production after its check was red.* also with --accept-red/u);
+    assert.equal(plan.pick.green, null);
+  });
+
+  it('the plan: a tip after the taken-back commit is not covered, and a green tip ships', async () => {
+    const plan = await planOf({ git: walk(), runs: [greenRun(TIP)], takenBack: () => [MID] });
+    assert.equal(plan.taken_back, null);
+    assert.equal(plan.sha, TIP);
+  });
+
+  it('the plan: a red tip after the taken-back commit with only covered commits behind it has no pick, and no take-back reason either', async () => {
+    const plan = await planOf({ git: walk(), runs: [redRun(TIP), greenRun(MID), greenRun(LOW)], takenBack: () => [MID] });
+    assert.equal(plan.taken_back, null);
+    assert.equal(plan.pick.green, null, 'MID and LOW are covered, TIP is red');
+    assert.equal(plan.sha, TIP);
+  });
+
+  it('the plan: a commit that comes before the taken-back one is named as such', async () => {
+    const plan = await planOf({
+      git: fakeGit({ sha: LOW, chain: [LOW], counts: COUNTS }), runs: [greenRun(LOW)], takenBack: () => [MID],
+    });
+    assert.match(plan.taken_back, /comes before 5b2d000, a commit that was taken back from production/u);
+  });
+
+  it('a commit this checkout does not have is no floor it can apply', () => {
+    const floor = takenBackFloor({ path: PATH, git: fakeGit({ unknown: [MID] }), shas: [MID] });
+    assert.equal(floor.covers(TIP), false);
+  });
+
+  for (const accept of [[], ['--accept-red', 'known']]) {
+    const how = accept.length ? 'under --accept-red too' : 'with a green tip';
+    it(`a tip that was taken back is refused with code taken-back, nothing is prepared or started, no deploy mend — ${how}`, async () => {
+      const queued = [];
+      const { code, out, spawned, started, calls, row } = await attempt(accept, {
+        extra: { git: walk({ chain: [TIP] }), takenBack: () => [TIP], queueRepair: (input) => { queued.push(input); } },
+        runs: [accept.length ? redRun(TIP) : greenRun(TIP)],
+      });
+      assert.equal(code, 1);
+      assert.deepEqual([spawned.length, started.length, calls.fullRun.length, calls.suites.length], [0, 0, 0, 0]);
+      assert.deepEqual(readPreparation(work), null, 'no preparation was started');
+      assert.equal(row.outcome, 'refused');
+      assert.match(row.note, /1a2b3c4 is a commit that was taken back from production/u);
+      assert.match(out.stderr, /taken back from production .* nothing was deployed/u);
+      assert.deepEqual(queued, [], 'a decision, not a fault: no deploy mend');
+    });
+  }
+
+  it('a green commit after the taken-back one ships as before', async () => {
+    const { code, spawned, row } = await attempt([], {
+      extra: { git: walk(), takenBack: () => [MID] }, runs: [greenRun(TIP), greenRun(MID)], head: TIP, served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1);
+    assert.equal(row.sha, TIP);
+  });
+
+  it('--dry-run says the tip was taken back and writes nothing', async () => {
+    const { code, out, spawned, row } = await attempt(['--dry-run'], {
+      extra: { git: walk({ chain: [TIP] }), takenBack: () => [TIP] }, runs: [greenRun(TIP)],
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 0);
+    assert.match(out.stdout, /a commit that was taken back from production/u);
+    assert.match(out.stdout, /mc: --dry-run — nothing would be deployed/u);
+    assert.equal(row, null, 'no row');
+  });
+
+  it('a take-back that landed between the reading and the admission refuses the pick', async () => {
+    let landed = false;
+    const { lock, raced } = lockWithRace(() => { landed = true; });
+    const { code, spawned, row, out } = await attempt([], {
+      extra: { git: walk({ chain: [TIP] }), lock, takenBack: () => (landed ? [TIP] : []) },
+      runs: [greenRun(TIP)], head: TIP, served: 'checkout',
+    });
+    assert.equal(raced.ran, 1, 'the take-back landed at the admission');
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0);
+    assert.equal(row.outcome, 'refused');
+    assert.match(row.note, /1a2b3c4 is a commit that was taken back from production; nothing ships/u);
+    assert.match(out.stderr, /nothing was deployed/u);
   });
 });
 

@@ -94,7 +94,7 @@ import { fileURLToPath } from 'node:url';
 import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
-  closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
+  closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart, takenBackShas,
   runningDeploy, versionCells, withDeploysLock,
 } from '../deploys.js';
 import { attemptInFlight, checkWords, takeBeforeReading } from '../deploy-check.js';
@@ -411,7 +411,7 @@ export function deploySource({ path, git = tryGit, env = process.env, create = f
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
   lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
-  languageState = readLanguageState, acceptRed = false, history = null,
+  languageState = readLanguageState, acceptRed = false, history = null, takenBack = takenBackRead,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
   const tip = git(path, ['rev-parse', '--verify', 'origin/main']);
@@ -429,6 +429,8 @@ export async function deployPlan({
       // The check after the deploy (D8): what its row keeps of it, and whether one is running now.
       check: row.check || '', check_at: row.check_at || '', check_why: row.check_why || '',
       checking: !row.check && attemptInFlight(env)?.started === row.started,
+      // A take-back row: what it took back (the floor below reads the same record).
+      takes_back: row.takes_back || '', takes_back_sha: row.takes_back_sha || '', takes_back_why: row.takes_back_why || '',
     };
   } else {
     const version = await fetchVersion(env);
@@ -461,10 +463,16 @@ export async function deployPlan({
     else if (!backwards && !descends(tip)) backwards = `main's tip ${short(tip)} does not descend from the live commit ${last.short} — shipping it would move production backwards, and nothing newer can ship`;
   }
 
+  // The floor (D7): a commit that was taken back, or comes before one, is no pick, also under --accept-red.
+  const floor = takenBackFloor({ path, git, shas: takenBack(env) });
+  let takenBackTip = null;
+  if (!backwards && floor.covers(tip)) {
+    takenBackTip = `main's tip ${short(tip)} ${floor.names(tip)} after its check was red; nothing after it is green yet, so nothing ships, also with --accept-red`;
+  }
   const runs = history ? history() : readNightlyHistory(path, { root: mcHome(env) }).runs;
-  const found = backwards
+  const found = backwards || takenBackTip
     ? { pick: null, tip, passed: [] }
-    : pickCommit({ chain, live: liveFull, runs, descends });
+    : pickCommit({ chain, live: liveFull, runs, descends, takenBack: floor.covers });
   const tipVerdict = fullRunVerdict(runs, tip);
   // Without a green commit, or when the person accepts a red, the tip is what is prepared.
   const sha = acceptRed || !found.pick ? tip : found.pick;
@@ -500,10 +508,31 @@ export async function deployPlan({
     gap: last ? count(liveFull || last.sha, sha) : null,
     pick,
     backwards,
+    taken_back: takenBackTip,
     nightly: nightlyState,
     // The deploy no longer promotes grammar; what waits is said here, from
     // the cache `mc language status` leaves — nothing is read anew.
     language: languageState(env),
+  };
+}
+
+/** Every commit a take-back row names, from the record on disk. */
+const takenBackRead = (env) => takenBackShas(readDeploys(env));
+
+/**
+ * The take-back floor over `shas` (the `takes_back_sha` of every take-back row, full or short):
+ * `covers(sha)` is whether `sha` is one of them or an ancestor of one; `names(sha)` says which.
+ * Resolved against the checkout, and a commit it does not have is not a floor it can apply.
+ */
+export function takenBackFloor({ path, git, shas = [] }) {
+  const full = shas.map((sha) => git(path, ['rev-parse', '--verify', `${sha}^{commit}`])).filter(Boolean);
+  const covering = (sha) => full.find((one) => one === sha || git(path, ['merge-base', '--is-ancestor', sha, one]) !== null) || null;
+  return {
+    covers: (sha) => covering(sha) !== null,
+    names: (sha) => {
+      const one = covering(sha);
+      return one === sha ? 'is a commit that was taken back from production' : `comes before ${short(one)}, a commit that was taken back from production`;
+    },
   };
 }
 
@@ -576,7 +605,7 @@ const commits = (n) => `${n} commit${n === 1 ? '' : 's'}`;
  */
 function pickLines(plan) {
   const { pick } = plan;
-  if (!pick || plan.backwards) return [];
+  if (!pick || plan.backwards || plan.taken_back) return [];
   const tip = short(plan.tip);
   if (pick.older && plan.sha === pick.green) {
     const behind = pick.behind === null ? 'behind' : `${commits(pick.behind)} behind`;
@@ -613,7 +642,9 @@ export function planLines(plan, { now = Date.now() } = {}) {
     }
   }
 
+  if (plan.last?.takes_back) lines.push(`mc: what is live is a take-back of ${short(plan.last.takes_back_sha)} (${plan.last.takes_back_why || 'no reason recorded'})`);
   if (plan.backwards) lines.push(`mc: ${plan.backwards}`);
+  if (plan.taken_back) lines.push(`mc: ${plan.taken_back}`);
   lines.push(...pickLines(plan));
   // What the release would be, taken back: said whether or not anything refuses (nothing does).
   lines.push(...takeBackLines(plan.take_back));
@@ -778,6 +809,7 @@ export async function run(argv, deps = {}) {
     git,
     fetchVersion: deps.fetchVersion || fetchVersionDefault,
     lastDeploy: deps.lastDeploy || lastDeployRow,
+    takenBack: deps.takenBack || takenBackRead,
     nightly: deps.nightly || nightlyReading,
     languageState: deps.languageState || readLanguageState,
     acceptRed: Boolean(opts.acceptRed),
@@ -812,7 +844,7 @@ export async function run(argv, deps = {}) {
   // the pick has it): made once the plan is known, before anything else, and only for a pick that moves
   // production forwards. It never refuses, holds or asks — a release that cannot be taken back deploys as
   // it does today — and a reading that cannot be made is `no`, with its why.
-  plan.take_back = plan.backwards
+  plan.take_back = plan.backwards || plan.taken_back
     ? null
     : await (deps.takeBack || takeBackReading)({ path, from: plan.live, to: plan.sha });
   const reading = takeBackCells(plan.take_back);
@@ -827,8 +859,8 @@ export async function run(argv, deps = {}) {
   // is the safe thing to type when you are not sure.
   if (opts.dryRun) {
     if (!opts.json) { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root: deps.root || workRoot(env), deps }); }
-    // Production never moves backwards: there is nothing to gate, and the reading has said why.
-    if (plan.backwards) {
+    // Production never moves backwards, and a taken-back commit does not come back: there is nothing to gate, and the reading has said why.
+    if (plan.backwards || plan.taken_back) {
       if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: null }, null, 2)}\n`);
       else stdout.write('mc: --dry-run — nothing would be deployed\n');
       return 0;
@@ -902,6 +934,13 @@ export async function run(argv, deps = {}) {
   if (plan.backwards) {
     refuse(plan.backwards, 'backwards');
     stderr.write(`mc: ${plan.backwards} — nothing was deployed\n`);
+    return 1;
+  }
+  // The floor, also under --accept-red: a tip that was taken back (or comes before one) is refused as it stands,
+  // with its own code — a decision, not a fault, so no deploy mend is opened for it.
+  if (plan.taken_back) {
+    refuse(plan.taken_back, 'taken-back');
+    stderr.write(`mc: ${plan.taken_back} — nothing was deployed\n`);
     return 1;
   }
 
@@ -988,6 +1027,14 @@ export async function run(argv, deps = {}) {
         stderr.write(`mc: ${why}; nothing was deployed\n`);
         return null;
       }
+    }
+    // The floor once more: a take-back that landed since the reading is in the record now.
+    const floorNow = takenBackFloor({ path, git, shas: (deps.takenBack || takenBackRead)(env) });
+    if (floorNow.covers(plan.sha)) {
+      const why = `${plan.short} ${floorNow.names(plan.sha)}; nothing ships`;
+      refuse(why, 'taken-back');
+      stderr.write(`mc: ${why}; nothing was deployed\n`);
+      return null;
     }
     // A row still `running` whose process is gone is a deploy that died
     // without completing it.
