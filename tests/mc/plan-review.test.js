@@ -177,6 +177,20 @@ test('a candidate that can run only on its API reserve is chosen over the author
   assert.equal(stub.candidate.model, 'opus', 'when the others answer that nothing can run, the whole list is asked');
 });
 
+test('plan review\'s removal of the author promotes no other candidate to first choice: the catalog\'s first stays first only while it is not the author', () => {
+  const ARGON = Object.freeze({ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' });
+  const catalog = catalogOf([ARGON, OPUS, SOL]);
+  const withArgon = (claudeUsed, codexUsed) => applyObservation(capacityOf(claudeUsed, codexUsed), 'agy', { windows: { five_hour: win(0.5), weekly: win(0.5) } }, NOW);
+  // The author is the first candidate: claude is not promoted, the ranking chooses and codex has the room.
+  const byArgon = chooseReader({ catalog, capacity: withArgon(0.9, 0.1), now: NOW, author: { tool: 'agy', model: 'gemini-4-argon-high' } });
+  assert.equal(byArgon.candidate.tool, 'codex');
+  assert.doesNotMatch(byArgon.why, /first choice/u);
+  // The author is a later candidate and the first can run: it is read on the first.
+  const byOpus = chooseReader({ catalog, capacity: withArgon(0.1, 0.1), now: NOW, author: { tool: 'claude', model: 'opus' } });
+  assert.equal(byOpus.candidate.tool, 'agy');
+  assert.match(byOpus.why, /review candidate 1, the first choice/u);
+});
+
 test('the author is MC_TOOL and MC_MODEL, else --avoid, else unknown, and the call and the record say so', async (t) => {
   assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, 'codex:gpt-6.1-sol'), { tool: 'claude', model: 'opus' });
   assert.deepEqual(authorOf({ MC_TOOL: 'person' }, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });

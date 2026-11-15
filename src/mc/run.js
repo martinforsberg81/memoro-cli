@@ -877,7 +877,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function routeClass(cls, { avoid = null, catalog = null } = {}) {
     try {
       const saved = deps.catalog();
-      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto' });
+      const chosen = chooseCandidate({ cls, catalog: catalog ?? saved, capacity: capacity.read(), now: deps.now(), avoid, priority: saved.providerPriority ?? 'auto', launchable: (tool) => Boolean(deps.launch(tool)?.ok) });
       // A class sent to the API reserve waits instead when that provider's API is off.
       const tool = chosen?.candidate?.tool;
       if (chosen?.billing === 'credits' && tool && deps.billing?.readApi?.()?.[tool] === false) {

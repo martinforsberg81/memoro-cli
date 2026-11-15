@@ -303,16 +303,21 @@ export function authorOf(env, avoid) {
  * The reader's candidate (D13): the review list with the author's model taken out of it, asked of
  * `chooseCandidate`; only when that list is empty or answers that nothing can run is the whole list asked.
  * 'Can run' is what `chooseCandidate` answers, its API reserve included.
+ *
+ * The review list's first candidate is its first choice. The reduced list is told which candidate that is
+ * (`first`): the catalog's own first, or none when the author's model is it, so the removal promotes no other
+ * candidate to first choice and the ranking chooses among the rest.
  */
-export function chooseReader({ catalog, capacity, now, author, choose = chooseCandidate }) {
+export function chooseReader({ catalog, capacity, now, author, choose = chooseCandidate, launchable }) {
   const priority = catalog.providerPriority ?? 'auto';
-  const ask = (review) => choose({ cls: 'review', catalog: { ...catalog, review }, capacity, now, priority });
+  const top = catalog.review[0] ?? null;
+  const ask = (review, first) => choose({ cls: 'review', catalog: { ...catalog, review }, capacity, now, priority, first, ...(launchable ? { launchable } : {}) });
   const others = author ? catalog.review.filter((one) => !(one.model === author.model && one.tool === author.tool)) : catalog.review;
   if (others.length && others.length < catalog.review.length) {
-    const answer = ask(others);
+    const answer = ask(others, others.includes(top) ? top : null);
     if (answer?.ok && answer.candidate) return answer;
   }
-  return ask(catalog.review);
+  return ask(catalog.review, top);
 }
 
 // -------------------------------------------------- the throwaway checkout
@@ -421,7 +426,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
     if (deps.route) return deps.route('review');
     const catalog = deps.catalog ?? readModels(env);
     const capacity = deps.capacity ?? readCapacity({ root: runnerDir(env) });
-    return chooseReader({ catalog, capacity, now: now(), author, choose: deps.choose });
+    return chooseReader({ catalog, capacity, now: now(), author, choose: deps.choose, launchable: (tool) => Boolean((deps.launch ?? resolveLaunch)(tool)?.ok) });
   };
   let route;
   try { route = candidateOf(); } catch (error) { route = { ok: false, reason: error.message || String(error) }; }
