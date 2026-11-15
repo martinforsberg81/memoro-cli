@@ -3493,7 +3493,7 @@ test('two lanes picking in one moment do not start one goal twice', async () => 
   assert.equal(f.calls.sessions.length, 1);
 });
 
-test('a build session that writes no log entry gets a runner entry, and three in a row move the goal to finish for one finish session', async () => {
+test('three build sessions without a log entry leave the goal in build for Martin', async () => {
   const f = goalFixture({ mute: { log: goalLog('2026-08-20T10:00Z') } });
   f.answer = () => ({ status: 1, stdout: '', stderr: '', timedOut: false });
   const runner = createRunner({ deps: f.deps });
@@ -3510,17 +3510,12 @@ test('a build session that writes no log entry gets a runner entry, and three in
   await runner.pass({ repo: 'memoro' });
   assert.equal(where(), 'build · ready', 'two are not three');
   await runner.pass({ repo: 'memoro' });
-  assert.equal(where(), 'finish · ready');
-  assert.match(entries().at(-1).comment, /^three sessions ended without a word — see the logs under runner\/log; a finish session takes it$/u);
+  assert.equal(where(), 'build · Martin');
+  assert.match(entries().at(-1).comment, /^three sessions ended without a word — see the logs under runner\/log$/u);
 
-  // In finish it wakes one finish session; a silent finish cannot continue in
-  // role and is reconciled directly to Martin without a mend hop.
-  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
-  assert.equal(f.calls.sessions.at(-1).env.MC_ROLE, 'finish-session');
-  assert.equal(where(), 'finish · Martin');
   assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
-  assert.equal(f.calls.sessions.length, 4);
-  assert.equal(runRows(f.files).length, 4);
+  assert.equal(f.calls.sessions.length, 3);
+  assert.equal(runRows(f.files).length, 3);
 });
 
 /* ------------------------------------------------ build sessions without progress (the runner's stop) */
@@ -3620,9 +3615,9 @@ test('sessions without a log entry are skipped by the no-progress count, and the
   await stuckPass(g, builds(g));
   await stuckPass(g, silentSession);
   await stuckPass(g, silentSession);
-  assert.equal(stuckWhere(g), 'build · ready', 'a no-progress session followed by two silent ones does not go to finish');
+  assert.equal(stuckWhere(g), 'build · ready', 'a no-progress session followed by two silent ones does not stop');
   await stuckPass(g, silentSession);
-  assert.equal(stuckWhere(g), 'finish · ready', 'three silent sessions with nothing between still do');
+  assert.equal(stuckWhere(g), 'build · Martin', 'three silent sessions with nothing between still stop');
 });
 
 test('a quota or offline ending and a HEAD that cannot be read are not counted, and do not start the count again', async () => {

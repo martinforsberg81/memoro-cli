@@ -13,7 +13,7 @@
  *
  * Where a goal stands is its own GOAL.json and LOG.md (goals.js). A session
  * writes its entry with `mc goal log`; one that ends without a word gets a
- * runner entry, and three of those in a row send the goal to finish (`goalWithoutWord`).
+ * runner entry, and three of those in a row stop the goal for Martin (`goalWithoutWord`).
  * A review or finish session sends its goal to merge;
  * a goal whose pull requests have all landed is set done (`settleLanded`); a
  * goal waiting on `after` is opened when those have landed (`releaseWaiting`).
@@ -2077,8 +2077,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /**
    * The runner's own log entry, for a build session that left none: stage
-   * and status unchanged. Three of them in a row in `build` move the goal to
-   * `finish · ready`, for a finish session — the guard against a session that
+   * and status unchanged. Three of them in a row in `build` set status Martin
+   * — the guard against a session that
    * fails the same way for ever (the loop that ran 2 803 times); there is no
    * attempt counter, only the log. The runner's no-progress entries
    * (`afterBuild`) are not sessions that ended without a word: they are
@@ -2091,7 +2091,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     say(`${name}: ${comment}`);
     const last = inStage(parseLog(deps.read(join(dir, LOG_FILE)) ?? ''), 'build').filter((item) => !noProgressEntry(item)).slice(-3);
     if (now.stage !== 'build' || now.status !== 'ready' || last.length < 3 || last.some((item) => item.tool !== 'runner')) return;
-    goalState(goal, name, { stage: 'finish' }, { comment: 'three sessions ended without a word — see the logs under runner/log; a finish session takes it' });
+    goalState(goal, name, { status: 'Martin' }, { comment: 'three sessions ended without a word — see the logs under runner/log' });
   }
 
   /**
