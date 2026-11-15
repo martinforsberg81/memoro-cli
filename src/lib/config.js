@@ -24,7 +24,7 @@ const DEFAULT_CONFIG = {
   installedHooks: {}, // { [tool]: { installedAt, configPath } }
   latestVersion: null,   // cached npm-registry latest (refreshed daily)
   latestCheckedAt: null, // ISO timestamp of last refresh attempt
-  // §13d: the adapter id (claude-code | codex | gemini-cli) that future
+  // §13d: the adapter id (claude-code | codex | antigravity-cli) that future
   // bare `mc` / `mc new` invocations should default to. Existing sessions
   // carry their own tool in the registry and can be relaunched with
   // `mc resume <name> --codex/--claude`.

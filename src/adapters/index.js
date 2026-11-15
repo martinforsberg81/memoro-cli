@@ -20,7 +20,7 @@ const ADAPTERS = {
 const PLANNED = {
   'cursor':     { label: 'Cursor',     note: 'Stubbed — writes to .cursorrules; adapter coming in PR 4.1' },
   'windsurf':   { label: 'Windsurf',   note: 'Stubbed — writes to .windsurfrules; adapter coming in PR 4.1' },
-  'gemini-cli': { label: 'Gemini CLI', note: 'Stubbed — adapter coming in PR 4.1' },
+  'antigravity-cli': { label: 'Antigravity CLI', note: 'Planned — the adapter is phase 2 of the antigravity programme' },
 };
 
 export function getAdapter(id) {
@@ -59,10 +59,10 @@ export function detectInstalled() {
 
 /**
  * Two name spaces exist for the same tool, by accident of history:
- *   - **adapter ID** (e.g. `claude-code`, `codex`, `gemini-cli`) — what
+ *   - **adapter ID** (e.g. `claude-code`, `codex`, `antigravity-cli`) — what
  *     `mc adapter sync --tool` and `mc tool-switch` accept, and what
  *     `config.defaultTool` stores. Stable identifier across the contract.
- *   - **short name** (e.g. `claude`, `codex`, `gemini`) — what
+ *   - **short name** (e.g. `claude`, `codex`, `agy`) — what
  *     `mc auth <tool>` and `mc new --tool` accept. Closer to what users
  *     type at the prompt.
  *
@@ -74,7 +74,7 @@ export function detectInstalled() {
 const SHORT_NAME_TO_ID = {
   'claude':     'claude-code',
   'codex':      'codex',
-  'gemini':     'gemini-cli',
+  'agy':        'antigravity-cli',
 };
 
 const ID_TO_SHORT_NAME = Object.fromEntries(
@@ -132,7 +132,7 @@ export function isSameTool(a, b) {
  * Fails HIGH (never a silent no-op), distinguishing the failure modes so
  * the caller can surface a precise, actionable error:
  *   - unknown      → the name matches no adapter at all
- *   - planned      → a known-but-unimplemented adapter (e.g. gemini-cli)
+ *   - planned      → a known-but-unimplemented adapter (e.g. antigravity-cli)
  *   - missing-bin  → adapter exists but its binary isn't installed
  *
  * @param {string} toolInput — `claude` | `codex` | `claude-code` | …
@@ -221,4 +221,64 @@ export function listArtifactOwnershipProfiles() {
   return Object.values(ADAPTERS)
     .filter((adapter) => adapter.ARTIFACT_OWNERSHIP)
     .map((adapter) => ({ id: adapter.ID, profile: adapter.ARTIFACT_OWNERSHIP }));
+}
+
+/* ------------------------------------------------------------------ seams */
+
+/**
+ * What `src/mc/` asks of a tool, it asks here. An adapter declares a
+ * capability as a named export; `declared` reads it and `requireCapability`
+ * refuses a tool that does not. A declared `null` means "none" (the tool has
+ * no such thing); only `undefined` is "not declared".
+ *
+ * Two kinds of seam read this. A seam that launches, bills, routes or acts
+ * calls `requireCapability` and so refuses a tool without the declaration,
+ * naming the tool and the capability. A seam that reads a stored record calls
+ * `declared` and treats `undefined` as unknown.
+ */
+
+/** The implemented adapter for any name form, or null (unknown or planned). */
+export function adapterFor(value) {
+  const id = canonicalToolId(value);
+  return (id && ADAPTERS[id]) || null;
+}
+
+/** Short names of the implemented adapters, in registry order. */
+export function implementedTools() {
+  return Object.values(ADAPTERS).map((adapter) => ID_TO_SHORT_NAME[adapter.ID] || adapter.ID);
+}
+
+/** The adapter's declaration of `capability` for any name form; undefined when none is declared. */
+export function declared(value, capability) {
+  return adapterFor(value)?.[capability];
+}
+
+/**
+ * The declaration of `capability`, or an error naming the tool and the
+ * capability. A tool whose adapter lacks it is never run as another tool.
+ * `adapter` stands in for the registry's when a caller holds the live one.
+ */
+export function requireCapability(value, capability, adapter = adapterFor(value)) {
+  const found = adapter?.[capability];
+  if (found !== undefined) return found;
+  const name = toolShortName(value) || (typeof value === 'string' && value) || 'no tool';
+  const err = new Error(`${name} declares no ${capability}`);
+  err.capability = capability;
+  err.tool = name;
+  throw err;
+}
+
+/** Short names of the implemented adapters that declare `capability` (a declared null counts), in registry order. */
+export function toolsDeclaring(capability) {
+  return implementedTools().filter((tool) => adapterFor(tool)?.[capability] !== undefined);
+}
+
+/** Short names of the implemented adapters whose declaration of `capability` is neither undefined nor null. */
+export function toolsWith(capability) {
+  return implementedTools().filter((tool) => adapterFor(tool)?.[capability] != null);
+}
+
+/** The command names the implemented adapters' processes run under. */
+export function processNames() {
+  return toolsWith('PROCESS_NAME').map((tool) => adapterFor(tool).PROCESS_NAME);
 }
