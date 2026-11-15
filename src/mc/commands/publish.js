@@ -39,6 +39,7 @@ import { basename, join } from 'node:path';
 import { run as runGit, tryGit } from '../git.js';
 import { addPr, beforeMergeLine, goalDirIn, goalOfPath, GOAL_FILE, isGoalRef, logStamp, parseGoal, programsGoals, prRef, readTextOrNull } from '../goals.js';
 import { publishMainMend } from '../main-repair.js';
+import { BRANCH_PREFIX as DEPLOY_MEND_PREFIX, publishDeployMend } from '../deploy-repair.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { programsHome, workRoot } from '../paths.js';
 import { describedBody, markedBody, messageParts, publishLines, readBody, refusal } from '../publish.js';
@@ -157,6 +158,10 @@ export async function run(argv, deps = {}) {
   if (branch.startsWith(`mend/main-${repo}-`)) {
     try { (deps.publishMainMend || publishMainMend)({ root: workRoot(env), repo, branch, pr: pr.number }); }
     catch (error) { stderr.write(`mc: main-red ownership not recorded: ${error.message}\n`); return 1; }
+  }
+  if (branch.startsWith(DEPLOY_MEND_PREFIX)) {
+    try { (deps.publishDeployMend || publishDeployMend)({ root: workRoot(env), repo, branch, pr: pr.number }); }
+    catch (error) { stderr.write(`mc: deploy-mend ownership not recorded: ${error.message}\n`); return 1; }
   }
   // A goal's pull request reaches the merger only in stage merge: a goal before
   // it, or one whose stage cannot be read, queues nothing, with or without

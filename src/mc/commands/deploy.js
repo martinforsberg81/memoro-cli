@@ -100,6 +100,7 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
+import { classifyStop, deployMendLine, deployMendReading, gateStopCode, requestDeployRepair } from '../deploy-repair.js';
 import {
   deployWorktreePath, isOwnWorktree, leftoverStamps, placeWorktree, STAMP_FILES, strayLines, strayPaths, takeHolder, worktreeState,
 } from '../deploy-worktree.js';
@@ -779,7 +780,7 @@ export async function run(argv, deps = {}) {
   // `--dry-run` is the plan alone: it starts nothing and deploys nothing, so it
   // is the safe thing to type when you are not sure.
   if (opts.dryRun) {
-    if (!opts.json) for (const line of planLines(plan)) stdout.write(`${line}\n`);
+    if (!opts.json) { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root: deps.root || workRoot(env), deps }); }
     // Production never moves backwards: there is nothing to gate, and the reading has said why.
     if (plan.backwards) {
       if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: null }, null, 2)}\n`);
@@ -811,13 +812,19 @@ export async function run(argv, deps = {}) {
     return 0;
   }
   if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: false }, null, 2)}\n`);
-  else for (const line of planLines(plan)) stdout.write(`${line}\n`);
+  else { for (const line of planLines(plan)) stdout.write(`${line}\n`); repairLine({ stdout, root: deps.root || workRoot(env), deps }); }
 
   // The holder is who the record names, and it is needed before it: a
   // refusal is written by somebody too.
   const holder = deps.holder || currentHolder();
   let cells = {};
-  const refuse = (note) => recordRefusal({ sha: plan.sha, holder: holder.name, note, gate: cells }, env);
+  const repairRoot = deps.root || workRoot(env);
+  // A refusal says why it is one by a code (`NOT_TECHNICAL`, deploy-repair.js): only a technical one queues a repair.
+  const refuse = (note, code = '') => {
+    const row = recordRefusal({ sha: plan.sha, holder: holder.name, note, gate: cells }, env);
+    queueRepair({ row, code, holder: holder.name, acceptRed: opts.acceptRed, deps, root: repairRoot });
+    return row;
+  };
 
   // Another deploy going on is read from the record. Read here so nobody
   // prepares for nothing, and again under the lock, where the answer is final.
@@ -828,14 +835,14 @@ export async function run(argv, deps = {}) {
     const language = liveRun(env, { alive });
     if (language) {
       const when = String(language.started).slice(0, 16).replace('T', ' ');
-      refuse(`a language run of ${language.manifest} is running — started ${language.started} by ${language.holder || 'somebody'}`);
+      refuse(`a language run of ${language.manifest} is running — started ${language.started} by ${language.holder || 'somebody'}`, 'language');
       stderr.write(`mc: a language run of ${language.manifest} is running since ${when} (pid ${language.pid}) — nothing was deployed\n`);
       return true;
     }
     const other = runningDeploy(env, { alive });
     if (!other) return false;
     const when = String(other.started).slice(0, 16).replace('T', ' ');
-    refuse(`a deploy of ${short(other.sha)} is running — started ${other.started} by ${other.holder || 'somebody'}`);
+    refuse(`a deploy of ${short(other.sha)} is running — started ${other.started} by ${other.holder || 'somebody'}`, 'running');
     stderr.write(`mc: a deploy of ${short(other.sha)} has been running since ${when} (${other.holder || 'holder unknown'}, pid ${other.pid}) — one deploy at a time; nothing was deployed\n`);
     return true;
   };
@@ -844,7 +851,7 @@ export async function run(argv, deps = {}) {
   // Production never moves backwards (also under --accept-red): a pick that is the live commit,
   // or that does not descend from it, is refused before anything is prepared or measured.
   if (plan.backwards) {
-    refuse(plan.backwards);
+    refuse(plan.backwards, 'backwards');
     stderr.write(`mc: ${plan.backwards} — nothing was deployed\n`);
     return 1;
   }
@@ -855,17 +862,17 @@ export async function run(argv, deps = {}) {
   // exception is untracked files in mc's own worktree, removed by the deployer
   // (`strayPaths`, `ship`).
   if (source.failed) {
-    refuse(`could not make mc's own main worktree at ${source.worktree}`);
+    refuse(`could not make mc's own main worktree at ${source.worktree}`, 'worktree');
     stderr.write(`mc: git worktree add ${source.worktree} main failed in ${path} — mc deploy needs a checkout of main to run the script in\n`);
     return 1;
   }
   if (state.unreadable) {
-    refuse(`git status failed in ${source.worktree} — whether main is clean there is unknown`);
+    refuse(`git status failed in ${source.worktree} — whether main is clean there is unknown`, 'status');
     stderr.write(`mc: git status failed in ${source.worktree}, so whether the deploy would ship a clean tree is unknown — nothing was deployed\n`);
     return 1;
   }
   if (state.dirty.length && !plan.stamps && !plan.strays.length) {
-    refuse(`main is dirty in ${source.worktree} — ${state.dirty.length} file(s)`);
+    refuse(`main is dirty in ${source.worktree} — ${state.dirty.length} file(s)`, 'dirty');
     stderr.write(`mc: main in ${source.worktree} has ${state.dirty.length} uncommitted file${state.dirty.length === 1 ? '' : 's'}, and the deploy would ship that tree\n`);
     for (const line of state.dirty.slice(0, 5)) stderr.write(`mc:   ${line.trim()}\n`);
     if (state.dirty.length > 5) stderr.write(`mc:   … and ${state.dirty.length - 5} more\n`);
@@ -873,7 +880,7 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   if (state.ahead) {
-    refuse(`main in ${source.worktree} has ${state.ahead} commit(s) not on origin/main`);
+    refuse(`main in ${source.worktree} has ${state.ahead} commit(s) not on origin/main`, 'ahead');
     stderr.write(`mc: main in ${source.worktree} has ${state.ahead} commit${state.ahead === 1 ? '' : 's'} that origin/main does not — what would ship is ${plan.short}, which is not that tree\n`);
     stderr.write('mc: push them or reset that checkout yourself — nothing was deployed\n');
     return 1;
@@ -887,7 +894,7 @@ export async function run(argv, deps = {}) {
     plan, opts, env, root, holder, say, stdout, stderr, own, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
   });
   if (prepared.code != null) {
-    if (prepared.note) refuse(prepared.note);
+    if (prepared.note) refuse(prepared.note, prepared.stop || 'prepare');
     return prepared.code;
   }
   const gate = judgeGate({ ...prepared.result, plan, opts });
@@ -895,7 +902,7 @@ export async function run(argv, deps = {}) {
   if (opts.json) stdout.write(`${JSON.stringify({ gate: gateSummary(gate) }, null, 2)}\n`);
   else for (const line of gate.lines) stdout.write(`${line}\n`);
   if (gate.refusal) {
-    refuse(gate.refusal.note);
+    refuse(gate.refusal.note, gateStopCode({ full: gate.full, exercise: gate.exercise }));
     for (const line of gate.refusal.lines) stderr.write(`${line}\n`);
     stderr.write('mc: nothing was deployed\n');
     return 1;
@@ -924,7 +931,7 @@ export async function run(argv, deps = {}) {
         && git(path, ['merge-base', '--is-ancestor', standingFull, plan.sha]) !== null;
       if (!forward) {
         const why = `${short(standingRef)} is live now and ${plan.short} does not come after it — nothing newer can ship`;
-        refuse(why);
+        refuse(why, 'backwards');
         stderr.write(`mc: ${why}; nothing was deployed\n`);
         return null;
       }
@@ -941,6 +948,7 @@ export async function run(argv, deps = {}) {
     const key = { started: new Date().toISOString(), sha: plan.sha };
     const job = {
       key, sha: plan.sha, worktree: source.worktree, own, holder: holder.name, json: opts.json, root,
+      ...(deps.retry ? { retry: true } : {}), ...(opts.acceptRed ? { acceptRed: true } : {}),
     };
     const deployer = startDeployer(job, { ...deps, stdout, stderr, env });
     // The one line the verb says about the start (nobody is asked): under the
@@ -957,7 +965,8 @@ export async function run(argv, deps = {}) {
   // written, and its exit code is the answer.
   if (deployer.inline) return deployer.inline();
   if (!deployer.pid) {
-    recordEnd(key, { outcome: FAILED, stopped_at: 'start', note: `mc: the deployer could not be started (${deployer.error || 'no pid'})` }, env);
+    const row = recordEnd(key, { outcome: FAILED, stopped_at: 'start', note: `mc: the deployer could not be started (${deployer.error || 'no pid'})` }, env);
+    queueRepair({ row, holder: holder.name, acceptRed: opts.acceptRed, deps, root });
     stderr.write(`mc: the deployer could not be started (${deployer.error || 'no pid'}) — nothing was deployed\n`);
     return 1;
   }
@@ -966,6 +975,33 @@ export async function run(argv, deps = {}) {
   if (deps.follow === false) return 0;
   stdout.write(`mc: ^C stops watching, not the deploy; mc deploy --follow watches again\n`);
   return followDeploy({ log: deployer.log, pid: deployer.pid, key, env, stdout, deps });
+}
+
+/**
+ * A technical stop queues one repair (`requestDeployRepair`, deploy-repair.js), the copies of the logs with it.
+ * Never throws and never changes the deploy's exit code, row or output; the runner's retry queues nothing.
+ */
+function queueRepair({ row, code = '', holder, acceptRed, deps, root }) {
+  try {
+    if (!row) return null;
+    const technical = classifyStop({ outcome: row.outcome, code });
+    // The runner's retry queues nothing: it says what stopped it, and the runner counts it (D5).
+    if (deps.retry) { deps.onStop?.({ row, code, technical }); return null; }
+    if (!technical) return null;
+    return (deps.queueRepair || requestDeployRepair)({
+      row, holder, acceptRed: Boolean(acceptRed), root, ...(deps.mend || {}),
+      logs: [{ name: 'deploy.log', path: deployLogPath(root) }, { name: 'deploy-prepare.log', path: preparationLogPath(root) }],
+    });
+  } catch { return null; }
+}
+
+/** The one line of the reading about an open repair (D6); an unreadable state says nothing here. */
+function repairLine({ stdout, root, deps }) {
+  try {
+    const { entry } = deployMendReading({ root, ...(deps.mend || {}) });
+    const line = deployMendLine(entry);
+    if (line) stdout.write(`${line}\n`);
+  } catch { /* the reading goes on without it */ }
 }
 
 /** How often the deployer looks again at a gate round it is waiting for. */
@@ -1081,6 +1117,22 @@ export async function holdBuildLane(job, deps = {}) {
  * before the placing and kept until the script has exited (`takeHolder`).
  */
 export async function ship(job, deps = {}) {
+  let code;
+  try { code = await shipJob(job, deps); } catch (error) { queueShipStop(job, deps); throw error; }
+  if (code !== 0) queueShipStop(job, deps);
+  return code;
+}
+
+/** The deployer's own stop is queued from the row it ended with (`failed`, any `stopped_at`); the runner's retry queues nothing. */
+function queueShipStop(job, deps) {
+  try {
+    const env = deps.env || process.env;
+    const row = readDeploys(env).findLast((item) => item.started === job.key?.started);
+    queueRepair({ row, holder: job.holder, acceptRed: job.acceptRed, deps: { ...deps, retry: deps.retry || job.retry }, root: job.root || workRoot(env) });
+  } catch { /* the deploy's own outcome is unchanged */ }
+}
+
+async function shipJob(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
@@ -1387,7 +1439,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     if (!preparer.pid) {
       const note = `the preparation could not be started (${preparer.error || 'no pid'})`;
       stderr.write(`mc: ${note} — nothing was deployed\n`);
-      return { code: 1, note };
+      return { code: 1, note, stop: 'prepare' };
     }
     say(`mc: preparing ${plan.short} in its own process (pid ${preparer.pid}) — the full run and the suites; a lost terminal does not stop it, mc deploy joins it`);
     if (preparer.inline) await preparer.inline();
@@ -1405,7 +1457,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     // Another asker moved the record on while this one watched: main moved.
     const note = `the preparation of ${plan.short} was replaced by a newer one while it was watched`;
     stderr.write(`mc: ${note} — mc deploy again joins the newer one; nothing was deployed\n`);
-    return { code: 1, note };
+    return { code: 1, note, stop: 'replaced' };
   }
   const state = preparationState(ended, { alive });
   if (state === 'done' && ended.result) {
@@ -1417,12 +1469,12 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true });
     const note = `the preparation of ${plan.short} did not run the suites --accept-red needs`;
     stderr.write(`mc: ${note} — nothing was deployed\n`);
-    return { code: 1, note };
+    return { code: 1, note, stop: 'prepare' };
   }
   const why = state === 'failed' ? `failed — ${ended.error}` : `was interrupted at ${STAGE_WORDS[ended.stage] || ended.stage} (its process is gone)`;
   const note = `the preparation of ${plan.short} ${why}`;
   stderr.write(`mc: ${note} — nothing was deployed; mc deploy starts a new one\n`);
-  return { code: 1, note };
+  return { code: 1, note, stop: 'prepare' };
 }
 
 /* --------------------------------------------------------------- deployer */
