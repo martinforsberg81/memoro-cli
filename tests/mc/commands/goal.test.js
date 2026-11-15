@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/goal.js';
-import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
+import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { goalHash, RECORDS_FILE } from '../../../src/mc/plan-review.js';
 import { runModule } from '../../../src/mc-verbs.js';
@@ -449,6 +449,62 @@ const MET = [{ criterion: 'it works', check: 'a test', met: true }];
 const inStage = (stage, status = 'ready', extra = {}) => seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage, status, success_criteria: MET }), ...extra });
 const stateOf = (f) => ['stage', 'status'].map((key) => goalField(f.store[`${DIR}/GOAL.json`], key)).join(' · ');
 
+/* ------------------------------ evidence at the current head: the heads of the worktrees and the records of the marks */
+
+const EVIDENCE_PATH = `${DIR}/.evidence.json`;
+const sha = (char) => char.repeat(40);
+const HEADS = { 'memoro-cli': sha('a') };
+const TWO_HEADS = { 'memoro-cli': sha('a'), memoro: sha('b') };
+/**
+ * A git fake for the worktrees of a goal. `heads` maps a repository to the HEAD of its worktree, `published` to the sha of
+ * refs/remotes/origin/<its branch> (default: the HEAD it has now; a repository missing there has not been published),
+ * `branches` to the branch it is on (default goal/plain), `dirty` lists the repositories with an uncommitted change. Each
+ * is kept on the fake (`git.heads` …), so a test makes a commit by writing there. Everything else is `allOk`.
+ */
+function worktreeGit({ heads = { ...HEADS }, published = { ...heads }, branches = {}, dirty = [] } = {}) {
+  const git = (cwd, args) => {
+    const repo = cwd.startsWith(`${DIR}/`) ? cwd.slice(DIR.length + 1) : null;
+    if (!repo || !(repo in git.heads)) return allOk(cwd, args);
+    const branch = git.branches[repo] ?? 'goal/plain';
+    const line = args.join(' ');
+    if (line === 'status --short') return ok(git.dirty.includes(repo) ? ' M src/x.js\n' : '');
+    if (line === 'rev-parse HEAD') return ok(`${git.heads[repo]}\n`);
+    if (line === 'rev-parse --abbrev-ref HEAD') return ok(`${branch}\n`);
+    if (line === `rev-parse refs/remotes/origin/${branch}`) return git.published[repo] ? ok(`${git.published[repo]}\n`) : failed('unknown revision');
+    return allOk(cwd, args);
+  };
+  return Object.assign(git, { heads, published, branches, dirty });
+}
+/** A commit in `repo`, published: its HEAD and the published ref both move. */
+const commitIn = (git, repo, to = sha('c')) => { git.heads[repo] = to; git.published[repo] = to; };
+/** A record as `mc goal criterion met` or `mc goal evidence` leaves it. */
+const recordAt = (heads, extra = {}) => ({ at: '2026-11-01T19:00Z', tool: 'claude', model: 'opus', role: 'build', heads, text: 'ran the check and it held', ...extra });
+/** `.evidence.json` holding `items`, as a file of the fixture. */
+const evidenceFile = (items) => ({ [EVIDENCE_PATH]: `${JSON.stringify({ items }, null, 2)}\n` });
+const evidenceOf = (f) => JSON.parse(f.store[EVIDENCE_PATH]).items;
+/** The records of version 1 criteria `texts`, all at `heads`. */
+const criterionRecords = (texts, heads = HEADS) => evidenceFile(Object.fromEntries(texts.map((text, index) => [`criterion ${index + 1}`, recordAt(heads, { criterion: text })])));
+
+/** The version 2 goal of two repositories, two criteria met, a preserve item V1, a touched obligation Documentation and an untouched one, Operations. */
+const TWO_CRITERIA = [{ criterion: 'first', check: 'x', met: true }, { criterion: 'second', check: 'y', met: true }];
+const v2Goal = (fields = {}) => goalJsonV2({ repos: ['memoro-cli', 'memoro'], success_criteria: TWO_CRITERIA, ...fields });
+/** Every item of `v2Goal` recorded at `heads`, except the ids in `without`. */
+const fullEvidence = (heads = TWO_HEADS, without = []) => evidenceFile(Object.fromEntries(Object.entries({
+  'criterion 1': recordAt(heads, { criterion: 'first' }),
+  'criterion 2': recordAt(heads, { criterion: 'second' }),
+  V1: recordAt(heads),
+  'obligation Documentation': recordAt(heads),
+}).filter(([id]) => !without.includes(id))));
+/** The two ways a build session moves a goal to review. */
+const MOVES_TO_REVIEW = [['stage', 'review', '--reason', 'built'], ['log', '--done', 'built', '--stage', 'review']];
+/** `argv` run on `files` in a fixture of `env` (default: a build session) over `git`; the exit code is `f.code`. */
+async function callWith(argv, files, { env = BUILD, git = worktreeGit({ heads: { ...TWO_HEADS } }), absent = [] } = {}) {
+  const f = fixture({ files, env, git, absent });
+  f.code = await run(argv, f.deps);
+  return f;
+}
+const v2Files = (extra = {}, fields = {}) => seededGoal({ [`${DIR}/GOAL.json`]: v2Goal(fields), ...extra });
+
 /** A fixture whose `gh pr list --head` answers `pr` (null: none) and whose queue is recorded. */
 function reviewed({ files, env = REVIEW, pr = { number: 31, headRefOid: 'fff0000' }, queue = null, git = allOk } = {}) {
   const f = fixture({ files, env, git });
@@ -493,7 +549,9 @@ test('stage moves by their owners, including recovery from historical finish', a
   ];
   for (const [from, to, env] of moves) {
     const reading = from === 'draft' ? { [`${DIR}/${RECORDS_FILE}`]: okReading(withGoal(GOAL_TEXT, { stage: 'draft', success_criteria: MET })) } : {};
-    let f = reviewed({ files: inStage(from, 'ready', { [REVIEW_FILE]: verdictText(), ...reading }), env });
+    // A build session's move to review needs its mark's record at the head of the worktree, which is published (mc/evidence-at-current-head).
+    const built = from === 'build' && to === 'review';
+    let f = reviewed({ files: inStage(from, 'ready', { [REVIEW_FILE]: verdictText(), ...reading, ...(built ? criterionRecords(['it works']) : {}) }), env, git: built ? worktreeGit() : allOk });
     if (to === 'dropped') f = dropFixture(f);
     assert.equal(await run(['stage', ...(env.MC_GOAL ? [] : ['mc/plain']), to], f.deps), 0, `${from} → ${to}: ${f.err()}`);
     if (to === 'dropped') assert.equal(goalField(f.store[`${HOME}/mc/goals/.archive/plain/GOAL.json`], 'stage'), 'dropped');
@@ -557,7 +615,9 @@ test('mc goal log and new name the session that wrote the entry by its role in t
     [{ MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'constructor' }, ['--done', 'x'], '· claude · build · ready · by constructor', 'build', 'constructor'],
   ];
   for (const [env, args, heading, stage, role] of cases) {
-    const f = fixture({ files: inStage('build'), env });
+    // The build session's move to review needs its mark's record at the head of the worktree, which is published (mc/evidence-at-current-head).
+    const toReview = args.includes('review');
+    const f = fixture({ files: inStage('build', 'ready', toReview ? criterionRecords(['it works']) : {}), env, git: toReview ? worktreeGit() : allOk });
     const before = parseLog(f.store[`${DIR}/LOG.md`]).length;
     assert.equal(await run(['log', ...args], f.deps), 0, `${heading}: ${f.err()}`);
     const entries = parseLog(f.store[`${DIR}/LOG.md`]);
@@ -605,13 +665,361 @@ test('a build session cannot move to review while a criterion is not met: the re
   assert.match(none.err(), /mc\/plain has no criterion — mc goal criterion add/u);
 
   // Once it is met the same call goes through; a plan session or a person is not refused.
-  const met = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two }), env: BUILD });
+  // A build session marks from its worktree and moves with every mark recorded at its head (mc/evidence-at-current-head).
+  const met = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two, ...criterionRecords(['a']) }), env: BUILD, git: worktreeGit() });
   assert.equal(await run(['criterion', 'met', '2'], met.deps), 0, met.err());
   assert.equal(await run(['stage', 'review', '--reason', 'built'], met.deps), 0, met.err());
   for (const env of [PLAN, {}]) {
     const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: two }), env });
     assert.equal(await run(['stage', 'mc/plain', 'review'], f.deps), 0, f.err());
   }
+});
+
+/* ------------------------------------------------- evidence at the current head: the marks (mc/evidence-at-current-head C1) */
+
+test('a build session\'s mark records the head of each worktree of a two-repository goal, the evidence, the criterion\'s text, tool, model and time, and leaves LOG.md byte-identical', async () => {
+  const f = await callWith(['criterion', 'met', '1', '--evidence', 'ran mc gate: 12 pass, 0 fail'], v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }, { criterion: 'second', check: 'y', met: false }] }));
+  assert.equal(f.code, 0, f.err());
+  assert.deepEqual(evidenceOf(f), { 'criterion 1': { at: '2026-11-01T20:00Z', tool: 'claude', model: 'opus', role: 'build', heads: TWO_HEADS, text: 'ran mc gate: 12 pass, 0 fail', criterion: 'first' } });
+  assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, true);
+  assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'the runner counts LOG.md entries: a mark writes none');
+  assert.equal(await run(['criterion', 'met', '2', '--evidence', 'second ran'], f.deps), 0, f.err());
+  assert.deepEqual(Object.keys(evidenceOf(f)), ['criterion 1', 'criterion 2'], 'each criterion has its own record');
+  assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+});
+
+test('--evidence-file - reads stdin verbatim, a file is read as it is, and both ways at once, a missing file and a blank text are refused and write nothing', async () => {
+  const files = { '-': 'line one "q" $(x)\n`two`\n', 'note.txt': 'from a file\n' };
+  const unmet = [{ criterion: 'first', check: 'x', met: false }];
+  const make = async (argv) => {
+    const f = fixture({ files: v2Files({}, { success_criteria: unmet }), env: BUILD, git: worktreeGit({ heads: { ...TWO_HEADS } }) });
+    f.deps.readFile = (path) => { if (!Object.hasOwn(files, path)) throw new Error('ENOENT'); return files[path]; };
+    f.code = await run(argv, f.deps);
+    return f;
+  };
+  assert.equal(evidenceOf(await make(['criterion', 'met', '1', '--evidence-file', '-']))['criterion 1'].text, 'line one "q" $(x)\n`two`', 'stdin as it is, but for the one final newline');
+  assert.equal(evidenceOf(await make(['criterion', 'met', '1', '--evidence-file', 'note.txt']))['criterion 1'].text, 'from a file');
+  for (const [argv, code, said] of [
+    [['criterion', 'met', '1', '--evidence', 'x', '--evidence-file', 'note.txt'], 2, /--evidence and --evidence-file are one or the other, not both/u],
+    [['criterion', 'met', '1', '--evidence-file', 'missing.txt'], 1, /--evidence-file missing\.txt cannot be read/u],
+    [['criterion', 'met', '1', '--evidence', '   '], 2, /criterion met needs --evidence/u],
+  ]) {
+    const f = await make(argv);
+    assert.equal(f.code, code, argv.join(' '));
+    assert.match(f.err(), said);
+    assert.equal(f.store[EVIDENCE_PATH], undefined, 'no record');
+    assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false, 'not marked');
+  }
+});
+
+test('a build session\'s mark is refused on a dirty worktree and on an absent one, each repository named, and on a version 2 goal without evidence; nothing is written', async () => {
+  const unmet = [{ criterion: 'first', check: 'x', met: false }];
+  for (const [label, options, said] of [
+    ['dirty', { git: worktreeGit({ heads: { ...TWO_HEADS }, dirty: ['memoro'] }) }, /memoro has uncommitted changes — commit them, run the check at that head, then record it/u],
+    ['absent', { absent: [`${DIR}/memoro`] }, /memoro has no worktree at \/work\/programs\/mc\/goals\/plain\/memoro/u],
+  ]) {
+    const f = await callWith(['criterion', 'met', '1', '--evidence', 'ran it'], v2Files({}, { success_criteria: unmet }), options);
+    assert.equal(f.code, 2, label);
+    assert.match(f.err(), said, label);
+    assert.doesNotMatch(f.err(), /memoro-cli has/u, `${label}: only the repository at fault`);
+    assert.equal(f.store[EVIDENCE_PATH], undefined, `${label}: no record`);
+    assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false, `${label}: not marked`);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+  const bare = await callWith(['criterion', 'met', '1'], v2Files({}, { success_criteria: unmet }));
+  assert.equal(bare.code, 2);
+  assert.match(bare.err(), /criterion met needs --evidence "…" or --evidence-file <path\|-> — what the check ran and what it showed/u);
+  assert.equal(bare.store[EVIDENCE_PATH], undefined);
+  assert.equal(parseGoal(bare.store[`${DIR}/GOAL.json`]).success_criteria[0].met, false);
+});
+
+test('a version 1 goal is marked without evidence, with the heads recorded; a person and plan mark with no worktree and get none to record', async () => {
+  const v1 = await callWith(['criterion', 'met', '1'], seededGoal(), { git: worktreeGit() });
+  assert.equal(v1.code, 0, v1.err());
+  assert.deepEqual(evidenceOf(v1)['criterion 1'], { at: '2026-11-01T20:00Z', tool: 'claude', model: 'opus', role: 'build', heads: HEADS, text: '', criterion: 'it works' });
+  const dirty = await callWith(['criterion', 'met', '1'], seededGoal(), { git: worktreeGit({ dirty: ['memoro-cli'] }) });
+  assert.equal(dirty.code, 2, 'a version 1 goal still needs a clean worktree');
+  assert.match(dirty.err(), /memoro-cli has uncommitted changes/u);
+  for (const env of [{}, PLAN]) {
+    const f = await callWith(['criterion', 'met', 'mc/plain', '1'], v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }] }), { env, absent: [`${DIR}/memoro-cli`, `${DIR}/memoro`] });
+    assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
+    assert.equal(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria[0].met, true);
+    assert.deepEqual(evidenceOf(f)['criterion 1'].heads, {}, 'no worktree: no head');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+  const person = await callWith(['criterion', 'met', 'mc/plain', '1', '--evidence', 'read it'], v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }] }), { env: {} });
+  assert.deepEqual(evidenceOf(person)['criterion 1'], { at: '2026-11-01T20:00Z', tool: 'person', model: null, role: null, heads: TWO_HEADS, text: 'read it', criterion: 'first' }, 'a person with worktrees: their heads');
+});
+
+test('criterion unmet and criterion set remove the criterion\'s record, and nothing else', async () => {
+  const items = evidenceOf({ store: { [EVIDENCE_PATH]: fullEvidence()[EVIDENCE_PATH] } });
+  const unmet = await callWith(['criterion', 'unmet', 'mc/plain', '1'], v2Files(fullEvidence()), { env: {} });
+  assert.equal(unmet.code, 0, unmet.err());
+  assert.deepEqual(Object.keys(evidenceOf(unmet)), ['criterion 2', 'V1', 'obligation Documentation']);
+  const set = await callWith(['criterion', 'set', 'mc/plain', '2', '--criterion', 'second, reworded'], v2Files(fullEvidence()), { env: PLAN });
+  assert.equal(set.code, 0, set.err());
+  assert.deepEqual(Object.keys(evidenceOf(set)), ['criterion 1', 'V1', 'obligation Documentation']);
+  assert.deepEqual(evidenceOf(set).V1, items.V1);
+  const checkOnly = await callWith(['criterion', 'set', 'mc/plain', '1', '--check', 'a new check'], v2Files(fullEvidence()), { env: {} });
+  assert.deepEqual(Object.keys(evidenceOf(checkOnly)), ['criterion 2', 'V1', 'obligation Documentation'], 'a changed check is a mark to run again');
+  const none = await callWith(['criterion', 'unmet', 'mc/plain', '1'], v2Files(), { env: {} });
+  assert.equal(none.code, 0, none.err());
+  assert.equal(none.store[EVIDENCE_PATH], undefined, 'no record, no file made');
+});
+
+test('criterion remove drops the removed criterion\'s record and the later records follow their criteria down one number', async () => {
+  const three = [{ criterion: 'first', check: 'x', met: true }, { criterion: 'second', check: 'y', met: true }, { criterion: 'third', check: 'z', met: true }];
+  const files = v2Files({ ...evidenceFile({
+    'criterion 1': recordAt(TWO_HEADS, { criterion: 'first', text: 'one' }),
+    'criterion 2': recordAt(TWO_HEADS, { criterion: 'second', text: 'two' }),
+    'criterion 3': recordAt(TWO_HEADS, { criterion: 'third', text: 'three' }),
+    V1: recordAt(TWO_HEADS, { text: 'preserved' }),
+  }) }, { success_criteria: three });
+  const f = await callWith(['criterion', 'remove', 'mc/plain', '2', '--reason', 'obsolete'], files, { env: {} });
+  assert.equal(f.code, 0, f.err());
+  const items = evidenceOf(f);
+  assert.deepEqual(Object.keys(items).sort(), ['V1', 'criterion 1', 'criterion 2']);
+  assert.deepEqual([items['criterion 1'].text, items['criterion 2'].text, items['criterion 2'].criterion, items.V1.text], ['one', 'three', 'third', 'preserved']);
+  assert.deepEqual(parseGoal(f.store[`${DIR}/GOAL.json`]).success_criteria.map((item) => item.criterion), ['first', 'third']);
+});
+
+test('mc goal evidence records a preserve item or a touched obligation without a LOG.md entry, and refuses an id the goal has not, listing the ones it has', async () => {
+  const f = await callWith(['evidence', 'V1', '--text', 'read src/mc/goals.js: version 1 is as before'], v2Files());
+  assert.equal(f.code, 0, f.err());
+  assert.equal(await run(['evidence', 'mc/plain', 'Documentation', '--text', 'mc-goals.md says both versions'], f.deps), 0, f.err());
+  assert.deepEqual(evidenceOf(f), {
+    V1: { at: '2026-11-01T20:00Z', tool: 'claude', model: 'opus', role: 'build', heads: TWO_HEADS, text: 'read src/mc/goals.js: version 1 is as before' },
+    'obligation Documentation': { at: '2026-11-01T20:00Z', tool: 'claude', model: 'opus', role: 'build', heads: TWO_HEADS, text: 'mc-goals.md says both versions' },
+  });
+  assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'LOG.md byte-identical');
+  assert.equal(f.store[`${DIR}/GOAL.json`], v2Goal(), 'the goal is not touched');
+  f.deps.readFile = (path) => { if (path !== '-') throw new Error('ENOENT'); return 'from stdin\n'; };
+  assert.equal(await run(['evidence', 'V1', '--file', '-'], f.deps), 0, f.err());
+  assert.equal(evidenceOf(f).V1.text, 'from stdin');
+  for (const [id, goalText] of [['V9', v2Goal()], ['Operations', v2Goal()], ['criterion 1', v2Goal()], ['V1', seededGoal()[`${DIR}/GOAL.json`]]]) {
+    const g = await callWith(['evidence', id, '--text', 'x'], seededGoal({ [`${DIR}/GOAL.json`]: goalText }));
+    assert.equal(g.code, 2, id);
+    assert.match(g.err(), goalText === v2Goal() ? /is not a preserve item or a touched obligation — the ids are V1, Documentation/u : /it has none \(a version 1 goal has no preserve items or obligations\)/u, id);
+    assert.equal(g.store[EVIDENCE_PATH], undefined);
+  }
+  for (const argv of [['evidence', 'V1'], ['evidence', 'V1', '--text', 'a', '--file', 'b'], ['evidence', 'V1', '--text', '  ']]) {
+    assert.equal((await callWith(argv, v2Files())).code, 2, argv.join(' '));
+  }
+});
+
+test('mc goal evidence is the build, a person, plan, the decision and interactive Martin\'s; a review, mend, plan-review, desk-prepare and learning session is refused and writes nothing', async () => {
+  const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
+  const DECISION = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
+  for (const env of [BUILD, {}, PLAN, MARTIN, DECISION]) {
+    const f = await callWith(['evidence', 'mc/plain', 'V1', '--text', 'read it'], v2Files(), { env });
+    assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
+    assert.equal(evidenceOf(f).V1.text, 'read it');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+  const PLAN_REVIEW = { MC_ROLE: 'plan-review', MC_TOOL: 'claude', MC_GOAL: 'mc/plain', MC_HEADLESS: '1' };
+  for (const env of [REVIEW, MEND, PLAN_REVIEW, { MC_ROLE: 'desk-prepare', MC_TOOL: 'person' }, LEARNING, { ...MARTIN, MC_HEADLESS: '1' }]) {
+    const f = await callWith(['evidence', 'mc/plain', 'V1', '--text', 'read it'], v2Files(), { env });
+    assert.equal(f.code, 2, `${JSON.stringify(env)}: ${f.err()}`);
+    assert.equal(f.store[EVIDENCE_PATH], undefined, `${env.MC_ROLE}: no record`);
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+  assert.match((await callWith(['evidence', 'mc/plain', 'V1', '--text', 'x'], v2Files(), { env: REVIEW })).err(), /a review session does not record evidence — the build records it, and a review reads it with mc goal show/u);
+});
+
+/* ------------------------------------- evidence at the current head: the move to review (mc/evidence-at-current-head C2) */
+
+test('a build session moves a version 2 goal to review when every mark is at the current, published head and every item has a record, through stage and through log', async () => {
+  for (const argv of MOVES_TO_REVIEW) {
+    const f = await callWith(argv, v2Files(fullEvidence(), { stage: 'build' }));
+    assert.equal(f.code, 0, `${argv.join(' ')}: ${f.err()}`);
+    assert.equal(stateOf(f), 'review · ready', argv.join(' '));
+    assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).stage, 'review');
+  }
+});
+
+test('a commit after the mark makes the move refused', async () => {
+  for (const argv of MOVES_TO_REVIEW) {
+    const git = worktreeGit({ heads: { ...TWO_HEADS } });
+    const f = fixture({ files: v2Files(fullEvidence()), env: BUILD, git });
+    commitIn(git, 'memoro');
+    assert.equal(await run(argv, f.deps), 1, argv.join(' '));
+    const said = f.err();
+    assert.match(said, /mc\/plain is not moved to review — no evidence at the head it publishes —/u);
+    assert.match(said, /criterion 1 was recorded at an earlier head \(memoro bbbbbbbbbbbb → cccccccccccc\) — run its check again at this head and record it: mc goal criterion met mc\/plain 1 --evidence "…"/u);
+    assert.match(said, /criterion 2 was recorded at an earlier head \(memoro bbbbbbbbbbbb → cccccccccccc\) — run its check again at this head and record it: mc goal criterion met mc\/plain 2 --evidence "…"/u);
+    assert.equal(stateOf(f), 'build · ready');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT, 'nothing written');
+    // The check is run again at this head: both marks are made, and the move is made.
+    assert.equal(await run(['criterion', 'met', '1', '--evidence', 'again, at the new head'], f.deps), 0, f.err());
+    assert.equal(await run(['criterion', 'met', '2', '--evidence', 'again, at the new head'], f.deps), 0, f.err());
+    assert.equal(await run(argv, f.deps), 0, f.err());
+    assert.equal(stateOf(f), 'review · ready');
+  }
+});
+
+test('one mark at the current head and one older: only the older is named', async () => {
+  const items = evidenceOf({ store: { [EVIDENCE_PATH]: fullEvidence()[EVIDENCE_PATH] } });
+  items['criterion 2'].heads = { ...TWO_HEADS, 'memoro-cli': sha('0') };
+  const f = await callWith(MOVES_TO_REVIEW[0], v2Files(evidenceFile(items)));
+  assert.equal(f.code, 1, f.err());
+  assert.match(f.err(), /criterion 2 was recorded at an earlier head \(memoro-cli 000000000000 → aaaaaaaaaaaa\)/u);
+  assert.doesNotMatch(f.err(), /criterion 1/u);
+});
+
+test('a worktree whose HEAD is not refs/remotes/origin/<its branch> is refused naming mc publish --no-merge, whether the branch is behind or not published at all', async () => {
+  const behind = worktreeGit({ heads: { ...TWO_HEADS } });
+  const unpublished = worktreeGit({ heads: { ...TWO_HEADS } });
+  delete unpublished.published.memoro;
+  for (const [label, git, said] of [
+    ['behind', behind, /memoro: HEAD cccccccccccc is not the published goal\/plain \(bbbbbbbbbbbb\) — publish it with mc publish --no-merge/u],
+    ['unpublished', unpublished, /memoro: goal\/plain is not published \(no refs\/remotes\/origin\/goal\/plain\) — publish it with mc publish --no-merge/u],
+  ]) {
+    if (git === behind) git.heads.memoro = sha('c');
+    const files = v2Files(git === behind ? fullEvidence({ ...TWO_HEADS, memoro: sha('c') }) : fullEvidence());
+    for (const argv of MOVES_TO_REVIEW) {
+      const f = await callWith(argv, files, { git });
+      assert.equal(f.code, 1, `${label}: ${argv.join(' ')}`);
+      assert.match(f.err(), said, label);
+      assert.doesNotMatch(f.err(), /criterion \d/u, `${label}: the marks are at the head; only the publishing is missing`);
+      assert.equal(stateOf(f), 'build · ready');
+    }
+  }
+});
+
+test('a goal whose worktree is on a branch that is not goal/<goal> and is published there is moved', async () => {
+  const git = worktreeGit({ heads: { ...TWO_HEADS }, branches: { 'memoro-cli': 'project/the-goal' } });
+  git.published['memoro-cli'] = TWO_HEADS['memoro-cli'];
+  const f = await callWith(MOVES_TO_REVIEW[0], v2Files(fullEvidence()), { git });
+  assert.equal(f.code, 0, f.err());
+  assert.equal(stateOf(f), 'review · ready');
+  assert.ok(f.calls.some((call) => call.cwd === `${DIR}/memoro-cli` && call.args.join(' ') === 'rev-parse refs/remotes/origin/project/the-goal'), 'the published ref is the worktree\'s own branch');
+});
+
+test('a repository of the goal with no worktree refuses a build session\'s move, and the repository is named', async () => {
+  for (const argv of MOVES_TO_REVIEW) {
+    const f = await callWith(argv, v2Files(fullEvidence()), { absent: [`${DIR}/memoro`] });
+    assert.equal(f.code, 1, argv.join(' '));
+    assert.match(f.err(), /memoro has no worktree at \/work\/programs\/mc\/goals\/plain\/memoro — a build session moves a goal to review from its worktrees, one per repository/u);
+    assert.doesNotMatch(f.err(), /memoro-cli has/u);
+    assert.equal(stateOf(f), 'build · ready');
+  }
+});
+
+test('a preserve item or a touched obligation with no record is named; the untouched obligation is not asked', async () => {
+  for (const [without, named] of [
+    [['V1'], ['V1 has no evidence — mc goal evidence mc/plain V1 --text "…"']],
+    [['obligation Documentation'], ['obligation Documentation has no evidence — mc goal evidence mc/plain Documentation --text "…"']],
+    [['V1', 'obligation Documentation'], ['V1 has no evidence', 'obligation Documentation has no evidence']],
+  ]) {
+    const f = await callWith(MOVES_TO_REVIEW[1], v2Files(fullEvidence(TWO_HEADS, without)));
+    assert.equal(f.code, 1, without.join(', '));
+    for (const line of named) assert.ok(f.err().includes(line), `${line}: ${f.err()}`);
+    assert.doesNotMatch(f.err(), /Operations/u, 'untouched: not asked');
+    assert.doesNotMatch(f.err(), /criterion \d/u, 'the criteria are recorded');
+    assert.equal(f.store[`${DIR}/LOG.md`], LOG_TEXT);
+  }
+});
+
+test('marks with no record file: each criterion is named as having no record, on a version 1 goal too', async () => {
+  const f = await callWith(MOVES_TO_REVIEW[0], v2Files());
+  assert.equal(f.code, 1);
+  assert.match(f.err(), /criterion 1 has no record — run its check and record it: mc goal criterion met mc\/plain 1 --evidence "…"/u);
+  assert.match(f.err(), /criterion 2 has no record — run its check and record it: mc goal criterion met mc\/plain 2 --evidence "…"/u);
+  const v1 = await callWith(MOVES_TO_REVIEW[1], seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { success_criteria: MET }) }), { git: worktreeGit() });
+  assert.equal(v1.code, 1);
+  assert.match(v1.err(), /criterion 1 has no record/u);
+  assert.doesNotMatch(v1.err(), /has no evidence/u, 'a version 1 goal has no preserve items or obligations');
+});
+
+test('a criterion rewritten after its mark: its record counts as none', async () => {
+  const f = await callWith(MOVES_TO_REVIEW[0], v2Files(fullEvidence(), { success_criteria: [{ criterion: 'first, reworded', check: 'x', met: true }, TWO_CRITERIA[1]] }));
+  assert.equal(f.code, 1);
+  assert.match(f.err(), /criterion 1 has no record/u);
+  assert.doesNotMatch(f.err(), /criterion 2/u);
+});
+
+test('a review session\'s move back removes the records of the NOT OK ids criterion <n>, a preserve id and obligation <area>, and no others; a person\'s move back and a third rejection remove none', async () => {
+  const ids = ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation', 'change', 'out-of-scope', 'protection', 'bugs'];
+  const text = verdictText({ ids, repos: ['memoro-cli', 'memoro'], notOk: { 'criterion 1': 'the check does not hold', V1: 'goals.js:40', bugs: 'goal.js:12' }, carried: ['criterion 2'] });
+  const inReviewFiles = (extra = {}) => seededGoal({ [`${DIR}/GOAL.json`]: v2Goal({ stage: 'review', prs: ['memoro-cli#31'] }), [REVIEW_FILE]: text, ...fullEvidence(), ...extra });
+  const rejected = await moveOut('build', inReviewFiles());
+  assert.equal(rejected.code, 0, rejected.err());
+  assert.equal(stateOf(rejected), 'build · ready');
+  assert.deepEqual(Object.keys(evidenceOf(rejected)), ['criterion 2', 'obligation Documentation'], 'criterion 1 and V1 are gone; bugs removes nothing');
+  assert.equal(evidenceOf(rejected)['criterion 2'].text, 'ran the check and it held');
+
+  const obligation = await moveOut('build', inReviewFiles({ [REVIEW_FILE]: verdictText({ ids, repos: ['memoro-cli', 'memoro'], notOk: { 'obligation Documentation': 'the page does not say it', change: 'x', protection: 'y' } }) }));
+  assert.deepEqual(Object.keys(evidenceOf(obligation)), ['criterion 1', 'criterion 2', 'V1'], 'an area, and change and protection: only the area has a record');
+
+  const person = fixture({ files: inReviewFiles(), env: {} });
+  assert.equal(await run(['stage', 'mc/plain', 'build', '--reason', 'the plan was wrong'], person.deps), 0, person.err());
+  assert.equal(stateOf(person), 'build · ready');
+  assert.deepEqual(Object.keys(evidenceOf(person)), ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation'], 'a person\'s move back removes none');
+
+  const third = await moveOut('build', inReviewFiles({ [`${DIR}/LOG.md`]: withLog(rejectedLog(2))[`${DIR}/LOG.md`] }));
+  assert.equal(stateOf(third), 'review · Martin', 'the third rejection moves nothing');
+  assert.deepEqual(Object.keys(evidenceOf(third)), ['criterion 1', 'criterion 2', 'V1', 'obligation Documentation'], 'and removes nothing');
+});
+
+test('a person and the plan role move a goal to review as they did, with no record and no worktree; martin and decision too, and all are still refused with a criterion not met', async () => {
+  const MARTIN = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_ROLE: 'martin' };
+  const DECISION = { MC_ROLE: 'decision', MC_HEADLESS: '1', MC_TOOL: 'codex', MC_GOAL: 'mc/plain' };
+  const unmet = [TWO_CRITERIA[0], { criterion: 'second', check: 'y', met: false }];
+  for (const env of [{}, PLAN, MARTIN, DECISION]) {
+    const f = await callWith(['stage', 'mc/plain', 'review', '--reason', 'built'], v2Files(), { env, absent: [`${DIR}/memoro-cli`, `${DIR}/memoro`] });
+    assert.equal(f.code, 0, `${JSON.stringify(env)}: ${f.err()}`);
+    assert.equal(stateOf(f), 'review · ready');
+    if (env === MARTIN || env === DECISION) {
+      const refused = await callWith(['stage', 'mc/plain', 'review', '--reason', 'built'], v2Files({}, { success_criteria: unmet }), { env });
+      assert.equal(refused.code, 1, `${env.MC_ROLE}: a criterion not met`);
+      assert.match(refused.err(), /criterion 2 is not met/u);
+      assert.equal(stateOf(refused), 'build · ready');
+    }
+  }
+});
+
+/* ------------------------------- evidence at the current head: the records stay out of the goal's text (mc/evidence-at-current-head C3) */
+
+test('the brief and the plan review\'s hash are the same with and without the records', async () => {
+  const files = v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }, { criterion: 'second', check: 'y', met: false }] });
+  const plain = await callWith(['criterion', 'met', 'mc/plain', '1'], files, { env: {} });
+  const recorded = await callWith(['criterion', 'met', '1', '--evidence', 'ran it'], files);
+  assert.equal(await run(['evidence', 'V1', '--text', 'read it'], recorded.deps), 0, recorded.err());
+  assert.equal(await run(['evidence', 'Documentation', '--text', 'read it'], recorded.deps), 0, recorded.err());
+  const goalOf = (f) => parseGoal(f.store[`${DIR}/GOAL.json`]);
+  assert.equal(plain.store[EVIDENCE_PATH] !== undefined && recorded.store[EVIDENCE_PATH] !== undefined, true, 'both left a record file');
+  assert.equal(recorded.store[`${DIR}/GOAL.json`], plain.store[`${DIR}/GOAL.json`], 'GOAL.json holds no record');
+  assert.equal(renderGoalText(goalOf(recorded)), renderGoalText(goalOf(plain)), 'the brief after the records is the brief after a mark without evidence');
+  assert.doesNotMatch(renderGoalText(goalOf(recorded)), /ran it|read it|aaaaaaaa/u, 'no record in the brief');
+  const before = goalHash(parseGoal(files[`${DIR}/GOAL.json`]));
+  assert.equal(goalHash(goalOf(recorded)), before, 'the plan review\'s hash: the mark and the records change none');
+  assert.equal(goalHash(goalOf(plain)), before);
+});
+
+test('mc goal show prints the EVIDENCE part with each record, and stale beside a met criterion after a commit and not before', async () => {
+  const git = worktreeGit({ heads: { ...TWO_HEADS } });
+  const f = fixture({ files: v2Files(fullEvidence(TWO_HEADS)), git });
+  assert.equal(await run(['show', 'mc/plain'], f.deps), 0, f.err());
+  const before = f.out();
+  assert.match(before, /\nEVIDENCE\n {2}criterion 1 · memoro-cli aaaaaaaaaaaa, memoro bbbbbbbbbbbb · 2026-11-01T19:00Z · claude opus\n {6}ran the check and it held\n/u);
+  for (const id of ['criterion 2', 'V1', 'obligation Documentation']) assert.match(before, new RegExp(`\\n {2}${id} · memoro-cli aaaaaaaaaaaa, memoro bbbbbbbbbbbb · `, 'u'), id);
+  assert.match(before, /\n {2}1 ✓ first\n/u);
+  assert.doesNotMatch(before, /stale/u, 'at the heads of the records: none stale');
+  commitIn(git, 'memoro-cli');
+  const g = fixture({ files: v2Files(fullEvidence(TWO_HEADS)), git });
+  assert.equal(await run(['show', 'mc/plain'], g.deps), 0, g.err());
+  const after = g.out();
+  assert.match(after, /\n {2}1 ✓ first {2}\[stale — its mark is at an earlier head\]\n/u);
+  assert.match(after, /\n {2}2 ✓ second {2}\[stale — its mark is at an earlier head\]\n/u);
+  assert.match(after, /\n {2}criterion 1 · memoro-cli aaaaaaaaaaaa, memoro bbbbbbbbbbbb · .* · stale: recorded at an earlier head\n/u);
+  assert.doesNotMatch(after.replace(/^.*(?:stale).*$/gmu, ''), /stale/u);
+  const marked = fixture({ files: v2Files(), git });
+  assert.equal(await run(['show', 'mc/plain'], marked.deps), 0, marked.err());
+  assert.match(marked.out(), /\nEVIDENCE\n {2}criterion 1 · met, no record\n {2}criterion 2 · met, no record\n/u, 'a mark with no record is said so');
+  const none = fixture({ files: v2Files({}, { success_criteria: [{ criterion: 'first', check: 'x', met: false }] }), git });
+  assert.equal(await run(['show', 'mc/plain'], none.deps), 0, none.err());
+  assert.doesNotMatch(none.out(), /\nEVIDENCE\n/u, 'no record and no mark: no EVIDENCE part');
+  assert.equal(none.calls.some((call) => call.args[0] === 'rev-parse'), false, 'and no worktree is asked for a head');
 });
 
 test('review and plan execute merge for every registered PR, reading only each PR\'s state; plan from historical finish needs no REVIEW.md', async () => {

@@ -24,10 +24,24 @@ Your worktree is `<goal dir>/<repo>`, on branch `goal/<goal>`. Work towards the
 goal's criteria from where the last session left it. There is no step and no
 `done_when`: the goal is the whole brief. A criterion is met only when you have
 run everything its check names — every command, case and file — on this branch
-as it stands, and all of it holds; then record it: `mc goal criterion met <n>`.
+as it stands, and all of it holds; then record it with what you ran and what it
+showed: `mc goal criterion met <n> --evidence "…"` (or `--evidence-file <path|->`).
 A case you have not run, or that your log entry lists as not done, leaves the
 criterion unmet, and `mc goal criterion unmet <n>` takes back a mark that no
 longer holds.
+
+**Evidence is recorded at the head you publish.** The order is: `git fetch`,
+and if the branch conflicts with main, integrate main first (`tasks/git.md`,
+*Integrating main*); commit everything (a dirty worktree refuses the mark); run
+each check at that head; record each criterion with `mc goal criterion met <n>
+--evidence "…"`; record every preserve item and every `touched` obligation of a
+version 2 goal with `mc goal evidence <id> --text "…"` (`<id>` is a preserve id
+or the obligation's area); `mc publish --no-merge`; then move to review. A
+commit or an integration of main after a mark makes every mark stale: run every
+check again and record it again. The move to review is refused, naming each
+item, unless every criterion has a record at the current head of every
+worktree, every item has a record, and each worktree's HEAD is the published
+branch. `mc goal show` prints the records under EVIDENCE.
 
 Before you finish: `mc gate` on what you changed, fix the red, commit, then
 `mc publish --no-merge --title "…" --body-file <file>` (file in
@@ -38,9 +52,11 @@ or lands nothing for a goal before stage `merge`, and says what hands it over
 (`mc goal stage merge`, a review's verb, never yours).
 
 When the prompt says this is a repair, read `REVIEW.md` and repair its NOT OK
-items. Run their checks again and log the evidence; leave the other criteria's
-marks as they are. Publish with `--no-merge` and return the goal to review,
-where the repair is judged again.
+items. The rejection removed the records of the NOT OK items: give them new
+evidence. Your repair commit makes every other mark stale too, so after it run
+every criterion's check again and record it again at the new head, in the order
+above. Publish with `--no-merge` and return the goal to review, where the
+repair is judged again.
 
 **Checks are yours to run.** Run a criterion's check, a gate or a live check
 as often as the work needs: after a fix, after a diagnosis, or to read a

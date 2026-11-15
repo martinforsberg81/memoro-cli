@@ -84,6 +84,13 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    head. This changes neither reviewer authority nor the requirement to
    independently run each criterion.
 
+The build's evidence is read with `mc goal show <programme>/<goal>`: its
+EVIDENCE part gives, for each criterion, preserve item and touched obligation,
+the heads the evidence was recorded at, the time, tool, model and text, and
+marks `stale` a met criterion recorded at another head. The evidence is the
+build's claim; run each criterion's check yourself. A NOT OK item loses its
+record when the goal goes back to build.
+
 **OK** is every criterion met with evidence and nothing in structure or bugs
 that should stop it landing. Anything else is **not OK**. You decide; the
 runner reads neither your words nor your files.

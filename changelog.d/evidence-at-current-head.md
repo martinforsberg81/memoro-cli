@@ -1,0 +1,4 @@
+section: Changed
+
+- **A goal goes to review only with evidence for every item, run at the head it publishes.** `mc goal criterion met` takes `--evidence "…"` or `--evidence-file <path|->` and records, in `.evidence.json` in the goal's directory, the head of each worktree, the time, tool, model and text. A build session's mark is refused when a worktree is dirty or absent, and for a version 2 goal when no evidence is given. The new `mc goal evidence <id> --text|--file` records a preserve item or a touched obligation. A build session's move to review is refused, naming each item, unless every criterion and item has a record at the current head of every worktree and each worktree's HEAD is the published branch.
+- **A review's rejection removes the records of the items it marks NOT OK, and `mc goal show` prints an EVIDENCE part** that marks a met criterion `stale` when its record is at another head. The brief and the plan review's hash do not change.
