@@ -24,15 +24,17 @@ draw, never from a repository checkout. Projects went on 2026-11-03; see
 
 ## The sections
 
-`renderPageLines` draws DESK first, directly under the header, then PROGRAMMES followed by three work panels: MERGE & DEPLOY, DEV
-and MAINTENANCE. Orange opening and closing rules distinguish these
+`renderPageLines` draws DESK first, directly under the header, then HORIZONS (in `a`, PROGRAMMES after it, as below), UNASSIGNED ACTIVITY and the strays, and
+three work panels: MERGE & DEPLOY, DEV and MAINTENANCE. Orange opening and closing rules distinguish these
 panels from cyan programme boundaries. SYSTEM follows a horizontal separator
 at the bottom, containing MC, runner diagnostics, Docker when present and BILLING. There is no
 separate SESSIONS section. A stopped language run inside an open gap still
 puts its warning above everything else.
 
 One `a` / `all` toggles all folded content and details across the page;
-the next press returns to the normal view. Current sessions, blockers,
+the next press returns to the normal view. In the overview it unfolds the
+folded HORIZONS row and draws PROGRAMMES below it; in a programme's view it
+expands that programme's block. Current sessions, blockers,
 malformed goals, open PRs, merge failures and process/resource warnings
 remain visible in both modes. Normal headings use spacing and indentation,
 without repeated table headers; programme blocks have opening and closing rules.
@@ -84,7 +86,52 @@ few tens of milliseconds at most. Its figures come from the functions the
 desk's own opening is built from (`desk-opening.js`, [mc-martin.md](mc-martin.md#opening)),
 so the page and the desk agree on what waits, in what order and what was decided.
 
+### HORIZONS
+
+The default page draws HORIZONS where per-programme blocks used to be
+(`page-horizons.js`, `horizonsLines`, from `data.horizons` and `data.programmes`
+alone). Under the heading, which counts the open horizons and the programmes
+under way, come the open horizons in the desk's order (`position`, then slug),
+each with one row under it for every programme whose record names it and that
+has something under way: an unfinished goal, a session, an open pull request or
+an item needing attention. A horizon with no such programme says `nothing under
+way`. Then `Serving no horizon`, the same rows for the programmes that name no
+open horizon; a row there that names one adds its slug and its state, `reached`,
+`dropped` or `not held`; a programme whose record is invalid says `record invalid`. Last, one folded row,
+`▸ <n> with nothing under way`, for every other programme. A horizon store that
+cannot be listed is a red line under the heading, and so is each horizon record
+that cannot be read; the page draws no horizon from either.
+
+A row is the programme's number, its name, its phase (`phase 2 of 4`), its unfinished goals counted by
+stage, what is done, its open pull requests, then one `●` per session at work on
+it (coloured by kind) and the flags for a goal waiting on Martin (`⚑`), blocked
+(`⊘`) or needing attention (`!`). On a narrow terminal the least telling facts
+go first (priority, done, the phase), the name last. A row draws no goal and no
+phase list: those are in the programme's view and in `a`.
+
+**Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
+order, in every listed programme including the folded ones, and the number is on
+the HORIZONS row and on the programme view's heading, not on the PROGRAMMES
+headings `a` draws. Both are `number` in `--json`.
+
+**A programme's view.** Typing a programme's number, or its exact name, at the
+prompt opens that programme alone: everything above PROGRAMMES (the header, the
+DESK) then the programme's block with its number on the heading, as `a` draws
+it (expanded when `a` is on), and nothing below it. `h` or `home` is the
+overview again; a programme that is no longer listed is the overview again too.
+The view is part of what the page is, so a live frame draws it, not the overview.
+
+**`--json`.** `horizons` is `{ open: [{ slug, title, position, programmes }],
+none: [<programme names serving no open horizon>], unreadable: [<directory
+names>], error }`, `error` being the reason the store could not be listed, else
+null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
+slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
+`dropped`, `not held` for a slug the store holds no horizon for, or null). Nothing else changes.
+
 ### PROGRAMMES
+
+In the overview PROGRAMMES is drawn only by `a`, below HORIZONS, unnumbered and
+as it has always been drawn; the rest of this section is that drawing.
 
 Nonzero programme priorities appear on the programme heading. Type
 `priority mc inbox --set 10` at the page prompt to set one or several; zero
@@ -295,6 +342,8 @@ A stopped runner has the same nearby warning with its restart command.
 | DESK: cost today and ceiling | the desk's rows in `runner/log/runs.tsv`, `runner/desk.json` | runner and desk; `mc martin ceiling` |
 | DESK: since | `~/mc/martin/last-open.json` | `mc martin`, after a launch |
 | DESK: asks decided without Martin | the jev ledger, `decisions.jsonl` in mc home | jev |
+| HORIZONS: the open horizons and their order | `martin/horizons/<slug>/horizon.json` (`readHorizons`) | `mc martin horizon`; the page only reads |
+| HORIZONS: the horizon a programme serves | `horizon` in the programme's `PROGRAMME.json` | `mc plan`, the manager |
 
 Paths without `~/mc/` in this table are relative to the work root.
 `pidAlive` is the liveness test: a current file naming a dead pid is stale,
@@ -385,7 +434,10 @@ painted rows occupy the same columns.
 
 | answer | action |
 |---|---|
-| a goal's number | `mc goal show` for that numbered goal, then redraw |
+| a goal's number | `mc goal show` for that numbered goal, then redraw; from the overview and from a programme's view alike |
+| a programme's number | open that programme alone (its view), then redraw |
+| a programme's exact name | the same; looked up last, so no programme name takes a word of this table, and a number is a goal's before it is a programme's |
+| `h` / `home` | the overview again; the key line reads `h  home` |
 | `a` / `all` | toggle all folded rows and details across every surface |
 | `d` / `desk` | open the desk (`mc martin`), through the injected `deskOrder`, and return its exit code; the key line reads `d  desk` |
 | `m` / `manager` | open Manager (`b` / `brief` remain aliases) |
@@ -422,9 +474,13 @@ retain the last observed step; an unfamiliar step is shown without guessing
 its phase. Like the rest of the page, progress refreshes every 30 seconds or
 immediately with `r`.
 
+The key line reads `<n>  show a goal or open a programme   ·   a  all / collapse   ·   h  home   ·   d  desk`.
+
+The prompt answers against the page on the screen: `run()` numbers each draw as it starts, keeps its data for the menu only if no later-started draw was kept, and the menu reads it through `current`, so a slow older collect never puts older numbers under a newer page, and a number typed after a frame that added a goal means the number that frame drew.
+
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
-shows a goal; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost). If
+shows a goal or opens a programme; it starts no coding session. `pageKey` includes every goal's
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.
@@ -636,7 +692,7 @@ still at the prompt with the cursor after it, backspace taking it back, `q`
 leaving with exit 0, no alternate screen buffer (`\x1b[?1049` never written),
 and `stty -g` identical before and after. What it does not do is press return
 on that `1`, because that exercised the interactive menu rather than the refresh loop.
-Today a number shows the goal PROGRAMMES numbered; `front-door.test.js`
+Today a number shows the goal it numbers, or opens the programme; `front-door.test.js`
 checks that routing without opening a coding tool.
 
 ## The modules and tests
@@ -645,6 +701,7 @@ checks that routing without opening a coding tool.
 - `src/mc/page-collect.js`: pure section builders plus the machine-facing collector.
 - `src/mc/page-desk.js`: the DESK section — `readPageDesk`, `deskLines` and `deskKey`.
 - `src/mc/desk-opening.js`: the desk opening's read-only figures (texts, acts, stuck, not ready, decided, cost and `last-open.json`), shared by `mc martin` and the page, and the page's own reader of the ask ledger (`ledgerAsks`), which the opening does not use; it has no sync, lock or writer.
+- `src/mc/page-horizons.js`: the HORIZONS section — `horizonsLines`, `programmeRow`, `programmeFacts`.
 - `src/mc/page-render.js`, `page-programmes.js`, `page-activity.js`, `page-operations.js` and `page-grid.js`: page composition, work tree, activity, operations, widths and palette.
 - `src/mc/page-cache.js`: the PR cache.
 - `src/mc/dev-pool.js`: DEV's data — `readPool`, the one reader of the dev-server pool, and `devSection`.
@@ -658,7 +715,7 @@ checks that routing without opening a coding tool.
 stage frame counts; `tests/mc/desk-cost.test.js` pins which transcripts are
 interactive, the incremental reading and the partial first reading. `tests/mc/page.test.js` builds sections from fixtures, compares the palette
 tables and checks painted/plain widths. `tests/mc/front-door.test.js` pins
-menu routing, including `d` and `desk`, and piped output. The DESK section's fixture, its agreement with the opening, its held-lock and error cases and its render are in `tests/mc/page.test.js`. `tests/mc/page-live.test.js` and
+menu routing, including `d` and `desk`, the programme's number and name, `h` and `home`, and piped output. The horizons collector cases (on a temporary home), the HORIZONS and programme-view renders at 160 and 80 columns, and `run()`'s view and numbers across live frames are in `tests/mc/page.test.js`. The DESK section's fixture, its agreement with the opening, its held-lock and error cases and its render are in `tests/mc/page.test.js`. `tests/mc/page-live.test.js` and
 `tests/mc/page-frame.test.js` cover refresh arithmetic without launching a tool.
 
 ## Manager header
