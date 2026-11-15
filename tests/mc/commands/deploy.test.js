@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { beforeEach, describe, it } from 'node:test';
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -25,6 +25,9 @@ import {
 } from '../../../src/mc/commands/deploy.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { exerciseApp, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
+import {
+  HOLDER_WAIT_MS, holderPath, placeWorktree, readHolder, takeHolder,
+} from '../../../src/mc/deploy-worktree.js';
 import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
@@ -870,11 +873,11 @@ describe('mc deploy — every case of where main is', () => {
     assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
   });
 
-  it('--dry-run with main nowhere reports the worktree it would make, and makes none', async () => {
+  it('--dry-run with main nowhere reports the worktree it would make, and then makes it: the suites are served in it', async () => {
     const git = fakeGit({ worktrees: worktreeList(null), counts: { [`${LIVE}..${SHA}`]: 6 } });
     const { out } = await ranIn({ git }, ['--dry-run']);
     assert.match(out.stdout, /mc's own main worktree, made before the script runs/u);
-    assert.equal(git.calls.some((call) => call.args[1] === 'add'), false);
+    assert.deepEqual(git.calls.filter((call) => call.args[1] === 'add').map((call) => call.args), [['worktree', 'add', MINE, 'main']]);
   });
 
   it('--json carries the worktree and how far behind it is', async () => {
@@ -3322,5 +3325,466 @@ describe('mc deploy — every red name is listed, never a few', () => {
     const { out } = await attempt(['--dry-run'], { extra: { git }, runs: [redRun(TIP, SIX_RED), greenRun(MID)] });
     const said = out.stdout.split('\n').find((line) => line.includes('its full run is RED'));
     for (const name of SIX_RED) assert.ok(said.includes(name), `${name} is named`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The own route (goal deploy-serves-its-own-checkout): where mc's own deploy worktree holds main,
+// the suites run in it, placed at the pick, under its one holder — and the shared checkout is
+// never read, moved, waited for or served.
+// ---------------------------------------------------------------------------
+
+describe('mc deploy — the own route: the suites run in the deploy worktree, at the pick', () => {
+  let home;
+  let env;
+  let OWN;
+  let clock;
+  let slept;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'mc-deploy-home-'));
+    env = { MC_HOME: home, MC_WORK_ROOT: work };
+    OWN = deployWorktreePath(env);
+    clock = Date.parse('2026-11-15T10:00:00.000Z');
+    slept = [];
+  });
+  const BOTH = { suites: [{ name: 'static-suite', server: 'static' }, { name: 'app-suite' }], environments: { dev: { service: 'app', static_service: 'static' } } };
+  /** A runner that finds, before each suite after the first, its server gone — and asks for it back. */
+  const leaving = () => async ({ declaration, revive }, resultOf) => {
+    const results = [];
+    const skipped = [];
+    let broken = false;
+    for (const [index, suite] of declaration.suites.entries()) {
+      if (broken) { skipped.push(suite.name); continue; }
+      if (index > 0) {
+        const back = await revive(suite.server === 'static' ? 'static' : 'app');
+        if (!back.ok) { broken = true; results.push({ ...resultOf(suite.name), ok: false, unmeasured: true, status: 1 }); continue; }
+      }
+      results.push(resultOf(suite.name));
+    }
+    return { results, gone: [], skipped };
+  };
+  /** The exercise of MID in mc's own worktree, the clock and the sleep the test's own. */
+  const exercise = async (fakeOptions = {}, { swap = {}, alive = () => false } = {}) => {
+    const fake = gateFake({ head: TIP, served: 'checkout', staticServed: 'checkout', ...fakeOptions });
+    const said = [];
+    const deps = {
+      ...fake.suites,
+      now: () => clock,
+      sleep: async (ms) => { slept.push({ ms, placed: fake.calls.placed.length }); clock += ms; await swap.onSleep?.(slept.length, clock); },
+      alive,
+      ...(typeof swap.deps === 'function' ? swap.deps(fake) : swap.deps),
+    };
+    const result = await exerciseApp({ sha: MID, env, own: true, say: (line) => said.push(line), deps });
+    return { result, fake, calls: fake.calls, said };
+  };
+  const holdBy = (pid, verb = 'language', started = new Date(clock).toISOString()) => {
+    mkdirSync(dirname(holderPath(env)), { recursive: true });
+    writeFileSync(holderPath(env), JSON.stringify({ pid, verb, started, token: 'someone-elses' }));
+  };
+
+  it('the worktree is placed at the pick before any ensure, and every ensure and revive is given it, never the shared checkout', async () => {
+    const { result, calls } = await exercise({ declared: BOTH, runner: leaving() });
+    assert.equal(result.error, null);
+    assert.deepEqual(calls.placed, [{ worktree: OWN, sha: MID }]);
+    assert.deepEqual(calls.ensures.map((ensure) => [ensure.tier, ensure.head]), [
+      ['static', MID], ['app', MID], ['app', MID],
+    ], 'the static ensure, the app ensure and the revive of the app server — all after the placing');
+    assert.deepEqual([...new Set(calls.ensuredIn)], [OWN]);
+    assert.equal(calls.follows, 0);
+    assert.deepEqual(calls.ensures.map((ensure) => ensure.pin), [false, false, false], 'the pin belongs to the shared checkout\'s route');
+    assert.deepEqual(calls.suites.map((suite) => suite.worktree), [OWN]);
+    assert.deepEqual(result.suites.map((suite) => suite.state), ['ok', 'ok']);
+  });
+
+  it('a worktree already at the pick is not moved, and is still the one the servers are given', async () => {
+    const { result, calls, said } = await exercise({ head: MID });
+    assert.equal(result.error, null);
+    assert.deepEqual(calls.ensuredIn, [OWN]);
+    assert.equal(said.some((line) => /stands at 5b2d000 now/u.test(line)), false);
+  });
+
+  it('a server that serves another commit than the pick makes the suites cannot-run', async () => {
+    const { result, calls } = await exercise({ served: TIP });
+    assert.match(result.error, /the app server serves 1a2b3c4, not 5b2d000 that would ship/u);
+    assert.deepEqual(result.suites, []);
+    assert.equal(calls.suites.length, 0);
+  });
+
+  it('a static server at another commit makes the app suites cannot-run, before the app server is started', async () => {
+    const { result, calls } = await exercise({ declared: BOTH, staticServed: TIP });
+    assert.match(result.error, /the static server serves 1a2b3c4, not 5b2d000/u);
+    assert.deepEqual(calls.ensures.map((ensure) => ensure.tier), ['static']);
+    assert.equal(calls.suites.length, 0);
+  });
+
+  it('a server brought back at another commit makes the rest cannot-run, the first included', async () => {
+    const declared = { suites: [{ name: 'one' }, { name: 'two' }, { name: 'three' }], environments: { dev: { service: 'app' } } };
+    const { result } = await exercise({ declared, runner: leaving(), revive: () => TIP });
+    assert.deepEqual(result.suites.map((suite) => [suite.name, suite.state]), [['one', 'ok'], ['two', 'cannot-run'], ['three', 'cannot-run']]);
+    assert.match(result.suites[2].tail, /never ran/u);
+  });
+
+  it('no git call, no read of the head and no ensure touches the shared checkout — dirty, on another branch or held', async () => {
+    const reads = [];
+    const trap = (name) => () => { reads.push(name); throw new Error(`the shared checkout was asked: ${name}`); };
+    const { result, calls } = await exercise({
+      dirtyNow: [' M src/app.js'], branch: 'language-content-open-decisions', contained: false,
+      held: { app: { instance_id: 'main-1', hold: 'busy' }, static: { instance_id: 'main-2', hold: 'kept' } },
+    }, { swap: { deps: { sharedWorktree: trap('sharedWorktree'), dirty: trap('dirty'), mainHold: trap('mainHold'), servingWorktree: trap('servingWorktree') } } });
+    assert.equal(result.error, null);
+    assert.deepEqual(reads, []);
+    const shared = '/tmp/does-not-exist/shared/memoro';
+    assert.deepEqual(calls.git.filter((call) => call.worktree === shared), []);
+    assert.deepEqual(calls.ensuredIn.filter((worktree) => worktree === shared), []);
+    assert.deepEqual(calls.holds, []);
+    assert.deepEqual(calls.sleeps, [], 'no hold was waited out');
+  });
+
+  it('through the verb: the shared checkout is read by nobody, the worktree is the one served', async () => {
+    const git = walkingGit({ worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } } });
+    const reads = [];
+    const trap = (name) => () => { reads.push(name); throw new Error(`the shared checkout was asked: ${name}`); };
+    const fake = gateFake({ head: TIP, served: 'checkout' });
+    const suites = { ...fake.suites, sharedWorktree: trap('sharedWorktree'), dirty: trap('dirty') };
+    const { code, calls } = await attempt(['--dry-run'], { extra: { git, suites, env: { ...process.env, ...env, MC_HEADLESS: '' }, gate: fake.gate } });
+    assert.equal(code, 0);
+    assert.deepEqual(reads, []);
+    assert.equal(calls.placed.length, 0, 'the verb\'s own fake gate was not the one used');
+  });
+
+  describe('placing — the function ship places with', () => {
+    const placed = (state, git = {}) => ({
+      deps: { placeWorktree, git: walkingGit({ head: TIP, state: { [OWN]: state }, ...git }) },
+    });
+    const clean = { dirty: [], ahead: 0, behind: 0 };
+    const exercisePlaced = (state, git, fakeOptions = {}) => exercise({ served: MID, ...fakeOptions }, { swap: placed(state, git) });
+    const resets = (result, deps) => deps;
+
+    it('mc\'s own worktree at main\'s tip is put back to the pick, and the suites then run', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: clean } });
+      const { result, said } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.equal(result.error, null);
+      assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset').map((call) => call.args), [['reset', '--keep', MID]]);
+      assert.equal(git.head(), MID);
+      assert.ok(said.some((line) => /the deploy worktree .* stands at 5b2d000 now \(moved back from 1a2b3c4\)/u.test(line)), said.join('\n'));
+    });
+
+    it('a worktree behind the pick is fast-forwarded to it', async () => {
+      const git = walkingGit({ head: LOW, state: { [OWN]: { ...clean, behind: 1 } }, ancestors: (older, newer) => !(older === MID && newer === LOW) });
+      const { result } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.equal(result.error, null);
+      assert.deepEqual(git.calls.filter((call) => call.args[0] === 'merge').map((call) => call.args), [['merge', '--ff-only', MID]]);
+    });
+
+    it('untracked strays are removed and said; the suites then run', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: { ...clean, dirty: ['?? artifacts/', '?? public/sdk/'] } } });
+      const { result, said } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.equal(result.error, null);
+      assert.equal(git.calls.filter((call) => call.args[0] === 'clean').length, 1);
+      assert.ok(said.some((line) => /removed 2 untracked paths from mc's own main worktree/u.test(line)));
+      assert.ok(said.some((line) => /mc:   artifacts\//u.test(line)));
+    });
+
+    it('modified tracked files are cannot-run, naming them; nothing is moved and no server is started', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: { ...clean, dirty: [' M src/app.js'] } } });
+      const { result, calls } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.match(result.error, /cannot be placed at 5b2d000, so no suite ran — .* has modified tracked files \(M src\/app\.js\)/u);
+      assert.deepEqual(result.suites, []);
+      assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset' || call.args[0] === 'merge' || call.args[0] === 'clean'), []);
+      assert.deepEqual(calls.ensures, []);
+    });
+
+    it('commits origin/main lacks are cannot-run, naming how many and where main stands', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: { ...clean, ahead: 2 } } });
+      const { result, calls } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.match(result.error, /has 2 commits that origin\/main lacks — main stands on 1a2b3c4, not 5b2d000/u);
+      assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset'), []);
+      assert.deepEqual(calls.ensures, []);
+    });
+
+    it('a HEAD off origin/main\'s line is cannot-run, and is not reset away', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: clean }, ancestors: (older, newer) => newer !== 'origin/main' });
+      const { result } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.match(result.error, /main stands on 1a2b3c4, which origin\/main does not contain/u);
+      assert.deepEqual(git.calls.filter((call) => call.args[0] === 'reset'), []);
+    });
+
+    it('a failed git reading is cannot-run, and says the state is unknown', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: clean }, fails: ['status'] });
+      const { result, calls } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.match(result.error, /git status failed in .* — what stands there is unknown/u);
+      assert.deepEqual(calls.ensures, []);
+    });
+
+    it('a reset git refuses is cannot-run', async () => {
+      const git = walkingGit({ head: TIP, state: { [OWN]: clean }, fails: ['reset'] });
+      const { result } = await exercise({ served: MID }, { swap: { deps: { placeWorktree, git } } });
+      assert.match(result.error, /could not move main in .* back to 5b2d000/u);
+    });
+    void placed; void exercisePlaced; void resets;
+  });
+
+  describe('the dev pool and the servers the exercise started', () => {
+    it('a slot not had within the pool\'s wait is cannot-run with the pool\'s reason', async () => {
+      const reason = 'no dev-pool slot for app within 900 s — 6 of 6 are taken (memoro-12, memoro-13)';
+      const { result, calls } = await exercise({ appError: reason });
+      assert.equal(result.error, reason);
+      assert.deepEqual(result.suites, []);
+      assert.equal(calls.suites.length, 0);
+    });
+
+    it('the servers it started are stopped after a pass, and the holder is gone', async () => {
+      const { result, calls } = await exercise({ declared: BOTH });
+      assert.equal(result.error, null);
+      assert.deepEqual(calls.stopped, ['static-1', 'app-2']);
+      assert.equal(readHolder(env), null);
+    });
+
+    it('and after a refusal', async () => {
+      const { result, calls } = await exercise({ served: TIP });
+      assert.match(result.error, /serves 1a2b3c4, not 5b2d000/u);
+      assert.deepEqual(calls.stopped, ['app-1']);
+      assert.equal(readHolder(env), null);
+    });
+
+    it('and after a ensure that failed halfway: the static tier it started is stopped', async () => {
+      const { result, calls } = await exercise({ declared: BOTH, appError: 'no dev-pool slot' });
+      assert.equal(result.error, 'no dev-pool slot');
+      assert.deepEqual(calls.stopped, ['static-1']);
+    });
+
+    it('a server that was already there is left running', async () => {
+      const there = { instance_id: 'app-0', service: 'app', worktree_path: 'own' };
+      const { result, calls } = await exercise({ existing: [there] });
+      assert.equal(result.error, null);
+      assert.deepEqual(calls.stopped, ['app-2'], 'only the one the exercise started');
+    });
+  });
+
+  describe('the holder', () => {
+    it('is held while the tree is placed and while the suites run, and released after', async () => {
+      const seen = {};
+      const swap = {
+        deps: (fake) => ({
+          placeWorktree: (options) => { seen.placing = readHolder(env); return fake.suites.placeWorktree(options); },
+          runSuites: async (options) => { seen.suites = readHolder(env); return fake.suites.runSuites(options); },
+        }),
+      };
+      const { result } = await exercise({}, { swap });
+      assert.equal(result.error, null);
+      for (const when of ['placing', 'suites']) {
+        assert.equal(seen[when]?.pid, process.pid, `held ${when}`);
+        assert.equal(seen[when]?.verb, 'deploy suites');
+      }
+      assert.equal(readHolder(env), null, 'released once the servers are stopped');
+    });
+
+    it('a live holder is waited for — said each minute — and the exercise then runs when it is released', async () => {
+      holdBy(4242, 'language');
+      const { result, said, calls } = await exercise({}, {
+        alive: (pid) => pid === 4242 && existsSync(holderPath(env)),
+        swap: { onSleep: (n, now) => { if (now - Date.parse('2026-11-15T10:00:00.000Z') >= 130_000) rmSync(holderPath(env), { force: true }); } },
+      });
+      assert.equal(result.error, null, 'it ran once the holder was released');
+      const waiting = said.filter((line) => /waiting for the deploy worktree — held by language \(pid 4242\), since 2026-11-15 10:00/u.test(line));
+      assert.equal(waiting.length, 3, 'at the start, and each minute after');
+      assert.ok(slept.length > 20, 'it looked again every few seconds');
+      assert.deepEqual([...new Set(slept.map((one) => one.placed))], [0], 'nothing was placed while it waited');
+      assert.equal(calls.placed.length, 1);
+      assert.equal(calls.suites.length, 1);
+    });
+
+    it('after 90 minutes of a live holder every suite is cannot-run, naming it, and nothing was placed', async () => {
+      holdBy(4242, 'deploy');
+      const { result, calls } = await exercise({}, { alive: (pid) => pid === 4242 });
+      assert.match(result.error, /the deploy worktree is held by deploy \(pid 4242\), since 2026-11-15 10:00, 90 min ago — waited 90 min/u);
+      assert.deepEqual(result.suites, []);
+      assert.equal(clock - Date.parse('2026-11-15T10:00:00.000Z'), HOLDER_WAIT_MS);
+      assert.deepEqual(calls.placed, []);
+      assert.deepEqual(calls.ensures, []);
+      assert.equal(readHolder(env)?.pid, 4242, 'the other\'s record was not touched');
+    });
+
+    it('a holder whose pid is gone is taken over, not waited for', async () => {
+      holdBy(4242, 'deploy');
+      const { result, said, calls } = await exercise({}, { alive: () => false });
+      assert.equal(result.error, null);
+      assert.deepEqual(slept, [], 'no wait');
+      assert.ok(said.some((line) => /deploy \(pid 4242\), is gone — its record is taken over/u.test(line)));
+      assert.equal(calls.placed.length, 1);
+      assert.equal(readHolder(env), null);
+    });
+
+    it('releasing never removes a record that is another\'s', async () => {
+      const taken = await takeHolder({ env, verb: 'deploy suites', pid: 111, alive: () => false });
+      holdBy(222, 'language');
+      assert.equal(taken.release(), false);
+      assert.equal(readHolder(env).pid, 222);
+    });
+
+    it('a dry run where main is held nowhere makes mc\'s own worktree, then runs the suites in it', async () => {
+      const git = walkingGit({
+        head: TIP, chain: [TIP, MID], counts: COUNTS, worktrees: worktreeList(null), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } },
+      });
+      const { code, calls, out } = await attempt(['--dry-run'], {
+        extra: { git, env: { ...process.env, ...env, MC_HEADLESS: '' } }, head: TIP, served: 'checkout',
+      });
+      assert.equal(code, 0, out.stderr);
+      const added = git.calls.filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
+      assert.deepEqual(added.map((call) => [call.cwd, ...call.args]), [[PATH, 'worktree', 'add', OWN, 'main']]);
+      assert.deepEqual(calls.placed.map((one) => one.worktree), [OWN]);
+      assert.deepEqual([...new Set(calls.ensuredIn)], [OWN]);
+    });
+  });
+});
+
+describe('mc deploy — the deployer holds the deploy worktree, from before the placing until the script has exited', () => {
+  const OWN = deployWorktreePath(process.env);
+  let seen;
+  async function shipping({ clock = null, sleep = null, alive = null, holdFor = null } = {}) {
+    const git = walkingGit({ head: TIP, state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } } });
+    const { out, stdout, stderr } = io();
+    const spawned = [];
+    seen = {};
+    const key = { started: '2026-11-15T10:00:00.000Z', sha: MID };
+    const d = {
+      ...deps({ git }),
+      stdout,
+      stderr,
+      runningRound: () => null,
+      readMerger: () => null,
+      spawnDeploy: async (options) => { seen.script = readHolder(d.env); spawned.push(options); return { code: 0 }; },
+      ...(clock ? { clock } : {}),
+      ...(sleep ? { sleep } : {}),
+      ...(alive ? { alive } : {}),
+    };
+    recordStart({ sha: MID, holder: 'test', pid: '', started: key.started, gate: {} }, d.env);
+    if (holdFor) holdFor(d.env);
+    const code = await ship({ key, sha: MID, worktree: OWN, own: true, root: work }, d);
+    return { code, git, out, spawned, d, row: lastAttempt({ MC_WORK_ROOT: work }) };
+  }
+
+  it('the holder is taken before the tree is placed and still held while the script runs, then released', async () => {
+    const { code, git, spawned, d } = await shipping();
+    assert.equal(code, 0);
+    assert.equal(seen.script?.pid, process.pid);
+    assert.equal(seen.script?.verb, 'deploy');
+    assert.equal(spawned.length, 1);
+    assert.equal(readHolder(d.env), null, 'released after the script has exited');
+    assert.equal(git.head(), MID);
+  });
+
+  it('a live holder is waited for, and a deployer that outlasts it ends failed, stopped_at held, with nothing placed', async () => {
+    let now = Date.parse('2026-11-15T10:00:00.000Z');
+    const { code, git, spawned, row, out, d } = await shipping({
+      clock: () => now,
+      sleep: async (ms) => { now += ms; },
+      alive: (pid) => pid === 4242,
+      holdFor: (env) => {
+        mkdirSync(dirname(holderPath(env)), { recursive: true });
+        writeFileSync(holderPath(env), JSON.stringify({ pid: 4242, verb: 'deploy suites', started: new Date(now).toISOString(), token: 'x' }));
+      },
+    });
+    assert.equal(code, 1);
+    assert.equal(spawned.length, 0, 'the script was not started');
+    assert.deepEqual(git.calls.filter((call) => ['reset', 'merge', 'clean', 'checkout'].includes(call.args[0])), [], 'the tree was not touched');
+    assert.deepEqual([row.outcome, row.stopped_at], ['failed', 'held']);
+    assert.match(out.stdout, /mc: waiting for the deploy worktree — held by deploy suites \(pid 4242\)/u);
+    assert.match(out.stderr, /the deploy worktree is held by deploy suites \(pid 4242\).* — waited 90 min — nothing was deployed; mc deploy again waits for it once more/u);
+    assert.equal(readHolder(d.env)?.pid, 4242, 'the other\'s record stays');
+  });
+
+  it('a deployer waits for a holder that then lets go, and ships', async () => {
+    let now = Date.parse('2026-11-15T10:00:00.000Z');
+    let slept = 0;
+    const { code, spawned, out } = await shipping({
+      clock: () => now,
+      sleep: async (ms) => { now += ms; slept += 1; if (slept === 3) rmSync(holderPath({ ...process.env, MC_WORK_ROOT: work }), { force: true }); },
+      alive: (pid) => pid === 4242 && existsSync(holderPath({ ...process.env, MC_WORK_ROOT: work })),
+      holdFor: (env) => {
+        mkdirSync(dirname(holderPath(env)), { recursive: true });
+        writeFileSync(holderPath(env), JSON.stringify({ pid: 4242, verb: 'language', started: new Date(now).toISOString(), token: 'x' }));
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(spawned.length, 1);
+    assert.match(out.stdout, /waiting for the deploy worktree — held by language \(pid 4242\)/u);
+  });
+
+  it('a finished preparation reused after the worktree was moved elsewhere on origin/main\'s line still ships: ship places it at the pick again', async () => {
+    const git = walkingGit({
+      head: TIP, chain: [TIP, MID, LOW], counts: COUNTS, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } },
+    });
+    const fake = gateFake({ runs: [greenRun(MID)], head: TIP, served: 'checkout' });
+    const { state, extra } = detachedPreparer(fake);
+    const stop = refusingAdmission();
+    const first = io();
+    const one = await run([], {
+      ...deps({ ...extra, git, lock: stop.lock, startDeployer: stop.startDeployer, sleep: async () => { await state.pending(); } }),
+      stdout: first.stdout,
+      stderr: first.stderr,
+    });
+    stop.end();
+    assert.equal(one, 1, 'stopped at the refusing admission: prepared, not shipped');
+    assert.equal(state.starts, 1);
+    assert.deepEqual(fake.calls.placed.map((one) => [one.worktree, one.sha]), [[OWN, MID]], 'the suites were run in the worktree at the pick');
+
+    // Meanwhile something moved the worktree elsewhere on origin/main's line.
+    git(OWN, ['reset', '--keep', LOW]);
+    assert.equal(git.head(), LOW);
+
+    const spawned = [];
+    const second = io();
+    const two = await run([], {
+      ...deps({
+        ...extra, git, spawnDeploy: async (options) => { spawned.push(options); return { code: 0 }; },
+        sleep: async () => { await state.pending(); },
+      }),
+      stdout: second.stdout,
+      stderr: second.stderr,
+    });
+    assert.equal(two, 0, second.out.stderr);
+    assert.equal(state.starts, 1, 'the preparation was reused, not made again');
+    assert.deepEqual(spawned.map((one) => [one.sha, one.cwd]), [[MID, OWN]]);
+    assert.equal(git.head(), MID, 'ship placed it at the pick again');
+    assert.equal(lastAttempt({ MC_WORK_ROOT: work }).outcome, 'deployed');
+  });
+});
+
+describe('mc deploy — which route: mc\'s own worktree, or the person\'s checkout of main', () => {
+  it('main held in a worktree that is not mc\'s own keeps the shared route: pinned, no placing, no holder', async () => {
+    const takes = [];
+    const fake = gateFake({ head: TIP, served: 'checkout' });
+    const suites = {
+      ...fake.suites,
+      takeHolder: async () => { takes.push('takeHolder'); throw new Error('the holder belongs to the own route'); },
+      placeWorktree: () => { takes.push('placeWorktree'); throw new Error('placing belongs to the own route'); },
+    };
+    const { code, calls, checkout, out } = await attempt(['--dry-run'], { extra: { git: fakeGit({ chain: [TIP, MID], counts: COUNTS }), suites, gate: fake.gate }, head: TIP, served: 'checkout' });
+    assert.equal(code, 0, out.stderr);
+    assert.deepEqual(takes, []);
+    assert.equal(calls.placed.length, 0);
+    void checkout;
+  });
+
+  it('the shared route: the checkout is detached at the pick and every ensure is pinned to it', async () => {
+    const { code, calls, checkout } = await attempt(['--dry-run'], {
+      extra: { git: fakeGit({ chain: [TIP, MID], counts: COUNTS }) }, runs: [redRun(TIP), greenRun(MID)], head: TIP, served: 'checkout',
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(calls.ensures.map((ensure) => ensure.pin), [true]);
+    assert.deepEqual(calls.ensuredIn, [SHARED]);
+    assert.equal(checkout.head, MID);
+    assert.equal(calls.placed.length, 0);
+  });
+
+  it('main held in mc\'s own worktree takes the own route: placed, never the shared checkout', async () => {
+    const OWN = deployWorktreePath(process.env);
+    const git = walkingGit({ chain: [TIP, MID], counts: COUNTS, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 0, behind: 0 } } });
+    const { code, calls } = await attempt(['--dry-run'], { extra: { git }, runs: [redRun(TIP), greenRun(MID)], head: TIP, served: 'checkout' });
+    assert.equal(code, 0);
+    assert.deepEqual(calls.placed.map((one) => one.worktree), [OWN]);
+    assert.deepEqual([...new Set(calls.ensuredIn)], [OWN]);
+    assert.deepEqual(calls.ensures.map((ensure) => ensure.pin), [false]);
   });
 });

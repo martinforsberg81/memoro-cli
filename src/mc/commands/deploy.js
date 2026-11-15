@@ -792,10 +792,16 @@ export async function run(argv, deps = {}) {
     // The suites run in mc's own worktree where main is held nowhere, so a dry
     // run with none makes it, as the deploy itself would: it is where the suites
     // are served (the reading is only worth having with them).
+    // An absent worktree is the path mc's own would take, so `own` is already
+    // true for it: what is missing is the tree itself.
     let exerciseOwn = own;
-    if (!own && source.absent && !source.failed) {
+    if (source.absent && !source.failed) {
       const made = deploySource({ path, git, env, create: true });
-      exerciseOwn = !made.failed && isOwnWorktree(made.worktree, env);
+      if (made.failed) {
+        stderr.write(`mc: git worktree add ${made.worktree} main failed in ${path} — the suites need mc's own main worktree to run in\n`);
+        return 1;
+      }
+      exerciseOwn = isOwnWorktree(made.worktree, env);
     }
     const gate = await gateStage({ plan, opts, env, say, deps: gateDeps, own: exerciseOwn });
     if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: gateSummary(gate) }, null, 2)}\n`);
