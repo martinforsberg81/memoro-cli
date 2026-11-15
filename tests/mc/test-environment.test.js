@@ -25,7 +25,7 @@ import { devQueuePath, joinQueue } from '../../src/mc/dev-queue.js';
 import { devPoolPath, readReservations } from '../../src/mc/dev-reservations.js';
 import { setLogPath } from '../../src/mc/logger.js';
 import {
-  accountAvailable, answers, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isGate, isLoopback, parseDeclaration, notInDev, readDeclaration, runSuites,
+  accountAvailable, answers, productionRound, builtFromMoved, editedSince, ensureAppServer, ensureDevServer, isGate, isLoopback, parseDeclaration, notInDev, readDeclaration, runSuites,
   NO_SHARED_WORKTREE, followMain, serversFor, servingWorktree, sharedWorktree, startArgvFor, stopServer, suiteEnv, tierOf,
 } from '../../src/mc/test-environment.js';
 import { shotWorktree } from '../../src/mc/shot.js';
@@ -1978,5 +1978,68 @@ describe('a server that dies behind its wrapper', () => {
 
     rmSync(tracked.file, { force: true });
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+});
+
+describe('productionRound — the one round against production that mc test prod and the check after a deploy both run', () => {
+  const declaration = {
+    schema_version: 1,
+    account: { token_env: 'MEMORO_TEST_TOKEN' },
+    environments: { prod: { base_url: 'https://prod.example' } },
+    suites: [
+      { name: 'api', argv: ['node', 'api.js'] },
+      { name: 'matrix', argv: ['node', 'matrix.js'], gate: false },
+      { name: 'smoke', argv: ['node', 'smoke.js'], gate: true },
+    ],
+  };
+  /** The round with `runSuites`, the token read and the probe faked: what the suites were handed is what is asserted. */
+  async function round(options = {}, env = { MEMORO_TEST_TOKEN: ' tok-123 ' }) {
+    const seen = {};
+    const probes = [];
+    const outcome = await productionRound({
+      declaration, worktree: '/w/tree', baseUrl: 'https://prod.example', env, ...options,
+    }, {
+      runSuites: async (given) => { Object.assign(seen, given); return { results: [{ name: 'api', ok: true }], gone: [], skipped: [], revived: [] }; },
+      answers: async (probe) => { probes.push(probe); return true; },
+      tokenFor: async (d, e) => ({ name: 'MEMORO_TEST_TOKEN', token: String(e.MEMORO_TEST_TOKEN || '').trim() || null, from: e.MEMORO_TEST_TOKEN ? 'environment' : null }),
+    });
+    return { seen, probes, outcome };
+  }
+
+  it('hands the suites the declared base URL, no static server, no reviver, and the token in their environment only', async () => {
+    const { seen, outcome } = await round();
+    assert.equal(seen.baseUrl, 'https://prod.example');
+    assert.equal(seen.staticBaseUrl, null);
+    assert.equal(seen.revive, null);
+    assert.equal(seen.worktree, '/w/tree');
+    assert.equal(seen.env.MEMORO_TEST_TOKEN, 'tok-123');
+    assert.deepEqual(seen.declaration.suites.map((suite) => suite.name), ['api', 'matrix', 'smoke'], 'every suite unless asked');
+    assert.deepEqual(outcome.held, { name: 'MEMORO_TEST_TOKEN', from: 'environment' });
+    assert.equal(outcome.account.available, true);
+    assert.equal(outcome.baseUrl, 'https://prod.example');
+    assert.doesNotMatch(JSON.stringify({ ...outcome, results: undefined }), /tok-123/u, 'the token is never in the result');
+  });
+
+  it('gateOnly keeps the suites that gate a deploy and drops the rest; the declaration handed in is not changed', async () => {
+    const { seen } = await round({ gateOnly: true });
+    assert.deepEqual(seen.declaration.suites.map((suite) => suite.name), ['api', 'smoke']);
+    assert.equal(declaration.suites.length, 3);
+    assert.equal((await round({ only: 'smoke' })).seen.only, 'smoke');
+  });
+
+  it('asks production, not a loopback address, whether it is still there; and says whom it signs in as before the first suite', async () => {
+    const ready = [];
+    const { seen, probes } = await round({ onReady: (info) => ready.push(info) });
+    assert.deepEqual(ready, [{ held: { name: 'MEMORO_TEST_TOKEN', from: 'environment' }, account: { available: true, why: null } }]);
+    await seen.stillThere();
+    assert.deepEqual(probes, [{ health_url: 'https://prod.example/api/version' }]);
+  });
+
+  it('with no token the round still runs and says the account is missing, nothing in the environment', async () => {
+    const { seen, outcome } = await round({}, {});
+    assert.equal(seen.env.MEMORO_TEST_TOKEN, undefined);
+    assert.equal(outcome.account.available, false);
+    assert.match(outcome.account.why, /no MEMORO_TEST_TOKEN/u);
+    assert.equal(outcome.held.from, null);
   });
 });
