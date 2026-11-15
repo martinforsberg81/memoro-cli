@@ -491,6 +491,19 @@ describe('mc martin item transitions', () => {
     assert.equal(await run(['item',fixed.record.id,'brief','--sort','judgement','--reversible','no'],{...io(),env:{...fixed.env,MC_ROLE:'decision'},now:()=>new Date('2026-11-14T10:00:00Z')}),0);
     const fixedRecord=JSON.parse(readFileSync(join(fixed.dir,'item.json'),'utf8')); assert.equal(fixedRecord.due_at,null); assert.equal(fixedRecord.reversible,false);
   });
+  it('the learning role lists the items without syncing: no lock, no write, and a source a sync would change is left as it is', async()=>{
+    const f=stored('new'); // the open item of alpha/one
+    const closedSource='2026-11-14T11:00:00Z', closedId=deskItemId('goal','alpha/two',closedSource);
+    writeDeskItem({schema:'mc-desk-item',version:1,id:closedId,kind:'goal',reference:'alpha/two',source_at:closedSource,opened_at:closedSource,state:'closed',sort:null,reversible:null,due_at:null,outcome:{by:'martin',at:closedSource,summary:'Answered.'}},{env:f.env});
+    const home=join(f.env.MC_WORK_ROOT,'programs'); mkdirSync(join(home,'alpha','goals','one'),{recursive:true});
+    writeFileSync(join(home,'alpha','goals','one','GOAL.json'),goalJson({status:'ready'})); // a sync would close the open item by source
+    const before=snapshot(f.env.MC_WORK_ROOT); const out=io();
+    const lock=()=>{ throw new Error('the runner lock is held by pid 4242 — try again'); };
+    assert.equal(await run(['items','--state','closed','--json'],{...out,env:{...f.env,MC_ROLE:'learning'},home,syncDeps:{lock}}),0,out.out.stderr);
+    assert.equal(out.out.stderr,'');
+    assert.deepEqual(JSON.parse(out.out.stdout).map(x=>x.id),[closedId]);
+    assert.deepEqual(snapshot(f.env.MC_WORK_ROOT),before);
+  });
   it('refuses invalid sorts, role writes, closed transitions and unknown ids without modifying bytes', async()=>{
     const f=stored('prepared'); writeFileSync(join(f.dir,'brief.md'),'Brief');
     const path=join(f.dir,'item.json'); const before=readFileSync(path,'utf8');

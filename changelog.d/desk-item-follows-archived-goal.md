@@ -1,0 +1,3 @@
+section: Fixed
+
+- **A desk item closes by source when its goal is dropped or done and archived, and `mc martin items` lists for the learning role.** The sync read a goal only where it stood in `goals/`, so a goal archived at once as dropped left its item open: it reported a missing goal file, and Martin was asked about a goal that no longer existed. Now an open goal item closes by source with the archived state as its outcome, and the drop's reason when the goal was dropped. A missing goal with no archive, and any malformed goal file, still reports and keeps the item open. Before, the learning role was refused `mc martin items`, which its role file tells it to run; now it lists the items without syncing, takes no lock and writes nothing.

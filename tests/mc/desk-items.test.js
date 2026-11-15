@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import { renameSync } from 'node:fs';
 import { deskItemId, deskItemQuestion, itemDirectory, syncDeskItems, listDeskItems, readDeskItem, updateDeskItem } from '../../src/mc/desk-items.js';
 import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
@@ -183,6 +184,87 @@ test('martin items syncs four sources once, closes resolved sources and only wri
   const beforeLater=sourceSnapshot(f.root,join(f.env.MC_WORK_ROOT,'martin','items')); const later=(await sync()).filter(x=>x.reference==='alpha/two');
   assert.deepEqual(later.map(x=>x.state).sort(),['closed','new']); assert.equal(later.find(x=>x.state==='closed').outcome.by,'source'); assert.deepEqual(sourceSnapshot(f.root,join(f.env.MC_WORK_ROOT,'martin','items')),beforeLater);
 });
+
+// A goal that has left goals/ for the archive, as `archiveGoal` leaves it: its directory under `.archive`, its log kept.
+const LIVE_QUESTION = `## ${stamp} · person · build · Martin\n\nComment: Martin is asked: Keep waiting?\n`;
+const DROP_ENTRIES = `\n## 2026-11-14T20:35:00Z · person · dropped · ready\n\nComment: Not wanted: the cutover is off\nThe second line of the reason\n\n## 2026-11-14T20:36:00Z · runner · dropped · ready\n\nComment: drop finalization pending — x\n`;
+const archivedGoal = (stage) => goalJson({ stage, status: 'ready' });
+const archiveDir = (f, name) => { const dir = join(f.home, 'alpha', 'goals', '.archive', name); mkdirSync(dir, { recursive: true }); return dir; };
+// The first sync opens the live question of alpha/one.
+function openQuestion(f) {
+  writeFileSync(join(f.home, 'alpha', 'README.md'), '# alpha\n'); // the programme README the question's context reads
+  writeFileSync(join(f.dir, 'GOAL.json'), goalJson({ status: 'Martin' }));
+  writeFileSync(join(f.dir, 'LOG.md'), LIVE_QUESTION);
+  const issues = [];
+  const deps = { env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, reportIssue: issue => issues.push(issue) };
+  const [item] = syncDeskItems(deps);
+  return { item, deps, issues, path: join(f.dir, 'GOAL.json') };
+}
+
+test('an open goal item closes by source when its goal is archived as dropped, with the first line of the drop as its reason; a second sync changes nothing', () => {
+  const f = fixture(); const { item, deps, issues } = openQuestion(f);
+  mkdirSync(join(f.home, 'alpha', 'goals', '.archive'), { recursive: true });
+  renameSync(f.dir, join(f.home, 'alpha', 'goals', '.archive', 'one'));
+  const archive = join(f.home, 'alpha', 'goals', '.archive', 'one');
+  writeFileSync(join(archive, 'GOAL.json'), archivedGoal('dropped')); writeFileSync(join(archive, 'LOG.md'), `${LIVE_QUESTION}${DROP_ENTRIES}`);
+  const closed = syncDeskItems(deps).find(x => x.id === item.id);
+  assert.equal(closed.state, 'closed'); assert.equal(closed.outcome.by, 'source');
+  assert.equal(closed.outcome.summary, 'The goal is dropped and archived. Reason: Not wanted: the cutover is off');
+  assert.deepEqual(issues, [], 'no issue is reported for the archived goal');
+  const path = join(f.env.MC_WORK_ROOT, 'martin', 'items', item.id, 'item.json'); const before = readFileSync(path, 'utf8');
+  syncDeskItems(deps); assert.equal(readFileSync(path, 'utf8'), before);
+});
+
+test('an open goal item closes by source when its goal is archived as done under the stamped name, and says so', () => {
+  const f = fixture(); const { item, deps, issues } = openQuestion(f);
+  const dir = archiveDir(f, 'one-20261114T2035'); writeFileSync(join(dir, 'GOAL.json'), archivedGoal('done')); writeFileSync(join(dir, 'LOG.md'), LIVE_QUESTION);
+  rmSync(f.dir, { recursive: true });
+  const closed = syncDeskItems(deps).find(x => x.id === item.id);
+  assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The goal is done and archived.']);
+  assert.deepEqual(issues, []);
+});
+
+test('a missing goal with nothing in the archive keeps its item open, and the live path is reported', () => {
+  const f = fixture(); const { item, deps, issues, path } = openQuestion(f);
+  rmSync(f.dir, { recursive: true });
+  const after = syncDeskItems(deps).find(x => x.id === item.id);
+  assert.equal(after.state, 'new'); assert.equal(after.outcome, null);
+  assert.deepEqual(issues.map(x => x.path), [path]);
+});
+
+test('an archived goal whose file does not parse, or whose stage is not finished, keeps its item open with the live path reported', () => {
+  for (const [label, text] of [['malformed', '{'], ['building', archivedGoal('build')]]) {
+    const f = fixture(); const { item, deps, issues, path } = openQuestion(f);
+    rmSync(f.dir, { recursive: true });
+    const dir = archiveDir(f, 'one'); writeFileSync(join(dir, 'GOAL.json'), text); writeFileSync(join(dir, 'LOG.md'), `${LIVE_QUESTION}${DROP_ENTRIES}`);
+    const after = syncDeskItems(deps).find(x => x.id === item.id);
+    assert.equal(after.state, 'new', label); assert.equal(after.outcome, null, label);
+    assert.deepEqual(issues.map(x => x.path), [path], label);
+  }
+});
+
+test('an archived goal of another name, one-two, does not close the item of one', () => {
+  const f = fixture(); const { item, deps, issues, path } = openQuestion(f);
+  rmSync(f.dir, { recursive: true });
+  const dir = archiveDir(f, 'one-two'); writeFileSync(join(dir, 'GOAL.json'), archivedGoal('dropped')); writeFileSync(join(dir, 'LOG.md'), `${LIVE_QUESTION}${DROP_ENTRIES}`);
+  const after = syncDeskItems(deps).find(x => x.id === item.id);
+  assert.equal(after.state, 'new'); assert.equal(after.outcome, null);
+  assert.deepEqual(issues.map(x => x.path), [path]);
+});
+
+for (const fault of ['empty', 'malformed', 'unreadable']) {
+  test(`a live goal file that is ${fault} keeps its item open, whatever the archive holds`, () => {
+    const f = fixture(); const { item, deps, issues, path } = openQuestion(f);
+    const dir = archiveDir(f, 'one'); writeFileSync(join(dir, 'GOAL.json'), archivedGoal('dropped')); writeFileSync(join(dir, 'LOG.md'), `${LIVE_QUESTION}${DROP_ENTRIES}`);
+    if (fault !== 'unreadable') writeFileSync(path, fault === 'empty' ? '' : '{');
+    // The live file exists on disk; for `unreadable` the reader returns nothing for it, as the production reader does on a read error.
+    const read = (p) => (fault === 'unreadable' && p === path ? null : fixtureRead(p));
+    const after = syncDeskItems({ ...deps, read }).find(x => x.id === item.id);
+    assert.equal(after.state, 'new'); assert.equal(after.outcome, null);
+    assert.ok(issues.some(x => x.path === path), 'the live path is reported');
+    assert.ok(issues.every(x => x.path === path), 'nothing else is reported');
+  });
+}
 
 function sourceSnapshot(root, excluded) { const out=[]; function walk(p) { for (const n of readdirSync(p)) { const c=join(p,n); if (c===excluded) continue; const st=lstatSync(c); if (st.isDirectory()) { out.push([c,'directory']); walk(c); } else out.push([c,'file',st.size,st.mtimeMs,createHash('sha256').update(readFileSync(c)).digest('hex')]); } } walk(root); return out.sort((a,b)=>a[0].localeCompare(b[0])); }
 function fixtureRead(path) { try { return readFileSync(path,'utf8'); } catch { return null; } }
