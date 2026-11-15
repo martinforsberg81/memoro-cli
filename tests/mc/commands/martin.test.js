@@ -335,8 +335,9 @@ function openingStore({ lastOpen = LAST } = {}) {
     if (prepared !== null) writeFileSync(join(itemDirectory(record, env), 'prepared.md'), prepared);
     return record;
   };
+  // alpha/one and beta/judge are stored with the old sorts and a due_at (product, judgement): they are read as text and no clock is read from them.
   put({ reference: 'alpha/one', source_at: '2026-11-13T10:00Z', state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-14T15:00:00.000Z', brief: 'Brief: the rule of alpha.' });
-  put({ reference: 'alpha/two', source_at: '2026-11-10T09:00Z', state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-16T09:00:00.000Z', brief: 'Brief: the timing.' });
+  put({ reference: 'alpha/two', source_at: '2026-11-10T09:00Z', state: 'for-martin', sort: 'text', reversible: null, brief: 'Brief: the timing.' });
   put({ reference: 'beta/irr', source_at: '2026-11-11T09:00Z', state: 'for-martin', sort: 'reserved', reversible: false, brief: 'Brief: the reserved act.' });
   put({ reference: 'beta/judge', source_at: '2026-11-12T09:00Z', state: 'for-martin', sort: 'judgement', reversible: true, due_at: '2026-11-20T00:00:00.000Z', brief: 'Brief: look at the screen.' });
   put({ reference: 'gamma/d1', source_at: '2026-11-01T08:00Z', state: 'closed', outcome: { by: 'decision', at: '2026-11-14T07:00:00.000Z', summary: 'Decision before the opening.' } });
@@ -347,7 +348,7 @@ function openingStore({ lastOpen = LAST } = {}) {
   put({ reference: 'beta/s2', source_at: '2026-11-06T08:00Z', state: 'closed', outcome: { by: 'source', at: '2026-11-14T10:30:00.000Z', summary: 'Source closed it too.' } });
   put({ reference: 'delta/p1', source_at: '2026-11-09T08:00Z', state: 'prepared', sort: 'mechanical', prepared: 'Facts for p1.' });
   put({ reference: 'delta/p2', source_at: '2026-11-10T08:00Z', state: 'prepared', sort: 'technical', prepared: 'Facts for p2.', decision_failures: [{ at: '2026-11-13T08:00:00.000Z', reason: 'session exited' }] });
-  return { root, env, home };
+  return { root, env, home, put, goal };
 }
 function launch(d, at, deps = {}) {
   const { out, stdout, stderr } = io();
@@ -355,20 +356,28 @@ function launch(d, at, deps = {}) {
 }
 
 describe('mc martin brief', () => {
-  it('prints the five parts in order, blocking work first, from the store', async () => {
-    const d = openingStore(); const text = io();
+  it('the opening prints texts, acts, decided, not ready, cost and changes in order, blocking work first, with no Due line, from the store', async () => {
+    const d = openingStore();
+    // A text item proposed by a session, and the runner's own stop: a for-martin item of sort mechanical (its decision failed twice), which is not Martin's.
+    d.put({ kind: 'text', reference: 'text:canon/roles/martin.md#Authority', source_at: '2026-11-12T10:00:00.000Z', state: 'for-martin', sort: 'text', text: 'canon/roles/martin.md#Authority', goal: null, brief: '## Vad den säger\nX\n\n## Vad som föreslås\nY\n\n## Vad som hittades\nZ\n' });
+    d.goal('delta', 'p3', { question: { at: '2026-11-11T08:00Z', text: 'Which stop?' } });
+    d.put({ reference: 'delta/p3', source_at: '2026-11-11T08:00Z', state: 'for-martin', sort: 'mechanical', decision_failures: [{ at: '2026-11-13T08:00:00.000Z', reason: 'session exited' }, { at: '2026-11-13T09:00:00.000Z', reason: 'session exited' }] });
+    const text = io();
     assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
     const out = text.out.stdout;
     const at = (part) => { const index = out.indexOf(part); assert.notEqual(index, -1, part); return index; };
-    const headings = ['## Yours (4)', '## Decided without you', '## Not ready', '## Cost', '## What the system changed'].map(at);
+    const headings = ['## Proposed changes to your texts (4)', '## Your acts (1)', '## Decided without you', '## Not ready', '## Cost', '## What the system changed'].map(at);
     assert.deepEqual([...headings].sort((a, b) => a - b), headings);
     assert.match(out, /^Martin's desk, opened 2026-11-14T12:00:00\.000Z\. Decided-without-you covers 2026-11-14T08:00:00\.000Z to 2026-11-14T12:00:00\.000Z\./u);
-    const yours = ['### 1. alpha/one · product · reversible', '### 2. alpha/two · product · reversible', '### 3. beta/irr · reserved · not reversible', '### 4. beta/judge · judgement · reversible'].map(at);
-    assert.deepEqual([...yours].sort((a, b) => a - b), yours, 'blocking first, then oldest source');
-    assert.ok(yours[0] > headings[0] && yours[3] < headings[1]);
+    const texts = ['### 1. alpha/one', '### 2. alpha/two', '### 3. beta/judge', '### 4. canon/roles/martin.md#Authority'].map(at);
+    assert.deepEqual([...texts].sort((a, b) => a - b), texts, 'blocking first, then oldest source');
+    assert.ok(texts[0] > headings[0] && texts[3] < headings[1]);
+    assert.ok(at('### 1. beta/irr · reserved · not reversible') > headings[1] && at('### 1. beta/irr · reserved · not reversible') < headings[2]);
     assert.match(out, /blocks 2 later-phase goals of alpha/u);
-    assert.match(out, /Due 2026-11-14T15:00:00\.000Z: if nothing is said/u);
-    assert.doesNotMatch(out, /Due 2026-11-16/u);
+    assert.doesNotMatch(out, /\bDue\b|if nothing is said|will be taken/u, 'no clock: no Due line and no default after a wait');
+    assert.doesNotMatch(out, /delta\/p3 ·/u, 'the runner\'s stop is not one of his');
+    assert.doesNotMatch(out, /## Yours/u);
+    assert.match(out, /Stuck after the decision pass, not yours: delta\/p3 \(preparation failed 0 times, decision 2 times\)\./u);
     assert.match(out, /Brief: the reserved act\./u);
     assert.ok(out.includes('- 2026-11-14T09:00:00.000Z · Decision at nine. (gamma/d2, decision)'));
     assert.ok(out.includes('- 2026-11-14T10:00:00.000Z · Decision at ten. (beta/d3, decision)'));
@@ -458,7 +467,7 @@ describe('mc martin brief', () => {
     const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
     const lines = text.out.stdout.split('\n');
     for (const line of ['- The archived title — code (src/mc/run.js) — memoro-cli#2001', '- alpha/nowhere — code (src/mc/run.js) — memoro-cli#2002', '- The archived reused name — code (src/mc/run.js) — memoro-cli#2003']) assert.ok(lines.includes(line), line);
-    assert.equal(data.yours.find((x) => x.reference === 'alpha/one').blocks, 2, 'later-phase blocking reads the live goals only');
+    assert.equal(data.texts.find((x) => x.reference === 'alpha/one').blocks, 2, 'later-phase blocking reads the live goals only');
   });
   it('counts the runs of unknown cost within the seven days its sums cover', async () => {
     const d = openingStore(); mkdirSync(join(d.env.MC_WORK_ROOT, 'runner', 'log'), { recursive: true });
@@ -487,7 +496,8 @@ describe('mc martin item transitions', () => {
     mkdirSync(join(env.MC_WORK_ROOT,'runner','projects'),{recursive:true}); // the runner lock's directory
     writeDeskItem(record,{env}); return {env,record,dir:itemDirectory(record,env)};
   }
-  it('requires each prepared artifact and advances prepared, brief and close with a deterministic clock', async()=>{
+  const FORM = '## Vad den säger\nThe rule says A.\n\n## Vad som föreslås\nSay B instead.\n\n## Vad som hittades\nC is what was found.\n';
+  it('requires each prepared artifact and advances prepared, brief and close with no clock: a brief has no due time, an old sort is recorded as text', async()=>{
     const f=stored(); const roleEnv={...f.env,MC_ROLE:'decision'}; let result=io();
     const newBytes=readFileSync(join(f.dir,'item.json'),'utf8');
     assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...result,env:roleEnv}),2);
@@ -497,17 +507,37 @@ describe('mc martin item transitions', () => {
     assert.equal(await run(['item',f.record.id,'prepared','--sort','technical'],{...io(),env:roleEnv}),0);
     const preparedBytes=readFileSync(join(f.dir,'item.json'),'utf8'); result=io();
     rmSync(join(f.dir,'brief.md'),{force:true});
-    assert.equal(await run(['item',f.record.id,'brief','--sort','product','--reversible','yes'],{...result,env:roleEnv}),2);
+    assert.equal(await run(['item',f.record.id,'brief','--sort','text','--text','canon/roles/martin.md#Authority','--reversible','yes'],{...result,env:roleEnv}),2);
     assert.match(result.out.stderr,/prepared.*brief or close applies/u); assert.equal(readFileSync(join(f.dir,'item.json'),'utf8'),preparedBytes);
-    writeFileSync(join(f.dir,'brief.md'),'Choice');
-    assert.equal(await run(['item',f.record.id,'brief','--sort','product','--reversible','yes'],{...io(),env:roleEnv,now:()=>new Date('2026-11-14T10:00:00Z')}),0);
+    writeFileSync(join(f.dir,'brief.md'),FORM);
+    assert.equal(await run(['item',f.record.id,'brief','--sort','product','--text','canon/roles/martin.md#Authority','--reversible','yes'],{...io(),env:roleEnv,now:()=>new Date('2026-11-14T10:00:00Z')}),0);
     let current=JSON.parse(readFileSync(join(f.dir,'item.json'),'utf8'));
-    assert.equal(current.state,'for-martin'); assert.equal(current.due_at,'2026-11-16T10:00:00.000Z');
-    assert.equal(await run(['item',f.record.id,'close','--by','martin','--summary','Martin chose the recommended option.'],{...io(),env:{...f.env,MC_ROLE:'martin'},now:()=>new Date('2026-11-14T11:00:00Z')}),0);
+    assert.equal(current.state,'for-martin'); assert.equal(current.sort,'text','the old name product is recorded as text'); assert.equal(current.due_at,null); assert.equal(current.text,'canon/roles/martin.md#Authority'); assert.equal(current.goal,'alpha/one');
+    assert.equal(await run(['item',f.record.id,'close','--by','martin','--summary','Martin took the proposal.'],{...io(),env:{...f.env,MC_ROLE:'martin'},now:()=>new Date('2026-11-14T11:00:00Z')}),0);
     current=JSON.parse(readFileSync(join(f.dir,'item.json'),'utf8')); assert.equal(current.state,'closed'); assert.equal(current.outcome.by,'martin');
-    const fixed=stored('prepared'); writeFileSync(join(fixed.dir,'brief.md'),'No default');
-    assert.equal(await run(['item',fixed.record.id,'brief','--sort','judgement','--reversible','no'],{...io(),env:{...fixed.env,MC_ROLE:'decision'},now:()=>new Date('2026-11-14T10:00:00Z')}),0);
-    const fixedRecord=JSON.parse(readFileSync(join(fixed.dir,'item.json'),'utf8')); assert.equal(fixedRecord.due_at,null); assert.equal(fixedRecord.reversible,false);
+    const fixed=stored('prepared'); writeFileSync(join(fixed.dir,'brief.md'),FORM);
+    assert.equal(await run(['item',fixed.record.id,'brief','--sort','judgement','--text','horizon:one','--reversible','no'],{...io(),env:{...fixed.env,MC_ROLE:'decision'},now:()=>new Date('2026-11-14T10:00:00Z')}),0);
+    const fixedRecord=JSON.parse(readFileSync(join(fixed.dir,'item.json'),'utf8')); assert.equal(fixedRecord.due_at,null); assert.equal(fixedRecord.reversible,false); assert.equal(fixedRecord.sort,'text');
+    const prepared=stored('new'); writeFileSync(join(prepared.dir,'prepared.md'),'Evidence');
+    for (const old of ['product','judgement']) { const g=stored('new'); writeFileSync(join(g.dir,'prepared.md'),'Evidence');
+      assert.equal(await run(['item',g.record.id,'prepared','--sort',old],{...io(),env:{...g.env,MC_ROLE:'decision'}}),0); assert.equal(JSON.parse(readFileSync(join(g.dir,'item.json'),'utf8')).sort,'text'); }
+  });
+  it('brief --sort text refuses what is not the form, a missing --text and --recommend, each with the item unchanged', async()=>{
+    const cases=[
+      ['a fourth part of options', '## Vad den säger\nA.\n\n## Vad som föreslås\nB.\n\n## Vad som hittades\nC.\n\n## Alternativ\n- a: keep\n- b: change\n', ['--text','canon/x.md'], /has the part "## Alternativ", which is not one of the three/u],
+      ['a missing part', '## Vad den säger\nA.\n\n## Vad som föreslås\nB.\n', ['--text','canon/x.md'], /lacks the part "## Vad som hittades"/u],
+      ['an empty part', '## Vad den säger\nA.\n\n## Vad som föreslås\n\n## Vad som hittades\nC.\n', ['--text','canon/x.md'], /"## Vad som föreslås" is empty/u],
+      ['parts out of order', '## Vad som föreslås\nB.\n\n## Vad den säger\nA.\n\n## Vad som hittades\nC.\n', ['--text','canon/x.md'], /out of order/u],
+      ['no --text', FORM, [], /needs --text/u],
+      ['a --text of two lines', FORM, ['--text','a\nb'], /one line/u],
+      ['--recommend', FORM, ['--text','canon/x.md','--recommend','a'], /no options and no recommendation/u],
+    ];
+    for (const [label,brief,flags,message] of cases) {
+      const f=stored('prepared'); writeFileSync(join(f.dir,'brief.md'),brief); const before=snapshot(f.env.MC_WORK_ROOT); const result=io();
+      assert.equal(await run(['item',f.record.id,'brief','--sort','text',...flags,'--reversible','yes'],{...result,env:{...f.env,MC_ROLE:'decision'}}),2,label);
+      assert.match(result.out.stderr,message,label);
+      assert.deepEqual(snapshot(f.env.MC_WORK_ROOT),before,`${label}: nothing written`);
+    }
   });
   it('the learning role lists the items without syncing: no lock, no write, and a source a sync would change is left as it is', async()=>{
     const f=stored('new'); // the open item of alpha/one
@@ -624,24 +654,32 @@ describe('mc martin item transitions', () => {
     assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary-file', summary], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
     assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'closed', sort: 'mechanical', outcome: { by: 'decision', at: new Date(f.record.source_at).toISOString(), summary: 'Resolved mechanically.' } });
   });
-  for (const reversible of ['yes', 'no']) it(`prepared advances to for-martin with reversible ${reversible}`, async () => {
+  for (const reversible of ['yes', 'no']) it(`prepared advances to for-martin with reversible ${reversible}, and a reserved act has no due time either way`, async () => {
     const f = stored('prepared'); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation');
     assert.equal(await run(['item', f.record.id, 'brief', '--sort', 'reserved', '--reversible', reversible], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
-    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'for-martin', sort: 'reserved', reversible: reversible === 'yes', due_at: reversible === 'yes' ? '2026-11-16T10:00:00.000Z' : null });
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8')), { ...f.record, state: 'for-martin', sort: 'reserved', reversible: reversible === 'yes', due_at: null });
   });
-  it('for-martin closes with a default outcome and exposes persisted fields and artifacts', async () => {
+  it('for-martin closes by decision and exposes persisted fields and artifacts', async () => {
     const f = stored('for-martin'); writeFileSync(join(f.dir, 'prepared.md'), 'Evidence'); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation');
-    assert.equal(await run(['item', f.record.id, 'close', '--by', 'default', '--summary', 'The default applies.'], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
+    assert.equal(await run(['item', f.record.id, 'close', '--by', 'decision', '--summary', 'The decision applies.'], { ...io(), env: { ...f.env, MC_ROLE: 'decision' }, now: () => new Date(f.record.source_at) }), 0);
     const current = JSON.parse(readFileSync(join(f.dir, 'item.json'), 'utf8'));
-    assert.deepEqual(current, { ...f.record, state: 'closed', outcome: { by: 'default', at: new Date(f.record.source_at).toISOString(), summary: 'The default applies.' } });
+    assert.deepEqual(current, { ...f.record, state: 'closed', outcome: { by: 'decision', at: new Date(f.record.source_at).toISOString(), summary: 'The decision applies.' } });
     const output = io(); assert.equal(await run(['item', f.record.id], { ...output, env: f.env, home: join(f.env.MC_WORK_ROOT, 'programs') }), 0);
     const { source, prepared, brief, ...detail } = JSON.parse(output.out.stdout);
     assert.deepEqual(detail, current); assert.equal(source, null); assert.equal(prepared, 'Evidence'); assert.equal(brief, 'Recommendation');
   });
+  it('no clock: close --by default is refused for every role and state, naming the verbs that remain, with nothing written', async () => {
+    for (const [state, role] of [['for-martin', 'decision'], ['for-martin', 'martin'], ['prepared', 'decision'], ['prepared', 'person']]) {
+      const f = stored(state); writeFileSync(join(f.dir, 'brief.md'), 'Recommendation'); const before = snapshot(f.env.MC_WORK_ROOT); const result = io();
+      assert.equal(await run(['item', f.record.id, 'close', '--by', 'default', '--summary', 'The default applies.'], { ...result, env: { ...f.env, MC_ROLE: role } }), 2, `${state} ${role}`);
+      assert.match(result.out.stderr, /close --by default is refused: no clock.*--by decision or --by martin/u);
+      assert.deepEqual(snapshot(f.env.MC_WORK_ROOT), before, 'refusal writes no file');
+    }
+  });
   // The sync closes by source while the deciding session works: the session's close still stands and keeps the closure it replaces.
   const sourceClosure = { by: 'source', at: '2026-11-14T10:20:00.000Z', summary: 'The source resolved.' };
   const closeArgs = (f, by) => ['item', f.record.id, 'close', '--by', by, '--summary', 'Settled.'];
-  for (const by of ['decision', 'martin', 'default']) it(`close --by ${by} over a source closure replaces it and records it as outcome.replaced`, async () => {
+  for (const by of ['decision', 'martin']) it(`close --by ${by} over a source closure replaces it and records it as outcome.replaced`, async () => {
     const f = stored('prepared'); const path = join(f.dir, 'item.json');
     writeJsonAtomic(path, { ...f.record, sort: 'product', state: 'closed', outcome: sourceClosure });
     const result = io();
@@ -763,9 +801,106 @@ describe('mc martin item transitions', () => {
   });
 });
 
+describe('mc martin propose', () => {
+  const PROPOSAL = '## Vad den säger\nThe paragraph says the default applies after two days.\n\n## Vad som föreslås\nSay that nothing is decided without him.\n\n## Vad som hittades\nThe decision pass found no case where the default was right.\n';
+  const TEXT = 'canon/tasks/asking-martin.md#What mc does with it';
+  function desk(role = 'person') {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-propose-')); roots.push(root);
+    const env = { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home'), MC_ROLE: role };
+    const home = join(root, 'programs');
+    mkdirSync(join(env.MC_WORK_ROOT, 'runner', 'projects'), { recursive: true }); // the runner lock's directory
+    mkdirSync(join(home, 'alpha', 'goals', 'one'), { recursive: true }); writeFileSync(join(home, 'alpha', 'README.md'), 'Alpha');
+    writeFileSync(join(home, 'alpha', 'goals', 'one', 'GOAL.json'), goalJson({ status: 'ready' })); writeFileSync(join(home, 'alpha', 'goals', 'one', 'LOG.md'), '');
+    const file = join(root, 'brief.md'); writeFileSync(file, PROPOSAL);
+    const propose = (argv, extra = {}) => { const result = io(); return run(['propose', ...argv], { ...result, env, home, now: () => new Date('2026-11-14T10:00:00.123Z'), ...extra }).then((code) => ({ code, out: result.out })); };
+    return { root, env, home, file, propose, items: () => readdirSync(join(env.MC_WORK_ROOT, 'martin', 'items')).filter((name) => !name.startsWith('.')) };
+  }
+  it('mc martin propose leaves one text item for Martin in the form: the record, the brief, its id on stdout, and the opening lists it', async () => {
+    const d = desk(); const r = await d.propose(['--text', TEXT, '--file', d.file, '--goal', 'alpha/one']);
+    assert.equal(r.code, 0, r.out.stderr); assert.equal(r.out.stderr, '');
+    const stamp = '2026-11-14T10:00:00.123Z', id = deskItemId('text', `text:${TEXT}`, stamp);
+    assert.equal(r.out.stdout, `${id}\n`);
+    const dir = join(d.env.MC_WORK_ROOT, 'martin', 'items', id);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'item.json'), 'utf8')), { schema: 'mc-desk-item', version: 1, id, kind: 'text', reference: `text:${TEXT}`, text: TEXT, goal: 'alpha/one', source_at: stamp, opened_at: stamp, state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null });
+    assert.equal(readFileSync(join(dir, 'brief.md'), 'utf8'), PROPOSAL);
+    const opening = io(); assert.equal(await run(['brief', '--json'], { ...opening, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, opening.out.stderr);
+    const data = JSON.parse(opening.out.stdout);
+    assert.deepEqual(data.texts.map((x) => [x.id, x.text, x.goal, x.brief]), [[id, TEXT, 'alpha/one', PROPOSAL]]); assert.deepEqual(data.acts, []);
+    const listed = io(); assert.equal(await run(['items', '--json'], { ...listed, env: d.env, home: d.home }), 0, listed.out.stderr);
+    assert.deepEqual(JSON.parse(listed.out.stdout).map((x) => [x.id, x.kind, x.state, x.sort, x.question]), [[id, 'text', 'for-martin', 'text', TEXT]]);
+  });
+  it('mc martin propose reads the brief from standard input with --file -', async () => {
+    const d = desk(); const r = await d.propose(['--text', TEXT, '--file', '-'], { readStdin: () => PROPOSAL });
+    assert.equal(r.code, 0, r.out.stderr); assert.equal(readFileSync(join(d.env.MC_WORK_ROOT, 'martin', 'items', r.out.stdout.trim(), 'brief.md'), 'utf8'), PROPOSAL);
+  });
+  const refusals = [
+    ['no --text', () => ['--file', 'F'], /--text names the text to change/u],
+    ['a --text of two lines', () => ['--text', 'a\nb', '--file', 'F'], /--text is one line/u],
+    ['an empty --text', () => ['--text', ' ', '--file', 'F'], /--text names the text to change/u],
+    ['no --file', () => ['--text', TEXT], /needs --file/u],
+    ['an unreadable file', () => ['--text', TEXT, '--file', '/nonexistent/brief.md'], /cannot read/u],
+    ['a brief that lacks a part', (d) => { writeFileSync(d.file, '## Vad den säger\nA.\n\n## Vad som föreslås\nB.\n'); return ['--text', TEXT, '--file', d.file]; }, /lacks the part "## Vad som hittades"/u],
+    ['a brief with options', (d) => { writeFileSync(d.file, `${PROPOSAL}\n## Alternativ\n- a: keep\n- b: change\n`); return ['--text', TEXT, '--file', d.file]; }, /which is not one of the three/u],
+    ['a brief with an empty part', (d) => { writeFileSync(d.file, '## Vad den säger\nA.\n\n## Vad som föreslås\n\n## Vad som hittades\nC.\n'); return ['--text', TEXT, '--file', d.file]; }, /is empty/u],
+    ['a goal that is not <programme>/<goal>', (d) => ['--text', TEXT, '--file', d.file, '--goal', 'alpha'], /--goal expects <programme>\/<goal>/u],
+    ['a goal that does not exist', (d) => ['--text', TEXT, '--file', d.file, '--goal', 'alpha/none'], /no readable goal alpha\/none/u],
+    ['a surplus argument', (d) => ['unexpected', '--text', TEXT, '--file', d.file], /unexpected/u],
+    ['an unknown flag', (d) => ['--text', TEXT, '--file', d.file, '--reversible', 'yes'], /--reversible|unknown/u],
+  ];
+  for (const [label, argv, message] of refusals) it(`mc martin propose refuses ${label} with exit 2 and writes nothing`, async () => {
+    const d = desk(); const args = argv(d).map((a) => (a === 'F' ? d.file : a)); const before = snapshot(d.root);
+    const r = await d.propose(args); assert.equal(r.code, 2, r.out.stderr); assert.match(r.out.stderr, message); assert.equal(r.out.stdout, '');
+    assert.deepEqual(snapshot(d.root), before, 'a refusal writes nothing');
+  });
+  it('mc martin propose is refused for desk-prepare, and open to the person and every other session role, headless or not', async () => {
+    const refused = desk('desk-prepare'); const before = snapshot(refused.root);
+    const r = await refused.propose(['--text', TEXT, '--file', refused.file]); assert.equal(r.code, 2); assert.match(r.out.stderr, /desk-prepare cannot propose/u);
+    assert.deepEqual(snapshot(refused.root), before);
+    for (const role of ['person', 'martin', 'decision', 'learning', 'plan', 'build-session', 'review-session', 'finish-session', 'mend-session']) {
+      const d = desk(role); const done = await d.propose(['--text', TEXT, '--file', d.file], { env: { ...d.env, MC_HEADLESS: '1' } });
+      assert.equal(done.code, 0, `${role}: ${done.out.stderr}`); assert.equal(d.items().length, 1, role);
+    }
+  });
+  it('mc martin propose proposed twice with the same wording makes one item: the second prints the first id, exits 0 and writes nothing, whitespace aside', async () => {
+    const d = desk(); const first = await d.propose(['--text', TEXT, '--file', d.file]); assert.equal(first.code, 0);
+    writeFileSync(d.file, PROPOSAL.replace('Say that nothing is decided without him.', '  Say that   nothing is\ndecided without him.  ').replace('after two days', 'after a wait'));
+    const before = snapshot(d.root); const again = await d.propose(['--text', TEXT, '--file', d.file], { now: () => new Date('2026-11-14T11:00:00Z') });
+    assert.equal(again.code, 0, again.out.stderr); assert.equal(again.out.stdout, first.out.stdout); assert.deepEqual(snapshot(d.root), before, 'nothing is written');
+    assert.equal(d.items().length, 1);
+    // Another wording of the same text, and the same wording of another text, are other proposals.
+    writeFileSync(d.file, PROPOSAL.replace('Say that nothing is decided without him.', 'Remove the paragraph.'));
+    const other = await d.propose(['--text', TEXT, '--file', d.file], { now: () => new Date('2026-11-14T12:00:00Z') }); assert.equal(other.code, 0); assert.notEqual(other.out.stdout, first.out.stdout);
+    writeFileSync(d.file, PROPOSAL);
+    const elsewhere = await d.propose(['--text', 'horizon:alpha', '--file', d.file], { now: () => new Date('2026-11-14T13:00:00Z') }); assert.equal(elsewhere.code, 0); assert.equal(d.items().length, 3);
+    // Once closed, the same wording may be proposed again.
+    const closed = io(); assert.equal(await run(['item', first.out.stdout.trim(), 'close', '--by', 'martin', '--summary', 'Declined.'], { ...closed, env: { ...d.env, MC_ROLE: 'martin' }, home: d.home, now: () => new Date('2026-11-14T13:30:00Z') }), 0, closed.out.stderr);
+    const reopened = await d.propose(['--text', TEXT, '--file', d.file], { now: () => new Date('2026-11-14T14:00:00Z') }); assert.equal(reopened.code, 0); assert.notEqual(reopened.out.stdout, first.out.stdout);
+  });
+  it('mc martin propose cannot take the runner lock: one mc: line, exit 1, nothing written', async () => {
+    const d = desk(); const before = snapshot(d.root);
+    const r = await d.propose(['--text', TEXT, '--file', d.file], { lock: () => { throw new Error('the runner lock is held by pid 4242 — try again'); } });
+    assert.equal(r.code, 1); assert.equal(r.out.stderr, 'mc: the runner lock is held by pid 4242 — try again\n'); assert.equal(r.out.stdout, ''); assert.deepEqual(snapshot(d.root), before);
+  });
+  it('mc martin propose: a sync neither closes nor rewrites a text item, whatever happens to its goal, and only a close ends it', async () => {
+    const d = desk(); const r = await d.propose(['--text', TEXT, '--file', d.file, '--goal', 'alpha/one']); const id = r.out.stdout.trim();
+    const path = join(d.env.MC_WORK_ROOT, 'martin', 'items', id, 'item.json'); const bytes = readFileSync(path, 'utf8');
+    for (const status of ['ready', 'blocked', 'Martin']) {
+      writeFileSync(join(d.home, 'alpha', 'goals', 'one', 'GOAL.json'), goalJson({ status }));
+      assert.equal(await run(['items'], { ...io(), env: d.env, home: d.home, syncDeps: { now: () => new Date('2026-11-20T00:00:00Z') } }), 0);
+      assert.equal(readFileSync(path, 'utf8'), bytes, `a sync with the goal ${status} leaves it as it was, a week later`);
+    }
+    rmSync(join(d.home, 'alpha', 'goals', 'one'), { recursive: true });
+    assert.equal(await run(['items'], { ...io(), env: d.env, home: d.home, syncDeps: { now: () => new Date('2026-12-20T00:00:00Z') } }), 0);
+    assert.equal(readFileSync(path, 'utf8'), bytes, 'nor when the goal is gone, a month later');
+    assert.equal(await run(['item', id, 'close', '--by', 'martin', '--summary', 'Took it.'], { ...io(), env: { ...d.env, MC_ROLE: 'martin' }, home: d.home, now: () => new Date('2026-12-20T01:00:00Z') }), 0);
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).state, 'closed');
+  });
+});
+
 describe('mc martin brief with horizons', () => {
-  const HEADS = ['Yours (4)', 'Decided without you', 'Not ready', 'Cost', 'What the system changed'].map((h) => `## ${h}`);
-  const KEYS = ['generated_at', 'last_opened', 'since', 'yours', 'decided', 'not_ready', 'cost', 'changes'];
+  const NEXT = '## Proposed changes to your texts'; // the part that follows the horizons
+  const HEADS = ['Proposed changes to your texts (3)', 'Your acts (1)', 'Decided without you', 'Not ready', 'Cost', 'What the system changed'].map((h) => `## ${h}`);
+  const KEYS = ['generated_at', 'last_opened', 'since', 'texts', 'acts', 'decided', 'not_ready', 'cost', 'changes'];
   const headingsOf = (text) => text.split('\n').filter((line) => line.startsWith('## '));
   const PLAYBACK = ['How it is read', 'How one sees it is reached', 'What is built first', 'What is not built', 'The strangest thing the wording permits'].map((h) => `## ${h}\n\ntext\n`).join('\n');
   const STATEMENT = '\nLine one.\n\nLine two.\nLine three.\nLine four.';
@@ -777,7 +912,7 @@ describe('mc martin brief with horizons', () => {
   }
   const setOne = (d, slug, at = '2026-11-14T07:00:00.000Z') => horizon(d, ['set', slug, '--title', `Title of ${slug}`, '--file', '-'], at);
   const brief = async (d, ...flags) => { const text = io(); assert.equal(await run(['brief', ...flags], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr); return text.out.stdout; };
-  const cut = (text) => { const from = text.indexOf('## Horizons'); assert.notEqual(from, -1); return text.slice(0, from) + text.slice(text.indexOf('## Decided without you')); };
+  const cut = (text) => { const from = text.indexOf('## Horizons'); assert.notEqual(from, -1); return text.slice(0, from) + text.slice(text.indexOf(NEXT)); };
   /** The store of criterion 5 (b): four open at the end, one reached today, one reached yesterday, one dropped. */
   async function withHorizons(d) {
     for (const slug of ['open-a', 'open-b', 'open-c', 'done-today', 'done-old', 'dropped-one', 'reopened-one']) await setOne(d, slug);
@@ -799,13 +934,13 @@ describe('mc martin brief with horizons', () => {
     assert.deepEqual(Object.keys(JSON.parse(await brief(d, '--json'))), KEYS);
   });
 
-  it('(b) the part stands between Yours and Decided without you, lists what was reached since the last opening, then the open ones in order, and nothing else changes', async () => {
+  it('(b) the part stands before the proposed changes to the texts, lists what was reached since the last opening, then the open ones in order, and nothing else changes', async () => {
     const d = openingStore(); const t0 = await brief(d); const json0 = JSON.parse(await brief(d, '--json'));
     await withHorizons(d); const before = snapshot(d.root);
     const text = await brief(d); const json = JSON.parse(await brief(d, '--json'));
     assert.equal(cut(text), t0, 'the opening with the part cut out is the opening without horizons');
-    assert.ok(text.indexOf('### 4. beta/judge') < text.indexOf('## Horizons') && text.indexOf('## Horizons') < text.indexOf('## Decided without you'));
-    const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    assert.ok(text.indexOf('Martin\'s desk, opened') < text.indexOf('## Horizons') && text.indexOf('## Horizons') < text.indexOf(NEXT));
+    const part = text.slice(text.indexOf('## Horizons'), text.indexOf(NEXT));
     const at = (needle) => { const index = part.indexOf(needle); assert.notEqual(index, -1, needle); return index; };
     const reachedAt = at('Reached since the last opening:'), openAt = at('Open, in order:');
     assert.ok(reachedAt < at('Title of done-today') && at('Title of done-today') < openAt);
@@ -830,7 +965,7 @@ describe('mc martin brief with horizons', () => {
     const d = openingStore(); await setOne(d, 'old-one'); await setOne(d, 'gone-one');
     await horizon(d, ['reached', 'old-one', '--file', '-'], '2026-11-14T07:30:00.000Z', { stdin: 'Done.\n' });
     await horizon(d, ['drop', 'gone-one', '--reason', 'No'], '2026-11-14T09:00:00.000Z');
-    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf(NEXT));
     assert.ok(text.includes('## Horizons')); assert.ok(part.split('\n').includes('No horizon is open.'));
     assert.ok(!part.includes('Reached since the last opening:') && !part.includes('Open, in order:'));
   });
@@ -838,7 +973,7 @@ describe('mc martin brief with horizons', () => {
   it('(d) a first opening lists what was reached on the day before', async () => {
     const d = openingStore({ lastOpen: null }); await setOne(d, 'yesterday-one', '2026-11-12T07:00:00.000Z');
     await horizon(d, ['reached', 'yesterday-one', '--file', '-'], '2026-11-13T09:00:00.000Z', { stdin: 'Done yesterday.\n' });
-    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf(NEXT));
     assert.equal(JSON.parse(await brief(d, '--json')).since, '2026-11-01T00:00:00.000Z');
     assert.ok(part.indexOf('Reached since the last opening:') !== -1 && part.indexOf('Title of yesterday-one') > part.indexOf('Reached since the last opening:'));
   });
@@ -849,7 +984,7 @@ describe('mc martin brief with horizons', () => {
     const bytes = readFileSync(join(broken, 'horizon.json'), 'utf8');
     const text = await brief(d); const json = JSON.parse(await brief(d, '--json'));
     assert.deepEqual(json.horizons.unreadable, ['broken']);
-    const lines = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you')).trimEnd().split('\n');
+    const lines = text.slice(text.indexOf('## Horizons'), text.indexOf(NEXT)).trimEnd().split('\n');
     assert.ok(lines[lines.length - 1].includes('broken'), lines.at(-1));
     const listed = io(); assert.equal(await run(['horizons'], { ...listed, env: d.env, now: () => new Date(NOW) }), 0);
     assert.ok(listed.out.stdout.includes('fine-one')); assert.match(listed.out.stderr, /^mc: [^\n]*broken[^\n]*\n$/u);

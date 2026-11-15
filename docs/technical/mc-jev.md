@@ -18,8 +18,10 @@ Normal build questions are answered by the technical standards and programme
 design. Apply those answers without asking; investigate a detail-level question
 as a possible missing general rule before escalating it.
 
-What remains for Martin is shown as a brief in the parts that
-[canon/roles/decision.md](../../canon/roles/decision.md) sets. The
+What remains for Martin is shown as a brief in the form that
+[canon/roles/decision.md](../../canon/roles/decision.md) and
+[mc-martin.md](mc-martin.md) set: a change to a text he holds in three parts, an
+act only he may do in the parts of a reserved brief. The
 desk's opening shows each waiting item with its brief ([mc-martin](mc-martin.md)).
 Preserve concrete action identifiers and evidence when needed. After the
 answer, reconcile the standard, programme design and affected goal contracts;
@@ -60,7 +62,10 @@ but always asks jev regardless of `MC_TOOL`; a reserved act is never sent. A
 technical result not answered, whatever its product reading, or unavailable,
 logs and continues with the recommendation, preserving goal stage/status. A
 product result sets a goal Martin; a
-no-goal product call exits 1 without changing a goal. A no-goal technical call
+no-goal product call exits 1 without changing a goal, and its message names the
+verb that brings the change to the desk, `mc martin propose --text '<the text>' --file <path|->`
+(three parts, `## Vad den säger`, `## Vad som föreslås`, `## Vad som hittades`), and tells the
+session to continue inside the wording that stands. A no-goal technical call
 is decided and ledgered without changing a goal. A named goal (or `MC_GOAL`) supplies exactly the
 `jevContext` state of `mc goal martin`. Without a goal, programme context is
 `MC_PROGRAMME`, otherwise the programme containing the working directory under

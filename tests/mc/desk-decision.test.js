@@ -59,15 +59,17 @@ test('two prepared items of one goal run sequentially, also across a manual runn
   assert.deepEqual([f.state(a).state,f.state(b).state], ['closed','closed']);
 });
 
-test('a fake session can brief an item for Martin instead of closing it', async t => {
+const FORM = '## Vad den säger\nThe text says A.\n\n## Vad som föreslås\nSay B.\n\n## Vad som hittades\nC was found.\n';
+
+test('a fake session can brief an item for Martin as a proposed change to a text, with no due time, instead of closing it', async t => {
   const f = fixture(t), item = f.add('alpha/first');
   f.deps.session = async () => {
-    writeFileSync(join(itemDirectory(item,f.env), 'brief.md'), 'Swedish brief material');
-    assert.equal(await martin(['item', item.id, 'brief', '--sort','product','--reversible','yes'], { env: { ...f.env, MC_ROLE:'decision' }, now: () => NOW, stdout:sink, stderr:sink }), 0);
+    writeFileSync(join(itemDirectory(item,f.env), 'brief.md'), FORM);
+    assert.equal(await martin(['item', item.id, 'brief', '--sort','text','--text','canon/roles/martin.md#Authority','--reversible','yes'], { env: { ...f.env, MC_ROLE:'decision' }, now: () => NOW, stdout:sink, stderr:sink }), 0);
     return result;
   };
   await f.runner().pass();
-  assert.equal(f.state(item).state, 'for-martin'); assert.equal(f.state(item).due_at,'2026-11-16T12:00:00.000Z');
+  assert.equal(f.state(item).state, 'for-martin'); assert.equal(f.state(item).sort,'text'); assert.equal(f.state(item).due_at,null);
   assert.equal(JSON.parse(readFileSync(join(f.root,'programs/alpha/goals/first/GOAL.json'))).status,'Martin');
 });
 
@@ -93,19 +95,30 @@ test('an unfinished pass whose failure cannot take the item lock still logs the 
   assert.deepEqual(readRunRows(readFileSync(deskRunsPath(f.env), 'utf8')).map(x => [x.name, x.kind]), [[item.id, 'decision']], 'the paid turn has its run row');
 });
 
-test('a reversible overdue brief is picked, told it is due, and closed by default', async t => {
-  const f = fixture(t), item = f.add('decision:record', {state:'for-martin',sort:'judgement',reversible:true,due_at:'2026-11-14T11:59:59Z'});
-  f.deps.session = async call => { assert.match(call.prompt,/This item is DUE/u); assert.match(call.prompt,/close --by default/u); await f.close(item,'default'); return result; };
-  await f.runner().pass(); assert.equal(f.state(item).outcome.by,'default');
+test('no clock: a brief for Martin is never picked however long it has waited or whatever its old due time says, and nothing carries it out', async t => {
+  for (const [label, fields] of [
+    ['an old reversible product brief with a past due time', { sort: 'product', reversible: true, due_at: '2026-11-14T11:59:59Z' }],
+    ['an old judgement brief with a past due time', { sort: 'judgement', reversible: true, due_at: '2026-11-10T11:00:00Z' }],
+    ['a text brief', { sort: 'text', reversible: false, due_at: null }],
+    ['a reserved brief', { sort: 'reserved', reversible: true, due_at: '2026-11-14T11:00:00Z' }],
+    ['a stuck item', { sort: 'mechanical', reversible: false, due_at: null }],
+  ]) {
+    const f = fixture(t); f.add('decision:record', { state: 'for-martin', ...fields });
+    f.deps.session = () => assert.fail(`${label} was launched`);
+    assert.equal(f.runner().nextWork(), null, label); assert.equal((await f.runner().pass()).ran, 0, label);
+  }
 });
-for (const [label, fields] of [
-  ['future brief',{reversible:true,due_at:'2026-11-14T12:00:01Z'}],
-  ['non-reversible due brief',{reversible:false,due_at:'2026-11-14T11:00:00Z'}],
-  ['reserved due brief',{sort:'reserved',reversible:true,due_at:'2026-11-14T11:00:00Z'}],
-]) test(`${label} is never picked`, async t => {
-  const f = fixture(t); f.add('decision:record',{state:'for-martin',sort:'product',...fields});
-  f.deps.session = () => assert.fail('ineligible default launched');
-  assert.equal(f.runner().nextWork(),null); assert.equal((await f.runner().pass()).ran,0);
+
+test('no clock: the decision prompt of a prepared item has no DUE text and no default to carry out, and the oldest source is taken first', async t => {
+  const f = fixture(t), late = f.add('decision:late', { source_at: '2026-11-14T11:30:00Z' }), early = f.add('decision:early', { source_at: '2026-11-14T09:00:00Z' });
+  f.add('decision:overdue', { state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-13T00:00:00Z', source_at: '2026-11-01T00:00:00Z' });
+  const seen = [];
+  f.deps.session = async call => { seen.push(call.prompt); const item = [late, early].find(x => call.prompt.includes(x.id)); await f.close(item); return result; };
+  const r = f.runner();
+  assert.equal(r.nextWork().name, early.id, 'ordered by source_at');
+  await r.pass(); await r.pass();
+  assert.deepEqual(seen.map(p => p.match(/Decide desk item ([a-f0-9]{24})/u)[1]), [early.id, late.id]);
+  for (const prompt of seen) { assert.doesNotMatch(prompt, /\bDUE\b|--by default|two days|overdue/u); assert.match(prompt, /No clock carries out a brief/u); assert.match(prompt, /brief --sort text --text/u); assert.match(prompt, /Vad den säger.*Vad som föreslås.*Vad som hittades/su); }
 });
 
 test('a reached daily desk ceiling starts no decision session, including after a paid turn', async t => {
@@ -174,23 +187,23 @@ for (const [reading, output, note] of PROVIDER_ENDINGS) test(`a decision ending 
   assert.deepEqual(listLessons({ env: f.env }), []);
 });
 
-test('a decision ending on an offline reading writes nothing to a due goal brief, however often it ends so', async t => {
-  const f = fixture(t), item = f.add('alpha/first', { state: 'for-martin', sort: 'product', reversible: true, due_at: '2026-11-14T11:00:00Z' });
-  const brief = join(itemDirectory(item, f.env), 'brief.md'); writeFileSync(brief, 'Swedish product brief');
+test('a decision ending on an offline reading writes nothing to a prepared goal item that already has a brief, however often it ends so', async t => {
+  const f = fixture(t), item = f.add('alpha/first');
+  const brief = join(itemDirectory(item, f.env), 'brief.md'); writeFileSync(brief, 'Swedish text brief');
   const before = readFileSync(logOf(f), 'utf8');
   let clock = NOW; f.deps.now = () => clock;
   const r = f.runner();
   ends(f, PROVIDER_ENDINGS[2][1]);
   await r.pass();
   assert.equal(f.calls.length, 1);
-  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-14T11:00:00Z']);
-  assert.equal(readFileSync(brief, 'utf8'), 'Swedish product brief');
+  assert.deepEqual([f.state(item).state, f.state(item).sort], ['prepared', 'technical']);
+  assert.equal(readFileSync(brief, 'utf8'), 'Swedish text brief');
   assert.equal(readFileSync(logOf(f), 'utf8'), before, 'the first ending writes no goal entry');
   clock = new Date(NOW.getTime() + 120_000);
   await r.pass();
   assert.equal(f.calls.length, 2);
-  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-14T11:00:00Z']);
-  assert.equal(readFileSync(brief, 'utf8'), 'Swedish product brief');
+  assert.deepEqual([f.state(item).state, f.state(item).sort], ['prepared', 'technical']);
+  assert.equal(readFileSync(brief, 'utf8'), 'Swedish text brief');
   assert.equal(f.state(item).decision_failures, undefined);
   assert.equal(readFileSync(logOf(f), 'utf8'), before, 'the second ending writes no goal entry');
   assert.equal(runRows(f).length, 2);
@@ -204,35 +217,23 @@ test('an unsettled ending read as a server error counts once, in the state the i
   assert.deepEqual(f.state(item).decision_failures.map(x => [x.state, /\(interrupted\)/u.test(x.reason)]), [['prepared', true]]);
 });
 
-test('the two-ending limit counts the failures of the item\'s current state: a failure while prepared does not spend the attempt of its due brief', async t => {
-  const f = fixture(t), item = f.add('alpha/first'), r = f.runner(), brief = join(itemDirectory(item, f.env), 'brief.md');
-  let clock = NOW; f.deps.now = () => clock;
+test('the two-ending limit counts the failures of the item\'s current state: a failure recorded in another state does not spend the attempt of a prepared item', async t => {
+  const f = fixture(t), item = f.add('alpha/first', { decision_failures: [{ at: '2026-11-14T10:05:00Z', reason: 'an earlier session exited', state: 'for-martin' }] }), r = f.runner(), brief = join(itemDirectory(item, f.env), 'brief.md');
   ends(f, result);
-  await r.pass(); // session 1: unsettled while prepared
-  assert.deepEqual(f.state(item).decision_failures.map(x => [x.state]), [['prepared']]);
-  f.deps.session = async call => { // session 2: briefs it reversible
-    f.calls.push(call); writeFileSync(brief, 'Swedish brief material');
-    assert.equal(await martin(['item', item.id, 'brief', '--sort', 'product', '--reversible', 'yes'], { env: { ...f.env, MC_ROLE: 'decision' }, now: () => NOW, stdout: sink, stderr: sink }), 0);
-    return result;
-  };
-  await r.pass();
-  assert.deepEqual([f.state(item).state, f.state(item).sort, f.state(item).reversible, f.state(item).due_at], ['for-martin', 'product', true, '2026-11-16T12:00:00.000Z']);
-  clock = new Date('2026-11-16T12:00:01Z');
-  ends(f, result);
-  await r.pass(); // session 3: the due brief is unsettled: one failure in for-martin, not the limit
-  const due = f.state(item);
-  assert.deepEqual([due.state, due.sort, due.reversible, due.due_at], ['for-martin', 'product', true, '2026-11-16T12:00:00.000Z']);
-  assert.equal(readFileSync(brief, 'utf8'), 'Swedish brief material');
-  assert.deepEqual(due.decision_failures.map(x => x.state), ['prepared', 'for-martin']);
-  assert.equal(r.nextWork()?.name, item.id, 'the due item is eligible once more');
-  await r.pass(); // session 4: the second in for-martin
+  await r.pass(); // the first unsettled ending while prepared: one failure in prepared, not the limit
+  const first = f.state(item);
+  assert.deepEqual([first.state, first.sort], ['prepared', 'technical']);
+  assert.deepEqual(first.decision_failures.map(x => x.state), ['for-martin', 'prepared']);
+  assert.equal(existsSync(brief), false);
+  assert.equal(r.nextWork()?.name, item.id, 'the item is eligible once more');
+  await r.pass(); // the second in prepared
   const ended = f.state(item);
   assert.deepEqual([ended.state, ended.sort, ended.reversible, ended.due_at], ['for-martin', 'mechanical', false, null]);
   assert.equal(ended.decision_failures.length, 3);
   const text = readFileSync(brief, 'utf8');
   for (const x of ended.decision_failures) assert.ok(text.includes(x.reason), 'the brief lists every failure');
   assert.deepEqual(listLessons({ env: f.env }).map(x => x.kind), ['unsettled']);
-  assert.equal(r.nextWork(), null);
+  assert.equal(r.nextWork(), null, 'a stuck item is not taken again: it waits as stuck in the opening');
 });
 
 test('an entry written before the state was recorded counts as prepared, so the next unsettled ending of a prepared item is the second', async t => {

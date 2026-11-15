@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeFileAtomic } from './atomic-write.js';
 import { deskItemId, itemDirectory, updateDeskItem } from './desk-items.js';
+import { textForm } from './desk-texts.js';
 import { goalReferences, isGoalRef, prRef, REVIEW_ROLE } from './goals.js';
 import { martinDir, programsHome } from './paths.js';
 
@@ -209,18 +210,19 @@ export function dismissLesson({ env = process.env, name, reason, role, since = n
 
 /**
  * A lesson that contradicts a dated decision of Martin's is not a goal: it becomes a desk item of sort
- * `product` with the brief given (Swedish, options as `- <key>: consequence`), and the lesson is
- * dismissed with that as its reason. The item is not reversible, so it waits for Martin without limit and
- * no default carries it out.
+ * `text` that names the text (`text`) with the brief given, in the form of mc-martin.md (three parts, no
+ * options), and the lesson is dismissed with that as its reason. The item waits for Martin without limit and
+ * no clock carries it out. A brief not in the form leaves the lesson open.
  */
-export function briefLesson({ env = process.env, name, brief, now = new Date(), lock }) {
+export function briefLesson({ env = process.env, name, text, brief, now = new Date(), lock }) {
   const lesson = readLesson(name, { env });
   if (!lesson) return { error: `unknown lesson ${name}` };
   if (lesson.state !== 'open') return { error: `lesson ${name} is ${lesson.state}; only an open lesson is brought to Martin` };
-  if (!briefOptions(brief).size) return { error: 'the brief names no option: write each as "- <key>: its consequence"' };
+  const form = textForm(brief);
+  if (form.error) return { error: form.error };
   const reference = `lesson:${name}`;
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('lesson', reference, lesson.at), kind: 'lesson', reference,
-    source_at: lesson.at, opened_at: now.toISOString(), state: 'for-martin', sort: 'product', reversible: false, due_at: null, outcome: null };
+    source_at: lesson.at, opened_at: now.toISOString(), state: 'for-martin', sort: 'text', reversible: null, due_at: null, outcome: null, text, goal: null };
   // Whether the item exists is read, and the brief and the item written, in one hold: two briefs of one lesson make one item.
   const { written } = updateDeskItem(item.id, (current) => {
     if (current) return null;
@@ -228,7 +230,7 @@ export function briefLesson({ env = process.env, name, brief, now = new Date(), 
     return item;
   }, { env, ...(lock ? { lock } : {}) });
   if (!written) return { error: `lesson ${name} has been brought to Martin already` };
-  Object.assign(lesson, { state: 'dismissed', dismissed_at: now.toISOString(), reason: `contradicts a decision of Martin's; brought to him as a product brief (item ${item.id})` });
+  Object.assign(lesson, { state: 'dismissed', dismissed_at: now.toISOString(), reason: `contradicts a decision of Martin's; brought to him as a change to a text (item ${item.id})` });
   writeLesson(lesson, { env });
   return { lesson, item };
 }

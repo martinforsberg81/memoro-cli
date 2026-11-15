@@ -824,7 +824,7 @@ unless git refuses (files that are not mc's stay, and the line says so).
 
 ## Decision lane
 
-Prepared desk items and overdue reversible product/judgement briefs share the
+Prepared desk items share the
 machine-wide lane total, behind mend and ahead of other delivery sessions.
 `decisionWork`, `decisionPass` and `runDecision` use the same slot, disk,
 capacity, billing, worktree, watch/check-in and log machinery as main-red mend.
@@ -838,6 +838,6 @@ as `mc decision [<id>]`; nesting it inside a session is refused.
 The shared daily desk ceiling is rechecked before launch; unset means no
 ceiling. One unfinished ending retries once; a second in the item's current
 state, not counting a quota, offline or provider-refusing login ending, makes a
-non-reversible mechanical brief that waits on Martin instead of looping. Future,
-irreversible and reserved briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+non-reversible mechanical brief that waits on Martin instead of looping. A
+for-martin brief is never lane work, and no clock carries one out. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.
