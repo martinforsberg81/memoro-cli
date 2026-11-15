@@ -21,7 +21,8 @@ that horizon this programme delivers.>
 ## End
 
 <When the programme is done, as the record says it. It is done when its goals
-are done and what is now true is written back to `docs/technical/`.>
+are done and what is now true is written back to `docs/technical/`; the system
+archives it once its write-back reads OK.>
 
 ## Decisions
 

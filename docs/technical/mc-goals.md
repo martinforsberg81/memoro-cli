@@ -1119,8 +1119,23 @@ REVIEW.md is written before either move and holds one `head: <repo> <sha>` line
 for each repository of the goal, then one line per item: `<id>: OK` or
 `<id>: NOT OK — <what and where>`. The ids are `criterion <n>`, each preserve id
 (`V1`…), `obligation <area>` for each touched obligation, `untouched <area>` for
-each tripped area (below), `seen <area>` for each area the review was told is judged as the user sees it (below), and `change`, `out-of-scope`, `protection` and `bugs`.
-A version 1 goal has the criterion lines and the head lines only. Free text may
+each tripped area (below), `seen <area>` for each area the review was told is judged as the user sees it (below), `write-back` when the review was told to write it (below), and `change`, `out-of-scope`, `protection` and `bugs`.
+A version 1 goal has the criterion lines and the head lines only.
+
+**The write-back line.** A review of a version 2 goal whose programme has a
+valid record (`PROGRAMME.json`) is launched with `MC_REVIEW_WRITE_BACK=1` and a
+line in its prompt asking for one `write-back` line: what the goal made true
+(a behaviour, contract, rule or budget) and the `docs/technical/` pages that now
+say it. The forms are `write-back: OK — <repo>/docs/technical/<page>.md §
+<section>[, …]`, `write-back: OK — none — <reason>` (a reason, never a bare
+`none`) and `write-back: NOT OK — <what the goal made true that no page says>`.
+`checkVerdict` requires exactly one in that form and refuses a `carried from
+round` one; a NOT OK line sends the goal to build (`mc goal stage merge` is
+refused, `mc goal stage build` allowed), like any NOT OK item. A review launched
+without `MC_REVIEW_WRITE_BACK` is held to no such line and a `write-back` id in
+it is refused, so a goal whose programme has no record is judged as before. The
+programme's archive reads the pages once more when every goal is done
+([mc-run.md](mc-run.md#programme-archive-turn)). Free text may
 follow. `mc goal stage merge|build` from a review session checks the file
 (`checkVerdict`, `review-verdict.js`) and refuses, naming each id or line at
 fault, when: the file is missing; a repository's head line is missing or the

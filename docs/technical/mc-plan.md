@@ -98,10 +98,13 @@ entrance.
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
 record is validated before every write and a write never replaces a file that
-is there (a temporary file linked into place). Nothing in this version sets
-`state` to `done`, and nothing reads `state` to decide anything: the list and
-the page show it. `mc plan <programme> --archive` archives a programme of
-either kind, as in [Archiving a programme](#archiving-a-programme).
+is there (a temporary file linked into place). `state` is read by the programme
+planning turn and the manager's horizon turn (a turn starts only for `open`),
+and by the archive turn, and the list and the page show it. Only the runner
+sets it to `done` (`setRecordState`), once it has archived the programme
+([mc-run.md](mc-run.md#programme-archive-turn)); `mc plan <programme> --archive`
+archives a programme of either kind, as in
+[Archiving a programme](#archiving-a-programme), and leaves `state` as it finds it.
 
 ```
 mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id>] [--purpose "…"] [--from-proposal <path>]
@@ -299,8 +302,12 @@ Review ranks usable subscriptions by provider priority, then headroom; ties avoi
 
 ## Archiving a programme
 
-`mc plan <programme> --archive` is a person's act. The runner archives
-finished goals, not the programme above them. `archiveProgramme`
+`mc plan <programme> --archive` is a person's act, and the only way to archive a
+programme without a record. The runner archives finished goals, and it archives
+the programme above them only when the programme has a valid record: once every
+goal is done or dropped, a write-back reading is OK and no restricted data is
+held, it calls the same `archiveProgramme` itself and sets the record's `state`
+to `done` ([mc-run.md](mc-run.md#programme-archive-turn)). `archiveProgramme`
 (`src/mc/archive-programme.js`) refuses any goal not done or dropped and
 anything the planning area's release forecast would keep, and any entry under
 `~/mc/restricted/<programme>/` without a README.md. It checks before changing
@@ -318,8 +325,12 @@ name if needed); its remaining documents are not deleted. A network failure
 leaves the planning area intact so a later attempt can continue.
 
 `--archive` refuses session-selection flags and requires an explicit name.
-No automatic pass can decide that a programme's aim is over. A programme with
-a record is archived by this command too; nothing sets its `state` to `done`.
+No automatic pass can decide that the aim of a programme without a record is
+over. A programme with a record is bounded, so its end is checked, not judged:
+the runner archives it (above), and this command archives one too, leaving its
+`state` as it finds it and moving its `proposals/` with the directory, whole.
+The runner's archive moves the top-level `proposals/*.md` to `~/mc/proposals/`
+first, so a finding is not shelved with the programme.
 
 ## How it is tested
 

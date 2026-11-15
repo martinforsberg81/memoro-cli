@@ -50,6 +50,11 @@ The runner starts a manager session in two cases, one at a time under one claim,
   whose docs form lands it (never `--no-merge`). A turn that finds nothing to change succeeds; a
   failed one is said in `runner.log` and opens no desk item.
 
+A programme with a record that the runner has archived (its goals done, its write-back
+read OK, its record set to `done`; [mc-run.md](mc-run.md#programme-archive-turn)) no
+longer serves its horizon: the horizon turn follows, when the horizon is open and no
+valid open record names it, and reads that programme among the archived ones.
+
 A horizon turn goes before curation. Both run under the manager role with `MC_HEADLESS=1`; a horizon turn also
 has `MC_HORIZON=<slug>`.
 
