@@ -49,21 +49,53 @@ before it has documents on main, or after all its goals have been archived.
 
 A programme may have a record, `PROGRAMME.json` directly in its directory
 (`src/mc/programme-record.js`): a bounded piece of work serving a horizon, or storage for small area work
-without one. A programme without the file is also bounded. The file has seven keys, in
-this order, and two more that are optional (`area` after `horizon`, `phases`
-last), and no other:
+without one. A programme without the file is also bounded. Version 2 has the
+following keys; `area`, `phases` and `legacy` are optional, and no others are accepted:
 
 | key | value |
 |---|---|
 | `schema` | `"mc-programme"` |
-| `version` | `1` |
+| `version` | `2` (version 1 remains readable) |
 | `horizon` | the slug of the horizon served, or `null` |
 | `area` | optional: `<repo>/<id>`, an area a repository declares; allowed only with `horizon` `null` |
 | `end` | one non-empty sentence saying when the programme is done |
-| `state` | `open` or `done` |
+| `state` | `draft`, `open`, `done` or `dropped` |
 | `created` | an ISO instant in UTC to the second |
 | `created_by` | `person`, `martin` or `manager` |
-| `phases` | optional, last: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+| `signed_at` | ISO instant in UTC, or `null` |
+| `signed_by` | `"martin"`, or `null` |
+| `signed_text` | sha256 hex digest of `SIGNED.md`, or `null` |
+| `cut_text` | signature consumed by the last complete goal cut, or `null` |
+| `legacy` | optional boolean; `true` exempts an existing record from sign-off |
+| `phases` | optional: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
+
+`draft` means the document is being written or waiting for sign-off; `open`
+means goals may be cut and built; `done` means archived; `dropped` means the
+draft was declined. The three `signed_*` keys are null in draft/dropped and
+set together in open/done. Area repairs and `legacy: true` records may instead
+have all three null in open/done; a partial signature is never valid. `cut_text`
+may stay set after a return. Every new record is draft, with or without a
+horizon and for every author, except an area repair, which is open and unsigned.
+
+Reading a version 1 open/done record normalizes it in memory to version 2,
+`legacy: true` and four null signature/cut keys. It does not change disk bytes
+or state. Only an actual write persists that upgrade; a no-op phase/state call
+does not migrate. `writeRecord` remains create-only even for old input. Old
+processes reject version 2 records as invalid, not understand their sign-off
+semantics; use normal installed-code/runner handover before relying on new
+gates. In particular an old goal-new caller has no new sign-off guard.
+
+The record module's transition writers take the strict runner lock around a
+fresh read and replacement: `signRecord` requires draft, reads README, runs
+the caller's structure/current-reading check on those exact bytes, appends a
+`## Signed designs` block listing every nested design file with sha256, writes
+`SIGNED.md`, then opens the record with Martin/time and the signed-copy hash,
+removing legacy. It retains phases and cut_text. A failed check/validation
+writes neither file. `returnRecord` requires open, nulls signed_* and keeps
+cut_text and the old signed copy until a re-sign replaces it. `dropRecord`
+requires draft and records dropped, without moving or deleting any material;
+reason logging and shelving belong to the command. Neither writer invents a
+reading or grants caller authority.
 
 A record cannot name both a horizon and an area. An area carrier is existing
 storage for one small goal without a horizon, not an extra product planning
@@ -93,7 +125,7 @@ entrance.
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
 record is validated before every write. Creation never replaces a file that
-is there (a temporary file linked into place). Existing phase and state writers
+is there (a temporary file linked into place). All existing-record writers (phase, state, sign, return and drop)
 take the shared runner lock with `strict: true` around a fresh read, validation
 and atomic replacement, retaining the other fields. They refuse rather than
 write without that lock; archive destination bookkeeping takes its own lock
@@ -122,7 +154,7 @@ Martin role, the manager and the plan role may call it, the last two also
 unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
-`open`, created now), `README.md` from the record page, and empty `goals/`,
+`draft` (or `open` for an area repair), created now), `README.md` from its template, and empty `goals/`,
 `proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
 works at once. It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
@@ -166,9 +198,17 @@ each programme: `null`, `{ horizon, end, state, created, created_by }` or
 (`no horizon` without one) or `record invalid`; a programme without a record
 keeps its seven cells.
 
-Both page templates under `canon/tasks/references/` have What it is for, End,
-Decisions, Phases and Where things are. The record page has extractable purpose
-and end headings; `create` fills the name, end and horizon. `mc plan` writes
+The complete record template is the first markdown fence of
+`canon/tasks/references/programme-document.md`; area repairs use the unchanged
+short template in `repair-page.md`. The older recordless page is
+`programme-readme.md`. `create` fills name, end, horizon/area and purpose.
+The document reference owns the eleven ordered nonempty entries and five
+ordered label-start entries of every numbered part. `documentProblems` checks
+title/scope/Repositories, headings, part presence and labels, ignoring fenced
+examples, never prose or design quality. Labels may continue freely on their
+first line and in paragraphs/lists. Decisions is optional; sessions keep
+working decisions in README, not the signed copy. A new draft copies the
+model's form, never content. `mc plan` writes
 the no-record page only when no README exists. `mc programs show` prints the
 `area` line and `--json` the key.
 

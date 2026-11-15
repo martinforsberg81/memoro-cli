@@ -350,9 +350,9 @@ A horizon is what Martin has decided is worked toward now, roughly one to two mo
 list of them, each with its playback; the order of the open ones is the
 priority. Everything stored in a horizon is English text.
 
-**Store.** `~/mc/martin/horizons/<slug>/` holds three files: `horizon.json` (the
+**Store.** `~/mc/martin/horizons/<slug>/` holds `horizon.json` (the
 record), `playback.md` (written by `set`) and `reached.md` (what is now true for
-the user, written by `reached`). A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
+the user, written by `reached`), plus desk-authored `basis.md`. A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
 reused: a directory whose `horizon.json` can be read, in any state, holds the
 slug. The record is `{ schema: "mc-desk-horizon", version: 1, slug, title, state,
 position, set_at, set_by, reached_at, reached_by, reopened_at, reopened_by,
@@ -365,6 +365,13 @@ with text: `How it is read`, `How one sees it is reached`, `What is built first`
 them as `playback` with the keys `read`, `reached`, `first`, `not_built` and
 `strangest`, and the text of `reached.md` as `now_true`, which is `null` unless
 the state is `reached`.
+
+**Basis.** Before confirming playback, the desk writes `basis.md`: what runs
+today, binding decisions, numbered gaps with reading locations, and what is
+not decided. Playback prerequisites cite gap numbers. Anything not yet
+designed (including “polished”) belongs under not decided and is settled in
+a programme document, never by the planner. Horizon show prints the basis
+path after playback; code does not parse, migrate or automatically read it.
 
 **Changing the wording.** The playback of an open horizon is changed by editing
 `playback.md` directly, on Martin's word at the desk, with the five headings

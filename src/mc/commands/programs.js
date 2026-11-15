@@ -299,7 +299,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       if (!existsSync(dir)) return problem(`no programme ${name} — ${dir} does not exist; mc programs create ${name} --end "…" makes a new one`);
       if (existsSync(join(dir, RECORD_FILE))) return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
       writeRecord(dir, newRecord({ horizon: flags.horizon, end: flags.end.trim(), createdBy: writer.by, now }));
-      stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state open\n`);
+      stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state draft\n`);
       return 0;
     }
     const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
@@ -322,8 +322,8 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       proposal = proposalIn(flags['from-proposal'], { env, home });
       if (proposal.error) return problem(proposal.error);
     }
-    const template = recordPageTemplate(canon ? { canon } : {});
-    if (template === null) return problem('could not read the programme record page template (canon/tasks/references/programme-record-readme.md) — nothing was made');
+    const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
+    if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
     const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose });
     const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
     mkdirSync(home, { recursive: true });
@@ -331,7 +331,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     for (const sub of ['goals', join('proposals', 'archive'), 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
     writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
     writeRecord(dir, record);
-    stdout.write(`${name}: programme made at ${dir} — record state open, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+    stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     if (proposal) {
       const moved = join(dir, 'proposals', basename(proposal.path));
       try {

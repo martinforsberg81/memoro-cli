@@ -2,7 +2,7 @@
 
 The bounded implementation plan without a record. The enduring direction is
 in the area pages. See [designing a programme](../designing-a-programme.md)
-and [the record page](programme-record-readme.md).
+and [the programme document](programme-document.md) or [the repair page](repair-page.md).
 
 ```markdown
 # <programme> — <one line on what this programme delivers>
