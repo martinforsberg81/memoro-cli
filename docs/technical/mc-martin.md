@@ -176,8 +176,9 @@ programme holds a goal, its record no longer reads valid and `open`, or its
 directory is gone; an unreadable state file is reported and keeps it open (an
 unreadable record reads invalid and closes it). A decision session answers it at its source: it repairs what failed within
 reach and closes it `--by decision`, so the runner plans again, and a text of
-Martin's that would have to change goes to a brief. The brief lists it under the
-programme's name.
+Martin's that would have to change goes to a brief. The opening lists one decided
+under the programme's name, and a `for-martin` one, being mechanical, among the
+stuck items of **Not ready**: it is the runner's, not his.
 
 A main-red item is answered at its source: `mc repo mend <repo> <id>
 requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item

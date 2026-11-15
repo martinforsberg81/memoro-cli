@@ -1104,7 +1104,7 @@ describe('mc martin brief for a programme whose record states its phases', () =>
 });
 
 describe('mc martin brief with a programme item', () => {
-  it('lists a programme planning turn\'s item under the programme\'s name, and its brief among the items waiting for Martin', async () => {
+  it('lists a programme planning turn\'s decided item under the programme\'s name, and a for-martin one as stuck, not Martin\'s', async () => {
     const d = openingStore();
     const dir = join(d.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
     writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' }));
@@ -1121,7 +1121,7 @@ describe('mc martin brief with a programme item', () => {
     assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
     const out = text.out.stdout;
     assert.ok(out.includes('\nprog\n- 2026-11-14T10:20:00.000Z · The state file was repaired. (programme:prog, decision)'), 'decided without you, under the programme\'s name');
-    assert.match(out, /### 5\. programme:prog · mechanical · not reversible/u);
-    assert.match(out, /Planeringspasset för prog slutade igen\./u);
+    assert.match(out, /Stuck after the decision pass, not yours: programme:prog \(/u, 'a for-martin programme item is mechanical: the runner\'s, listed as stuck');
+    assert.doesNotMatch(out, /### \d+\. programme:prog/u, 'not among Martin\'s texts or acts');
   });
 });
