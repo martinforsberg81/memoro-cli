@@ -2175,7 +2175,7 @@ describe('mc deploy — a headless session cannot deploy', () => {
       const code = await run(argv, { ...deps(spies.extra), stdout, stderr });
       assert.equal(code, 1);
       assert.deepEqual(spies.touched, [], 'no git, history, suite, prompt or deployer call was made');
-      assert.match(out.stderr, /Martin's act/u);
+      assert.match(out.stderr, /refused to an unattended session/u);
       assert.match(out.stderr, /headless \(MC_HEADLESS=1\)/u);
       assert.equal(readDeploys({ MC_WORK_ROOT: work }).length, 0, 'not even a refused row: nothing was read or recorded');
     });

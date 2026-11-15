@@ -11,11 +11,11 @@
  * to the remote main would ship another.
  *
  * The question is not a formality and no flag skips it. Deploying to
- * production is Martin's word every time, so `mc deploy` refuses outright
+ * production is asked every time, so `mc deploy` refuses outright
  * where there is nobody to ask: without a terminal it exits 2 rather than
  * assuming yes. `--dry-run` is the reading and stops before the question. The
  * runner never calls this and no role tells a session to: with `MC_HEADLESS=1`
- * it refuses before it reads anything (the deploy is Martin's act), the reading
+ * it refuses before it reads anything (a deploy is refused to an unattended session), the reading
  * and `--follow` excepted.
  *
  * What ships is the newest first-parent commit of `origin/main` after the live
@@ -794,11 +794,11 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  // The deploy is Martin's act (2026-11-14): refused before anything is read —
+  // A deploy is refused to an unattended session (2026-11-14): refused before anything is read —
   // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
   // the watching (`--follow`) change nothing in production and stay allowed.
   if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
-    stderr.write('mc: mc deploy is Martin\'s act and happens only in an interactive session; this one is headless (MC_HEADLESS=1) — nothing was deployed. mc deploy --dry-run is the reading.\n');
+    stderr.write('mc: mc deploy is refused to an unattended session and happens only in an interactive session; this one is headless (MC_HEADLESS=1) — nothing was deployed. mc deploy --dry-run is the reading.\n');
     return 1;
   }
   if (opts.follow) return follow({ env, stdout, deps });
