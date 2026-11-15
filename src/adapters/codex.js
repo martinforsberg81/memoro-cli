@@ -702,3 +702,27 @@ export const PERSISTENT_DRIVER = 'codex-session';
  * forwards and a local client (`bin`) it runs against it.
  */
 export const SERVER_SESSION = Object.freeze({ mechanism: 'socket', name: 'Codex', bin: 'codex' });
+
+/**
+ * How a conversation's launching role is proven (reading seam; `src/mc/conversations.js` holds the code by
+ * these names): from the developer instructions the rollout records.
+ */
+export const IDENTITY_READER = 'developer-instructions';
+
+/** Context usage is not read from a rollout. */
+export const CONTEXT_READER = null;
+
+/** How a transcript's last model is read: the model of the last turn context. */
+export const MODEL_READER = 'turn-context';
+
+/** How a conversation is removed: the tool's own verb, because it holds an index a deleted file would leave lying. */
+export const CONVERSATION_DELETE = Object.freeze({ mechanism: 'tool-verb', bin: 'codex', args: (id) => ['delete', '--force', id], failed: 'codex-delete-failed' });
+
+/** How the end of a transcript is read for what was said and whose turn it is (`src/mc/work-status.js` holds the code by this name). */
+export const TAIL_READER = 'codex-tail';
+
+/**
+ * Where the desk's cost is read from (`src/mc/desk-cost.js` holds the code by these names): the transcript
+ * files, the reader of their lines, and the option that names their directory.
+ */
+export const COST_SOURCE = Object.freeze({ files: 'codex-rollouts', reader: 'codex-readings', option: 'codexDir' });

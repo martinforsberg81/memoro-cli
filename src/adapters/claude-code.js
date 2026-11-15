@@ -628,3 +628,27 @@ export const PERSISTENT_DRIVER = 'claude-background';
 
 /** What a server session of this tool is on the wire: it is a terminal the client attaches to over ssh. */
 export const SERVER_SESSION = Object.freeze({ mechanism: 'tty', name: 'Claude' });
+
+/**
+ * How a conversation's launching role is proven (reading seam; `src/mc/conversations.js` holds the code by
+ * these names): from the launch log, bound to the id mc supplied, because the system prompt is not recorded.
+ */
+export const IDENTITY_READER = 'launch-log';
+
+/** How a transcript's context usage is read: the usage of the last assistant message. */
+export const CONTEXT_READER = 'assistant-usage';
+
+/** How a transcript's last model is read: the model of the last assistant message. */
+export const MODEL_READER = 'assistant-message';
+
+/** How a conversation is removed: the transcript is the conversation, so the file goes. */
+export const CONVERSATION_DELETE = Object.freeze({ mechanism: 'transcript-file', failed: 'transcript-delete-failed' });
+
+/** How the end of a transcript is read for what was said and whose turn it is (`src/mc/work-status.js` holds the code by this name). */
+export const TAIL_READER = 'claude-tail';
+
+/**
+ * Where the desk's cost is read from (`src/mc/desk-cost.js` holds the code by these names): the transcript
+ * files, the reader of their lines, and the option that names their directory.
+ */
+export const COST_SOURCE = Object.freeze({ files: 'claude-projects', reader: 'claude-messages', option: 'claudeDir' });
