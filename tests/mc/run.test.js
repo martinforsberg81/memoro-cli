@@ -6,6 +6,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { attemptDeadline, deployCheckTick, statePath as deployCheckState, writeVerdictFile } from '../../src/mc/deploy-check.js';
+import { DEPLOYED as DEPLOY_ROW, readDeploys, recordEnd, recordStart } from '../../src/mc/deploys.js';
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
@@ -960,6 +962,119 @@ test('deploy check: nothing is asked under STOP or UPDATE, and a fixture without
   await createRunner({ deps: bare.deps }).chores();
   assert.doesNotMatch(bare.files['/w/runner/log/runner.log'] || '', /deploy check/u);
   assert.equal(typeof realDeps({ MC_WORK_ROOT: '/nowhere', MC_HOME: '/nowhere' }).deployCheckTick, 'function', 'the real runner has the chore');
+});
+
+/**
+ * The real tick through the runner's chore pass: its process boundaries are
+ * faked (what it started, killed), its work root is a temporary directory and
+ * the runner's clock is the fixture's. Each rule of the chore is one case.
+ */
+function checkChore(t, { now = '2026-11-15T12:10:00Z', alive = () => false, running = () => null, from = '2026-11-15T11:00:00.000Z' } = {}) {
+  const f = fixture({ now });
+  const root = mkdtempSync(join(tmpdir(), 'mc-run-deploy-check-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+  writeFileSync(join(root, 'runner', 'layout.json'), JSON.stringify({ schema: 'mc-layout', version: 2 }));
+  const env = { MC_WORK_ROOT: root };
+  const seen = { started: [], killed: [] };
+  const state = { alive, running };
+  if (from) writeFileSync(deployCheckState(env), JSON.stringify({ from }));
+  f.deps.alive = (pid) => state.alive(pid);
+  f.deps.deployCheckTick = (options) => deployCheckTick({
+    env, ...options,
+    running: () => state.running(),
+    kill: (pid) => { seen.killed.push(pid); },
+    start: (job) => { seen.started.push(job); return { pid: 4000 + seen.started.length, log: '/log' }; },
+  });
+  const deployed = (started, sha, ended) => {
+    const key = recordStart({ sha, started, pid: 1 }, env);
+    recordEnd(key, { ended, outcome: DEPLOY_ROW, live_commit: sha.slice(0, 7) }, env);
+    return key;
+  };
+  const read = () => readDeploys(env);
+  const attempt = () => JSON.parse(readFileSync(deployCheckState(env), 'utf8')).attempt;
+  return { f, env, seen, state, deployed, read, attempt, runner: createRunner({ deps: f.deps }) };
+}
+const SHA_A = '0123456789abcdef0123456789abcdef01234567';
+const SHA_B = 'fedcba9876543210fedcba9876543210fedcba98';
+
+test('deploy check: a chore pass starts the check of the oldest due row, one at a time, and a pass while it lives starts nothing', async (t) => {
+  const c = checkChore(t, { alive: () => true });
+  const first = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [{ started: first.started, sha: SHA_A }]);
+  assert.equal(c.attempt().pid, 4001);
+  await c.runner.chores();
+  assert.equal(c.seen.started.length, 1, 'the attempt is alive: nothing is started');
+  assert.equal(c.read()[0].check, '');
+});
+
+test('deploy check: a row that ended before `from` stays empty, and `from` is written on the first pass and never moved', async (t) => {
+  const c = checkChore(t, { from: null });
+  c.deployed('2026-11-15T10:00:00.000Z', SHA_A, '2026-11-15T10:05:00.000Z');
+  await c.runner.chores();
+  assert.equal(JSON.parse(readFileSync(deployCheckState(c.env), 'utf8')).from, '2026-11-15T12:10:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.read()[0].check, '', 'not checked');
+});
+
+test('deploy check: a due row a later deploy superseded is written could-not-run without a start, and the later one is started', async (t) => {
+  const c = checkChore(t);
+  c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  const second = c.deployed('2026-11-15T12:05:00.000Z', SHA_B, '2026-11-15T12:07:00.000Z');
+  await c.runner.chores();
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'superseded by fedcba9 before it was checked']);
+  assert.deepEqual(c.seen.started, [{ started: second.started, sha: SHA_B }]);
+});
+
+test('deploy check: nothing starts while a deploy runs; and the pass, asked again, starts the row', async (t) => {
+  const c = checkChore(t);
+  c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  c.state.running = () => ({ started: '2026-11-15T12:09:00.000Z' });
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.read()[0].check, '');
+  c.state.running = () => null;
+  await c.runner.chores();
+  assert.equal(c.seen.started.length, 1);
+});
+
+test('deploy check: an attempt that died without a verdict is written could-not-run with its pid and is not started again', async (t) => {
+  const c = checkChore(t);
+  const row = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  writeFileSync(deployCheckState(c.env), JSON.stringify({ from: '2026-11-15T11:00:00.000Z', attempt: { key: { started: row.started, sha: SHA_A }, pid: 4321, started_at: '2026-11-15T12:02:00.000Z', deadline: Date.parse('2026-11-15T14:00:00.000Z') } }));
+  await c.runner.chores();
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'the check ended without a verdict (pid 4321)']);
+  assert.deepEqual(c.seen.started, []);
+  assert.equal(c.attempt(), null);
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [], 'not retried against production');
+});
+
+test('deploy check: an attempt alive past its deadline is killed by its pid, written could-not-run, and the next due row starts on a later pass', async (t) => {
+  const c = checkChore(t, { now: '2026-11-15T13:40:00Z', alive: () => true });
+  const first = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  const second = c.deployed('2026-11-15T13:00:00.000Z', SHA_B, '2026-11-15T13:02:00.000Z');
+  writeFileSync(deployCheckState(c.env), JSON.stringify({ from: '2026-11-15T11:00:00.000Z', attempt: { key: { started: first.started, sha: SHA_A }, pid: 4321, started_at: '2026-11-15T12:02:00.000Z', deadline: attemptDeadline({ startedAt: Date.parse('2026-11-15T12:02:00.000Z'), ended: '2026-11-15T12:02:00.000Z' }) } }));
+  assert.ok(Date.parse('2026-11-15T13:40:00Z') > attemptDeadline({ startedAt: Date.parse('2026-11-15T12:02:00.000Z'), ended: '2026-11-15T12:02:00.000Z' }));
+  await c.runner.chores();
+  assert.deepEqual(c.seen.killed, [4321]);
+  assert.deepEqual([c.read()[0].check, c.read()[0].check_why], ['could-not-run', 'the check passed its deadline (pid 4321)']);
+  assert.deepEqual(c.seen.started, [], 'the slot is free, but the next row waits for a later pass');
+  await c.runner.chores();
+  assert.deepEqual(c.seen.started, [{ started: second.started, sha: SHA_B }]);
+});
+
+test('deploy check: a verdict file whose row has no check is written into it, and nothing is started for that row', async (t) => {
+  const c = checkChore(t);
+  const row = c.deployed('2026-11-15T12:00:00.000Z', SHA_A, '2026-11-15T12:02:00.000Z');
+  writeVerdictFile(c.env, row, { check: 'red', check_at: '2026-11-15T12:40:00.000Z', check_why: 'database: down', parts: [] });
+  await c.runner.chores();
+  const after = c.read()[0];
+  assert.deepEqual([after.check, after.check_at, after.check_why], ['red', '2026-11-15T12:40:00.000Z', 'database: down']);
+  assert.deepEqual(c.seen.started, []);
+  assert.match(c.f.files['/w/runner/log/runner.log'], /deploy check: .*restored from its file/u);
 });
 
 test('the chore pass removes no scratch directory by age: what goes from scratch is tidy rule S\'s, on proof', async () => {
