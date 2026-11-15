@@ -68,7 +68,8 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    `rev-list --count origin/main..HEAD` and `rev-list --count HEAD..origin/main`
    — dirty and diverged are refusals (below); behind is fast-forwarded and past
    the pick is reset back, both in step 9.
-   `--dry-run` makes nothing: it names the worktree it *would* make.
+   `--dry-run` names the worktree it would make in its reading and then makes
+   it, when it is mc's own: the suites of step 6 are served in that tree.
 3. **What is live.** The last `deployed` row of `~/mc/runner/log/deploys.tsv`
    when there is one; otherwise `GET https://meetmemoro.app/api/version`, which
    is public, tiny (`{ commit, build, build_time }`) and asked with `no-store`.
@@ -108,15 +109,27 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    again. No repository lease is taken: until ruling 30 the deploy waited up to
    eight minutes for a merge round to give it back, and gave up with exit 3.
 9. **Placing the worktree at the pick**, in the deployer, after the admission — at the
-   sha the gate measured, never at `origin/main` as it is
-   by then. When the worktree is behind: `git merge --ff-only <sha>`, on a tree
-   already proved clean and not ahead — the one movement of somebody else's
-   checkout this verb makes. When the pick is *behind* the worktree's HEAD (main's
-   tip was passed over): `git reset --keep <sha>`, **only in mc's own worktree**,
-   and only when the pick is an ancestor of HEAD, HEAD is an ancestor of
-   `origin/main` and the tracked tree is clean; in any other worktree, or when one
-   of those fails, nothing moves and the row is `moved`. A failed fast-forward or
-   reset is the row's `stopped_at: 'fast-forward'`. mc then reads `rev-parse HEAD` in that worktree: when it
+   sha the gate measured, never at `origin/main` as it is by then.
+   *In mc's own worktree* (`~/.memoro/mc/deploy/memoro`, the route of *The gate*
+   below) the deployer first takes the worktree's **holder** (§ *No lease*) — before
+   the tree is placed or read, and it keeps it until the script has exited — and then
+   places the tree with `placeWorktree`, the one function the exercise of the suites
+   places it with: a tree behind the pick is fast-forwarded (`git merge --ff-only
+   <sha>`); a tree past the pick is `git reset --keep <sha>`, only when the pick is an
+   ancestor of HEAD, HEAD is an ancestor of `origin/main` and no tracked file is
+   modified; untracked strays are removed (`git clean -fd`, said in a line). A tree
+   with modified tracked files, with commits `origin/main` lacks, off `origin/main`'s
+   line, or that git cannot read is not placed: the row is completed `failed`, stopped
+   at `moved`, naming what stood. A tree the exercise placed and something moved
+   after the measuring is put back by this same placing, so what the suites measured
+   and what is built are the same tree. A holder that is not given within 90 minutes
+   completes the row `failed`, stopped at `held`, naming the holder; nothing was placed
+   and nothing was deployed.
+   *In any other worktree* (main checked out in the person's own) the one movement of
+   somebody else's checkout this verb makes is `git merge --ff-only <sha>`, on a tree
+   already proved clean and not ahead; a tree that stands past the pick is not
+   reset, and the row is `moved`. A failed fast-forward or reset is the row's
+   `stopped_at: 'fast-forward'`. mc then reads `rev-parse HEAD` in that worktree: when it
    is the sha the gate measured, that is what the success line names, the
    script is handed and the row records. When it is not — main moved on by
    somebody else between the gate's end and the placing — the commit that stands there
@@ -246,6 +259,7 @@ the deploy, so it is refused.
 | **the pick is the live commit, or live is not its ancestor** | 1 | production never moves backwards; refused row naming both, also under `--accept-red` and again at final admission |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | the worktree stands on another commit than the pick, at the deployer's placing, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
+| mc's own worktree is held by another process for 90 minutes (an exercise, a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. In the exercise the suites are cannot-run naming the holder |
 | **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
@@ -390,31 +404,55 @@ appended under the round's own run id, and the page shows it for a day beside
 the deploy panel — never a round that is "running" forever.
 
 **The app, used — against exactly the pick.** `exerciseApp` reads the suites
-declared in memoro's `.mc/test.json` and runs them against a local server of
+declared in memoro's `.mc/test.json` and runs them against local servers of
 *exactly* the pick, started the way `mc test dev` starts one (`ensureAppServer`).
-The server is the shared checkout's, `~/mc/self/memoro` (`sharedWorktree`) — not
-the worktree with main that the script runs in, which can be another checkout.
-The order is fixed: `git show <pick>:.mc/test.json` (the declaration, before
-anything moves), then the holds, then the checkout is placed, then the
-declaration is read from the tree, then the server is ensured. The checkout must
-be clean, on main or on no branch, and its HEAD an ancestor of `origin/main`;
-then `git checkout --detach <pick>` places it (the repository is bare, the
-deploy's worktree holds the branch `main`, and git gives a branch to one
-worktree, so the shared checkout stands detached). Otherwise every suite is
-*cannot run* with the reason and nothing is moved. The holds are asked before the
-checkout is detached, and a hold of either kind — busy (mc used the main server
-within its idle window) or a kept browser's (one stepped on it within
-`KEPT_HOLD_SECONDS`) — is waited out and asked again, with the checkout
-untouched: both end by themselves, so the deploy says what it waits for and asks
-nobody to close anything. The wait has one bound for the whole hold check,
-`HOLD_WAIT_MS` (ten minutes); a server still held when it has passed refuses,
-names the hold and leaves the checkout where it stood. Every ensure —
-the static server, the app server and each revive after a server left mid-run —
-**pins** the commit and never follows main, and the commit the server serves is
-checked against the pick after every ensure: a server of another commit makes the
-remaining suites cannot-run. So the gate refuses, as suites that cannot run, when
-the checkout has uncommitted changes (`git status --porcelain`, read before any
-server is asked for), when the server was started on uncommitted changes
+Which tree they are served from depends on where main is held — one of two routes,
+chosen by `isOwnWorktree` on the worktree step 2 found:
+
+- **The own route — main is held in mc's own worktree, or nowhere.** The servers
+  are the **deploy worktree's own** (`~/.memoro/mc/deploy/memoro`), placed at the
+  pick, and the shared checkout `~/mc/self/memoro` is not used: no git call is made
+  on it, it is not moved, no hold on its main server is asked or waited for, and it
+  is never served — however dirty, on whatever branch, or held it is. This is the
+  tree the script then builds in, so the suites measure what is built. The order
+  is fixed: the **holder** is taken (§ *No lease*; waited for up to 90 minutes, then
+  every suite is cannot-run naming the holder); the tree is **placed** at the pick
+  by `placeWorktree`, the function `ship` places with (step 9), and a tree it cannot
+  place makes every suite cannot-run naming what stood; the declaration is read from
+  the tree at the pick; each server is **ensured in that worktree** — the static
+  server, the app server and each revive after a server left mid-run — **unpinned**,
+  since the tree was placed and nothing follows main; and the commit each server
+  serves is checked against the pick after every ensure and revive: a server of
+  another commit, or one started on uncommitted changes, makes the remaining suites
+  cannot-run. The servers take **dev-pool slots** and wait in turn within the pool's
+  wait; a slot not had is cannot-run with the pool's reason. After the exercise,
+  passed or refused, the servers it started are stopped and the holder is released;
+  a server that was already there is left running.
+- **The shared-checkout route — main is held in a worktree that is not mc's
+  own** (the person's checkout). Nothing of the own route applies; this is the
+  route as it was. The server is the shared checkout's, `~/mc/self/memoro`
+  (`sharedWorktree`) — not the worktree with main that the script runs in. The
+  order is fixed: `git show <pick>:.mc/test.json` (the declaration, before
+  anything moves), then the holds, then the checkout is placed, then the
+  declaration is read from the tree, then the server is ensured. The checkout must
+  be clean, on main or on no branch, and its HEAD an ancestor of `origin/main`;
+  then `git checkout --detach <pick>` places it (the repository is bare, the
+  person's worktree holds the branch `main`, and git gives a branch to one
+  worktree, so the shared checkout stands detached). Otherwise every suite is
+  *cannot run* with the reason and nothing is moved. The holds are asked before the
+  checkout is detached, and a hold of either kind — busy (mc used the main server
+  within its idle window) or a kept browser's (one stepped on it within
+  `KEPT_HOLD_SECONDS`) — is waited out and asked again, with the checkout
+  untouched: both end by themselves, so the deploy says what it waits for and asks
+  nobody to close anything. The wait has one bound for the whole hold check,
+  `HOLD_WAIT_MS` (ten minutes); a server still held when it has passed refuses,
+  names the hold and leaves the checkout where it stood. Every ensure **pins** the
+  commit and never follows main, and the commit the server serves is checked
+  against the pick after every ensure.
+
+On both routes the gate refuses, as suites that cannot run, when the checkout has
+uncommitted changes (`git status --porcelain`, read before any server is asked for
+on the shared route), when the server was started on uncommitted changes
 (`built_from.dirty`), or when the server serves another commit. The tests assert
 the commit the server was started on.
 
@@ -457,9 +495,8 @@ the one thing it hands the script is `MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1`
 Until ruling 26 the verb held memoro's repository lease for the whole deploy;
 from it, only for the fast-forward and the read of the sha; since ruling 30
 (2026-10-09) not at all. A merge round holds that lease for its whole gate, so
-any hold made a deploy wait for the merges. The worktree the script runs in is
-moved by nothing but the deployer, and a merge landing on `origin/main` after
-the fast-forward changes nothing the build sees.
+any hold made a deploy wait for the merges. A merge landing on
+`origin/main` after the placing changes nothing the build sees.
 
 What keeps two deploys apart is the record: a `running` row whose pid is alive
 is a deploy in progress (`runningDeploy`,
@@ -489,6 +526,39 @@ A language run is kept apart the same way. Its record
 in the same places. `mc language` reads the deploy record under the same lock
 before it writes its own, so the two never write to production at the same
 time ([`mc-language.md`](mc-language.md)).
+
+### One holder of the deploy worktree at a time (2026-11-15)
+
+mc's own worktree (`~/.memoro/mc/deploy/memoro`) is *placed* — fast-forwarded,
+reset back, cleaned — by whoever uses it, so two users at once would move the tree
+under each other. It is therefore used by **one holder at a time**. The holder is a
+record file beside the worktree, `~/.memoro/mc/deploy/memoro.holder.json` (`{ pid,
+verb, started, token }`), written and read under a lock, by `takeHolder` in
+[`src/mc/deploy-worktree.js`](../../src/mc/deploy-worktree.js):
+
+- **Who holds it, and for how long.** The exercise of the suites (`deploy suites`),
+  for its whole length: from before the placing until its servers are stopped. The
+  deployer (`deploy`), from before its placing until the script has exited. `mc
+  language` (`language`, [`mc-language.md`](mc-language.md)), for the whole of its
+  use: a status read from its fast-forward to its last read, a run or resume from
+  its fast-forward until its last act has exited. It is taken before the tree is
+  placed or read, and the existing refusals made under the register's lock — a
+  deploy or a language run already running — come first.
+- **A holder whose pid is gone** is stale: its record is taken over, with a line
+  saying so. A record carrying the caller's own pid is the caller's. A holder is
+  released only by the one who took it (the record's `token`).
+- **A waiter waits while the holder's pid lives**, saying each minute what it waits
+  for and since when (`mc: waiting for the deploy worktree — held by <verb> (pid
+  <n>), since <time>, <n> min ago`), up to **90 minutes**. After that an exercise's
+  suites are cannot-run naming the holder, a deployer's row is completed `failed`
+  with `stopped_at: 'held'` (and `mc deploy` again waits for it once more), and `mc
+  language` reads nothing.
+- **Only mc's own worktree has one.** Where main is held in the person's checkout,
+  nothing here is taken: that tree is the person's, and the shared-checkout route
+  is as it was.
+
+The deploy worktree has several users, and the holder is what keeps them apart. It is not a lease on the
+repository — none of this touches the merge lane.
 
 ## Grammar is not promoted here
 
@@ -738,6 +808,30 @@ The reader and the two writes had a test until 2026-11-01, removed with the
 tests that never caught anything; the page, brief and helper readings are
 covered in their own suites from fixtures.
 
+The own route has its own cases in the same file, asserted through the
+verb's and the gate's seams with an injected clock: the worktree is placed at the
+pick before any ensure and every ensure and revive is given it and never the
+shared checkout (also when that is dirty, on another branch or held, and no git
+call is made on it); a server serving another commit makes the rest cannot-run;
+each way `placeWorktree` refuses (modified tracked files, commits `origin/main`
+lacks, off the line, a failed reading) is cannot-run naming what stood, and
+untracked strays are removed; a slot not had is cannot-run with the pool's
+reason; the servers the exercise started are stopped after a pass and a
+refusal, and one already there is left; a finished preparation reused after
+the worktree was moved elsewhere on `origin/main`'s line ships because `ship`
+places it at the pick again; and the holder — a live one waited for and the
+exercise then runs, 90 minutes of a live one is cannot-run naming it, a
+holder whose pid is gone is taken over, a deployer waits the same way and ends
+`failed` stopped at `held`, and a dry run without mc's own worktree makes it.
+The route choice has a case each way: main in a worktree that is not mc's own
+keeps the shared-checkout route (pinned, no placing, no holder). `mc language`'s
+holder is tested in `tests/mc/commands/language.test.js`. Seven fault checks hold
+them (the exercise handed the shared checkout, `ship` not placing again, the
+served-commit check dropped, a started server left running, placing without the
+holder, a dead holder waited for, `mc language` releasing the holder after its
+fast-forward): each turns a named test red, and the files are green again
+without it.
+
 Where `main` is has a test per case — in another worktree, behind, dirty, ahead,
 checked out nowhere with mc's worktree absent, and mc's worktree present — and
 each asserts the spawn's `cwd` where there is a spawn and the refused row where
@@ -753,8 +847,9 @@ space and a branch merely *starting* with `main`.
 repository checkout on `main` and once with it on a feature branch), and on
 2026-09-04 (at `c061d74` and `e30fd83`). Everything from the gate's end onwards —
 the fast-forward, the deployer, the spawn, the completed row — has only ever run
-against a faked script; mc's own worktree at `~/.memoro/mc/deploy/memoro` has
-therefore never been made on this machine, because `main` has always been
-checked out somewhere.
+against a faked script. The own route's reading has been run for real too: `mc
+deploy --dry-run` in mc's own worktree, with the suites served in it at the pick
+and the shared checkout's commit the same before and after (the goal's log has
+the shas and the seconds to the first suite).
 The one real deploy is Martin's to type, watched, and this note should say what
 it did when it has happened.

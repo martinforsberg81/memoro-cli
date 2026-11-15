@@ -153,7 +153,7 @@ export async function prepare(job, {
   }, beatMs);
   try {
     const measured = await measureGate({
-      sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), env, say,
+      sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), env, say,
       deps: deps.gate || {}, suites: deps.suites || {}, stage: (next) => { stage = next; return patch({ stage: next }); },
     });
     patch({ stage: 'done', ended: now().toISOString(), result: measured });

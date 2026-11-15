@@ -9,6 +9,11 @@
  * (`deploySource`), and adds what is around them — the reading, the cache,
  * the key.
  *
+ * In mc's own deploy worktree the verb takes the worktree's holder
+ * (`takeHolder`, deploy-worktree.js) before it fast-forwards the tree and keeps
+ * it until its last read or act has exited, so it never moves the tree under a
+ * deploy's exercise or deployer.
+ *
  * This file, so far:
  *
  *   mc language                  every language from the cache — offline, instant
@@ -69,6 +74,7 @@ import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { realLock } from '../runner-lock.js';
 import { currentHolder } from '../repo-lease.js';
 import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
+import { takeHolder } from '../deploy-worktree.js';
 import {
   deploySource, isOwnWorktree, leftoverStamps, REPO, strayPaths, worktreeState,
 } from './deploy.js';
@@ -330,33 +336,60 @@ async function runRead(read, { lang, cwd, env, spawnRead }) {
 /**
  * Make the deploy worktree a reading of `origin/main`: fetched, then
  * fast-forwarded as `ship` does — or a refusal that touched nothing.
- * Returns `{ worktree }` or `{ refused: '<line>' }`.
+ * Returns `{ worktree, release }` or `{ refused: '<line>' }`.
+ *
+ * When the worktree is mc's own — or is not there yet, so mc makes it — the
+ * verb takes the deploy worktree's holder first, after the deploy and run
+ * refusals and before the tree is fetched into, fast-forwarded or read, and
+ * waits for an exercise or a deployer that has it. `release()` is the caller's
+ * to call when its last use of the tree has ended; a refusal has released it
+ * already. When main is checked out elsewhere that tree is the person's, and
+ * no holder is taken.
  */
-export function prepareWorktree({ path, git, env, alive }) {
+export async function prepareWorktree({
+  path, git, env, alive, say = () => {}, now, sleep, lock, pid, takeHolder: take = takeHolder,
+}) {
   const deploy = runningDeploy(env, { alive });
   if (deploy) {
     const when = String(deploy.started).slice(0, 16).replace('T', ' ');
     return { refused: `a deploy of ${short(deploy.sha)} has been running since ${when} (pid ${deploy.pid}) — the reads wait for it; nothing was read` };
   }
+  const probe = deploySource({ path, git, env, create: false });
+  let release = null;
+  if (probe.absent || isOwnWorktree(probe.worktree, env)) {
+    const taken = await take({ env, verb: 'language', say, now, sleep, alive, lock, pid });
+    if (!taken.ok) return { refused: `${taken.reason} — nothing was read` };
+    release = taken.release;
+  }
+  const refuse = (line) => {
+    release?.();
+    return { refused: line };
+  };
   const source = deploySource({ path, git, env, create: true });
-  if (source.failed) return { refused: `git worktree add ${source.worktree} main failed in ${path} — the reads need a checkout of main` };
+  if (source.failed) return refuse(`git worktree add ${source.worktree} main failed in ${path} — the reads need a checkout of main`);
   const { worktree } = source;
   if (git(path, ['fetch', 'origin', 'main', '--quiet']) === null) {
-    return { refused: `git fetch origin main failed in ${path} — nothing was read` };
+    return refuse(`git fetch origin main failed in ${path} — nothing was read`);
   }
   const state = worktreeState({ worktree, git });
   const own = isOwnWorktree(worktree, env);
   if (state.dirty.length && !leftoverStamps({ worktree, dirty: state.dirty, git }) && !(own && strayPaths(state.dirty))) {
-    return { refused: `main in ${worktree} has ${state.dirty.length} uncommitted file${state.dirty.length === 1 ? '' : 's'} — commit or clean it there; nothing was read` };
+    return refuse(`main in ${worktree} has ${state.dirty.length} uncommitted file${state.dirty.length === 1 ? '' : 's'} — commit or clean it there; nothing was read`);
   }
   if (state.ahead) {
-    return { refused: `main in ${worktree} has ${state.ahead} commit${state.ahead === 1 ? '' : 's'} that origin/main does not — push them or reset that checkout yourself; nothing was read` };
+    return refuse(`main in ${worktree} has ${state.ahead} commit${state.ahead === 1 ? '' : 's'} that origin/main does not — push them or reset that checkout yourself; nothing was read`);
   }
   if (state.behind && git(worktree, ['merge', '--ff-only', 'origin/main']) === null) {
-    return { refused: `git merge --ff-only origin/main failed in ${worktree} — nothing was read` };
+    return refuse(`git merge --ff-only origin/main failed in ${worktree} — nothing was read`);
   }
-  return { worktree };
+  return { worktree, release: release || (() => {}) };
 }
+
+/** The holder's seams, from the verb's `deps`. */
+const holderDeps = (deps, stdout) => ({
+  say: (line) => stdout.write(`${line}\n`),
+  now: deps.clock, sleep: deps.sleep, lock: deps.holderLock, pid: deps.pid, takeHolder: deps.takeHolder,
+});
 
 async function status(argv, { stdout, stderr, env, deps }) {
   const scanned = read('status', argv);
@@ -371,12 +404,21 @@ async function status(argv, { stdout, stderr, env, deps }) {
     return 1;
   }
   const git = deps.git || tryGit;
-  const prepared = prepareWorktree({ path, git, env, alive: deps.alive || processAlive });
+  const prepared = await prepareWorktree({ path, git, env, alive: deps.alive || processAlive, ...holderDeps(deps, stdout) });
   if (prepared.refused) {
     stderr.write(`mc: ${prepared.refused}\n`);
     return 1;
   }
   const { worktree } = prepared;
+  // The tree is held from its fast-forward to the last read of it below.
+  try {
+    return await statusReads({ lang, worktree, git, stdout, stderr, env, deps });
+  } finally {
+    prepared.release();
+  }
+}
+
+async function statusReads({ lang, worktree, git, stdout, stderr, env, deps }) {
   const exists = deps.exists || existsSync;
   if (!exists(join(worktree, 'node_modules', '.bin', 'wrangler'))) {
     stderr.write(`mc: no wrangler in ${worktree} — run npm ci there; nothing was read\n`);
@@ -683,12 +725,25 @@ async function conduct({
   }
   const git = deps.git || tryGit;
   const alive = deps.alive || processAlive;
-  const prepared = prepareWorktree({ path, git, env, alive });
+  const prepared = await prepareWorktree({ path, git, env, alive, ...holderDeps(deps, stdout) });
   if (prepared.refused) {
     stderr.write(`mc: ${prepared.refused}\n`);
     return 1;
   }
-  const { worktree } = prepared;
+  // A run holds the tree from its fast-forward until its last act has exited.
+  try {
+    return await conductHeld({
+      name, built, dryRun, prior, fromHead, worktree: prepared.worktree, git, alive,
+    }, { stdout, stderr, env, deps });
+  } finally {
+    prepared.release();
+  }
+}
+
+/** `conduct` from the prepared worktree on — the part the holder is held for. */
+async function conductHeld({
+  name, built, dryRun, prior, fromHead, worktree, git, alive,
+}, { stdout, stderr, env, deps }) {
   if (!(deps.exists || existsSync)(join(worktree, 'node_modules', '.bin', 'wrangler'))) {
     stderr.write(`mc: no wrangler in ${worktree} — run npm ci there; nothing was read\n`);
     return 1;

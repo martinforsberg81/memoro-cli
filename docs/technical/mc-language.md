@@ -75,6 +75,16 @@ nothing:
 - a deploy running;
 - a `main` that is dirty, or that has commits `origin/main` does not.
 
+When the worktree is mc's own (`~/.memoro/mc/deploy/memoro`), or is yet to be made,
+the verb takes the worktree's **holder** before it fast-forwards the tree
+([`mc-deploy.md`](mc-deploy.md), § *No lease*), as the exercise of the suites and
+the deployer do, so that only one of them moves the tree at a time. A `status`
+holds it from its fast-forward to its last read; a `run` or `resume`, from its
+fast-forward until its last act has exited. A holder that is not given within 90
+minutes refuses the verb, naming the holder, and nothing is read or run; one
+whose process is gone is taken over. Where `main` is held in the person's own
+checkout nothing is taken.
+
 The reading is written to `~/mc/runner/log/language/status-<lang>.json`. That
 cache is what bare `mc language`, the page and `mc deploy --dry-run` read. None
 of them runs anything.
@@ -104,8 +114,8 @@ runs an act whose shape it would misread. It is not a second validator.
 
 `run`, `resume` and `promote` share one sequence (`conduct`):
 
-1. **The worktree**, prepared as for `status`. There must be wrangler in it:
-   `node_modules/.bin/wrangler`.
+1. **The worktree**, prepared as for `status`, with the holder taken (kept until the
+   last act has exited). There must be wrangler in it: `node_modules/.bin/wrangler`.
 2. **The manifest**, read from that worktree by name. A `resume` refuses when
    memoro's `main` has moved since the stopped run, because the manifest may
    have changed; `--from-head` resumes there regardless.

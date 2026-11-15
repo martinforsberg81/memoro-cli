@@ -27,7 +27,8 @@
  * the mends, the servers, the suites — is on `deps`, so the whole gate runs in
  * a test with nothing real behind it.
  */
-import { KEPT_HOLD_SECONDS, mainIdleSecondsOf } from './dev-servers.js';
+import { deployWorktreePath, placeWorktree, strayLines, takeHolder } from './deploy-worktree.js';
+import { KEPT_HOLD_SECONDS, mainIdleSecondsOf, stopServer } from './dev-servers.js';
 import { run as runGit } from './git.js';
 import { readMainMends } from './main-repair.js';
 import { fullRun, RETRY_LATER, RETRY_NOW } from './nightly-loop.js';
@@ -35,7 +36,7 @@ import { readNightlyHistory } from './nightly-history.js';
 import { mcHome, workRoot } from './paths.js';
 import {
   answers, ensureAppServer, ensureDevServer, isGate, mainHold, NO_SHARED_WORKTREE, parseDeclaration,
-  readDeclaration, runSuites, serviceFor, servingWorktree, sharedWorktree, tierOf, tokenFor,
+  readDeclaration, runSuites, serversFor, serviceFor, servingWorktree, sharedWorktree, tierOf, tokenFor,
 } from './test-environment.js';
 
 const REPO = 'memoro';
@@ -215,7 +216,7 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  * (`deploy-prepare.js`); the judging is the asker's (`judgeGate`).
  */
 export async function measureGate({
-  sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {},
+  sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
 }) {
   stage('full-run');
   const full = await measureFull({
@@ -226,7 +227,7 @@ export async function measureGate({
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
   stage('suites');
   say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha, env, say, deps: suites });
+  const exercise = await exerciseApp({ sha, env, say, deps: suites, own });
   return { full, exercise };
 }
 
@@ -347,17 +348,24 @@ function gitIn(worktree, args) {
  * would run against it are `cannot-run`, as is a checkout whose server was
  * started on uncommitted changes.
  *
+ * That is the shared-checkout route. With `own` — main held in mc's own deploy
+ * worktree, or nowhere — the suites run in that worktree instead (`exerciseOwn`):
+ * its holder taken, the tree placed at `sha` by `placeWorktree`, the servers
+ * ensured unpinned in it, and the shared checkout not touched at all.
+ *
  * Returns `{ suites, commit, error, not_gate }`: one `{ name, state, seconds,
  * tail }` per suite that gates, `state` one of `ok`, `red`, `skipped` (the
  * declared skip code; `tail` carries its reason) or `cannot-run`; `not_gate`
  * the `{ name, why }` of those that do not.
  */
-export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {} }) {
+export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {}, own = false }) {
   const d = {
     sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
     gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
+    takeHolder, placeWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath,
     ...deps,
   };
+  if (own) return exerciseOwn({ sha, env, say, deps, d });
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
@@ -379,6 +387,62 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
     say(`mc: suites — the shared checkout ${worktree} stands at ${short(sha)} now (it was at ${short(before)}), detached`);
   }
 
+  // Every ensure pins: the checkout is where it was placed, and following main would move it.
+  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true });
+}
+
+/**
+ * The exercise where main is held nowhere (D1–D5 of deploy-serves-its-own-checkout): in mc's own
+ * deploy worktree, at the pick, and never in the shared checkout — nothing of it is read, moved,
+ * waited for or served. In this order:
+ *
+ * 1. the worktree's holder is taken (`takeHolder`): waited for while another process has the
+ *    tree, up to its bound, and then every suite is cannot-run naming the holder;
+ * 2. the tree is placed at `sha` (`placeWorktree`, the function `ship` places with), and a tree it
+ *    cannot place — modified tracked files, commits origin/main lacks, off its line, a failed
+ *    reading — is every suite cannot-run naming what stood;
+ * 3. the servers the exercise starts take dev-pool slots, in turn, within the pool's wait — a slot
+ *    not had is cannot-run with the pool's reason — and each is checked against `sha`;
+ * 4. whatever happened, the servers the exercise started are stopped and the holder is released;
+ *    a server that was already there is left.
+ */
+async function exerciseOwn({ sha, env, say, deps, d }) {
+  const worktree = d.deployWorktree(env);
+  const taken = await d.takeHolder({
+    env, verb: 'deploy suites', say, now: d.now, sleep: d.sleep, alive: d.alive, lock: d.holderLock, root: d.holderRoot,
+  });
+  if (!taken.ok) return cannot(taken.reason);
+  let already = null;
+  try {
+    const git = d.git || ((cwd, args) => {
+      const asked = d.gitIn(cwd, args);
+      return asked.status === 0 ? String(asked.stdout || '').trim() : null;
+    });
+    const placed = d.placeWorktree({ worktree, sha, git });
+    if (!placed.ok) return cannot(`mc's own deploy worktree ${worktree} cannot be placed at ${short(sha)}, so no suite ran — ${placed.reason}`);
+    if (placed.moved) say(`mc: suites — the deploy worktree ${worktree} stands at ${short(sha)} now (${placed.how === 'reset' ? 'moved back from' : 'fast-forwarded from'} ${short(placed.from)})`);
+    for (const line of strayLines(placed.strays)) say(line);
+    already = new Set(d.serversFor(worktree, { root: d.root }).map((server) => server.instance_id));
+    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false });
+  } finally {
+    // Its own servers only: one that was there before the exercise is somebody's, and left.
+    if (already) {
+      for (const server of d.serversFor(worktree, { root: d.root })) {
+        if (already.has(server.instance_id)) continue;
+        const stopped = d.stopServer(server);
+        if (!stopped?.ok) say(`mc: suites — could not stop ${server.instance_id}, which the exercise started: ${stopped?.error || 'no reason given'}`);
+      }
+    }
+    taken.release();
+  }
+}
+
+/**
+ * The declaration read from the tree at the pick, the servers its suites need and the suites
+ * themselves — the same on both routes. `pinned` is the shared checkout's: it is placed once and no
+ * ensure may follow main, which would move it.
+ */
+async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
@@ -400,13 +464,13 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
     }
     return null;
   };
-  // Every ensure pins: the checkout is where it was placed, and following main would move it.
-  const staticEnsure = () => d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService, pin: true });
+  const pin = pinned ? { pin: true } : {};
+  const staticEnsure = () => d.ensureDevServer(worktree, declaration, { holderVerb: 'deploy', ...deps, service: staticService, ...pin });
   const appEnsure = (json) => d.ensureAppServer(worktree, declaration, {
     json,
     stdout: { write: (text) => { if (!json) say(String(text).replace(/\n$/u, '')); } },
     answer: { write: () => {} },
-    deps: { holderVerb: 'deploy', ...deps, pin: true },
+    deps: { holderVerb: 'deploy', ...deps, ...pin },
   });
 
   let server = null;

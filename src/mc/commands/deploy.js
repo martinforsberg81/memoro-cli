@@ -56,8 +56,7 @@
  * watching, not the deploy, and `mc deploy --follow` watches again (ruling 30,
  * 2026-10-09). It takes no repository lease. A merge round holds the lease for
  * its whole gate, and until then a deploy waited up to eight minutes for that
- * window and gave up with exit 3; but the worktree is moved by nothing but
- * this verb, and a merge landing on `origin/main` changes nothing the build
+ * window and gave up with exit 3; but a merge landing on `origin/main` changes nothing the build
  * sees (ruling 26). What it does wait for is the gate round in flight, and
  * the merger starts none while it runs (`waitForGate`, 2026-10-10): beside a
  * merge round the build swapped for 26 minutes. There is no queue: what keeps two deploys apart is the
@@ -101,6 +100,9 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
+import {
+  deployWorktreePath, isOwnWorktree, leftoverStamps, placeWorktree, STAMP_FILES, strayLines, strayPaths, takeHolder, worktreeState,
+} from '../deploy-worktree.js';
 import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, withMendsNow } from '../deploy-gate.js';
 import {
   preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
@@ -122,6 +124,10 @@ import { ghCommand } from './publish.js';
 import { run as mergeRun } from './merge.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
+
+export {
+  deployWorktreePath, isOwnWorktree, leftoverStamps, STAMP_FILES, strayPaths, worktreeState,
+} from '../deploy-worktree.js';
 
 /** The repository this verb is about. It takes no argument and never will:
  * memoro-cli is not deployed, it is installed. */
@@ -319,21 +325,6 @@ export function readScriptOutput(text) {
 }
 
 /**
- * Where mc keeps a `main` of its own: `~/.memoro/mc/deploy/memoro`, added with
- * `git worktree add` the first time a deploy finds `main` checked out nowhere,
- * and never removed.
- *
- * Under `mcHome()` and deliberately not under `~/mc/`: a checkout there is a
- * runner area to `listStepAreas` (`work-area.js`) and to the runner's
- * `closeWorkareas`, or a stray to `listStrays`, and a deploy checkout is neither a project nor something
- * the board should draw. `env` rather than `mcHome()` alone so the seam every
- * other process boundary in this file goes through covers this one too.
- */
-export function deployWorktreePath(env = process.env) {
-  return join(env.MC_HOME || mcHome(), 'deploy', REPO);
-}
-
-/**
  * The worktree `npm run deploy` will run in, in the order the ruling fixes:
  *
  * 1. wherever `main` is checked out — git allows at most one worktree per
@@ -365,76 +356,6 @@ export function deploySource({ path, git = tryGit, env = process.env, create = f
   const added = git(path, args);
   if (added === null) return { worktree: mine, created: false, absent: true, failed: true };
   return { worktree: mine, created: true, absent: false, failed: false };
-}
-
-/**
- * The three readings that decide whether that worktree may be deployed from:
- * uncommitted files, commits it has that `origin/main` does not, and how far
- * behind it is. Read in the worktree itself — a working tree is its own, while
- * `origin/main` is a ref every worktree of the repository shares.
- */
-export function worktreeState({ worktree, git = tryGit }) {
-  const status = git(worktree, ['status', '--porcelain']);
-  const dirty = String(status || '').split('\n').filter((line) => line.trim());
-  const count = (range) => {
-    const out = git(worktree, ['rev-list', '--count', range]);
-    const value = Number(out);
-    return out !== null && Number.isFinite(value) ? value : null;
-  };
-  // A status git could not give is not a clean tree: the caller refuses it.
-  return { dirty, unreadable: status === null, ahead: count('origin/main..HEAD'), behind: count('HEAD..origin/main') };
-}
-
-/** Whether `worktree` is the one mc made for itself — the only `main` whose
- * dirt mc may remove, because nobody checks it out to work in. */
-export function isOwnWorktree(worktree, env = process.env) {
-  return resolve(worktree) === resolve(deployWorktreePath(env));
-}
-
-/**
- * The untracked paths in `dirty` when that is all it is, else null.
- *
- * In mc's own worktree they are leftovers, never work: on 2026-10-09 #13137
- * deleted the SDK generator together with the `.gitignore` block that hid its
- * output, so the fast-forward turned `artifacts/` and `public/sdk/` — written
- * there by every earlier deploy — into untracked files, and `deploy.mjs`'s
- * source preflight refused the tree. A generator retired with its ignore lines
- * does that every time, so mc removes them (`git clean -fd`, which leaves
- * ignored files such as `node_modules/` alone) instead of handing it to a person.
- * A modified or deleted tracked file is still a refusal: in that worktree it
- * means something went wrong, and that is worth seeing rather than discarding.
- */
-export function strayPaths(dirty) {
-  if (!dirty?.length) return null;
-  return dirty.every((line) => line.startsWith('?? ')) ? dirty.map((line) => line.slice(3)) : null;
-}
-
-/** The two files `deploy.mjs` stamps before wrangler and restores after it
- * (`STAMPED_FILES` there). */
-export const STAMP_FILES = ['public/sw.js', 'src/version.js'];
-
-/** Every line a stamp writes: inject-version.mjs's whole `src/version.js`,
- * stamp-sw-cache.mjs's one `CACHE_VERSION` line. */
-const STAMP_LINE = /^(\/\/ Auto-generated by scripts\/inject-version\.mjs\b.*|export const (VERSION|COMMIT|COMMIT_FULL|BUILD_TIME|BUILD_NUMBER) = .*|const CACHE_VERSION = .*)$/u;
-
-/**
- * Whether everything uncommitted in `worktree` is a deploy's stamps — what a
- * deploy that was killed before it could restore them leaves behind. Only
- * then is the dirt not somebody's work: the two files and nothing else,
- * modified rather than added or deleted, and every added line one a stamp
- * writes. `deploy.mjs` restores such leftovers itself before it builds
- * (`repairGeneratedStamps`), so mc lets them through instead of refusing.
- */
-export function leftoverStamps({ worktree, dirty, git = tryGit }) {
-  if (!dirty?.length) return false;
-  const entries = dirty.map((line) => {
-    const [code, ...rest] = line.trim().split(/\s+/u);
-    return { code, file: rest.join(' ') };
-  });
-  if (!entries.every(({ code, file }) => /^M{1,2}$/u.test(code) && STAMP_FILES.includes(file))) return false;
-  const diff = git(worktree, ['diff', 'HEAD', '--unified=0', '--', ...entries.map(({ file }) => file)]);
-  const added = String(diff || '').split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++'));
-  return added.length > 0 && added.every((line) => STAMP_LINE.test(line.slice(1).trim()));
 }
 
 /**
@@ -715,9 +636,9 @@ function failureLine(code, said, interrupted) {
  * answer is known and they cost minutes. A dry run and an accepted red run both,
  * so that the reading shows everything.
  */
-export async function gateStage({ plan, opts, env, say, deps = {} }) {
+export async function gateStage({ plan, opts, env, say, deps = {}, own = false }) {
   const measured = await measureGate({
-    sha: plan.sha, path: plan.path, acceptRed: Boolean(opts.acceptRed), dryRun: opts.dryRun, env, say,
+    sha: plan.sha, path: plan.path, acceptRed: Boolean(opts.acceptRed), dryRun: opts.dryRun, env, say, own,
     deps: deps.gate || {}, suites: deps.suites || {},
   });
   return judgeGate({ ...measured, plan, opts });
@@ -867,7 +788,21 @@ export async function run(argv, deps = {}) {
     }
     const busy = preparationInFlight({ root: deps.root || workRoot(env), plan, alive: deps.alive || processAlive });
     if (busy && !opts.json) stdout.write(`${busy}\n`);
-    const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
+    // The suites run in mc's own worktree where main is held nowhere, so a dry
+    // run with none makes it, as the deploy itself would: it is where the suites
+    // are served (the reading is only worth having with them).
+    // An absent worktree is the path mc's own would take, so `own` is already
+    // true for it: what is missing is the tree itself.
+    let exerciseOwn = own;
+    if (source.absent && !source.failed) {
+      const made = deploySource({ path, git, env, create: true });
+      if (made.failed) {
+        stderr.write(`mc: git worktree add ${made.worktree} main failed in ${path} — the suites need mc's own main worktree to run in\n`);
+        return 1;
+      }
+      exerciseOwn = isOwnWorktree(made.worktree, env);
+    }
+    const gate = await gateStage({ plan, opts, env, say, deps: gateDeps, own: exerciseOwn });
     if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: gateSummary(gate) }, null, 2)}\n`);
     else {
       for (const line of gate.lines) stdout.write(`${line}\n`);
@@ -949,7 +884,7 @@ export async function run(argv, deps = {}) {
   // running or a dirty main is not found out after a full run.
   const root = deps.root || workRoot(env);
   const prepared = await prepareStage({
-    plan, opts, env, root, holder, say, stdout, stderr, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
+    plan, opts, env, root, holder, say, stdout, stderr, own, deps: { ...deps, gate: gateDeps.gate, suites: gateDeps.suites },
   });
   if (prepared.code != null) {
     if (prepared.note) refuse(prepared.note);
@@ -1140,10 +1075,10 @@ export async function holdBuildLane(job, deps = {}) {
  * Everything after the admission, in the deployer's own process: the round in
  * flight waited for (`waitForGate`), the worktree fast-forwarded to
  * `origin/main`, the script run there, the row completed with the sha that
- * shipped. No repository lease is held — the worktree is moved by nothing
- * but this, and the merger lands nothing while the row says `running`
- * (rulings 26, 30) — but the heavy gate lock is, for the whole deploy
- * (`holdBuildLane`).
+ * shipped. No repository lease is held (rulings 26, 30), and the merger lands nothing
+ * while the row says `running` — but the heavy gate lock is, for the whole deploy
+ * (`holdBuildLane`), and in mc's own worktree so is the worktree's holder, taken
+ * before the placing and kept until the script has exited (`takeHolder`).
  */
 export async function ship(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -1154,67 +1089,81 @@ export async function ship(job, deps = {}) {
   const progress = deployProgress(job, { env });
   let tail = '';
   let holding = false;
+  let fastForwarded = false;
+  let releaseHolder = null;
   try {
     progress.report('waiting', 'Waiting for deployment lane');
     holding = await holdBuildLane(job, { ...deps, stdout });
     progress.report('prepare', 'Preparing deploy worktree');
-    // The one movement of somebody else's checkout this verb may make: it is
-    // fast-forwarded to the sha the gate measured
-    // (2026-11-14) — not to whatever `origin/main` is by now, which no full
-    // run and no suite has seen. `--ff-only` on a tree already proved clean
-    // and not ahead, so it either fast-forwards or does nothing.
-    //
-    // The sha may be older than origin/main (the newest commit whose full run is
-    // green): a worktree behind it is fast-forwarded, and one that stands *past* it
-    // — at main's tip, say — is put back with `git reset --keep`. That is a
-    // movement of the worktree to a commit origin/main contains and nothing else, so
-    // it is made only in mc's own worktree, from a HEAD origin/main contains, with
-    // nothing tracked uncommitted. Anywhere else the worktree is left alone and the
-    // check below refuses it, naming the commit that stood.
-    const state = worktreeState({ worktree, git });
-    const head = git(worktree, ['rev-parse', '--verify', 'HEAD']);
-    const ancestor = (older, newer) => Boolean(older && newer) && git(worktree, ['merge-base', '--is-ancestor', older, newer]) !== null;
-    const past = Boolean(head) && head !== sha && ancestor(sha, head);
-    let moved = false;
-    if (state.behind && !past) {
-      if (git(worktree, ['merge', '--ff-only', sha]) === null) {
-        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree} to ${short(sha)}` }, env);
-        stderr.write(`mc: git merge --ff-only ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
+    // mc's own worktree: one holder at a time (the suites of an exercise, `mc
+    // language` and this deployer never stand in it together), taken before the
+    // tree is placed or read and kept until the script has exited; then placed at
+    // the pick by the function the exercise placed it with (`placeWorktree`), so
+    // what the suites measured and what is built are the same tree. A tree moved
+    // after the measuring is put back.
+    if (own) {
+      const taken = await (deps.takeHolder || takeHolder)({
+        env, verb: 'deploy', say: (line) => stdout.write(`${line}\n`), now: deps.clock, sleep: deps.sleep, alive: deps.alive, lock: deps.holderLock,
+      });
+      if (!taken.ok) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'held', note: `mc: ${taken.reason}` }, env);
+        stderr.write(`mc: ${taken.reason} — nothing was deployed; mc deploy again waits for it once more\n`);
         return 1;
       }
-      moved = true;
-    } else if (past && own && !state.unreadable && ancestor(head, 'origin/main')
-      && !state.dirty.some((line) => !line.startsWith('?? '))) {
-      if (git(worktree, ['reset', '--keep', sha]) === null) {
-        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not move main in ${worktree} back to ${short(sha)}, the commit that was measured` }, env);
-        stderr.write(`mc: git reset --keep ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
+      releaseHolder = taken.release;
+      const placed = placeWorktree({ worktree, sha, git });
+      if (!placed.ok) {
+        const stood = placed.stopped_at === 'moved' || placed.stopped_at === 'unreadable';
+        recordEnd(key, {
+          ...(stood && placed.head ? { sha: placed.head } : {}),
+          outcome: FAILED,
+          stopped_at: stood ? 'moved' : placed.stopped_at,
+          note: `mc: ${placed.reason}`,
+        }, env);
+        if (placed.lines.length) for (const line of placed.lines) stderr.write(`${line}\n`);
+        else if (placed.stopped_at === 'moved' && placed.head) {
+          stderr.write(`mc: main in ${worktree} stands on ${short(placed.head)}, not ${short(sha)} — the commit the full run and the suites measured (${placed.reason}); run the deploy again — nothing was deployed\n`);
+        } else stderr.write(`mc: ${placed.reason}; run the deploy again — nothing was deployed\n`);
         return 1;
       }
-      moved = true;
-    }
-    const behind = moved;
-    // Read again after the fast-forward, because the fast-forward can dirty
-    // it: a commit that drops lines from `.gitignore` turns files that were
-    // ignored a moment ago into untracked ones (2026-10-09). In mc's own
-    // worktree they go; anywhere else they are somebody's to look at, and mc
-    // says so instead of letting the script's preflight say it later.
-    const strays = strayPaths(worktreeState({ worktree, git }).dirty);
-    if (strays && own) {
-      if (git(worktree, ['clean', '-fd']) === null) {
-        recordEnd(key, { outcome: FAILED, stopped_at: 'clean', note: `mc: could not remove untracked files in ${worktree}` }, env);
-        stderr.write(`mc: git clean -fd failed in ${worktree} — nothing was deployed\n`);
+      if (placed.moved) stdout.write(`mc: ${placed.how === 'reset' ? 'moved' : 'fast-forwarded'} main in ${worktree} to ${short(sha)}\n`);
+      for (const line of strayLines(placed.strays)) stdout.write(`${line}\n`);
+    } else {
+      // Anywhere but mc's own worktree the one movement of somebody else's checkout
+      // this verb may make is a fast-forward to the sha the gate measured
+      // (2026-11-14) — not to whatever `origin/main` is by now, which no full run
+      // and no suite has seen. `--ff-only` on a tree already proved clean and not
+      // ahead, so it either fast-forwards or does nothing. A tree that stands past
+      // the pick is left alone and the check below refuses it, naming the commit
+      // that stood.
+      const state = worktreeState({ worktree, git });
+      const head = git(worktree, ['rev-parse', '--verify', 'HEAD']);
+      const ancestor = (older, newer) => Boolean(older && newer) && git(worktree, ['merge-base', '--is-ancestor', older, newer]) !== null;
+      const past = Boolean(head) && head !== sha && ancestor(sha, head);
+      let behind = false;
+      if (state.behind && !past) {
+        if (git(worktree, ['merge', '--ff-only', sha]) === null) {
+          recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree} to ${short(sha)}` }, env);
+          stderr.write(`mc: git merge --ff-only ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
+          return 1;
+        }
+        behind = true;
+      }
+      // Read again after the fast-forward, because the fast-forward can dirty
+      // it: a commit that drops lines from `.gitignore` turns files that were
+      // ignored a moment ago into untracked ones (2026-10-09). Somebody else's
+      // checkout is theirs to look at, and mc says so instead of letting the
+      // script's preflight say it later.
+      const strays = strayPaths(worktreeState({ worktree, git }).dirty);
+      if (strays && behind) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'dirty', note: `mc: main is dirty in ${worktree} after the fast-forward — ${strays.length} untracked file(s)` }, env);
+        stderr.write(`mc: the fast-forward left ${strays.length} untracked file${strays.length === 1 ? '' : 's'} in ${worktree} — likely ignored until the commit that came in:\n`);
+        for (const file of strays.slice(0, 5)) stderr.write(`mc:   ${file}\n`);
+        if (strays.length > 5) stderr.write(`mc:   … and ${strays.length - 5} more\n`);
+        stderr.write('mc: remove them there and run this again — nothing was deployed\n');
         return 1;
       }
-      stdout.write(`mc: removed ${strays.length} untracked path${strays.length === 1 ? '' : 's'} from mc's own main worktree:\n`);
-      for (const file of strays.slice(0, 5)) stdout.write(`mc:   ${file}\n`);
-      if (strays.length > 5) stdout.write(`mc:   … and ${strays.length - 5} more\n`);
-    } else if (strays && behind) {
-      recordEnd(key, { outcome: FAILED, stopped_at: 'dirty', note: `mc: main is dirty in ${worktree} after the fast-forward — ${strays.length} untracked file(s)` }, env);
-      stderr.write(`mc: the fast-forward left ${strays.length} untracked file${strays.length === 1 ? '' : 's'} in ${worktree} — likely ignored until the commit that came in:\n`);
-      for (const file of strays.slice(0, 5)) stderr.write(`mc:   ${file}\n`);
-      if (strays.length > 5) stderr.write(`mc:   … and ${strays.length - 5} more\n`);
-      stderr.write('mc: remove them there and run this again — nothing was deployed\n');
-      return 1;
+      if (behind) fastForwarded = true;
     }
 
     // What ships is what that worktree stands on now, read rather than
@@ -1225,7 +1174,7 @@ export async function ship(job, deps = {}) {
     // was until 2026-11-14, after two rows had named the wrong sha, 2026-09-14
     // and 2026-09-19). The row is completed with the sha that stood.
     const shipping = git(worktree, ['rev-parse', '--verify', 'HEAD']) || sha;
-    if (behind) stdout.write(`mc: ${past ? 'moved' : 'fast-forwarded'} main in ${worktree} to ${short(shipping)}\n`);
+    if (fastForwarded) stdout.write(`mc: fast-forwarded main in ${worktree} to ${short(shipping)}\n`);
     if (shipping !== sha) {
       recordEnd(key, { sha: shipping, outcome: FAILED, stopped_at: 'moved', note: `mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)}, the commit that was measured` }, env);
       stderr.write(`mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)} — the commit the full run and the suites measured; run the deploy again — nothing was deployed\n`);
@@ -1331,6 +1280,7 @@ export async function ship(job, deps = {}) {
     recordEnd(key, { outcome: FAILED, stopped_at: readScriptOutput(tail).stopped_at, note: `mc: ${error?.message || error}` }, env);
     throw error;
   } finally {
+    releaseHolder?.();
     if (holding) (deps.releaseGateLock || releaseGateLock)({ root: job.lockRoot || mcHome(env), lane: BUILD_LANE });
   }
 }
@@ -1373,7 +1323,7 @@ function preparationInFlight({ root, plan, alive }) {
  * `{ result }` when the measurements are in, else `{ code, note }`: the exit
  * code the deploy ends with and, for a refusal, the row's note.
  */
-async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, again = false }) {
+async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own = false, again = false }) {
   const alive = deps.alive || processAlive;
   const lock = deps.lock || realLock;
   const startPreparer = deps.startPreparer || startPreparerDefault;
@@ -1408,7 +1358,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     }
     const log = preparationLogPath(root);
     const started = new Date().toISOString();
-    const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name };
+    const job = { root, sha: plan.sha, path: plan.path, started, acceptRed: Boolean(opts.acceptRed), log, holder: holder.name, ownWorktree: own };
     // The record is written before the process exists, so that its first
     // word about itself finds it and a second asker finds it too.
     writePreparation(root, { sha: plan.sha, pid: null, started, stage: 'starting', log, accept_red: Boolean(opts.acceptRed), holder: holder.name });
@@ -1464,7 +1414,7 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     // suites on a red full run: the same rule as a finished one — prepare
     // again, with the suites, said in one line. Once: a preparation this
     // asker started has its flags.
-    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, again: true });
+    if (!again) return prepareStage({ plan, opts, env, root, holder, say, stdout, stderr, deps, own, again: true });
     const note = `the preparation of ${plan.short} did not run the suites --accept-red needs`;
     stderr.write(`mc: ${note} — nothing was deployed\n`);
     return { code: 1, note };

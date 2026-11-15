@@ -6,7 +6,7 @@
  * throwaway MC_WORK_ROOT, because they are what the verb reads and leaves.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -16,6 +16,7 @@ import {
   languageDir, readingPath, run, TOKEN_SECRET, ACCOUNT_SECRET, withoutCloudflare,
 } from '../../../src/mc/commands/language.js';
 import { recordStart } from '../../../src/mc/deploys.js';
+import { deployWorktreePath, holderPath, readHolder } from '../../../src/mc/deploy-worktree.js';
 import { CUTOVER_DIR } from '../../../src/mc/language-manifest.js';
 import { readRuns, startRun } from '../../../src/mc/language-runs.js';
 import { logPath } from '../../../src/mc/logger.js';
@@ -836,5 +837,166 @@ describe('mc language promote', () => {
     const [, resumed] = readRuns(env);
     assert.equal(resumed.manifest, 'grammar-promote');
     assert.equal(resumed.outcome, 'done');
+  });
+});
+
+describe('mc language — the deploy worktree\'s holder', () => {
+  const WAIT_START = Date.parse('2026-11-15T10:00:00.000Z');
+  let clock;
+  beforeEach(() => {
+    worktree = deployWorktreePath(env);
+    mkdirSync(join(worktree, CUTOVER_DIR), { recursive: true });
+    installCutover();
+    clock = WAIT_START;
+  });
+
+  /** What the holder file said at each git call and each read or act. */
+  const watching = (inner, seen) => (cwd, args) => {
+    seen.push({ cmd: args.join(' '), holder: readHolder(env) });
+    return inner(cwd, args);
+  };
+  const exerciseHolds = (pid = 4242) => {
+    mkdirSync(join(holderPath(env), '..'), { recursive: true });
+    writeFileSync(holderPath(env), JSON.stringify({
+      pid, verb: 'deploy suites', started: new Date(WAIT_START).toISOString(), token: 'the-exercises',
+    }));
+  };
+  const waiting = (releaseAfterMs = null) => {
+    const slept = [];
+    return {
+      slept,
+      clock: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+        slept.push(clock);
+        if (releaseAfterMs !== null && clock - WAIT_START >= releaseAfterMs) rmSync(holderPath(env), { force: true });
+      },
+      alive: (pid) => pid === 4242 && existsSync(holderPath(env)),
+    };
+  };
+  const mine = (record) => record && record.pid === process.pid && record.verb === 'language';
+
+  it('a status read holds the worktree from its fast-forward to its last read, and lets go', async () => {
+    const seen = [];
+    const reads = [];
+    const spawn = fakeSpawn();
+    const stdout = sink();
+    const code = await run(['status', 'sv'], statusDeps({
+      stdout,
+      stderr: sink(),
+      git: watching(fakeGit({ behind: '2' }), seen),
+      spawnRead: async (call) => { reads.push(readHolder(env)); return spawn(call); },
+    }));
+    assert.equal(code, 0);
+    const during = (cmd) => seen.filter((one) => one.cmd.startsWith(cmd));
+    assert.ok(during('fetch').length === 1 && mine(during('fetch')[0].holder), 'held at the fetch');
+    assert.ok(during('merge --ff-only').length === 1 && mine(during('merge --ff-only')[0].holder), 'held at the fast-forward');
+    assert.equal(reads.length, 4);
+    assert.ok(reads.every(mine), 'held at every read');
+    assert.equal(readHolder(env), null, 'let go after the last read');
+  });
+
+  it('a status that refuses lets go too', async () => {
+    const stderr = sink();
+    const code = await run(['status', 'sv'], statusDeps({ stdout: sink(), stderr, git: fakeGit({ dirty: ' M src/app.js' }) }));
+    assert.equal(code, 1);
+    assert.match(stderr.text(), /uncommitted file/u);
+    assert.equal(readHolder(env), null);
+  });
+
+  it('a run holds the worktree until its last act has exited, and lets go', async () => {
+    const memoro = fakeMemoro();
+    const acts = [];
+    const stdout = sink();
+    const code = await run(['run', 'sv-test-cutover'], runDeps({
+      stdout, ask: answers('y', 'y', 'y').ask,
+      spawnAct: async (call) => { acts.push(readHolder(env)); return memoro.spawnAct(call); },
+    }));
+    assert.equal(code, 0);
+    assert.ok(acts.length > 3);
+    assert.ok(acts.every(mine), 'held at every act and read');
+    assert.equal(readHolder(env), null, 'let go once the last act has exited');
+  });
+
+  it('a run a refusal ends lets go, and a resume holds it the same way', async () => {
+    const stderr = sink();
+    assert.equal(await run(['run', 'sv-test-cutover'], runDeps({ stderr, exists: () => false, ask: answers('y').ask })), 1);
+    assert.match(stderr.text(), /no wrangler/u);
+    assert.equal(readHolder(env), null);
+
+    const failing = fakeMemoro({ answer: { 'ingest.js --all': () => ({ code: 1, stdout: '' }) } });
+    await run(['run', 'sv-test-cutover'], runDeps({ ask: answers('y', 'y', 'y').ask, spawnAct: failing.spawnAct }));
+    const resumed = fakeMemoro();
+    const acts = [];
+    const code = await run(['resume'], runDeps({
+      ask: answers('y', 'y', 'y').ask, spawnAct: async (call) => { acts.push(readHolder(env)); return resumed.spawnAct(call); },
+    }));
+    assert.equal(code, 0);
+    assert.ok(acts.length > 0 && acts.every(mine), 'held at every act of the resume');
+    assert.equal(readHolder(env), null);
+  });
+
+  it('a status read waits for an exercise\'s holder before it touches the tree, and reads when it is released', async () => {
+    exerciseHolds();
+    const seen = [];
+    const wait = waiting(130_000);
+    const stdout = sink();
+    const code = await run(['status', 'sv'], statusDeps({
+      stdout, stderr: sink(), git: watching(fakeGit(), seen), ...wait,
+    }));
+    assert.equal(code, 0);
+    assert.ok(wait.slept.length > 20, 'it looked again every few seconds');
+    assert.match(stdout.text(), /mc: waiting for the deploy worktree — held by deploy suites \(pid 4242\), since 2026-11-15 10:00/u);
+    const touching = seen.filter((one) => one.cmd !== 'worktree list --porcelain');
+    assert.ok(touching.length > 0);
+    assert.ok(touching.every((one) => mine(one.holder)), 'every touch was under its own holder, after the exercise\'s was released');
+  });
+
+  it('a run waits the same way, and acts on nothing before the holder is its own', async () => {
+    exerciseHolds();
+    const memoro = fakeMemoro();
+    const acts = [];
+    const wait = waiting(60_000);
+    const code = await run(['run', 'sv-test-cutover'], runDeps({
+      ask: answers('y', 'y', 'y').ask,
+      spawnAct: async (call) => { acts.push(readHolder(env)); return memoro.spawnAct(call); },
+      ...wait,
+    }));
+    assert.equal(code, 0);
+    assert.ok(wait.slept.length > 0);
+    assert.ok(acts.every(mine));
+  });
+
+  it('after 90 minutes of a live holder it reads nothing, and names the holder', async () => {
+    exerciseHolds();
+    const seen = [];
+    const stderr = sink();
+    const code = await run(['status', 'sv'], statusDeps({
+      stdout: sink(), stderr, git: watching(fakeGit(), seen), ...waiting(),
+    }));
+    assert.equal(code, 1);
+    assert.match(stderr.text(), /the deploy worktree is held by deploy suites \(pid 4242\), since 2026-11-15 10:00.* — waited 90 min — nothing was read/u);
+    assert.deepEqual(seen.filter((one) => one.cmd !== 'worktree list --porcelain'), [], 'the tree was not touched');
+    assert.equal(readHolder(env).pid, 4242, 'the other\'s record stays');
+  });
+
+  it('a holder whose pid is gone is taken over, and the read goes on', async () => {
+    exerciseHolds();
+    const stdout = sink();
+    const code = await run(['status', 'sv'], statusDeps({ stdout, stderr: sink(), alive: () => false }));
+    assert.equal(code, 0);
+    assert.match(stdout.text(), /is gone — its record is taken over/u);
+    assert.equal(readHolder(env), null);
+  });
+
+  it('where main is in somebody else\'s worktree no holder is taken', async () => {
+    worktree = mkdtempSync(join(tmpdir(), 'mc-language-elsewhere-'));
+    mkdirSync(join(worktree, CUTOVER_DIR), { recursive: true });
+    const code = await run(['status', 'sv'], statusDeps({
+      stdout: sink(), stderr: sink(),
+      takeHolder: async () => { throw new Error('the holder belongs to mc\'s own worktree'); },
+    }));
+    assert.equal(code, 0);
+    assert.equal(readHolder(env), null);
   });
 });
