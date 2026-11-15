@@ -288,13 +288,25 @@ describe('PROGRAMMES without finished goals', () => {
     }
   });
 
-  it('keeps every key of the collector and adds finished and archive_refused to it', () => {
+  it('keeps every key the collector had and adds finished and archive_refused to it', () => {
+    // The keys of a goal row and of a programme group at d2e05d90, before this goal.
+    const rowKeys = ['name', 'title', 'runnable', 'programme', 'repos', 'stage', 'status', 'kind', 'repo', 'state', 'progress', 'prs', 'carries', 'phase', 'held', 'sessions', 'criteria', 'last', 'running', 'person', 'question', 'hold', 'problems'];
+    const groupKeys = ['programme', 'priority', 'dormant', 'goals', 'current_phase', 'phases', 'proposals', 'repos', 'planning', 'planning_sessions', 'sessions', 'statuses'];
+    const sectionKeys = ['count', 'programmes', 'active', 'dormant', 'statuses', 'planning', 'running', 'strays'];
     const goals = goalsFor(['a', 1, { stage: 'done' }], ['b', 1]);
-    const [row] = goalsOf({ goals: [goals[1]], currents: [], alive: () => true });
-    for (const key of ['programme', 'name', 'title', 'phase', 'stage', 'status', 'repos', 'criteria', 'running', 'last', 'hold', 'problems', 'sessions']) assert.ok(key in row, `${key} is kept`);
-    assert.equal(row.archive_refused, null, 'null for a goal that is not finished');
-    const [group] = page(goals).programmes.programmes;
-    for (const key of ['programme', 'dormant', 'goals', 'phases', 'proposals']) assert.ok(key in group, `${key} is kept`);
+    const rows = goalsOf({ goals, currents: [], alive: () => true });
+    for (const row of rows) {
+      for (const key of rowKeys) assert.ok(key in row, `goal row keeps ${key}`);
+      assert.deepEqual(Object.keys(row).filter((key) => !rowKeys.includes(key)), ['archive_refused']);
+    }
+    assert.equal(rows.find((row) => row.name === 'b').archive_refused, null, 'null for a goal that is not finished');
+    const section = programmesSection({ goalRows: rows, programmes: [] });
+    const [group] = section.programmes;
+    for (const key of groupKeys) assert.ok(key in group, `programme keeps ${key}`);
+    assert.deepEqual(Object.keys(group).filter((key) => !groupKeys.includes(key)), ['finished']);
+    for (const key of sectionKeys) assert.ok(key in section, `programmes keeps ${key}`);
+    assert.deepEqual(Object.keys(section).filter((key) => !sectionKeys.includes(key)), []);
+    assert.deepEqual(group.goals.map((row) => row.name).sort(), ['a', 'b'], 'finished goals stay in programmes[].goals');
     assert.equal(group.finished, 1);
     assert.equal(JSON.parse(JSON.stringify(group)).finished, 1, 'in mc --json');
   });
