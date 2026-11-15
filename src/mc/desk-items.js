@@ -145,6 +145,8 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
     const question = currentQuestion(log.slice(0, index + 1), 'Martin');
     return firstLine(question?.question || question?.reason || 'Source question unavailable.');
   }
+  // A text item has no source to recover a label from: its label is the text it names.
+  if (item.kind === 'text') return firstLine(item.text ?? item.reference.replace(/^text:/u, ''));
   if (item.kind === 'decision') {
     const row = ledgerRows(read(ledgerPath(mcHome(env)))).find(row => row.at === item.source_at);
     return firstLine(row?.question || row?.reason || 'Source decision unavailable.');

@@ -267,7 +267,7 @@ const KEYS = [
   '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
   '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
   '  priority <programme>... --set <n>   higher number goes first within a stage',
-  '  r  refresh   ·   deploy  deploy to production',
+  '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
   '  start  ·  stop [--force]  ·  update [--force]   the runner, from here',
 ].join('\n');
 
@@ -289,6 +289,12 @@ export function runnerOrder(answer) {
   if (!['start', 'stop', 'update', '--update', 'lanes'].includes(verb)) return null;
   if (verb === 'stop' && rest.some((word) => !word.startsWith('-'))) return null;
   return [verb, ...rest];
+}
+
+/** `mc goal archive --all` — `c`: every finished goal archived that is safe to, each refusal named. */
+async function archiveAllVerb(io) {
+  const goal = await import('./goal.js');
+  return goal.archiveAllFinished(io);
 }
 
 /** `mc goal <argv>` — the goal verbs, loaded when a goal's number is typed. */
@@ -325,6 +331,8 @@ export async function menu(first, {
   showGoal = null,
   // Reuse the programme verb; no separate priority parser for the menu.
   programOrder = null,
+  // `mc goal archive --all` for `c` — a dependency, as runOrder is, so a test drives the menu without a goal on disk.
+  archiveOrder = null,
   // The page on newer code, when a frame said mc moved under it (`RESTART`).
   restart = () => 0,
 }) {
@@ -356,6 +364,14 @@ export async function menu(first, {
       continue;
     }
     if (answer === 'r' || answer === 'refresh') {
+      data = await redraw();
+      continue;
+    }
+    // Every finished goal that is safe to archive, archived now; each refusal is
+    // named under the page. Nothing is deleted, so there is nothing to confirm.
+    if (answer === 'c' || answer === 'clear') {
+      stdout.write('\n');
+      await (archiveOrder || archiveAllVerb)({ stdout, stderr });
       data = await redraw();
       continue;
     }

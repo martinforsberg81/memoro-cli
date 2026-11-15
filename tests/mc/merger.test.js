@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { parseGoal } from '../../src/mc/goals.js';
 import { writeRedDetail } from '../../src/mc/merge-red.js';
+import { deployMendPath, publishDeployMend, readDeployMends, requestDeployRepair, updateDeployMends } from '../../src/mc/deploy-repair.js';
 import { mainMendPath, mainMendPrompt, publishMainMend, readMainMends, removeFinishedWorktrees, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { mergesPath, parseQueue } from '../../src/mc/merge-queue.js';
 import { mergesSection } from '../../src/mc/page-collect.js';
@@ -1750,6 +1751,50 @@ describe('requestMainRepair — the main-red request file', () => {
     writeFileSync(mainMendPath(root, request.repo), 'broken');
     assert.ok(requestMainRepair({ ...request, root, now }).skipped);
     assert.equal(readFileSync(mainMendPath(root, request.repo), 'utf8'), 'broken');
+  });
+});
+
+describe('a deploy repair — the merger records what happened to its pull requests', () => {
+  const branch = 'mend/deploy-0123456789ab';
+  const now = () => new Date('2026-11-13T06:00:00Z');
+  const queued = () => {
+    requestDeployRepair({ root, row: { started: '2026-11-13T05:00:00.000Z', sha: 'a'.repeat(40), stopped_at: 'deployer', note: 'wrangler fell over' }, holder: 'martin@laptop', now });
+    updateDeployMends({ root }, (entries) => { Object.assign(entries[0], { state: 'running', branch }); });
+    publishDeployMend({ root, repo: 'memoro-cli', branch, pr: 671 });
+    publishDeployMend({ root, repo: 'memoro', branch, pr: 15203 });
+  };
+  const prs = () => Object.fromEntries(readDeployMends({ root })[0].prs.map((item) => [`${item.repo}#${item.number}`, item.state]));
+
+  it('a landed pull request is recorded landed, and the request is the runner\'s to settle (the merger decides nothing else)', async () => {
+    queued();
+    await landJob({ ...JOB, repo: 'memoro-cli', pr: 671 }, machine([green]).deps);
+    assert.deepEqual(prs(), { 'memoro-cli#671': 'landed', 'memoro#15203': 'open' });
+    assert.equal(readDeployMends({ root })[0].state, 'running', 'repaired is the runner\'s judgement, after every PR');
+  });
+
+  it('a pull request that did not land is a failed attempt: the request returns to the queue with the reason', async () => {
+    queued();
+    const red = { ok: false, merged: false, stopped_at: 'red', reason: '1 test red: s › a', gate: { candidate: { red_files: ['tests/a.test.js'], red_tests: [] } } };
+    await landJob({ ...JOB, repo: 'memoro-cli', pr: 671 }, machine([red]).deps);
+    const [entry] = readDeployMends({ root });
+    assert.deepEqual([entry.state, entry.failures], ['queued', 1]);
+    assert.match(entry.reason, /1 test red/u);
+  });
+
+  it('a pull request that belongs to no deploy repair changes nothing in its file', async () => {
+    queued();
+    const before = readFileSync(deployMendPath(root), 'utf8');
+    await landJob({ ...JOB, repo: 'memoro-cli', pr: 999 }, machine([green]).deps);
+    assert.equal(readFileSync(deployMendPath(root), 'utf8'), before);
+  });
+
+  it('a file that cannot be read is said and never stops the landing', async () => {
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(deployMendPath(root), '{');
+    const m = machine([green]);
+    const [answer] = await landJob({ ...JOB, repo: 'memoro-cli', pr: 671 }, m.deps);
+    assert.equal(answer.landed, true);
+    assert.equal(readFileSync(deployMendPath(root), 'utf8'), '{');
   });
 });
 

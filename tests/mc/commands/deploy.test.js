@@ -23,6 +23,7 @@ import {
   deployLogPath, followDeploy, ship, spawnDeployDefault, startDeployerDefault, startPreparerDefault,
   worktreeState, DISK_BUSY_WAIT_MS,
 } from '../../../src/mc/commands/deploy.js';
+import { readDeployMends } from '../../../src/mc/deploy-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { exerciseApp, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
 import {
@@ -3956,5 +3957,186 @@ describe('mc deploy — whether the release can be taken back', () => {
     );
     assert.equal(lastDeploy({ MC_WORK_ROOT: work }).sha, SHA, 'the last deployed row is the new one');
     assert.equal(now.take_back, 'no');
+  });
+});
+
+describe('mc deploy — a stop by a technical fault is queued for repair', () => {
+  const mendRoot = () => ({ root: work });
+  const queued = () => readDeployMends(mendRoot());
+  const failing = { spawnDeploy: async () => ({ code: 17 }) };
+
+  // Every stop of the table: what mc deploy does, and whether a repair is queued for it (D2).
+  const technical = [
+    ['a failed deploy script', () => attempt([], { extra: failing })],
+    ['a deployer that could not be started', () => attempt([], { extra: { startDeployer: () => ({ pid: null, error: 'spawn EACCES' }) } })],
+    ['suites that could not run', () => attempt([], { appError: 'the dev server did not answer within 180s' })],
+    ['git worktree add of mc\'s own main failed', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(null), fails: ['worktree add'] }) } })],
+    ['git status failed where main is', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, fails: ['status'] }) } })],
+    ['mc\'s own deploy worktree that is dirty', () => {
+      const OWN = deployWorktreePath(process.env);
+      return attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [' M src/app.js'], ahead: 0, behind: 0 } } }) } });
+    }],
+    ['mc\'s own deploy worktree that is ahead of origin/main', () => {
+      const OWN = deployWorktreePath(process.env);
+      return attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, worktrees: worktreeList(OWN), state: { [OWN]: { dirty: [], ahead: 2, behind: 0 } } }) } });
+    }],
+  ];
+  const notTechnical = [
+    ['a usage error', () => attempt(['memoro'])],
+    ['--dry-run', () => attempt(['--dry-run'])],
+    ['the headless refusal', () => attempt([], { extra: { env: { ...process.env, MC_WORK_ROOT: work, MC_HEADLESS: '1' } } })],
+    ['a red gate suite', () => attempt([], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'step 3 failed\n' } })],
+    ['a red run of the commit', () => attempt([], { runs: [RED_RUN()] })],
+    ['another deploy in progress', () => {
+      recordStart({ sha: LIVE, holder: 'martin@laptop', started: '2026-10-07T19:14:22.167Z', pid: 4242 }, { MC_WORK_ROOT: work });
+      return attempt([], { extra: { alive: (pid) => pid === 4242 } });
+    }],
+    ['a language run in progress', () => {
+      startRun({ manifest: 'sv-forms-cutover', lang: 'sv', sha: SHA, holder: 'martin@laptop', pid: 4242, started: '2026-10-10T08:00:00.000Z' }, { MC_WORK_ROOT: work });
+      return attempt([], { extra: { alive: (pid) => pid === 4242 } });
+    }],
+    ['a main that is dirty in a worktree that is not mc\'s own', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [' M src/app.js'], ahead: 0, behind: 0 } } }) } })],
+    ['a main that is ahead in a worktree that is not mc\'s own', () => attempt([], { extra: { git: fakeGit({ counts: { [`${LIVE}..${SHA}`]: 6 }, state: { [MAIN_WT]: { dirty: [], ahead: 2, behind: 0 } } }) } })],
+    ['a pick that would move production backwards', () => attempt([], {
+      extra: { git: walkingGit({ chain: () => [], counts: COUNTS, worktrees: worktreeList(deployWorktreePath(process.env)) }), fetchVersion: async () => ({ commit: TIP, build: 900, build_time: '2026-11-14T10:00:00Z' }) },
+      runs: [fullRunOf(TIP)],
+    })],
+  ];
+
+  // The note each stop leaves, so a row stands for the stop it names and not another one.
+  const notes = {
+    'git worktree add of mc\'s own main failed': /could not make mc's own main worktree/u,
+    'git status failed where main is': /git status failed in/u,
+    'mc\'s own deploy worktree that is dirty': /main is dirty in .*\/deploy\/memoro — 1 file/u,
+    'mc\'s own deploy worktree that is ahead of origin/main': /\/deploy\/memoro has 2 commit\(s\) not on origin\/main/u,
+    'a main that is dirty in a worktree that is not mc\'s own': /main is dirty in \/tmp\/does-not-exist\/mc\/plan/u,
+    'a main that is ahead in a worktree that is not mc\'s own': /\/tmp\/does-not-exist\/mc\/plan\/msr-core\/memoro has 2 commit\(s\)/u,
+    'a pick that would move production backwards': /nothing newer can ship/u,
+  };
+
+  for (const [name, stop] of technical) {
+    it(`${name} queues one repair, with the row it left`, async () => {
+      const { row } = await stop();
+      assert.ok(['failed', 'refused'].includes(row.outcome), `the stop left a ${row.outcome} row`);
+      if (notes[name]) assert.match(row.note, notes[name]);
+      const [request] = queued();
+      assert.equal(queued().length, 1);
+      assert.equal(request.state, 'queued');
+      assert.equal(request.rows[0].started, row.started);
+      assert.equal(request.rows[0].accept_red, false);
+    });
+  }
+
+  for (const [name, stop] of notTechnical) {
+    it(`${name} queues nothing`, async () => {
+      const { row } = await stop();
+      if (notes[name]) assert.match(row?.note || '', notes[name]);
+      assert.deepEqual(queued(), []);
+    });
+  }
+
+  it('a second technical stop joins the open request: never a second one', async () => {
+    await attempt([], { extra: failing });
+    await attempt([], { extra: { startDeployer: () => ({ pid: null, error: 'spawn EACCES' }) } });
+    const requests = queued();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].rows.length, 2);
+  });
+
+  it('--accept-red is carried by the request, and its holder is the deploy\'s', async () => {
+    await attempt(['--accept-red', 'the red is a known flake'], { runs: [RED_RUN()], extra: { ...failing, holder: { name: 'martin@laptop' } } });
+    const [request] = queued();
+    assert.equal(request.rows[0].accept_red, true);
+    assert.equal(request.rows[0].holder, 'martin@laptop');
+  });
+
+  it('the logs of the stop are copied beside the request', async () => {
+    mkdirSync(join(work, 'runner'), { recursive: true });
+    await attempt([], { extra: failing });
+    const [request] = queued();
+    assert.match(request.rows[0].copies, /runner\/deploy-mend\/[^/]+\/\d{4}-/u);
+  });
+
+  it('a queue that cannot be written changes nothing: the exit code, the row and the output are the deploy\'s', async () => {
+    const plain = await attempt([], { extra: failing });
+    work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-'));
+    const broken = await attempt([], { extra: { ...failing, mend: { write: () => { throw new Error('disk full'); } } } });
+    assert.equal(broken.code, plain.code);
+    assert.equal(broken.row.outcome, plain.row.outcome);
+    assert.equal(broken.row.stopped_at, plain.row.stopped_at);
+    assert.equal(broken.out.stderr.replace(/\d{4}-\d\d-\d\d[ T]\d\d:\d\d\S*/gu, '#'), plain.out.stderr.replace(/\d{4}-\d\d-\d\d[ T]\d\d:\d\d\S*/gu, '#'), 'the same words on stderr');
+    assert.deepEqual(queued(), []);
+    // The only line a queue adds to the output is the reading line (D6); the broken queue adds none.
+    assert.equal(/a repair of the deploy/u.test(broken.out.stdout), false);
+  });
+
+  it('a queue whose function throws changes nothing either', async () => {
+    const { code, row } = await attempt([], { extra: { ...failing, queueRepair: () => { throw new Error('boom'); } } });
+    assert.equal(code, 17);
+    assert.equal(row.outcome, 'failed');
+  });
+
+  it('the reading says one line about an open repair, and no other line', async () => {
+    await attempt([], { extra: failing });
+    const { out } = await attempt(['--dry-run']);
+    assert.match(out.stdout, /^mc: a repair of the deploy of \d{4}-\d\d-\d\d \d\d:\d\d is queued$/mu);
+    const none = await (async () => { work = mkdtempSync(join(tmpdir(), 'mc-deploy-work-')); return attempt(['--dry-run']); })();
+    assert.doesNotMatch(none.out.stdout, /a repair of the deploy/u);
+  });
+
+  it('the line is also said before a real deploy, and not in --json', async () => {
+    await attempt([], { extra: failing });
+    const real = await attempt([], { extra: failing });
+    assert.match(real.out.stdout, /a repair of the deploy of .* is queued/u);
+    const json = await attempt(['--dry-run', '--json']);
+    assert.doesNotThrow(() => JSON.parse(json.out.stdout));
+  });
+
+  describe('the retry', () => {
+    const retrying = (extra = {}) => {
+      const stops = [];
+      return { stops, extra: { retry: true, holder: { name: 'runner for martin, 2026-11-15T10:00' }, onStop: (stop) => stops.push(stop), ...extra } };
+    };
+
+    it('a technical stop of the retry queues nothing and says what stopped it', async () => {
+      const r = retrying(failing);
+      const { row } = await attempt([], { extra: r.extra });
+      assert.equal(row.outcome, 'failed');
+      assert.equal(row.holder, 'runner for martin, 2026-11-15T10:00');
+      assert.deepEqual(queued(), [], 'no new request: the runner counts it as a failure');
+      assert.equal(r.stops.length, 1);
+      assert.equal(r.stops[0].technical, true);
+    });
+
+    it('a stop of the retry that is not technical is told as such, and queues nothing', async () => {
+      const r = retrying();
+      await attempt([], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'x\n' }, extra: r.extra });
+      assert.deepEqual(queued(), []);
+      assert.equal(r.stops.at(-1).technical, false);
+    });
+
+    it('goes through the gate: a red suite stops the retry before the script', async () => {
+      const r = retrying();
+      const { spawned, calls, code } = await attempt([], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'x\n' }, extra: r.extra });
+      assert.equal(code, 1);
+      assert.equal(spawned.length, 0);
+      assert.ok(calls.suites.length > 0, 'the suites ran for the retry');
+    });
+
+    it('a red run of the commit refuses the retry as it refuses a typed deploy, and never accepts it', async () => {
+      const r = retrying();
+      const { spawned, row } = await attempt([], { runs: [RED_RUN()], extra: r.extra });
+      assert.equal(spawned.length, 0);
+      assert.equal(row.outcome, 'refused');
+    });
+
+    it('a retry that ships is one ordinary deployed row', async () => {
+      const r = retrying();
+      const { code, spawned, row } = await attempt([], { extra: r.extra });
+      assert.equal(code, 0);
+      assert.equal(spawned.length, 1);
+      assert.equal(row.outcome, 'deployed');
+      assert.deepEqual(r.stops, []);
+    });
   });
 });

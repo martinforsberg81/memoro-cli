@@ -154,6 +154,8 @@ the session says why.
 
 **Headless.** In a session with `MC_HEADLESS=1` four acts are refused, and `MC_HOOK_ALLOW=1` does not pass them: `mc deploy` without `--dry-run` (`headless-deploy`), `mc merge` or `gh pr merge` with `--admin` (`headless-admin`), setting `CLAUDE_ALLOW_PROD_WRANGLER` (`headless-production-data`) and `mc test token --set|--rm` (`headless-credentials`). A rule matches a command the line would run — after `;`, `&&`, `||`, `|` or a newline, inside `$(…)`, backticks, `eval` or `sh -c`, behind `env`, `sudo` and the like — and never text inside another command's quoted argument or a here-document: a question, a log entry or a commit message may name the act. The refusal names the way forward, `mc ask … --reserved <act>`. A line that cannot be parsed is matched as one string.
 
+The runner's own retry of a repaired deploy ([`mc-deploy.md`](mc-deploy.md)) is not a session and these rules do not apply to it; the rules are unchanged, and `mc repo mend deploy <id> repaired --reason "…"`, the mend session's form, is no deploy and is never refused by `headless-deploy`.
+
 The rules are `src/mc/hooks.js`, pure over a git runner and the inputs; the
 door is `src/mc/commands/hook.js`; `tests/mc/hooks.test.js` holds both.
 

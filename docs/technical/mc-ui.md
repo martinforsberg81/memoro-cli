@@ -62,8 +62,21 @@ programme whose record is invalid shows every unfinished goal held and says
 `after`, a goal's `held` is true when it is unfinished and its phase is not
 open, and `current_phase` is the lowest phase with an unfinished goal; the rule
 is `phaseStanding` ([mc-goals.md](mc-goals.md#phases)).
-Only finished history folds by default; `a` expands it. Malformed goals appear
-under NEEDS ATTENTION, without an inferred phase.
+Finished goals leave the page: the default view draws no done or dropped goal
+except one still at work (running, or owning a live session), which stays in
+its phase until the session ends, and `a` draws every finished goal still under
+`goals/` in its phase. The runner archives a finished goal at its next pass
+([mc-run.md](mc-run.md)), so what remains is usually a goal waiting on a
+refusal. A programme heading carries ` · n done` for its finished goals (`n`
+is `finished` in `--json`); a phase with nothing drawn is not drawn, and a
+programme with nothing to draw is its heading row alone. Under NEEDS ATTENTION,
+in both views: a malformed goal, without an inferred phase; a finished goal the
+runner refused to archive, with the red line `not archived — <why>` (`archive_refused`
+on the goal row in `--json`, from the runner's last such log entry after the
+entry that set the stage, else null); and a finished goal with an open pull
+request, with that pull request as its child row. There is no fold line for finished
+goals, and a session on a finished goal is shown under that goal, never as
+unassigned activity.
 
 Each numbered goal title is followed immediately by `stage build · status ready
 · criteria 1/3`, rather than distant right-aligned columns. Status is exactly
@@ -327,6 +340,7 @@ painted rows occupy the same columns.
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `r` / `refresh` | collect the current page and redraw immediately |
+| `c` / `clear` | archive every safe finished goal (`mc goal archive --all`), print its lines, then redraw; the key line reads `c  clear finished goals` |
 | `deploy [<args>]` / `mc deploy [<args>]` | run the deploy preflight and start the deploy, with no confirmation, then return to the live page as soon as the deploy starts; explicit `--follow` watches the log |
 | `start`, `stop [--force]`, `update [--force]`, `lanes [<n>]` | the runner order, then redraw |
 | `q`, empty | quit |

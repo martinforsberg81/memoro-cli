@@ -58,10 +58,11 @@ import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
 import { recordedProgrammes } from './programme-record.js';
 import { readProgrammePriority } from './programme-priority.js';
-import { FINISHED, SEQUENTIAL, goalName, goalSession, mergeAnswered, phaseOpen, phaseStanding, programmeOrder, programsGoals, readHold, sessions as goalSessions, waitsOnPerson } from './goals.js';
+import { FINISHED, SEQUENTIAL, goalName, goalSession, mergeAnswered, phaseOpen, phaseStanding, programmeOrder, programsGoals, readHold, sessions as goalSessions, stageEntryIndex, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
+import { deployMendLine, deployMendReading } from './deploy-repair.js';
 import { mainMendReading } from './main-repair.js';
 import { DEFAULT_LANES, readLaneCount } from './lane-count.js';
 import { languageState } from './language-runs.js';
@@ -1265,6 +1266,8 @@ export function programmesSection({
       // make it active: nothing is on it yet. The renderer folds these into
       // one line (Martin, 2026-11-02).
       dormant: goals.length === 0,
+      // How many of its goals are finished (done or dropped) and still under `goals/`: the count `a` shows.
+      finished: goals.filter((goal) => FINISHED.includes(goal.stage)).length,
       goals,
       ...phaseSection(goals, order(name)),
       proposals: proposalCounts[name] || 0,
@@ -1345,8 +1348,28 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = (
     // The hold `mc goal hold` wrote (`{by, tool, at, reason}`), or null.
     hold: readHold(goal.dir),
     problems: goal.problems,
+    // Why the runner could not archive this finished goal, from its last
+    // `not archived — …` entry after the one that set the stage; null when
+    // none (`archiveRefusal`).
+    archive_refused: archiveRefusal(goal),
     };
   });
+}
+
+const NOT_ARCHIVED = 'not archived — ';
+
+/**
+ * The reason of the runner's last refusal to archive a finished goal: the text
+ * after `not archived — ` of the last runner entry that says so and comes after
+ * the entry that set the stage (any such entry when the log has no stage entry).
+ * Null for an unfinished goal or when the runner has refused nothing.
+ */
+export function archiveRefusal(goal) {
+  if (!FINISHED.includes(goal.stage) || !goal.log) return null;
+  const start = stageEntryIndex(goal);
+  const after = start === null ? goal.log : goal.log.slice(start + 1);
+  const entry = after.findLast((item) => item.tool === 'runner' && item.comment?.startsWith(NOT_ARCHIVED));
+  return entry ? entry.comment.slice(NOT_ARCHIVED.length) : null;
 }
 
 /* ----------------------------------------------------------------- readers */
@@ -1710,7 +1733,7 @@ export async function collectPage({
         return { name: repo.name, nightly, deps: loadSaved(repo.name, home) };
       }),
       now,
-    }), main_mend: repos.map((repo) => ({ repo: repo.name, ...mainMendReading({ root, repo: repo.name }) })) },
+    }), main_mend: repos.map((repo) => ({ repo: repo.name, ...mainMendReading({ root, repo: repo.name }) })), deploy_mend: deployMendPage(root) },
     // File reads only, as the rest of the page: the runtime is never asked.
     docker: dockerSection({ state: readJson(statePath(home)), now, alive }),
     // What landed in the last 24 hours and what each goal took (landed.js).
@@ -1794,4 +1817,11 @@ function readProgrammeProposalCounts(home) {
     counts[programme.name] = files.filter((entry) => entry.isFile()).length;
   }
   return counts;
+}
+
+/** The open deploy repair as the page shows it: its state, its reading line and, when it waits on Martin, why. */
+function deployMendPage(root) {
+  const reading = deployMendReading({ root });
+  const entry = reading.entry;
+  return { error: reading.error, state: entry?.state || null, line: deployMendLine(entry), reason: entry?.reason || null, session_log: entry?.session_log || null };
 }

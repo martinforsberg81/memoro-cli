@@ -111,9 +111,14 @@ one.
 
 Martin investigates source questions against shared technical standards and
 programme design before raising a choice. Resolved details are not escalated.
-Any remaining choice is synthesized at design level with evidence,
-uncertainty, alternatives/tradeoffs, recommendation and proposed normative
-wording for an exact `docs/technical/` section. Original queue evidence remains
+A remaining choice that is a change to a text Martin holds is brought in the
+form of [mc-martin.md](mc-martin.md) (*Durable desk items*): what the text
+says, the proposed wording as its second part, and what was found, with no
+alternatives and no recommendation; any role but `desk-prepare` may leave one
+with `mc martin propose`. Alternatives/tradeoffs, one recommendation and the
+exact act stay for a reserved act. No clock changes anything on the desk: a
+brief waits for him, and nothing carries out a recommendation after a time.
+Original queue evidence remains
 unchanged. After a decision, the canonical standard and affected programme and
 goal contracts are reconciled before handoff. Get remains model-free and does
 not reinterpret historical questions.

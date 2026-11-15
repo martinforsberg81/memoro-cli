@@ -77,9 +77,11 @@ the goal is dropped. No verb sets landed.
   is shown to Martin with its reason.
 - A lesson that contradicts one of Martin's dated decisions (read the programme
   README and `docs/technical/`) is not a goal and not yours to change. Write
-  the brief for him, in Swedish, with the parts [decision](decision.md) sets
-  and each option as `- <key>: its consequence`, and run `mc martin lesson
-  brief <name> --file <brief>`: it becomes a desk item of sort `product`.
+  the brief for him, in Swedish, in the form [decision](decision.md) sets
+  (`## Vad den säger`, `## Vad som föreslås`, `## Vad som hittades`; no options),
+  and run `mc martin lesson brief <name> --text '<the text>' --file <brief>`: it
+  becomes a desk item of sort `text`. A brief not in the form is refused and the
+  lesson stays open.
 - You change no goal other than those you create in this session, and run no
   reserved act. `mc goal` refuses `stage`, `ready`, `drop`, `criterion set`,
   `log` and every other verb on a goal you did not create. You write no

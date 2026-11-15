@@ -15,6 +15,7 @@ const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
 const NOW = new Date('2026-11-14T12:00:00Z');
 const BODY = '## What happened\nAn item reached Martin that was not his.\n\n## The rule\nA question established practice answers is not his.\n\n## Where the change belongs\ncanon/roles/decision.md\n';
+const FORM = '## Vad den säger\nThe rule says A.\n\n## Vad som föreslås\nSay B instead.\n\n## Vad som hittades\nA lesson found that C contradicts it.\n';
 const BRIEF = 'Vad det gäller\n\n- keep: behåll regeln som den är\n- change: ändra regeln till att gälla alla\n\nRekommendation: keep.\n';
 
 function home() {
@@ -171,7 +172,7 @@ describe('a differing answer always leaves a lesson', () => {
     const h = home(); const item = briefedItem(h);
     for (const [argv, wanted] of [
       [['close', '--by', 'martin', '--no-option', '--chose', 'change'], /cannot be combined/u], [['close', '--by', 'martin', '--no-option', '--chose', 'keep'], /cannot be combined/u],
-      [['close', '--by', 'decision', '--no-option'], /only with --by martin/u], [['close', '--by', 'default', '--no-option'], /only with --by martin/u],
+      [['close', '--by', 'decision', '--no-option'], /only with --by martin/u], [['close', '--by', 'default', '--no-option'], /close --by default is refused/u],
       [['close', '--by', 'martin'], /--chose <key>.*--no-option/u], [['prepared', '--sort', 'product', '--no-option'], /--no-option belongs to close/u],
     ]) {
       const before = tree(h.root);
@@ -192,7 +193,7 @@ describe('a differing answer always leaves a lesson', () => {
     const [waiting] = sync();
     writeFileSync(join(itemDirectory(waiting, h.env), 'prepared.md'), 'Facts.'); writeFileSync(join(itemDirectory(waiting, h.env), 'brief.md'), BRIEF);
     assert.equal((await call(h, 'decision', ['item', waiting.id, 'prepared', '--sort', 'product'])).code, 0);
-    assert.equal((await call(h, 'decision', ['item', waiting.id, 'brief', '--sort', 'product', '--reversible', 'yes', '--recommend', 'keep'])).code, 0);
+    assert.equal((await call(h, 'decision', ['item', waiting.id, 'brief', '--sort', 'reserved', '--reversible', 'yes', '--recommend', 'keep'])).code, 0);
     writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready' })); // the goal left Martin: the sync closes the item by source
     sync();
     const source = readDeskItem(waiting.id, { env: h.env }).outcome;
@@ -210,9 +211,9 @@ describe('a differing answer always leaves a lesson', () => {
     const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('goal', 'alpha/one', at), kind: 'goal', reference: 'alpha/one', source_at: at, opened_at: at, state: 'prepared', sort: 'product', reversible: null, due_at: null, outcome: null };
     writeDeskItem(item, { env: h.env }); writeFileSync(join(itemDirectory(item, h.env), 'brief.md'), BRIEF);
     const before = tree(h.root);
-    assert.equal((await call(h, 'decision', ['item', item.id, 'brief', '--sort', 'product', '--reversible', 'yes', '--recommend', 'maybe'])).code, 2);
+    assert.equal((await call(h, 'decision', ['item', item.id, 'brief', '--sort', 'reserved', '--reversible', 'yes', '--recommend', 'maybe'])).code, 2);
     assert.deepEqual(tree(h.root), before);
-    assert.equal((await call(h, 'decision', ['item', item.id, 'brief', '--sort', 'product', '--reversible', 'yes', '--recommend', 'keep'])).code, 0);
+    assert.equal((await call(h, 'decision', ['item', item.id, 'brief', '--sort', 'reserved', '--reversible', 'yes', '--recommend', 'keep'])).code, 0);
     assert.equal(readDeskItem(item.id, { env: h.env }).recommend, 'keep');
   });
 });
@@ -260,12 +261,12 @@ describe('a failed decision pass and a lesson brief are written under the lock, 
   });
   it('briefs a lesson once: an item that appears before the hold is kept, and the second brief is refused', async () => {
     const h = home(); const [name] = await open(h);
-    const other = 'Vad det gäller\n\n- keep: behåll\n- change: ändra\n';
+    const other = FORM.replace('Say B instead.', 'Say D instead.');
     let made;
-    const lock = (root, fn) => { made = briefLesson({ env: h.env, name, brief: BRIEF, now: NOW }); return fn(); };
-    const twice = briefLesson({ env: h.env, name, brief: other, now: NOW, lock });
+    const lock = (root, fn) => { made = briefLesson({ env: h.env, name, text: 'canon/x.md', brief: FORM, now: NOW }); return fn(); };
+    const twice = briefLesson({ env: h.env, name, text: 'canon/x.md', brief: other, now: NOW, lock });
     assert.equal(twice.error, `lesson ${name} has been brought to Martin already`);
-    assert.equal(readFileSync(join(itemDirectory(made.item, h.env), 'brief.md'), 'utf8'), `${BRIEF.trim()}\n`, 'the brief of the first stands');
+    assert.equal(readFileSync(join(itemDirectory(made.item, h.env), 'brief.md'), 'utf8'), `${FORM.trim()}\n`, 'the brief of the first stands');
     assert.deepEqual(readDeskItem(made.item.id, { env: h.env }), made.item);
     assert.deepEqual(readdirSync(join(h.env.MC_WORK_ROOT, 'martin', 'items')).filter(n => !n.startsWith('.')), [made.item.id], 'one item');
     assert.equal(listLessons({ env: h.env })[0].state, 'dismissed');
@@ -274,12 +275,39 @@ describe('a failed decision pass and a lesson brief are written under the lock, 
     const h = home(); const [name] = await open(h); const holds = [];
     const before = tree(h.root);
     const lock = (root, fn, options) => { holds.push(options); throw new Error('the runner lock is held by pid 4242 — try again'); };
-    assert.throws(() => briefLesson({ env: h.env, name, brief: BRIEF, now: NOW, lock }), /held by pid 4242/u);
+    assert.throws(() => briefLesson({ env: h.env, name, text: 'canon/x.md', brief: FORM, now: NOW, lock }), /held by pid 4242/u);
     assert.deepEqual(holds, [{ strict: true, name: 'desk-item' }]); assert.deepEqual(tree(h.root), before);
     assert.equal(listLessons({ env: h.env })[0].state, 'open');
     const refused = io();
-    assert.equal(await martin(['lesson', 'brief', name, '--file', '-'], { ...refused, env: { ...h.env, MC_ROLE: 'martin' }, now: () => NOW, readStdin: () => BRIEF, lock }), 1);
+    assert.equal(await martin(['lesson', 'brief', name, '--text', 'canon/x.md', '--file', '-'], { ...refused, env: { ...h.env, MC_ROLE: 'martin' }, now: () => NOW, readStdin: () => FORM, lock }), 1);
     assert.equal(refused.o.stderr, 'mc: the runner lock is held by pid 4242 — try again\n');
+  });
+});
+
+describe('lesson brief brings a lesson as a proposed change to a text', () => {
+  it('lesson brief writes the item in the form, sort text, naming the text, and dismisses the lesson', async () => {
+    const h = home(); const [name] = await open(h);
+    const r = await call(h, 'martin', ['lesson', 'brief', name, '--text', 'canon/roles/decision.md#Rules', '--file', '-'], FORM);
+    assert.equal(r.code, 0, r.stderr);
+    const [item] = listDeskItems({ env: h.env });
+    assert.deepEqual([item.kind, item.state, item.sort, item.text, item.due_at, item.reversible], ['lesson', 'for-martin', 'text', 'canon/roles/decision.md#Rules', null, null]);
+    assert.equal(readFileSync(join(itemDirectory(item, h.env), 'brief.md'), 'utf8'), FORM);
+    assert.equal(listLessons({ env: h.env })[0].state, 'dismissed');
+  });
+  it('lesson brief refuses a brief that is not in the form, or no --text, with the lesson open and nothing written', async () => {
+    const h = home(); const [name] = await open(h);
+    const before = tree(h.root);
+    for (const [argv, stdin, pattern] of [
+      [['--text', 'canon/x.md'], BRIEF, /text before its first ## part/u],
+      [['--text', 'canon/x.md'], `${FORM}\n## Alternativ\n- a: keep\n`, /which is not one of the three/u],
+      [['--text', 'canon/x.md'], '## Vad den säger\nA.\n\n## Vad som föreslås\nB.\n', /lacks the part "## Vad som hittades"/u],
+      [[], FORM, /needs --text/u]]) {
+      const r = await call(h, 'martin', ['lesson', 'brief', name, ...argv, '--file', '-'], stdin);
+      assert.equal(r.code, 2, argv.join(' ')); assert.match(r.stderr, pattern);
+      assert.deepEqual(tree(h.root), before);
+    }
+    assert.equal(listLessons({ env: h.env })[0].state, 'open');
+    assert.deepEqual(listDeskItems({ env: h.env }), []);
   });
 });
 

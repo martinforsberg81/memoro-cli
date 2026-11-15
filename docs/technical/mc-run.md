@@ -417,8 +417,10 @@ Dropped goals are finalized and archived immediately through the shared drop
 operation on ordinary reconciliation, even without a stage timestamp. It
 closes exclusively owned PRs, cancels their queue rows, preserves PRs with an
 unfinished co-owner, and retains failed/unsafe cleanup for retry without
-starting a recovery session. Done goals retain the 24-hour archive hold, with
-one row in `goals/goal_log.md`; archive refusals are recorded once. Every five
+starting a recovery session. Done goals are archived the same way at the next pass, with no hold, each with
+one row in `goals/goal_log.md`; a goal a live session owns is left for the pass
+after the session ends, with no log entry, and any other archive refusal is
+recorded once. Every five
 minutes at most, `settleLanded` checks carried PRs and sets done once all are
 merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 
@@ -804,9 +806,25 @@ names.
 The full run's cadence (it follows main) and existing repair goals are unchanged.
 
 
+## Deploy mend
+
+A technical deploy stop ([`mc-deploy.md`](mc-deploy.md), *A stop that is repaired*) queues one request in
+`runner/deploy-mend.json`, offered at the main-red mend's rank by `deployMendWork` (an idle lane notices it on the control
+poll through `deployMendTicket`). `runDeployMend` is `runMainMend`'s machinery for both repositories: worktrees of memoro-cli
+and memoro on `mend/deploy-<digest>` from each `origin/main`, the session in memoro-cli's, `MC_ROLE=mend-session`,
+`MC_DEPLOY_MEND=<id>`, class fast. Two attempts; a dead runner's `running` request is a failed attempt. `settleDeployMends`
+(every `SETTLE_EVERY_MS`, with `settleMainMends`) restores a published handoff, reads each landed pull request's merge commit,
+marks the request repaired, and runs the **one retry** in the runner's own process through `run` of `commands/deploy.js`
+(holder `runner for …`, `retry: true`, no `MC_HEADLESS`), only when the runner's code (`runner.json` `commit`) and the pick
+contain the landed merge commits; the retry's stop is reported by `onStop`, never queued. The retry is marked `retried` when
+it starts and is never made twice: its technical stop is `retryFailed`, the request on Martin. A request whose retry owner is
+gone is settled from `deploys.tsv` first: deployed ends it, still running waits, anything else is `retryFailed`, never started
+again. Finished requests' worktrees are removed
+unless git refuses (files that are not mc's stay, and the line says so).
+
 ## Decision lane
 
-Prepared desk items and overdue reversible product/judgement briefs share the
+Prepared desk items share the
 machine-wide lane total, behind mend and ahead of other delivery sessions.
 `decisionWork`, `decisionPass` and `runDecision` use the same slot, disk,
 capacity, billing, worktree, watch/check-in and log machinery as main-red mend.
@@ -820,6 +838,6 @@ as `mc decision [<id>]`; nesting it inside a session is refused.
 The shared daily desk ceiling is rechecked before launch; unset means no
 ceiling. One unfinished ending retries once; a second in the item's current
 state, not counting a quota, offline or provider-refusing login ending, makes a
-non-reversible mechanical brief that waits on Martin instead of looping. Future,
-irreversible and reserved briefs never default. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
+non-reversible mechanical brief that waits on Martin instead of looping. A
+for-martin brief is never lane work, and no clock carries one out. See [mc-martin.md](mc-martin.md#unattended-decision-pass)
 for item state, failure evidence, authority and the fixed Swedish brief shape.

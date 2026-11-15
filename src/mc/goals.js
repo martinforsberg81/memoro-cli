@@ -534,10 +534,16 @@ export function noProgressStreak(log) {
  * log holds no such entry, as a stage set by hand in GOAL.json has none.
  */
 export function stageSince(goal) {
-  let at = null;
+  const start = stageEntryIndex(goal);
+  return start === null ? null : goal.log[start].at;
+}
+
+/** The index in the log of the entry that set the goal's current stage (see `stageSince`), or null. */
+export function stageEntryIndex(goal) {
+  let start = null;
   const stageOf = (entry) => entry.stage ?? (FINISHED.includes(entry.status) ? entry.status : null);
-  for (let i = goal.log.length - 1; i >= 0 && stageOf(goal.log[i]) === goal.stage; i -= 1) at = goal.log[i].at;
-  return at;
+  for (let i = goal.log.length - 1; i >= 0 && stageOf(goal.log[i]) === goal.stage; i -= 1) start = i;
+  return start;
 }
 
 /** Whether a goal waits on a person: Martin, in any stage, and not finished. */

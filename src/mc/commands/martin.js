@@ -14,10 +14,11 @@ import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
 import { costSum, deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
-import { FINISHED, goalReferences, programmeOrder, programsGoals } from '../goals.js';
+import { FINISHED, goalReferences, isGoalRef, programmeOrder, programsGoals } from '../goals.js';
 import { readRunRows } from '../landed.js';
 import { writeJsonAtomic } from '../atomic-write.js';
 import { HORIZON_STATES, PLAYBACK_PARTS, horizonsOpening, parsePlaybackInput, planDrop, planMove, planReached, planReopen, planSet, readHorizon, readHorizons, renderHorizons, updateDeskHorizons, validSlug } from '../desk-horizons.js';
+import { isTextSort, proposeText, textForm, textName } from '../desk-texts.js';
 import { addLesson, briefLesson, briefOptions, buildChanges, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
 
 export function usage() { return commandUsage('martin'); }
@@ -38,11 +39,12 @@ export const ROUTES = {
   prepare: { check: ({ positional }) => positional.length > 1 ? 'prepare takes at most one item id' : null },
   ceiling: { check: ({ positional }) => positional.length > 1 ? 'ceiling takes one USD amount or off' : null },
   items: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  propose: { strictValues: ['--text', '--file', '--goal'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
+  lesson: { strictValues: ['--kind', '--item', '--programme', '--place', '--file', '--goal', '--reason', '--text'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
   lessons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
   horizon: { booleans: ['--json'], strictValues: ['--title', '--file', '--position', '--reason'], check: ({ positional }) => positional.length > 2 ? `unknown argument ${positional[2]}` : null },
   horizons: { booleans: ['--json'], strictValues: ['--state'], check: ({ positional }) => positional.length ? `unknown argument ${positional[0]}` : null },
-  item: { booleans: ['--no-option'], strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
+  item: { booleans: ['--no-option'], strictValues: ['--sort','--reversible','--by','--summary','--summary-file','--recommend','--chose','--text'], check: ({ positional }) => positional.length < 1 ? 'mc martin item expects <id>' : positional.length > 2 ? `unknown argument ${positional[2]}` : null },
 };
 
 export async function run(argv, deps = {}) {
@@ -51,6 +53,7 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'ceiling') return ceiling(argv.slice(1), deps);
   if (argv[0] === 'items') return items(argv.slice(1), deps);
   if (argv[0] === 'item') return item(argv.slice(1), deps);
+  if (argv[0] === 'propose') return propose(argv.slice(1), deps);
   if (argv[0] === 'lesson') return lesson(argv.slice(1), deps);
   if (argv[0] === 'lessons') return lessons(argv.slice(1), deps);
   if (argv[0] === 'horizon') return horizon(argv.slice(1), deps);
@@ -112,7 +115,7 @@ function items(argv, deps) {
   const result = listDeskItems({ env: deps.env || process.env, state: parsed.flags.state });
   const shown = result.map((x) => ({ ...x, question: deskItemQuestion(x, { env, home }) }));
   if (parsed.flags.json) stdout.write(`${JSON.stringify(shown, null, 2)}\n`);
-  else for (const x of shown) stdout.write(`${x.id} · ${x.kind} · ${x.reference} · ${x.state} · ${x.sort || 'unsorted'} · ${x.due_at || 'no due date'} · ${x.question}\n`);
+  else for (const x of shown) stdout.write(`${x.id} · ${x.kind} · ${x.reference} · ${x.state} · ${x.sort || 'unsorted'} · ${x.question}\n`);
   return 0;
 }
 
@@ -153,13 +156,26 @@ function item(argv, deps) {
     if (!fresh) { stderr.write(`mc: unknown item ${id}; no item state or verb applies\n`); code = 2; return null; }
     const dir = itemDirectory(fresh, env), state = fresh.state;
     const refuse = (message) => { code = refused(fresh, verb, stderr, message); return null; };
-    if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
-      fresh.state = 'prepared'; fresh.sort = f.sort; return fresh;
+    if (verb === 'prepared' && state === 'new' && f.sort && ['mechanical','technical','text','product','judgement','reserved'].includes(f.sort) && exists(join(dir,'prepared.md'))) {
+      // product and judgement are the old names of the one sort for a text change; a new record never carries them.
+      fresh.state = 'prepared'; fresh.sort = isTextSort(f.sort) ? 'text' : f.sort; return fresh;
     }
-    if (verb === 'brief' && state === 'prepared' && ['product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
-      if (f.recommend !== null && !briefOptions(maybeRead(join(dir, 'brief.md'))).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
-      if (f.recommend !== null) fresh.recommend = f.recommend;
-      fresh.state = 'for-martin'; fresh.sort = f.sort; fresh.reversible = f.reversible === 'yes'; fresh.due_at = fresh.reversible ? new Date((deps.now || (() => new Date()))().getTime() + 48*60*60*1000).toISOString() : null; return fresh;
+    if (verb === 'brief' && state === 'prepared' && ['text','product','judgement','reserved'].includes(f.sort) && ['yes','no'].includes(f.reversible) && exists(join(dir,'brief.md'))) {
+      const briefText = maybeRead(join(dir, 'brief.md'));
+      if (isTextSort(f.sort)) {
+        // A change to a text of Martin's is brought in the form of mc-martin.md: no options, no recommendation, no due time.
+        if (f.recommend !== null) return refuse('a text change has no options and no recommendation: it is proposed or the wording stands; leave out --recommend');
+        const named = textName(f.text);
+        if (named.error) return refuse(`brief --sort text needs --text '<the text>': ${named.error}`);
+        const form = textForm(briefText);
+        if (form.error) return refuse(form.error);
+        fresh.text = named.text; fresh.goal = fresh.kind === 'goal' ? fresh.reference : null; fresh.sort = 'text';
+      } else {
+        if (f.recommend !== null && !briefOptions(briefText).has(f.recommend)) return refuse(`brief.md names no option "${f.recommend}"; write each option as "- <key>: its consequence"`);
+        if (f.recommend !== null) fresh.recommend = f.recommend;
+        fresh.sort = f.sort;
+      }
+      fresh.state = 'for-martin'; fresh.reversible = f.reversible === 'yes'; fresh.due_at = null; return fresh;
     }
     // A main-red question is answered by its repair state, never by a close: mc repo mend is the answer, and the sync closes the item.
     if (verb === 'close' && fresh.kind === 'main-red') {
@@ -167,7 +183,8 @@ function item(argv, deps) {
       if (held) return refuse(held);
     }
     if (f['no-option'] && verb !== 'close') return refuse('--no-option belongs to close');
-    if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin','default'].includes(f.by)) {
+    if (verb === 'close' && f.by === 'default') return refuse('close --by default is refused: no clock carries out a brief; close --by decision or --by martin');
+    if (verb === 'close' && (['prepared','for-martin'].includes(state) || sourceClosedWithSort(fresh)) && ['decision','martin'].includes(f.by)) {
       if (f['no-option'] && f.by !== 'martin') return refuse('--no-option is that Martin chose none of the options: only with --by martin');
       if (f['no-option'] && f.chose !== null) return refuse('--no-option and --chose cannot be combined: he chose an option or none');
       let summary = f.summary;
@@ -193,13 +210,48 @@ function item(argv, deps) {
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
   return code;
 }
+/**
+ * A change proposed to a text Martin holds, left at the desk in the form of mc-martin.md. Open to the person and every
+ * session role but desk-prepare, headless or not: a session without a goal has no other way to the desk. Every refusal
+ * is exit 2 with nothing written; a lock that cannot be had is exit 1.
+ */
+function propose(argv, deps) {
+  const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
+  const env = deps.env || process.env;
+  const fail = (message) => { stderr.write(`mc: ${message}\n`); return 2; };
+  const role = writerRole(env);
+  if (role === 'desk-prepare') return fail('role desk-prepare cannot propose a text change: it only prepares');
+  const parsed = scanArgs(argv, ROUTES.propose);
+  const error = parsed.error || ROUTES.propose.check(parsed);
+  if (error) return fail(error);
+  const f = parsed.flags;
+  const named = textName(f.text);
+  if (named.error) return fail(`mc martin propose: ${named.error}`);
+  if (!f.file) return fail('mc martin propose needs --file <path|-> with the brief: "## Vad den säger", "## Vad som föreslås", "## Vad som hittades"');
+  let goal = null;
+  if (f.goal !== null && f.goal !== undefined) {
+    if (!isGoalRef(f.goal)) return fail('--goal expects <programme>/<goal>');
+    const home = deps.home || programsHome(env);
+    if (!programsGoals({ home }).some((g) => `${g.programme}/${g.goal}` === f.goal && !g.problems.length)) return fail(`no readable goal ${f.goal}`);
+    goal = f.goal;
+  }
+  let text;
+  try { text = f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8'); } catch { return fail(`cannot read ${f.file}`); }
+  const now = (deps.now || (() => new Date()))();
+  let done;
+  try { done = proposeText({ env, text: named.text, brief: text, goal, now, ...(deps.lock ? { lock: deps.lock } : {}) }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  if (done.error) return fail(done.error);
+  stdout.write(`${done.item.id}\n`);
+  return 0;
+}
+
 // ---- Lessons ------------------------------------------------------------------------
 
 function lesson(argv, deps) {
   const stdout = deps.stdout || process.stdout, stderr = deps.stderr || process.stderr;
   const env = deps.env || process.env;
   const [verb, ...rest] = argv;
-  if (!['add', 'carry', 'dismiss', 'brief'].includes(verb)) { stderr.write('mc: usage: mc martin lesson add --kind <kind> [--item <id>] [--programme <p>] [--place <path>] --file <path|->\n  | carry <name> --goal <programme>/<goal> [--place <path>] | dismiss <name> --reason "…" | brief <name> --file <path|->\n'); return 2; }
+  if (!['add', 'carry', 'dismiss', 'brief'].includes(verb)) { stderr.write('mc: usage: mc martin lesson add --kind <kind> [--item <id>] [--programme <p>] [--place <path>] --file <path|->\n  | carry <name> --goal <programme>/<goal> [--place <path>] | dismiss <name> --reason "…" | brief <name> --text "<the text>" --file <path|->\n'); return 2; }
   const role = writerRole(env);
   const refusal = lessonRefusal(verb, role);
   if (refusal) { stderr.write(`mc: ${refusal}\n`); return 2; }
@@ -224,10 +276,12 @@ function lesson(argv, deps) {
   if (!name) return fail(`lesson ${verb} expects <name>`);
   if (verb === 'brief') {
     if (!f.file) return fail('lesson brief needs --file <path|-> with the brief for Martin');
+    const named = textName(f.text);
+    if (named.error) return fail(`lesson brief needs --text '<the text>': ${named.error}`);
     let text;
     try { text = f.file === '-' ? (deps.readStdin || (() => readFileSync(0, 'utf8')))() : (deps.readFile || readFileSync)(f.file, 'utf8'); } catch { return fail(`cannot read ${f.file}`); }
     let done;
-    try { done = briefLesson({ env, name, brief: text, now, ...(deps.lock ? { lock: deps.lock } : {}) }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+    try { done = briefLesson({ env, name, text: named.text, brief: text, now, ...(deps.lock ? { lock: deps.lock } : {}) }); } catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
     if (done.error) return fail(done.error);
     stdout.write(`${name} · dismissed · item ${done.item.id}\n`);
     return 0;
@@ -455,6 +509,7 @@ function programmeOf(item) {
   if (item.kind === 'goal') return item.reference.split('/')[0];
   if (item.kind === 'main-red') return `main-red ${item.reference.slice('main-red:'.length).split('/')[0]}`;
   if (item.kind === 'lesson') return 'lessons';
+  if (item.kind === 'text') return item.goal ? item.goal.split('/')[0] : 'texts';
   return 'jev ledger';
 }
 
@@ -474,7 +529,8 @@ function costReading({ env, now, read }) {
 
 /** `blocks`, and for a programme that states its phases `blocks_stated` (the words of its line). */
 function blocksOf(item, goals, home) {
-  const { count, stated } = laterPhaseGoals(item, goals, { home, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } } });
+  const goalItem = item.kind === 'text' ? { kind: 'goal', reference: item.goal ?? '' } : item;
+  const { count, stated } = laterPhaseGoals(goalItem, goals, { home, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } } });
   return { blocks: count, ...(stated ? { blocks_stated: true } : {}) };
 }
 
@@ -486,11 +542,21 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
   const items = listDeskItems({ env });
   const goals = programsGoals({ home });
 
-  const yours = items.filter((item) => item.state === 'for-martin').map((item) => ({
+  // What waits for Martin is a for-martin item of sort text (or its old names product and judgement) or reserved.
+  // A for-martin item of any other sort is the runner's own stop, which is not his: it is listed as stuck.
+  const forMartin = items.filter((item) => item.state === 'for-martin');
+  const entry = (item) => ({
     id: item.id, kind: item.kind, reference: item.reference, source_at: item.source_at, sort: item.sort, reversible: item.reversible,
-    ...blocksOf(item, goals, home), due: item.due_at && timeOf(item.due_at) - nowMs <= DAY_MS ? item.due_at : null,
-    brief: readDeskText(join(itemDirectory(item, env), 'brief.md')),
-  })).sort((a, b) => b.blocks - a.blocks || timeOf(a.source_at) - timeOf(b.source_at) || a.id.localeCompare(b.id));
+    ...blocksOf(item, goals, home), brief: readDeskText(join(itemDirectory(item, env), 'brief.md')),
+  });
+  const byWaiting = (a, b) => b.blocks - a.blocks || timeOf(a.source_at) - timeOf(b.source_at) || a.id.localeCompare(b.id);
+  const texts = forMartin.filter((item) => isTextSort(item.sort)).map((item) => ({
+    ...entry(item), text: item.text ?? item.reference, goal: item.goal ?? (item.kind === 'goal' ? item.reference : null),
+  })).sort(byWaiting);
+  const acts = forMartin.filter((item) => item.sort === 'reserved').map(entry).sort(byWaiting);
+  const stuck = forMartin.filter((item) => !isTextSort(item.sort) && item.sort !== 'reserved').map((item) => ({
+    id: item.id, reference: item.reference, sort: item.sort ?? null, prepare_failures: item.prepare_failures?.length ?? 0, decision_failures: item.decision_failures?.length ?? 0,
+  })).sort((a, b) => a.reference.localeCompare(b.reference) || a.id.localeCompare(b.id));
 
   const closed = items.filter((item) => item.state === 'closed' && item.outcome && timeOf(item.outcome.at) > sinceMs && timeOf(item.outcome.at) <= nowMs);
   const decided = closed.filter((item) => ['decision', 'default'].includes(item.outcome.by)).map((item) => ({
@@ -507,12 +573,13 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
   const horizonData = horizonsOpening({ env, since, now });
   return {
     generated_at: now.toISOString(), last_opened: last, since,
-    yours,
+    texts, acts,
     decided: { since, programmes, closed_by_source: closed.filter((item) => item.outcome.by === 'source').length },
     not_ready: {
       count: waiting.length,
       oldest: oldest ? { id: oldest.id, reference: oldest.reference, state: oldest.state, source_at: oldest.source_at, age_hours: Math.floor((nowMs - timeOf(oldest.source_at)) / 3600000) } : null,
       failed,
+      stuck,
     },
     cost: costReading({ env, now, read }),
     ...(horizonData ? { horizons: horizonData } : {}),
@@ -520,23 +587,33 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
   };
 }
 
+/** What an item blocks, as the end of its line: `, blocks 2 later-phase goals of <programme>`, or nothing. */
+function blocksPhrase(item) {
+  if (!item.blocks) return '';
+  const programme = (item.goal ?? item.reference).split('/')[0];
+  return item.blocks_stated ? `, blocks ${plural(item.blocks, 'goal')} of ${programme} whose ${item.blocks === 1 ? 'phase waits' : 'phases wait'} for it`
+    : `, blocks ${plural(item.blocks, 'later-phase goal')} of ${programme}`;
+}
+
 /** The opening as the text the session starts from. */
 export function renderOpening(data) {
   const out = [];
   out.push(`Martin's desk, opened ${data.generated_at}. Decided-without-you covers ${data.since} to ${data.generated_at}${data.last_opened ? '' : ' (first opening)'}.`);
-  out.push('', `## Yours (${data.yours.length})`);
-  if (!data.yours.length) out.push('', 'Nothing waits for you.');
-  data.yours.forEach((item, index) => {
-    const programme = item.reference.split('/')[0];
-    const blocks = !item.blocks ? ''
-      : item.blocks_stated ? `, blocks ${plural(item.blocks, 'goal')} of ${programme} whose ${item.blocks === 1 ? 'phase waits' : 'phases wait'} for it`
-        : `, blocks ${plural(item.blocks, 'later-phase goal')} of ${programme}`;
-    out.push('', `### ${index + 1}. ${item.reference} · ${item.sort ?? 'unsorted'} · ${item.reversible ? 'reversible' : 'not reversible'}`);
-    out.push(`Item ${item.id}, waiting since ${item.source_at}${blocks}.`);
-    if (item.due) out.push(`Due ${item.due}: if nothing is said by then, the recommendation in the brief is carried out and the item is closed by default.`);
+  if (data.horizons) out.push('', ...renderHorizons(data.horizons));
+  out.push('', `## Proposed changes to your texts (${data.texts.length})`);
+  if (!data.texts.length) out.push('', 'No change to a text of yours is proposed.');
+  data.texts.forEach((item, index) => {
+    out.push('', `### ${index + 1}. ${item.text}`);
+    out.push(`Item ${item.id}, waiting since ${item.source_at}, ${item.goal ? `goal ${item.goal}` : 'no goal'}${blocksPhrase(item)}.`);
     out.push('', item.brief ?? '(brief.md is missing)');
   });
-  if (data.horizons) out.push('', ...renderHorizons(data.horizons));
+  out.push('', `## Your acts (${data.acts.length})`);
+  if (!data.acts.length) out.push('', 'No act of yours waits.');
+  data.acts.forEach((item, index) => {
+    out.push('', `### ${index + 1}. ${item.reference} · ${item.sort ?? 'unsorted'} · ${item.reversible ? 'reversible' : 'not reversible'}`);
+    out.push(`Item ${item.id}, waiting since ${item.source_at}${blocksPhrase(item)}.`);
+    out.push('', item.brief ?? '(brief.md is missing)');
+  });
   out.push('', '## Decided without you');
   if (!data.decided.programmes.length) out.push('', 'Nothing was decided without you in this interval.');
   for (const group of data.decided.programmes) {
@@ -547,6 +624,7 @@ export function renderOpening(data) {
   out.push('', '## Not ready');
   const nr = data.not_ready;
   out.push('', nr.count ? `${plural(nr.count, 'item')} still new or prepared. Oldest: ${nr.oldest.reference} (${nr.oldest.state}), waiting ${nr.oldest.age_hours} hours since ${nr.oldest.source_at}.` : 'Nothing is waiting for preparation.');
+  if (nr.stuck.length) out.push(`Stuck after the decision pass, not yours: ${nr.stuck.map((item) => `${item.reference} (preparation failed ${item.prepare_failures} time${item.prepare_failures === 1 ? '' : 's'}, decision ${item.decision_failures} time${item.decision_failures === 1 ? '' : 's'})`).join('; ')}.`);
   if (nr.failed.length) out.push(`Failed: ${nr.failed.map((item) => `${item.reference} (preparation failed ${item.prepare_failures} time${item.prepare_failures === 1 ? '' : 's'}, decision ${item.decision_failures} time${item.decision_failures === 1 ? '' : 's'})`).join('; ')}.`);
   out.push('', '## Cost');
   const cost = data.cost;
