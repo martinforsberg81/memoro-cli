@@ -243,3 +243,27 @@ test('archiveGoal says a directory it cannot move, and that its worktrees are go
   const result = archiveGoal(goal(), ctx);
   assert.match(result.refused, /could not be moved .* \(exists\); its worktrees are gone/u);
 });
+
+test('archiving the last goal of a phase renumbers a stated programme\'s goals and keeps each dependency on its phase', () => {
+  const GOALS = '/w/programs/prog/goals';
+  const record = { schema: 'mc-programme', version: 1, horizon: null, end: 'e', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated', after: { 3: [1], 4: [2] } } };
+  const recordPath = '/w/programs/prog/PROGRAMME.json';
+  const store = { [recordPath]: `${JSON.stringify(record, null, 2)}\n` };
+  const phases = { one: 1, two: 2, three: 3, four: 4 };
+  for (const [name, phase] of Object.entries(phases)) store[`${GOALS}/${name}/GOAL.json`] = goalJson({ phase, stage: name === 'one' ? 'done' : 'build' });
+  const names = (path) => [...new Set(Object.keys(store).filter((key) => key.startsWith(`${path}/`)).map((key) => key.slice(path.length + 1).split('/')[0]))].sort();
+  const { ctx } = ctxOf();
+  const model = {
+    ...ctx,
+    read: (path) => store[path] ?? null,
+    write: (path, text) => { store[path] = text; },
+    list: (path) => (path === '/w/programs' ? ['prog'] : names(path)),
+    move: (from, to) => { for (const key of Object.keys(store)) if (key.startsWith(`${from}/`)) { store[`${to}${key.slice(from.length)}`] = store[key]; delete store[key]; } },
+  };
+  const subject = goal({ programme: 'prog', goal: 'one', dir: `${GOALS}/one`, phase: 1 });
+  const result = archiveGoal(subject, model);
+  assert.equal(result.refused, undefined);
+  const phaseOf = (name) => JSON.parse(store[`${GOALS}/${name}/GOAL.json`]).phase;
+  assert.deepEqual(['two', 'three', 'four'].map(phaseOf), [1, 2, 3]);
+  assert.deepEqual(JSON.parse(store[recordPath]).phases, { order: 'stated', after: { 3: [1] } });
+});
