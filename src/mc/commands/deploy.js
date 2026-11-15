@@ -95,7 +95,7 @@ import { stripAnsi } from '../../lib/prompt.js';
 import { defaultRepos } from '../brief-collect.js';
 import {
   closeAbandoned, DEPLOYED, FAILED, lastDeploy as lastDeployRow, readDeploys, recordEnd, recordRefusal, recordStart,
-  runningDeploy, versionCells,
+  runningDeploy, versionCells, withDeploysLock,
 } from '../deploys.js';
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
@@ -964,7 +964,10 @@ export async function run(argv, deps = {}) {
   // an abandoned row, the deployer's start and its row are one step.
   const lock = deps.lock || realLock;
   const startDeployer = deps.startDeployer || startDeployerDefault;
-  const started = lock(root, () => {
+  // The same lock the row writers take, and held once: `withDeploysLock` runs
+  // the writers called inside this step (`recordStart`, `closeAbandoned`,
+  // `recordRefusal`) within this hold instead of waiting for it.
+  const started = withDeploysLock(env, () => {
     if (refuseRunning()) return null;
     // The ancestor rule once more, against the last deployed row as it stands now: a deploy that
     // landed since the reading may have moved production past this pick.
@@ -1005,7 +1008,7 @@ export async function run(argv, deps = {}) {
       sha: plan.sha, holder: holder.name, pid: deployer.pid ?? '', started: key.started, gate: cells, takeBack: reading,
     }, env);
     return { key, deployer };
-  }, { name: 'deploy' });
+  }, { lock, root, name: 'deploy' });
   if (!started) return 1;
   const { key, deployer } = started;
   // A deployer run in this process — a test's — is run now, after its row is
