@@ -56,8 +56,7 @@
  * watching, not the deploy, and `mc deploy --follow` watches again (ruling 30,
  * 2026-10-09). It takes no repository lease. A merge round holds the lease for
  * its whole gate, and until then a deploy waited up to eight minutes for that
- * window and gave up with exit 3; but the worktree is moved by nothing but
- * this verb, and a merge landing on `origin/main` changes nothing the build
+ * window and gave up with exit 3; but a merge landing on `origin/main` changes nothing the build
  * sees (ruling 26). What it does wait for is the gate round in flight, and
  * the merger starts none while it runs (`waitForGate`, 2026-10-10): beside a
  * merge round the build swapped for 26 minutes. There is no queue: what keeps two deploys apart is the
@@ -1076,10 +1075,10 @@ export async function holdBuildLane(job, deps = {}) {
  * Everything after the admission, in the deployer's own process: the round in
  * flight waited for (`waitForGate`), the worktree fast-forwarded to
  * `origin/main`, the script run there, the row completed with the sha that
- * shipped. No repository lease is held — the worktree is moved by nothing
- * but this, and the merger lands nothing while the row says `running`
- * (rulings 26, 30) — but the heavy gate lock is, for the whole deploy
- * (`holdBuildLane`).
+ * shipped. No repository lease is held (rulings 26, 30), and the merger lands nothing
+ * while the row says `running` — but the heavy gate lock is, for the whole deploy
+ * (`holdBuildLane`), and in mc's own worktree so is the worktree's holder, taken
+ * before the placing and kept until the script has exited (`takeHolder`).
  */
 export async function ship(job, deps = {}) {
   const stdout = deps.stdout || process.stdout;

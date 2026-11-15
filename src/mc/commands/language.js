@@ -9,6 +9,11 @@
  * (`deploySource`), and adds what is around them — the reading, the cache,
  * the key.
  *
+ * In mc's own deploy worktree the verb takes the worktree's holder
+ * (`takeHolder`, deploy-worktree.js) before it fast-forwards the tree and keeps
+ * it until its last read or act has exited, so it never moves the tree under a
+ * deploy's exercise or deployer.
+ *
  * This file, so far:
  *
  *   mc language                  every language from the cache — offline, instant

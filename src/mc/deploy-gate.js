@@ -348,6 +348,11 @@ function gitIn(worktree, args) {
  * would run against it are `cannot-run`, as is a checkout whose server was
  * started on uncommitted changes.
  *
+ * That is the shared-checkout route. With `own` — main held in mc's own deploy
+ * worktree, or nowhere — the suites run in that worktree instead (`exerciseOwn`):
+ * its holder taken, the tree placed at `sha` by `placeWorktree`, the servers
+ * ensured unpinned in it, and the shared checkout not touched at all.
+ *
  * Returns `{ suites, commit, error, not_gate }`: one `{ name, state, seconds,
  * tail }` per suite that gates, `state` one of `ok`, `red`, `skipped` (the
  * declared skip code; `tail` carries its reason) or `cannot-run`; `not_gate`
