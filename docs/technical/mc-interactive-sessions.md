@@ -64,7 +64,7 @@ never remembered per session.
   - `mc: <name> is running[ on <host>]. Open it in the Claude app or at claude.ai/code: session "<name>".`
   - `mc: terminal view: mc <entrance>[ <programme>]`
 - `--bg` is refused before anything starts, with a message and no session:
-  - on a Codex launch: `--bg is for Claude sessions: a Codex session has no client but the terminal`;
+  - on a launch of a tool that does not declare `BACKGROUND` (Codex, agy): `--bg is for tools whose session outlives the terminal (<the tools that declare it>); a <tool> session has no client but the terminal`, the tool and the list read from the adapter registry;
   - off the persistent path: `--bg needs a configured server or an SSH entrance on Linux; here the session lives in this terminal`.
 
 A session is ended with `/exit` in the app or the terminal, or on its host with
@@ -301,3 +301,54 @@ rejoin, suffix naming and tool environment for each provider. They do not
 certify a real Mac→TC SSH logout, host reboot, or future provider CLI changes.
 The probes used Claude Code 2.1.325 and the Codex `app-server` of the Codex
 CLI installed on TC.
+
+## A tool that lives in the terminal: agy
+
+agy (Antigravity CLI) declares `PERSISTENT_DRIVER: 'terminal'`,
+`SERVER_SESSION { mechanism: 'tty', name: 'Antigravity' }`, `BACKGROUND: false`
+and `REMOTE_CONTROL: false`. Its session is the process in the terminal that
+started it: there is no join, no PTY host, no tmux and no remote control, and
+`mc plan`, `mc martin` and the server's `mc session` take it through
+`openInWorkArea` like the other tools, with `--agy` (or `agy` where a tool name
+is taken) naming it.
+
+- **Launch.** The argv is `-i <marker + instructions + INSTRUCTIONS_SEPARATOR +
+  prompt>` as one argument. The marker is a single line,
+  `<!-- mc-launch-v1 {"launch":<uuid>,"role":…,"programme":…} -->`, that leads
+  the opening message (after agy's `<USER_REQUEST>` wrapper); a marker quoted
+  later in a message is not one. A resume is `--conversation <id> --model …`
+  and carries no instructions. The plan model is `gemini-4-argon-high`, and
+  the folder trust is answered by `agy-trust`.
+- **Which conversation.** agy mints its own conversation id, so mc finds it:
+  a conversation's workspace comes from its database (a length-prefixed
+  `file://` string in `trajectory_metadata_blob`), its launch nonce from the
+  marker, and a guarded plan resumes the conversation its own launch log names
+  (`IDENTITY_READER: 'launch-log'`). A database mc cannot read, or one that
+  names no workspace, means the conversation is not listed, resumed or
+  deleted.
+- **One at a time.** The terminal path takes the desk lock across the pick, the
+  held check and the register row (the row carries `conversation` and
+  `launch`), then releases it before the process starts. A conversation is held
+  by a live register row three ways: the conversation it resumed, the launch
+  nonce its opening message carries, and — for a launch with no marker — a
+  conversation with no nonce created at or after the row's start. A held
+  conversation is refused with exit 2, `held by a running Antigravity CLI
+  session (pid N); no second one was started`; a row whose process is gone
+  holds nothing.
+- **`--bg`** is refused with the tool-neutral text above, before anything is
+  started.
+- **On a server** (`mc session`, [mc-server.md](mc-server.md)): `list` answers
+  from the live register rows of the desk, `start` runs the same terminal path
+  under the lock, and `join` is refused with exit 2 and the way on (start a new
+  one or resume its conversation).
+- **Conversations, status and cost.** Listed under the tool's canonical id
+  (`antigravity-cli`) with a nonce, a label past the marker and the
+  instructions, and a model from the last `PLANNER_RESPONSE`
+  (`agy-step`); `mc conversations delete` removes exactly the named
+  conversation's brain directory, database and annotations
+  (`agy-conversation`), refusing an open or off-shape one. Tail, model and the
+  provider counts on the page follow the adapter's declarations; the desk cost
+  counts only conversations that carry the marker and says how many it left out
+  ([mc-ui.md](mc-ui.md#manager-header)). `mc hook install` registers agy's own
+  hooks ([mc-hooks.md](mc-hooks.md)), and `mc skills sync` its skills
+  ([mc-skills.md](mc-skills.md)).

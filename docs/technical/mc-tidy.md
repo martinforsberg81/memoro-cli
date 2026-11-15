@@ -56,6 +56,7 @@ stays.
 | `${MC_HOME}/shots/` | MC screenshots | regular `.png` files in non-hidden directories, recursively; hidden directories and `sessions/` stay (F) |
 | `${CODEX_HOME:-~/.codex}/generated_images/` | Codex generation groups | regular `.png`, `.jpg`, `.jpeg` and `.webp` files directly in UUID-named session directories, older than 72 hours and only if the group is wholly old (F) |
 | `~/mc/runner/scratch/<stem>/` | a runner session's scratch: logs, patches, replay worktrees, DerivedData, registered source exports | a clean registered worktree with ended ownership evidence, or marker-less legacy worktrees with a matching finalized runner log pair; `DerivedData` only with a valid ended ownership record; a verified registered export of an ended session (S, [Registered source exports](#registered-source-exports)); under S alone never logs, patches, receipts or the directory; the whole directory goes only as S-whole below |
+| `~/.gemini/antigravity-cli/brain/<UUID>/.system_generated/` | agy's generated files of one conversation | the directory whole, when every entry in it is a regular file or directory, the newest is older than seven days and no process holds one open (T); nothing else under `~/.gemini` |
 | `${CODEX_HOME:-~/.codex}/sessions/YYYY/MM/DD/` | Codex session transcripts | a regular `*.jsonl` file older than seven days and not held open, and the date directory its transcripts leave empty (C); nothing else under the Codex home |
 | Exact native-phone outputs, worker bundles in registered worktrees, and named per-user caches | rebuildable outputs and caches | the allowlisted paths under B, with finished-goal ownership or 72-hour retention and fresh inactivity/identity checks |
 | `~/mc/gate-cache/`, `~/mc/gate/`, `~/.memoro/mc/selection/` | a directory per repository slug (`repoFileSlug` of its path) | a slug directory no repository mc knows hashes to, untouched for a day, with no process in it (K); under a slug a repository mc knows has, an entry no round has used for 14 days, or staging older than a day (A) |
@@ -67,7 +68,8 @@ for plan goal checkouts; it reads no execution register and retains S, F and
 the rebuildable-cache rule B approved by Martin on 2026-11-06. Rules version 12
 adds the `scratch-export` kind to S, the registered source exports below. Rules
 version 13 adds S-whole, the whole-directory rule for an ended session's scratch,
-and C, the Codex session transcripts, both below (Martin, 2026-11-09). Scratch
+and C, the Codex session transcripts, both below (Martin, 2026-11-09). Rules
+version 14 adds T, agy's generated files below. Scratch
 cleanup follows S and S-whole below and
 [Registered source exports](#registered-source-exports); transcripts and logs
 outside F's exact root and shape, and outside C's `sessions/` shape, remain
@@ -96,6 +98,22 @@ malformed or warning-bearing evidence keeps its entire batch. macOS `lsof`
 returns exit 1 for a mixed batch of open and closed requested files; valid
 NUL-delimited matches with no diagnostics identify the open files. Other
 failures keep the batch.
+
+**T — agy's generated files (rules version 14).** agy keeps a conversation in
+`~/.gemini/antigravity-cli/brain/<UUID>/`; under it `.system_generated/` holds
+what agy made for itself (logs, the full transcript, tool results). T lists
+`brain/<UUID>/.system_generated/` and removes it whole, through `rmTree`, when:
+every entry in it is a regular file or a directory (a link of any kind keeps
+it); the newest mtime anywhere in it is older than seven days; and no process
+holds anything in it open (one `lsof` batch over the directories old enough).
+Each condition is read again at `--apply`. It is the one thing T touches: a
+conversation's transcript, its database under `conversations/`, its
+annotations, agy's settings, hooks and skills, and every other file under
+`~/.gemini` are never read or removed by tidy, and anything that cannot be read
+keeps the directory with its reason. A person deletes a whole conversation with
+`mc conversations`, which removes `brain/<id>/`, the database (with its `-wal`
+and `-shm`) and `annotations/<id>.pbtxt`, and refuses one that is open or not
+what agy makes.
 
 **G — planning transcripts.** Per `~/.claude/projects/<dir>`, the transcripts
 whose cwd is in `plan/<programme>`: the newest stays at any age, and so does

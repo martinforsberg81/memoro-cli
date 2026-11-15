@@ -38,6 +38,7 @@ changes need no skill regeneration.
 | --- | --- |
 | Claude Code | `~/.claude/skills/mc/`, or `$CLAUDE_CONFIG_DIR/skills/mc/` |
 | Codex | `~/.agents/skills/mc/` |
+| Antigravity CLI (agy) | `~/.gemini/antigravity-cli/skills/mc/` |
 
 `mc skills` and `mc roles check` report bundle drift and marked legacy entries.
 `mc skills sync` builds and validates the source bundle before writing, stages
