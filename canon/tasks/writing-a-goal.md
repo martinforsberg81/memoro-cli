@@ -25,10 +25,10 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
    Repair what it finds yourself and read again; after two rounds decide, and move with `mc goal stage <p>/<g> build --reason "…"`.
    `mc goal stage <p>/<g> build` moves a goal that is complete and has an OK reading of its current text; any change to the text asks for a new one.
 
-Work that is several pieces in order is several goals, each in the phase after the one before: a goal starts only when every goal of its
-programme in a lower phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later; goals of one phase run side by side; phases
-may be renumbered; a `draft` goal holds later phases back too. The cut into goals and phases is
-[designing a programme](designing-a-programme.md): a finished, read brief stands in `build` in its phase.
+Work that is several pieces in order is several goals in phases. In a programme whose record states its phases a goal starts when every goal of each
+phase its own is stated to wait for is done or dropped (`mc programs after`); in every other programme, when every goal in a lower phase is. `mc goal phase
+<p>/<g> <n>` changes the order later; goals of one phase run side by side; a `draft` goal holds back the phases that wait for its phase. The cut into goals and
+phases is [designing a programme](designing-a-programme.md): a finished, read brief stands in `build` in its phase.
 
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others

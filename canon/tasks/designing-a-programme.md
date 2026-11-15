@@ -39,7 +39,7 @@ without a record keeps [the programme page](references/programme-readme.md) and 
    direction. No goal is written with a decision still open.
 4. Cut work into goals buildable start to finish by headless sessions. Investigate, measure and design before the cut, not as
    the goal's first task ([goal design](references/goal-design.md)).
-5. Order by prerequisites and shared files: independent goals share a phase; dependent goals go later. A prerequisite is a phase dependency, never a note.
+5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
 7. Write/read back the README as a headless session will, in the order of its page's headings (for a

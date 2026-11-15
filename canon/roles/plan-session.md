@@ -48,7 +48,12 @@ When `MC_HEADLESS=1`, the runner assigns exactly one next draft, named by
 its goals are draft, done or dropped. The next draft is the lowest phase,
 then oldest creation time, then name. A first draft waiting on Martin or held, or
 unreadable goal data, holds automatic planning. A programme with no drafts
-starts no plan session.
+starts no plan session. In a programme whose record states its phases the
+trigger reads each phase: an open phase with none of its goals in build, review
+or merge offers its oldest draft when that draft is ready, not held and not
+decision-claimed; the offered draft of the lowest phase is next, whatever other
+phases build, and a first draft waiting on Martin or held holds its own phase
+only. One plan session runs in a programme at a time.
 
 Complete that draft's planning: read the programme README first, its relevant
 design, technical contracts, goal and log, and the affected code.
