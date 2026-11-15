@@ -525,7 +525,47 @@ export async function executeCheck({ job, env = process.env, deps = {}, say = ()
     written = { written: false, why: oneLine(error?.message || error) };
   }
   if (!written.written) say(`the row was not written (${written.why}); the verdict file stays for the runner to copy`);
-  return { code: 0, verdict, written: written.written, why: written.why };
+  // A red is reacted to at once, by a process of its own: no chore pass and no sleep stands between
+  // the verdict and the reaction. A red that is not in the row yet is the chore's to restore, and
+  // the chore's first step then starts the reaction.
+  let reaction = null;
+  if (verdict.check === RED && written.written) {
+    try {
+      reaction = (deps.startReaction || startReactionDefault)({ started: row.started }, { env });
+      say(reaction.pid ? `the take-back reaction started (pid ${reaction.pid})` : `the take-back reaction was not started: ${reaction.error || 'no process'}`);
+    } catch (error) {
+      say(`the take-back reaction was not started: ${oneLine(error?.message || error)}`);
+    }
+  }
+  return { code: 0, verdict, written: written.written, why: written.why, reaction };
+}
+
+/** The reaction's script: `take-back-run.js`, started by the check process and by the runner's chore, and nobody else. */
+export const REACTION_RUN = fileURLToPath(new URL('./take-back-run.js', import.meta.url));
+
+/**
+ * The reaction to a red, started detached in its own process group (so that the
+ * check's deadline kill does not reach it), stdin closed, its output in
+ * `<started>.take-back.log`. The script is the installed mc's. `{ pid, log }` or
+ * `{ pid: null, log, error }`.
+ */
+export function startReactionDefault(job, { env = process.env, spawnProcess = spawn } = {}) {
+  const log = join(checkDir(env), `${job.started}.take-back.log`);
+  let fd = null;
+  try {
+    mkdirSync(dirname(log), { recursive: true });
+    fd = openSync(log, 'a', 0o644);
+    const run = installedScript(join('src', 'mc', 'take-back-run.js'), REACTION_RUN, env);
+    const child = spawnProcess(process.execPath, [run.path, job.started], {
+      cwd: dirname(run.path), detached: true, stdio: ['ignore', fd, fd], env,
+    });
+    child.unref();
+    return { pid: child.pid ?? null, log };
+  } catch (error) {
+    return { pid: null, log, error: error?.message || String(error) };
+  } finally {
+    if (fd != null) try { closeSync(fd); } catch { /* closed */ }
+  }
 }
 
 /** The entry's script: `deploy-check-run.js`, started by the runner and nobody else. */

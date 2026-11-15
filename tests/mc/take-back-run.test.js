@@ -6,12 +6,18 @@
  * file, and the runner lock the real one on a temporary root.
  */
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
+import { ledgerPath, readLedger, updateLedger } from '../../src/mc/check-red-ledger.js';
+import { verdictPath } from '../../src/mc/deploy-check.js';
 import { deployWorktreePath } from '../../src/mc/deploy-worktree.js';
+import { checkMemberKey, mainMendPrompt, readMainMends, updateMainMends } from '../../src/mc/main-repair.js';
+import { deskEntries, endDesk, pendingReds, react, takeBackTick } from '../../src/mc/take-back-run.js';
 import { DEPLOYS_HEADER, deploysPath, readDeploys, tsvRow } from '../../src/mc/deploys.js';
 import { WRANGLER_BIN, parseVersions, takeBack, takeBackGate } from '../../src/mc/release-take-back.js';
 
@@ -389,4 +395,311 @@ test('the holder is released when the script throws', async () => {
 test('parseVersions reads the cells as the deploy row keeps them', () => {
   assert.deepEqual(parseVersions('memoro:b2,memoro-tail:missing'), [{ worker: 'memoro', id: 'b2' }, { worker: 'memoro-tail', id: null }]);
   assert.deepEqual(parseVersions(''), []);
+});
+
+// ----------------------------------------------------- the reaction (D8, D9, D10)
+
+const mends = (fixture) => readMainMends({ root: fixture.root, repo: 'memoro' });
+const ledgerOf = (fixture) => readLedger(fixture.env).entries;
+const reaction = (fixture, options = {}) => react({
+  started: R_STARTED, env: fixture.env, deps: { alive: () => false, repoPath: '/repo.git', takeBackDeps: fixture.deps, pid: 4000, ...options },
+});
+
+test('D8: a red release is taken back, the repair is asked with a member for its red part, and the ledger records both', async () => {
+  const fixture = setup();
+  try {
+    const result = await reaction(fixture);
+    assert.equal(result.status, 'taken-back');
+    assert.equal(fixture.calls.scripts.length, 1);
+    assert.equal(fixture.calls.verb, 'take back');
+    const rows = readDeploys(fixture.env);
+    assert.equal(rows.at(-1).takes_back, R_STARTED);
+    assert.equal(rows.at(-1).holder, `runner, check red of ${R_STARTED}`);
+    const members = mends(fixture);
+    assert.equal(members.length, 1);
+    assert.equal(members[0].file, checkMemberKey('errors', R_STARTED));
+    assert.equal(members[0].base, R_SHA);
+    assert.deepEqual(members[0].check, { part: 'errors', why: '3 new fingerprints', sha: R_SHA, started: R_STARTED, verdict: verdictPath(fixture.env, R_STARTED), taken_back: true });
+    const entry = ledgerOf(fixture)[R_STARTED];
+    assert.deepEqual([entry.take_back, entry.desk, entry.done, entry.pid], ['taken-back', 'none', true, null]);
+    assert.deepEqual(entry.repair, [members[0].id]);
+  } finally { fixture.cleanup(); }
+});
+
+test('D8: a second reaction for the row exits at once while the first is alive, and after it is done', async () => {
+  const fixture = setup();
+  try {
+    updateLedger(fixture.env, (entries) => { entries[R_STARTED] = { sha: R_SHA, parts: [], pid: 4242, repair: [], take_back: 'none', desk: 'none', reason: '', steps: [], created: 'x', done: false }; });
+    const held = await reaction(fixture, { alive: (pid) => pid === 4242 });
+    assert.equal(held.status, 'held');
+    assert.equal(fixture.calls.scripts.length, 0);
+    assert.equal(mends(fixture).length, 0);
+    const first = await reaction(fixture);
+    assert.equal(first.status, 'taken-back', 'a dead holder is taken over');
+    const again = await reaction(fixture);
+    assert.equal(again.status, 'done');
+    assert.equal(fixture.calls.scripts.length, 1, 'nothing is taken back twice');
+    assert.equal(mends(fixture).length, 1);
+  } finally { fixture.cleanup(); }
+});
+
+test('D8: a row that is not eligible is never taken back by the runner — no, a take-back row, a later release, not red', async () => {
+  const cases = [
+    ['a reading of no', [earlierRow(), releaseRow({ take_back: 'no', take_back_why: 'migration-after: 0042' })], 'not-made'],
+    ['an empty reading', [earlierRow(), releaseRow({ take_back: '' })], 'not-made'],
+    ['a take-back row', [earlierRow(), releaseRow({ takes_back: '2026-11-15T08:00:00.000Z', takes_back_sha: 'c'.repeat(40) })], 'not-made'],
+    ['a later release', [earlierRow(), releaseRow(), releaseRow({ started: '2026-11-15T10:30:00.000Z', sha: 'd'.repeat(40), check: '' })], 'not-made'],
+  ];
+  for (const [name, rows, status] of cases) {
+    const fixture = setup(rows);
+    try {
+      const result = await reaction(fixture);
+      assert.equal(result.status, status, name);
+      assert.equal(fixture.calls.scripts.length, 0, `${name}: no script`);
+      assert.equal(readDeploys(fixture.env).length, rows.length, `${name}: no row`);
+      assert.equal(ledgerOf(fixture)[R_STARTED].take_back, 'not-made', name);
+      assert.equal(ledgerOf(fixture)[R_STARTED].done, true, name);
+      assert.equal(mends(fixture).length, 1, `${name}: the repair is still asked`);
+    } finally { fixture.cleanup(); }
+  }
+});
+
+test('D8: a take-back already in the register — deployed, running or failed — is never made again', async () => {
+  const named = (outcome, extra = {}) => ({ started: '2026-11-15T10:50:00.000Z', sha: EARLIER_SHA, outcome, takes_back: R_STARTED, takes_back_sha: R_SHA, pid: '4242', ...extra });
+  const deployed = setup([earlierRow(), releaseRow(), named('deployed')]);
+  try {
+    // R is no longer the last deployed row; a deployed take-back names it, so it counts as taken back.
+    assert.equal((await reaction(deployed)).status, 'taken-back');
+    assert.equal(deployed.calls.scripts.length, 0);
+  } finally { deployed.cleanup(); }
+  const running = setup([earlierRow(), releaseRow(), named('running')]);
+  try {
+    const result = await reaction(running, { alive: (pid) => pid === 4242 });
+    assert.equal(result.status, 'untried');
+    assert.equal(running.calls.scripts.length, 0);
+    assert.equal(ledgerOf(running)[R_STARTED].done, false);
+  } finally { running.cleanup(); }
+  const failed = setup([earlierRow(), releaseRow(), named('failed', { note: 'memoro-tail was not taken back' })]);
+  try {
+    const result = await reaction(failed);
+    assert.equal(result.status, 'failed');
+    assert.equal(failed.calls.scripts.length, 0, 'the runner tries a take-back once');
+    const entry = ledgerOf(failed)[R_STARTED];
+    assert.equal(entry.desk, 'Martin');
+    assert.match(entry.steps.join('\n'), /mc deploy take-back/u);
+  } finally { failed.cleanup(); }
+});
+
+test('D8: a busy holder, STOP or UPDATE leaves the reaction untried: the entry is not done and no repair is asked', async () => {
+  const busy = setup();
+  try {
+    busy.deps.takeHolder = async () => ({ ok: false, reason: 'the deploy worktree is held by deploy (pid 7) — waited 10 min' });
+    const result = await reaction(busy);
+    assert.equal(result.status, 'untried');
+    assert.equal(ledgerOf(busy)[R_STARTED].done, false);
+    assert.equal(ledgerOf(busy)[R_STARTED].pid, null);
+    assert.equal(mends(busy).length, 0);
+    busy.deps.takeHolder = async () => ({ ok: true, release: () => {} });
+    assert.equal((await reaction(busy)).status, 'taken-back', 'a later pass tries again');
+  } finally { busy.cleanup(); }
+  const stopped = setup();
+  try {
+    const result = await reaction(stopped, { stopRequested: () => true });
+    assert.equal(result.status, 'untried');
+    assert.equal(stopped.calls.scripts.length, 0);
+    assert.equal(ledgerOf(stopped)[R_STARTED].done, false);
+  } finally { stopped.cleanup(); }
+});
+
+test('D10: an unreadable ledger is said, and no take-back is made and no repair asked until it reads again', async () => {
+  const fixture = setup();
+  try {
+    writeFileSync(ledgerPath(fixture.env), '{ not json');
+    const said = [];
+    const result = await react({ started: R_STARTED, env: fixture.env, say: (line) => said.push(line), deps: { alive: () => false, repoPath: '/repo.git', takeBackDeps: fixture.deps } });
+    assert.equal(result.status, 'ledger-unreadable');
+    assert.match(said.join('\n'), /red ledger .* is not JSON/u);
+    assert.equal(fixture.calls.scripts.length, 0);
+    assert.equal(mends(fixture).length, 0);
+    assert.equal(readFileSync(ledgerPath(fixture.env), 'utf8'), '{ not json', 'an unreadable ledger is not written over');
+    assert.match(pendingReds({ env: fixture.env }).error, /not JSON/u);
+    assert.deepEqual(deskEntries({ env: fixture.env }).items, [], 'the desk reads it as no entries');
+    assert.match(deskEntries({ env: fixture.env }).error, /not JSON/u);
+    assert.equal(takeBackTick({ env: fixture.env, start: () => { throw new Error('must not start'); } }).started.length, 0);
+    writeFileSync(ledgerPath(fixture.env), JSON.stringify({ version: 2, entries: {} }));
+    assert.match(pendingReds({ env: fixture.env }).error, /not a version 1 ledger/u);
+  } finally { fixture.cleanup(); }
+});
+
+test('D9: the member is keyed by part and release, once-only in any state, and a second release makes its own', async () => {
+  const second = '2026-11-15T12:00:00.000Z';
+  const rows = [earlierRow(), releaseRow({ check_why: 'errors: 3 new fingerprints; latency: p95 up', take_back: 'no', take_back_why: 'migration-after: 1' }),
+    { ...releaseRow({ started: second, sha: 'd'.repeat(40), live_commit: 'd'.repeat(40), versions_before: 'memoro:b2,memoro-tail:t2', versions_made: 'memoro:b3,memoro-tail:t3', check_why: 'errors: boom' }) }];
+  const fixture = setup(rows);
+  try {
+    await reaction(fixture);
+    const first = mends(fixture).map((entry) => entry.file).sort();
+    assert.deepEqual(first, [checkMemberKey('errors', R_STARTED), checkMemberKey('latency', R_STARTED)].sort(), 'one member per red part');
+    assert.equal(mends(fixture).every((entry) => entry.check.taken_back === false), true);
+    await react({ started: second, env: fixture.env, deps: { alive: () => false, repoPath: '/repo.git', takeBackDeps: fixture.deps, pid: 4000 } });
+    const all = mends(fixture).map((entry) => entry.file);
+    assert.equal(all.length, 3);
+    assert.ok(all.includes(checkMemberKey('errors', second)), 'a second red release is its own member');
+    assert.notEqual(checkMemberKey('errors', second), checkMemberKey('errors', R_STARTED));
+  } finally { fixture.cleanup(); }
+});
+
+test('D9: a repeat after the members landed — with the ledger populated, or lost — makes nothing new, and the ledger records the ids', async () => {
+  const fixture = setup();
+  try {
+    await reaction(fixture);
+    const ids = mends(fixture).map((entry) => entry.id);
+    updateMainMends({ root: fixture.root, repo: 'memoro' }, (entries) => { for (const entry of entries) entry.state = 'landed'; });
+    assert.equal((await reaction(fixture)).status, 'done');
+    assert.deepEqual(mends(fixture).map((entry) => entry.id), ids, 'a populated ledger asks nothing');
+    // The crash case: the members exist and are finished, and the ledger has no record of them.
+    updateLedger(fixture.env, (entries) => { delete entries[R_STARTED]; });
+    updateMainMends({ root: fixture.root, repo: 'memoro' }, (entries) => { entries[0].state = 'dropped'; });
+    const result = await reaction(fixture);
+    assert.notEqual(result.status, 'untried');
+    assert.deepEqual(mends(fixture).map((entry) => entry.id), ids, 'nothing new is created');
+    assert.deepEqual(ledgerOf(fixture)[R_STARTED].repair, ids, 'the ledger records the members that exist');
+  } finally { fixture.cleanup(); }
+});
+
+test('D9: the check member has its own words in the prompt and is not a file for the gate', () => {
+  const entry = (back) => ({ id: 'm1', file: checkMemberKey('errors', R_STARTED), base: R_SHA, finder: 'the check', check: { part: 'errors', why: '3 new fingerprints', sha: R_SHA, started: R_STARTED, verdict: '/runner/check/v.json', taken_back: back } });
+  const prompt = mainMendPrompt({ repo: 'memoro', entries: [entry(true)], branch: 'mend/main-memoro-x', worktree: '/w' });
+  assert.match(prompt, /production's check after the deploy of bbbbbbb/u);
+  assert.match(prompt, /3 new fingerprints/u);
+  assert.match(prompt, /The release was taken back/u);
+  assert.match(prompt, /\/runner\/check\/v\.json/u);
+  assert.match(prompt, /Do not deploy/u);
+  assert.doesNotMatch(prompt, /mc gate --fresh check:/u);
+  assert.match(mainMendPrompt({ repo: 'memoro', entries: [entry(false)], branch: 'b', worktree: '/w' }), /The release was not taken back/u);
+});
+
+// ------------------------------------------------------------- the desk's paths
+
+async function deskOf(rows, change = () => {}) {
+  const fixture = setup(rows);
+  change(fixture);
+  const result = await reaction(fixture);
+  const entry = ledgerOf(fixture)[R_STARTED];
+  return { fixture, result, entry, text: entry.steps.join('\n') };
+}
+
+test('D10: a reading of no, with D5 holding, gives the desk --despite and the reading, never a wrangler line', async () => {
+  const { fixture, entry, text } = await deskOf([earlierRow(), releaseRow({ take_back: 'no', take_back_why: 'migration-after: 0042' })]);
+  try {
+    assert.equal(entry.desk, 'Martin');
+    assert.match(text, /errors: 3 new fingerprints/u);
+    assert.match(text, /Serving now: bbbbbbb/u);
+    assert.match(text, /mc deploy take-back --despite "<reason>"/u);
+    assert.match(text, /migration-after: 0042/u);
+    assert.match(text, /Repair: a main-red mend is open/u);
+    assert.doesNotMatch(text, /wrangler/u);
+  } finally { fixture.cleanup(); }
+});
+
+test('D10: a take-back that failed gives the desk the verb and the Workers by hand, in the deploy worktree', async () => {
+  const { fixture, result, entry, text } = await deskOf(undefined, (one) => {
+    one.said.workers = [{ worker: 'memoro', from: 'b2', to: 'b1', state: 'taken-back', serving: 'b1', why: 'ok' }, { worker: 'memoro-tail', from: 't2', to: 't1', state: 'failed', serving: 't2', why: 'api down' }];
+  });
+  try {
+    assert.equal(result.status, 'failed');
+    assert.equal(entry.take_back, 'failed');
+    assert.match(text, /To finish it: mc deploy take-back/u);
+    assert.match(text, /npx wrangler rollback b1 --name memoro --message/u);
+    assert.match(text, /npx wrangler rollback t1 --name memoro-tail --message/u);
+    assert.match(text, new RegExp(deployWorktreePath(fixture.env).replace(/[/.]/gu, '\\$&'), 'u'));
+  } finally { fixture.cleanup(); }
+});
+
+test('D10: when D5 does not hold the desk is told to ship the repair, with the hand rollback and what it leaves in the record', async () => {
+  const { fixture, entry, text } = await deskOf([earlierRow(), releaseRow({ versions_why: 'memoro-tail before: no deployments' })]);
+  try {
+    assert.equal(entry.take_back, 'not-made');
+    assert.equal(entry.desk, 'Martin');
+    assert.match(text, /mc cannot take this release back/u);
+    assert.match(text, /Ship the repair: mc deploy once the main-red mend has landed and a later commit is green/u);
+    assert.match(text, /npx wrangler rollback b1 --name memoro/u);
+    assert.match(text, /deploys\.tsv naming the release as live; the next mc deploy reads each Worker's versions from the provider/u);
+  } finally { fixture.cleanup(); }
+  const unknown = await deskOf([earlierRow(), releaseRow({ versions_before: 'memoro:b1', versions_made: 'memoro:b2,memoro-tail:t2' })]);
+  try { assert.match(unknown.text, /npx wrangler deployments list --name memoro-tail/u); } finally { unknown.fixture.cleanup(); }
+});
+
+test('D10: a take-back row that checked red has nothing to roll back to — ship the repair', async () => {
+  const { fixture, entry, text } = await deskOf([earlierRow(), releaseRow({ takes_back: '2026-11-15T08:00:00.000Z', takes_back_sha: 'c'.repeat(40) })]);
+  try {
+    assert.equal(entry.desk, 'Martin');
+    assert.match(text, /a take-back, which is not taken back/u);
+    assert.match(text, /nothing before it to roll back to/u);
+  } finally { fixture.cleanup(); }
+});
+
+test('D10: a taken-back release, and a later release, put nothing on the desk', async () => {
+  const back = await deskOf();
+  try { assert.deepEqual([back.entry.desk, back.entry.steps], ['none', []]); } finally { back.fixture.cleanup(); }
+  const later = await deskOf([earlierRow(), releaseRow(), releaseRow({ started: '2026-11-15T10:30:00.000Z', sha: 'd'.repeat(40), check: '' })]);
+  try { assert.deepEqual([later.entry.take_back, later.entry.desk], ['not-made', 'none']); } finally { later.fixture.cleanup(); }
+});
+
+test('D10: a desk entry ends on a later deployed row, or when a person ends it, and not before', async () => {
+  const { fixture } = await deskOf([earlierRow(), releaseRow({ take_back: 'no' })]);
+  try {
+    assert.equal(deskEntries({ env: fixture.env }).items.length, 1);
+    assert.equal(deskEntries({ env: fixture.env }).items[0].started, R_STARTED);
+    const later = [...readDeploys(fixture.env), { ...releaseRow({ started: '2026-11-15T13:00:00.000Z', sha: 'e'.repeat(40), check: '' }) }];
+    const read = deskEntries({ env: fixture.env, rows: later });
+    assert.deepEqual([read.items.length, read.ended], [0, [R_STARTED]]);
+    takeBackTick({ env: fixture.env, start: () => ({ pid: null }) });
+    assert.equal(ledgerOf(fixture)[R_STARTED].desk, 'Martin', 'only the rows on file end an entry');
+    endDesk({ env: fixture.env, ended: read.ended });
+    assert.equal(ledgerOf(fixture)[R_STARTED].desk, 'ended');
+  } finally { fixture.cleanup(); }
+  const person = await deskOf([earlierRow(), releaseRow({ take_back: 'no' })]);
+  try {
+    assert.deepEqual(endDesk({ env: person.fixture.env, started: R_STARTED, reason: 'handled by hand' }), [R_STARTED]);
+    const entry = ledgerOf(person.fixture)[R_STARTED];
+    assert.deepEqual([entry.desk, entry.ended_reason], ['ended', 'handled by hand']);
+    assert.deepEqual(deskEntries({ env: person.fixture.env }).items, []);
+    assert.deepEqual(endDesk({ env: person.fixture.env, started: '2020-01-01T00:00:00.000Z' }), []);
+  } finally { person.fixture.cleanup(); }
+});
+
+// ------------------------------------------------------------ the chore's fallback
+
+test('D8: the fallback begins the ledger, then starts one reaction per red row not done — never one from before it, held, or done', () => {
+  const old = releaseRow({ started: '2026-11-14T10:00:00.000Z', check_at: '2026-11-14T10:40:00.000Z' });
+  const fixture = setup([earlierRow(), old, releaseRow()]);
+  try {
+    const started = [];
+    const start = ({ started: key }) => { started.push(key); return { pid: 99 }; };
+    const first = takeBackTick({ env: fixture.env, start, now: () => new Date('2026-11-15T10:30:00.000Z') });
+    assert.deepEqual(first.started, [], 'the first pass only begins the ledger');
+    assert.equal(readLedger(fixture.env).from, '2026-11-15T10:30:00.000Z');
+    const second = takeBackTick({ env: fixture.env, start, alive: () => false });
+    assert.deepEqual(second.started, [R_STARTED], 'a red from before the ledger is not a reaction\'s to make');
+    updateLedger(fixture.env, (entries) => { entries[R_STARTED] = { pid: 4242, done: false }; });
+    assert.deepEqual(takeBackTick({ env: fixture.env, start, alive: (pid) => pid === 4242 }).started, [], 'a live reaction holds the row');
+    updateLedger(fixture.env, (entries) => { entries[R_STARTED] = { pid: null, done: true }; });
+    assert.deepEqual(takeBackTick({ env: fixture.env, start, alive: () => false }).started, [], 'a done entry is not started again');
+    updateLedger(fixture.env, (entries) => { delete entries[R_STARTED]; });
+    assert.deepEqual(takeBackTick({ env: fixture.env, start, stopRequested: () => true, alive: () => false }).started, [], 'nothing starts while STOP is asked');
+    assert.deepEqual(takeBackTick({ env: fixture.env, start, updateRequested: () => true, alive: () => false }).started, [], 'nor while UPDATE is');
+  } finally { fixture.cleanup(); }
+});
+
+test('C11: take-back-run.js exits 2 under MC_HEADLESS=1 before it reads or writes anything', () => {
+  const fixture = setup();
+  try {
+    const script = fileURLToPath(new URL('../../src/mc/take-back-run.js', import.meta.url));
+    const result = spawnSync(process.execPath, [script, R_STARTED], { env: { ...process.env, ...fixture.env, MC_HEADLESS: '1' }, encoding: 'utf8' });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /refused to a headless session/u);
+    assert.equal(readDeploys(fixture.env).length, 2);
+    assert.throws(() => readFileSync(ledgerPath(fixture.env)), /ENOENT/u);
+  } finally { fixture.cleanup(); }
 });
