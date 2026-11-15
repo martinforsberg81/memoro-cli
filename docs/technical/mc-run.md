@@ -721,6 +721,16 @@ no chores and so no full run. The detached scheduler that once did this
 where the full runs now come from. See [`mc-merge.md`](mc-merge.md) § *The full
 run nobody asks for*.
 
+**The check after a deploy** is the last step of every chore pass
+(`runDeployCheck`, `deployCheckTick` in `deploy-check.js`): it starts, detached,
+the check of the oldest deployed row that has no verdict, settles an attempt that
+died or passed its deadline, and copies a verdict file into its row. One start per
+pass; none under STOP or UPDATE, none while a deploy runs, none while a check is
+alive; a tick that throws is said (`deploy check: the pass failed — …`) and asked
+again on the next pass. It writes `~/mc/runner/deploy-check.json` and
+`~/mc/runner/log/deploy-check/`, and a verdict into `deploys.tsv`; a red does
+nothing else. See [`mc-deploy.md`](mc-deploy.md) § *The check after a deploy*.
+
 Nothing else runs beside it. There was a shell supervisor — it fetched,
 fast-forwarded `~/memoro-cli`, ran the runner for one pass and slept — written
 on 2026-08-29 because `mc run` had no way of its own to pick up a merge of its

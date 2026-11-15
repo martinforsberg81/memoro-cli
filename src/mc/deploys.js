@@ -27,12 +27,13 @@
  * `writeFileAtomic` (`atomic-write.js`), so a reader sees the file before or
  * after, never half-way through the edit.
  */
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
 import { processAlive } from './lease-owner.js';
 import { workRoot } from './paths.js';
+import { realLock } from './runner-lock.js';
 
 /**
  * The columns. Append, never insert: a cell added at the end is one a
@@ -43,6 +44,7 @@ export const DEPLOYS_HEADER = [
   'started', 'ended', 'sha', 'build', 'holder', 'outcome', 'live_commit', 'live_build', 'stopped_at', 'note', 'pid',
   'full_commit', 'full_verdict', 'suites', 'accepted_red', 'take_back', 'take_back_why',
   'versions_before', 'versions_made', 'versions_why',
+  'check', 'check_at', 'check_why',
 ];
 
 /**
@@ -93,9 +95,20 @@ export function versionCells(versions) {
 }
 
 /**
+ * The check after a deploy (2026-11-15), three cells written by the runner's
+ * check, never by the deploy: `check` — `green`, `red` or `could-not-run` —
+ * `check_at`, the ISO time of the verdict, and `check_why`, each part that was
+ * not green as `<part>: <reason>` joined by `; `, empty when green. All three
+ * are empty on a row no check has judged, which is shown as not checked and is
+ * never read as green.
+ */
+export const CHECK_COLUMNS = ['check', 'check_at', 'check_why'];
+
+/**
  * The headers earlier mc versions wrote, oldest first: before `pid`
  * (2026-10-07), before the gate's columns (2026-11-14), before the
- * take-back reading's and before the Worker versions' (both 2026-11-15). A file with exactly
+ * take-back reading's and before the Worker versions' (both 2026-11-15), and
+ * before the check's (the header of 9a094dec). A file with exactly
  * one of them is given the current header the next time a row is written, its
  * old rows with the new cells empty: without `pid`, a deploy in progress could
  * never be told from one that died, which is the one thing that column is for.
@@ -104,7 +117,8 @@ export function versionCells(versions) {
 const PID_COLUMNS = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('pid') + 1);
 const GATE_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red') + 1);
 const TAKE_BACK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('take_back_why') + 1);
-const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER].map((header) => header.join('\t'));
+const VERSIONS_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('versions_why') + 1);
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER, VERSIONS_HEADER].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';
@@ -199,6 +213,32 @@ export function runningDeploy(env = process.env, { alive = processAlive } = {}) 
   return readDeploys(env).filter((row) => deployAlive(row, { alive })).at(-1) || null;
 }
 
+/**
+ * Whether this process is inside `withDeploysLock`. `realLock` is an O_EXCL
+ * file and not reentrant: a second take by the same process would wait out its
+ * five seconds against itself. Every row writer asks for the lock through
+ * `withDeploysLock`, and one called while the admission step of `mc deploy`
+ * already holds it runs inside that hold.
+ */
+let holding = 0;
+
+/**
+ * Run `fn` — a read-patch-write of deploys.tsv — under the runner lock. Within
+ * one process the lock is taken once and never nested: a call made while this
+ * process holds it runs `fn` as it is. `lock` and `root` are the boundaries a
+ * test passes (the admission step of `mc deploy` passes its own); the other
+ * options are `realLock`'s (`strict`, `waitMs`, `alive`, …).
+ */
+export function withDeploysLock(env, fn, { lock = realLock, root = workRoot(env), name = 'deploys', ...options } = {}) {
+  if (holding) return fn();
+  holding += 1;
+  try {
+    return lock(root, fn, { name, ...options });
+  } finally {
+    holding -= 1;
+  }
+}
+
 function append(row, env) {
   const path = deploysPath(env);
   mkdirSync(dirname(path), { recursive: true });
@@ -229,7 +269,7 @@ export function recordStart({
     started, ended: '', sha, build, holder, outcome: RUNNING,
     live_commit: '', live_build: '', stopped_at: '', note, pid, ...gateCells(gate), ...readingCells(takeBack),
   };
-  append(row, env);
+  withDeploysLock(env, () => append(row, env));
   return { started, sha };
 }
 
@@ -243,6 +283,10 @@ export function recordStart({
  * deploy that happened with no trace at all.
  */
 export function recordEnd(key, patch = {}, env = process.env) {
+  return withDeploysLock(env, () => completeRow(key, patch, env));
+}
+
+function completeRow(key, patch, env) {
   const text = readFile(env);
   const header = fileHeader(text);
   const rows = parseDeploys(text);
@@ -268,10 +312,10 @@ export function recordEnd(key, patch = {}, env = process.env) {
 export function recordRefusal({
   sha = '', holder = '', note = '', at = new Date().toISOString(), gate = {}, takeBack = {},
 }, env = process.env) {
-  return append({
+  return withDeploysLock(env, () => append({
     started: at, ended: at, sha, build: '', holder, outcome: REFUSED,
     live_commit: '', live_build: '', stopped_at: '', note, ...gateCells(gate), ...readingCells(takeBack),
-  }, env);
+  }, env));
 }
 
 /** The gate's cells of a row, from what the gate found; every one empty when it did not run. */
@@ -295,7 +339,11 @@ function readingCells(takeBack) {
  *
  * Returns the rows it closed, as they were.
  */
-export function closeAbandoned({ at = new Date().toISOString(), alive = processAlive } = {}, env = process.env) {
+export function closeAbandoned(options = {}, env = process.env) {
+  return withDeploysLock(env, () => closeRows(options, env));
+}
+
+function closeRows({ at = new Date().toISOString(), alive = processAlive } = {}, env) {
   const text = readFile(env);
   const header = fileHeader(text);
   const rows = parseDeploys(text);
@@ -306,4 +354,42 @@ export function closeAbandoned({ at = new Date().toISOString(), alive = processA
     abandoned.includes(row) ? { ...row, outcome: FAILED, note: row.note ? `${row.note}; ${note}` : note } : row
   )));
   return abandoned;
+}
+
+/** What a file looked like when it was read: a write is only made over the same one. */
+function fileStamp(env) {
+  try { const { size, mtimeMs } = statSync(deploysPath(env)); return `${size}:${mtimeMs}`; } catch { return 'absent'; }
+}
+
+/**
+ * The check's verdict, written into the row it judged: the three cells of
+ * `CHECK_COLUMNS` and no other cell of any row. Returns `{ written: true, row }`,
+ * or `{ written: false, why }` when the row is not there or the file changed
+ * under every one of three attempts — then the verdict stays in its own file
+ * (`deploy-check/<started>.verdict.json`) and the runner's chore writes it
+ * into the row on a later pass.
+ *
+ * The lock is taken strict: a holder that does not let go in time throws, and
+ * nothing is written. The file is written only if it is still the one that was
+ * read (size and mtime) — a refusal appended by a writer that did not get the
+ * lock in time is read again, never erased. `afterRead` is the boundary a test
+ * uses to be that writer.
+ */
+export function recordCheck(key, cells, env = process.env, { afterRead = null, ...lockOptions } = {}) {
+  return withDeploysLock(env, () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const stamp = fileStamp(env);
+      const text = readFile(env);
+      const rows = parseDeploys(text);
+      const index = rows.findLastIndex((row) => row.started === key?.started && row.sha === key?.sha);
+      if (index === -1) return { written: false, why: 'the row is not in deploys.tsv' };
+      afterRead?.(attempt);
+      if (fileStamp(env) !== stamp) continue;
+      const header = fileHeader(text);
+      rows[index] = { ...rows[index], ...Object.fromEntries(CHECK_COLUMNS.map((name) => [name, cells?.[name] ?? ''])) };
+      rewrite(env, header, rows);
+      return { written: true, row: rows[index] };
+    }
+    return { written: false, why: 'deploys.tsv changed under every attempt to write the verdict' };
+  }, { strict: true, ...lockOptions });
 }

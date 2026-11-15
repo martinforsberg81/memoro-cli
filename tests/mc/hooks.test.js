@@ -615,6 +615,9 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
     'gh pr merge 12 --squash --admin': 'headless-admin',
     'CLAUDE_ALLOW_PROD_WRANGLER=1 npx wrangler d1 execute memoro --remote': 'headless-production-data',
     'mc test token --set': 'headless-credentials',
+    // The check after a deploy holds production's tokens; only the runner starts it.
+    'node ~/mc/self/memoro/src/mc/deploy-check-run.js \'{"started":"2026-11-15T10:00:00.000Z","sha":"abc"}\'': 'headless-deploy-check',
+    'MC_HOME=/tmp/x node src/mc/deploy-check-run.js {}': 'headless-deploy-check',
   };
   for (const [command, id] of Object.entries(REFUSED)) {
     it(`refuses ${command} headless, with no escape`, () => {
@@ -651,7 +654,7 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
   });
 
   it('names one rule per act', () => {
-    assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials']);
+    assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials', 'headless-deploy-check']);
   });
 
   // 2026-11-14: one Bash call held two reserved-act questions; the words of an
@@ -666,6 +669,8 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
       "git commit -F - <<'EOF'\nhooks: mc deploy is named in a message\nEOF",
       `echo "mc merge memoro 1 --admin is Martin's"`,
       'grep -rn "mc test token --set" docs/',
+      'grep -rn "deploy-check-run.js" docs/ src/',
+      'git commit -m "docs: deploy-check-run.js is the runner\'s"',
       'echo done # mc deploy',
       'mc ask alpha/one --kind product --reason "Ship it?" --option "a: run mc deploy after the gate" --option "b: wait" --recommend b',
       'mc ask alpha/one --kind technical --reason "Deploy?" --option "a: wait" --recommend a && mc ask alpha/one --kind technical --reason "Merge?" --option "a: mc merge 14 --admin" --option "b: hold" --recommend b',

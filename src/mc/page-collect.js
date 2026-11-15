@@ -53,6 +53,7 @@ import {
   DAY_MS, defaultRepos, listProgrammes, proposalSystem, parseRuns, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { SESSION_KINDS, sessionKind } from './session-kind.js';
+import { attemptInFlight } from './deploy-check.js';
 import { deployAlive, lastAttempt, lastDeploy, runningDeploy } from './deploys.js';
 import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
@@ -103,6 +104,7 @@ import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
+import { sameCommit } from './same-commit.js';
 import {
   REPO_NAMES, RUNNER_MODEL, nowBlock, pidAlive, readCurrents,
 } from './status-collect.js';
@@ -144,28 +146,6 @@ export const DECISIONS_NAMED = 3;
 export const DEPLOY_LATE_S = 60 * 60;
 
 const shortSha = (sha) => (sha ? String(sha).slice(0, 7) : null);
-
-/** The shortest sha two readings may be compared on: git's own abbreviation. */
-const SHA_MIN = 7;
-
-/**
- * Are these two readings the same commit? Compared on the shorter of the two.
- *
- * `deploys.tsv` records the full 40-character sha and `/api/version` answers
- * the 7-character one, so `!==` said *mismatch* on every deploy this machine
- * ever made — the line was bold-yellow with `919de24` printed on both sides of
- * it. Below git's own abbreviation nothing is compared at all: a prefix that
- * short matches too much to mean anything, so two readings that disagree in
- * length there are reported as they are.
- */
-function sameCommit(a, b) {
-  const one = String(a || '').toLowerCase();
-  const two = String(b || '').toLowerCase();
-  if (!one || !two) return false;
-  const n = Math.min(one.length, two.length);
-  if (n < SHA_MIN) return one === two;
-  return one.slice(0, n) === two.slice(0, n);
-}
 
 /**
  * What is in production, from the two readings that know: the last `deployed`
@@ -238,6 +218,9 @@ export function productionSection({
   // The deploy's preparation record (`deploy-prepare.json`) and the gate
   // rounds settled as interrupted, newest first (`settleInterruptedRounds`).
   preparation = null, interrupted = [],
+  // The check after the deploy that is running now (`attemptInFlight`): its
+  // row's key, when its process is alive. The row's own cells say the rest.
+  checking = null,
 } = {}) {
   // Keep the first attempt even when it failed or was refused before any
   // successful deployment or production reading.
@@ -288,6 +271,11 @@ export function productionSection({
     sha: deploy?.sha || null,
     short: shortSha(deploy?.sha),
     build: deploy?.build || null,
+    // The verdict of the check after this deploy (D8): empty cells are "not checked".
+    check: deploy?.check || '',
+    check_at: deploy?.check_at || null,
+    check_why: deploy?.check_why || '',
+    checking: Boolean(deploy?.sha && !deploy.check && checking?.started === deploy.started),
     holder: deploy?.holder || null,
     at: when,
     age_seconds: when ? age(when) : null,
@@ -314,7 +302,7 @@ export function runnerSection({
   // What STOP says: the time it was written, for the stop line's `since`.
   stopText = null,
   deploy = null, attempt = null, live = null, progress = null, repos = REPO_NAMES,
-  preparation = null, interrupted = [],
+  preparation = null, interrupted = [], checking = null,
   // What `mc run lanes` set: how many sessions run at once, across every
   // repository. The rows are one per lane, so the page needs the number.
   lanes: setting = { lanes: DEFAULT_LANES },
@@ -367,7 +355,7 @@ export function runnerSection({
     // that lasts: the round's `prsFailed`, carried between rounds.
     github: githubFailures(github, { now }),
     // What is in production, under the day it took to get there.
-    production: productionSection({ deploy, attempt, live, progress, now, alive, preparation, interrupted }),
+    production: productionSection({ deploy, attempt, live, progress, now, alive, preparation, interrupted, checking }),
     day: {
       ...summariseRuns(rows),
       by_kind: dayByKind(rows),
@@ -1719,6 +1707,7 @@ export async function collectPage({
     // here, so the log says so too.
     preparation: readPreparation(root),
     interrupted: settleInterruptedRounds({ root: home, alive, now }),
+    checking: attemptInFlight(env, { alive }),
     now,
     alive,
   });

@@ -709,6 +709,9 @@ header the file actually carries rather than the one this module knows.
 | `versions_before` | the Cloudflare Worker version each Worker served before the deploy, `<worker>:<id>` joined by commas, `<worker>:missing` for one that is not known — `memoro:<id>,memoro-tail:<id>`; empty on a row written before the script ran and before the column |
 | `versions_made` | the version the deploy made, in the same form; a Worker the deploy did not change has no entry, and `<worker>:missing` is a change whose id is not known; empty as above |
 | `versions_why` | why a version is missing, `<worker> before\|made: <why>` joined by `; `; `not reported by the deploy script` when the script printed no version line; empty when none is missing and on a row written before the script ran |
+| `check` | the verdict of the check after the deploy (*The check after a deploy*): `green`, `red` or `could-not-run`; empty while it is not made, on a row that is not `deployed` and on a row written before the column |
+| `check_at` | when the verdict was reached (UTC, ISO) |
+| `check_why` | for `red` and `could-not-run`, what was found, `<part>: <why>` joined by `; ` — the parts are `version`, `database`, `suites` and `errors`, and a part that was not reached reads `<part>: not run`; empty for `green` |
 
 Two properties are the point of it:
 
@@ -727,6 +730,15 @@ Two properties are the point of it:
   columns, which are the last: a refusal made after the reading carries the
   take-back's as the started row does, and a file with the header of any version
   before them is given the new header on its next row, its old rows' cells empty.
+  The three check columns are after those, and a file with any older header is
+  given the current one the same way.
+- **Every writer takes one lock, once.** `withDeploysLock` (`deploys.js`) is the
+  `deploys` lock of the runner (`runner-lock.js`), held through an admission and
+  re-entered by the writers inside it without taking it again; `recordStart`,
+  `recordEnd`, `recordRefusal` and `recordCheck` take it when they are called
+  outside one. `recordCheck` takes it strictly (a held lock throws, it is never
+  written around) and writes only the three cells of the one row, reading the
+  file again if its size or mtime changed between its read and its write.
 
 The version columns are what taking a release back needs: rolling a Worker back
 is returning it to the version it served before the deploy, so the row names
@@ -826,6 +838,64 @@ The cost of piping is that the child sees a pipe and not a terminal, so a tool
 inside the deploy that draws a progress bar only for a TTY prints plain lines
 instead. stdin stays inherited: `deploy.mjs` asks nothing, but wrangler's own
 login flow might. If that ever matters, the fix is a pty, not a smaller record.
+
+## The check after a deploy
+
+Every deploy that ends `deployed` is checked afterwards, with nobody present
+([`src/mc/deploy-check.js`](../../src/mc/deploy-check.js)). The runner's chore
+pass starts it detached (`deploy-check-run.js`, its own process group, output in
+`~/mc/runner/log/deploy-check/<started>.log`); the verdict is the row's `check`,
+`check_at` and `check_why`. **A red does nothing else**: it does not take the
+release back, stop the runner, hold a merge or refuse the next deploy — it is a
+word on the page, in `mc deploy` and in the digest, for a person to read.
+
+**The four parts.** The check is `green` only when all four are present and
+green; a `red` part beats a `could-not-run` one; `check_why` names each part
+that is not green, and `<part>: not run` for each one never reached.
+
+| part | what it asks | green when |
+|---|---|---|
+| `version` | production's `/api/version`, read through `sameCommit` (`commit_full` when it answers one, else `commit`) | it answers the row's `sha`; read again after the wait, and a commit that differs then is `could-not-run`, since somebody has deployed since |
+| `database` | `/ping-d1` | `d1` is `healthy` |
+| `suites` | the gating suites of `mc test prod` (`isGate`), through `productionRound` (`test-environment.js`) with `gateOnly`, as the seeded test account, in the deploy worktree put at the row's `sha`, under the holder verb `deploy check`; no dev or static server is started | every suite passes |
+| `errors` | `scripts/admin/survey-errors.mjs --env production --since <time> --limit 200`, read twice: once before the deploy (`takeBeforeReading`, inside the deploy's holder, before the script is spawned) and once after the wait, from the row's `sha` | no fingerprint in the second reading is new since the deploy: first seen at or after the row's `started` (compared to the second), or absent from a complete first reading (*returned*). Any one is red. When nothing is red, a reading that is truncated, missing or unreadable is `could-not-run`, never green |
+
+The before-reading is kept in `<started>.before.json` as `{ ok, survey }` or
+`{ ok: false, why }`. A reading that cannot be made never changes the deploy: it
+says so on stdout (*the error reading before the deploy was not made*) and the
+deploy ships as it would have. The check then has nothing to compare with and
+its `errors` part is `could-not-run` with that reason.
+
+Every request is bounded at 30 s. The check waits until the deploy's `ended` plus
+30 minutes before it reads the errors, so that a fault that needs traffic has had
+it. Its attempt has a deadline of `max(start, ended + 30 min) + 30 min`; one past
+it has its process group killed and is written `could-not-run`.
+
+**The chore** (`deployCheckTick`, a step of the runner's chore pass — `mc-run.md`,
+*What runs beside it*). It copies a verdict file into a row whose check is empty
+(the check wrote its verdict to a file first, so a lock held by another writer
+loses nothing); settles an attempt in flight — a dead process is written
+`could-not-run` (*the check ended without a verdict*), a live one past its
+deadline is killed and written so — and then returns, leaving the next row to a
+later pass; and otherwise starts the oldest *due* row: `deployed`, `ended` at or
+after `from` (written into `~/mc/runner/deploy-check.json` on the first pass and
+never moved, so a row from before this existed is not checked, once), with an
+empty `check`. A due row with a later deployed row is written `could-not-run`
+(*superseded by <short> before it was checked*) and never started. One start per
+pass; nothing starts under STOP or UPDATE or while a deploy is running; a start
+that fails is written `could-not-run` (*the check could not be started*).
+
+**Refused to a session.** `deploy-check-run.js` exits 2 under `MC_HEADLESS=1`
+before it does anything, and the hook `headless-deploy-check` (`hooks.js`) refuses
+a session command that runs it. The check reads production and signs in as the
+test account; it is the runner's, and nobody types it. `mc test prod` is the
+same round, still typed by a person and never run by itself.
+
+**Where it is said.** The page's RECORDED line, `mc deploy`'s plan line and
+`--json` (`last.check`, `last.check_at`, `last.check_why`, `last.checking`) and
+the helper's digest say it in the same words (`checkWords`): `checked green`,
+`check red: <why>`, `check could not run: <why>`, `checking` (an attempt of this
+row is alive) and `not checked`.
 
 ## Who reads the record
 

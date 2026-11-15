@@ -300,7 +300,11 @@ merge blocker.
 DEPLOY uses an orange subsection heading, LIVE and RECORDED version evidence,
 and a rounded attempt frame: green while running, red after failure, yellow
 for a refusal or missing end record. Expanded details include builds and
-timestamps. Language readings and last runs are omitted from this panel.
+timestamps. The RECORDED line ends with the verdict of the check after the deploy —
+`checked green`, `check red: <why>` (red), `check could not run: <why>` (yellow),
+`checking` or `not checked` (`mc-deploy.md` § *The check after a deploy*); a red is
+that line's colour and nothing else on the page. Language readings and last runs
+are omitted from this panel.
 DEV follows as a separate panel.
 
 ### Related work and system details

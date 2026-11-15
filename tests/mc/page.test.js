@@ -18,7 +18,7 @@ import { newRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
-import { recordStart } from '../../src/mc/deploys.js';
+import { recordEnd, recordStart } from '../../src/mc/deploys.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, horizonsSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
   prsSection, programmesSection, readDigests, runnerSection, sessionsSection, mcSection,
@@ -481,6 +481,31 @@ describe('DEPLOY', () => {
     assert.doesNotMatch(strip(line()), /martin@laptop/u);
   });
 
+  it('says on the RECORDED line what the check after the deploy found, in the words mc deploy and the digest use', () => {
+    const at = '2026-08-29T10:40:00Z';
+    const cases = [
+      [{ check: 'green', check_at: at, check_why: '' }, {}, /RECORDED + 1a2b3c4 · deployed 2 h ago · checked green$/u],
+      [{ check: 'red', check_at: at, check_why: 'suites: api (exit 1) red' }, {}, /RECORDED + 1a2b3c4 · deployed 2 h ago · check red: suites: api \(exit 1\) red$/u],
+      [{ check: 'could-not-run', check_at: at, check_why: 'version: production is at b3e65b6' }, {}, /· check could not run: version: production is at b3e65b6$/u],
+      [{}, { checking: { started: DEPLOYED.started } }, /· checking$/u],
+      [{}, {}, /· not checked$/u],
+    ];
+    for (const [cells, over, expected] of cases) {
+      const deploy = { ...DEPLOYED, ...cells };
+      const p = section({ deploy, attempt: deploy, ...over });
+      assert.equal(p.check, cells.check || '');
+      assert.equal(p.check_why, cells.check_why || '');
+      const recorded = strip(line({ deploy, attempt: deploy, ...over })).split('\n').map((row) => row.replace(/[│ ]+$/u, '').replace(/^[│ ]+/u, '')).find((row) => /^RECORDED/u.test(row));
+      assert.match(recorded, expected);
+    }
+    // A red is yellow-red on that line and nothing else on the page changes: no mismatch, no failure frame.
+    const red = line({ deploy: { ...DEPLOYED, check: 'red', check_why: 'database: down' }, attempt: { ...DEPLOYED, check: 'red', check_why: 'database: down' } });
+    assert.match(rowWith(red.split('\n'), 'check red'), /\x1b\[31m/u);
+    assert.doesNotMatch(strip(red), /ATTEMPT|version mismatch/u);
+    // A check in flight belongs to the deploy it is checking, not to a later one.
+    assert.equal(section({ checking: { started: '2026-08-28T00:00:00Z' } }).checking, false);
+  });
+
   it('removes successful deploy frames and shows pids only for a live attempt', () => {
     const done = { ...DEPLOYED, pid: '84970' };
     const text = strip(line({ deploy: done, attempt: done }));
@@ -786,6 +811,37 @@ describe('collectPage — a deploy preparation and a round that lost its process
       assert.match(text, /said 40s ago/u);
       assert.match(text, /interrupted gate round · memoro check/u);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('collectPage — the check after a deploy', () => {
+  const SHA = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+  const started = '2026-08-29T09:40:00.000Z';
+  async function collectWith({ cells = {}, pid = null, alive = () => false } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-page-check-'));
+    const env = { MC_WORK_ROOT: root, MC_HOME: root };
+    try {
+      mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+      const key = recordStart({ sha: SHA, started, pid: 1 }, env);
+      recordEnd(key, { outcome: 'deployed', ended: '2026-08-29T10:00:00.000Z', build: '813', live_commit: SHA, live_build: '813', ...cells }, env);
+      if (pid) writeFileSync(join(root, 'runner', 'deploy-check.json'), JSON.stringify({ from: started, attempt: { key, pid, started_at: started, deadline: 1 } }));
+      const data = await collectPage({
+        claudeSettings: () => null, env, now: NOW, repos: [], offline: true,
+        exec: async () => ({ ok: false, stdout: '' }), run: () => ({ status: 1, stdout: '' }), git: () => null,
+        checkout: null, alive,
+        cache: { loadPrs: () => ({ prs: [], fetched: null, age_seconds: null }), savePrs: () => {} },
+      });
+      return strip(renderPage(data, { columns: 140, now: NOW }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+
+  it('reads the verdict from deploys.tsv and the attempt in flight from its state file', async () => {
+    assert.match(await collectWith({ cells: { check: 'green', check_at: '2026-08-29T10:40:00.000Z' } }), /RECORDED +1a2b3c4 · deployed .* · checked green/u);
+    assert.match(await collectWith({ cells: { check: 'red', check_at: '2026-08-29T10:40:00.000Z', check_why: 'errors: 1 new' } }), /check red: errors: 1 new/u);
+    assert.match(await collectWith({ cells: { check: 'could-not-run', check_at: '2026-08-29T10:40:00.000Z', check_why: 'the check passed its deadline (pid 7)' } }), /check could not run: the check passed its deadline/u);
+    assert.match(await collectWith({}), /RECORDED +1a2b3c4 · deployed .* · not checked/u);
+    assert.match(await collectWith({ pid: 4242, alive: (pid) => pid === 4242 }), /RECORDED +1a2b3c4 · deployed .* · checking/u);
+    assert.match(await collectWith({ pid: 4242, alive: () => false }), /· not checked/u, 'a dead attempt is not "checking"');
   });
 });
 
