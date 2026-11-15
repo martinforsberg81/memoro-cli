@@ -651,6 +651,8 @@ export function deployCheckTick({
         say(`deploy check: ${short(row.sha)} — ${why}`);
         state = { ...state, attempt: null };
         writeState(env, state);
+        // The slot is free; the next due row starts on a later pass.
+        return { notes, started: null };
       } else return { notes, started: null };
     }
     rows = readDeploys(env);
