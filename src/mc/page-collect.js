@@ -102,6 +102,7 @@ import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
+import { agyBrainDir } from './agy-brain.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import { sameCommit } from './same-commit.js';
@@ -1788,7 +1789,7 @@ export async function collectPage({
     // What landed in the last 24 hours and what each goal took (landed.js).
     landed: landedSection({ rows: readRunRows(tsv), now }),
     // The interactive sessions' cost, from the tools' own transcripts (desk-cost.js).
-    desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), now, read: readText }),
+    desk_cost: readDeskCost({ root, claudeDir: claudeHome(env), codexDir: codexHome(env), agyDir: agyBrainDir(env), now, read: readText }),
     intake: intakeSection({ runs: parseRuns(tsv), digests: readDigests(env), proposals: proposalFiles(proposalsDir(env)), programmeProposals, intakeFiles: directFiles(intakeDir(env)), now }),
     programmes,
     horizons,

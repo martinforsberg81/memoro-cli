@@ -806,12 +806,18 @@ function headerLines(lines, c, raw, wide, data, version) {
   const landedPlan = data.landed || {};
   summary([
     { text: desk ? `Planning & desks 24 h: ${money(desk.cost) || '$0'}${desk.partial ? ' so far' : ''}` : '' },
-    { text: desk ? `${desk.sessions} interactive sessions` : '', styles: ['grey'] },
+    { text: desk ? `${desk.sessions} interactive sessions${deskNote(desk)}` : '', styles: ['grey'] },
     { text: landedPlan.plan_sessions ? `headless plan ${money(landedPlan.plan_cost) || '$0'} (${landedPlan.plan_sessions})` : '', styles: ['grey'] },
   ]);
   rule('└', '┘');
   pipelineLines(lines, c, raw, wide, data);
   lines.push('');
+}
+
+/** What the desk cost line could not count: conversations mc did not start, and tools whose cost could not be read. */
+function deskNote(desk) {
+  const left = Object.entries(desk.left_out || {}).map(([tool, count]) => `${count} ${tool} not started by mc left out`);
+  return [...left, ...(desk.failed || [])].map((text) => `; ${text}`).join('');
 }
 
 /**

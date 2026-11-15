@@ -219,6 +219,30 @@ export function claudeTail(entries) {
   return { said, turn };
 }
 
+/**
+ * agy: one step per line. A user message, or a tool result the agent has not
+ * answered, or a response that calls tools, is the agent's turn; a response
+ * with words and no tool call is the person's. Steps agy injects on its own
+ * (SYSTEM_MESSAGE) say nothing about whose turn it is.
+ */
+export function agyTail(entries) {
+  let said = null;
+  let turn = null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const calls = Array.isArray(entry.tool_calls) && entry.tool_calls.length > 0;
+    if (entry.type === 'PLANNER_RESPONSE') {
+      const text = textOf(entry.content);
+      if (turn === null) turn = !calls && text ? 'waiting' : 'working';
+      if (!said && text) said = text;
+    } else if (turn === null && (entry.type === 'USER_INPUT' || entry.type === 'GENERIC')) {
+      turn = 'working';
+    }
+    if (turn !== null && said) break;
+  }
+  return { said, turn };
+}
+
 /** Codex: messages live under `payload`, and `task_complete` ends a turn. */
 export function codexTail(entries) {
   let said = null;
@@ -292,7 +316,8 @@ function markLive(conversations, running, now) {
 function describeConversation(item, live) {
   const entries = readTailEntries(item.path);
   const reader = declared(item.tool, 'TAIL_READER');
-  const { said, turn } = reader === 'codex-tail' ? codexTail(entries) : reader === 'claude-tail' ? claudeTail(entries) : { said: null, turn: null };
+  const tails = { 'codex-tail': codexTail, 'claude-tail': claudeTail, 'agy-tail': agyTail };
+  const { said, turn } = tails[reader]?.(entries) ?? { said: null, turn: null };
   return {
     ...item,
     said,

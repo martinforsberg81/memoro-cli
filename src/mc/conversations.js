@@ -31,7 +31,11 @@ import { openSync, readSync, closeSync, lstatSync, readdirSync, rmSync, statSync
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { declared, toolShortName } from '../adapters/index.js';
+import { declared, toolShortName, toolsDeclaring } from '../adapters/index.js';
+import {
+  agyBrainDir, agyHeldOpen, agyHome, agyTranscriptPath, agyWorkspaces, conversationLaunch, firstUserContent,
+} from './agy-brain.js';
+import { readLaunchMarker } from './launch-marker.js';
 import { log, logPath } from './logger.js';
 import { normalizeSessionRole } from './session-role.js';
 
@@ -61,8 +65,77 @@ export function claudeHome(env = process.env) {
  */
 export function listConversations(areaRoot, env = process.env) {
   if (!areaRoot) return [];
-  const found = [...codexConversations(areaRoot, env), ...claudeConversations(areaRoot, env)];
+  const found = [...codexConversations(areaRoot, env), ...claudeConversations(areaRoot, env), ...mechanismConversations(areaRoot, env)];
   return found.sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0));
+}
+
+/**
+ * The tools that declare where their conversations live (`CONVERSATION_SOURCE`)
+ * are collected by that mechanism; Codex and Claude, which predate it, keep the
+ * two collectors above.
+ */
+const SOURCES = { 'agy-brain': agyConversations };
+
+function mechanismConversations(areaRoot, env) {
+  return toolsDeclaring('CONVERSATION_SOURCE').flatMap((tool) => {
+    const collect = SOURCES[declared(tool, 'CONVERSATION_SOURCE')];
+    return collect ? collect(areaRoot, env, tool) : [];
+  });
+}
+
+/**
+ * agy: a conversation is a brain directory with a transcript. Where it ran is
+ * in its database; a conversation whose workspace cannot be read is not listed,
+ * so it is never offered for resume or deletion by mistake. The launch nonce mc
+ * put in its opening message rides along (`nonce`), and `created_ms` (the brain
+ * directory's birth, mtime where the filesystem has none) lets the held check
+ * place a conversation that has no nonce.
+ */
+function agyConversations(areaRoot, env, tool) {
+  const brain = agyBrainDir(env);
+  let names = [];
+  try { names = readdirSync(brain); } catch { return []; }
+  const separator = declared(tool, 'INSTRUCTIONS_SEPARATOR');
+  const found = [];
+  for (const id of names) {
+    if (!SESSION_ID.test(id)) continue;
+    const path = agyTranscriptPath(brain, id);
+    let transcript;
+    try { transcript = statSync(path); } catch { continue; }
+    const workspaces = agyWorkspaces(env, id);
+    const cwd = workspaces?.find((workspace) => within(areaRoot, workspace));
+    if (!cwd) continue;
+    let created = 0;
+    try { const stat = statSync(join(brain, id)); created = stat.birthtimeMs || stat.mtimeMs; } catch { /* unknown */ }
+    const home = agyHome(env);
+    found.push({
+      tool,
+      id,
+      cwd,
+      label: agyLabel(firstUserContent(path), separator),
+      path,
+      nonce: conversationLaunch(brain, id)?.launch ?? null,
+      created_ms: created,
+      updated_ms: transcript.mtimeMs,
+      bytes: treeBytes(join(brain, id)) + agyOwnFiles(home, id).reduce((sum, file) => sum + sizeOf(file), 0),
+    });
+  }
+  return found;
+}
+
+/** The person's own words in an opening message: after the marker and the role's instructions. */
+function agyLabel(content, separator) {
+  if (typeof content !== 'string') return null;
+  let text = content.replace(/^<USER_REQUEST>\n/u, '');
+  if (readLaunchMarker(content)) text = text.slice(text.indexOf('-->') + 3);
+  if (separator && text.includes(separator)) text = text.slice(text.indexOf(separator) + separator.length);
+  return label(text.replace(/<\/USER_REQUEST>[\s\S]*$/u, ''));
+}
+
+/** The files beside the brain directory that are this conversation's, by name. */
+function agyOwnFiles(home, id) {
+  const db = join(home, 'conversations', `${id}.db`);
+  return [db, `${db}-wal`, `${db}-shm`, join(home, 'annotations', `${id}.pbtxt`)];
 }
 
 function within(root, cwd) {
@@ -277,7 +350,7 @@ export function conversationIdentityReader() {
         && entry.started === item.id && entry.tool === item.tool && entry.run)
         .map((entry) => `${entry.run}:${entry.pid}`));
       const records = launches.filter((entry) => entry?.event === 'work.open'
-        && (entry.launched_id === item.id || (entry.run && runs.has(`${entry.run}:${entry.pid}`)))
+        && (entry.launched_id === item.id || (item.nonce && entry.launched_id === item.nonce) || (entry.run && runs.has(`${entry.run}:${entry.pid}`)))
         && entry.tool === item.tool
         && entry.cwd === item.cwd && entry.instructions === true
         && entry.instruction_channel === declared(item.tool, 'INSTRUCTIONS')?.channel);
@@ -409,12 +482,14 @@ export function contextUsage(tool, entries) {
 /** The same question, asked of transcript entries someone already read. */
 export function lastModel(tool, entries) {
   const reader = declared(tool, 'MODEL_READER');
-  if (reader !== 'turn-context' && reader !== 'assistant-message') return null;
+  if (reader !== 'turn-context' && reader !== 'assistant-message' && reader !== 'agy-step') return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     const model = reader === 'turn-context'
       ? (entry.type === 'turn_context' ? entry.payload?.model : null)
-      : (entry.type === 'assistant' ? entry.message?.model : null);
+      : reader === 'agy-step'
+        ? (entry.type === 'PLANNER_RESPONSE' ? entry.model : null)
+        : (entry.type === 'assistant' ? entry.message?.model : null);
     // Claude stamps `<synthetic>` on messages the model never produced.
     if (typeof model === 'string' && model && !model.startsWith('<')) return model;
   }
@@ -511,7 +586,7 @@ function mtimeOf(path) {
  * transcript is the conversation, so removing the file removes it. Neither of
  * these touches a copy of mc's, because mc never made one.
  */
-export function deleteConversation(entry, env = process.env) {
+export function deleteConversation(entry, env = process.env, deps = {}) {
   if (!entry?.id) return { ok: false, reason: 'no-conversation' };
   const removal = declared(entry.tool, 'CONVERSATION_DELETE');
   if (!removal) return { ok: false, reason: `${toolShortName(entry.tool) || entry.tool || 'no tool'} declares no CONVERSATION_DELETE` };
@@ -530,6 +605,7 @@ export function deleteConversation(entry, env = process.env) {
     }
     return { ok: true };
   }
+  if (removal.mechanism === 'agy-conversation') return deleteAgyConversation(entry, env, removal, deps);
   try {
     if (entry.path) {
       rmSync(entry.path, { force: true });
@@ -553,11 +629,41 @@ export function deleteConversation(entry, env = process.env) {
   return { ok: true };
 }
 
-export function deleteConversations(entries = [], env = process.env) {
+/**
+ * agy keeps one conversation in four places: `brain/<id>/`, and beside it
+ * `conversations/<id>.db` (with its `-wal` and `-shm`) and
+ * `annotations/<id>.pbtxt`. Exactly those go, by the id's own name. A
+ * conversation is not removed while anything holds one of them open, nor when
+ * any of them is not what agy makes (a symlink, a directory where a file
+ * belongs): refusing leaves it whole.
+ */
+function deleteAgyConversation(entry, env, removal, { heldOpen = agyHeldOpen } = {}) {
+  const refuse = (why) => {
+    log(`conversations.${removal.failed}`, { id: entry.id, error: why });
+    return { ok: false, reason: removal.failed };
+  };
+  if (!SESSION_ID.test(entry.id)) return refuse('not a conversation id');
+  const home = agyHome(env);
+  const brain = join(agyBrainDir(env), entry.id);
+  const files = agyOwnFiles(home, entry.id);
+  for (const [path, directory] of [[brain, true], ...files.map((file) => [file, false])]) {
+    let stat;
+    try { stat = lstatSync(path); } catch (error) { if (error.code === 'ENOENT') continue; return refuse(`${path}: ${error.code || 'unreadable'}`); }
+    if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) return refuse(`${path} is not what agy makes`);
+  }
+  if (heldOpen({ files, directory: brain }) !== false) return refuse('the conversation is open in a running process');
+  try {
+    for (const file of files) rmSync(file, { force: true });
+    rmSync(brain, { recursive: true, force: true });
+  } catch (error) { return refuse(String(error?.message || error)); }
+  return { ok: true };
+}
+
+export function deleteConversations(entries = [], env = process.env, deps = {}) {
   const removed = [];
   const failed = [];
   for (const entry of entries) {
-    const result = deleteConversation(entry, env);
+    const result = deleteConversation(entry, env, deps);
     (result.ok ? removed : failed).push({ ...entry, reason: result.reason });
   }
   return { removed, failed };
