@@ -5398,8 +5398,10 @@ test('a dependency stated while a phase-1 session runs keeps the phase-2 goal ba
   assert.deepEqual(started, ['prog/one'], 'a session on phase 1 is running');
   f.files[RECORD_AT] = statedText({ 2: [1] });
   const logBefore = f.files[`${GOALS}/two/LOG.md`];
-  assert.equal((await runner.pass({ repo: 'memoro', lane: 2, tag: 'memoro#2' })).ran, 0, 'phase 2 waits now');
-  assert.deepEqual(started, ['prog/one']);
+  const second = runner.pass({ repo: 'memoro', lane: 2, tag: 'memoro#2' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ['prog/one'], 'phase 2 waits now: no session starts on it');
+  assert.equal((await second).ran, 0);
   assert.equal(where(f, 'two'), 'build · ready');
   assert.equal(f.files[`${GOALS}/two/LOG.md`], logBefore);
   release();
