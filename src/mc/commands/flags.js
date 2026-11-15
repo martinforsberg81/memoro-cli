@@ -24,16 +24,16 @@
  * not given.
  */
 
-import { createRequire } from 'node:module';
+import { implementedShortNames } from '../../adapters/names.js';
 
 /**
- * The tools a `--<tool>` flag names, read from the adapter registry the first time a scan meets an
- * unrecognised flag. Most verbs never scan one, and the registry loads every adapter (R2: the static
- * import added 0.04 s to every verb that reads flags), so it is loaded here, once, and not at import.
+ * The tools a `--<tool>` flag names: the implemented tools' short names from the registry's name
+ * tables. Those tables import nothing; the registry itself loads every adapter (a static import of it
+ * added 0.04 s to every verb that reads flags), so flags.js reads the tables, not the registry.
  */
 let sugared = null;
 function sugarTools() {
-  sugared ??= createRequire(import.meta.url)('../../adapters/index.js').implementedTools();
+  sugared ??= implementedShortNames();
   return sugared;
 }
 

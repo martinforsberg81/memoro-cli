@@ -65,7 +65,9 @@ its last row should read `0%`.
   `declared`, `requireCapability`, `toolsDeclaring`/`toolsWith`, `idsWith`,
   `implementedTools`, `processNames`, `billingProviders`/`apiProviders`,
   `providerPriorities`, `adapterOfProvider`, `canonicalToolId`,
-  `toolShortName` and `resolveLaunch`. A launching, billing, routing or acting
+  `toolShortName` and `resolveLaunch` (a module every verb loads, such as the
+  flag scanner, reads `implementedShortNames` from `src/adapters/names.js`,
+  the registry's name tables, which load no adapter). A launching, billing, routing or acting
   seam refuses a tool that does not declare the capability, with an error that
   names the tool and the capability (`requireCapability`); a reading seam gives
   *unknown* (null, `-` or no match) and never guesses another tool's answer.

@@ -11,16 +11,11 @@
 
 import * as claudeCode from './claude-code.js';
 import * as codex from './codex.js';
+import { PLANNED, SHORT_NAME_TO_ID, implementedShortNames } from './names.js';
 
 const ADAPTERS = {
   [claudeCode.ID]: claudeCode,
   [codex.ID]: codex,
-};
-
-const PLANNED = {
-  'cursor':     { label: 'Cursor',     note: 'Stubbed — writes to .cursorrules; adapter coming in PR 4.1' },
-  'windsurf':   { label: 'Windsurf',   note: 'Stubbed — writes to .windsurfrules; adapter coming in PR 4.1' },
-  'antigravity-cli': { label: 'Antigravity CLI', note: 'Planned — the adapter is phase 2 of the antigravity programme' },
 };
 
 export function getAdapter(id) {
@@ -71,15 +66,21 @@ export function detectInstalled() {
  * implemented adapter). Returns null when input is unknown so callers
  * can decide whether to error or fall back.
  */
-const SHORT_NAME_TO_ID = {
-  'claude':     'claude-code',
-  'codex':      'codex',
-  'agy':        'antigravity-cli',
-};
-
+// SHORT_NAME_TO_ID and PLANNED live in ./names.js, which imports nothing, so
+// the flag sugar reads the tools' names without loading the adapters.
 const ID_TO_SHORT_NAME = Object.fromEntries(
   Object.entries(SHORT_NAME_TO_ID).map(([s, id]) => [id, s]),
 );
+
+// One list of tools: the name tables and the imported adapters must agree,
+// or the registry does not load.
+{
+  const fromAdapters = Object.keys(ADAPTERS).map((id) => ID_TO_SHORT_NAME[id] || id);
+  const fromNames = implementedShortNames();
+  if (fromAdapters.join(',') !== fromNames.join(',')) {
+    throw new Error(`adapter registry: names.js lists ${fromNames.join(', ')} as implemented, index.js imports ${fromAdapters.join(', ')}`);
+  }
+}
 
 export function resolveToolInput(input) {
   if (typeof input !== 'string' || !input) return null;
