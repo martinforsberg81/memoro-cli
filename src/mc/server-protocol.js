@@ -1,10 +1,14 @@
 /** The public, credential-free wire contract; both ends reject rather than guess. */
 import { readFileSync } from 'node:fs';
 
+import { declared, idsWith } from '../adapters/index.js';
+
 export const MC_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 export const DESCRIPTOR_VERSION = 1;
 export const ENTRANCES = new Set(['plan', 'manager', 'brief', 'martin', 'helper']);
 const string = value => typeof value === 'string' && value.length > 0;
+/** A provider whose server session is a socket the client forwards (`SERVER_SESSION.mechanism`). */
+const socketed = provider => declared(provider, 'SERVER_SESSION')?.mechanism === 'socket';
 const nullable = value => value === null || string(value);
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).every(key => keys.includes(key)) && keys.every(key => Object.hasOwn(value, key));
@@ -25,12 +29,12 @@ export function validateDescriptor(value, { destination = 'server', localVersion
         && ['string', 'number'].includes(typeof item.key) && string(item.value) && string(item.name) && string(item.label))))) refuse('invalid question descriptor');
   } else if (value.kind === 'session') {
     const keys = ['provider', 'providerVersion', 'id', 'name', 'sessionId', 'started'];
-    if (value.provider === 'codex') keys.push('socket', 'access');
-    shape(keys, value.provider === 'codex' ? ['prompt'] : []);
+    if (socketed(value.provider)) keys.push('socket', 'access');
+    shape(keys, socketed(value.provider) ? ['prompt'] : []);
     if (Object.hasOwn(value, 'prompt') && (!string(value.prompt) || value.prompt.includes('\0'))) refuse('invalid opening user message');
-    if (!['codex', 'claude-code'].includes(value.provider) || !string(value.providerVersion)
+    if (!idsWith('SERVER_SESSION').includes(value.provider) || !string(value.providerVersion)
       || !string(value.id) || !string(value.name) || !nullable(value.sessionId) || !nullable(value.started)) refuse('invalid session descriptor');
-    if (value.provider === 'codex') {
+    if (socketed(value.provider)) {
       if (!string(value.socket) || !value.socket.startsWith('/') || /[\x00\r\n:]/u.test(value.socket)) refuse('invalid server socket path');
       const access = value.access;
       if (!Array.isArray(access) || (value.sessionId !== null && access.length)) refuse('access flags are only for a new Codex thread');
@@ -40,7 +44,7 @@ export function validateDescriptor(value, { destination = 'server', localVersion
     }
   } else if (value.kind === 'snapshot') {
     shape(['provider', 'providerVersion', 'chosen', 'sessions']);
-    if (!['codex', 'claude-code'].includes(value.provider) || !string(value.providerVersion) || !nullable(value.chosen)
+    if (!idsWith('SERVER_SESSION').includes(value.provider) || !string(value.providerVersion) || !nullable(value.chosen)
       || !Array.isArray(value.sessions)) refuse('invalid snapshot descriptor');
     for (const session of value.sessions) {
       validateDescriptor(session, { destination, localVersion });
@@ -61,6 +65,6 @@ export function descriptor(kind, fields = {}) {
 export function sessionDescriptor(session, provider, providerVersion) {
   return descriptor('session', { provider, providerVersion, id: session.id, name: session.name,
     sessionId: session.resume ?? null, started: session.started ?? null,
-    ...(provider === 'codex' ? { socket: session.socket, access: session.resume ? [] : session.access ?? [],
+    ...(socketed(provider) ? { socket: session.socket, access: session.resume ? [] : session.access ?? [],
       ...(session.prompt ? { prompt: session.prompt } : {}) } : {}) });
 }

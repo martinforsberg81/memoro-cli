@@ -221,7 +221,7 @@ function serverFixture({ prompt = null, resumePrompt = null, historical = false,
     open: options => openInWorkArea({ ...options, resolve: () => launch,
       conversations: () => historical ? [{ id: 'thread-a', tool: 'codex', updated_ms: 1 }] : [],
       identify: () => ({ role: entrance, programme }), billingRoute: () => ({ billing: 'plan' }) }),
-    drivers: { codex: boundaries => ({
+    drivers: { 'codex-session': boundaries => ({
       list: async () => joining ? [row] : [],
       start: async (_options, plan, name) => {
         started = plan;

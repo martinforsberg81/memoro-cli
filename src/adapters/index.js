@@ -297,6 +297,11 @@ export function apiProviders() {
   return toolsWith('API_ROUTE').filter((tool) => adapterFor(tool).BILLING_PROVIDER).map((tool) => adapterFor(tool).BILLING_PROVIDER);
 }
 
+/** Ids of the implemented adapters whose declaration of `capability` is neither undefined nor null. */
+export function idsWith(capability) {
+  return Object.values(ADAPTERS).filter((adapter) => adapter[capability] != null).map((adapter) => adapter.ID);
+}
+
 /** The provider priorities a catalog accepts: `auto`, then the implemented tools by their declared rank. */
 export function providerPriorities() {
   const ranked = toolsWith('PROVIDER_PRIORITY_RANK').sort((a, b) => adapterFor(a).PROVIDER_PRIORITY_RANK - adapterFor(b).PROVIDER_PRIORITY_RANK);

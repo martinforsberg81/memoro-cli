@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { workRoot } from './paths.js';
 import { terminalEnvironment } from './session-entrance.js';
 import { MC_VERSION, validateDescriptor } from './server-protocol.js';
+import { declared, idsWith } from '../adapters/index.js';
 
 import { sshDestination } from './server-settings.js';
 export { sshDestination, readServer, saveServer, clearServer } from './server-settings.js';
@@ -153,13 +154,17 @@ export function serverLink(destination, {
     let linkLost = false;
     try {
       const session = validateDescriptor(connection.session, { destination });
-      if (session.kind !== 'session' || session.provider !== 'codex') refusal(`on ${destination}: expected a Codex session descriptor`);
-      const measured = run('codex', ['--version'], { ...options, encoding: 'utf8' });
+      const wire = declared(session.provider, 'SERVER_SESSION');
+      if (session.kind !== 'session' || wire?.mechanism !== 'socket') {
+        const names = idsWith('SERVER_SESSION').map(id => declared(id, 'SERVER_SESSION')).filter(spec => spec.mechanism === 'socket').map(spec => spec.name);
+        refusal(`on ${destination}: expected a ${names.join(' or ')} session descriptor`);
+      }
+      const measured = run(wire.bin, ['--version'], { ...options, encoding: 'utf8' });
       const localVersion = measured.status === 0 && measured.stdout?.trim() ? measured.stdout.trim() : `unavailable (${measured.error?.message || measured.stderr?.trim() || measured.status})`;
       if (localVersion !== session.providerVersion) refusal(`${localVersion} here, ${session.providerVersion} on ${destination}`);
       forward = await tunnel(session.socket);
       result = await new Promise(resolve => {
-        client = spawnProcess('codex', [...(session.sessionId ? ['resume', session.sessionId] : session.access), '--remote', `unix://${forward.socket}`,
+        client = spawnProcess(wire.bin, [...(session.sessionId ? ['resume', session.sessionId] : session.access), '--remote', `unix://${forward.socket}`,
           ...(session.prompt ? (session.prompt.startsWith('-') ? ['--', session.prompt] : [session.prompt]) : [])],
           { ...options, stdio: 'inherit' });
         client.once('error', error => resolve({ status: 1, error }));

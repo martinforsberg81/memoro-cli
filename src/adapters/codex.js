@@ -659,3 +659,46 @@ export const API_ROUTE = Object.freeze({
     };
   },
 });
+
+/** The model a plan session runs on when none is named. */
+export const PLAN_MODEL = 'gpt-6.1-sol';
+
+/**
+ * How an interactive launch hands the role's instructions over: the
+ * channel's name, its arguments, whether a resume supplies them again, the
+ * channel a guarded launch uses instead (ordinary resume text cannot replace
+ * historical developer authority), and whether a guarded fresh launch names
+ * its own session id.
+ */
+export const INSTRUCTIONS = Object.freeze({
+  channel: 'instructions',
+  args: (markdown) => ['-c', `instructions=${JSON.stringify(markdown)}`],
+  onResume: false,
+  guarded: Object.freeze({
+    channel: 'developer_instructions',
+    args: (markdown) => ['-c', `developer_instructions=${JSON.stringify(markdown)}`],
+    marker: true,
+  }),
+  freshSessionId: false,
+});
+
+/** A resume's session switches go before its session id (`codex resume [OPTIONS] [SESSION_ID]`). */
+export const RESUME_ID_LAST = true;
+
+/** A session has no client but the terminal: nothing could be left running in the background. */
+export const BACKGROUND = false;
+
+/** No Remote Control. */
+export const REMOTE_CONTROL = false;
+
+/** No folder is trusted before the tool opens in it. */
+export const FOLDER_TRUST = null;
+
+/** The mechanism that keeps a persistent session; `src/mc/work-open.js` and `commands/session.js` hold the code. */
+export const PERSISTENT_DRIVER = 'codex-session';
+
+/**
+ * What a server session of this tool is on the wire: a socket the client
+ * forwards and a local client (`bin`) it runs against it.
+ */
+export const SERVER_SESSION = Object.freeze({ mechanism: 'socket', name: 'Codex', bin: 'codex' });

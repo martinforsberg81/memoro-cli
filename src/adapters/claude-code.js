@@ -593,3 +593,38 @@ export const API_ROUTE = Object.freeze({
     return { args, env: { ...env, ANTHROPIC_BASE_URL: `${base}/claude`, ANTHROPIC_AUTH_TOKEN: grant } };
   },
 });
+
+/** The model a plan session runs on when none is named. */
+export const PLAN_MODEL = 'opus';
+
+/**
+ * How an interactive launch hands the role's instructions over: the
+ * channel's name, its arguments, whether a resume supplies them again, the
+ * channel a guarded launch uses instead (none here), and whether a guarded
+ * fresh launch names its own session id.
+ */
+export const INSTRUCTIONS = Object.freeze({
+  channel: 'append-system-prompt',
+  args: (markdown) => ['--append-system-prompt', markdown],
+  onResume: true,
+  guarded: null,
+  freshSessionId: true,
+});
+
+/** A resume's session switches may go anywhere in its arguments. */
+export const RESUME_ID_LAST = false;
+
+/** A session may be left running in the background. */
+export const BACKGROUND = true;
+
+/** Every interactive launch is in the Claude app through Remote Control. */
+export const REMOTE_CONTROL = true;
+
+/** The mechanism that trusts a folder before the tool opens in it; `src/mc/work-open.js` holds the code. */
+export const FOLDER_TRUST = 'claude-trust';
+
+/** The mechanism that keeps a persistent session; `src/mc/work-open.js` and `commands/session.js` hold the code. */
+export const PERSISTENT_DRIVER = 'claude-background';
+
+/** What a server session of this tool is on the wire: it is a terminal the client attaches to over ssh. */
+export const SERVER_SESSION = Object.freeze({ mechanism: 'tty', name: 'Claude' });
