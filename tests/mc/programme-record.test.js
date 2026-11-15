@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { run as goal } from '../../src/mc/commands/goal.js';
@@ -402,7 +402,11 @@ describe('mc programs create for an area', () => {
     try {
       const outside = join(a.root, 'elsewhere.md');
       writeFileSync(outside, 'x');
-      for (const given of [outside, join(a.root, 'proposals', 'missing.md')]) {
+      // A file under a proposals archive/ has been decided already: it is no proposal.
+      const archivedHere = join(a.root, 'proposals', 'archive', 'old.md');
+      const archivedThere = join(a.home, 'other', 'proposals', 'archive', 'old.md');
+      for (const file of [archivedHere, archivedThere]) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, 'x'); }
+      for (const given of [outside, join(a.root, 'proposals', 'missing.md'), archivedHere, archivedThere]) {
         const { code, err } = await call(['create', 'ops-repair', '--end', 'e', '--area', 'memoro-cli/operations', '--from-proposal', given], a.env, AREA_DEPS);
         assert.equal(code, 1, given);
         assert.match(err, /--from-proposal/u);

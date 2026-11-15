@@ -33,4 +33,4 @@ export function ownerOf(item) {
 }
 
 /** What a launch with no owner is told: what it should belong to. */
-export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to a desk (mc manager, mc helper, mc martin)';
+export const OWNERLESS_HINT = 'a session belongs to a programme (mc plan <programme>, or a project\'s number on the page) or to a desk (mc helper, mc martin)';

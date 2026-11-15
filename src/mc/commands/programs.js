@@ -260,8 +260,12 @@ function proposalIn(given, { env, home }) {
   try { path = realpathSync(given); } catch { return { error: `--from-proposal ${given} is not a file` }; }
   if (!statSync(path).isFile()) return { error: `--from-proposal ${given} is not a file` };
   const root = join(workRoot(env), 'proposals') + sep;
-  const inProgramme = path.startsWith(realOr(home) + sep) && path.slice(realOr(home).length + 1).split(sep)[1] === 'proposals';
-  if (!path.startsWith(realOr(root.slice(0, -1)) + sep) && !inProgramme) return { error: `--from-proposal ${given} is not a proposal: it must be a file in ${root} or in a programme's proposals/ folder` };
+  // A proposal is a file directly in a proposals folder; one under its archive/ has been decided already.
+  const under = (dir) => (path.startsWith(dir + sep) ? path.slice(dir.length + 1).split(sep) : null);
+  const inRoot = under(realOr(root.slice(0, -1)))?.length === 1;
+  const parts = under(realOr(home));
+  const inProgramme = parts?.length === 3 && parts[1] === 'proposals';
+  if (!inRoot && !inProgramme) return { error: `--from-proposal ${given} is not a proposal: it must be a file in ${root} or in a programme's proposals/ folder` };
   return { path };
 }
 

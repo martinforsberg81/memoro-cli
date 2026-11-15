@@ -5,7 +5,8 @@ Linux SSH interactive launches keep their provider alive past the terminal ([Cla
 Two things get noticed about memoro: what production says, and what Martin
 says. `mc helper` is the door for both, and **the only thing either of them
 produces is a proposal** — a file in `~/mc/proposals/` that nobody
-acts on until Martin picks it up at `mc manager` or `mc plan`.
+acts on until Martin picks it up at `mc martin` or `mc plan`, or the manager's
+curation turn reads it ([mc-manager.md](mc-manager.md)).
 
 | | what it does |
 |---|---|
@@ -66,13 +67,14 @@ inside intake is not itself drained.
 `mc helper` with no flags opens the interactive session; the conversation already in `~/mc/helper/` resumed with no
 intro, a fresh one when there is none or on `--new` (Martin, 2026-09-13) —
 standing in `~/mc/helper/`, wearing the
-`helper` role (`canon/roles/helper.md`, Sonnet). Its shape is `mc manager`'s:
+`helper` role (`canon/roles/helper.md`, Sonnet). It has
 a room of its own under the work root, no repository, no workarea.
 
 It stands in `~/mc/helper/` and **not** `~/mc/intake/`, which is the eye's
 material and none of the desk's business. The role says so in the same
 words: it does not read the digest, and it does not list, edit or delete a
-proposal that is already waiting. Deciding one is `mc manager`'s job. Adding
+proposal that is already waiting. Deciding one is Martin's, at the desk or in
+planning, or the manager's curation turn's for a defect against an area text. Adding
 is all the desk does.
 
 It also does not fix anything — no code change, no branch, no PR, no deploy.
@@ -444,12 +446,16 @@ it runs when Martin has something to say.
 
 ## Who acts on it
 
-Nobody automatic. That is the point.
+No session turns a proposal into work on its own, with one bounded exception.
 
-- **`mc manager`** — the session lists the waiting proposals (`ls ~/mc/proposals/`)
-  and opens each one. At the brief Martin has one become a goal, or
-  archived to `~/mc/proposals/archive/`. It reads the desk's proposals and the
-  eye's the same way, because they are the same file.
+- **The manager's curation turn** ([mc-manager.md](mc-manager.md)) — its prompt
+  lists the waiting proposals of `~/mc/proposals/` and every programme's
+  `proposals/`, oldest first. A proposal that reports a defect against an area
+  text, in an area with no repair in flight, may become that area's repair
+  programme (`mc programs create … --area … --from-proposal`); the others wait.
+- **Martin**, at `mc martin` or in `mc plan`, has one become a goal, or
+  archived to `~/mc/proposals/archive/`. The desk's proposals and the eye's are
+  read the same way, because they are the same file.
 - **`mc plan <programme>`** is the other way in: open the programme the
   proposal belongs to, with the proposal in front of you. Nothing automatic
   carries one across — `mc plan` takes a programme, not a file, and a proposal
@@ -549,5 +555,5 @@ is not the drain's doing, but the drain makes it permanent; proposal
 `scripts/sync-todo.mjs`, the `/improve` command and the `docs/TODO.md`
 production sentinels in `~/memoro` still exist. Decision `mc-2` retires them
 once the helper has run for a week: two systems doing the same thing, and
-this is the one that puts proposals where `mc manager` can see them instead of
+this is the one that puts proposals where the manager and Martin can see them instead of
 making a human in a terminal into the queue. The helper has to earn it first.

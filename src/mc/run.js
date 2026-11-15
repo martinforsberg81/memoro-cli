@@ -2010,18 +2010,22 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         prompt = horizonPrompt({ slug: turn.slug, env: deps.env, pages: areaPages({ repos: declaring.repos, checkouts }),
           archivedProgrammes: archivedFor({ archived: archivedProgramsHome(deps.env), slug: turn.slug, list: deps.list, read: deps.read }), checkouts });
       } else {
+        before = again.state.status === 'valid' ? again.state.state : null;
         worktrees = setUpCurationWorktrees({ git: deps.git, root, stamp: stampText, repos: declaring.repos });
         if (!worktrees.ok) {
-          // Said in runner.log; the cadence bounds the next try, and no desk item opens.
-          say(`${turnLabel}: no session started — ${worktrees.reason}`);
-          return worktrees.fetch ? 'skipped:fetch' : 'skipped:setup';
+          // A fetch that fails is the network's: nothing is spent, and the next pick tries again. Any other setup
+          // failure is the turn's: it is said in runner.log, the cadence starts from now so it is said once a day at
+          // most, the bases stay what the last success read, and no desk item opens (D7).
+          say(`${turnLabel}: no session started — ${worktrees.reason}${worktrees.fetch ? '' : '; the next turn waits for the cadence'}`);
+          if (worktrees.fetch) return 'skipped:fetch';
+          writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
+          return 'skipped:setup';
         }
         areaSet = declaring.repos;
         const backlog = proposalBacklog({ root, home: programsHome(deps.env), list: deps.list, modified: deps.modified ?? (() => 0) });
         prompt = curationPrompt({ paths: worktrees.paths, branches: worktrees.branches, pages: areaPages({ repos: declaring.repos, checkouts: worktrees.paths }), backlog, moved: turn.moved });
         cwd = curationWorktreesDir(root, stampText);
         // The turn has started: the cadence runs from now, and the bases stay what the last success read.
-        before = again.state.status === 'valid' ? again.state.state : null;
         writeJson(curationStatePath(root), curationState({ started: stamp(), bases: before?.bases ?? {} }));
       }
       const rechecked = await admission.recheck?.();

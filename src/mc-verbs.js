@@ -75,7 +75,7 @@ export function retiredLines(verb) {
     `mc: mc ${verb} is gone — every session belongs to a programme or a desk`,
     '    mc                    the page; a project\'s number opens its runner area',
     '    mc plan <programme>   plan a programme',
-    '    mc manager · mc helper · mc martin  the desks',
+    '    mc helper · mc martin  the desks',
     '    mc tidy               what is left under ~/mc/work/, and whether it can go',
   ];
 }

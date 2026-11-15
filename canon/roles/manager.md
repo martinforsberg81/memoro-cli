@@ -53,7 +53,8 @@ retried blind: it names what is wrong.
 **A curation turn** (no `MC_HORIZON`). Your prompt names a worktree on a branch
 made from origin/main for each repository that declares areas. Read what main
 moved, bring the pages' Closer, Store and Standards into line, and publish each
-worktree you changed with `mc publish --no-merge`; one you did not change needs
+worktree you changed with plain `mc publish` (never `--no-merge`): it queues
+the pull request for the merger, whose docs form lands it. One you did not change needs
 nothing, and a turn that finds nothing to change is a success. The prompt lists
 the proposals, oldest first. A proposal that reports a defect against an area
 text, in an area that has no repair in flight, may become that area's

@@ -6516,6 +6516,18 @@ test('curation turn: a failed turn waits for the cadence and opens no item; a pr
   assert.deepEqual(failed.items(), []);
   assert.notEqual(runner.nextWork()?.name, 'manager', 'bounded by the cadence');
 
+  // A setup failure that is not the network's starts no session, spends the cadence and is said once, not every pick.
+  const setup = managerFixture({ horizons: [] });
+  setup.world.addFails = { 'memoro-cli': 'a branch named manager/curation-x already exists' };
+  const setupRunner = createRunner({ deps: setup.f.deps });
+  await setupRunner.pass({ repo: 'memoro' });
+  assert.equal(managerSessions(setup.f).length, 0, 'no session');
+  assert.deepEqual([JSON.parse(setup.f.files[CURATION_STATE]).started, JSON.parse(setup.f.files[CURATION_STATE]).bases], ['2026-11-15T09:00:00Z', {}]);
+  assert.notEqual(setupRunner.nextWork()?.name, 'manager', 'bounded by the cadence');
+  await setupRunner.pass({ repo: 'memoro' });
+  assert.equal(setup.f.log.filter((line) => /manager:curation: no session started — setup:/u.test(line)).length, 1, 'said once');
+  assert.deepEqual(setup.items(), []);
+
   const quota = managerFixture({ horizons: [] });
   quota.f.answer = REFUSED_429;
   await createRunner({ deps: quota.f.deps }).pass({ repo: 'memoro' });

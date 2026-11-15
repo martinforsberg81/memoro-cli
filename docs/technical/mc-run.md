@@ -906,7 +906,10 @@ and the desk sync reports it.
 **Worktrees.** The runner fetches, then makes for each repository that declares
 areas a branch `manager/curation-<stamp>` from origin/main in
 `runner/work/manager-curation/<stamp>/<repo>`. The prompt names them and lists the
-proposals. The session publishes what it changed with `mc publish --no-merge`;
+proposals. The session publishes what it changed with plain `mc publish`, which
+opens the pull request and queues it for the merger, where the docs form lands a
+pull request whose every file is under `docs/` (never `--no-merge`: nothing
+would queue a `manager/curation-*` branch);
 its refusals are the manager's guard ([mc-manager.md](mc-manager.md#what-the-manager-may-write)).
 After the session a worktree that holds nothing, or whose branch is published
 and clean, is removed with its branch; any other is kept and named in

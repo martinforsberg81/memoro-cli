@@ -46,7 +46,8 @@ The runner starts a manager session in two cases, one at a time under one claim,
   ([mc-martin.md](mc-martin.md)).
 - **A curation turn**, when none started in the last 24 hours and the origin/main of a repository that declares
   areas has moved past what the last curation read. It works in branch worktrees the runner makes from
-  origin/main and publishes what it changed with `mc publish`. A turn that finds nothing to change succeeds; a
+  origin/main and publishes what it changed with plain `mc publish`, which queues the pull request for the merger,
+  whose docs form lands it (never `--no-merge`). A turn that finds nothing to change succeeds; a
   failed one is said in `runner.log` and opens no desk item.
 
 A horizon turn goes before curation. Both run under the manager role with `MC_HEADLESS=1`; a horizon turn also
