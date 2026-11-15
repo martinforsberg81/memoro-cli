@@ -242,6 +242,7 @@ describe('PROGRAMMES without finished goals', () => {
     assert.ok(lines.some((line) => /Phase 1/u.test(line)));
     assert.ok(!lines.some((line) => line.includes('Title gone')));
     assert.ok(!lines.some((line) => /NEEDS ATTENTION/u.test(line)), 'a goal at work is not needing attention');
+    assert.ok(!lines.some((line) => /UNASSIGNED ACTIVITY/u.test(line)), 'its session is under it, not unassigned');
     const after = draw(page(goalsFor(['live', 1, { stage: 'done' }], ['open', 2])));
     assert.ok(!after.some((line) => line.includes('Title live')), 'once the session has ended it leaves');
   });
