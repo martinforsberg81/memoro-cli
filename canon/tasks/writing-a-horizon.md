@@ -42,3 +42,10 @@ State the exclusions explicitly.
 ## The strangest thing the wording permits
 
 Name the nearest wrong reading and distinguish it from the intended scope.
+
+## Changing the wording
+
+The wording of an open horizon is changed by editing `playback.md` in
+`~/mc/martin/horizons/<slug>/` directly, keeping the five headings. It is a file, and a file is edited: no verb exists for it and
+none is to be proposed. Never drop a horizon and set it again to change a
+sentence; the programmes that name its slug would be left naming a dropped one.
