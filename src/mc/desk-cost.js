@@ -284,7 +284,9 @@ function costOf(entry, since) {
  * the cache is written back unless `write` is null.
  */
 export function deskCost({
-  cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET, ...directories
+  cache = null, now = new Date(), write = null, budget = DESK_COST_BUDGET,
+  // What a tool declares as its cost source; injectable so a mechanism mc does not know can be exercised.
+  sourceOf = (tool) => adapterFor(tool)?.COST_SOURCE, ...directories
 } = {}) {
   const since = now.getTime() - DAY_MS;
   const age = now.getTime() - Date.parse(cache?.at || '');
@@ -296,7 +298,7 @@ export function deskCost({
   // Each implemented tool that declares a cost source (`COST_SOURCE`) is read from the directory its option names.
   const failed = [];
   const sources = toolsDeclaring('COST_SOURCE').flatMap((tool) => {
-    const { files: kind, reader, option } = adapterFor(tool).COST_SOURCE;
+    const { files: kind, reader, option } = sourceOf(tool);
     if (!Object.hasOwn(FILE_SOURCES, kind) || !Object.hasOwn(READERS, reader)) {
       failed.push(`${toolShortName(tool)}: no cost reader for ${kind}/${reader}`);
       return [];
@@ -308,7 +310,7 @@ export function deskCost({
   });
   for (const { path, size, tool } of sources) {
     seen.add(path);
-    const { read: reader, start } = READERS[adapterFor(tool).COST_SOURCE.reader];
+    const { read: reader, start } = READERS[sourceOf(tool).reader];
     let entry = files[path];
     if (!entry || entry.tool !== tool || size < entry.offset) {
       entry = { tool, offset: 0, interactive: null, ...start() };
@@ -339,7 +341,7 @@ export function deskCost({
   for (const [path, entry] of Object.entries(files)) {
     if (!seen.has(path)) { delete files[path]; continue; }
     if (!entry.interactive) {
-      if (entry.interactive === false && READERS[adapterFor(entry.tool)?.COST_SOURCE?.reader]?.marked) {
+      if (entry.interactive === false && READERS[sourceOf(entry.tool)?.reader]?.marked) {
         const name = toolShortName(entry.tool);
         leftOut[name] = (leftOut[name] || 0) + 1;
       }
