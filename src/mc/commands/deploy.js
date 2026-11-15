@@ -88,7 +88,7 @@ import {
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
-import { gateRecord, measureGate, reds, suiteLines, withMendsNow } from '../deploy-gate.js';
+import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, withMendsNow } from '../deploy-gate.js';
 import {
   preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
   writePreparation,
@@ -101,7 +101,7 @@ import { baseUrl } from '../helper-collect.js';
 import { processAlive } from '../lease-owner.js';
 import { languageState as readLanguageState, liveRun } from '../language-runs.js';
 import { installedScript, readMerger } from '../merger.js';
-import { nightlyReading } from '../nightly-history.js';
+import { nightlyReading, readNightlyHistory } from '../nightly-history.js';
 import { mcHome, workRoot } from '../paths.js';
 import { ask as realAsk, interactive as realInteractive } from '../prompt.js';
 import { realLock } from '../runner-lock.js';
@@ -156,13 +156,21 @@ async function fetchVersionDefault(env = process.env) {
 /** What a person or a closing terminal sends a deploy that should stop. */
 const STOP_SIGNALS = ['SIGINT', 'SIGHUP', 'SIGTERM'];
 
+/** What `mc deploy` always hands `scripts/deploy.mjs`: do not fast-forward to origin/main (the script's own switch). */
+export const SKIP_REMOTE_PREFLIGHT = 'MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT';
+
 export function spawnDeployDefault({
   cwd, env, onOutput, stdout = process.stdout, stderr = process.stderr, signals = process,
   spawnProcess = spawn,
 }) {
   return new Promise((resolve) => {
-    // The environment goes through untouched: MEMORO_DEPLOY_CONTAINERS and
-    // wrangler's own variables are the caller's to set, not mc's to invent.
+    // The environment goes through as the caller has it — MEMORO_DEPLOY_CONTAINERS and
+    // wrangler's own variables are the caller's to set, not mc's to invent — with one
+    // addition: MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT=1, always. The script's remote main
+    // preflight (`ensureUpToDateWithOrigin`: fetch, then fast-forward to origin/main)
+    // is then skipped — it would ship the tip instead of the commit mc measured and
+    // placed the worktree at. The clean-tree check still runs, and `ship` checks that
+    // HEAD is the measured commit before the spawn (`moved`).
     //
     // stdout and stderr are piped rather than inherited so the row can say
     // which step it stopped at and what version was verified — every chunk is
@@ -171,7 +179,7 @@ export function spawnDeployDefault({
     // and not a terminal, so a tool that draws a progress bar only for a TTY
     // prints plain lines instead. stdin stays inherited: `deploy.mjs` asks
     // nothing, but wrangler's own login flow might.
-    const child = spawnProcess('npm', ['run', 'deploy'], { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
+    const child = spawnProcess('npm', ['run', 'deploy'], { cwd, env: { ...env, [SKIP_REMOTE_PREFLIGHT]: '1' }, stdio: ['inherit', 'pipe', 'pipe'] });
     const tee = (stream, sink) => {
       if (!stream) return;
       stream.setEncoding('utf8');
@@ -361,7 +369,8 @@ export function worktreeState({ worktree, git = tryGit }) {
     const value = Number(out);
     return out !== null && Number.isFinite(value) ? value : null;
   };
-  return { dirty, ahead: count('origin/main..HEAD'), behind: count('HEAD..origin/main') };
+  // A status git could not give is not a clean tree: the caller refuses it.
+  return { dirty, unreadable: status === null, ahead: count('origin/main..HEAD'), behind: count('HEAD..origin/main') };
 }
 
 /** Whether `worktree` is the one mc made for itself — the only `main` whose
@@ -417,8 +426,18 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
 }
 
 /**
- * What would ship, before anybody is asked: the tree, what is live, the gap
+ * What would ship, before anybody is asked: the commit, what is live, the gap
  * between them, and whether the nightly ever measured this tree whole.
+ *
+ * The commit is the newest first-parent commit of origin/main after the live
+ * one whose full run is green (`pickCommit`) — main's tip when that is green,
+ * and an older one when the tip's run is red, stalled or missing and an older
+ * commit's is green. `plan.tip` is main's tip either way, and `plan.pick` says
+ * what was passed over and why. With `acceptRed` the tip is what ships (the
+ * person has said which red they take) and the pick is what would have shipped
+ * without it. Nothing newer than the live commit — the live commit itself, or
+ * one that does not descend from it — is `plan.backwards`: production never
+ * moves backwards, and a refusal names the live commit.
  *
  * Everything it cannot answer is null rather than a guess — a deploy is not
  * the moment to invent a number — and `planLines` says the unknown out loud.
@@ -426,17 +445,23 @@ export function leftoverStamps({ worktree, dirty, git = tryGit }) {
 export async function deployPlan({
   path, env = process.env, git = tryGit, fetchVersion = fetchVersionDefault,
   lastDeploy = lastDeployRow, nightly = nightlyReading, offline = false,
-  languageState = readLanguageState,
+  languageState = readLanguageState, acceptRed = false, history = null,
 }) {
   const fetched = offline ? false : git(path, ['fetch', 'origin', 'main', '--quiet']) !== null;
-  const sha = git(path, ['rev-parse', '--verify', 'origin/main']);
-  if (!sha) return { repo: REPO, path, sha: null, fetched, reason: 'no-checkout' };
+  const tip = git(path, ['rev-parse', '--verify', 'origin/main']);
+  if (!tip) return { repo: REPO, path, sha: null, fetched, reason: 'no-checkout' };
 
+  // What is live: the last deployed row's `live_commit` — what production said it ran
+  // when that deploy was verified — else the sha it shipped, else what /api/version says.
   const row = lastDeploy(env);
-  let last = row
-    ? { sha: row.sha, short: short(row.sha), build: row.build || null, at: row.ended || row.started || null, source: 'deploys.tsv' }
-    : null;
-  if (!last) {
+  let last = null;
+  if (row) {
+    const ref = row.live_commit || row.sha;
+    last = {
+      sha: ref, short: short(ref), build: (row.live_commit ? row.live_build : '') || row.build || null,
+      at: row.ended || row.started || null, source: 'deploys.tsv',
+    };
+  } else {
     const version = await fetchVersion(env);
     if (version?.commit) {
       last = {
@@ -450,6 +475,36 @@ export async function deployPlan({
     const out = from && to ? git(path, ['rev-list', '--count', `${from}..${to}`]) : null;
     const value = Number(out);
     return out !== null && Number.isFinite(value) ? value : null;
+  };
+
+  // The live commit as this checkout knows it, in full: a `live_commit` may be short.
+  const liveFull = last ? (git(path, ['rev-parse', '--verify', `${last.sha}^{commit}`]) || null) : null;
+  const descends = (sha) => Boolean(liveFull) && git(path, ['merge-base', '--is-ancestor', liveFull, sha]) !== null;
+  let chain = [tip];
+  let backwards = null;
+  if (last && !liveFull) {
+    backwards = `the live commit ${last.short} is not a commit this checkout has — nothing newer than it can be told from here, so nothing ships`;
+  } else if (liveFull) {
+    const listed = git(path, ['rev-list', '--first-parent', `${liveFull}..${tip}`]);
+    if (listed === null) backwards = `git could not list the commits between the live commit ${last.short} and origin/main`;
+    else chain = String(listed).split('\n').map((line) => line.trim()).filter(Boolean);
+    if (!backwards && liveFull === tip) backwards = `the live commit ${last.short} is main's tip — nothing newer can ship`;
+    else if (!backwards && !descends(tip)) backwards = `main's tip ${short(tip)} does not descend from the live commit ${last.short} — shipping it would move production backwards, and nothing newer can ship`;
+  }
+
+  const runs = history ? history() : readNightlyHistory(path, { root: mcHome(env) }).runs;
+  const found = backwards
+    ? { pick: null, tip, passed: [] }
+    : pickCommit({ chain, live: liveFull, runs, descends });
+  const tipVerdict = fullRunVerdict(runs, tip);
+  // Without a green commit, or when the person accepts a red, the tip is what is prepared.
+  const sha = acceptRed || !found.pick ? tip : found.pick;
+  const older = Boolean(found.pick) && found.pick !== tip;
+  const pick = {
+    tip, green: found.pick, older, passed: found.passed,
+    tip_state: tipVerdict.state, tip_run: tipVerdict.run,
+    tip_red: tipVerdict.run?.red || [],
+    behind: older ? count(found.pick, tip) : 0,
   };
 
   const reading = nightly(path);
@@ -468,10 +523,14 @@ export async function deployPlan({
     path,
     sha,
     short: short(sha),
+    tip,
     subject: git(path, ['log', '-1', '--format=%s', sha]),
     fetched,
     last,
-    gap: last ? count(last.sha, sha) : null,
+    live: liveFull,
+    gap: last ? count(liveFull || last.sha, sha) : null,
+    pick,
+    backwards,
     nightly: nightlyState,
     // The deploy no longer promotes grammar; what waits is said here, from
     // the cache `mc language status` leaves — nothing is read anew.
@@ -528,6 +587,41 @@ function sourceLine(plan) {
   return `${from}main at origin/main`;
 }
 
+/** Why main's tip was passed over, in the words of its own full run — every red name, none cut. */
+function passedOverWhy(pick) {
+  const run = pick.tip_run;
+  if (pick.tip_state === 'red') return `its full run is RED (${pick.tip_red.length}): ${pick.tip_red.join(', ')}`;
+  if (pick.tip_state === 'stalled') return 'its full run STALLED';
+  if (pick.tip_state === 'unmeasured') return `its full run stopped at ${run?.stopped_at || 'an unknown step'} and measured nothing`;
+  return 'not measured: no full run of it';
+}
+
+const commits = (n) => `${n} commit${n === 1 ? '' : 's'}`;
+
+/**
+ * What the pick says beyond the commit itself: how far behind main's tip it is
+ * and why the tip was passed over; under `--accept-red`, that the tip ships and
+ * which green commit would have without it; with nothing green after the live
+ * commit, that the tip is prepared as it is. A tip that is itself green says
+ * nothing: it reads as it always did.
+ */
+function pickLines(plan) {
+  const { pick } = plan;
+  if (!pick || plan.backwards) return [];
+  const tip = short(plan.tip);
+  if (pick.older && plan.sha === pick.green) {
+    const behind = pick.behind === null ? 'behind' : `${commits(pick.behind)} behind`;
+    return [`mc: ${behind} main's tip ${tip} — ${passedOverWhy(pick)}`];
+  }
+  if (pick.older) {
+    return [`mc: --accept-red ships main's tip ${tip}; without it ${short(pick.green)}, ${pick.behind === null ? 'behind' : `${commits(pick.behind)} behind`} the tip, would ship`];
+  }
+  if (!pick.green && plan.last && pick.tip_state !== 'green') {
+    return [`mc: no commit after the live one ${plan.last.short} has a green full run — the tip is prepared as it is`];
+  }
+  return [];
+}
+
 /** The reading, in the words a person decides on. */
 export function planLines(plan, { now = Date.now() } = {}) {
   const lines = [`mc: would deploy ${plan.repo} ${plan.sha}${plan.subject ? ` — ${plan.subject}` : ''}`];
@@ -548,6 +642,9 @@ export function planLines(plan, { now = Date.now() } = {}) {
       lines.push(`mc: ${plan.gap} commit${plan.gap === 1 ? '' : 's'} would ship`);
     }
   }
+
+  if (plan.backwards) lines.push(`mc: ${plan.backwards}`);
+  lines.push(...pickLines(plan));
 
   if (!plan.nightly) {
     lines.push('mc: the nightly has measured nothing here — this tree was not measured whole');
@@ -711,6 +808,8 @@ export async function run(argv, deps = {}) {
     lastDeploy: deps.lastDeploy || lastDeployRow,
     nightly: deps.nightly || nightlyReading,
     languageState: deps.languageState || readLanguageState,
+    acceptRed: Boolean(opts.acceptRed),
+    history: () => (deps.gate?.history || readNightlyHistory)(path, { root: deps.gate?.root ?? mcHome(env) }).runs,
   });
   if (!base.sha) {
     stderr.write(`mc: ${path} has no origin/main — mc deploy needs ${REPO}'s main checkout\n`);
@@ -748,6 +847,12 @@ export async function run(argv, deps = {}) {
   // deploys nothing, so it is the safe thing to type when you are not sure.
   if (opts.dryRun) {
     if (!opts.json) for (const line of planLines(plan)) stdout.write(`${line}\n`);
+    // Production never moves backwards: there is nothing to gate, and the reading has said why.
+    if (plan.backwards) {
+      if (opts.json) stdout.write(`${JSON.stringify({ ...plan, dry_run: true, gate: null }, null, 2)}\n`);
+      else stdout.write('mc: --dry-run — nothing would be deployed\n');
+      return 0;
+    }
     const busy = preparationInFlight({ root: deps.root || workRoot(env), plan, alive: deps.alive || processAlive });
     if (busy && !opts.json) stdout.write(`${busy}\n`);
     const gate = await gateStage({ plan, opts, env, say, deps: gateDeps });
@@ -790,6 +895,14 @@ export async function run(argv, deps = {}) {
   };
   if (refuseRunning()) return 1;
 
+  // Production never moves backwards (also under --accept-red): a pick that is the live commit,
+  // or that does not descend from it, is refused before anything is prepared or measured.
+  if (plan.backwards) {
+    refuse(plan.backwards);
+    stderr.write(`mc: ${plan.backwards} — nothing was deployed\n`);
+    return 1;
+  }
+
   // Nothing here stashes, resets or discards anything: the worktree that has
   // `main` may well be somebody's, and a `main` that is not exactly
   // `origin/main` plus nothing is a refusal with the path in the row. The one
@@ -798,6 +911,11 @@ export async function run(argv, deps = {}) {
   if (source.failed) {
     refuse(`could not make mc's own main worktree at ${source.worktree}`);
     stderr.write(`mc: git worktree add ${source.worktree} main failed in ${path} — mc deploy needs a checkout of main to run the script in\n`);
+    return 1;
+  }
+  if (state.unreadable) {
+    refuse(`git status failed in ${source.worktree} — whether main is clean there is unknown`);
+    stderr.write(`mc: git status failed in ${source.worktree}, so whether the deploy would ship a clean tree is unknown — nothing was deployed\n`);
     return 1;
   }
   if (state.dirty.length && !plan.stamps && !plan.strays.length) {
@@ -862,6 +980,21 @@ export async function run(argv, deps = {}) {
   const startDeployer = deps.startDeployer || startDeployerDefault;
   const started = lock(root, () => {
     if (refuseRunning()) return null;
+    // The ancestor rule once more, against the last deployed row as it stands now: a deploy that
+    // landed while the question was open may have moved production past this pick.
+    const standing = (deps.lastDeploy || lastDeployRow)(env);
+    const standingRef = standing ? (standing.live_commit || standing.sha) : null;
+    if (standingRef) {
+      const standingFull = git(path, ['rev-parse', '--verify', `${standingRef}^{commit}`]);
+      const forward = Boolean(standingFull) && standingFull !== plan.sha
+        && git(path, ['merge-base', '--is-ancestor', standingFull, plan.sha]) !== null;
+      if (!forward) {
+        const why = `${short(standingRef)} is live now and ${plan.short} does not come after it — nothing newer can ship`;
+        refuse(why);
+        stderr.write(`mc: ${why}; nothing was deployed\n`);
+        return null;
+      }
+    }
     // A row still `running` whose process is gone is a deploy that died
     // without completing it.
     for (const row of closeAbandoned({ alive }, env)) {
@@ -1027,14 +1160,36 @@ export async function ship(job, deps = {}) {
     // (2026-11-14) — not to whatever `origin/main` is by now, which no full
     // run and no suite has seen. `--ff-only` on a tree already proved clean
     // and not ahead, so it either fast-forwards or does nothing.
-    const behind = worktreeState({ worktree, git }).behind;
-    if (behind) {
+    //
+    // The sha may be older than origin/main (the newest commit whose full run is
+    // green): a worktree behind it is fast-forwarded, and one that stands *past* it
+    // — at main's tip, say — is put back with `git reset --keep`. That is a
+    // movement of the worktree to a commit origin/main contains and nothing else, so
+    // it is made only in mc's own worktree, from a HEAD origin/main contains, with
+    // nothing tracked uncommitted. Anywhere else the worktree is left alone and the
+    // check below refuses it, naming the commit that stood.
+    const state = worktreeState({ worktree, git });
+    const head = git(worktree, ['rev-parse', '--verify', 'HEAD']);
+    const ancestor = (older, newer) => Boolean(older && newer) && git(worktree, ['merge-base', '--is-ancestor', older, newer]) !== null;
+    const past = Boolean(head) && head !== sha && ancestor(sha, head);
+    let moved = false;
+    if (state.behind && !past) {
       if (git(worktree, ['merge', '--ff-only', sha]) === null) {
         recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not fast-forward main in ${worktree} to ${short(sha)}` }, env);
         stderr.write(`mc: git merge --ff-only ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
         return 1;
       }
+      moved = true;
+    } else if (past && own && !state.unreadable && ancestor(head, 'origin/main')
+      && !state.dirty.some((line) => !line.startsWith('?? '))) {
+      if (git(worktree, ['reset', '--keep', sha]) === null) {
+        recordEnd(key, { outcome: FAILED, stopped_at: 'fast-forward', note: `mc: could not move main in ${worktree} back to ${short(sha)}, the commit that was measured` }, env);
+        stderr.write(`mc: git reset --keep ${short(sha)} failed in ${worktree} — nothing was deployed\n`);
+        return 1;
+      }
+      moved = true;
     }
+    const behind = moved;
     // Read again after the fast-forward, because the fast-forward can dirty
     // it: a commit that drops lines from `.gitignore` turns files that were
     // ignored a moment ago into untracked ones (2026-10-09). In mc's own
@@ -1067,7 +1222,7 @@ export async function ship(job, deps = {}) {
     // was until 2026-11-14, after two rows had named the wrong sha, 2026-09-14
     // and 2026-09-19). The row is completed with the sha that stood.
     const shipping = git(worktree, ['rev-parse', '--verify', 'HEAD']) || sha;
-    if (behind) stdout.write(`mc: fast-forwarded main in ${worktree} to ${short(shipping)}\n`);
+    if (behind) stdout.write(`mc: ${past ? 'moved' : 'fast-forwarded'} main in ${worktree} to ${short(shipping)}\n`);
     if (shipping !== sha) {
       recordEnd(key, { sha: shipping, outcome: FAILED, stopped_at: 'moved', note: `mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)}, the commit that was measured and asked about` }, env);
       stderr.write(`mc: main in ${worktree} stands on ${short(shipping)}, not ${short(sha)} — the commit the full run and the suites measured and the question named; run the deploy again — nothing was deployed\n`);
@@ -1226,10 +1381,20 @@ async function prepareStage({ plan, opts, env, root, holder, say, stdout, stderr
     const state = preparationState(record, { alive });
     const same = record?.sha === plan.sha;
     if (same && state === 'running') return { join: record };
-    if (same && state === 'done' && preparationServes(record, opts)) return { done: record };
+    // A finished preparation is the gate's answer only while the history still says what
+    // it recorded: a full run that has been written since (a red where it read green, or
+    // the other way) makes it a measurement of an older state of the same commit.
+    let stale = null;
+    if (same && state === 'done' && preparationServes(record, opts)) {
+      const runs = (deps.gate?.history || readNightlyHistory)(plan.path, { root: deps.gate?.root ?? mcHome(env) }).runs;
+      const now = fullRunVerdict(runs, record.sha).state;
+      const then = record.result?.full?.state;
+      if (now === then) return { done: record };
+      stale = `mc: the preparation of ${plan.short} read the full run as ${then}, the history says ${now} now — preparing again`;
+    }
 
-    let said = null;
-    if (record && !same) {
+    let said = stale;
+    if (stale) { /* said above */ } else if (record && !same) {
       said = `mc: the last preparation was of ${short(record.sha)}${state === 'running' ? ' and is still running' : ''}, main is ${plan.short} now — starting a new one, of ${plan.short}`;
     } else if (record && state === 'interrupted') {
       said = `mc: the preparation of ${plan.short} started ${when(record.started)} was interrupted at ${STAGE_WORDS[record.stage] || record.stage} — starting a new one`;

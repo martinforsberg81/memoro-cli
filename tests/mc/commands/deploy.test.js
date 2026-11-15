@@ -110,25 +110,43 @@ const worktreeList = (mainAt = MAIN_WT) => porcelain([
  * readings of the worktree it will run in. `state` answers `status --porcelain`
  * and the two `rev-list --count` ranges per worktree path, so a test says where
  * `main` is *and* what state it is in without a repository anywhere.
+ *
+ * The history the picker reads is a line of commits: `chain` is what
+ * `rev-list --first-parent <live>..origin/main` lists, newest first (default: the
+ * tip alone), `ancestors(a, b)` what `merge-base --is-ancestor a b` says (default:
+ * yes), `unknown` the refs this checkout does not have, `head` where the worktree
+ * stands, `shows` the `.mc/test.json` each commit holds and `fails` the git
+ * commands (by their first words) that exit non-zero.
  */
 function fakeGit({
   sha = SHA, counts = {}, subject = 'the change that would ship', fetch = true,
   worktrees = worktreeList(), state = {}, localMain = true, add = '', ff = '', diff = null,
+  chain = null, ancestors = () => true, unknown = [], head = null, shows = {}, fails = [],
 } = {}) {
   const calls = [];
   const at = (cwd) => state[cwd] || { dirty: [], ahead: 0, behind: 0 };
+  const failing = (args) => fails.some((words) => words.split(' ').every((word, index) => args[index] === word));
   const git = (cwd, args) => {
     calls.push({ cwd, args });
+    if (failing(args)) return null;
     if (args[0] === 'fetch') return fetch ? '' : null;
-    if (args[0] === 'rev-parse') return sha;
+    if (args[0] === 'rev-parse') {
+      const ref = args.at(-1);
+      if (ref === 'HEAD') return head || sha;
+      if (ref.endsWith('^{commit}')) return unknown.includes(ref.slice(0, -9)) ? null : ref.slice(0, -9);
+      return sha;
+    }
     if (args[0] === 'log') return subject;
     if (args[0] === 'worktree' && args[1] === 'list') return worktrees;
     if (args[0] === 'worktree' && args[1] === 'add') return add;
     if (args[0] === 'show-ref') return localMain ? '' : null;
     if (args[0] === 'status') return at(cwd).dirty.join('\n');
+    if (args[0] === 'merge-base') return ancestors(args[2], args[3]) ? '' : null;
     if (args[0] === 'merge') return ff;
+    if (args[0] === 'reset') return '';
     if (args[0] === 'clean') return '';
     if (args[0] === 'diff') return diff;
+    if (args[0] === 'rev-list' && args[1] === '--first-parent') return (chain || [sha]).join('\n');
     if (args[0] === 'rev-list') {
       const range = args.at(-1);
       if (range === 'origin/main..HEAD') return String(at(cwd).ahead);
@@ -164,9 +182,32 @@ const fullRunOf = (commit = SHA, extra = {}) => ({
 function gateFake({
   runs = [fullRunOf()], started = null, mends = [], suites = ['smoke'], outcomes = {}, served = SHA, declared = null,
   appError = null, dirtyNow = [], servedDirty = undefined,
+  head = SHA, branch = '', contained = true, held = {}, shown = null, checkoutFails = false, revive = null,
 } = {}) {
-  const calls = { fullRun: [], history: 0, servers: [], suites: [], mends: 0 };
+  const calls = { fullRun: [], history: 0, servers: [], suites: [], mends: 0, git: [], holds: [], follows: 0, ensures: [], sleeps: [] };
   const declaration = declared || { suites: suites.map((name) => ({ name })), environments: { dev: { service: 'app' } } };
+  // The checkout, as the exercise places it: `checkout --detach` moves it, and the
+  // fake servers are built from wherever it stands when they are (re)started.
+  const checkout = { head };
+  const measured = [];
+  const declarationText = (at) => shown?.[at] ?? JSON.stringify({
+    schema_version: 1,
+    ...declaration,
+    suites: declaration.suites.map((suite) => ({ argv: ['node', `${suite.name}.js`], ...suite })),
+  });
+  const gitIn = (worktree, args) => {
+    calls.git.push({ worktree, args });
+    const out = (status = 0, stdout = '', stderr = '') => ({ status, stdout, stderr });
+    if (args[0] === 'show') return out(0, declarationText(args[1].split(':')[0]));
+    if (args[0] === 'branch') return out(0, `${branch}\n`);
+    if (args[0] === 'merge-base') return contained ? out(0) : out(1);
+    if (args[0] === 'checkout') {
+      if (checkoutFails) return out(1, '', 'error: cannot detach');
+      checkout.head = args[2];
+      return out(0);
+    }
+    return out(1, '', 'not faked');
+  };
   const resultOf = (name) => {
     const how = outcomes[name] || 'ok';
     return {
@@ -175,8 +216,9 @@ function gateFake({
     };
   };
   const gate = {
-    history: () => { calls.history += 1; return { runs }; },
-    fullRun: async (repo) => { calls.fullRun.push(repo); return started || fullRunOf(SHA); },
+    history: () => { calls.history += 1; return { runs: [...runs, ...measured] }; },
+    // A full run the gate measured is in the history from then on, as the real one writes it.
+    fullRun: async (repo) => { calls.fullRun.push(repo); const run = started || fullRunOf(SHA); measured.push(run); return run; },
     readMends: () => { calls.mends += 1; return mends; },
     root: work,
     mendRoot: work,
@@ -184,15 +226,25 @@ function gateFake({
   const suiteDeps = {
     sharedWorktree: () => '/tmp/does-not-exist/shared/memoro',
     readDeclaration: () => ({ ok: true, declaration }),
-    ensureAppServer: async (worktree) => {
+    gitIn,
+    servingWorktree: (worktree, { service }) => held[service] || null,
+    mainHold: (server, { now, idleMs }) => { calls.holds.push({ id: server.instance_id, now, idleMs }); return server.hold ? (typeof server.hold === 'function' ? server.hold(now) : server.hold) : null; },
+    now: () => calls.clock ?? 0,
+    sleep: async (ms) => { calls.sleeps.push(ms); calls.clock = (calls.clock ?? 0) + ms; },
+    ensureAppServer: async (worktree, declared, options = {}) => {
+      calls.ensures.push({ tier: 'app', pin: options.deps?.pin === true, head: checkout.head });
       if (appError) return { ok: false, error: appError };
-      calls.servers.push({ worktree, commit: served });
-      const builtFrom = servedDirty === undefined ? { commit: served } : { commit: served, dirty: servedDirty };
+      const commit = revive && calls.servers.length ? revive(calls.servers.length) : (served === 'checkout' ? checkout.head : served);
+      calls.servers.push({ worktree, commit });
+      const builtFrom = servedDirty === undefined ? { commit } : { commit, dirty: servedDirty };
       return { ok: true, server: { built_from: builtFrom, health_url: 'http://127.0.0.1:1/api/version' }, baseUrl: 'http://127.0.0.1:1' };
     },
-    ensureDevServer: async () => ({ ok: false, error: 'no static tier in this test' }),
+    ensureDevServer: async (worktree, declared, options = {}) => {
+      calls.ensures.push({ tier: 'static', pin: options.pin === true, head: checkout.head });
+      return { ok: false, error: 'no static tier in this test' };
+    },
     tokenFor: async () => ({ name: null, token: null, from: null }),
-    head: () => SHA,
+    head: () => checkout.head,
     dirty: () => dirtyNow,
     answers: async () => true,
     runSuites: async ({ declaration: declared, worktree }) => {
@@ -200,7 +252,7 @@ function gateFake({
       return { results: declared.suites.map((suite) => resultOf(suite.name)), gone: [], skipped: [] };
     },
   };
-  return { gate, suites: suiteDeps, calls };
+  return { gate, suites: suiteDeps, calls, checkout };
 }
 
 function deps(extra = {}) {
@@ -466,7 +518,7 @@ describe('mc deploy — the worktree the script runs in', () => {
   it('reads dirty, ahead and behind in the worktree itself', () => {
     const git = fakeGit({ state: { [MAIN_WT]: { dirty: [' M src/a.js', '?? b.txt'], ahead: 2, behind: 7 } } });
     assert.deepEqual(worktreeState({ worktree: MAIN_WT, git }), {
-      dirty: [' M src/a.js', '?? b.txt'], ahead: 2, behind: 7,
+      dirty: [' M src/a.js', '?? b.txt'], unreadable: false, ahead: 2, behind: 7,
     });
     assert.equal(git.calls.every((call) => call.cwd === MAIN_WT), true);
   });
@@ -521,7 +573,9 @@ describe('mc deploy — every case of where main is', () => {
     const git = (cwd, args) => {
       if (args[0] === 'rev-parse') {
         base.calls.push({ cwd, args });
-        return args.at(-1) === 'HEAD' ? at : origin;
+        const ref = args.at(-1);
+        if (ref.endsWith('^{commit}')) return ref.slice(0, -9);
+        return ref === 'HEAD' ? at : origin;
       }
       if (args[0] === 'merge') {
         base.calls.push({ cwd, args });
@@ -1658,7 +1712,7 @@ describe('a deploy that was stopped', () => {
         assert.equal(command, 'npm');
         assert.deepEqual(args, ['run', 'deploy']);
         assert.equal(options.cwd, dir);
-        assert.equal(options.env, process.env);
+        assert.deepEqual(options.env, { ...process.env, MEMORO_DEPLOY_SKIP_REMOTE_PREFLIGHT: '1' });
         assert.deepEqual(options.stdio, ['inherit', 'pipe', 'pipe']);
         return spawn('sh', ['script.sh'], options);
       },
