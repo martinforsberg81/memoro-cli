@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { noProgressEntry, noProgressStreak, NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN } from '../../src/mc/goals.js';
-import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
+import { appendEntry, backward, currentPhase, appendLog, criteriaWords, GOAL_FILE, goalDirIn, goalSession, inStage, isRepair, lastBuildEntry, LOG_FILE, mergeAnswered, mergeRetryDue, nextDraft, nextGoal, parseGoal, parseLog, programsGoals, redMergeText, rejections, renderEntry, renderGoal, renderGoalText, REVIEW_DIED_TEXT, reviewDiedBefore, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, validateGoal, phaseMoves, phaseOpen, renumberPhases, waitsOnPerson } from '../../src/mc/goals.js';
 import * as criteria from '../../src/mc/criteria.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from './_helpers/goal-file.js';
 import { addPr, goalOfRecord } from '../../src/mc/goals.js';
@@ -305,11 +305,11 @@ test('lastBuildEntry is the last entry a build session wrote: not the runner\'s,
 const staged = (stage, status = 'ready', log = [], extra = {}) => ({ programme: 'p', goal: 'g', stage, status, repos: ['memoro'], problems: [], prs: [], log, success_criteria: [{ criterion: 'x', check: 'y', met: false }], ...extra });
 const said = (tool, stage, done, comment = null) => ({ at: '2026-11-02T10:00Z', tool, model: null, stage, status: 'ready', done, comment, next: null });
 
-test('goalSession: build · ready is a build, review · ready a review, finish · ready a finish, merge · ready after a red a mend, blocked merge only a mend; never draft · ready, never Martin', () => {
+test('goalSession: build · ready is a build, review · ready a review, merge · ready after a red a mend, blocked merge only a mend; never draft · ready, never Martin, and no stage gives a finish session', () => {
   assert.equal(goalSession(staged('build')), 'build');
   assert.equal(goalSession(staged('build', 'ready', [], { success_criteria: [] })), null, 'no criterion yet: not started');
   assert.equal(goalSession(staged('review')), 'review');
-  assert.equal(goalSession(staged('finish')), 'finish');
+  assert.equal(goalSession(staged('finish')), null, 'finish is a name kept for old records: the runner moves such a goal to build first');
   assert.equal(goalSession(staged('merge')), null, 'in the merger\'s hands');
   const red = (kind) => staged('merge', 'ready', [said('runner', 'merge', redMergeText(12, kind))], { prs: [{ repo: 'memoro', pr: 12 }] });
   assert.equal(goalSession(red('red')), 'mend');
@@ -321,6 +321,46 @@ test('goalSession: build · ready is a build, review · ready a review, finish �
   }
   for (const stage of ['draft', 'done', 'dropped']) assert.equal(goalSession(staged(stage)), null, stage);
   assert.equal(goalSession({ ...staged('build'), problems: ['x'] }), null);
+});
+
+/** A log entry by `role` (a session's `by` word; null for none) at `stage`, in order by `n`. */
+const entry = (n, tool, stage, role = null, status = 'ready') => ({ at: `2026-11-02T${String(10 + n).padStart(2, '0')}:00Z`, tool, model: null, role, stage, status, done: null, comment: null, next: null });
+const built = (n) => entry(n, 'claude', 'review', 'build');
+const rejected = (n) => entry(n, 'claude', 'build', 'review');
+
+test('rejections counts a review session\'s moves from review to build since the latest move into draft; a move to finish, a person\'s and a build session\'s are not counted', () => {
+  assert.equal(rejections([]), 0);
+  assert.equal(rejections([entry(0, 'person', 'plan'), built(1)]), 0);
+  assert.equal(rejections([entry(0, 'person', 'plan'), built(1), rejected(2)]), 1);
+  assert.equal(rejections([entry(0, 'person', 'plan'), built(1), rejected(2), built(3), rejected(4)]), 2);
+  assert.equal(rejections([entry(0, 'person', 'plan'), built(1), entry(2, 'claude', 'finish', 'review'), entry(3, 'runner', 'build'), built(4)]), 0, 'a move to finish before finish went');
+  assert.equal(rejections([built(1), entry(2, 'person', 'build', null)]), 0, 'a person moved it back: no review rejected it');
+  assert.equal(rejections([built(1), entry(2, 'claude', 'build', 'build')]), 0, 'a build session\'s own entry');
+  const redrafted = [entry(0, 'person', 'plan'), built(1), rejected(2), built(3), rejected(4), entry(5, 'person', 'draft'), entry(6, 'person', 'build'), built(7)];
+  assert.equal(rejections(redrafted), 0, 'rejections before the goal\'s latest move into draft');
+  assert.equal(rejections([...redrafted, rejected(8)]), 1);
+});
+
+test('isRepair: a build goal with REVIEW.md after a review\'s rejection or the runner\'s move from finish, later than any merge; not one a person moved to merge and back', () => {
+  const log = [entry(0, 'person', 'plan'), built(1), rejected(2)];
+  assert.equal(isRepair(log, true), true);
+  assert.equal(isRepair(log, false), false, 'no REVIEW.md: an ordinary build');
+  assert.equal(isRepair([entry(0, 'person', 'plan'), built(1)], true), false, 'no rejection yet');
+  assert.equal(isRepair([...log, built(3), rejected(4)], true), true, 'the second repair');
+  assert.equal(isRepair([...log, built(3), entry(4, 'claude', 'merge', 'review'), entry(5, 'person', 'build')], true), false, 'moved to merge and back by a person after a rejection');
+  assert.equal(isRepair([entry(0, 'person', 'plan'), entry(1, 'claude', 'finish', 'review'), entry(2, 'runner', 'build')], true), true, 'a goal the runner moved from finish to build');
+  assert.equal(isRepair([entry(0, 'person', 'plan'), entry(1, 'claude', 'merge', 'review'), entry(2, 'person', 'finish'), entry(3, 'runner', 'build')], true), true, 'the runner\'s move from finish is later than the merge');
+  assert.equal(isRepair([entry(0, 'person', 'plan'), built(1), entry(2, 'runner', 'build')], true), false, 'a runner\'s return to build that is no recovery from finish');
+});
+
+test('goalSession: build · ready with REVIEW.md after a rejection is a repair; without a rejection, or moved to merge and back by a person, a build; a goal rejected a third time (review · Martin) has none', () => {
+  const log = [entry(0, 'person', 'plan'), built(1), rejected(2)];
+  assert.equal(goalSession(staged('build', 'ready', log, { verdict: '...' })), 'repair');
+  assert.equal(goalSession(staged('build', 'ready', log, { verdict: null })), 'build', 'REVIEW.md is gone');
+  assert.equal(goalSession(staged('build', 'ready', [entry(0, 'person', 'plan')], { verdict: '...' })), 'build', 'no rejection');
+  assert.equal(goalSession(staged('build', 'ready', [...log, entry(3, 'claude', 'merge', 'review'), entry(4, 'person', 'build')], { verdict: '...' })), 'build');
+  const third = [entry(0, 'person', 'plan'), built(1), rejected(2), built(3), rejected(4), built(5), entry(6, 'claude', 'review', 'review', 'Martin')];
+  assert.equal(goalSession(staged('review', 'Martin', third, { verdict: '...' })), null, 'rejected a third time: the desk\'s');
 });
 
 test('the merger\'s red, inStage and a review that died before', () => {
