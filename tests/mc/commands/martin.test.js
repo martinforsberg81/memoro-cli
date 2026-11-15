@@ -745,6 +745,108 @@ describe('mc martin item transitions', () => {
   });
 });
 
+describe('mc martin brief with horizons', () => {
+  const HEADS = ['Yours (4)', 'Decided without you', 'Not ready', 'Cost', 'What the system changed'].map((h) => `## ${h}`);
+  const KEYS = ['generated_at', 'last_opened', 'since', 'yours', 'decided', 'not_ready', 'cost', 'changes'];
+  const headingsOf = (text) => text.split('\n').filter((line) => line.startsWith('## '));
+  const PLAYBACK = ['How it is read', 'How one sees it is reached', 'What is built first', 'What is not built', 'The strangest thing the wording permits'].map((h) => `## ${h}\n\ntext\n`).join('\n');
+  const STATEMENT = '\nLine one.\n\nLine two.\nLine three.\nLine four.';
+  /** One horizon verb through the real command, as `role` (a headless manager for reached) at the injected time. */
+  async function horizon(d, argv, at, { role = 'person', headless = false, stdin = PLAYBACK } = {}) {
+    const text = io(); const env = { ...d.env, MC_ROLE: role, ...(headless ? { MC_HEADLESS: '1' } : {}) };
+    const code = await run(['horizon', ...argv], { ...text, env, now: () => new Date(at), readStdin: () => stdin });
+    assert.equal(code, 0, `${argv.join(' ')}: ${text.out.stderr}`);
+  }
+  const setOne = (d, slug, at = '2026-11-14T07:00:00.000Z') => horizon(d, ['set', slug, '--title', `Title of ${slug}`, '--file', '-'], at);
+  const brief = async (d, ...flags) => { const text = io(); assert.equal(await run(['brief', ...flags], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr); return text.out.stdout; };
+  const cut = (text) => { const from = text.indexOf('## Horizons'); assert.notEqual(from, -1); return text.slice(0, from) + text.slice(text.indexOf('## Decided without you')); };
+  /** The store of criterion 5 (b): four open at the end, one reached today, one reached yesterday, one dropped. */
+  async function withHorizons(d) {
+    for (const slug of ['open-a', 'open-b', 'open-c', 'done-today', 'done-old', 'dropped-one', 'reopened-one']) await setOne(d, slug);
+    await horizon(d, ['reached', 'done-today', '--file', '-'], '2026-11-14T09:00:00.000Z', { role: 'manager', headless: true, stdin: STATEMENT });
+    await horizon(d, ['reached', 'done-old', '--file', '-'], '2026-11-13T09:00:00.000Z', { stdin: 'Old statement.\n' });
+    await horizon(d, ['drop', 'dropped-one', '--reason', 'No longer wanted'], '2026-11-14T09:30:00.000Z');
+    await horizon(d, ['reached', 'reopened-one', '--file', '-'], '2026-11-14T09:10:00.000Z', { stdin: 'Briefly reached.\n' });
+    await horizon(d, ['reopen', 'reopened-one', '--reason', 'It was not'], '2026-11-14T09:20:00.000Z');
+  }
+
+  it('(a) a desk with no horizon opens as before: the same parts, the same keys, and the same text with an empty or a record-less directory', async () => {
+    const d = openingStore(); const t0 = await brief(d);
+    assert.deepEqual(headingsOf(t0), HEADS);
+    assert.deepEqual(Object.keys(JSON.parse(await brief(d, '--json'))), KEYS);
+    mkdirSync(join(d.env.MC_WORK_ROOT, 'martin', 'horizons'));
+    assert.equal(await brief(d), t0);
+    mkdirSync(join(d.env.MC_WORK_ROOT, 'martin', 'horizons', 'no-record'));
+    assert.equal(await brief(d), t0);
+    assert.deepEqual(Object.keys(JSON.parse(await brief(d, '--json'))), KEYS);
+  });
+
+  it('(b) the part stands between Yours and Decided without you, lists what was reached since the last opening, then the open ones in order, and nothing else changes', async () => {
+    const d = openingStore(); const t0 = await brief(d); const json0 = JSON.parse(await brief(d, '--json'));
+    await withHorizons(d); const before = snapshot(d.root);
+    const text = await brief(d); const json = JSON.parse(await brief(d, '--json'));
+    assert.equal(cut(text), t0, 'the opening with the part cut out is the opening without horizons');
+    assert.ok(text.indexOf('### 4. beta/judge') < text.indexOf('## Horizons') && text.indexOf('## Horizons') < text.indexOf('## Decided without you'));
+    const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    const at = (needle) => { const index = part.indexOf(needle); assert.notEqual(index, -1, needle); return index; };
+    const reachedAt = at('Reached since the last opening:'), openAt = at('Open, in order:');
+    assert.ok(reachedAt < at('Title of done-today') && at('Title of done-today') < openAt);
+    for (const needle of ['done-today', '2026-11-14T09:00:00.000Z', 'manager', 'Line one.', 'Line two.', 'Line three.']) assert.ok(at(needle) > reachedAt && at(needle) < openAt, needle);
+    const order = ['open-a', 'open-b', 'open-c', 'reopened-one'].map((slug) => { assert.ok(part.includes(`Title of ${slug}`)); return at(`Title of ${slug}`); });
+    assert.ok(order[0] > openAt); assert.deepEqual([...order].sort((a, b) => a - b), order);
+    assert.ok(!text.includes('Line four.'));
+    for (const absent of ['Title of done-old', 'Title of dropped-one']) assert.ok(!text.includes(absent), absent);
+    assert.ok(part.includes('open-a') && part.includes('reopened-one'));
+    const { horizons, ...rest } = json;
+    assert.deepEqual(horizons, {
+      reached: [{ slug: 'done-today', title: 'Title of done-today', reached_at: '2026-11-14T09:00:00.000Z', reached_by: 'manager', first_lines: ['Line one.', 'Line two.', 'Line three.'] }],
+      open: ['open-a', 'open-b', 'open-c', 'reopened-one'].map((slug, index) => ({ slug, title: `Title of ${slug}`, position: index + 1 })),
+      unreadable: [],
+    });
+    assert.deepEqual(rest, json0);
+    assert.equal(renderOpening(json), text);
+    assert.deepEqual(snapshot(d.root), before, 'the opening writes no file');
+  });
+
+  it('(c) with nothing open the part says so and holds neither list', async () => {
+    const d = openingStore(); await setOne(d, 'old-one'); await setOne(d, 'gone-one');
+    await horizon(d, ['reached', 'old-one', '--file', '-'], '2026-11-14T07:30:00.000Z', { stdin: 'Done.\n' });
+    await horizon(d, ['drop', 'gone-one', '--reason', 'No'], '2026-11-14T09:00:00.000Z');
+    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    assert.ok(text.includes('## Horizons')); assert.ok(part.split('\n').includes('No horizon is open.'));
+    assert.ok(!part.includes('Reached since the last opening:') && !part.includes('Open, in order:'));
+  });
+
+  it('(d) a first opening lists what was reached on the day before', async () => {
+    const d = openingStore({ lastOpen: null }); await setOne(d, 'yesterday-one', '2026-11-12T07:00:00.000Z');
+    await horizon(d, ['reached', 'yesterday-one', '--file', '-'], '2026-11-13T09:00:00.000Z', { stdin: 'Done yesterday.\n' });
+    const text = await brief(d); const part = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you'));
+    assert.equal(JSON.parse(await brief(d, '--json')).since, '2026-11-01T00:00:00.000Z');
+    assert.ok(part.indexOf('Reached since the last opening:') !== -1 && part.indexOf('Title of yesterday-one') > part.indexOf('Reached since the last opening:'));
+  });
+
+  it('(e) a record that cannot be read is named, never overwritten, and the verbs go on with the others', async () => {
+    const d = openingStore(); await setOne(d, 'fine-one');
+    const broken = join(d.env.MC_WORK_ROOT, 'martin', 'horizons', 'broken'); mkdirSync(broken); writeFileSync(join(broken, 'horizon.json'), '{');
+    const bytes = readFileSync(join(broken, 'horizon.json'), 'utf8');
+    const text = await brief(d); const json = JSON.parse(await brief(d, '--json'));
+    assert.deepEqual(json.horizons.unreadable, ['broken']);
+    const lines = text.slice(text.indexOf('## Horizons'), text.indexOf('## Decided without you')).trimEnd().split('\n');
+    assert.ok(lines[lines.length - 1].includes('broken'), lines.at(-1));
+    const listed = io(); assert.equal(await run(['horizons'], { ...listed, env: d.env, now: () => new Date(NOW) }), 0);
+    assert.ok(listed.out.stdout.includes('fine-one')); assert.match(listed.out.stderr, /^mc: [^\n]*broken[^\n]*\n$/u);
+    const refused = io();
+    assert.equal(await run(['horizon', 'set', 'broken', '--title', 'T', '--file', '-'], { ...refused, env: { ...d.env, MC_ROLE: 'martin' }, now: () => new Date(NOW), readStdin: () => PLAYBACK }), 2);
+    assert.equal(readFileSync(join(broken, 'horizon.json'), 'utf8'), bytes);
+  });
+
+  it('(f) the launch hands the opening model the text brief prints', async () => {
+    const d = openingStore(); await withHorizons(d); const printed = await brief(d); const prompts = [];
+    const r = await launch(d, NOW, { open: async (spec) => { prompts.push(spec.prompt); return { ok: true, code: 0 }; } });
+    assert.equal(r.code, 0, r.out.stderr); assert.equal(prompts.length, 1); assert.equal(prompts[0], printed);
+  });
+});
+
 function snapshot(root) {
   const rows = [];
   function walk(path) { for (const name of readdirSync(path)) { const child = join(path, name); const st = lstatSync(child); if (st.isDirectory()) { rows.push([child, 'directory']); walk(child); } else rows.push([child, 'file', readFileSync(child).toString()]); } }

@@ -204,7 +204,7 @@ export function deployLines(lines, c, wide, production, expand) {
         state === 'failed' ? ['red'] : ['grey']);
     });
   }
-  // The preparation: the full run and the suites before the question, in a
+  // The preparation: the full run and the suites before the deployer, in a
   // process of its own — a lost terminal does not stop it.
   const prep = p.preparation;
   if (prep && !(prep.state === 'done' && p.sha === prep.sha)) {
@@ -212,7 +212,7 @@ export function deployLines(lines, c, wide, production, expand) {
     operationFrame(lines, c, wide, tone, (body, room) => {
       const states = {
         running: `PREPARING ${prep.short} · ${prep.stage_words}`,
-        done: `PREPARED  ${prep.short} · done, \`mc deploy\` asks`,
+        done: `PREPARED  ${prep.short} · done, \`mc deploy\` ships it`,
         failed: `PREPARATION FAILED ${prep.short}`,
         interrupted: `PREPARATION INTERRUPTED ${prep.short} · \`mc deploy\` starts a new one`,
       };

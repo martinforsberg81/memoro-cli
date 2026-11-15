@@ -301,7 +301,7 @@ export function recordUnsettled({ env = process.env, item, failures, now = new D
   });
 }
 
-// ---- The fifth part of the opening ---------------------------------------------
+// ---- What the system changed: a part of the opening ---------------------------------------------
 
 const ageDays = (at, nowMs) => Math.max(0, Math.floor((nowMs - Date.parse(at)) / DAY_MS));
 const share = (n, of) => (of > 0 ? Math.round((n / of) * 1000) / 10 : null);
@@ -366,7 +366,7 @@ export function buildChanges({ lessons, items, goals = [], since, now }) {
   };
 }
 
-/** The fifth part as text. */
+/** The part What the system changed, as text. */
 export function renderChanges(changes) {
   const out = ['## What the system changed', ''];
   if (!changes.landed.length) out.push('No change has landed from lessons since the last opening.');

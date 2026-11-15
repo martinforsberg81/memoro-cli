@@ -10,8 +10,8 @@
  * have to reconstruct it from `/admin/deploy/logs` afterwards, which is the
  * failure mode this file exists to end.
  *
- * A refusal is a row too (`recordRefusal`): a `no` at the question, no
- * terminal to ask at, a repository somebody else holds. They are the deploys
+ * A refusal is a row too (`recordRefusal`): a red gate, a deploy
+ * already running, a repository somebody else holds. They are the deploys
  * somebody meant to make, and the brief can see them only if they are written.
  *
  * The shape follows `runs.tsv` (`RUNS_HEADER`, `tsvRow` in `run-plan.js`,

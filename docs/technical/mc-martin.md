@@ -19,7 +19,7 @@ session; `brief --json` gives the same data as the text. `brief` writes nothing
 except the sync's own store writes, and neither it nor a refused or failed
 launch changes `last-open.json`.
 
-The opening has five parts, in this order:
+The opening has these parts, in this order (Horizons only when the desk holds one):
 
 1. **Yours (n)** — every for-martin item, blocking work first: a goal item that
    blocks later-phase goals of its programme sorts before one that blocks none,
@@ -28,17 +28,25 @@ The opening has five parts, in this order:
    how many later-phase goals of its programme wait on it. A due time within
    24 hours is shown with the closure it will cause by default. The brief is
    printed as written; a missing `brief.md` is named as missing.
-2. **Decided without you** — decisions and defaults closed in the interval,
+2. **Horizons** — present only when the horizon store holds a horizon or a
+   record that cannot be read (*Horizons*, below); a desk that holds none opens
+   without the part, byte for byte as it did before horizons. It shows the
+   horizons reached in the interval, oldest first, each with its title, slug,
+   time, who marked it and the first three non-empty lines of what is now true,
+   then the open ones in order, numbered, each with title and slug (the line
+   `No horizon is open.` when none is), and in its last line the records that
+   cannot be read.
+3. **Decided without you** — decisions and defaults closed in the interval,
    grouped by programme and ordered by time, each with its summary and
    reference, then the count of items the source closed in the same interval.
-3. **Not ready** — items still new or prepared: their count, the oldest with
+4. **Not ready** — items still new or prepared: their count, the oldest with
    its age in hours from its source time, and those with a preparation or
    decision failure.
-4. **Cost** — the desk's spend on the UTC day and over the last seven days
+5. **Cost** — the desk's spend on the UTC day and over the last seven days
    (`desk-prepare`, `decision` and `learning` rows of `runs.tsv`; runs of unknown
    cost within those seven days are counted, not summed), and the daily ceiling
    or `off`.
-5. **What the system changed** — from the lessons and the item store only (see
+6. **What the system changed** — from the lessons and the item store only (see
    *Lessons and the learning pass*). It never lists lessons or prints their text.
 
 The interval is `(since, now]`, where `since` is the time of the last
@@ -179,6 +187,99 @@ end with exit 1 and the lock's message. Sync runs in one hold. `mc martin` launc
 `mc martin brief [--json]` prints it; the read-only `mc martin get` remains
 unchanged.
 
+## Horizons
+
+A horizon is what Martin has decided is worked toward. The desk keeps a standing
+list of them, each with its playback; the order of the open ones is the
+priority. Everything stored in a horizon is English text.
+
+**Store.** `~/mc/martin/horizons/<slug>/` holds three files: `horizon.json` (the
+record), `playback.md` (written by `set`) and `reached.md` (what is now true for
+the user, written by `reached`). A slug is `[a-z0-9][a-z0-9-]{0,63}` and is not
+reused: a directory whose `horizon.json` can be read, in any state, holds the
+slug. The record is `{ schema: "mc-desk-horizon", version: 1, slug, title, state,
+position, set_at, set_by, reached_at, reached_by, reopened_at, reopened_by,
+reopen_reason, dropped_at, dropped_by, drop_reason }`; a field that does not apply
+is `null`. Times are ISO times; the `_by` fields hold the writer's role.
+
+**Playback.** `playback.md` has exactly five `## ` headings, in this order, each
+with text: `How it is read`, `How one sees it is reached`, `What is built first`,
+`What is not built`, `The strangest thing the wording permits`. `show --json` gives
+them as `playback` with the keys `read`, `reached`, `first`, `not_built` and
+`strangest`, and the text of `reached.md` as `now_true`, which is `null` unless
+the state is `reached`.
+
+**States.** `set` makes an `open` horizon. `reached` takes an open one to
+`reached`, writes `reached.md` and sets `reached_at` and `reached_by`. `reopen`
+takes a reached one back to `open`: it sets `reopened_at`, `reopened_by` and
+`reopen_reason` and clears `reached_at` and `reached_by`; `reached.md` stays on
+disk, is not shown while the horizon is open, and is replaced by the next
+`reached`. `drop` takes an open one to `dropped` and sets `dropped_at`,
+`dropped_by` and `drop_reason`. Every other transition is refused, and nothing is
+ever deleted: a dropped or reached horizon keeps its directory and files.
+
+**Order.** Open horizons hold the whole numbers `1..n` in `position`; a reached or
+dropped one holds `null`. `--position` defaults to last; on `set` and `reopen` it
+must be `1..n+1` (n being the open horizons before the write) and on `move`
+`1..n`. A write that changes the open set or its order renumbers the open ones
+`1..n` in the same hold. Readers order by `position`, then `set_at`, then slug, so
+an interrupted write still has one order.
+
+**Verbs.** A title is one non-empty line; a reason is non-empty and stored as one
+line, with its whitespace collapsed. `--file -` reads standard input.
+
+| Verb | stdout |
+| --- | --- |
+| `mc martin horizon set <slug> --title <t> --file <path\|-> [--position <n>]` | `<slug> · open · <position>` |
+| `mc martin horizon show <slug> [--json]` | the horizon as text, or its record with `playback` and `now_true` |
+| `mc martin horizon move <slug> --position <n>` | `<slug> · open · <position>` |
+| `mc martin horizon reached <slug> --file <path\|->` | `<slug> · reached` |
+| `mc martin horizon reopen <slug> --reason <t> [--position <n>]` | `<slug> · open · <position>` |
+| `mc martin horizon drop <slug> --reason <t>` | `<slug> · dropped` |
+| `mc martin horizons [--state open\|reached\|dropped] [--json]` | one line per horizon, or the records as a JSON list |
+
+A list line is `<slug> · <state> · <position or -> · <title>`: the open ones
+first, in order, then the reached ones newest first, then the dropped ones
+newest first. `--state` selects one state; any other value exits 2. `set` writes
+`playback.md` before the record and `reached` writes `reached.md` before the
+record, so a record never points at a missing file.
+
+**Who may write.** The role is `MC_ROLE`, else `session` when `MC_TOOL` names a
+tool other than `person`, else the session's identity, else `person`. `set`,
+`move`, `reopen` and `drop` are open to the interactive `martin` and to a
+`person`, without `MC_HEADLESS=1`. `reached` is open to the same callers and
+also to the `manager` with `MC_HEADLESS=1`; the interactive manager is refused
+with a line that names the desk. Every other caller, every unknown role and every
+caller with `MC_HEADLESS=1` (the manager on `reached` aside) is refused. The role
+is judged before the arguments. `horizons` and `horizon show` are open to every
+caller. Nothing else in mc sets a horizon: no runner pass, no hook, no other verb.
+
+**Exit codes and the lock.** 0 on success; 2 on a refusal (unknown verb, flag,
+slug or state, a role, a playback with missing or empty parts, a transition not
+allowed, a position out of range), with one `mc:` line on standard error and
+nothing written; 1 when the lock cannot be had (`the runner lock is held by pid
+<n> — try again`), with nothing written. Each write verb is one read-modify-write
+under the strict runner lock: the records are read inside the hold and the
+transition is judged on what was read there. Reads take no lock.
+
+**Records that cannot be read.** A `horizon.json` that exists but does not parse or
+does not hold the schema, the slug of its directory and a known state is never
+overwritten, renumbered or removed: `set` on that slug is refused, `horizons`
+prints one `mc:` line on standard error naming it and still exits 0, and the
+opening names it in the last line of its part. A directory with no `horizon.json`
+holds no horizon (an interrupted `set`): `set` goes on and replaces the leftover
+`playback.md`.
+
+**The opening.** See *Opening*. The data under `brief --json` is
+`horizons: { reached: [{ slug, title, reached_at, reached_by, first_lines }],
+open: [{ slug, title, position }], unreadable: [<directory names>] }`, present
+only when the store holds a horizon or an unreadable record. Reached horizons are
+those with `reached_at` in `(since, now]`, oldest first.
+
+**What does not read horizons.** The runner's pick, `PRIORITY.json`, `mc programs`
+and the page do not read horizons: the order of the horizons does not change
+which programme the runner works on.
+
 ## Unattended preparation
 
 Each chores round, after item sync, prepares up to three `new` items in oldest
@@ -277,7 +378,7 @@ is one decision applied to each, not repeated questions. No budget, allocation,
 exception or new rule is added without measured need.
 
 What the rule names and mc does not do yet, as of today and with no date
-promised: nothing records a horizon, so the opening shows no reached horizon; a
+promised: a horizon is recorded and shown in the opening (*Horizons*), but a
 change to a text Martin holds is briefed in the brief's existing parts, not in a
 form of its own; a change with no goal has no way to the desk, since a goal-less
 `product` ask exits 1 and opens no item; and a brief of sort `product` or

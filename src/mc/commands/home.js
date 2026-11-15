@@ -318,7 +318,7 @@ export async function menu(first, {
   fresh = () => {},
   // `mc run <verb>` — a dependency so a test drives the menu without a runner.
   runOrder = null,
-  // Reuse deploy's preflight and confirmation; the live page shows its status.
+  // Reuse deploy's preflight, which starts the deploy with no confirmation; the live page shows its status.
   deployOrder = null,
   // `mc goal <verb>` for a goal's number — a dependency, as runOrder is, so a
   // test drives the menu without a goal on disk.
