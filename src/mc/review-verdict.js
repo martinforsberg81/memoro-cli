@@ -6,7 +6,11 @@
  * then one line per item: `<id>: OK` or `<id>: NOT OK — <what and where>`. The
  * ids are `criterion <n>`, the preserve ids (`V1`…), `obligation <area>` for
  * each touched obligation, `untouched <area>` for each tripped area, and
- * `change`, `out-of-scope`, `protection`, `bugs`. A narrow round copies a line
+ * `change`, `out-of-scope`, `protection`, `bugs`; and `seen <area>` for each area the review was told is judged as the
+ * user sees it (an area that declares `"seen": true` and that the goal stands touched on or trips: `seenAreas`). A
+ * `seen` line is `OK — <shots>[ — <words>]` or `NOT OK — <shots> — <words>`, where `<shots>` is one or more
+ * `shots/<name>.png` paths, separated by `, `, files in the goal's directory, or is `none` and the words are the
+ * reason; a `seen` line is never carried. A narrow round copies a line
  * it did not rejudge as `<id>: OK — carried from round <n>`. A version 1 goal
  * has the criteria lines only. Free text may follow the lines. mc checks that
  * the lines are present and consistent (`checkVerdict`), never the judgement
@@ -15,7 +19,8 @@
  * `trippedAreas` is the one function that decides which untouched rule areas a
  * branch changed (a source area is never one): the review prompt (run.js) and the move to merge or build
  * (commands/goal.js) both call it, so what the reviewer is told and what mc
- * then requires are the same list.
+ * then requires are the same list. `seenAreas` is asked once, by the runner at the review's launch: its list goes to the
+ * prompt and, as MC_REVIEW_SEEN, to the session's environment, and the move out of review asks for exactly that list.
  */
 import { join } from 'node:path';
 
@@ -25,8 +30,8 @@ import { isSourceArea, readAreas } from './areas.js';
 export const FIXED_IDS = Object.freeze(['change', 'out-of-scope', 'protection', 'bugs']);
 
 const HEAD_LINE = /^head: (\S+) (\S+)\s*$/u;
-const ID = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|change|out-of-scope|protection|bugs)(?=:)/u;
-const ITEM = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|change|out-of-scope|protection|bugs): (OK|NOT OK)(?: — (.+?))?\s*$/u;
+const ID = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|change|out-of-scope|protection|bugs)(?=:)/u;
+const ITEM = /^(criterion \d+|V\d+|obligation \S+|untouched \S+|seen \S+|change|out-of-scope|protection|bugs): (OK|NOT OK)(?: — (.+?))?\s*$/u;
 
 /**
  * REVIEW.md's `text` read into `{ heads: [{ repo, sha }], items: [{ id, ok, reason }], malformed: [line] }`.
@@ -49,8 +54,8 @@ export function parseVerdict(text) {
   return { heads, items, malformed };
 }
 
-/** The ids a verdict on `goal` holds, in the order they are written; `tripped` is `trippedAreas`' list. */
-export function requiredIds(goal, tripped = []) {
+/** The ids a verdict on `goal` holds, in the order they are written; `tripped` is `trippedAreas`' list, `seen` `seenAreas`'. */
+export function requiredIds(goal, tripped = [], seen = []) {
   const criteria = (goal.success_criteria ?? []).map((_, index) => `criterion ${index + 1}`);
   if (goal.version !== 2) return criteria;
   return [
@@ -58,6 +63,7 @@ export function requiredIds(goal, tripped = []) {
     ...(goal.preserve ?? []).map((item) => item.id),
     ...(goal.obligations ?? []).filter((one) => one.stand === 'touched').map((one) => `obligation ${one.area}`),
     ...tripped.map((one) => `untouched ${one.area}`),
+    ...seen.map((area) => `seen ${area}`),
     ...FIXED_IDS,
   ];
 }
@@ -70,13 +76,35 @@ export function sameHead(a, b) {
   return short.length >= 7 && long.startsWith(short);
 }
 
+const SEEN_FORM = '`seen <area>: OK — shots/<name>.png[, …][ — <words>]` or `seen <area>: NOT OK — shots/<name>.png[, …] — <what and where>`, with `none — <reason>` in place of the screenshots';
+
+/** A path a `seen` line may name: under `shots/`, a `.png`, no space, comma or `..`. */
+const SHOT = /^shots\/[^\s,]+\.png$/u;
+
+/**
+ * What is wrong with the reason of a `seen` line, as `{ fault, shots }`: `fault` is null when it is in form, `shots`
+ * the paths it names (none for `none`).
+ */
+function seenReason(item) {
+  const reason = item.reason ?? '';
+  if (/^carried from round \d+$/u.test(reason)) return { fault: 'a `seen` line is not carried from an earlier round — copy the earlier round\'s line as it stands when the diff since leaves the area\'s paths alone, or judge again with new screenshots', shots: [] };
+  const [first, ...rest] = reason.split(' — ');
+  const words = rest.join(' — ').trim();
+  if (first === 'none') return words ? { fault: null, shots: [] } : { fault: `\`none\` needs its reason: ${SEEN_FORM}`, shots: [] };
+  const shots = first.split(', ');
+  if (!reason || !shots.every((path) => SHOT.test(path) && !path.includes('..'))) return { fault: SEEN_FORM, shots: [] };
+  if (!item.ok && !words) return { fault: `a NOT OK line says what and where after the screenshots: ${SEEN_FORM}`, shots };
+  return { fault: null, shots };
+}
+
 /**
  * What is wrong with REVIEW.md's `text` for `goal`, as `{ problems: [string], failed: [{ id, reason }] }`. Checked: a head
  * line for each repository of the goal, each head the one in `heads` (`[{ repo, sha }]`, where a sha is null the
  * line only has to be there), every id of `requiredIds` once, no line that is not in form, no id the goal does not have.
- * `failed` lists the NOT OK items.
+ * For each area in `seen` the line's form and that each screenshot it names is a file (`isFile(path)`, the path as written,
+ * read from the goal's directory). `failed` lists the NOT OK items.
  */
-export function checkVerdict({ text, goal, tripped = [], heads = [] }) {
+export function checkVerdict({ text, goal, tripped = [], heads = [], seen = [], isFile = () => false }) {
   const read = parseVerdict(text);
   const problems = [];
   for (const line of read.malformed) problems.push(`not in form: "${line}" — ${'`<id>: OK` or `<id>: NOT OK — <what and where>`, and `head: <repo> <sha>`'}`);
@@ -87,13 +115,19 @@ export function checkVerdict({ text, goal, tripped = [], heads = [] }) {
     if (lines.length > 1) problems.push(`more than one \`head: ${repo}\` line`);
     if (expected && !sameHead(lines[0].sha, expected)) problems.push(`\`head: ${repo} ${lines[0].sha}\` is not the head judged, ${expected}`);
   }
-  const required = requiredIds(goal, tripped);
+  const required = requiredIds(goal, tripped, seen);
   for (const id of required) {
     const count = read.items.filter((one) => one.id === id).length;
     if (count === 0) problems.push(`no line for ${id}`);
     else if (count > 1) problems.push(`more than one line for ${id}`);
   }
   for (const item of read.items) if (!required.includes(item.id)) problems.push(`${item.id} is not an item of this goal's verdict`);
+  for (const item of read.items) {
+    if (!item.id.startsWith('seen ') || !required.includes(item.id)) continue;
+    const { fault, shots } = seenReason(item);
+    if (fault) { problems.push(`${item.id}: not in form — ${fault}`); continue; }
+    for (const path of shots) if (!isFile(path)) problems.push(`${item.id}: ${path} is not a file in the goal's directory — save it there with \`mc shot … --out <goal directory>/${path}\``);
+  }
   return { problems, failed: read.items.filter((one) => !one.ok).map((one) => ({ id: one.id, reason: one.reason })) };
 }
 
@@ -142,4 +176,27 @@ export function trippedAreas({ goal, dir, head, git, exists = () => true }) {
     }
   }
   return { heads, tripped };
+}
+
+/**
+ * The areas a review is held to a `seen <area>` line for: `{ seen: ['<repo>/<id>', …] }` or `{ error }`. An area is in
+ * it when it is a rule area that declares `"seen": true` at origin/main and the goal either stands `touched` on it or
+ * trips it (`tripped` is `trippedAreas`' list). In the order of the goal's repositories and of each declaration. A
+ * version 1 goal reads nothing, and an area the goal has no stand on is never in it. `git` and `exists` as `trippedAreas`.
+ */
+export function seenAreas({ goal, dir, tripped = [], git, exists = () => true }) {
+  if (goal.version !== 2) return { seen: [] };
+  const touched = new Set((goal.obligations ?? []).filter((one) => one.stand === 'touched').map((one) => one.area));
+  const trips = new Set(tripped.map((one) => one.area));
+  const seen = [];
+  for (const repo of goal.repos ?? []) {
+    const wanted = (id) => touched.has(`${repo}/${id}`) || trips.has(`${repo}/${id}`);
+    if (![...touched, ...trips].some((area) => area.startsWith(`${repo}/`))) continue;
+    const cwd = join(dir, repo);
+    if (!exists(cwd)) continue;
+    const declared = readAreas(cwd, { git, at: 'origin/main', repo });
+    if (!declared.ok) return { error: declared.reason };
+    for (const area of declared.areas) if (!isSourceArea(area) && area.seen === true && wanted(area.id)) seen.push(`${repo}/${area.id}`);
+  }
+  return { seen };
 }

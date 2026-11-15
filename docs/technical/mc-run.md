@@ -186,8 +186,18 @@ order without a model call:
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below.
-3. Hold any goal whose programme has an unfinished goal in a lower phase.
-   All goals of a phase can run side by side; there is no separate queue file.
+3. Hold any goal whose phase is not open in its programme. The runner reads
+   each programme's record at every pick (`programmeOrder`), as it reads
+   `PRIORITY.json`, so a dependency stated, removed or renumbered counts at the
+   next pick without a restart. A sequential programme (no record, or one
+   without `phases`) holds a goal that has an unfinished goal in a lower phase;
+   a programme whose record states its phases holds a goal whose phase waits for
+   a phase with an unfinished goal, and a goal in a phase that waits for none
+   runs beside every other. A programme whose record is invalid holds every
+   goal, plan session included, and the runner says so once per programme while
+   it lasts, in `runner.log`. All goals of an open phase can run side by side;
+   there is no separate queue file. The rule is `phaseStanding`
+   ([mc-goals.md](mc-goals.md), *Phases*).
 4. Exclude goals already claimed or named by a live current file, held goals
    (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
    repository is not served by the lane. A review without an
@@ -734,6 +744,16 @@ Martin, 2026-11-09: a programme with at least one draft and every goal in
 Any unfinished delivery goal, including a goal waiting on Martin, holds this
 trigger. Unreadable goal data holds it too. Select lowest phase, oldest creation
 time, then goal name; a selected draft waiting on Martin or held (`.hold.json`, which a draft created without `MC_HEADLESS=1` carries from creation) cannot be bypassed.
+
+That is a sequential programme's trigger. For a programme whose record states
+its phases the trigger reads each phase: a phase whose goals are all `draft`,
+`done` or `dropped` and which is open offers its first draft when that draft is
+ready, not held and not decision-claimed; one that is not offers none, and holds
+only its own phase. Goals building, held or waiting on Martin in other phases do
+not hold it, but at most one plan session runs in the programme at a time, told
+from a delivery session by its kind in the current record, so a plan session
+whose draft has moved to build still counts and a build, review or mend session
+on another phase does not. The recheck after admission asks the same.
 
 The runner offers this assignment after build in the existing lane picker.
 Claims and live current records prevent concurrent planning in one programme,

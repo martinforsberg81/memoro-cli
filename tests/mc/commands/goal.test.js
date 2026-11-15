@@ -9,7 +9,9 @@ import { jevContext, refusedMove, run, usage } from '../../../src/mc/commands/go
 import { addGoalWorktree, GOAL_FILE, goalSession, MEND_ROLE, parseGoal, parseLog, PLAN_ROLE, renderGoalText, REVIEW_ROLE, STAGES } from '../../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../../src/mc/run-plan.js';
 import { goalHash, RECORDS_FILE } from '../../../src/mc/plan-review.js';
+import { seenAreas } from '../../../src/mc/review-verdict.js';
 import { runModule } from '../../../src/mc-verbs.js';
+import { phaseOpen, programmeOrder, programsGoals } from '../../../src/mc/goals.js';
 import { goalField, goalJson, goalJsonV2, goalMinimalV2, withGoal } from '../_helpers/goal-file.js';
 
 const HOME = '/work/programs';
@@ -1401,6 +1403,115 @@ test('the diff is read against origin/main at the head judged, and a git that ca
   assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, noDiff), /could not list what memoro-cli changed against origin\/main — fatal: bad revision/u, 'a diff git cannot make');
   const noAreas = (cwd, args = []) => (args[0] === 'show' ? failed('fatal: bad object') : ok(''));
   assertRefused(await moveOut('merge', reviewFiles(verdictText({ ids: TRIPWIRE_IDS }), { v2: true, goal: TRIPWIRE }), REVIEW, noAreas), /could not read memoro-cli's \.mc\/areas\.json/u, 'areas git cannot read');
+});
+
+/* ---- Areas judged as the user sees it: `seen <area>` in REVIEW.md, asked only of the areas MC_REVIEW_SEEN names ---- */
+
+const SEEN_ID = 'seen memoro-cli/documentation';
+const SEEN_IDS = [...TRIPWIRE_IDS.filter((id) => id !== 'untouched memoro-cli/operations'), SEEN_ID];
+/** The goal of `TRIPWIRE` without its untouched area, standing touched on `documentation`, which declares `seen`. */
+const SEEN_GOAL = { obligations: [TRIPWIRE.obligations[0]] };
+const seenDeclaration = () => JSON.stringify({ schema_version: 1, areas: [AREA('documentation', { seen: true }), AREA('operations')] });
+const seenGit = (changed = []) => (cwd, args = []) => (args[0] === 'diff' ? ok(changed.join('\n')) : areasGit({ [WORKTREE]: seenDeclaration() })(cwd, args));
+/** The seen line `line` after the other lines of the verdict. */
+const seenVerdict = (line, ids = SEEN_IDS.filter((id) => id !== SEEN_ID)) => verdictText({ ids, tail: line === null ? '' : `${line}\n` });
+const SEEN_ENV = { ...REVIEW, MC_REVIEW_SEEN: 'memoro-cli/documentation' };
+/** `to` with `files` under `env`; the shots in `missing` are not files. */
+async function moveSeen(to, files, { env = SEEN_ENV, git = seenGit(), missing = [] } = {}) {
+  const f = reviewed({ files, env, git });
+  const base = f.deps.exists;
+  f.deps.exists = (path) => !missing.includes(path) && base(path);
+  f.code = await run(['stage', to], f.deps);
+  return f;
+}
+const seenFiles = (text) => reviewFiles(text, { v2: true, goal: SEEN_GOAL });
+
+test('a review told of a seen area is refused for merge and for build without its seen line, naming the id, and moves with it in either form', async () => {
+  for (const to of ['merge', 'build']) {
+    const notOk = to === 'build' ? { bugs: 'x' } : {};
+    const text = (line) => verdictText({ ids: SEEN_IDS.filter((id) => id !== SEEN_ID), notOk, tail: line ? `${line}\n` : '' });
+    assertRefused(await moveSeen(to, seenFiles(text(null))), /no line for seen memoro-cli\/documentation/u, `${to}: no line`);
+    for (const line of [`${SEEN_ID}: OK — shots/a.png`, `${SEEN_ID}: OK — shots/a.png, shots/b.png — both viewports read`, `${SEEN_ID}: OK — none — the diff changes a comment and nothing that is drawn`, `${SEEN_ID}: NOT OK — shots/a.png — the title is cut off at 390 px`]) {
+      const rejects = line.includes('NOT OK');
+      const f = await moveSeen(rejects ? 'build' : to, seenFiles(rejects ? verdictText({ ids: SEEN_IDS.filter((id) => id !== SEEN_ID), tail: `${line}\n` }) : text(line)));
+      assert.equal(f.code, 0, `${to}: ${line}: ${f.err()}`);
+      assert.equal(stateOf(f), rejects ? 'build · ready' : `${to} · ready`, line);
+    }
+  }
+});
+
+test('a seen line that is not in its form is refused naming the fault: a bare OK, none without a reason, carried, a path outside shots or not a png, and a line twice', async () => {
+  const cases = [
+    [`${SEEN_ID}: OK`, /not in form/u],
+    [`${SEEN_ID}: OK — none`, /`none` needs its reason/u],
+    [`${SEEN_ID}: OK — none — `, /not in form|needs its reason/u],
+    [`${SEEN_ID}: OK — carried from round 1`, /not carried from an earlier round/u],
+    [`${SEEN_ID}: OK — /tmp/a.png`, /not in form/u],
+    [`${SEEN_ID}: OK — shots/a.jpg`, /not in form/u],
+    [`${SEEN_ID}: OK — shots/../GOAL.json`, /not in form/u],
+    [`${SEEN_ID}: OK — shots/a b.png`, /not in form/u],
+    [`${SEEN_ID}: NOT OK — shots/a.png`, /says what and where/u],
+    [`${SEEN_ID}: OK — shots/a.png\n${SEEN_ID}: OK — shots/a.png`, /more than one line for seen memoro-cli\/documentation/u],
+  ];
+  for (const [line, said] of cases) assertRefused(await moveSeen('merge', seenFiles(seenVerdict(line))), said, line);
+});
+
+test('a seen line naming a screenshot that is not a file in the goal\'s directory is refused with its path; every named file must be there', async () => {
+  const line = `${SEEN_ID}: OK — shots/a.png, shots/b.png`;
+  const f = await moveSeen('merge', seenFiles(seenVerdict(line)), { missing: [`${DIR}/shots/b.png`] });
+  assertRefused(f, /seen memoro-cli\/documentation: shots\/b\.png is not a file in the goal's directory/u, 'one missing');
+  assert.doesNotMatch(f.err(), /shots\/a\.png is not a file/u);
+  const none = await moveSeen('merge', seenFiles(seenVerdict(line)), { missing: [`${DIR}/shots/a.png`, `${DIR}/shots/b.png`] });
+  assertRefused(none, /shots\/a\.png is not a file[\s\S]*shots\/b\.png is not a file/u, 'both missing');
+  const present = await moveSeen('merge', seenFiles(seenVerdict(line)));
+  assert.equal(present.code, 0, present.err());
+  const nothing = await moveSeen('merge', seenFiles(seenVerdict(`${SEEN_ID}: OK — none — a comment changed`)), { missing: [`${DIR}/shots/a.png`] });
+  assert.equal(nothing.code, 0, `none names no file: ${nothing.err()}`);
+});
+
+test('the move asks seen lines for exactly the areas MC_REVIEW_SEEN names and never reads the declaration for it: without the variable none, and a line for an area not named is refused', async () => {
+  const bare = await moveSeen('merge', seenFiles(seenVerdict(null)), { env: REVIEW });
+  assert.equal(bare.code, 0, `a review started without the list is asked none: ${bare.err()}`);
+  const extra = await moveSeen('merge', seenFiles(seenVerdict(`${SEEN_ID}: OK — none — a comment changed`)), { env: REVIEW });
+  assertRefused(extra, /seen memoro-cli\/documentation is not an item of this goal's verdict/u, 'a line for an area the review was not told of');
+  const other = await moveSeen('merge', seenFiles(seenVerdict(null)), { env: { ...REVIEW, MC_REVIEW_SEEN: 'memoro-cli/operations' } });
+  assertRefused(other, /no line for seen memoro-cli\/operations/u, 'the list is the variable\'s, whatever the goal stands on');
+  const two = await moveSeen('merge', seenFiles(seenVerdict(`${SEEN_ID}: OK — none — a\nseen memoro-cli/operations: OK — none — b`)), { env: { ...REVIEW, MC_REVIEW_SEEN: 'memoro-cli/documentation  memoro-cli/operations' } });
+  assert.equal(two.code, 0, two.err());
+  const seen = [];
+  const git = (cwd, args = []) => { seen.push(args[0]); return seenGit()(cwd, args); };
+  assert.equal((await moveSeen('merge', seenFiles(seenVerdict(`${SEEN_ID}: OK — none — a`)), { git })).code, 0);
+  assert.equal(seen.filter((one) => one === 'show').length, 0, 'the declarations are not read for the seen list (no untouched obligation either)');
+});
+
+test('seenAreas lists the rule areas that declare seen which the goal stands touched on or trips, in the goal\'s order, and nothing for a version 1 goal, an untouched area not tripped or a source area', () => {
+  const games = { ...AREA('games', { seen: true }), standards: [], questions: [], page: 'docs/areas/games.md' };
+  const text = JSON.stringify({ schema_version: 1, areas: [AREA('ui', { seen: true }), AREA('ops', { seen: true }), AREA('data'), games] });
+  const git = (cwd, args = []) => (args[0] === 'show' ? ok(text) : allOk(cwd, args));
+  const list = (obligations, tripped = [], repos = ['memoro-cli']) => seenAreas({ goal: parseGoal(goalJsonV2({ repos, obligations })), dir: DIR, tripped, git, exists: () => true });
+  const stand = (area, kind) => ({ area, stand: kind, text: 't', ...(kind === 'touched' ? { standard: 'memoro-cli/docs/technical/ui.md#Rule' } : {}) });
+  assert.deepEqual(list([stand('memoro-cli/ui', 'touched'), stand('memoro-cli/data', 'touched')]), { seen: ['memoro-cli/ui'] }, 'touched, and not one that does not declare it');
+  assert.deepEqual(list([stand('memoro-cli/ops', 'untouched')], [{ area: 'memoro-cli/ops', repo: 'memoro-cli', files: ['src/ops/a.js'] }]), { seen: ['memoro-cli/ops'] }, 'tripped');
+  assert.deepEqual(list([stand('memoro-cli/ops', 'untouched')]), { seen: [] }, 'untouched and not tripped');
+  assert.deepEqual(list([stand('memoro-cli/ui', 'touched'), stand('memoro-cli/ops', 'touched')]), { seen: ['memoro-cli/ui', 'memoro-cli/ops'] }, 'the declaration\'s order');
+  assert.deepEqual(list([stand('memoro-cli/games', 'untouched')]), { seen: [] }, 'a source area is no stand\'s');
+  assert.deepEqual(list([stand('memoro-cli/ui', 'touched')], [], ['memoro-cli', 'memoro']), { seen: ['memoro-cli/ui'] });
+  assert.deepEqual(seenAreas({ goal: parseGoal(goalJson()), dir: DIR, tripped: [], git: () => assert.fail('a version 1 goal reads no git'), exists: () => true }), { seen: [] });
+  assert.match(seenAreas({ goal: parseGoal(goalJsonV2({ obligations: [stand('memoro-cli/ui', 'touched')] })), dir: DIR, tripped: [], git: () => failed('fatal: bad object'), exists: () => true }).error, /\.mc\/areas\.json/u);
+});
+
+test('mc goal areas prints a seen: line for an area that declares seen, for a repository and for a goal, and for no other', async () => {
+  const text = JSON.stringify({ schema_version: 1, areas: [AREA('documentation', { seen: true }), AREA('operations')] });
+  const declarations = { [CLI_PATH]: text, [APP_PATH]: DECLARATION('security') };
+  const repo = fixture({ git: areasGit(declarations) });
+  assert.equal(await run(['areas', 'memoro-cli'], repo.deps), 0, repo.err());
+  const [first, second] = repo.out().split('\n\n');
+  assert.match(first, /^memoro-cli\/documentation — The documentation\n  covers: [^\n]*\n  seen: work on it is judged as the user sees it/u);
+  assert.doesNotMatch(second, /seen:/u);
+  const goal = fixture({ git: areasGit(declarations), files: TWO_REPOS(STANDS_OF) });
+  assert.equal(await run(['areas', 'mc/plain'], goal.deps), 0, goal.err());
+  assert.equal(goal.out().match(/^  seen: /gmu).length, 1, 'one area in the goal\'s two repositories declares it');
+  assert.match(goal.out(), /memoro-cli\/documentation — The documentation\n  stand: touched[^\n]*\n  covers: [^\n]*\n  seen: /u);
 });
 
 test('only a review session in review is held to REVIEW.md: plan and a person move merge without one', async () => {
@@ -3344,4 +3455,87 @@ test('mc goal show says where the plan review stands in four states, and areas p
   assert.equal(await run(['areas', 'mc/plain'], f.deps), 0, f.err());
   assert.match(f.out(), /memoro-cli\/documentation — The documentation\n  no stand\n  proposed stand: touched — C1 changes a path of the area \(advisory\)\n/u);
   assert.match(f.out(), /memoro-cli\/operations — The operations\n  no stand\n  proposed stand: untouched — no change item names a path of the area \(advisory\)\n/u);
+});
+
+/* ------------------------------ phases stated in the programme's record */
+
+const STATED_RECORD = { schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' };
+const PROG_RECORD_PATH = `${HOME}/prog/PROGRAMME.json`;
+const statedRecord = (after) => `${JSON.stringify({ ...STATED_RECORD, phases: after === undefined ? { order: 'stated' } : { order: 'stated', after } }, null, 2)}\n`;
+const plainRecord = () => `${JSON.stringify(STATED_RECORD, null, 2)}\n`;
+/** A goal of programme `prog` in `stage` and `phase`. */
+const progGoal = (name, stage, phase) => ({
+  [`${HOME}/prog/goals/${name}/GOAL.json`]: withGoal(GOAL_TEXT, { stage, phase }),
+  [`${HOME}/prog/goals/${name}/LOG.md`]: '',
+});
+const progRecordOf = (f) => JSON.parse(f.store[PROG_RECORD_PATH]);
+const phaseLines = (text) => text.trim().split('\n').filter((line) => !line.startsWith(' ')).map((line) => line.split(' · ').slice(0, 5).join(' · '));
+
+/** The arrangement of criterion 5: phases 1 and 2 in build, 3 in build after 1 and 2, 4 done, 5 in build after 4. */
+const arranged = (record = statedRecord({ 3: [1, 2], 5: [4] })) => fixture({
+  files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), ...progGoal('four', 'done', 4), ...progGoal('five', 'build', 5), [PROG_RECORD_PATH]: record },
+});
+
+test('mc goal list says what a stated phase waits for, in the words of the stated rule', async () => {
+  const f = arranged();
+  assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+  assert.deepEqual(phaseLines(f.out()), [
+    'prog · phase 1 · in progress',
+    'prog · phase 2 · in progress',
+    'prog · phase 3 · waiting · after phase 1, 2',
+    'prog · phase 4 · done',
+    'prog · phase 5 · in progress · after phase 4',
+  ]);
+});
+
+test('mc goal list of a programme whose record is not JSON says the record is invalid and every unfinished phase waits', async () => {
+  const f = arranged('{ not json');
+  assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+  const lines = f.out().trim().split('\n');
+  assert.equal(lines[0], 'prog · record invalid — no phase is open');
+  assert.deepEqual(phaseLines(f.out()).slice(1), [
+    'prog · phase 1 · waiting',
+    'prog · phase 2 · waiting',
+    'prog · phase 3 · waiting',
+    'prog · phase 4 · done',
+    'prog · phase 5 · waiting',
+  ]);
+});
+
+test('mc goal list of a programme with no record, or a record without phases, says in progress and after phase 1, never waiting', async () => {
+  for (const [kind, extra] of [['no record', {}], ['a record without phases', { [PROG_RECORD_PATH]: plainRecord() }]]) {
+    const f = fixture({ files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...extra } });
+    assert.equal(await run(['list', 'prog'], f.deps), 0, f.err());
+    assert.deepEqual(phaseLines(f.out()), ['prog · phase 1 · in progress', 'prog · phase 2 · after phase 1'], kind);
+    assert.doesNotMatch(f.out(), /waiting/u, kind);
+  }
+});
+
+test('mc goal phase of the only goal of a phase another phase waits for is refused, and nothing is written', async () => {
+  const files = { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), [PROG_RECORD_PATH]: statedRecord({ 3: [2] }) };
+  const f = fixture({ files });
+  const before = JSON.stringify(f.store);
+  assert.equal(await run(['phase', 'prog/two', '1'], f.deps), 2);
+  assert.match(f.err(), /phase 3/u);
+  assert.match(f.err(), /mc programs after prog 3/u);
+  assert.equal(JSON.stringify(f.store), before, 'every goal, log and the record are as they were');
+  // once phase 3 no longer waits for phase 2 the same move goes through
+  f.store[PROG_RECORD_PATH] = statedRecord({ 3: [1] });
+  assert.equal(await run(['phase', 'prog/two', '1'], f.deps), 0, f.err());
+  const phases = Object.fromEntries(['one', 'two', 'three'].map((name) => [name, parseGoal(f.store[`${HOME}/prog/goals/${name}/GOAL.json`]).phase]));
+  assert.deepEqual(phases, { one: 1, two: 1, three: 2 });
+  assert.deepEqual(progRecordOf(f).phases, { order: 'stated', after: { 2: [1] } });
+});
+
+test('mc goal phase that empties a phase says in one line what it no longer waits for, and a goal later made in that number is open', async () => {
+  const f = fixture({ files: { ...progGoal('one', 'build', 1), ...progGoal('two', 'build', 2), ...progGoal('three', 'build', 3), [PROG_RECORD_PATH]: statedRecord({ 3: [1] }) } });
+  assert.equal(await run(['phase', 'prog/three', '2'], f.deps), 0, f.err());
+  assert.equal(Object.hasOwn(progRecordOf(f).phases.after ?? {}, '3'), false);
+  assert.equal(f.out().split('\n').filter((line) => /no longer waits/u.test(line)).length, 1);
+  assert.match(f.out(), /phase 3 no longer waits for phase 1/u);
+  assert.equal(await run(newArgs('prog/fresh', '--phase', '3'), f.deps), 0, f.err());
+  const goals = programsGoals({ home: HOME, list: f.deps.list, read: f.deps.read });
+  const fresh = goals.find((goal) => goal.goal === 'fresh');
+  assert.equal(fresh.phase, 3);
+  assert.equal(phaseOpen(fresh, goals.filter((goal) => goal.programme === 'prog'), programmeOrder('prog', { home: HOME, read: f.deps.read })), true, 'no old dependency stays on the freed number');
 });

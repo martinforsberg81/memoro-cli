@@ -12,6 +12,7 @@
 import { linkSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { writeFileAtomic } from './atomic-write.js';
 import { canonRoot } from './canon.js';
 import { NAME_RE } from './plan-schema.js';
 
@@ -20,8 +21,58 @@ export const RECORD_SCHEMA = 'mc-programme';
 export const RECORD_VERSION = 1;
 export const RECORD_STATES = Object.freeze(['open', 'done']);
 export const RECORD_AUTHORS = Object.freeze(['person', 'martin', 'manager']);
-const KEYS = Object.freeze(['schema', 'version', 'horizon', 'end', 'state', 'created', 'created_by']);
+const KEYS = Object.freeze(['schema', 'version', 'horizon', 'end', 'state', 'created', 'created_by', 'phases']);
+/** The one value of `phases.order`: the programme's phases wait for what the record says and for nothing else. */
+export const PHASES_ORDER = 'stated';
+const PHASE_NUMBER = /^[1-9]\d*$/u;
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u;
+
+/**
+ * A cycle in `after` (`{ "<phase>": [phases it waits for] }`), as the phases of
+ * one cycle in the order they wait for each other, or null.
+ */
+export function cycleOf(after) {
+  const waits = (phase) => (Array.isArray(after?.[phase]) ? after[phase] : []);
+  const done = new Set();
+  const walk = (phase, path) => {
+    if (path.includes(phase)) return path.slice(path.indexOf(phase));
+    if (done.has(phase)) return null;
+    for (const next of waits(phase)) {
+      const found = walk(String(next), [...path, phase]);
+      if (found) return found;
+    }
+    done.add(phase);
+    return null;
+  };
+  for (const phase of Object.keys(after ?? {})) {
+    const found = walk(phase, []);
+    if (found) return found.map(Number).sort((a, b) => a - b);
+  }
+  return null;
+}
+
+/** The problems of a parsed `phases` value; none when it is of the form of the record. */
+function phasesProblems(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return ['phases: an object { "order": "stated", "after": { "<phase>": [<phases it waits for>] } }'];
+  const problems = [];
+  for (const key of Object.keys(value)) if (key !== 'order' && key !== 'after') problems.push(`phases.${key}: unknown key`);
+  if (value.order !== PHASES_ORDER) problems.push(`phases.order: must be "${PHASES_ORDER}"`);
+  if (value.after === undefined) return problems;
+  const { after } = value;
+  if (after === null || typeof after !== 'object' || Array.isArray(after)) { problems.push('phases.after: an object with a key for each phase that waits'); return problems; }
+  for (const [key, list] of Object.entries(after)) {
+    if (!PHASE_NUMBER.test(key)) { problems.push(`phases.after.${key}: the key must be a phase number, a whole number from 1`); continue; }
+    const ok = Array.isArray(list) && list.length > 0 && list.every((n) => Number.isSafeInteger(n) && n >= 1)
+      && list.every((n, at) => at === 0 || n > list[at - 1]);
+    if (!ok) { problems.push(`phases.after.${key}: the phases it waits for, whole numbers from 1, ascending, none twice, at least one`); continue; }
+    if (list.includes(Number(key))) problems.push(`phases.after.${key}: phase ${key} cannot wait for itself`);
+  }
+  if (!problems.length) {
+    const cycle = cycleOf(after);
+    if (cycle) problems.push(`phases.after: phases ${cycle.join(', ')} wait for one another in a cycle`);
+  }
+  return problems;
+}
 
 /** The problems of a parsed value; none when it is a record. */
 export function validateRecord(value) {
@@ -35,11 +86,12 @@ export function validateRecord(value) {
   if (!RECORD_STATES.includes(value.state)) problems.push(`state: one of ${RECORD_STATES.join(', ')}`);
   if (typeof value.created !== 'string' || !INSTANT.test(value.created) || !Number.isFinite(Date.parse(value.created))) problems.push('created: an ISO instant in UTC to the second');
   if (!RECORD_AUTHORS.includes(value.created_by)) problems.push(`created_by: one of ${RECORD_AUTHORS.join(', ')}`);
+  if (value.phases !== undefined) problems.push(...phasesProblems(value.phases));
   return problems;
 }
 
-/** A new record, the keys in their order. */
-export function newRecord({ horizon = null, end, createdBy, now = new Date() }) {
+/** A new record, the keys in their order; `stated` opts the programme's phases in (`mc programs create`). */
+export function newRecord({ horizon = null, end, createdBy, now = new Date(), stated = false }) {
   return {
     schema: RECORD_SCHEMA,
     version: RECORD_VERSION,
@@ -48,6 +100,7 @@ export function newRecord({ horizon = null, end, createdBy, now = new Date() }) 
     state: 'open',
     created: now.toISOString().replace(/\.\d+Z$/u, 'Z'),
     created_by: createdBy,
+    ...(stated ? { phases: { order: PHASES_ORDER } } : {}),
   };
 }
 
@@ -73,7 +126,7 @@ export function readRecord(dir, { read = (path) => readFileSync(path, 'utf8') } 
 export function recordView(read) {
   if (read.status === 'valid') {
     const { horizon, end, state, created, created_by: createdBy } = read.record;
-    return { horizon, end, state, created, created_by: createdBy };
+    return { horizon, end, state, created, created_by: createdBy, ...(read.record.phases ? { phases: read.record.phases } : {}) };
   }
   return read.status === 'invalid' ? { problems: read.problems } : null;
 }
@@ -101,6 +154,25 @@ export function writeRecord(dir, record) {
   writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
   try { linkSync(temporary, path); } finally { unlinkSync(temporary); }
   return path;
+}
+
+/**
+ * The one change to a record that is there: its `phases`. `change` is given the
+ * current `phases` (undefined when the record has none) and returns the new
+ * one; the whole result is validated and written whole (`write`, atomic), every other key as it
+ * was, in its place. An invalid record or none is never touched. Returns
+ * `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
+ */
+export function changePhases(dir, change, { read, write = writeFileAtomic } = {}) {
+  const found = readRecord(dir, read ? { read } : {});
+  if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
+  const phases = change(found.record.phases);
+  const record = phases === undefined ? found.record : { ...found.record, phases };
+  const problems = validateRecord(record);
+  if (problems.length) return { ok: false, status: 'refused', problems };
+  const changed = JSON.stringify(record) !== JSON.stringify(found.record);
+  if (changed) write(join(dir, RECORD_FILE), `${JSON.stringify(record, null, 2)}\n`);
+  return { ok: true, record, changed };
 }
 
 /** The record page's fenced markdown block in the packaged canon, or null when it cannot be read. */

@@ -21,6 +21,7 @@ import { samePr } from './merge-queue.js';
 import { programsHome } from './paths.js';
 import { CRITERION_KEYS_V2, criteriaCount, plain, prose, text, unknownKeys, unmetCriteria, validateCriteria, validateDocuments } from './criteria.js';
 import { NAME_RE } from './plan-schema.js';
+import { changePhases, readRecord } from './programme-record.js';
 import { GOAL_KEYS_V2, partsOf, partsToWrite, renderGoalTextV2, validateParts } from './goal-parts.js';
 
 export const GOAL_FILE = 'GOAL.json';
@@ -609,17 +610,101 @@ export function goalSession(goal, inLine = []) {
   return null;
 }
 
-/** The one draft a programme may plan, or null. Delivery and unreadable data
- * hold planning; a waiting first draft cannot be bypassed by another draft. */
-export function nextDraft(goals, programme) {
+/** A programme whose goals wait for the phases below them: the order of every programme that has not opted in. */
+export const SEQUENTIAL = Object.freeze({ kind: 'sequential' });
+
+/**
+ * How a programme's phases are ordered, from what `readRecord` found in its
+ * directory (`undefined` is a programme read without its record): `sequential`
+ * for no record and for a record whose `phases` is absent, `stated` with the
+ * dependencies of its `phases.after` as `{ <phase>: [phases it waits for] }`,
+ * and `invalid` for a record that is there and does not validate — which holds
+ * every phase, as a `.hold.json` that does not parse still holds.
+ */
+export function phaseOrder(found) {
+  if (found?.status === 'invalid') return { kind: 'invalid', problems: found.problems };
+  const phases = found?.status === 'valid' ? found.record.phases : undefined;
+  if (!phases || phases.order !== 'stated') return SEQUENTIAL;
+  return { kind: 'stated', after: Object.fromEntries(Object.entries(phases.after ?? {}).map(([phase, list]) => [Number(phase), [...list]])) };
+}
+
+/** `programme`'s order, read from its directory under `home` with `read` (text or null). */
+export function programmeOrder(programme, { home = programsHome(), read = readTextOrNull } = {}) {
+  return phaseOrder(readRecord(join(home, programme), { read: (path) => read(path) }));
+}
+
+const phaseOf = (goal) => goal.phase ?? 1;
+const unfinishedOf = (goal) => !goal.problems?.length && !FINISHED.includes(goal.stage ?? goal.status);
+
+/** Whether `phase` may start in a programme whose goals are `own` (the programme's goals only), by `order`. */
+function openIn(own, order, phase) {
+  if (order.kind === 'invalid') return false;
+  if (order.kind === 'stated') {
+    return !(order.after[phase] ?? []).some((named) => own.some((goal) => unfinishedOf(goal) && phaseOf(goal) === named));
+  }
+  const unfinished = own.filter(unfinishedOf).map(phaseOf);
+  return !unfinished.length || phase <= Math.min(...unfinished);
+}
+
+/**
+ * Each phase of one programme's goals, and where it stands by the programme's
+ * `order` — the one function every reader of the phase rule asks (`phaseOpen`,
+ * the runner, `mc goal list`, the page, tidy, the desk). `phases` has one
+ * entry per phase of the goals that parse, ascending: `{ phase, state, open,
+ * after }` where `state` is `finished` (every goal done or dropped), `current`
+ * (open, with something to finish) or `waiting`, and `after` the phases the
+ * record states it waits for. `current` is the lowest phase with an unfinished
+ * goal; `invalid` is true for a record that does not validate.
+ */
+export function phaseStanding(own, order = SEQUENTIAL) {
+  const parsed = own.filter((goal) => !goal.problems?.length);
+  const numbers = [...new Set(parsed.map(phaseOf))].sort((a, b) => a - b);
+  const current = parsed.filter(unfinishedOf).map(phaseOf);
+  return {
+    current: current.length ? Math.min(...current) : null,
+    invalid: order.kind === 'invalid',
+    phases: numbers.map((phase) => {
+      const finished = !parsed.some((goal) => unfinishedOf(goal) && phaseOf(goal) === phase);
+      const open = openIn(parsed, order, phase);
+      return { phase, state: finished ? 'finished' : open ? 'current' : 'waiting', open, after: order.kind === 'stated' ? order.after[phase] ?? [] : [] };
+    }),
+  };
+}
+
+/**
+ * The one draft a programme may plan, or null. Delivery and unreadable data
+ * hold planning; a waiting first draft cannot be bypassed by another draft.
+ *
+ * `order` is the programme's (`phaseOrder`). For a programme whose phases are
+ * stated the trigger reads each phase: a phase offers its first draft (oldest
+ * created, then by name) when the phase is open, none of its goals is in build,
+ * review or merge, and that draft is ready and not `unavailable(goal)` (held or
+ * decision-claimed, told by the runner). The draft of the lowest phase that
+ * offers one is the programme's. A goal that does not parse holds the whole
+ * programme, as it does for any order. An invalid record offers none.
+ */
+export function nextDraft(goals, programme, { order = SEQUENTIAL, unavailable = () => false } = {}) {
   const own = goals.filter(goal => goal.programme === programme);
-  if (own.some(goal => goal.problems?.length || !['draft', ...FINISHED].includes(goal.stage))) return null;
+  if (order.kind === 'invalid') return null;
   // Missing dates stay oldest; compare validated creation instants, not ISO spellings.
   const createdAt = goal => goal.created == null ? -Infinity : Date.parse(goal.created);
+  const byAge = (a, b) => createdAt(a) - createdAt(b) || a.goal.localeCompare(b.goal);
+  if (order.kind === 'stated') {
+    if (own.some(goal => goal.problems?.length)) return null;
+    const standing = phaseStanding(own, order);
+    for (const { phase, open } of standing.phases) {
+      if (!open) continue;
+      const inPhase = own.filter(goal => phaseOf(goal) === phase);
+      if (inPhase.some(goal => !['draft', ...FINISHED].includes(goal.stage))) continue;
+      const first = inPhase.filter(goal => goal.stage === 'draft').sort(byAge)[0];
+      if (first && first.status === 'ready' && !unavailable(first)) return first;
+    }
+    return null;
+  }
+  if (own.some(goal => goal.problems?.length || !['draft', ...FINISHED].includes(goal.stage))) return null;
   const drafts = own.filter(goal => goal.stage === 'draft').sort((a, b) =>
     (a.phase ?? 1) - (b.phase ?? 1)
-    || createdAt(a) - createdAt(b)
-    || a.goal.localeCompare(b.goal));
+    || byAge(a, b));
   return drafts[0]?.status === 'ready' ? drafts[0] : null;
 }
 
@@ -627,7 +712,8 @@ export function nextDraft(goals, programme) {
  * The phase a programme is in, of `goals` (`programsGoals`' answer): the
  * lowest phase of its goals that parse and are not finished (`FINISHED`), or
  * null when none is left. A goal that does not parse has no phase and holds
- * nothing back.
+ * nothing back. For a programme whose phases are stated it is still the lowest
+ * phase with something to finish; whether a phase may start is `phaseOpen`.
  */
 export function currentPhase(goals, programme) {
   const phases = goals.filter((goal) => goal.programme === programme && goal.problems.length === 0 && !FINISHED.includes(goal.stage)).map((goal) => goal.phase ?? 1);
@@ -635,13 +721,19 @@ export function currentPhase(goals, programme) {
 }
 
 /**
- * Whether `goal` may be started: no goal of its programme in a lower phase is
- * still to finish. Done and dropped both finish a goal. The goals of one phase
- * run side by side.
+ * Whether `goal` may be started, by its programme's `order` (`phaseOrder`;
+ * none given is a programme whose phases are sequential): in a sequential
+ * programme no goal of its programme in a lower phase is still to finish; in
+ * one whose phases are stated, every goal of each phase its phase is stated to
+ * wait for is done or dropped; with an invalid record never. Done and dropped
+ * both finish a goal. The goals of one phase run side by side.
  */
-export function phaseOpen(goal, goals) {
-  const current = currentPhase(goals, goal.programme);
-  return current === null || (goal.phase ?? 1) <= current;
+export function phaseOpen(goal, goals, order = SEQUENTIAL) {
+  if (order.kind === 'sequential') {
+    const current = currentPhase(goals, goal.programme);
+    return current === null || (goal.phase ?? 1) <= current;
+  }
+  return openIn(goals.filter((item) => item.programme === goal.programme), order, phaseOf(goal));
 }
 
 /**
@@ -665,17 +757,49 @@ export function phaseMoves(goals) {
 }
 
 /**
+ * A stated `after` with each phase renamed by `number` (old → new phase): a key
+ * or a listed phase the goals no longer have (`number` has none for it) is
+ * dropped, and so is a key left with an empty list. What `renumberPhases` makes
+ * of the record's dependencies.
+ */
+export function renumberedAfter(after, number) {
+  const out = {};
+  for (const [key, list] of Object.entries(after ?? {})) {
+    const to = number.get(Number(key));
+    const named = list.map((phase) => number.get(phase)).filter((phase) => phase !== undefined);
+    if (to !== undefined && named.length) out[to] = [...new Set(named)].sort((a, b) => a - b);
+  }
+  return out;
+}
+
+/**
  * Renumbers the phases of `programme`'s goals under `home` (`phaseMoves`),
  * each change written by `updateGoal`. Returns the moves made. `mc goal
  * archive`, the runner's archive and `mc goal phase` call it, so the lowest
  * phase left is always 1.
+ *
+ * A programme whose record states its phases keeps its dependencies with the
+ * phases they were stated for: every key and listed phase of `phases.after`
+ * moves with its phase, a phase with no goal left that parses is taken out, and
+ * the record is written once, only when it changes, after the goals — on every
+ * call, also when no goal moves. No record, a record that does not state its
+ * phases and an invalid record are left as they are.
  */
 export function renumberPhases({ home, programme, list = listDirsOf, read = readTextOrNull, write = writeFileAtomic }) {
   const goals = programsGoals({ home, list: (path) => (path === home ? [programme] : list(path)), read });
+  const own = goals.filter((goal) => goal.programme === programme && goal.problems.length === 0);
+  const numbers = [...new Set(own.map((goal) => goal.phase))].sort((a, b) => a - b);
   const made = [];
   for (const move of phaseMoves(goals)) {
     const outcome = updateGoal({ dir: move.goal.dir, change: (goal) => ({ ...goal, phase: move.to }), read, write });
     if (!outcome.problems) made.push(move);
+  }
+  const order = programmeOrder(programme, { home, read });
+  if (order.kind === 'stated') {
+    const number = new Map(numbers.map((phase, at) => [phase, at + 1]));
+    changePhases(join(home, programme), (phases) => {
+      return phases.after === undefined ? phases : { ...phases, after: renumberedAfter(phases.after, number) };
+    }, { read: (path) => read(path), write });
   }
   return made;
 }
@@ -695,10 +819,10 @@ export function goalName({ programme, goal }) {
  * leaves out a review that cannot run now, so it does not stand in front of
  * every other goal.
  */
-export function nextGoal(goals, { repos = [], held = new Set(), may = () => true, inLine = [] } = {}) {
+export function nextGoal(goals, { repos = [], held = new Set(), may = () => true, inLine = [], order = () => SEQUENTIAL } = {}) {
   const lastAt = (goal) => goal.log.at(-1)?.at ?? '';
   const eligible = goals.filter((goal) => goalSession(goal, inLine) !== null
-    && repos.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, goals) && may(goal));
+    && repos.includes(goal.repos[0]) && !held.has(goalName(goal)) && phaseOpen(goal, goals, order(goal.programme)) && may(goal));
   return eligible.reduce((oldest, goal) => (oldest === null || lastAt(goal) < lastAt(oldest) ? goal : oldest), null);
 }
 

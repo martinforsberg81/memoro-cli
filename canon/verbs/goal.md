@@ -128,6 +128,10 @@ its check, and each worktree's state.
   oldest creation time, name). Unreadable goal data, or a first draft that waits on Martin or is held, prevents that launch. One session completes only that draft into
   build using its goal worktrees. Interactive mc plan remains the person's
   entrance; empty programmes and proposals alone start no plan turn.
+  In a programme whose record states its phases each phase offers its oldest
+  draft when it is open, none of its goals is in build, review or merge, and the
+  draft is ready, not held and not decision-claimed; the lowest phase that offers
+  one gives the next draft, and one plan session runs in the programme at a time.
 
 The unattended `decision` desk role has Martin's goal mutation authority,
 including backward moves, ready, goal/criterion rewrites and dropping, but

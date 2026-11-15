@@ -75,7 +75,7 @@ describe('mc programs create', () => {
       assert.equal(code, 0, out);
       assert.deepEqual(readdirSync(join(a.home, 'alpha')).sort(), ['PROGRAMME.json', 'README.md', 'evidence', 'goals', 'proposals']);
       assert.ok(existsSync(join(a.home, 'alpha', 'proposals', 'archive')));
-      assert.deepEqual(recordOf(a.home, 'alpha'), { ...GOOD, end: 'Alpha is done when it holds.', created: '2026-11-14T10:20:30Z' });
+      assert.deepEqual(recordOf(a.home, 'alpha'), { ...GOOD, end: 'Alpha is done when it holds.', created: '2026-11-14T10:20:30Z', phases: { order: 'stated' } });
       const page = readFileSync(join(a.home, 'alpha', 'README.md'), 'utf8');
       assert.deepEqual([...page.matchAll(/^#+ .+$/gmu)].map(([line]) => line).slice(1), ['## What it is for', '## End', '## Decisions', '## Phases', '## Where things are']);
       assert.match(page, /^# alpha — /u);
@@ -182,7 +182,7 @@ describe('mc programs record and show', () => {
       assert.match(text.out, /horizon {2}mc-autonomy/u);
       assert.match(text.out, /end {6}Alpha done\./u);
       const json = JSON.parse((await call(['show', 'alpha', '--json'], a.env)).out);
-      assert.deepEqual(json, { name: 'alpha', record: { horizon: 'mc-autonomy', end: 'Alpha done.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' } });
+      assert.deepEqual(json, { name: 'alpha', record: { horizon: 'mc-autonomy', end: 'Alpha done.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated' } } });
       mkdirSync(join(a.home, 'plain'));
       const none = await call(['show', 'plain'], a.env);
       assert.equal(none.code, 0);
@@ -251,7 +251,7 @@ describe('the list and the page', () => {
       const json = JSON.parse((await call(['list', '--json'], a.env)).out);
       const names = json.programmes.map((item) => item.name);
       assert.deepEqual(names, ['alpha', 'broken']);
-      assert.deepEqual(json.programmes[0].record, { horizon: 'mc-autonomy', end: 'e', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' });
+      assert.deepEqual(json.programmes[0].record, { horizon: 'mc-autonomy', end: 'e', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated' } });
       assert.ok(json.programmes[1].record.problems.length);
       assert.equal(json.programmes[0].dormant, true);
       const text = (await call(['list'], a.env)).out;

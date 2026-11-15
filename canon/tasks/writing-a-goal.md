@@ -20,15 +20,15 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
 5. `mc goal criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]` per success criterion; the runner starts no goal without one.
    `mc goal document add <p>/<g> --label "…" --path "…"` for each document the build session must read.
 6. `mc goal show <p>/<g>` renders it as the build session will read it. Then `mc goal plan-review <p>/<g>`: a fresh session reads the goal in
-   `draft` against seven questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK). It takes up to 20 minutes: a session whose
+   `draft` against its questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK). It takes up to 20 minutes: a session whose
    tool call is shorter runs it in the background and waits. An interactive session passes `--avoid <tool>:<model>` with its own model.
    Repair what it finds yourself and read again; after two rounds decide, and move with `mc goal stage <p>/<g> build --reason "…"`.
    `mc goal stage <p>/<g> build` moves a goal that is complete and has an OK reading of its current text; any change to the text asks for a new one.
 
-Work that is several pieces in order is several goals, each in the phase after the one before: a goal starts only when every goal of its
-programme in a lower phase is done or dropped. `mc goal phase <p>/<g> <n>` changes the order later; goals of one phase run side by side; phases
-may be renumbered; a `draft` goal holds later phases back too. The cut into goals and phases is
-[designing a programme](designing-a-programme.md): a finished, read brief stands in `build` in its phase.
+Work that is several pieces in order is several goals in phases. In a programme whose record states its phases a goal starts when every goal of each
+phase its own is stated to wait for is done or dropped (`mc programs after`); in every other programme, when every goal in a lower phase is. `mc goal phase
+<p>/<g> <n>` changes the order later; goals of one phase run side by side; a `draft` goal holds back the phases that wait for its phase. The cut into goals and
+phases is [designing a programme](designing-a-programme.md): a finished, read brief stands in `build` in its phase.
 
 - **Readiness:** before creating a goal, including a `draft` skeleton, apply [goal design](references/goal-design.md): establish the problem,
   choose the solution, and define success criteria and exclusions. Missing investigation stays with the proposal. A goal that waits on others
@@ -47,7 +47,7 @@ may be renumbered; a `draft` goal holds later phases back too. The cut into goal
   choices in planning, not acceptance.
   [Goal design](references/goal-design.md#success-criteria) holds the rules for evidence and for a live check.
 - **What users see:** a UI goal states the intended result per viewport and checks it with `mc shot` there. Plan several build iterations:
-  compare screenshots with the intent until they agree.
+  compare screenshots with the intent until they agree. It names the tokens, components, icons and assets it reuses and each one it adds.
 - **What waits on Martin:** only what [asking-martin](asking-martin.md) names, resolved before build and recorded as a decision item.
 - **Test protection:** `protection` names protected behaviours, failure consequences, the cheapest credible test level, existing tests to reuse
   and the fault to replay, and states the evidence the build must produce, or why no new automated test is warranted. Follow [writing-tests.md](writing-tests.md); not every fix needs one.

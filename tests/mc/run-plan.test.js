@@ -29,6 +29,24 @@ test('repair and narrow review prompts carry the rejected items and judged heads
   assert.match(goalRepairPrompt({ ...args, verdict: 'old free form' }), /no item ids/u);
 });
 
+test('the review prompt names the seen areas with the form of the line and where the screenshots go, says when they could not be read, and has no seen text without them', () => {
+  const args = { name: 'p/g', dir: '/goal', worktree: '/goal/repo', branch: 'goal/g', pr: 1, head: 'abc123' };
+  const plain = goalReviewPrompt(args);
+  assert.doesNotMatch(plain, /user sees it|seen/u);
+  assert.equal(goalReviewPrompt({ ...args, seen: [] }), plain, 'an empty list is no list');
+  const shown = goalReviewPrompt({ ...args, seen: ['memoro/users-meet', 'memoro-cli/ui'] });
+  assert.ok(shown.startsWith(plain.slice(0, 40)));
+  assert.match(shown, /judged as the user sees it; write a `seen <area>` line for each/u);
+  for (const area of ['memoro/users-meet', 'memoro-cli/ui']) {
+    assert.ok(shown.includes(`seen ${area}: OK — shots/<name>.png`), area);
+    assert.ok(shown.includes(`seen ${area}: OK — none — <reason>`), area);
+  }
+  assert.match(shown, /mc shot … --out \/goal\/shots\/<name>\.png/u);
+  const unread = goalReviewPrompt({ ...args, seenError: 'could not read areas' });
+  assert.match(unread, /could not be checked \(could not read areas\); no `seen` line is asked/u);
+  assert.doesNotMatch(unread, /write a `seen <area>` line/u);
+});
+
 test('SESSION_DEFAULTS: the review session runs on opus at high effort, with no advisor', () => {
   assert.deepEqual(SESSION_DEFAULTS.review, { model: 'opus', effort: 'high', advisor: null });
   const settings = sessionSettings({}, null, { kind: 'review' });

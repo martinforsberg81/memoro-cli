@@ -70,7 +70,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -104,7 +104,7 @@ import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished }
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
-import { trippedAreas } from './review-verdict.js';
+import { seenAreas, trippedAreas } from './review-verdict.js';
 import { runsKind } from './session-kind.js';
 import { CREDITS_RETRY_MS, patchBillingState, planWindows, readBillingApi, readBillingState } from './billing.js';
 import { MERGE_HANDOFF_FILE, withoutSessionIdentity } from './session-role.js';
@@ -1481,17 +1481,55 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
     }
     all = goals();
-    const drafts = [...new Set(all.map(goal => goal.programme))]
-      .map(programme => nextDraft(all, programme)).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json')) && ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`)) && !heldBy(goal))
+    const programmes = [...new Set(all.map(goal => goal.programme))];
+    // Each programme's record, once for this pick (D10): who may start what is read where it is decided.
+    const orders = new Map(programmes.map(programme => [programme, orderOf(programme)]));
+    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json'));
+    const drafts = programmes
+      .map(programme => nextDraft(all, programme, { order: orders.get(programme), unavailable })).filter(Boolean);
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json'))
+      && (orders.get(goal.programme).kind === 'stated'
+        // Stated phases: this draft's own name and any plan session of the programme hold it; delivery sessions of other phases do not.
+        ? !held.has(goalName(goal)) && ![...held].some(name => !name) && planSessions(goal.programme, all).size === 0
+        : ![...held].some(name => !name || name.startsWith(`goal:${goal.programme}/`))) && !heldBy(goal))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all) && !heldBy(goal) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all, orders.get(goal.programme)) && !heldBy(goal) && may(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
       })];
+  }
+
+  /** `programme`'s order of phases, read now from its record; an invalid one is said once while it lasts (`invalidSaid`). */
+  function orderOf(programme) {
+    const order = programmeOrder(programme, { home: programsHome(deps.env), read: deps.read });
+    const key = order.kind === 'invalid' ? order.problems.join('; ') : null;
+    if (key === null) invalidSaid.delete(programme);
+    else if (invalidSaid.get(programme) !== key) {
+      say(`${programme}: its record (PROGRAMME.json) is invalid — no goal or plan session is started in it until it is repaired (${key}; mc programs show ${programme})`);
+      invalidSaid.set(programme, key);
+    }
+    return order;
+  }
+
+  /**
+   * The plan sessions of `programme` that are claimed or current, by name: the
+   * session's kind (`kind` of its current record) and not its goal's stage tells
+   * a plan session from a delivery one, since a plan session moves its draft
+   * to build while it runs. A claim with no current record yet is a plan
+   * session when its goal is still a draft.
+   */
+  function planSessions(programme, all) {
+    const names = new Set(stepsHeld().filter(item => item.kind === 'plan' && item.programme === programme && item.name).map(item => item.name));
+    const current = new Set(stepsHeld().map(item => item.name));
+    for (const name of claims) {
+      if (current.has(name)) continue;
+      const goal = all.find(item => goalName(item) === name);
+      if (goal?.programme === programme && goal.stage === 'draft') names.add(name);
+    }
+    return names;
   }
 
   /** A build or review is `goal`'s variant (a project's was the other); a repair or a mend has none (`session-kind.js`). */
@@ -1639,7 +1677,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           ...watchFor(launch, settings, { prompt, name, checkInText: () => `Continue decision item ${name}. End closed or for-martin; preserve goal evidence and handoffs.`, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
           env: { MC_HEADLESS: '1', MC_ROLE: 'decision', MC_TOOL: settings.tool, MC_MODEL: settings.model, MC_SCRATCH: scratch,
             ...(goal ? { MC_GOAL: currentItem.reference, MC_PROGRAMME: goal.programme, MC_REPO: repoName, MC_WORKAREA: cwd } : {}) },
-          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
+          unsetEnv: ['MC_GOAL', 'MC_PROGRAMME', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'].filter(key => !goal || !['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA'].includes(key)) });
         admission.release?.();
         result = await pending;
       } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
@@ -1962,6 +2000,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   /** The reason each goal's review last waited on, so it is said once. */
   const reviewWaits = new Map();
+  /** The problems each programme's invalid record was last said with, so they are said once. */
+  const invalidSaid = new Map();
   /** The hold each goal was last said to be held by (`by|at`), so a hold is said once. */
   const holdsSaid = new Map();
   /**
@@ -2575,6 +2615,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       }
       // The untouched areas the branch changed: the one function the move out of review checks against (`review-verdict.js`).
       if (review) found = trippedAreas({ goal, dir: goal.dir, head: pr.head, git: deps.git, exists: deps.exists });
+      // The areas judged as the user sees it, asked once here: the prompt names them and MC_REVIEW_SEEN holds the same list.
+      const judged = review ? seenAreas({ goal, dir: goal.dir, tripped: found.tripped ?? [], git: deps.git, exists: deps.exists }) : { seen: [] };
       const attached = await deps.attachDeps(worktree);
       if (!attached.ok) say(`${name}: dependencies could not be attached — ${attached.why}`);
       // The brief is the goal as `mc goal show` renders it; a record from a test without one has none.
@@ -2583,7 +2625,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const prompt = planning
         ? goalPlanPrompt(told)
         : review
-        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null })
+        ? goalReviewPrompt({ ...told, pr: pr.number, head: pr.head, verdict: goal.verdict, tripped: found.tripped ?? [], trippedError: found.error ?? null, seen: judged.seen ?? [], seenError: judged.error ?? null })
         : repair
         ? goalRepairPrompt({ ...told, verdict: goal.verdict })
         : mend
@@ -2645,7 +2687,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         if (stopRequested()) return 'stop';
         if (updateRequested()) return 'skipped:update';
         if (heldBy(goal)) return 'skipped:held';
-        if (planning && nextDraft(goals(), goal.programme)?.goal !== goal.goal) {
+        const listed = goals();
+        const order = planning ? orderOf(goal.programme) : null;
+        // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
+        const others = order?.kind === 'stated' ? [...planSessions(goal.programme, listed)].filter(other => other !== name) : [];
+        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')));
+        if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length)) {
           say(`${name}: programme changed during admission — planning deferred`);
           return 'skipped:programme-changed';
         }
@@ -2674,6 +2721,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
             MC_GOAL: `${goal.programme}/${goal.goal}`, MC_REPO: repoName, MC_WORKAREA: worktree, MC_TOOL: settings.tool,
             // The review uses this head as context; the Stop hook reads when it began.
             ...(review ? { MC_REVIEW_HEAD: pr.head, MC_REVIEW_PR: String(pr.number), MC_SESSION_STARTED: new Date(t0).toISOString() } : {}),
+            ...(review && judged.seen?.length ? { MC_REVIEW_SEEN: judged.seen.join(' ') } : {}),
             ...(settings.model ? { MC_MODEL: settings.model } : {}),
             ...scratchEnv,
           },
