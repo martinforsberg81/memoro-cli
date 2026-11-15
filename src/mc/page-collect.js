@@ -94,7 +94,7 @@ import {
 } from './page-cache.js';
 import { RUNNER_DISK, RUNNER_MEMORY, mcHome, programsHome, runnerScratchDir, workRoot } from './paths.js';
 import { diskSummary } from './disk-pressure.js';
-import { claudeSettingsPath, hookDrift, hookRegistration, readClaudeSettings } from './hooks.js';
+import { claudeSettingsPath, hookDrift, hookRegistration, hookTargets, hookTargetsDrift, readClaudeSettings } from './hooks.js';
 import { listStrays } from './work-area.js';
 import { DESKS, ownerOf } from './session-owner.js';
 import { gitDirOf } from './repos.js';
@@ -1603,6 +1603,10 @@ export async function collectPage({
   checkout = mcCheckout(),
   // Injected so that no test reads the real file; an env without HOME means none is read.
   claudeSettings = () => (env.HOME ? readClaudeSettings(claudeSettingsPath(env.HOME)) : null),
+  // The drift of the other tools' hook files (those of an installed tool that declares `HOOKS`); injected for the same reason.
+  otherHooksDrift = () => (env.HOME
+    ? hookTargetsDrift(hookTargets({ env, home: env.HOME }).filter((target) => !target.spec.always), (path) => readClaudeSettings(path))
+    : null),
   // The current statfs measurement; injectable for the same real collection
   // path used by the page without depending on this machine's free space.
   diskFreeBytes = undefined,
@@ -1806,7 +1810,10 @@ export async function collectPage({
         (() => { const m = readMerger({ root }); return m ? { name: 'merger', pid: m.pid, commit: m.commit || null } : null; })(),
         (() => { const w = watcherState({ root: home }); return w.running ? { name: 'repo watch', pid: w.pid, commit: w.commit } : null; })(),
       ].filter(Boolean),
-      hooks: (() => { const settings = claudeSettings(); return settings ? hookDrift(hookRegistration(settings)) : null; })(),
+      hooks: (() => {
+        const settings = claudeSettings();
+        return [settings ? hookDrift(hookRegistration(settings)) : null, otherHooksDrift()].filter(Boolean).join('; ') || null;
+      })(),
       updateText: readText(join(root, 'runner', 'UPDATE')),
       drain: drainState({
         paths: controlPaths(root),
