@@ -26,7 +26,7 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 const draw = (data, over = {}) => renderPageLines(data, { columns: 120, now: NOW, ...over }).map(plain);
 
 describe('PROGRAMMES phase tree', () => {
-  it('shows each Manager below the hero and programme turns under their owner, with triggers', () => {
+  it('shows each Manager as one IN FLIGHT row and programme turns under their owner, with triggers', () => {
     const runner = runnerSection({ now: NOW, alive: () => true, currents: [
       ...['inbox', 'empty'].map((programme, index) => ({ name: `plan:${programme}`, programme,
         kind: 'plan', reason: 'daily_proposals', pid: 200 + index, session_pid: 300 + index,
@@ -43,16 +43,15 @@ describe('PROGRAMMES phase tree', () => {
       programmes: programmesSection({ runnerSessions: runner.sessions, planningSessions: sessions.planning_sessions }) };
     for (const columns of [60, 80, 120, 160]) for (const expand of [false, true]) {
       const lines = draw(JSON.parse(JSON.stringify(data)), { columns, expand });
-      const heroEnd = lines.findIndex(line => line.startsWith('  └'));
       const programmes = lines.findIndex(line => line.includes('PROGRAMMES'));
-      for (const pid of [400, 401]) {
-        const at = lines.findIndex(line => line.includes(`pid ${pid}`));
-        assert.ok(at > heroEnd && at < programmes, `Manager ${pid} below hero`);
-        const top = lines.findLastIndex((line, index) => index < at && line.startsWith('  ╭'));
-        assert.ok(top > heroEnd, 'Manager has its own rounded frame');
-        assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
+      const flight = lines.findIndex(line => line.includes('IN FLIGHT'));
+      assert.ok(programmes >= 0 && flight >= 0, 'the programmes and the sessions are both drawn');
+      // A desk session is one IN FLIGHT row, by name; its pid and its frame are in the operations view's drawing of it.
+      for (const [name, age] of [['manager', '30 min'], ['manager', '20 min']]) {
+        const rows = lines.filter((line, index) => index > flight && line.includes(`● ${name}  the desk`) && line.includes(age));
+        assert.equal(rows.length, 1, `${name} ${age} is one IN FLIGHT row`);
       }
-      assert.ok(lines.slice(heroEnd, programmes).some(line => line.includes('manual_task')));
+      assert.ok(!lines.some(line => line.includes('pid 400') || line.includes('pid 401')), 'a desk session has no frame of its own in the overview');
       for (const [programme, pid] of [['inbox', 300], ['empty', 301]]) {
         const heading = lines.findIndex(line => line.startsWith(`  ┌─ ${programme}`));
         const close = lines.findIndex((line, index) => index > heading && line.startsWith('  └'));
@@ -315,7 +314,12 @@ describe('PROGRAMMES without finished goals', () => {
       assert.ok(attention >= 0 && landed > attention, `expand ${expand}`);
       assert.match(lines[landed + 2], /not archived — memoro#77 is open — land or close it first/u);
       assert.match(lines[landed + 3], /↳ memoro#77/u, 'the PR is a child row');
-      assert.equal(lines.filter((line) => line.includes('#77')).length, 2, 'once as the reason, once as the row');
+      // `a` goes on to the operations sections, whose PRs panel lists the same PR again: the goal's own rows end there.
+      const operations = lines.findIndex((line) => line.includes('MERGE & DEPLOY'));
+      const goalRows = operations < 0 ? lines : lines.slice(0, operations);
+      // The programme's tree has it twice (the reason and the PR row); the overview's NEEDS ATTENTION adds its one row.
+      assert.equal(goalRows.filter((line) => line.includes('#77')).length, 3, 'the reason and the row in the tree, one row in NEEDS ATTENTION');
+      assert.equal(goalRows.filter((line) => line.includes('Title landed')).length, 1, 'the tree draws the goal once');
     }
   });
 

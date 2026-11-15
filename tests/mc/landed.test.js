@@ -2,7 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { landedSection, readRunRows } from '../../src/mc/landed.js';
-import { pipelineStages, renderPageLines, sparkline } from '../../src/mc/page-render.js';
+import { pipelineStages, sparkline, renderPageLines as drawPageLines } from '../../src/mc/page-render.js';
+// the pipeline is in the operations view (`o`); the overview carries only its rows.
+const renderPageLines = (data, options = {}) => drawPageLines(data, { operations: true, ...options });
 
 const NOW = new Date('2026-11-09T18:00:00Z');
 // The file keeps the header it was created with; later columns are appended.

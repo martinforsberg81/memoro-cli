@@ -19,7 +19,9 @@ import { devSection, readPool } from '../../src/mc/dev-pool.js';
 import {
   collectPage, intakeSection, mergesSection, programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
-import { renderPageLines } from '../../src/mc/page-render.js';
+import { renderPageLines as drawPageLines } from '../../src/mc/page-render.js';
+// DEV is in the operations view (`o`); the overview carries only its rows.
+const renderPageLines = (data, options = {}) => drawPageLines(data, { operations: true, ...options });
 import { width } from '../../src/mc/status-render.js';
 
 const NOW = new Date('2026-11-04T12:00:00Z');
@@ -106,7 +108,7 @@ describe('DEV — the dev servers and who holds each', () => {
     assert.match(expanded, /goal\/no-work/u);
     assert.match(expanded, /http:\/\/127.0.0.1:8920/u);
     const order = lines.map(plain).filter(line => /^  (?:┌─ )?(PROGRAMMES|DEV|MERGE)\b/u.test(line)).map(line => line.replace('┌─ ', '').trim().split(/\s/u)[0]);
-    assert.deepEqual(order, ['PROGRAMMES', 'MERGE', 'DEV']);
+    assert.deepEqual(order, ['MERGE', 'DEV'], 'the operations view has no PROGRAMMES; DEV follows MERGE & DEPLOY');
   });
 
   it('says none running in readable secondary text when there is no server', () => {
