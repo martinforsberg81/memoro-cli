@@ -37,7 +37,7 @@ as the one way past. A headless session cannot deploy; that is Martin's act.
 - Bare: the repository's selector maps the branch's and the tree's changes
   against `origin/main` to the change's own test files, with no command gates. `mc gate <files…>
   [--test-name-pattern <p>]` is a focused rerun.
-- Before review/finish/mend authorizes merge, complete final-tree bare `mc gate`:
+- Before review/mend authorizes merge, complete final-tree bare `mc gate`:
   GREEN or only adjudicated untouched-baseline `SETTLED` failures (Martin, 2026-11-11).
   Record scope, revision, frozen base, log and failed members; finish RUNNING with `mc gate --wait`.
   Baseline-only failures do not hold delivery; receipts stay incomplete: reuse passed members only,
@@ -61,7 +61,7 @@ as the one way past. A headless session cannot deploy; that is Martin's act.
   `--base`) on an open one.
 - Then it queues the pull request for the merger in the same call.
   `--no-merge` pushes and opens and queues nothing; so does `--json`.
-- A PR that carries a goal before stage `merge` (draft, build, review, finish, or a
+- A PR that carries a goal before stage `merge` (draft, build, review, or a
   stage mc cannot read) is never queued, with or without `--no-merge`: it prints
   the goal, its stage and `mc goal stage merge`, which is what hands it over.
 - The body says what changed, why, impact, root cause, what did and did not run,

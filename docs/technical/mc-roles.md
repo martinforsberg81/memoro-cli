@@ -62,17 +62,15 @@ There are two catalogues, and they are looked up in that order:
 
 What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation and decision roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
-the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Finish
-and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09).
+the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
 
 | role | model | started as | who launches it |
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `plan-review` | sonnet | `plan-review` | `mc goal plan-review`, one headless read-only turn on a draft goal, never the runner ([mc-goals.md](mc-goals.md) § *Plan review*) |
-| `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
+| `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
-| `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
-| `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
+| `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `manager` | opus | `manager` | `mc manager`, foreground in `~/mc/manager/` or an explicit fresh headless task |
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `helper` | sonnet | `helper` | `mc helper`, the desk, foreground in `~/mc/helper/` |
@@ -208,14 +206,14 @@ Four paths launch a session with instructions, and all four call it:
 |---|---|
 | `work-open.js:93` (`openInWorkArea`) | a foreground conversation in an area — `mc manager`, `mc helper`, `mc martin`, `mc plan` |
 | `work-open.js:342` (`launchCommand`) | the argv a tmux launch or a handoff respawn is built from |
-| `run.js` (`runGoal`) | a selected-draft plan, build, review, finish or mend session |
+| `run.js` (`runGoal`) | a selected-draft plan, build, review or mend session |
 | `helper-turn.js:258` | the intake turn, one file, headless |
 
 Each of them used to write the join out by hand.
 
 ## The verb files
 
-`canon/verbs/goal.md` holds the goal manual. The plan, finish, mend and manager role files name
+`canon/verbs/goal.md` holds the goal manual. The plan, mend and manager role files name
 it with `@verb goal`. `expandRoleIncludes`, called by `instructionsFor`, turns
 that line into a short instruction to read the installed `mc/verbs/goal.md`
 before using `mc goal`. It never pastes the manual into the launch context.
@@ -256,14 +254,15 @@ publish and `review`/`done`, and listed three allowed ends; both are gone.
 Until 2026-11-07 the same file had headless sections (`### finish`, `### blocked`,
 programme planning, `MC_PLAN_REASON`); those are gone too. What it writes unasked is in [mc-plan.md](mc-plan.md) § *Writing goals*.
 
-**The finish session** (`finish-session.md`) and **the mend session**
-(`mend-session.md`) each state one job, their inputs, what they may change,
-their exits and what they hand to whom. Finish takes `finish · ready` to
-`merge`, or resolves its own acceptance obstacle or sets `Martin` directly (a change to
-the goal, contract or scope). Mend owns a reported merge failure through repair,
+**The mend session** (`mend-session.md`) states one job, its inputs, what it may
+change, its exits and what it hands to whom. The repair a review asks for is a
+build session's (`build-session.md`, the repair case): it reads REVIEW.md, fixes
+the NOT OK items and moves the goal to review, or resolves its own acceptance
+obstacle or sets `Martin` directly (a change to the goal, contract or scope).
+`canon/roles/finish-session.md` was removed on 2026-11-15. Mend owns a reported merge failure through repair,
 final acceptance and requeue, preserving intervening person decisions. An unchanged delivery retry can retain
 valid evidence; a content-changing repair requires acceptance of the repaired
-worktree. Bounded failure outside its authority waits on Martin. Neither changes
+worktree. Bounded failure outside its authority waits on Martin. Neither mend nor a repair build changes
 the goal's text: `refusedMove` and the criterion verbs refuse them, as they
 refuse build and review.
 `canon/roles/plan.md` had no body at all until #656 — six lines of
@@ -423,7 +422,7 @@ Every launch sets `MC_ROLE` on new and resumed conversations. `MC_PROGRAMME`
 accompanies programme-owned launches; `MC_GOAL` identifies a goal. Desks are
 `manager`, `helper` and `intake`. The launch clears inherited session
 identity first so the child cannot inherit the caller's job by accident.
-Runner roles are `build-session:goal`, `review-session:goal`, `finish-session`
+Runner roles are `build-session:goal`, `review-session:goal`
 and `mend-session`; `plan` serves interactive planning and next-draft assignment.
 
 `sessionIdentity` (`src/mc/session-role.js`) reads MC_ROLE first, then
@@ -434,5 +433,5 @@ SessionStart hook prints what it found even outside a repository.
 
 `mc plan` refuses recognised sessions and Claude/Codex agent markers before
 creating anything. A session writes a goal through `mc goal`, not by opening
-another interactive plan session. The runner's finish and mend sessions have
+another interactive plan session. The runner's mend sessions have
 roles of their own and never use the plan role or that person's entrance.

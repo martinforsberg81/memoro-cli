@@ -30,7 +30,7 @@ export const GOAL_VERSION = 1;
 /** The versions of GOAL.json mc reads: 1 has `goal` and `contract` as prose, 2 has numbered parts (`goal-parts.js`). */
 export const GOAL_VERSIONS = Object.freeze([1, 2]);
 export const LOG_FILE = 'LOG.md';
-/** What a review that sends a goal to `finish` writes in its directory, for the finish session: the head judged, what is wrong and where. */
+/** What a review writes in the goal's directory before it moves the goal: its verdict in the fixed form (`review-verdict.js`). */
 export const REVIEW_FILE = 'REVIEW.md';
 /** The directory under a programme that holds its goals. */
 export const GOALS_DIR = 'goals';
@@ -39,10 +39,11 @@ export const GOALS_DIR = 'goals';
  * moves forward (`backward`). Each stage has one owner
  * (`docs/technical/mc-goals.md`): the interactive plan session writes the goal
  * in `draft` and moves it to `build`; a build session moves it to `review`; a
- * review session to `merge` (OK, all registered PRs sent to merge) or `finish`
- * (not OK, with REVIEW.md); a finish session finishes it to `merge`; the
+ * review session to `merge` (all OK, all registered PRs sent to merge) or back to
+ * `build` (a NOT OK line, with REVIEW.md in its fixed form); the
  * merger sets `done` when it lands. `dropped` is a goal let go without
- * landing, from any stage. Only a person moves a stage backward.
+ * landing, from any stage. Only a person, and a review's move to `build`, go backward. `finish`
+ * is read as a name for old records and nothing moves into it.
  */
 export const STAGES = ['draft', 'build', 'review', 'finish', 'merge', 'done', 'dropped'];
 /**
@@ -434,7 +435,7 @@ function buildWrote(entry) {
 /**
  * The last entry a build session wrote: neither the runner's nor a person's,
  * and in `build` or the `review` it moved the goal to — a review's own entry
- * names `merge` or `finish`. An entry with a `· by <role>` other than build is
+ * names `merge` or `build`. An entry with a `· by <role>` other than build is
  * no build's either. Its heading's `<tool> <model>` is the model a review of
  * the goal may not run on. Null when no build session has written one.
  */
@@ -545,8 +546,6 @@ export function waitsOnPerson(goal) {
 
 /** Interactive planning and the runner's next-draft assignment use canon/roles/plan-session.md. */
 export const PLAN_ROLE = 'plan';
-/** The role a finish session ran with. No session runs with it now (a rejected goal is repaired by a build session); old logs, run rows and goals keep the name. */
-export const FINISH_ROLE = 'finish-session';
 /** The role a goal's mend session runs with: `canon/roles/mend-session.md`. It handles merge failures only. */
 export const MEND_ROLE = 'mend-session';
 
@@ -787,7 +786,7 @@ export function goalOfPr(goals, repo, pr) {
 
 /**
  * The goals that carry `repo`'s pull request `pr` and have not reached stage
- * `merge`: draft, build, review or finish, or a stage that cannot be read —
+ * `merge`: draft, build or review, or a stage that cannot be read —
  * each as `{ programme, goal, name, stage }` (`stage` null when GOAL.json does
  * not parse). A goal carries it when it registers it in `prs`, or — the pull
  * request not being registered — when `head` is its branch `goal/<g>` and the

@@ -13,7 +13,7 @@ import { after, test } from 'node:test';
 
 import { run } from '../../src/mc/commands/goal.js';
 import { askJev, buildState, defaultTransport, INSTRUCTIONS, JEV_MODEL, JEV_URL, judge, readMartinCall, retryAfterMs, STATE_BUDGET, THRESHOLDS, TRUNCATED, TIMEOUT_MS } from '../../src/mc/jev.js';
-import { FINISH_ROLE, parseLog } from '../../src/mc/goals.js';
+import { parseLog } from '../../src/mc/goals.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 const HOME = '/work/programs';
@@ -26,11 +26,11 @@ const KEYS_FILE = join(scratch, '.dev.vars');
 writeFileSync(KEYS_FILE, `TYPESAFE_API_KEY=${KEY}\nOTHER_SECRET="${OTHER}"\nSHORT_ONE=${SHORT}\n`);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
-const ENV = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_MODEL: 'opus', MC_ROLE: FINISH_ROLE, MC_KEYS_FILE: KEYS_FILE };
-const entry = (n, text = `entry ${n}`) => `## 2026-11-0${n}T10:00Z · claude opus · finish · ready\n\nDone: ${text}\n`;
+const ENV = { MC_GOAL: 'mc/plain', MC_TOOL: 'claude', MC_MODEL: 'opus', MC_ROLE: 'build-session:goal', MC_KEYS_FILE: KEYS_FILE };
+const entry = (n, text = `entry ${n}`) => `## 2026-11-0${n}T10:00Z · claude opus · build · ready\n\nDone: ${text}\n`;
 const LOG = [1, 2, 3, 4, 5, 6, 7].map((n) => entry(n)).join('\n');
 const GOAL = goalJson({
-  stage: 'finish',
+  stage: 'build',
   title: 'Make the goal plain',
   goal: ['Two files and a worktree.'],
   contract: ['The timer stays injected.'],
@@ -126,7 +126,7 @@ test('the state holds question, options, evidence, the goal with contract and cr
   assert.deepEqual(state.goal, {
     title: 'Make the goal plain', goal: 'Two files and a worktree.', contract: 'The timer stays injected.', out_of_scope: 'The page.',
     criteria: [{ criterion: 'it works', check: 'a test', met: true }, { criterion: 'it is fast', check: 'timings', met: false }],
-    stage: 'finish', status: 'ready',
+    stage: 'build', status: 'ready',
   });
   assert.equal(state.programme.readme, '# mc\n\nThe programme README.');
   assert.deepEqual(Object.keys(state.programme), ['readme'], 'the programme carries its README and no rulings');
@@ -271,7 +271,7 @@ test('buildState trims in order: the log alone when that is enough; then documen
 
 test('documents whose path metadata keeps the state over budget are dropped whole and the trimmed state is still sent', async () => {
   const documents = Array.from({ length: 100 }, (_, n) => ({ label: `doc ${n}`, path: `${String(n).padStart(3, '0')}-${'p'.repeat(3_000)}` }));
-  const files = { [`${DIR}/GOAL.json`]: goalJson({ stage: 'finish', documents }) };
+  const files = { [`${DIR}/GOAL.json`]: goalJson({ stage: 'build', documents }) };
   for (const item of documents) files[`${DIR}/${item.path}`] = 'document text';
   const f = fixture(files);
   assert.equal(await run(CALL, f.deps), 0, f.err());

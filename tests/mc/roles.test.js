@@ -34,11 +34,11 @@ import {
   selectParts,
   sharedRoleText,
 } from '../../src/mc/roles.js';
-import { FINISH_ROLE, MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
+import { MEND_ROLE, PLAN_ROLE, REVIEW_ROLE } from '../../src/mc/goals.js';
 import { BUILD_ROLES } from '../../src/mc/run-plan.js';
 
 /** Every way a session is started on a canon role, by the role name it runs. */
-const STARTS = [PLAN_ROLE, BUILD_ROLES.goal, REVIEW_ROLE, FINISH_ROLE, MEND_ROLE];
+const STARTS = [PLAN_ROLE, BUILD_ROLES.goal, REVIEW_ROLE, MEND_ROLE];
 import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
 import { canonSkillsDir } from '../../src/mc/skills.js';
 
@@ -348,10 +348,11 @@ describe('the role catalogue', () => {
   // `headless-plan` (2026-11-02); plan, build and review became one file each,
   // and the passages verb files, with `plan-session-roles` (2026-11-03);
   // `finish-session.md` and `mend-session.md` took headless plan's goal work
-  // when plan became interactive only (Martin, 2026-11-07).
+  // when plan became interactive only (Martin, 2026-11-07); `finish-session.md`
+  // went with the finish stage (2026-11-15): a rejected goal returns to build.
   it('is exactly the roles and verb files mc ships', () => {
     assert.deepEqual(readdirSync(canonRolesDir()).sort(), [
-      'all-sessions.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'finish-session.md', 'helper.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'review-session.md',
+      'all-sessions.md', 'build-session.md', 'decision.md', 'desk-prepare.md', 'helper.md', 'intake.md', 'learning.md', 'manager.md', 'martin.md', 'mend-session.md', 'plan-review.md', 'plan-session.md', 'review-session.md',
     ]);
   });
 });

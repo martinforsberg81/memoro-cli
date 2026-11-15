@@ -220,7 +220,7 @@ describe('Martin ask authority', () => {
 
   it('retains interactive Martin and existing headless stage-role ask permissions with attributed logs', async () => {
     const f = fixture();
-    for (const [role, stage] of [['martin', 'build'], ['build-session:goal', 'build'], ['review-session:goal', 'review'], ['finish-session', 'finish'], ['mend-session', 'merge']]) {
+    for (const [role, stage] of [['martin', 'build'], ['build-session:goal', 'build'], ['review-session:goal', 'review'], ['mend-session', 'merge']]) {
       const name = role.replaceAll(':', '-'); const dir = f.make('alpha', name, { stage, status: 'ready' });
       const writer = askFixture(f.home, `alpha/${name}`, { MC_ROLE: role, ...(role === 'martin' ? {} : { MC_HEADLESS: '1' }) });
       assert.equal(await writer.call({ reserved: true }), 1, writer.out.stderr);

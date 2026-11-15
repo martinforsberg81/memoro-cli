@@ -2,7 +2,7 @@
  * `mc run` — the decisions the runner makes without starting anything.
  *
  * Everything here is a function of text and small objects: the prompts a
- * goal's build, review, finish and mend session is given; the headless argument list
+ * goal's build, review, repair and mend session is given; the headless argument list
  * per tool; what a finished session's output means; when the helper, intake
  * and nightly chores are due; and the runs.tsv row. The process-touching half
  * (git, gh, the session itself) is run.js, and it calls in here so that the

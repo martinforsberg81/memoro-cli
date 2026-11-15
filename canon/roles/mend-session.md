@@ -17,7 +17,7 @@ code and technical standards before deciding what to change. Establish what
 failed, which revision was judged and what evidence still applies. An old red
 or an exit code alone is not a diagnosis.
 
-You own merge recovery only. A blocked draft, build, review or finish belongs
+You own merge recovery only. A blocked draft, build or review belongs
 to that stage's owner. If the goal is no longer in merge, is waiting on Martin,
 or is done or dropped, preserve that state and stop. If the PR is already
 queued, leave its delivery to the merger; do not create a second owner.

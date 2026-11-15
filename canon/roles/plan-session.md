@@ -88,10 +88,10 @@ the next reader.
   choice or reserved act, or reports a wrong goal with `mc goal defect`. Three
   build sessions in a row without a commit or a criterion met stop the goal
   (`no progress:`, status `Martin`).
-- A **review session** judges and moves it to `merge` (OK) or `finish` (not
-  OK, with REVIEW.md).
-- A **finish session** takes `finish · ready`: fixes what review found,
-  gates, publishes and sends the goal to `merge`.
+- A **review session** judges and moves it to `merge` (all OK) or back to
+  `build` (a NOT OK line), with REVIEW.md in its fixed form. A goal rejected a
+  third time stays in review with status Martin. A build session on a rejected
+  goal is a repair build: it takes REVIEW.md's NOT OK items.
 - A **mend session** handles merge failures only: conflict, failed candidate
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.
@@ -99,7 +99,7 @@ the next reader.
   starts: each carries a product question, reserved act or runner issue and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
-over a goal yourself — one in build, one waiting on Martin, one in finish — hold
+over a goal yourself — one in build or one waiting on Martin — hold
 it first: `mc goal hold <programme>/<goal> --reason "…"` keeps the runner from
 starting a session on it and writes the log entry, and `mc goal release` hands
 it back with what the worktree holds. `mc goal blocked` and `mc goal martin` are

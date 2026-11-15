@@ -5,7 +5,7 @@
  * Read from runs.tsv alone. A merge row whose note says `merged` is one pull
  * request on main; a row named `goal:<programme>/<goal>` is a goal's, every
  * other merge row (named after its repository) is a pull request without a
- * goal. A landed goal's effort is every build, review, finish and mend row
+ * goal. A landed goal's effort is every build, review, repair, finish (old) and mend row
  * it ever had, summed over its whole life, not only the day, because a goal
  * landed today may have been built yesterday. Its planning is not the goal's:
  * the headless plan rows and the plan-review rows are `plan_cost`, beside the

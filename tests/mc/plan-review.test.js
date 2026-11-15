@@ -15,7 +15,7 @@ import * as claude from '../../src/adapters/claude-code.js';
 import { run as ask } from '../../src/mc/commands/ask.js';
 import { refusedMove } from '../../src/mc/commands/goal.js';
 import { deskRunsPath } from '../../src/mc/desk-budget.js';
-import { FINISH_ROLE, HOLD_FILE, MEND_ROLE, parseGoal, parseLog, REVIEW_ROLE, readTextOrNull } from '../../src/mc/goals.js';
+import { HOLD_FILE, MEND_ROLE, parseGoal, parseLog, REVIEW_ROLE, readTextOrNull } from '../../src/mc/goals.js';
 import { readRunRows } from '../../src/mc/landed.js';
 import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity } from '../../src/mc/model-capacity.js';
@@ -352,8 +352,8 @@ test('a launch whose process is gone is not live, and a verdict against it is re
   assert.match(said.text(), /not live/u);
 });
 
-test('the call is refused with exit 2, launching and writing nothing, from build, review, finish, mend, desk-prepare and plan-review sessions', async (t) => {
-  const roles = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [FINISH_ROLE]: 'finish', [MEND_ROLE]: 'mend', 'desk-prepare': 'desk-prepare', 'plan-review': 'plan-review' };
+test('the call is refused with exit 2, launching and writing nothing, from build, review, mend, desk-prepare and plan-review sessions', async (t) => {
+  const roles = { 'build-session:goal': 'build', [REVIEW_ROLE]: 'review', [MEND_ROLE]: 'mend', 'desk-prepare': 'desk-prepare', 'plan-review': 'plan-review' };
   for (const [role, label] of Object.entries(roles)) {
     const f = setup(t);
     const before = f.files();

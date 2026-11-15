@@ -58,7 +58,7 @@ export function sessionRoleLine(identity, { cwd = process.cwd(), env = process.e
 
 /**
  * A role's name as a sentence says it: `build-session:goal` is the build
- * session (goal), `finish-session` the finish session, `mend-session` the mend
+ * session (goal), `mend-session` the mend
  * session, `plan-session` the plan session. A name of another shape —
  * `brief`, `helper`, a catalogue's own — is that name's session.
  */
