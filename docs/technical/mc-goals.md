@@ -472,7 +472,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   the decision for retry and runner recovery. Existing `merging` records and
   log entries are read as `merge`; new writes use `merge`.
 - **`blocked|ready [<p>/<g>] [--reason "…"]`** — sets the status; the stage stays.
-- **`hold [<p>/<g>] --reason "…"` · `release [<p>/<g>] [--reason "…"]`** — an interactive takeover's hold. `hold` writes `.hold.json` (`by`, `tool`, `at`, `reason`) in the goal's directory and a log entry; stage and status stay, so nothing is asked of Martin and no desk item opens. The runner starts no session on a held goal — delivery, plan or decision; a running session, the merger and landing are not stopped. `release` removes the file and logs each worktree's state: changed files, commits past `origin/main`, last commit. Both are refused with `MC_HEADLESS=1`. `blocked` is not a hold: outside merge the runner reconciles it to Martin.
+- **`hold [<p>/<g>] --reason "…"` · `release [<p>/<g>] [--reason "…"]`** — an interactive session's hold. `hold` writes `.hold.json` (`by`, `tool`, `at`, `reason`) in the goal's directory and a log entry; stage and status stay, so nothing is asked of Martin and no desk item opens. The runner starts no session on a held goal — delivery, plan or decision — and when a session that was already running ends on a goal that is held, it sets no stage or status on the goal and writes no entry: the hold's owner decides the goal's state. A running session, the merger and landing are not stopped. `release` removes the file and logs each worktree's state: changed files, commits past `origin/main`, last commit. Both are refused with `MC_HEADLESS=1`. A draft made by `mc goal new` without `MC_HEADLESS=1` is held from creation (`created: true` in the file); a stage move out of `draft` by a caller without `MC_HEADLESS=1`, or `release`, frees it. `blocked` is not a hold: outside merge the runner reconciles it to Martin.
 - **`martin [<p>/<g>] --kind technical|product --reason "<question>" --option "<key>: <text>"… --recommend <key>`** —
   the compatible goal-bound question command. Optional evidence, documents,
   reserved acts, caller validation, recording and routing are specified once
@@ -1197,10 +1197,9 @@ nothing. `dropped` has the same terminal meaning as in phase eligibility.
 The next draft is selected by ascending phase, creation instant, then name.
 Compare creation instants chronologically regardless of offset or precision;
 missing dates sort before dated goals, and equal or missing instants tie by name.
-The selected draft must be ready; one waiting on Martin holds planning rather than
-being bypassed. Only one goal session per programme may be held while planning
+The selected draft must be ready and not held; one waiting on Martin or held holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
 starts, including current records from a predecessor runner. Admission rechecks
-the trigger before spawning. The plan uses that draft's goal worktrees and branch,
+the trigger and the hold before spawning. The plan uses that draft's goal worktrees and branch,
 role `plan`, kind `plan`, MC_GOAL and MC_HEADLESS=1, with existing routing, lane
 and reserved-act rules. Interactive planning checkouts remain separate.
 
@@ -1210,7 +1209,7 @@ reconcile the programme README and phases, and move it to build immediately
 when ready. Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither no-draft nor
 daily-proposal turns.

@@ -273,6 +273,9 @@ export async function run(argv, deps = {}) {
   return listGoals(rest, ctx);
 }
 
+/** The reason a creation hold (`created: true`) carries: a draft an interactive session makes is held until its author moves it on or releases it. */
+const CREATION_HOLD_REASON = 'draft being written by its author';
+
 /**
  * `mc goal new <programme>/<goal>` — makes a goal. The programme must be a
  * directory under the programmes home, the goal must not exist, and every
@@ -331,10 +334,14 @@ function newGoal(args, flags, ctx) {
 
   const created = stampSeconds(now);
   const made = { stage, status: 'ready', phase, repos, class: flags.class, created, title: flags.title.trim(), success_criteria: [] };
+  // A draft an interactive session makes is held from creation (D1, D3): the hold is written first, so no reader finds the goal without it.
+  const held = ctx.env.MC_HEADLESS !== '1';
+  if (held) ctx.write(join(dir, HOLD_FILE), `${JSON.stringify({ by: writerRole(ctx.env) || 'person', tool: ctx.env.MC_TOOL || 'person', at: logStamp(now), reason: CREATION_HOLD_REASON, created: true }, null, 2)}\n`);
   ctx.write(join(dir, GOAL_FILE), renderGoal(structure === 2 ? { ...made, version: 2, ids: emptyIds() } : made));
-  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, role: writerRole(ctx.env), stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: null, next: null }));
+  ctx.write(join(dir, LOG_FILE), appendLog('', { at: logStamp(now), tool: ctx.env.MC_TOOL || 'person', model: ctx.env.MC_MODEL || null, role: writerRole(ctx.env), stage, status: 'ready', done: phase > 1 ? `created, phase ${phase}` : 'created', comment: held ? `held from creation: ${CREATION_HOLD_REASON}` : null, next: null }));
   stdout.write(`mc: ${programme}/${goal} · ${stage} · ready · phase ${phase} — ${dir}\n`);
   stdout.write(`  no worktree yet: the runner makes ${repos.join(', ')} on goal/${goal} at the goal's first session\n`);
+  if (held) stdout.write(`  held from creation: mc goal stage ${programme}/${goal} build moves it on and frees it; mc goal release ${programme}/${goal} hands the draft to headless planning\n`);
   if (structure === 2) {
     stdout.write(`${GOAL_FILE} (version 2) is to be filled in by verbs: mc goal set ${programme}/${goal} ${PROSE_PARTS.join('|')} --text "…", mc goal item add ${programme}/${goal} ${ITEM_WORDS.join('|')} --text "…" …, mc goal obligation set ${programme}/${goal} <area> --stand touched|untouched --text "…", mc goal criterion add ${programme}/${goal} --criterion "…" --check "…"\n`);
     return 0;
@@ -417,6 +424,7 @@ function logEntry(args, fields, ctx) {
   const comment = back ? [base, `moved back from ${goal.stage} to ${fields.stage} by ${writerRole(env) || 'a person'}`].filter(Boolean).join(' — ') : base;
   const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done, comment, next: fields.next };
   let now = goal;
+  let freed = false;
   if (fields.stage !== null || fields.status !== null) {
     const outcome = setGoalState({ dir: target.dir, stage: fields.stage ?? undefined, status: fields.status ?? (fields.stage === 'merge' ? 'ready' : undefined), entry, read, write });
     if (outcome.problems) {
@@ -424,6 +432,11 @@ function logEntry(args, fields, ctx) {
       return 1;
     }
     now = outcome.goal;
+    // The first move out of draft by an interactive caller frees a creation hold (`created: true`) and no other hold (D3, C3).
+    if (goal.stage === 'draft' && now.stage !== 'draft' && env.MC_HEADLESS !== '1' && readHold(target.dir, read)?.created === true) {
+      ctx.remove(join(target.dir, HOLD_FILE));
+      freed = true;
+    }
     // A review's rejection removes the records of the items it judged NOT OK: the repair gives new evidence for them (D2).
     if (verdict.failed?.length) {
       const dropped = dropItems(target.dir, verdict.failed, { read, write });
@@ -458,11 +471,13 @@ function logEntry(args, fields, ctx) {
       return 1;
     }
     stdout.write(`mc: ${target.name} · dropped — archived to ${result.to}\n`);
+    if (freed) stdout.write('  creation hold released\n');
     for (const { pr, owners } of result.preserved ?? []) stdout.write(`mc: ${pr.repo}#${pr.pr} remains open and queued for ${owners.map((owner) => `${owner.programme}/${owner.goal}`).join(', ')}\n`);
     for (const move of result.renumbered) stdout.write(`  ${move.goal.programme}/${move.goal.goal}  phase ${move.from} → ${move.to}\n`);
     return 0;
   }
   stdout.write(`mc: ${target.name} · ${stageWords(now)}${back ? ` — moved back from ${goal.stage}` : ''}\n`);
+  if (freed) stdout.write('  creation hold released\n');
   if (done && done !== fields.done) stdout.write(`mc: ${done}\n`);
   // Queueing is complete before the runner may end this session. A failed or
   // partial enqueue leaves no receipt, so the session can repair and retry.

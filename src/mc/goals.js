@@ -957,9 +957,11 @@ export const HOLD_FILE = '.hold.json';
 
 /**
  * The hold on the goal in `dir`, or null when it has none. A hold file that
- * parses reads as `{ by, tool, at, reason }`; one that is there but does not
+ * parses reads as `{ by, tool, at, reason, created }`; `created` is true only
+ * for the creation hold `mc goal new` writes for a draft made without
+ * `MC_HEADLESS=1` (`created: true` in the file). One that is there but does not
  * parse still holds the goal, as `{ by: null, tool: null, at: null, reason:
- * 'unreadable .hold.json' }`. A missing file is no hold: `read` returns null or
+ * 'unreadable .hold.json', created: false }`. A missing file is no hold: `read` returns null or
  * throws for it.
  */
 export function readHold(dir, read = readTextOrNull) {
@@ -969,9 +971,9 @@ export function readHold(dir, read = readTextOrNull) {
   try {
     const hold = JSON.parse(text);
     if (!hold || typeof hold !== 'object') throw new Error('not an object');
-    return { by: hold.by ?? null, tool: hold.tool ?? null, at: hold.at ?? null, reason: hold.reason ?? null };
+    return { by: hold.by ?? null, tool: hold.tool ?? null, at: hold.at ?? null, reason: hold.reason ?? null, created: hold.created === true };
   } catch {
-    return { by: null, tool: null, at: null, reason: 'unreadable .hold.json' };
+    return { by: null, tool: null, at: null, reason: 'unreadable .hold.json', created: false };
   }
 }
 

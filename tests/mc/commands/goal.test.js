@@ -130,7 +130,7 @@ test('mc goal new writes a GOAL.json skeleton and LOG.md, fetches each repositor
   assert.equal(goal.title, 'Make the goal plain');
   assert.deepEqual([goal.goal, goal.contract, goal.out_of_scope, goal.success_criteria, goal.documents], [[], [], [], [], []]);
   assert.equal(goalField(f.store[`${DIR}/GOAL.json`], 'schema'), 'mc-goal');
-  assert.equal(f.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · person · draft · ready\n\nDone: created\n');
+  assert.equal(f.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · person · draft · ready\n\nDone: created\nComment: held from creation: draft being written by its author\n');
 
   assert.deepEqual(f.calls, [
     { cwd: '/home/m/memoro-cli.git', args: ['fetch', '-q', 'origin'] },
@@ -630,7 +630,7 @@ test('mc goal log and new name the session that wrote the entry by its role in t
   }
   const created = fixture({ env: { MC_TOOL: 'claude', MC_ROLE: PLAN_ROLE } });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], created.deps), 0, created.err());
-  assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · draft · ready · by plan\n\nDone: created\n');
+  assert.equal(created.store[`${DIR}/LOG.md`], '## 2026-11-01T20:00Z · claude · draft · ready · by plan\n\nDone: created\nComment: held from creation: draft being written by its author\n');
 });
 
 test('a build session moves build to review or sets blocked, and nothing else', async () => {
@@ -1780,6 +1780,85 @@ test('mc goal release refuses a goal that is not held, and a headless caller, an
     assert.match(f.err(), message, why);
     assert.deepEqual(f.store, before, `${why}: nothing written or removed`);
   }
+});
+
+/* ------------------------------------------------- a creation hold: made by new, freed by a stage move or release */
+
+const CREATION = JSON.stringify({ by: 'person', tool: 'person', at: '2026-11-01T19:00Z', reason: 'draft being written by its author', created: true });
+/** A draft that is complete and read OK, with `hold` (a hold file's text) beside it, if given. */
+const draftFiles = (hold = null) => {
+  const text = withGoal(GOAL_TEXT, { stage: 'draft' });
+  return seededGoal({ [`${DIR}/GOAL.json`]: text, [`${DIR}/${RECORDS_FILE}`]: okReading(text), ...(hold ? { [`${DIR}/.hold.json`]: hold } : {}) });
+};
+/** Every git call answers: origin/main is seven commits ahead and the goal has none of its own, so a stage move remakes nothing. */
+const behindMain = (cwd, args) => (args[0] === 'rev-list' ? ok(`${args[2] === 'origin/main..HEAD' ? 0 : 7}\n`) : ok());
+
+test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is written first, its one entry says so, and a line names the goal', async () => {
+  const f = fixture();
+  const written = [];
+  const { write } = f.deps;
+  f.deps.write = (path, text) => { written.push(path); write(path, text); };
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.deepEqual(JSON.parse(f.store[`${DIR}/.hold.json`]), { by: 'person', tool: 'person', at: '2026-11-01T20:00Z', reason: 'draft being written by its author', created: true });
+  assert.ok(written.indexOf(`${DIR}/.hold.json`) >= 0 && written.indexOf(`${DIR}/.hold.json`) < written.indexOf(`${DIR}/GOAL.json`), `the hold first: ${written.join(', ')}`);
+  const entries = parseLog(f.store[`${DIR}/LOG.md`]);
+  assert.equal(entries.length, 1, 'one entry');
+  assert.match(entries[0].comment, /^held from creation/u);
+  assert.match(f.out(), /^  held from creation: mc goal stage mc\/plain build moves it on and frees it; mc goal release mc\/plain hands the draft to headless planning$/mu);
+  assert.equal(stateOf(f), 'draft · ready');
+});
+
+test('mc goal new with MC_HEADLESS=1 writes no hold, and its entry and stdout carry no held line', async () => {
+  const f = fixture({ env: { MC_HEADLESS: '1' } });
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
+  assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'no hold file');
+  assert.equal(parseLog(f.store[`${DIR}/LOG.md`])[0].comment, null, 'no held comment');
+  assert.doesNotMatch(f.out(), /held from creation/u);
+  assert.equal(stateOf(f), 'draft · ready');
+});
+
+test('mc goal new --stage build without MC_HEADLESS is refused and writes no hold', async () => {
+  const f = fixture();
+  assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 2);
+  assert.deepEqual(Object.keys(f.store).filter((key) => key.startsWith(DIR)), [], 'no hold, no GOAL.json, no LOG.md');
+});
+
+test('a stage move out of draft by a caller without MC_HEADLESS frees a creation hold: the hold goes, the move says so, and the log gains one entry', async () => {
+  const f = fixture({ files: draftFiles(CREATION), git: behindMain });
+  const removed = [];
+  f.deps.remove = (path) => { removed.push(path); delete f.store[path]; };
+  const before = parseLog(f.store[`${DIR}/LOG.md`]).length;
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
+  assert.deepEqual(removed, [`${DIR}/.hold.json`], 'the hold file is the only thing removed');
+  assert.equal(f.store[`${DIR}/.hold.json`], undefined);
+  assert.match(f.out(), /^  creation hold released$/mu);
+  assert.equal(parseLog(f.store[`${DIR}/LOG.md`]).length, before + 1, 'no extra entry for the release');
+  assert.equal(stateOf(f), 'build · ready');
+});
+
+test('a takeover hold, not made by new, survives a stage move out of draft, and the move does not mention it', async () => {
+  const f = fixture({ files: draftFiles(HELD), git: behindMain });
+  f.deps.remove = () => { throw new Error('a takeover hold is not removed by a stage move'); };
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
+  assert.equal(f.store[`${DIR}/.hold.json`], HELD);
+  assert.doesNotMatch(f.out(), /creation hold released/u);
+});
+
+test('a headless stage move keeps a creation hold: only a caller without MC_HEADLESS frees one', async () => {
+  const f = fixture({ files: draftFiles(CREATION), env: { ...PLAN, MC_HEADLESS: '1' }, git: behindMain });
+  f.deps.remove = () => { throw new Error('a headless move removes nothing'); };
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
+  assert.equal(f.store[`${DIR}/.hold.json`], CREATION);
+  assert.doesNotMatch(f.out(), /creation hold released/u);
+});
+
+test('mc goal release removes a creation hold and logs it as released, as it does any hold', async () => {
+  const f = fixture({ files: draftFiles(CREATION), env: PLAN, git: gitState });
+  f.deps.remove = (path) => { delete f.store[path]; };
+  assert.equal(await run(['release', 'mc/plain'], f.deps), 0, f.err());
+  assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'the hold file is gone');
+  assert.equal(stateOf(f), 'draft · ready');
+  assert.match(parseLog(f.store[`${DIR}/LOG.md`]).at(-1).comment, /^released: held by person since 2026-11-01T19:00Z \(draft being written by its author\)/u);
 });
 
 test('a held goal shows its hold on the list line and in show, and a hold on a goal with a session running says the hold does not stop it', async () => {

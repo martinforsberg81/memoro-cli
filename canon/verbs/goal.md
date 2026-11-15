@@ -116,7 +116,7 @@ its check, and each worktree's state.
 - **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs an OK reading of the current text (or two readings and `--reason`). Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and
-  LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
+  LOG.md, and no worktree (the runner makes it at first use). A draft made without `MC_HEADLESS=1` is held from creation: `mc goal stage` to `build` frees it, and `mc goal release` hands the draft to headless planning. `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows
   cancelled, and the goal is archived immediately when safe. Shared PRs stay
@@ -125,8 +125,7 @@ its check, and each worktree's state.
 
 - **Next draft planning.** With at least one draft and all programme goals in
   draft, done or dropped, the runner may plan its next draft (lowest phase,
-  oldest creation time, name). Unreadable goal data or a first draft waiting
-  on Martin prevents that launch. One session completes only that draft into
+  oldest creation time, name). Unreadable goal data, or a first draft that waits on Martin or is held, prevents that launch. One session completes only that draft into
   build using its goal worktrees. Interactive mc plan remains the person's
   entrance; empty programmes and proposals alone start no plan turn.
 
