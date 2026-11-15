@@ -90,6 +90,6 @@ export function readAreas(repoPath, { git, at = 'origin/main', repo = null }) {
     if (NOT_IN_REVISION.test(shown.stderr || '')) return { ok: true, declared: false, areas: [] };
     return { ok: false, reason: `could not read ${named} at ${at} in ${repoPath} — ${(shown.stderr || '').trim() || 'git failed'}` };
   }
-  if (!shown.stdout.trim()) return { ok: true, declared: false, areas: [] };
+  if (!String(shown.stdout ?? '').trim()) return { ok: true, declared: false, areas: [] };
   return checkAreas(shown.stdout, `${named} at ${at}`);
 }

@@ -410,6 +410,11 @@ export function programmePlanCheckInPrompt({ minutes, count }) {
   return `Programme planning check-in after ${minutes} minutes (${count}). Keep cutting the goals inside the page's End, completing each draft, reading it with \`mc goal plan-review\` and moving it to build in turn. Resolve technical details locally; use goal-bound mc ask --kind product for a text of Martin's that would change. Do not implement, process proposals or commit.`;
 }
 
+/** `checkInPrompt` for the manager's turns (mc-run.md, "Manager turns"): keep to the turn's one task and end in one of its endings. */
+export function managerCheckInPrompt({ minutes, count }) {
+  return `Manager check-in after ${minutes} minutes (${count}). Keep to this turn's one task: for a horizon turn end in exactly one of the three endings; for a curation turn change only what docs/technical/ says is wrong, publish it with mc publish --no-merge and bring what waits on Martin to the desk. Do not make a horizon or a goal and do not perform a reserved act.`;
+}
+
 export function goalCheckInPrompt({ minutes, count }) {
   return [
     `Check-in from the runner: you have been running for ${minutes} minutes (this is check-in number ${count}).`,

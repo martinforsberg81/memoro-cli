@@ -11,6 +11,8 @@ import { ledgerPath } from './jev.js';
 import { realLock } from './runner-lock.js';
 import { holdsGoals, readTurnState, turnStatePath } from './programme-turn.js';
 import { readRecord } from './programme-record.js';
+import { readHorizon } from './desk-horizons.js';
+import { horizonHeldByItem, horizonStatePath, readHorizonState, scanRecords } from './manager-pulse.js';
 
 export const ITEM_STATES = ['new', 'prepared', 'for-martin', 'closed'];
 const open = (item) => item.state !== 'closed';
@@ -31,7 +33,7 @@ export function syncDeskItems({ env = process.env, lock = realLock, reportIssue 
   return items;
 }
 
-function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, exists = existsSync, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic }) {
+function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mcHome(env), now = () => new Date(), collect = collectMartinQueue, read = readText, exists = existsSync, list = listDirs, readLedger = readText, readMends = readMainMends, write = writeJsonAtomic, horizon = (slug) => readHorizon(slug, { env }) }) {
   const dir = join(martinDir(env), 'items');
   mkdirSync(dir, { recursive: true });
   const marker = join(dir, '.store.json');
@@ -97,7 +99,7 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
     write(join(dir, id, 'item.json'), item); existing.set(id, item);
   }
   for (const item of existing.values()) {
-    if (!open(item) || !['goal', 'main-red', 'programme'].includes(item.kind)) continue;
+    if (!open(item) || !['goal', 'main-red', 'programme', 'manager'].includes(item.kind)) continue;
     let summary = null;
     if (item.kind === 'goal') {
       const [programme, goal] = item.reference.split('/'); const gd = join(home, programme, 'goals', goal);
@@ -138,6 +140,20 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       if (!record) summary = 'The programme directory is gone.';
       else if (record.status !== 'valid' || record.record.state !== 'open') summary = 'The programme record no longer reads valid and open.';
       else if (holdsGoals({ home, programme, list })) summary = 'The programme now holds a goal.';
+    } else if (item.kind === 'manager') {
+      // A manager item is the horizon turn's: it closes when the horizon is not open, a valid open programme record
+      // names it or a text item horizon:<slug> is open. A state file that cannot be read keeps it open, said.
+      const slug = item.reference.slice('manager:'.length);
+      const turn = readHorizonState({ root, slug, read });
+      if (turn.status === 'unreadable') {
+        const path = horizonStatePath(root, slug);
+        issues.set(path, { path, error: turn.problem });
+        continue;
+      }
+      const found = horizon(slug);
+      if (!found || found.state !== 'open') summary = `The horizon ${slug} is no longer open.`;
+      else if (scanRecords({ home, list, read }).open.some((entry) => entry.record.horizon === slug)) summary = 'An open programme now serves the horizon.';
+      else if (horizonHeldByItem([...existing.values()].filter((other) => other.kind === 'text'), slug)) summary = `The text item horizon:${slug} is open.`;
     } else {
       const [, repoAndId] = item.reference.split(':'); const slash = repoAndId.indexOf('/'); const repo = repoAndId.slice(0, slash); const id = repoAndId.slice(slash + 1);
       const entries = sourceMends(repo);
@@ -169,6 +185,11 @@ export function deskItemQuestion(item, { env = process.env, home = programsHome(
   }
   if (item.kind === 'programme') {
     const state = readTurnState({ root, programme: item.reference.slice('programme:'.length), read });
+    const last = state.status === 'valid' ? state.state.failures.at(-1) : null;
+    return firstLine(last?.reason || 'Source reason unavailable.');
+  }
+  if (item.kind === 'manager') {
+    const state = readHorizonState({ root, slug: item.reference.slice('manager:'.length), read });
     const last = state.status === 'valid' ? state.state.failures.at(-1) : null;
     return firstLine(last?.reason || 'Source reason unavailable.');
   }
