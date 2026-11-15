@@ -865,6 +865,53 @@ describe('bringing one up', () => {
     return { ensured, left };
   }
 
+  it('re-admits once after a dead wrapper and returns the second registered server', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const pauses = [];
+    const progress = [];
+    let spawned = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => { pauses.push(ms); t += ms; },
+      spawn: () => { spawned += 1; if (spawned === 2) registerServer(root, worktree, { port: 8900 }); return { pid: 4242, unref() {} }; },
+      pidAlive: () => false, fetch: async () => ({ ok: true }), onRetry: (line) => progress.push(line),
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.server.url, 'http://127.0.0.1:8900');
+    assert.equal(spawned, 2);
+    assert.deepEqual(pauses, [1000, 5000, 1000]);
+    assert.equal(progress.length, 1);
+    assert.match(progress[0], /starting once more/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('reports the second failed attempt, not an older start failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'dev-old.log'), 'start failed: old cause\n');
+    let t = 0;
+    let attempts = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t, sleep: async (ms) => { t += ms; },
+      spawn: () => { attempts += 1; writeFileSync(join(dir, `dev-${attempts}.log`), `start failed: cause ${attempts}\nlast ${attempts}\n`); return { pid: 4242, unref() {} }; },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 2);
+    assert.match(result.error, /^start failed: cause 2\n/u);
+    assert.match(result.error, /last 2$/u);
+    assert.doesNotMatch(result.error, /old cause|cause 1/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
   it('leaves no keys child file in the temp directory once its start registered', async () => {
     const { ensured, left } = await decidedStart({ registers: true, wrapperAlive: true });
     assert.equal(ensured.ok, true, ensured.error);
@@ -938,7 +985,7 @@ describe('bringing one up', () => {
     assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
     assert.doesNotMatch(ensured.error, /still alive/u);
     assert.deepEqual(waiting, []);
-    assert.equal(t, 1_000, `named after ${t}ms, at the first poll rather than the end of the window`);
+    assert.equal(t, 7_000, `two first-poll exits and the 5s retry pause took ${t}ms`);
     assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -1859,7 +1906,7 @@ describe('a restart keeps its slot, and a dead start is named at once', () => {
     const worktree = worktreeWith();
     const logs = join(worktree, '.wrangler', 'dev-server', 'logs');
     mkdirSync(logs, { recursive: true });
-    writeFileSync(join(logs, 'dev-2026-11-06.log'), `${Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join('\n')}\n`);
+    const logFile = join(logs, 'dev-2026-11-06.log');
     let t = 0;
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
@@ -1869,14 +1916,14 @@ describe('a restart keeps its slot, and a dead start is named at once', () => {
       freeMemory: () => null,
       now: () => t,
       sleep: async (ms) => { t += ms; },
-      spawn: () => ({ pid: 4242, unref() {} }),
+      spawn: () => { writeFileSync(logFile, `${Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join('\n')}\n`); return { pid: 4242, unref() {} }; },
       // Alive for two seconds, then the wrapper is gone and nothing will register.
       pidAlive: () => t < 2_000,
       fetch: async () => ({ ok: false }),
     });
 
     assert.equal(ensured.ok, false);
-    assert.ok(t < 3_000, `named after ${t}ms, not at the end of the register window`);
+    assert.equal(t, 8_000, 'first exit at 2s, 5s pause and second exit at its first poll');
     assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
     assert.match(ensured.error, /line 25$/u, 'the last line of the log is in the error');
     assert.doesNotMatch(ensured.error, /^line 5$/mu, 'only the last twenty lines');
@@ -1915,7 +1962,7 @@ describe('a server that dies behind its wrapper', () => {
   it('a server that dies while its wrapper lives is named at the next poll, with its exit and the end of its log', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
-    const log = logIn(worktree, ['worker options: {"port":8900}', 'the last line before the exit'], T0 + 1_000);
+    let log;
     const tracked = {};
     let t = 0;
     let diedAt = null;
@@ -1933,13 +1980,13 @@ describe('a server that dies behind its wrapper', () => {
           writeFileSync(tracked.file, JSON.stringify({ pid: SERVER, exit: 1, signal: null }));
         }
       },
-      spawn: spawnWrapper(tracked),
+      spawn: (...args) => { diedAt = null; log = logIn(worktree, ['worker options: {"port":8900}', `attempt at ${t}`, 'the last line before the exit'], T0 + t + 1_000); return spawnWrapper(tracked)(...args); },
       pidAlive: (pid) => pid === WRAPPER || (pid === SERVER && diedAt === null),
       fetch: async () => ({ ok: false }),
     });
 
     assert.equal(ensured.ok, false);
-    assert.ok(t - diedAt <= 1_000, `named ${t - diedAt}ms after the server died, not at the end of the register window`);
+    assert.equal(t, 8_000, 'one retry pause and a first-poll second exit');
     assert.match(ensured.error, /memoro-worker's server \(pid 5151\) exited with code 1 before it registered/u);
     assert.match(ensured.error, /its wrapper \(pid 4242\) is still alive/u);
     assert.ok(ensured.error.includes(log), 'the newest log is named');
