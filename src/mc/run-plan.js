@@ -620,6 +620,24 @@ export function sessionResult(stdout) {
 /** The output readers this module implements, by the name an adapter declares. */
 const OUTPUT_READERS = new Set(['claude-stream', 'codex-events']);
 
+/**
+ * The text a headless session answered with, read by the output reader its
+ * adapter declares; '' when it gave none. A tool with no reader is refused.
+ */
+export function sessionAnswer(toolId, stdout) {
+  const reader = requireCapability(toolId, 'OUTPUT_READER');
+  if (reader === 'claude-stream') return sessionResult(stdout)?.result || '';
+  if (reader !== 'codex-events') throw new Error(`${toolId} declares output reader ${reader}, which mc cannot read`);
+  let answer = '';
+  for (const line of String(stdout || '').split('\n')) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'item.completed' && event.item?.type === 'agent_message') answer = event.item.text || answer;
+    } catch { /* not a JSON event */ }
+  }
+  return answer;
+}
+
 export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false, now = new Date(), model = null }) {
   const reader = requireCapability(toolId, 'OUTPUT_READER');
   if (!OUTPUT_READERS.has(reader)) throw new Error(`${toolId} declares output reader ${reader}, which mc cannot read`);

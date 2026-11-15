@@ -1,7 +1,7 @@
 /** One fresh medium-class evidence turn per new desk item; no decisions. */
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveLaunch } from '../adapters/index.js';
+import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { runTool } from './child-async.js';
@@ -69,7 +69,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     if (!launch?.ok) return { started: false, reason: launch?.hint || launch?.reason || 'tool unavailable' };
     const role = (deps.role || readCanonRole)('desk-prepare');
     if (!role?.overlay) return { started: false, reason: 'desk-prepare role missing' };
-    const provider = candidate.tool;
+    const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
     const billing = (deps.billingRoute || billingRouteNow)(provider, { env, now: now(), route: { billing: route.billing, why: route.why } });
     if (billing.billing === 'unavailable') return { started: false, reason: billing.why };
     const dir = itemDirectory(item, env);

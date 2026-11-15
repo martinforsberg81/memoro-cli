@@ -543,6 +543,12 @@ export const BILLING_PROVIDER = 'claude';
 /** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
 export const PROVIDER_PRIORITY_RANK = 1;
 
+/** Intake and other catalog-routed turns may run on this tool's role model: no catalog candidate is required. */
+export const INTAKE_FROM_CATALOG = null;
+
+/** A plan review passes the checkout as an allowed directory, before the permission mode. */
+export const ALLOWED_DIR = Object.freeze({ flag: '--add-dir', before: '--permission-mode' });
+
 /** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */
 export const CAPACITY_READER = 'claude-usage';
 

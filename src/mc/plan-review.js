@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { resolveLaunch } from '../adapters/index.js';
+import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { AREAS_PATH, isSourceArea } from './areas.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
@@ -471,9 +471,11 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
       const prompt = readerPrompt({ name: target.name, goal, declared: declarations.declared, dir: target.dir, checkout });
       const args = headlessArgs({ toolId: launched.id, adapter: launched.adapter, model: candidate.model, effort: candidate.effort,
         instructions: instructionsFor(launched.id, role.overlay), prompt, profileArgs, stream: false, cache: role.cache });
-      const at = args.indexOf('--permission-mode');
-      if (launched.id === 'claude' && at > 0) args.splice(at, 0, '--add-dir', checkout);
-      const spawned = gatewayLaunch({ provider: candidate.tool, model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
+      // A tool that takes the checkout as an allowed directory declares where its argument goes.
+      const allowed = requireCapability(launched.id, 'ALLOWED_DIR');
+      const at = allowed ? args.indexOf(allowed.before) : -1;
+      if (at > 0) args.splice(at, 0, allowed.flag, checkout);
+      const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
       for (const key of ['MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_SESSION_STARTED', 'MC_SCRATCH']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: PLAN_REVIEW_ROLE, MC_HEADLESS: '1', MC_GOAL: target.name, MC_TOOL: candidate.tool, MC_MODEL: candidate.model, MC_PLAN_REVIEW_TOKEN: token });

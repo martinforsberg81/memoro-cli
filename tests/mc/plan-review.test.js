@@ -69,7 +69,7 @@ function setup(t, { fields = {}, records = null, review = null } = {}) {
   const deps = {
     checkoutId: () => 'fixture', now: () => NOW, alive: () => true, tmp, pid: 4242, mtime: () => AFTER_START, logRun: (row) => rows.push(row),
     catalog: catalogOf([SOL, OPUS]), capacity: capacityOf(0.5, 0.5), token: () => 'a'.repeat(48),
-    launch: () => ({ ok: true, id: 'claude', shortName: 'claude', spec: { bin: '/fake/claude' }, adapter: claude }),
+    launch: () => ({ ok: true, id: 'claude-code', shortName: 'claude', spec: { bin: '/fake/claude' }, adapter: claude }),
     billingRoute: () => ({ billing: 'plan' }),
     checkout: ({ dir: into }) => { writeFileSync(join(into, 'README.md'), 'origin/main'); return { ok: true }; },
     session: async () => DONE,

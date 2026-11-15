@@ -47,7 +47,7 @@ import { readModels } from './model-config.js';
 import { readCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { runnerDir } from './paths.js';
-import { resolveLaunch } from '../adapters/index.js';
+import { declared, requireCapability, resolveLaunch, toolShortName } from '../adapters/index.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { defaultRepos, proposalSystem } from './brief-collect.js';
@@ -295,15 +295,17 @@ export async function runHelperTurn({
   let routeWhy = null;
   let routeBilling = null;
   let savedPriority = 'auto';
-  if (!model && (!tool || tool === 'codex')) {
+  // A tool whose intake model comes only from the catalog's fast list (`INTAKE_FROM_CATALOG`) is routed by it.
+  const fromCatalog = (name) => declared(name, 'INTAKE_FROM_CATALOG') != null;
+  if (!model && (!tool || fromCatalog(tool))) {
     const catalog = (deps.catalog || (() => readModels(env)))();
     savedPriority = catalog.providerPriority ?? 'auto';
-    if (tool === 'codex') {
-      routeCandidate = (catalog.fast || []).find((candidate) => candidate.tool === 'codex') || null;
+    if (tool) {
+      routeCandidate = (catalog.fast || []).find((candidate) => candidate.tool === toolShortName(tool)) || null;
     } else if (!tool && savedPriority !== 'auto') {
       const roleCandidates = [
         { tool: 'claude', model: role.model || 'sonnet', effort: 'medium' },
-        ...(catalog.fast || []).filter((candidate) => candidate.tool === 'codex'),
+        ...(catalog.fast || []).filter((candidate) => fromCatalog(candidate.tool)),
       ];
       const chosen = chooseCandidate({ cls: 'fast', catalog: { fast: roleCandidates }, capacity: (deps.capacity || (() => readCapacity({ root: runnerDir(env) })))(), now, priority: savedPriority });
       routeCandidate = chosen.candidate;
@@ -316,7 +318,7 @@ export async function runHelperTurn({
   if (!launch?.ok) {
     return { ok: false, reason: 'no-tool', note: launch?.hint || launch?.reason || 'no tool to run the turn' };
   }
-  if (launch.id === 'codex' && !model && !routeCandidate) return { ok: false, reason: 'no Codex intake candidate is listed in mc model' };
+  if (fromCatalog(launch.id) && !model && !routeCandidate) return { ok: false, reason: `no ${declared(launch.id, 'INTAKE_FROM_CATALOG')} intake candidate is listed in mc model` };
 
   const dir = intakeDir(env);
   const proposals = proposalsDir(env);
@@ -340,7 +342,7 @@ export async function runHelperTurn({
     // and its output the one JSON object (step-cost step 3 left it so).
     toolId: launch.id, adapter: launch.adapter, model: model || routeCandidate?.model || role.model, effort: routeCandidate?.effort, instructions, prompt, profileArgs, autocompact: null, stream: false, cache: role.cache,
   });
-  const provider = launch.id === 'codex' ? 'codex' : 'claude';
+  const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
   const billing = (deps.billingRoute || billingRouteNow)(provider, { now, env, route: { billing: routeBilling, why: routeWhy } });
   if (billing.billing === 'unavailable') return { ok: false, reason: billing.why, providerPriority: savedPriority, routeWhy };
   const selectedModel = model || routeCandidate?.model || role.model;
