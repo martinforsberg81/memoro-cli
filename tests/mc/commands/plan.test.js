@@ -57,7 +57,7 @@ describe('the plan role', () => {
     assert.match(told, /taking over a goal's branch and finishing the work there/u);
     assert.match(told, /A goal \(`GOAL\.json`, written with the `mc goal` verbs\) is what the runner builds\. It is a means toward the aim, not the aim itself/u);
     assert.match(told, /With Martin at the terminal you have full freedom/u);
-    assert.match(told, /runner assigns exactly one next draft/u);
+    assert.match(told, /runner assigns exactly that one next draft/u);
     assert.match(told, /Do not implement it, plan another draft/u);
     assert.match(told, /A \*\*review session\*\* judges and moves it to `merge` \(all OK\) or back to `build` \(a NOT OK line\)/u);
     assert.match(told, /A goal rejected a third time stays in review with status Martin/u);
