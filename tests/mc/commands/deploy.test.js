@@ -190,9 +190,14 @@ function gateFake({
   runs = [fullRunOf()], started = null, mends = [], suites = ['smoke'], outcomes = {}, served = SHA, declared = null,
   appError = null, dirtyNow = [], servedDirty = undefined,
   head = SHA, branch = '', contained = true, held = {}, shown = null, checkoutFails = false, revive = null,
-  staticServed = null, runner = null, origin = SHA,
+  staticServed = null, runner = null, origin = SHA, existing = [], place = null,
 } = {}) {
-  const calls = { fullRun: [], history: 0, servers: [], statics: [], suites: [], mends: 0, git: [], holds: [], follows: 0, ensures: [], sleeps: [], order: [] };
+  const calls = {
+    fullRun: [], history: 0, servers: [], statics: [], suites: [], mends: 0, git: [], holds: [], follows: 0, ensures: [], sleeps: [], order: [],
+    placed: [], stopped: [], ensuredIn: [],
+  };
+  // The servers the registry would list for mc's own deploy worktree: the ones already there, then those an ensure starts.
+  const live = [...existing];
   const declaration = declared || { suites: suites.map((name) => ({ name })), environments: { dev: { service: 'app' } } };
   // The checkout, as the exercise places it: `checkout --detach` moves it, and the
   // fake servers are built from wherever it stands when they are (re)started.
@@ -218,7 +223,14 @@ function gateFake({
     return out(1, '', 'not faked');
   };
   // What an ensure that is not pinned does to the checkout, as `followMain` does: fast-forwards it to origin/main.
-  const follow = (pinned) => { if (!pinned) { calls.follows += 1; checkout.head = origin; } };
+  // The shared route's checkout only: an ensure for any other worktree (mc's own deploy worktree) has no main to follow.
+  const SHARED = '/tmp/does-not-exist/shared/memoro';
+  const follow = (pinned, worktree = SHARED) => { if (!pinned && worktree === SHARED) { calls.follows += 1; checkout.head = origin; } };
+  const startedServer = (service) => {
+    const id = `${service}-${live.length + 1}`;
+    live.push({ instance_id: id, service, worktree_path: 'own' });
+    return id;
+  };
   const resultOf = (name) => {
     const how = outcomes[name] || 'ok';
     return {
@@ -235,7 +247,7 @@ function gateFake({
     mendRoot: work,
   };
   const suiteDeps = {
-    sharedWorktree: () => '/tmp/does-not-exist/shared/memoro',
+    sharedWorktree: () => SHARED,
     readDeclaration: () => ({ ok: true, declaration }),
     gitIn,
     servingWorktree: (worktree, { service }) => held[service] || null,
@@ -244,24 +256,44 @@ function gateFake({
     sleep: async (ms) => { calls.sleeps.push(ms); calls.clock = (calls.clock ?? 0) + ms; },
     ensureAppServer: async (worktree, declared, options = {}) => {
       calls.ensures.push({ tier: 'app', pin: options.deps?.pin === true, head: checkout.head });
-      follow(options.deps?.pin === true);
+      calls.ensuredIn.push(worktree);
+      follow(options.deps?.pin === true, worktree);
       if (appError) return { ok: false, error: appError };
       const commit = revive && calls.servers.length ? revive(calls.servers.length) : (served === 'checkout' ? checkout.head : served);
       calls.servers.push({ worktree, commit });
+      startedServer('app');
       const builtFrom = servedDirty === undefined ? { commit } : { commit, dirty: servedDirty };
       return { ok: true, server: { built_from: builtFrom, health_url: 'http://127.0.0.1:1/api/version' }, baseUrl: 'http://127.0.0.1:1' };
     },
     ensureDevServer: async (worktree, declared, options = {}) => {
       calls.ensures.push({ tier: 'static', pin: options.pin === true, head: checkout.head });
-      follow(options.pin === true);
+      calls.ensuredIn.push(worktree);
+      follow(options.pin === true, worktree);
       if (staticServed === null) return { ok: false, error: 'no static tier in this test' };
       const commit = staticServed === 'checkout' ? checkout.head : typeof staticServed === 'function' ? staticServed(calls.statics.length) : staticServed;
       calls.statics.push({ worktree, commit });
+      startedServer('static');
       return { ok: true, server: { url: 'http://127.0.0.1:2/', instance_id: 'static-1', built_from: { commit } } };
     },
     tokenFor: async () => ({ name: null, token: null, from: null }),
     head: () => checkout.head,
     dirty: () => dirtyNow,
+    // mc's own deploy worktree: placed at the pick by the function ship uses (the placing itself is
+    // tested in its own cases), the servers the registry lists, and the stopping of those.
+    placeWorktree: ({ worktree, sha }) => {
+      calls.placed.push({ worktree, sha });
+      if (place) return place({ worktree, sha });
+      const from = checkout.head;
+      checkout.head = sha;
+      return { ok: true, moved: from !== sha, how: from !== sha ? 'reset' : null, strays: [], restored: [], from };
+    },
+    serversFor: () => live.map((server) => ({ ...server })),
+    stopServer: (server) => {
+      calls.stopped.push(server.instance_id);
+      live.splice(live.findIndex((one) => one.instance_id === server.instance_id), 1);
+      return { ok: true, instance_id: server.instance_id };
+    },
+    holderLock: (root, fn) => fn(),
     answers: async () => true,
     runSuites: async (options) => {
       const { declaration: declared, worktree } = options;
@@ -742,9 +774,13 @@ describe('mc deploy — every case of where main is', () => {
       counts: { [`${LIVE}..${SHA}`]: 6 },
       state: { [worktree]: { dirty: [], ahead: 0, behind: 1 } },
     });
+    // Before the merge the tree stands on the commit before the pick, as a tree that is behind does.
+    const BEFORE = 'f00dfeed0000000000000000000000000000beef';
     let merged = false;
     const git = (cwd, args) => {
       if (args[0] === 'merge') merged = true;
+      if (!merged && args[0] === 'rev-parse' && args.at(-1) === 'HEAD') { base.calls.push({ cwd, args }); return BEFORE; }
+      if (args[0] === 'merge-base' && args[2] === SHA && args[3] === BEFORE) { base.calls.push({ cwd, args }); return null; }
       if (args[0] === 'status' && merged) {
         base.calls.push({ cwd, args });
         return '?? artifacts/\n?? public/sdk/';
