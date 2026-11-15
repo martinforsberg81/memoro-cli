@@ -94,7 +94,7 @@ describe('mc programs create', () => {
     } finally { a.done(); }
   });
 
-  it('refuses a name that exists — with a directory, a record or a goal — and leaves it as it is', async () => {
+  it('refuses a name that exists — a bare directory or one with a record — and leaves it as it is', async () => {
     const a = area();
     try {
       mkdirSync(join(a.home, 'bare'));
@@ -106,6 +106,17 @@ describe('mc programs create', () => {
       const before = readFileSync(join(a.home, 'alpha', RECORD_FILE), 'utf8');
       assert.equal((await call(['create', 'alpha', '--end', 'second'], a.env)).code, 1);
       assert.equal(readFileSync(join(a.home, 'alpha', RECORD_FILE), 'utf8'), before);
+    } finally { a.done(); }
+  });
+
+  it('refuses a name the list knows that has no directory here — a programme on main — and makes nothing', async () => {
+    const a = area();
+    try {
+      const read = () => ({ section: { programmes: [{ programme: 'onmain', goals: [], dormant: true, statuses: {} }] } });
+      const { code, err } = await call(['create', 'onmain', '--end', 'e'], a.env, { read });
+      assert.equal(code, 1);
+      assert.match(err, /programme onmain exists.*mc programs record.*mc programs show/u);
+      assert.deepEqual(readdirSync(a.home), []);
     } finally { a.done(); }
   });
 
@@ -183,6 +194,7 @@ describe('mc programs record and show', () => {
       assert.match(broken.err, /extra: unknown key/u);
       assert.match(broken.err, /state: one of open, done/u);
       assert.equal((await call(['show', 'missing'], a.env)).code, 1);
+      assert.equal((await call(['show', 'Bad_Name'], a.env)).code, 2, 'a name that is not a programme name is a malformed call');
     } finally { a.done(); }
   });
 });

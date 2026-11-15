@@ -92,7 +92,8 @@ that is missing or already has a record (exit 1). Both refuse a bad name, a
 blank `--end` or a horizon that is not a slug with exit 2, before any write.
 `show` prints the record (`--json`: `{ "name", "record" }`, where `record` is
 `null` without one) or says the programme has none; a record that does not
-validate is printed as its problems with exit 1.
+validate is printed as its problems with exit 1, a programme with no directory
+exits 1, and a word that is not a programme name exits 2.
 
 Who may write is decided from the environment alone: `MC_ROLE` through
 `normalizeSessionRole`, else `MC_GOAL` alone is a build session, else a person.

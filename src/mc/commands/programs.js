@@ -43,7 +43,10 @@ export const ROUTES = {
   ) },
   create: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('create', scanned) },
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
-  show: { booleans: ['--json'], check: ({ positional }) => (positional.length === 1 ? null : 'mc programs show needs one programme') },
+  show: { booleans: ['--json'], check: ({ positional }) => (
+    positional.length !== 1 ? 'mc programs show needs one programme'
+      : NAME_RE.test(positional[0]) ? null : `"${positional[0]}" is not a programme name: lower-case letters, digits and hyphens, at most 64, starting with a letter or digit`
+  ) },
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
@@ -202,6 +205,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     stdout.write(`${name}: programme made at ${dir} — record state open, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     return 0;
   } catch (error) {
+    if (error.code === 'EEXIST' && verb === 'record') return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
     if (error.code === 'EEXIST') return problem(`programme ${name} exists — mc programs record ${name} --end "…" gives a directory without a record its record, and mc programs show ${name} prints what it has`);
     return problem(`could not write ${name}: ${error.message}`);
   }
@@ -211,7 +215,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
 function showVerb({ positional, flags }, { env, stdout, stderr }) {
   const [name] = positional;
   const dir = join(programsHome(env), name);
-  if (!NAME_RE.test(name) || !existsSync(dir)) { stderr.write(`mc: no programme ${name} — ${dir} does not exist\n`); return 1; }
+  if (!existsSync(dir)) { stderr.write(`mc: no programme ${name} — ${dir} does not exist\n`); return 1; }
   const found = readRecord(dir);
   const view = recordView(found);
   if (flags.json) { stdout.write(`${JSON.stringify({ name, record: view }, null, 2)}\n`); return found.status === 'invalid' ? 1 : 0; }
