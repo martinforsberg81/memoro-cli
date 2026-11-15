@@ -489,3 +489,50 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
     return entry?.sessionId || entry?.session_id || null;
   },
 });
+
+/* ------------------------------------------------------------------
+ * Seam declarations. `src/mc/` asks the registry (`index.js`) for these and
+ * never compares this tool's name. A declaration is a named export; a tool
+ * that lacks one is refused by a seam that launches, bills, routes or acts.
+ * ------------------------------------------------------------------ */
+
+/** The command name this tool's process runs under. */
+export const PROCESS_NAME = 'claude';
+
+/**
+ * The headless argument list: `pieces` are what the runner computed from this
+ * adapter's own switches (`modelArgs`, `effortArgs`, `advisorArgs`,
+ * `sessionArgs`), the role's instruction arguments, the prompt, and the
+ * resumed session id.
+ */
+export function headlessArgs({ modelArgs: model, effortArgs: effort, advisorArgs: advisor, session, instr, prompt, resume = null, stream = true, autocompact = null }) {
+  const tuning = [...effort, ...advisor];
+  const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
+  const io = stream
+    ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
+    : ['--output-format', 'json'];
+  // `--resume` keeps the session's id and its whole history; the message on
+  // stdin is the next turn of that conversation.
+  const resumed = resume ? ['--resume', resume] : [];
+  const tools = ['--tools', CLAUDE_TOOLS];
+  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...model, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
+}
+
+/** The mechanism `src/mc/run-plan.js` reads this tool's headless output with. */
+export const OUTPUT_READER = 'claude-stream';
+
+/** A running session is asked whether its step can be finished and is killed when silent too long. */
+export const WATCH = Object.freeze({ checkIn: true, stallGuard: true });
+
+/**
+ * What a session runs on when neither its step nor its plan says otherwise,
+ * per kind. A step is `opus` at `medium` effort with no advisor (2026-09-25,
+ * ruling 18's second addendum). These are claude's aliases and nobody else's.
+ */
+export const SESSION_DEFAULTS = Object.freeze({
+  step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
+  review: Object.freeze({ model: 'opus', effort: 'high', advisor: null }),
+});
+
+/** A named advisor model is kept (`--advisor`). */
+export const ADVISOR_SUPPORT = true;

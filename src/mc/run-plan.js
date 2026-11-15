@@ -17,6 +17,7 @@
  * started projects off answered decision files.
  */
 import { CLAUDE_TOOLS } from '../adapters/claude-code.js';
+import { declared, requireCapability } from '../adapters/index.js';
 import { parseRuns } from './brief-collect.js';
 import { EFFORT_LEVELS } from './plan-schema.js';
 import { estimateCost } from './prices.js';
@@ -45,10 +46,7 @@ export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turn
  * flag and no advisor; ruling 21 removed it.) These are claude's aliases and
  * nobody else's — see `sessionSettings`.
  */
-export const SESSION_DEFAULTS = Object.freeze({
-  step: Object.freeze({ model: 'opus', effort: 'medium', advisor: null }),
-  review: Object.freeze({ model: 'opus', effort: 'high', advisor: null }),
-});
+export { SESSION_DEFAULTS } from '../adapters/claude-code.js';
 /**
  * The role a goal's build session runs with (`canon/roles/build-session.md`,
  * its `goal` part).
@@ -466,22 +464,11 @@ export function headlessArgs({ toolId, adapter, model, effort = null, advisor = 
   // No CLAUDE.md, AGENTS.md or memory, and the role's TTL — new and resumed.
   const session = adapter?.sessionArgs?.({ cache }) ?? [];
   const instr = profileArgs(toolId, instructions);
-  // Headless planning/helper work starts in mc-owned directories outside Git.
-  // Allow that cwd in fresh and resumed runs; keep the sandbox policy unchanged.
-  // `codex exec resume` takes no `--sandbox` (codex-cli 0.151.0): the same
-  // setting goes through `-c`, and the session id is the first positional.
-  if (toolId === 'codex' && resume) return ['exec', 'resume', '--json', ...modelArgs, ...effortArgs, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, '--skip-git-repo-check', resume, prompt];
-  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...effortArgs, ...session, ...instr, '--skip-git-repo-check', prompt];
-  const tuning = [...effortArgs, ...(adapter?.advisorArgs?.(advisor) ?? [])];
-  const compact = autocompact ? ['--autocompact', String(autocompact)] : [];
-  const io = stream
-    ? ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
-    : ['--output-format', 'json'];
-  // `--resume` keeps the session's id and its whole history; the message on
-  // stdin is the next turn of that conversation.
-  const resumed = resume ? ['--resume', resume] : [];
-  const tools = ['--tools', CLAUDE_TOOLS];
-  return ['-p', ...resumed, ...(stream ? [] : [prompt]), ...modelArgs, ...tuning, '--permission-mode', 'acceptEdits', ...compact, ...tools, '--strict-mcp-config', ...session, ...instr, ...io];
+  // The argument list is the tool's own: a tool whose adapter declares no
+  // `headlessArgs` is refused here, never launched as another tool.
+  return requireCapability(toolId, 'headlessArgs')({
+    modelArgs, effortArgs, advisorArgs: adapter?.advisorArgs?.(advisor) ?? [], session, instr, prompt, resume, stream, autocompact,
+  });
 }
 
 /** One stream-json user message, as `deps.session` writes it on claude's stdin. */
@@ -630,7 +617,12 @@ export function sessionResult(stdout) {
  * and its note is `stalled`. `timedOut` alone is the helper turn's own
  * wall-clock cap, which that lane keeps, and stays `timeout`.
  */
+/** The output readers this module implements, by the name an adapter declares. */
+const OUTPUT_READERS = new Set(['claude-stream', 'codex-events']);
+
 export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false, stalled = false, now = new Date(), model = null }) {
+  const reader = requireCapability(toolId, 'OUTPUT_READER');
+  if (!OUTPUT_READERS.has(reader)) throw new Error(`${toolId} declares output reader ${reader}, which mc cannot read`);
   const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', quotaReset: null, cost: null };
   // A limit answer is what the tool says when it refuses: one or two turns
   // and the limit text as the whole result. Session prose that mentions a
@@ -638,7 +630,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
   // runner slept 30 min and left a finished PR unmerged on exactly that.
   if (stalled) return { ...dash, note: 'stalled', quota: false };
   if (timedOut) return { ...dash, note: 'timeout', quota: false };
-  if (toolId === 'codex') {
+  if (reader === 'codex-events') {
     // Codex's own refusals are its `error` and `turn.failed` events; the rest
     // of the stream is the session's work, which may well say "quota" — on
     // 2026-10-29 a crashed step read as one and every lane slept 30 min.
@@ -934,8 +926,11 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
   const step = stepRunner || {};
   const minutes = (value, fallback) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback);
   const tool = plan.tool || DEFAULT_TOOL;
-  const claude = tool === DEFAULT_TOOL;
-  const defaults = claude ? (SESSION_DEFAULTS[kind] || SESSION_DEFAULTS.step) : {};
+  // What a tool runs on, and whether it keeps a named advisor, are its
+  // adapter's declarations; a tool declaring neither gets no defaults and no advisor.
+  const declaredDefaults = declared(tool, 'SESSION_DEFAULTS');
+  const defaults = declaredDefaults ? (declaredDefaults[kind] || declaredDefaults.step) : {};
+  const advisorKept = declared(tool, 'ADVISOR_SUPPORT') === true;
   const named = (key) => [step[key], plan[key]].find((value) => value !== undefined && value !== null && value !== '');
   const advisor = named('advisor') ?? defaults.advisor ?? null;
   const effort = named('effort') ?? defaults.effort ?? null;
@@ -944,7 +939,7 @@ export function sessionSettings(planRunner = {}, stepRunner = null, { kind = 'st
     tool,
     model,
     effort: EFFORT_LEVELS.includes(effort) ? effort : null,
-    advisor: claude && advisor !== 'off' && advisor !== model ? advisor : null,
+    advisor: advisorKept && advisor !== 'off' && advisor !== model ? advisor : null,
     checkInMinutes: minutes(plan.check_in_minutes, DEFAULT_CHECK_IN_MINUTES),
     stallMinutes: minutes(plan.stall_minutes, DEFAULT_STALL_MINUTES),
   };
@@ -991,6 +986,6 @@ export function describeSettings(shortName, settings) {
  * says so rather than printing numbers nothing acts on.
  */
 export function describeWatch(toolId, settings) {
-  if (toolId === 'codex') return 'no check-in, no stall guard';
+  if (requireCapability(toolId, 'WATCH') === null) return 'no check-in, no stall guard';
   return `check-in every ${settings.checkInMinutes} min, killed after ${settings.stallMinutes} min silent`;
 }

@@ -566,3 +566,31 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
     return entry?.type === 'session_meta' ? entry?.payload?.id || null : null;
   },
 });
+
+/* ------------------------------------------------------------------
+ * Seam declarations. `src/mc/` asks the registry (`index.js`) for these and
+ * never compares this tool's name. A declaration is a named export; a tool
+ * that lacks one is refused by a seam that launches, bills, routes or acts.
+ * ------------------------------------------------------------------ */
+
+/** The command name this tool's process runs under. */
+export const PROCESS_NAME = 'codex';
+
+/**
+ * The headless argument list from the pieces the runner computed from this
+ * adapter's own switches. Headless planning/helper work starts in mc-owned
+ * directories outside Git, so the working directory is allowed in fresh and
+ * resumed runs and the sandbox policy is unchanged. `codex exec resume` takes
+ * no `--sandbox` (codex-cli 0.151.0): the same setting goes through `-c`, and
+ * the session id is the first positional.
+ */
+export function headlessArgs({ modelArgs: model, effortArgs: effort, session, instr, prompt, resume = null }) {
+  if (resume) return ['exec', 'resume', '--json', ...model, ...effort, '-c', 'sandbox_mode="danger-full-access"', ...session, ...instr, '--skip-git-repo-check', resume, prompt];
+  return ['exec', '--json', '--sandbox', 'danger-full-access', ...model, ...effort, ...session, ...instr, '--skip-git-repo-check', prompt];
+}
+
+/** The mechanism `src/mc/run-plan.js` reads this tool's headless output with. */
+export const OUTPUT_READER = 'codex-events';
+
+/** Codex gets neither a check-in nor a stall guard: its stdin is not a pipe. */
+export const WATCH = null;
