@@ -22,6 +22,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
+import { toolShortName, toolsWith } from '../../src/adapters/index.js';
+import { implementedShortNames } from '../../src/adapters/names.js';
 import { HELP_TEXT } from '../../src/mc/help-text.js';
 import { commandReference, commandUsage } from '../../src/mc/command-help.js';
 import { scanArgs } from '../../src/mc/commands/flags.js';
@@ -352,7 +354,7 @@ function knows(verb, flag, forms) {
   if (ROUTED[verb]) {
     return Object.values(ROUTED[verb]).some((spec) => [
       ...(spec.booleans || []), ...(spec.values || []), ...(spec.strictValues || []), ...(spec.repeatable || []),
-      ...(spec.toolSugar ? ['--codex', '--claude'] : []),
+      ...(spec.toolSugar ? implementedShortNames().map((name) => `--${name}`) : []),
     ].includes(flag));
   }
   return forms.some((argv) => [[flag], [flag, '3'], [flag, 'x']].some((extra) => {
@@ -410,6 +412,16 @@ describe('every name in the help is routed', () => {
 
   it('each verb usage names, in prose too, only flags the verb it speaks of reads', () => {
     for (const verb of Object.keys(VERB_MODULES)) assert.deepEqual(unknownFlags(verb, commandUsage(verb)), [], verb);
+  });
+
+  it('plan and martin offer every tool that declares an interactive driver, and the helper offers none', () => {
+    const offered = toolsWith('PERSISTENT_DRIVER').map((id) => `--${toolShortName(id)}`);
+    assert.ok(offered.includes('--agy'), 'agy declares an interactive driver');
+    for (const verb of ['plan', 'martin']) {
+      const alternatives = /\[(--[a-z]+(?:\|--[a-z]+)+)\]/u.exec(commandUsage(verb))?.[1];
+      assert.deepEqual(alternatives?.split('|').sort(), [...offered].sort(), `${verb} --help writes the tools the registry declares`);
+    }
+    assert.doesNotMatch(commandUsage('helper'), /--agy/u);
   });
 
   it('names every vault verb in the long help, and only those', () => {
