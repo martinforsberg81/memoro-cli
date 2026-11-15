@@ -136,8 +136,8 @@ export function applyFailure(state, provider, { why }, now = new Date()) {
  * (null) keeps the one the snapshot holds, as observeClaudeStream keeps a window
  * a stream does not carry; its own reset still governs it (windowsAt).
  */
-function claudeWindowsOf(held, read) {
-  return Object.fromEntries(WINDOWS.claude.map((name) => [name, read?.[name] ?? held[name]]));
+function streamWindowsOf(provider, held, read) {
+  return Object.fromEntries(WINDOWS[provider].map((name) => [name, read?.[name] ?? held[name]]));
 }
 
 /**
@@ -151,7 +151,7 @@ export function applyCollectedCapacity(state, provider, answer, now = new Date()
   const changed = baseline !== null && JSON.stringify(current.providers[provider]) !== baseline;
   if (answer?.ok && changed) return current;
   if (answer?.ok) return applyObservation(current, provider, {
-    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? claudeWindowsOf(current.providers.claude.windows, answer.windows) : answer.windows,
+    windows: adapterOfProvider(provider)?.PLAN_STATE != null ? streamWindowsOf(provider, current.providers[provider].windows, answer.windows) : answer.windows,
     models: answer.models ?? null,
   }, now);
   return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
@@ -174,8 +174,10 @@ export function observeClaudeStream(state, stdout, now = new Date()) {
   const seen = planWindows(stdout);
   const current = normaliseCapacity(state);
   if (!seen || (!seen.five_hour && !seen.seven_day)) return current;
-  const previous = current.providers.claude.windows;
-  return applyObservation(current, 'claude', {
+  const provider = PROVIDERS.find((name) => adapterOfProvider(name).PLAN_STATE === 'claude-stream');
+  if (!provider) return current;
+  const previous = current.providers[provider].windows;
+  return applyObservation(current, provider, {
     windows: { five_hour: fraction(seen.five_hour) ?? previous.five_hour, seven_day: fraction(seen.seven_day) ?? previous.seven_day },
     models: null,
   }, now);

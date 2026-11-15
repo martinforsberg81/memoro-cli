@@ -297,6 +297,12 @@ export function apiProviders() {
   return toolsWith('API_ROUTE').filter((tool) => adapterFor(tool).BILLING_PROVIDER).map((tool) => adapterFor(tool).BILLING_PROVIDER);
 }
 
+/** The provider priorities a catalog accepts: `auto`, then the implemented tools by their declared rank. */
+export function providerPriorities() {
+  const ranked = toolsWith('PROVIDER_PRIORITY_RANK').sort((a, b) => adapterFor(a).PROVIDER_PRIORITY_RANK - adapterFor(b).PROVIDER_PRIORITY_RANK);
+  return ['auto', ...ranked];
+}
+
 /** The implemented adapter billed under `provider`, or null. */
 export function adapterOfProvider(provider) {
   return Object.values(ADAPTERS).find((adapter) => adapter.BILLING_PROVIDER === provider) || null;

@@ -34,6 +34,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { implementedTools, providerPriorities } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { runnerDir } from './paths.js';
 import { EFFORT_LEVELS, MODEL_RE } from './plan-schema.js';
@@ -50,9 +51,9 @@ export const ROLE_LISTS = Object.freeze(['review', 'finish', 'mend', 'plan', 'ma
 export const LISTS = Object.freeze([...CLASSES, ...ROLE_LISTS]);
 /** The lists a file may lack, which then read as their defaults. `review` is required, as it always was. */
 const DEFAULTED_LISTS = Object.freeze(['medium', 'finish', 'mend', 'plan', 'manager', 'decision']);
-export const TOOLS = Object.freeze(['claude', 'codex']);
+export const TOOLS = Object.freeze(implementedTools());
 const DOCUMENT_KEYS = Object.freeze(['schema', 'version', ...LISTS, 'provider_priority']);
-export const PROVIDER_PRIORITIES = Object.freeze(['auto', 'codex', 'claude']);
+export const PROVIDER_PRIORITIES = Object.freeze(providerPriorities());
 const CANDIDATE_KEYS = Object.freeze(['tool', 'model', 'effort']);
 const LOCK_POLL_MS = 50;
 

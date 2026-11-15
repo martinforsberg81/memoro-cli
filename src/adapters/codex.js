@@ -598,6 +598,9 @@ export const WATCH = null;
 /** The name billing state, plan windows and the API gateway know this tool by. */
 export const BILLING_PROVIDER = 'codex';
 
+/** Where this tool ranks when a provider priority is not `auto`: a lower rank is listed first. */
+export const PROVIDER_PRIORITY_RANK = 0;
+
 /** The plan windows a usage snapshot carries for this tool, in order. */
 export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
 
