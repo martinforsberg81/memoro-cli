@@ -87,17 +87,22 @@ function programmeOf(item) {
 export function costReading({ env, now, read = readDeskText }) {
   const day = now.toISOString().slice(0, 10), nowMs = now.getTime();
   const out = { day, today: null, last_seven_days: null, unknown_cost_runs: 0, ceiling: null, error: null };
+  let runsError = null;
   try {
     // runs.tsv holds every session the runner ever ran (11 000 rows, 1.5 MB in November): a row is built only
     // for a line that names one of the desk's passes, which is what takes the reading from 100 ms to a few.
-    const [header = '', ...body] = String(read(deskRunsPath(env)) ?? '').split('\n');
+    // The header is the first non-blank line, as readRunRows takes it.
+    const lines = String(read(deskRunsPath(env)) ?? '').split('\n').filter((line) => line.trim());
+    const [header = '', ...body] = lines;
     const rows = readRunRows([header, ...body.filter((line) => PASSES.some((pass) => line.includes(pass)))].join('\n')).filter((row) => PASSES.includes(row.kind));
     const today = rows.filter((row) => String(row.ts).slice(0, 10) === day);
     const week = rows.filter((row) => timeOf(row.ts) <= nowMs && nowMs - timeOf(row.ts) < 7 * DAY_MS);
     out.today = costSum(today); out.last_seven_days = costSum(week);
     out.unknown_cost_runs = week.filter((row) => !(Number.isFinite(Number(row.cost)) && Number(row.cost) >= 0)).length;
-  } catch (error) { out.error = `runs.tsv unreadable: ${error.message}`; }
-  try { out.ceiling = deskCeiling({ env, read }); } catch (error) { out.error = `${out.error ? `${out.error}; ` : ''}ceiling setting unreadable: ${error.message}`; }
+  } catch (error) { runsError = error; out.error = `runs.tsv unreadable: ${error.message}`; }
+  // The ceiling is read as deskBudget reads it, which reads runs.tsv too: a runs.tsv that cannot be read leaves
+  // the ceiling unread and is named twice, as the opening has always said it (V1). runs.tsv is read once.
+  try { const ceiling = deskCeiling({ env, read }); if (runsError) throw runsError; out.ceiling = ceiling; } catch (error) { out.error = `${out.error ? `${out.error}; ` : ''}ceiling setting unreadable: ${error.message}`; }
   return out;
 }
 

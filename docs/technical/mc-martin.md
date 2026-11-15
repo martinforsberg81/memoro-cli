@@ -19,13 +19,17 @@ session; `brief --json` gives the same data as the text. `brief` writes nothing
 except the sync's own store writes, and neither it nor a refused or failed
 launch changes `last-open.json`.
 
-The opening's data is built in `src/mc/desk-opening.js`: texts, acts, stuck, not
-ready, decided, cost, the ledger's asks and `last-open.json`, with no sync, lock
-or writer. `martin.js` re-exports them and what the opening shows is unchanged.
-The page's DESK section ([mc-ui.md](mc-ui.md#desk)) reads the same texts, acts,
-decided, not-ready and cost from the store as the last sync left it. The page
-runs no sync and takes no lock, and it writes nothing; its decided row's asks
-come from the jev ledger, `decisions.jsonl`, by the same function the opening uses.
+The opening's data is built in `src/mc/desk-opening.js`, with no sync, lock or
+writer: texts, acts, stuck, not ready, decided and cost, each by one function,
+and the reading of `last-open.json`. `martin.js` re-exports them, and what the
+opening shows is unchanged. The page's DESK section ([mc-ui.md](mc-ui.md#desk))
+calls the same functions, so it reads the same texts, acts, decided, not ready
+and cost from the store as the last sync left it. The page runs no sync, takes
+no lock and writes nothing. The module also holds the page's ledger reader,
+`ledgerAsks`, which the opening does not use. The decided row's asks come from
+the jev ledger, `decisions.jsonl`. Whether an ask went against the asking
+session's recommendation follows `mc decisions`: an `answered` row takes jev's
+choice and a `decided` row takes the recommendation.
 
 The opening has these parts, in this order (Horizons only when the desk holds one):
 

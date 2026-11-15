@@ -30,7 +30,8 @@ import { width } from '../../src/mc/status-render.js';
 import { codeCommit, pageKey, restartPage, run as page } from '../../src/mc/commands/home.js';
 import { RESTART } from '../../src/mc/page-live.js';
 import { goalJson } from './_helpers/goal-file.js';
-import { buildOpening } from '../../src/mc/desk-opening.js';
+import { buildOpening, costReading } from '../../src/mc/desk-opening.js';
+import { deskRunsPath, readDeskText } from '../../src/mc/desk-budget.js';
 import { deskItemId, itemDirectory, writeDeskItem } from '../../src/mc/desk-items.js';
 import { deskKey, deskLines, readPageDesk } from '../../src/mc/page-desk.js';
 import { ledgerPath } from '../../src/mc/jev.js';
@@ -2910,6 +2911,15 @@ describe('DESK — what waits for Martin, read by the page', () => {
     const third = (await collect(brief.env)).desk;
     assert.match(third.error, /EISDIR/u);
     assert.deepEqual([third.waiting, third.texts, third.acts], [0, [], []]);
+  });
+
+  it('names a runs.tsv it cannot read as the opening always has: runs.tsv and the ceiling, with no ceiling', (t) => {
+    const { env } = deskFixture(t);
+    const read = (path) => { if (path === deskRunsPath(env)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return readDeskText(path); };
+    const cost = costReading({ env, now: DESK_NOW, read });
+    assert.equal(cost.error, 'runs.tsv unreadable: EACCES: permission denied; ceiling setting unreadable: EACCES: permission denied');
+    assert.deepEqual([cost.today, cost.ceiling], [null, null]);
+    assert.deepEqual(buildOpening({ env, home: programsHome(env), now: DESK_NOW, read }).cost, cost);
   });
 
   it('keeps the page\'s other sections in the data, with the desk as one more key', async (t) => {
