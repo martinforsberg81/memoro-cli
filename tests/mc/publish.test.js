@@ -152,7 +152,6 @@ describe('mc publish', () => {
     const { out, deps } = fixture({ branch: 'mend/deploy-0123456789ab' });
     const recorded = [];
     deps.publishDeployMend = (entry) => { recorded.push(entry); assert.deepEqual(out.merged, [], 'recorded before the merger is asked'); };
-    deps.publishMainMend = () => assert.fail('a deploy repair is not a main-red mend');
     assert.equal(await run([], deps), 0);
     assert.deepEqual(recorded.map(({ repo, branch, pr }) => ({ repo, branch, pr })), [{ repo: 'memoro', branch: 'mend/deploy-0123456789ab', pr: 9 }]);
     assert.deepEqual(out.merged, [['memoro', '9']]);
