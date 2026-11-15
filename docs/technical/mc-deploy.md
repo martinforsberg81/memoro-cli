@@ -81,6 +81,11 @@ path through `defaultRepos(env)`, the same reading the page and `mc plan` use.
    and again under the register's lock at final admission.
 4. **The gap.** `git rev-list --count <live>..<sha>`. A sha the checkout does not
    have is *"the gap is unknown"*, never a number.
+   **The reading.** With the live commit, the pick and the gap known, and the
+   pick not older than what is live, memoro's `scripts/release/reading.mjs` says
+   whether the release can be taken back and which change makes it not (*The
+   reading* below); it is printed after the pick's lines, on `--dry-run` too, and
+   changes nothing about what follows.
 5. **The nightly.** `readNightlyHistory`
    ([`src/mc/nightly-history.js`](../../src/mc/nightly-history.js)) has the last
    full-suite measurement per repository with the commit it measured. When that
