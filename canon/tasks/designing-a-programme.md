@@ -8,16 +8,18 @@ A programme is thought through once, before its goals are written. Its design is
 page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
 means the programme was not designed.
 
-A programme is of one of two kinds. One with a record (`PROGRAMME.json`, made by `mc programs create
-<programme> --end "…"`) is bounded: it serves a horizon and ends. Its page is [the record
-page](references/programme-record-readme.md); the enduring aim stays in the area pages it points to.
-It is done when its goals are done and what is now true is written back to `docs/technical/`. One
-without a record keeps [the programme page](references/programme-readme.md) and what speaks of its aim.
+Every programme is a bounded implementation plan, archived when its work is
+finished and written back. Its enduring direction belongs to the area pages.
+A recorded programme uses [the record page](references/programme-record-readme.md);
+a programme without a record uses [the programme page](references/programme-readme.md).
+Legacy pages preserve the held Aim in the appropriate area without silently
+changing its meaning. Finish active work where it stands, write back, then archive:
+use the supported manual route without a record, or the valid-record route when
+already established. Do not require the enduring direction to be declared over.
 
 ## Files
 
-- `README.md` — the programme page of its kind: aim, measures, gap, next
-  horizon, phases, Martin-only choices and pointers. Read first; keep its gap current each session.
+- `README.md` — purpose, end, decisions, phases and pointers; read first.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
 - `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
@@ -27,11 +29,8 @@ without a record keeps [the programme page](references/programme-readme.md) and 
 
 ## Design, in order
 
-1. Define the aim as the enduring state the area strives toward for its user: what they can do and
-   rely on when it is as good as it can be. It is not work, has no end when goals land, and changes
-   only with Martin. Define three to five observable or countable progress measures, each with its
-   first reading and date, or say what would give a reading. A programme with a record has no aim of
-   its own: write what it is for and its end as the record says it, and point to the area pages.
+1. Define what the implementation plan delivers and its end; point to its
+   area's enduring direction and, where applicable, the horizon it serves.
 2. Read affected code, technical standards, programme README and proposals; design claims cite files actually opened.
 3. Resolve questions through [asking-martin](asking-martin.md). Record decisions in the README or goal, or in the technical standard
    if it reaches beyond the programme, then in affected goals. Add needed standards within the app's
@@ -41,15 +40,14 @@ without a record keeps [the programme page](references/programme-readme.md) and 
 5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
-7. Write/read back the README as a headless session will, in the order of its page's headings (for a
-   programme without a record: Aim, Measures, Gap, Next horizon, Phases, Martin's, Where things are). Rewrite the dated Gap at every plan session's end.
-   At its next plan session, bring an existing page to this template, settling its aim with Martin.
-   Each goal stands on the design's decisions and prerequisites; landed sections leave the README.
+7. Write and read back the README in heading order: What it is for, End,
+   Decisions, Phases, Where things are. Landed sections leave the README.
 
 ## When a goal lands
 
-The plan session (or session that takes the landing) rereads measures, rewrites the dated Gap largest-first, and writes a new horizon when reached.
-Landed work is in `mc goal list` and `docs/technical/`, not Gap. A programme without a record is archived only when Martin says the aim is over or has moved to another programme, never because its goals are done; a programme with a record is bounded, and the system archives it once its goals are done and its write-back reads OK.
+Write landed functionality to `docs/technical/`. When the work is finished,
+archive the programme after write-back. Automatic archive requires a valid record
+and the runner's safety checks; otherwise use the supported manual archive route.
 
 ## Faithful scope correction and handoff
 
