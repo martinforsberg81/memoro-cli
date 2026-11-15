@@ -155,8 +155,8 @@ reversible, no due time) with a Swedish `brief.md`. Its source is the
 programme's record, directory and goals, and the turn's state file
 `runner/programme-turn/<programme>.json`. Sync closes it by source when the
 programme holds a goal, its record no longer reads valid and `open`, or its
-directory is gone; an unreadable state file or record is reported and keeps it
-open. A decision session answers it at its source: it repairs what failed within
+directory is gone; an unreadable state file is reported and keeps it open (an
+unreadable record reads invalid and closes it). A decision session answers it at its source: it repairs what failed within
 reach and closes it `--by decision`, so the runner plans again, and a text of
 Martin's that would have to change goes to a brief. The brief lists it under the
 programme's name.

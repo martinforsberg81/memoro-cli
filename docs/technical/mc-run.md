@@ -838,8 +838,8 @@ Swedish. No turn starts while an item is open. A failure is counted again only
 after the item closed. The item closes by source when the programme holds a
 goal, the record no longer reads valid and open, or the directory is gone, and
 by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
-file that cannot be read starts no turn and counts nothing; the decision lane
-reports it and the item stays open.
+file that cannot be read starts no turn and counts nothing; the runner says it
+once in `runner.log`, the desk sync reports it and the item stays open.
 
 
 ## Goal-less main-red mend
