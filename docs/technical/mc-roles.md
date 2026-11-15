@@ -68,6 +68,7 @@ and mend retain its former delivery recovery work (Martin, 2026-11-07 and 2026-1
 | role | model | started as | who launches it |
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
+| `plan-review` | sonnet | `plan-review` | `mc goal plan-review`, one headless read-only turn on a draft goal, never the runner ([mc-goals.md](mc-goals.md) § *Plan review*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build` |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `finish-session` | opus | `finish-session` | `mc run`, one headless session on a goal in `finish · ready` ([mc-goals.md](mc-goals.md) § *Finish and mend*) |
@@ -238,7 +239,7 @@ aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
 deliverable is the programme's planning: the README and design, the resolved
 prerequisite and policy decisions, the goal decomposition and phases, and
 complete goal briefs with contracts, exclusions, documents, success criteria and
-executable checks. Every complete brief moves from draft to build at once in its
+executable checks. Every complete brief, once `mc goal plan-review` has read it, moves from draft to build at once in its
 phase, including one waiting on an earlier phase; a brief with unresolved
 planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch

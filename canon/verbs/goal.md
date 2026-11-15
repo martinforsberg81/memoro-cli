@@ -109,8 +109,9 @@ its check, and each worktree's state.
   runner starts no delivery session on `draft · ready`, no session on `Martin`, or a build session
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
+- **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs an OK reading of the current text (or two readings and `--reason`). Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
-  fast|medium|large --title "…" [--stage draft|build]` makes one: GOAL.json and
+  fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). `mc goal drop
   --reason "…"` abandons delivery; only plan, interactive Martin, decision or a person may drop. The stage is
   persisted before cleanup. Exclusive open PRs are closed, their merge rows

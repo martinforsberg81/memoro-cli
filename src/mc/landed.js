@@ -8,7 +8,8 @@
  * goal. A landed goal's effort is every build, review, finish and mend row
  * it ever had, summed over its whole life, not only the day, because a goal
  * landed today may have been built yesterday. Its planning is not the goal's:
- * the headless plan rows are `plan_cost`, beside the interactive sessions.
+ * the headless plan rows and the plan-review rows are `plan_cost`, beside the
+ * interactive sessions.
  */
 import { rowCost } from './prices.js';
 import { RUNNER_MODEL } from './status-collect.js';
@@ -71,8 +72,8 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
   for (const row of rows) {
     const goal = effort.get(row.name);
     // A goal's own work: its merge rows are the merger's, and its planning is
-    // counted with the planning, not the goal (Martin, 2026-11-09).
-    if (!goal || row.kind === 'merge' || row.kind === 'plan') continue;
+    // counted with the planning, not the goal (Martin, 2026-11-09); so is a plan review's reading.
+    if (!goal || row.kind === 'merge' || row.kind === 'plan' || row.kind === 'plan-review') continue;
     goal.seconds += number(row.seconds);
     goal.sessions += 1;
     if (row.kind === 'finish' || row.kind === 'mend') goal.again = true;
@@ -88,7 +89,7 @@ export function landedSection({ rows = [], now = new Date() } = {}) {
   const round = (value) => (value == null ? null : Math.round(value));
   const cents = (value) => (value == null ? null : Math.round(value * 100) / 100);
   // Headless planning in the window, for the planning line beside the interactive sessions.
-  const planCost = rows.filter((row) => row.kind === 'plan' && inDay(row)).reduce((n, row) => n + (rowCost(row, RUNNER_MODEL) ?? 0), 0);
+  const planCost = rows.filter((row) => (row.kind === 'plan' || row.kind === 'plan-review') && inDay(row)).reduce((n, row) => n + (rowCost(row, RUNNER_MODEL) ?? 0), 0);
   return {
     goals: goals.length,
     plan_cost: cents(planCost),

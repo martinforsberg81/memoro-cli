@@ -178,8 +178,8 @@ Yours without asking:
   README or design) or repairs a defect against one is written as a goal without asking
   Martin. What is asked is what `tasks/asking-martin.md` names.
 
-A person opens a plan session to write goals: `mc goal new … --stage draft`
-while the brief is being written, then `mc goal stage <p>/<g> build` when
-ready, or `--stage build` at once.
+A person opens a plan session to write goals: `mc goal new …` makes the draft
+while the brief is being written, `mc goal plan-review <p>/<g>` reads it, and
+`mc goal stage <p>/<g> build` moves it once the reading is OK.
 
 @verb goal
