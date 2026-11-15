@@ -107,7 +107,8 @@ the no-progress stop among them, do not go through `mc ask` either.
 `mc goal martin` is gone: it exits 2 in every role, before any other check, and
 prints the `mc ask` call to make (`retiredMartin` in `src/mc/commands/goal.js`).
 It reads no key and writes no ledger row, and its message keeps no part of the
-call the caller typed: the old `--reason` text is never echoed.
+call the caller typed except the goal id, when the first argument is one: the
+old `--reason` text and every other value are never echoed.
 
 ## The flow
 
