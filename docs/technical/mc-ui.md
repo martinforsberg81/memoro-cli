@@ -314,7 +314,7 @@ painted rows occupy the same columns.
 | `p [<programme>]` | open plan, asking which programme if unnamed |
 | `f` | ask GitHub now and redraw |
 | `r` / `refresh` | collect the current page and redraw immediately |
-| `deploy [<args>]` / `mc deploy [<args>]` | run deploy preflight and confirmation, then return to the live page as soon as the deploy starts; explicit `--follow` watches the log |
+| `deploy [<args>]` / `mc deploy [<args>]` | run the deploy preflight and start the deploy, with no confirmation, then return to the live page as soon as the deploy starts; explicit `--follow` watches the log |
 | `start`, `stop [--force]`, `update [--force]`, `lanes [<n>]` | the runner order, then redraw |
 | `q`, empty | quit |
 | anything else | explain the unrecognised or retired verb, then redraw |

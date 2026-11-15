@@ -1,5 +1,5 @@
 /**
- * What `mc deploy` asks of a commit before it asks the question (Martin,
+ * What `mc deploy` asks of a commit before the deployer starts (Martin,
  * 2026-11-14: tests and gates move from the merge to the deploy).
  *
  * A commit of memoro's main is put in production only when that exact commit
@@ -22,7 +22,7 @@
  *
  * `--accept-red "<reason>"` is the only way past a red, and the reason is
  * written into the record. Nothing here deploys, asks or refuses by itself:
- * `commands/deploy.js` owns the question and the refusals, and this file only
+ * `commands/deploy.js` owns the refusals and the start, and this file only
  * measures and words what it found. Every boundary — history, the full run,
  * the mends, the servers, the suites — is on `deps`, so the whole gate runs in
  * a test with nothing real behind it.

@@ -49,7 +49,7 @@ remain outside it. The verified builder wraps only its declared upload script.
   sync scripts. Any further words (`--version=1.1.2`, `--locale=sv`) go to the
   script, which refuses what it does not take. `--dry-run` sends nothing.
 - `mc asc submit <version> <build>` and `mc asc release <version> [--phased]`
-  are a person's acts, asked the way `mc deploy` asks. Without a terminal they
+  are a person's acts, asked at the terminal. Without a terminal they
   refuse with exit 2 before anything runs. Otherwise mc first runs the script
   with `--dry-run --json`. The script refuses a version in the wrong state
   (`submit` wants `PREPARE_FOR_SUBMISSION` with that VALID build and the
@@ -159,7 +159,7 @@ renumbered. Building again takes the next one.
 ### The question
 
 At a terminal, before the builder starts (`interactive`/`ask` from
-`src/mc/prompt.js`, as `mc deploy` asks):
+`src/mc/prompt.js`):
 
     upload memoro me (build <n>) from <short sha> — production runs <short live> — to TestFlight after it is built and verified? [y/N]
 
