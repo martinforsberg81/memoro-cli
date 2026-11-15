@@ -8,8 +8,14 @@
  * and asks a stand of each goal. A source area has an empty `questions` list and must have a `page`; it asks no stand
  * of a goal, is never a tripped area, and its `standards` may be empty (`isSourceArea`).
  *
+ * A rule area may also say `"seen": true`: work on it is judged as the user sees it. The key is absent or `true`, so
+ * there is one way to say it; the goal review of a goal that stands `touched` on such an area, or trips it, is held to
+ * a `seen <area>` line in REVIEW.md (`seenAreas`, `checkVerdict` in `review-verdict.js`), and the plan review asks its
+ * eighth question of it (`plan-review.js`). An mc from before reads a file with the key as invalid.
+ *
  * The declaration is read by `mc goal areas` and `mc goal obligation set` (`commands/goal.js`), by the plan review's
- * parts check and prompt (`plan-review.js`) and by the tripped areas of a review (`review-verdict.js`). Whether a
+ * parts check and prompt (`plan-review.js`) and by the tripped and seen areas of a review (`review-verdict.js`, asked
+ * by the runner's launch and, for the tripped areas, by the move out of review). Whether a
  * page exists is asked by the parts check and shown by `mc goal areas`, never when the file is read. Nothing renders
  * a declaration into a goal and no goal file's validation knows of it.
  */
@@ -17,7 +23,7 @@
 export const AREAS_PATH = '.mc/areas.json';
 const ID_RE = /^[a-z][a-z0-9-]*$/u;
 const FILE_KEYS = ['schema_version', 'areas'];
-const AREA_KEYS = ['id', 'name', 'covers', 'standards', 'paths', 'questions', 'page'];
+const AREA_KEYS = ['id', 'name', 'covers', 'standards', 'paths', 'questions', 'page', 'seen'];
 const QUESTION_KEYS = ['when', 'ask'];
 
 const plain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -37,17 +43,18 @@ export function checkAreas(text, where) {
   const stray = unknownKeys(file, FILE_KEYS)[0];
   if (stray) return fail(stray, 'is an unknown key');
   if (!Array.isArray(file.areas) || file.areas.length === 0) return fail('areas', 'must be a non-empty array');
-  const seen = new Set();
+  const ids = new Set();
   for (const [index, area] of file.areas.entries()) {
     const at = `areas[${index}]`;
     if (!plain(area)) return fail(at, 'must be an object');
     const extra = unknownKeys(area, AREA_KEYS)[0];
     if (extra) return fail(`${at}.${extra}`, 'is an unknown key');
     if (typeof area.id !== 'string' || !ID_RE.test(area.id)) return fail(`${at}.id`, 'must be lower-case letters, digits and hyphens, starting with a letter');
-    if (seen.has(area.id)) return fail(`${at}.id`, `${area.id} is given twice`);
-    seen.add(area.id);
+    if (ids.has(area.id)) return fail(`${at}.id`, `${area.id} is given twice`);
+    ids.add(area.id);
     for (const key of ['name', 'covers']) if (!words(area[key])) return fail(`${at}.${key}`, 'must be a non-blank text');
     if ('page' in area && !words(area.page)) return fail(`${at}.page`, 'must be a non-blank path');
+    if ('seen' in area && area.seen !== true) return fail(`${at}.seen`, 'must be true or absent');
     if (!Array.isArray(area.questions)) return fail(`${at}.questions`, 'must be an array, empty only for a source area');
     const source = area.questions.length === 0;
     if (source && !('page' in area)) return fail(`${at}.questions`, 'is empty, which makes a source area, and a source area needs a page');

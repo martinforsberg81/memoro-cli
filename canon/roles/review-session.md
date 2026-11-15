@@ -54,14 +54,21 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    yourself in each viewport the goal names and compare it with the intended
    result — layout, spacing, alignment, typography, states, overflow, empty and
    error states. A visible deviation from the intent is not OK; it goes to
-   build with the screenshots named in REVIEW.md.
+   build with the screenshots named in REVIEW.md. Save each screenshot you judge
+   with `--out` under `shots/` in the goal's directory, under a name not already
+   there: in each viewport the goal names, and where it names none, at least the
+   default viewport. The change uses the tokens, components, icons and assets the
+   documents of the area hold, and what it adds is entered there; a new one that
+   is entered nowhere is not OK.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated. For a
    goal in numbered parts, judge the diff against the parts as well as the
    criteria: it stays within CHANGE or the log explains the departure, every
    PRESERVE item holds, what each `touched` OBLIGATION says holds, no DECISION
    was reopened, choices stayed within LATITUDE, and nothing in OUT OF SCOPE was
-   done. Name a finding by the id it is against. A premise the code contradicts
+   done. Where `~/mc/programs/<programme>/README.md` has a section `End`, the
+   change stays inside it; a change that goes beyond it is a finding against
+   `change`. Name a finding by the id it is against. A premise the code contradicts
    is the goal's defect, not the build's: report it with `mc goal defect`.
    Read every `Decided by the session (technical)` entry in this goal's
    `LOG.md` and judge each as part of the review; a wrong decision is a review finding, and a rule that would have prevented it is recorded as a lesson: write `## What happened` (the goal and the decision), `## The rule` (one or two sentences, general) and `## Where the change belongs` (a named file in `src/mc/`, `canon/` or `docs/technical/`) to a file in `$MC_SCRATCH` and run `mc martin lesson add --kind review-finding --item <programme>/<goal> --place <file> --file <path>`. You add lessons; you never carry or dismiss one.
@@ -111,11 +118,23 @@ The prompt also lists changed files under paths of areas declared untouched.
 For each tripped area, judge its questions: give an OK line with the reason
 the touch does not concern them, or report a goal defect against that stand.
 
+The prompt may also list areas whose work is judged as the user sees it. For
+each, write a `seen <area>` line: `seen <area>: OK — shots/<name>.png, …`, with
+` — <words>` optional after the files, or `seen <area>: NOT OK — shots/<name>.png
+— <what and where>`; where the diff changes nothing a user sees, say so:
+`seen <area>: OK — none — <reason>`. mc checks that the line is there, that it is
+in this form and that each file named exists in the goal's directory; it does not
+read what a screenshot shows or whether `none` is right. That is your judgement.
+A `seen` line is never carried: in a later round copy the earlier line as it
+stands when the diff since leaves the area's paths alone, and otherwise judge
+again with new screenshots.
+
 Write `REVIEW.md` on every review, before moving the stage. Start with one
 `head: <repo> <sha>` line for each goal repository. Then write one line per
 item as `<id>: OK` or `<id>: NOT OK — <what and where>`. The ids are
 `criterion <n>`, each preserve id, `obligation <area>` for each touched
-obligation, `untouched <area>` for each tripped area, `change`, `out-of-scope`,
+obligation, `untouched <area>` for each tripped area, `seen <area>` for each area the prompt
+lists as judged as the user sees it, `change`, `out-of-scope`,
 `protection` and `bugs`. A version 1 goal requires only its criteria lines.
 Free text may follow the lines. Include the evidence needed to understand a
 failure. mc checks the form and heads, not your judgement, and keeps a copy

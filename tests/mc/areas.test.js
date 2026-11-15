@@ -29,6 +29,24 @@ test('checkAreas accepts a rule area with a page and a source area with a page, 
   }
 });
 
+test('checkAreas accepts seen: true on a rule area and a source area, returns it as given, and an area without it is unchanged', () => {
+  for (const area of [{ ...AREA, seen: true }, { ...SOURCE, seen: true }, AREA]) {
+    const r = check({ schema_version: 1, areas: [area] });
+    assert.equal(r.ok, true, r.reason);
+    assert.deepEqual(r.areas, [area]);
+  }
+});
+
+test('checkAreas refuses seen when it is not true: false, a text, a number, null and an empty list each name areas[0].seen', () => {
+  for (const seen of [false, 'true', 1, 0, null, []]) {
+    const r = check(withArea({ seen }));
+    assert.equal(r.ok, false, JSON.stringify(seen));
+    assert.match(r.reason, /^x\.json at main: areas\[0\]\.seen must be true or absent/u, JSON.stringify(seen));
+  }
+  const second = check({ schema_version: 1, areas: [AREA, { ...AREA, id: 'ops-2', seen: false }] });
+  assert.match(second.reason, /areas\[1\]\.seen must be true or absent/u);
+});
+
 test('checkAreas refuses a source area without a page, a blank or non-text page, a rule area with empty standards and an area without the questions key, naming the field', () => {
   const { questions, ...noQuestions } = AREA;
   const cases = [

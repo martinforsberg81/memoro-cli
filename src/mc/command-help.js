@@ -95,7 +95,7 @@ export const COMMAND_USAGE = Object.freeze({
     "        mc goal stage [<programme>/<goal>] draft|build|review|merge|done|dropped [--reason \"…\"]   move the goal's stage, and log the reason;\n",
     "                                    going to build, a branch with no commits of its own is remade from origin/main, and a draft goal needs a complete text and an OK plan review;\n",
     "                                    merge executes the session decision for every registered pull request; done after all land\n",
-    "        mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]   a fresh session reads a draft goal against seven questions and writes PLAN-REVIEW.md; exit 0 OK, 1 not OK, 2 refused; up to 20 minutes; stage build needs an OK reading of the current text, or two readings and --reason\n",
+    "        mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]   a fresh session reads a draft goal against its questions and writes PLAN-REVIEW.md; exit 0 OK, 1 not OK, 2 refused; up to 20 minutes; stage build needs an OK reading of the current text, or two readings and --reason\n",
     "        mc goal plan-review <programme>/<goal> verdict ok|not-ok   the reader's last act, with the token the call gave it (a plan-review session only)\n",
     "        mc goal blocked|ready [<programme>/<goal>] [--reason \"…\"]   set the goal's status; its stage stays\n",
     "        mc goal hold [<programme>/<goal>] --reason \"…\"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay, nothing is asked of Martin\n",

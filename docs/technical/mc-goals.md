@@ -320,6 +320,15 @@ closer, the decisions that hold and where its assets are.
       "paths": ["src/games/"],
       "questions": [],
       "page": "docs/areas/games.md"
+    },
+    {
+      "id": "users-meet",
+      "name": "What users meet",
+      "covers": "The interface, as a user sees it.",
+      "standards": ["docs/technical/ui.md"],
+      "paths": ["public/"],
+      "questions": [{ "when": "a user can see the change", "ask": "Is it the intended result in each viewport?" }],
+      "seen": true
     }
   ]
 }
@@ -341,6 +350,14 @@ closer, the decisions that hold and where its assets are.
   empty `questions` is valid only with a `page`, so a rule area does not become a
   source by an emptied list alone. A rule area's `standards` is non-empty; a
   source area's may be empty, its page listing its standards.
+- `seen` is optional and has one value: `true`. It says that work on the area is
+  judged as the user sees it. The key is absent or `true`; `false`, a text, a
+  number or `null` makes the file invalid with `areas[<n>].seen` named, so there
+  is one way to say it. It says nothing of viewports or targets (the goal's
+  criteria and the repository's `.mc/shot.json` hold them), mc does not check that
+  the repository has a `.mc/shot.json`, and on a source area, on which no goal
+  takes a stand, it does nothing. What it brings is in *What a review session
+  does* (the `seen <area>` line) and *Plan review* (question 8).
 - An obligation's `area` is `<repo>/<id>`, `<repo>` being the repository that
   declares it (`memoro-cli/documentation`).
 - A repository without the file declares no areas and behaves as it did.
@@ -350,8 +367,8 @@ closer, the decisions that hold and where its assets are.
 - A goal that leaves draft needs a stand on every declared rule area (the parts
   check, *Plan review*) and none on a source area; no brief or goal text carries
   the declarations: `mc goal show` does not render them.
-- An mc from before a declaration uses `page` or a source area refuses the file,
-  naming the key (`areas[0].page is an unknown key`) or the field (`questions`),
+- An mc from before a declaration uses `page`, `seen` or a source area refuses the file,
+  naming the key (`areas[0].seen is an unknown key`) or the field (`questions`),
   so `mc goal areas`, `obligation set` and the moves out of draft and review fail
   for that repository. `schema_version` stays 1; a declaration in the new forms is
   written to a main only after the mc that reads it runs.
@@ -367,7 +384,8 @@ closer, the decisions that hold and where its assets are.
 **`mc goal areas`** prints each declared area as a block — `<repo>/<id>`, its
 name, what it covers, its page when it has one (`(missing)` after a page that is
 not in the revision), standards (`none` when empty; `(missing)` after one that is
-not in the revision), paths and questions. A source area's block says it is a
+not in the revision), paths and questions; an area that declares `seen` has a line `  seen: …` saying it is judged as the user sees it
+and no other block has one. A source area's block says it is a
 source area that asks no stand, and has no `questions:` heading. For a repository that declares none it prints
 one line saying so (exit 0); an unknown repository name exits 2. For a goal it
 prints the blocks of every goal repository that declares areas, each with the
@@ -764,7 +782,8 @@ candidates ([mc-run.md](mc-run.md), *What a free lane takes*), and
    how `MC_MODEL` writes them into the heading. The review is told its pull
    request and head: the open pull request on `goal/<goal>`, asked of GitHub
    before the launch, and `MC_REVIEW_HEAD`, `MC_REVIEW_PR` and
-   `MC_SESSION_STARTED` are set for it. With none, the goal goes to
+   `MC_SESSION_STARTED` are set for it, with `MC_REVIEW_SEEN` when the review is
+   held to `seen` lines (*The verdict, the rounds and the tripped areas*). With none, the goal goes to
    `build · ready` with a runner entry that names the missing pull request
    the first time, and to `review · Martin` the second (a review session's entry
    between the two resets the count). A repair build gets a build session on the
@@ -930,7 +949,10 @@ checks, in order:
   each area the change touches (a `touched` stand, a tripped area, a source area
   whose `covers` or `paths` the diff falls under); a change against an aim or a
   decision a page states is a finding under `obligation <area>` when the goal
-  stands `touched` on the area and under `change` otherwise.
+  stands `touched` on the area and under `change` otherwise. Where the programme's
+  README has a section `End`, the change stays inside it; going beyond it is a
+  finding under `change`. A change users see uses the tokens, components, icons
+  and assets the documents of the area hold and enters what it adds there.
 - **Bugs** — edge cases, error paths and regressions in what the diff touches.
 
 Martin, 2026-11-03: *"Vi ska utnyttja reviewen till input utan att betala för
@@ -968,13 +990,14 @@ REVIEW.md is written before either move and holds one `head: <repo> <sha>` line
 for each repository of the goal, then one line per item: `<id>: OK` or
 `<id>: NOT OK — <what and where>`. The ids are `criterion <n>`, each preserve id
 (`V1`…), `obligation <area>` for each touched obligation, `untouched <area>` for
-each tripped area (below), and `change`, `out-of-scope`, `protection` and `bugs`.
+each tripped area (below), `seen <area>` for each area the review was told is judged as the user sees it (below), and `change`, `out-of-scope`, `protection` and `bugs`.
 A version 1 goal has the criterion lines and the head lines only. Free text may
 follow. `mc goal stage merge|build` from a review session checks the file
 (`checkVerdict`, `review-verdict.js`) and refuses, naming each id or line at
 fault, when: the file is missing; a repository's head line is missing or the
 first repository's is not `MC_REVIEW_HEAD`; an id is missing, repeated or not
-the goal's; a line is not in form. `merge` is also refused while a line is NOT
+the goal's; a line is not in form; a `seen` line is not in its form or names a file
+that is not in the goal's directory. `merge` is also refused while a line is NOT
 OK, and `build` while all are OK. Neither the judgement nor the reasons are read.
 After either move REVIEW.md stays and `REVIEW-<round>.md` is its copy, the round
 being the count of reviews since the goal's latest move into draft.
@@ -989,6 +1012,43 @@ prompt lists them with their files and the move to merge or build requires their
 lines, so what the reviewer is told and what mc requires are the same list. A
 file under a touched area's paths is not listed. A source area is never tripped,
 also when the goal holds an older `untouched` stand on it.
+
+**Judged as the user sees it.** An area that declares `"seen": true` (*Rule areas*)
+asks a `seen <area>` line of a version 2 goal's review when the goal stands
+`touched` on it or trips it (stands `untouched` on it while the branch changes a
+file under its paths); a tripped area that declares `seen` is asked both lines. A
+version 1 goal, an area the goal has no stand on and a source area are asked none.
+`seenAreas` (`review-verdict.js`) answers the list, as `<repo>/<id>`, in the order of
+the goal's repositories and of each declaration. The runner asks it **once**, at
+the review's launch, beside `trippedAreas`: the prompt names the areas and tells the
+form, and the session's environment gets `MC_REVIEW_SEEN`, the ids separated by one
+space, set when the list is not empty and absent otherwise. The move out of review
+asks for a `seen` line for exactly the areas `MC_REVIEW_SEEN` names and never
+reads the declarations for it: with the variable absent it asks for none. So a review
+started by a runner from before this, or before an area declared `seen`, moves as it
+was told, and the goal's next review is told and held. When the declarations cannot
+be read at the launch the variable is absent and the prompt says so. `MC_REVIEW_SEEN`
+is removed from the environment of any child session wherever `MC_REVIEW_HEAD` is.
+
+The line is `seen <area>: OK — shots/<name>.png[, shots/<name>.png…][ — <words>]`,
+`seen <area>: NOT OK — shots/<name>.png[, …] — <what and where>`, or `none` in
+place of the screenshots, with its reason after ` — `: `seen memoro/users-meet: OK —
+none — the diff changes a comment and nothing that is drawn`. A path starts
+`shots/`, ends `.png` and holds no space, comma or `..`, and is read from the goal's
+directory. A bare `OK`, `none` without a reason and `carried from round <n>` are not
+in form. mc checks the line's presence once, its form and that each named file is a
+file; both moves are refused otherwise, naming the line, the fault and, for a
+missing file, its path. It reads no screenshot and does not judge `none`: that is the
+reviewer's. A `seen` line is not carried: in a later round it is copied as it stands
+when the diff since the previous heads leaves the area's paths alone, and judged
+again with new screenshots otherwise. A `seen` line for an area the review was not
+told of is refused as an id that is not the goal's.
+
+The screenshots are written with `mc shot … --out <goal directory>/shots/<name>.png`,
+under a name not already there. The default directory is swept by `mc tidy` after 72
+hours (`mc-shot.md`, *Where the file goes*); a goal's directory keeps what is put in
+it and is archived whole, so REVIEW.md, each `REVIEW-<round>.md` and a repair build
+find the files. A path outside `shots/` is refused.
 
 **Rounds.** A rejection moves the goal `review → build` with the reviewer's
 `--reason`; a repair build session (*Repair and mend*) fixes the NOT OK items
@@ -1181,8 +1241,17 @@ move exits 1 and writes nothing.
 - **The prompt** gives each rule area with the path of its page (`<checkout>/<repo>/<page>`)
   before its questions, and after the rule areas a section of the source areas,
   each with what it covers and its page and no question. The role reads the page
-  of each area the goal touches, source areas included; the seven questions are
-  the same, question 4 widened to the pages.
+  of each area the goal touches, source areas included; question 4 is widened to
+  the pages, and question 7 asks whether the goal stays inside the end the
+  programme's README states, where it states one. An area that declares `seen`
+  is marked on its line (` · judged as the user sees it`); when the goal stands
+  `touched` on at least one, the prompt adds a line `QUESTION 8 IS ASKED`
+  naming them, and the reader answers question 8: the intended result per
+  viewport, the `mc shot` check, and the tokens, components, icons and assets the
+  goal reuses and adds, held against the documents the area names. Without such an
+  area the line is absent and the question is not asked. The gate is unchanged:
+  no part is added to what a goal needs to leave draft, and whether the goal
+  answers question 8 is the reading's judgement.
 - **Show and areas.** `mc goal show` says where the review stands (none, OK for
   this text, OK for an earlier text, not OK with the round). `mc goal areas
   <p>/<g>` proposes a stand for each rule area without one: touched, naming the change

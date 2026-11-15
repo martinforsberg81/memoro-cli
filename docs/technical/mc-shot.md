@@ -514,6 +514,10 @@ mc creates its directory. Without `--out` the file goes to
 (`<mmm>` the milliseconds, `<xxxx>` four random hex digits; `--out` names its own file)
 ```
 
+The default directory is swept by `mc tidy` after 72 hours. A screenshot a goal's
+review must keep is written with `--out` under the goal's directory (`mc-goals.md`,
+*The verdict, the rounds and the tripped areas*).
+
 `<target>` is the target name, or the path as a slug (`/app/people` →
 `app-people`, `/app/` → `app`), and `<viewport>` is the name or `WxH`. Nothing
 in the name comes from a secret.
