@@ -39,6 +39,7 @@ import { PRS_STALE_SECONDS } from '../page-cache.js';
 import { collectPage } from '../page-collect.js';
 import { CLEAR_ALL } from '../page-frame.js';
 import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
+import { deskKey } from '../page-desk.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { childEnv, mcCheckout } from '../run-control.js';
@@ -246,7 +247,8 @@ export function pageKey(data) {
     .map((s) => [s.goal || s.name || s.area, s.kind || s.verb, s.repo, s.pid, s.started, s.tool, s.model, s.check_ins || 0].join(':')).sort().join('|');
   const priorityKey = (data?.programmes?.programmes || []).filter((group) => group.priority)
     .map((group) => `${group.programme}:priority:${group.priority}`).join('|');
-  return [goalKey, activityKey, priorityKey, data?.providerPriority || ''].filter(Boolean).join('|');
+  // What waits for Martin changes what the top of the page says; its ages and its cost do not.
+  return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk)].filter(Boolean).join('|');
 }
 
 export function parsePageArgs(argv) {
@@ -264,7 +266,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  show that goal   ·   a  all / collapse   ·   m  manager',
+  '  <n>  show that goal   ·   a  all / collapse   ·   d  desk   ·   m  manager',
   '  p  plan a programme   ·   priority <auto|codex|claude>   ·   f  fresh from GitHub   ·   q  quit',
   '  priority <programme>... --set <n>   higher number goes first within a stage',
   '  r  refresh   ·   c  clear finished goals   ·   deploy  deploy to production',
@@ -295,6 +297,12 @@ export function runnerOrder(answer) {
 async function archiveAllVerb(io) {
   const goal = await import('./goal.js');
   return goal.archiveAllFinished(io);
+}
+
+/** `mc martin` — the desk, loaded when `d` is typed. */
+async function deskVerb(argv, io) {
+  const martin = await import('./martin.js');
+  return martin.run(argv, io);
 }
 
 /** `mc goal <argv>` — the goal verbs, loaded when a goal's number is typed. */
@@ -333,6 +341,8 @@ export async function menu(first, {
   programOrder = null,
   // `mc goal archive --all` for `c` — a dependency, as runOrder is, so a test drives the menu without a goal on disk.
   archiveOrder = null,
+  // `mc martin` for `d` — a dependency, as runOrder is, so a test drives the menu without opening a session.
+  deskOrder = null,
   // The page on newer code, when a frame said mc moved under it (`RESTART`).
   restart = () => 0,
 }) {
@@ -375,6 +385,8 @@ export async function menu(first, {
       data = await redraw();
       continue;
     }
+    // The desk: `mc martin`, whose own opening is what the DESK panel above summarises.
+    if (answer === 'd' || answer === 'desk') return (deskOrder || deskVerb)([], { stdout, stderr, env });
     if (['m', 'manager', 'b', 'brief'].includes(answer)) {
       const manager = await import('./manager.js');
       return manager.run([], { stdout, stderr });

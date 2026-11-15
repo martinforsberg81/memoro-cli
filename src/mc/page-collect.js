@@ -99,6 +99,7 @@ import { gitDirOf } from './repos.js';
 import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
+import { readPageDesk } from './page-desk.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
 import {
@@ -1715,6 +1716,8 @@ export async function collectPage({
     runner,
     billing: billingStatus({ capacity: readCapacity({ root: join(root, 'runner') }), state: readBillingState({ root: join(root, 'runner') }), now }),
     providerPriority,
+    // What waits for Martin, as the last sync left it: file reads only, no sync and no lock (page-desk.js).
+    desk: readPageDesk({ env, home: programsHome(env), now }),
     sessions,
     // File reads and a signal 0 per server; one `git branch` per worktree.
     dev: devSection({

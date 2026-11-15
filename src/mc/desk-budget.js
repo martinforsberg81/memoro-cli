@@ -14,10 +14,15 @@ export function readDeskText(path) {
 export function costSum(rows) {
   return rows.reduce((sum, row) => { const cost = Number(row.cost); return sum + (Number.isFinite(cost) && cost >= 0 ? Math.round(cost * 10000) : 0); }, 0) / 10000;
 }
-export function deskBudget({ env = process.env, now = new Date(), read = readDeskText } = {}) {
+/** The daily ceiling in USD, or null when it is off; a setting that is not one is an error. Reads desk.json and nothing else. */
+export function deskCeiling({ env = process.env, read = readDeskText } = {}) {
   const text = read(deskSettingsPath(env));
   const ceiling = text == null ? null : JSON.parse(text).ceiling_usd_per_day;
   if (ceiling !== null && (typeof ceiling !== 'number' || !Number.isFinite(ceiling) || ceiling < 0)) throw new Error('desk.json ceiling_usd_per_day must be null or a non-negative number');
+  return ceiling;
+}
+export function deskBudget({ env = process.env, now = new Date(), read = readDeskText } = {}) {
+  const ceiling = deskCeiling({ env, read });
   const day = now.toISOString().slice(0, 10);
   const spent = costSum(readRunRows(read(deskRunsPath(env))).filter(row => ['desk-prepare', 'decision', 'learning'].includes(row.kind) && String(row.ts).slice(0, 10) === day));
   return { ceiling, spent, day, held: ceiling !== null && spent >= ceiling };
