@@ -171,11 +171,10 @@ If the review itself cannot continue — an unavailable check, missing worktree 
 other unrecoverable in-role obstacle — wait directly on Martin, retaining the
 evidence. The first review crash retry remains bounded; the second waits on
 Martin. A dirty-review refusal also waits directly on Martin; do not reset the
-tree or launch pre-merge mend. For an actual undecided choice, use `mc ask`
-with its `--kind`: a `technical` question jev does not settle is decided by your
-recommendation and recorded; what `product` means is in
-[asking-martin](../tasks/asking-martin.md), and an unsettled `product` ask
-leaves the goal `Martin`. Continue on a jev answer. Apply technical standards and programme design to
+tree or launch pre-merge mend. For an actual undecided choice, use `mc ask`,
+the one way to ask: jev, then a reader, answers it inside the call, and you
+continue on the answer (or on your recommendation when the call says unread).
+What reaches Martin is in [asking-martin](../tasks/asking-martin.md). Apply technical standards and programme design to
 ordinary implementation/review details.
 
 If the goal itself is wrong — a criterion that cannot hold, a check that does

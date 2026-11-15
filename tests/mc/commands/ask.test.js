@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { run } from '../../../src/mc/commands/ask.js';
+import { itemStore } from '../../../src/mc/desk-items.js';
 import { parseLog } from '../../../src/mc/goals.js';
-import { goalJson } from '../_helpers/goal-file.js';
+import { goalJson, goalJsonV2 } from '../_helpers/goal-file.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'mc-ask-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
@@ -31,20 +32,23 @@ const reply = (p = 0.95, choice = 'fake_timer', { fits = 0.9, settled = 0.9, pro
     fits: { noul: fits }, settled: { noul: settled }, product: { noul: product },
   },
 }) });
-function fixture({ response = reply(), env = { MC_PROGRAMME: 'jev', cwd: repoDir }, realpath, list = ['memoro-cli'] } = {}) {
+function fixture({ response = reply(), env = { MC_PROGRAMME: 'jev', cwd: repoDir }, realpath, list = ['memoro-cli'], reader = { read: false, reason: 'no reader in this test' }, budget = { held: false } } = {}) {
   const output = [];
   const errors = [];
   const ledger = [];
   const requests = [];
+  const readers = [];
   const deps = {
     env, home: programmeHome, now: () => new Date('2026-11-08T00:00:00Z'),
     stdout: { write: (s) => output.push(s) }, stderr: { write: (s) => errors.push(s) },
     list: () => list, known: () => ['/home/m/memoro-cli'], realpath,
     readKeys: () => ({ TYPESAFE_API_KEY: 'fixture-secret-value' }),
     ledger: (line) => ledger.push(JSON.parse(line)),
+    budget: () => (typeof budget === 'function' ? budget() : budget),
+    askReader: async (input) => { readers.push(input); return typeof reader === 'function' ? reader(input) : reader; },
     jev: { transport: (url, init) => { requests.push({ url, init }); return typeof response === 'function' ? response(url, init) : response; }, timer: () => new Promise(() => {}) },
   };
-  return { deps, requests, ledger, out: () => output.join(''), err: () => errors.join('') };
+  return { deps, requests, ledger, readers, out: () => output.join(''), err: () => errors.join('') };
 }
 
 test('mc ask without a goal asks jev, sends programme context and a confined document, and leaves goal state absent', async () => {
@@ -61,57 +65,6 @@ test('mc ask without a goal asks jev, sends programme context and a confined doc
   assert.deepEqual(state.documents, [{ path: 'memoro-cli/docs/technical/standard.md', text: 'The standard.' }]);
   assert.match(f.out(), /^mc: jev answered fake_timer /u);
   assert.deepEqual([f.ledger.length, f.ledger[0].verb, f.ledger[0].programme, f.ledger[0].goal, f.ledger[0].model], [1, 'ask', 'jev', null, 'jev-1.14.0']);
-});
-
-for (const [label, response, keys, expectedReading] of [
-  ['a missed jev reading', reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'inject (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)'],
-  ['a network error', () => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)'],
-  ['a missing key', reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source'],
-]) {
-  test(`a session mc ask decides a technical question on ${label} without a goal`, async () => {
-    const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
-    const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
-    const f = fixture({ env, response });
-    if (keys) f.deps.readKeys = () => keys;
-    assert.equal(await run(args, f.deps), 0, f.err());
-    assert.equal(f.out(), `mc: decided by the session: inject — jev did not settle it (${expectedReading}) — continue with: inject a timer\n`);
-    assert.equal(f.ledger.length, 1);
-    assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome], ['technical', 'decided']);
-    assert.equal(existsSync(join(programmeDir, 'goals')), false, 'no goal was created or changed');
-    assert.ok(f.out().includes(expectedReading));
-  });
-}
-
-test('a session mc ask decides technical reading with high product score without a goal', async () => {
-  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
-  const f = fixture({ env, response: reply(0.6, 'inject', { fits: 0.88, settled: 0.30, product: 0.95 }) });
-  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
-  assert.equal(await run(args, f.deps), 0, f.err());
-  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
-  assert.equal(existsSync(join(programmeDir, 'goals')), false);
-});
-
-test('a goal-less product ask jev does not settle names mc martin propose, exits 1 and writes no goal', async () => {
-  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
-  const f = fixture({ env, response: reply(0.5, 'one') });
-  const args = ['--kind', 'product', '--reason', 'Which general rule?', '--option', 'one: keep local behavior', '--option', 'two: define a shared rule', '--recommend', 'one'];
-  assert.equal(await run(args, f.deps), 1, f.err());
-  assert.match(f.out(), /^mc: jev did not settle it: .* — no goal is set; leave the change to his text at the desk with mc martin propose --text '<the text>' --file <path\|-> .*## Vad den säger, ## Vad som föreslås, ## Vad som hittades/u);
-  assert.doesNotMatch(f.out(), /take it to Martin/u);
-  assert.deepEqual([f.ledger.length, f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].goal], [1, 'product', 'martin', null]);
-  assert.equal(existsSync(join(programmeDir, 'goals')), false, 'no goal was created or changed');
-});
-
-test('a session mc ask without a goal refuses malformed kinds without writes', async () => {
-  const env = { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
-  const args = ['--kind', 'technical', '--reason', 'Which timeout strategy?', '--option', 'inject: inject a timer', '--option', 'wait: wait fifteen seconds', '--recommend', 'inject'];
-  for (const kind of [null, 'unknown']) {
-    const malformed = fixture({ env });
-    assert.equal(await run([...args.filter((value) => value !== '--kind' && value !== 'technical'), ...(kind ? ['--kind', kind] : [])], malformed.deps), 2);
-    assert.deepEqual([malformed.ledger.length, malformed.requests.length, malformed.out()], [0, 0, '']);
-    assert.match(malformed.err(), /technical.*product/u);
-    assert.match(malformed.err(), /--kind technical/u);
-  }
 });
 
 test('mc ask rebuilds a state jev refuses for its input limit and answers from the smaller one; the ledger names the budget sent', async () => {
@@ -141,16 +94,6 @@ test('mc ask asks jev when MC_TOOL is unset or person, but a reserved act never 
   assert.equal(reserved.requests.length, 0);
   assert.deepEqual([reserved.ledger.length, reserved.ledger[0].verb, reserved.ledger[0].outcome], [1, 'ask', 'reserved']);
   assert.match(reserved.out(), /reserved act deploy — Martin decides, jev is not asked/u);
-});
-
-test('a non-answer exits 1; malformed calls exit 2 with an mc ask example', async () => {
-  const f = fixture({ response: reply(0.5) });
-  assert.equal(await run(options, f.deps), 1);
-  assert.match(f.out(), /jev did not settle it: fake_timer .* not answered: p 0\.50/u);
-  assert.equal(f.ledger[0].outcome, 'martin');
-  const malformed = fixture();
-  assert.equal(await run(['--reason', 'missing choices'], malformed.deps), 2);
-  assert.match(malformed.err(), /mc ask <programme>\/<goal>/u);
 });
 
 test('mc ask redacts keys-source values from a malformed-call return instruction', async () => {
@@ -215,72 +158,6 @@ test('goal-bound mc ask ledger records only documents retained in the trimmed re
   assert.ok(f.ledger[0].trimmed.some((item) => item.endsWith('dropped')));
 });
 
-test('an unresolved goal-bound ask records safe evidence and sets Martin directly', async () => {
-  const goal = join(programmeHome, 'jev', 'goals', 'unsettled');
-  mkdirSync(goal, { recursive: true });
-  const file = join(goal, 'GOAL.json');
-  const log = join(goal, 'LOG.md');
-  writeFileSync(file, goalJson({ stage: 'build', title: 'Unsettled goal', goal: ['Ask once.'], repos: ['memoro-cli'] }));
-  writeFileSync(log, '');
-  const f = fixture({ response: reply(0.5, 'one'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/unsettled', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
-  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  const argv = ['--kind', 'product', '--reason', 'Which design?', '--option', 'one: keep current rule', '--option', 'two: change rule', '--recommend', 'one', '--evidence', 'The standard is silent.'];
-  assert.equal(await run(argv, { ...f.deps, read, write: writeFileSync }), 1, f.err());
-  assert.equal(f.requests.length, 1, 'one consultation sequence');
-  assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
-  const logged = readFileSync(log, 'utf8');
-  for (const text of ['Which design?', 'Option one: keep current rule', 'Option two: change rule', 'Recommended: one', 'The standard is silent.', 'not answered', 'take it to Martin']) assert.ok(logged.includes(text), text);
-  const entry = parseLog(logged).at(-1);
-  assert.deepEqual([entry.at, entry.stage, entry.status], ['2026-11-08T00:00:00Z', 'build', 'Martin'], 'the entry parses, so the question reads back from the goal');
-  assert.match(entry.comment, /Option two: change rule/u);
-  assert.equal(f.ledger[0].goal, 'jev/unsettled');
-});
-
-for (const [label, response, keys, expectedReading, product] of [
-  ['a missed jev reading', reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.10 }), undefined, 'fake_timer (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)', 0.10],
-  ['a high product reading', reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), undefined, 'fake_timer (p 0.60, fits 0.88, settled 0.30, jev-1.14.0)', 0.95],
-  ['a network error', () => { throw new Error('offline'); }, undefined, 'jev unavailable: network error (offline)', undefined],
-  ['a missing key', reply(), {}, 'jev unavailable: no TYPESAFE_API_KEY in the mc keys source', undefined],
-]) {
-  test(`a goal-bound technical mc ask decides on ${label} and preserves stage and status`, async () => {
-    const goal = join(programmeHome, 'jev', 'goals', 'technical');
-    const file = join(goal, 'GOAL.json'); const log = join(goal, 'LOG.md');
-    const original = goalJson({ stage: 'build', title: 'Technical call', goal: ['Ask once.'], repos: ['memoro-cli'] });
-    const store = { [file]: original, [log]: '' };
-    const f = fixture({ response, env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/technical', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
-    if (keys) f.deps.readKeys = () => keys;
-    const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer', '--evidence', 'No standard selects one.'];
-    const read = (path) => store[path] ?? null;
-    const write = (path, text) => { store[path] = text; };
-    assert.equal(await run(argv, { ...f.deps, read, write }), 0, f.err());
-    assert.equal(store[file], original, 'GOAL.json is byte-identical');
-    assert.deepEqual([JSON.parse(store[file]).stage, JSON.parse(store[file]).status], ['build', 'ready']);
-    assert.equal(f.out(), `mc: decided by the session: fake_timer — jev did not settle it (${expectedReading}) — continue with: inject a timer\n`);
-    const entries = parseLog(store[log]);
-    assert.equal(entries.length, 1);
-    const [entry] = entries;
-    assert.deepEqual([entry.stage, entry.status], ['build', 'ready']);
-    assert.equal(entry.comment.split('\n')[0], 'Decided by the session (technical): Which timer?');
-    for (const text of ['Option fake_timer: inject a timer', 'Option real_wait: wait fifteen seconds', 'Recommended: fake_timer', 'Evidence: No standard selects one.', `jev reading: ${expectedReading}`]) assert.ok(entry.comment.split('\n').includes(text), text);
-    assert.equal(f.ledger.length, 1);
-    assert.deepEqual([f.ledger[0].goal, f.ledger[0].kind, f.ledger[0].outcome], ['jev/technical', 'technical', 'decided']);
-    assert.equal(f.ledger[0].question, 'Which timer?');
-    assert.deepEqual(f.ledger[0].options, { fake_timer: 'inject a timer', real_wait: 'wait fifteen seconds' });
-    assert.equal(f.ledger[0].recommend, 'fake_timer');
-    assert.equal(f.ledger[0].answers?.product, product);
-    assert.equal(f.requests.length, keys ? 0 : 1);
-  });
-}
-
-test('jev product reading does not reroute an unsettled technical mc ask to Martin', async () => {
-  const f = fixture({ response: reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.95 }), env: { MC_TOOL: 'claude', MC_ROLE: 'build-session:goal' } });
-  const argv = ['--kind', 'technical', '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer'];
-  assert.equal(await run(argv, f.deps), 0, f.err());
-  assert.match(f.out(), /^mc: decided by the session: fake_timer — jev did not settle it \(fake_timer \(p 0\.60, fits 0\.88, settled 0\.30, jev-1\.14\.0\)/u);
-  assert.equal(f.ledger.length, 1);
-  assert.deepEqual([f.ledger[0].kind, f.ledger[0].outcome, f.ledger[0].answers.product], ['technical', 'decided', 0.95]);
-});
-
 test('interactive Martin may consult jev on a newly synthesized question and keeps truthful role evidence', async () => {
   const goal = join(programmeHome, 'jev', 'goals', 'martin-choice');
   mkdirSync(goal, { recursive: true });
@@ -290,7 +167,7 @@ test('interactive Martin may consult jev on a newly synthesized question and kee
   const f = fixture({ response: reply(0.95, 'shared'), env: { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/martin-choice', MC_TOOL: 'claude', MC_ROLE: 'martin', cwd: repoDir } });
   f.deps.readKeys = () => ({ TYPESAFE_API_KEY: 'fixture-secret-value' });
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  assert.equal(await run(['--kind', 'product', '--reason', 'Which general rule?', '--option', 'specific: keep local behavior', '--option', 'shared: define a shared rule', '--recommend', 'shared'], { ...f.deps, read, write: writeFileSync }), 0, `${f.err()}${f.out()}`);
+  assert.equal(await run(['--reason', 'Which general rule?', '--option', 'specific: keep local behavior', '--option', 'shared: define a shared rule', '--recommend', 'shared'], { ...f.deps, read, write: writeFileSync }), 0, `${f.err()}${f.out()}`);
   assert.equal(f.requests.length, 1);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'Martin');
   assert.equal(parseLog(readFileSync(log, 'utf8')).at(-1).role, 'martin');
@@ -319,7 +196,7 @@ test('a goal finished or moved by a person while jev is asked is not set over by
   const file = join(goal, 'GOAL.json');
   const log = join(goal, 'LOG.md');
   const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  const argv = ['jev/raced', '--kind', 'product', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
+  const argv = ['jev/raced', '--reason', 'Which?', '--option', 'one: a', '--option', 'two: b', '--recommend', 'one'];
   const env = { MC_PROGRAMME: 'jev', MC_GOAL: 'jev/raced', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir };
   const build = (fields) => goalJson({ stage: 'build', title: 'Raced', goal: ['Move while asked.'], repos: ['memoro-cli'], ...fields });
 
@@ -331,7 +208,8 @@ test('a goal finished or moved by a person while jev is asked is not set over by
     writeFileSync(file, build({ stage: 'done' }));
     return { status: 400, text: async () => '' };
   };
-  assert.equal(await run(argv, { ...finishing.deps, read, write: writeFileSync }), 1, finishing.err());
+  assert.equal(await run(argv, { ...finishing.deps, read, write: writeFileSync }), 0, finishing.err());
+  assert.match(finishing.out(), /^mc: decided by the session, unread /u);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).stage, 'done');
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).status, 'ready', 'a finished goal is not set Martin');
   assert.equal(readFileSync(log, 'utf8'), '', 'a finished goal gets no log entry from the ask');
@@ -388,7 +266,7 @@ test('desk-prepare cannot ask with or without goal identity and writes no file o
     const f = fixture({ env: { MC_ROLE: 'desk-prepare', MC_GOAL: goal, MC_HOME: scratch, MC_WORK_ROOT: scratch } });
     const before = snapshot(scratch);
     f.deps.readKeys = () => assert.fail('preparation read question credentials');
-    assert.equal(await run([...(goal ? [goal] : []), ...options, '--kind', 'technical'], f.deps), 2);
+    assert.equal(await run([...(goal ? [goal] : []), ...options, '--kind', 'technical'], f.deps), 2); // an old --kind is still parsed, then refused by the role
     assert.match(f.err(), /desk-prepare cannot ask/u);
     assert.deepEqual(snapshot(scratch), before);
     assert.deepEqual(f.requests, []); assert.deepEqual(f.ledger, []);
@@ -403,9 +281,252 @@ test('headless decision may ask at every active goal stage, with decision attrib
     writeFileSync(join(goal,'GOAL.json'),goalJson({stage,status:'Martin'})); writeFileSync(join(goal,'LOG.md'),'');
     const f = fixture({env:{MC_ROLE:'decision',MC_HEADLESS:'1',MC_TOOL:'codex',MC_GOAL:`jev/decision-${stage}`,cwd:repoDir}});
     const read = path => {try {return readFileSync(path,'utf8');} catch {return null;}};
-    assert.equal(await run(['--kind','technical',...options],{...f.deps,read,write:writeFileSync}),0,f.err());
+    assert.equal(await run([...options],{...f.deps,read,write:writeFileSync}),0,f.err());
     assert.equal(f.requests.length,1);
     assert.match(f.requests[0].init.body,/How should the timeout test work/u);
     assert.equal(parseLog(readFileSync(join(goal,'LOG.md'),'utf8')).at(-1).role,'decision');
   }
+});
+
+
+// ---------------------------------------------------------------------- one way to ask
+
+const sessionEnv = (name, extra = {}) => ({ MC_PROGRAMME: 'jev', MC_GOAL: `jev/${name}`, MC_TOOL: 'claude', MC_MODEL: 'opus', MC_ROLE: 'build-session:goal', cwd: repoDir,
+  MC_WORK_ROOT: join(scratch, 'work'), MC_HOME: join(scratch, 'home'), ...extra });
+const missed = () => reply(0.6, 'fake_timer', { fits: 0.88, settled: 0.30, product: 0.10 });
+const goalArgs = (name, extraArgs = []) => [`jev/${name}`, '--reason', 'Which timer?', '--option', 'fake_timer: inject a timer', '--option', 'real_wait: wait fifteen seconds', '--recommend', 'fake_timer', '--evidence', 'No standard selects one.', ...extraArgs];
+function goalStore(name, fields = {}) {
+  const dir = join(programmeHome, 'jev', 'goals', name);
+  const file = join(dir, 'GOAL.json');
+  const log = join(dir, 'LOG.md');
+  const original = goalJson({ stage: 'build', title: `Goal ${name}`, goal: ['Ask once.'], repos: ['memoro-cli'], ...fields });
+  const store = { [file]: original, [log]: '' };
+  return { file, log, original, store, read: (path) => store[path] ?? null, write: (path, text) => { store[path] = text; } };
+}
+const verdictOf = (verdict, who = { tool: 'codex', model: 'gpt' }) => ({ read: true, verdict, ...who });
+mkdirSync(join(scratch, 'work', 'runner', 'projects'), { recursive: true });
+
+test('one way to ask: a reader continues with its option, says why when it differs, and the call is one LOG entry and one ledger row', async () => {
+  const g = goalStore('reads');
+  const f = fixture({ response: missed(), env: sessionEnv('reads'), reader: verdictOf({ kind: 'continue', key: 'real_wait', why: 'the standard names real waits for provider timeouts' }) });
+  assert.equal(await run(goalArgs('reads'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.equal(f.out(), 'mc: the reader answered real_wait — continue with: wait fifteen seconds\n  why: the standard names real waits for provider timeouts\n');
+  assert.match(f.err(), /^mc: jev did not settle it — a reader reads it now \(up to 10 minutes\)\n/mu);
+  assert.equal(g.store[g.file], g.original, 'the goal is untouched');
+  assert.equal(parseLog(g.store[g.log]).length, 1);
+  assert.equal(f.ledger.length, 1);
+  assert.deepEqual([f.ledger[0].answered_by, f.ledger[0].outcome, f.ledger[0].chosen, f.ledger[0].kind, f.ledger[0].reader.tool, f.ledger[0].reader.model], ['reader', 'read', 'real_wait', null, 'codex', 'gpt']);
+  assert.equal(f.readers.length, 1);
+  assert.match(f.readers[0].jevText, /not answered/u);
+  assert.equal(f.readers[0].goalName, 'jev/reads');
+  const jevOnly = fixture({ response: missed(), env: sessionEnv('reads'), reader: verdictOf({ kind: 'continue', key: 'fake_timer', why: null }) });
+  assert.equal(await run(goalArgs('reads'), { ...jevOnly.deps, read: g.read, write: g.write }), 0);
+  assert.equal(jevOnly.out(), 'mc: the reader answered fake_timer — continue with: inject a timer\n', 'the recommendation needs no why line');
+});
+
+test('one way to ask: the reader is given the standards of the rule areas the goal has a stand on, from its obligations and the area declaration', async () => {
+  const g = goalStore('areas');
+  g.store[g.file] = goalJsonV2({ repos: ['memoro-cli'], obligations: [
+    { area: 'memoro-cli/reserved-acts', stand: 'touched', text: 'The reader can do less.', standard: 'memoro-cli/docs/technical/hooks.md#mc hook pre-tool' },
+  ] });
+  g.store[join(repoDir, '.mc', 'areas.json')] = JSON.stringify({ schema_version: 1, areas: [
+    { id: 'reserved-acts', name: 'Reserved acts', covers: 'headless acts', standards: ['docs/technical/hooks.md'], paths: [], questions: [{ when: 'always', ask: 'which?' }] },
+  ] });
+  g.store[join(repoDir, 'docs', 'technical', 'hooks.md')] = '# Hooks\n\n## mc hook pre-tool\n\nA deploy is refused.\n\n## Other\n\nNo.\n';
+  const f = fixture({ response: missed(), env: sessionEnv('areas'), reader: verdictOf({ kind: 'continue', key: 'fake_timer', why: null }) });
+  assert.equal(await run(goalArgs('areas'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.equal(f.readers.length, 1);
+  const [one] = f.readers[0].standards;
+  assert.deepEqual([one.area, one.stand, one.pages, one.section.path, one.section.text], ['memoro-cli/reserved-acts', 'touched', ['docs/technical/hooks.md'], 'memoro-cli/docs/technical/hooks.md', '## mc hook pre-tool\n\nA deploy is refused.']);
+});
+
+test('one way to ask: jev answers first and no reader is read', async () => {
+  const g = goalStore('jevfirst');
+  const f = fixture({ env: sessionEnv('jevfirst') });
+  assert.equal(await run(goalArgs('jevfirst'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.match(f.out(), /^mc: jev answered fake_timer /u);
+  assert.deepEqual([f.readers.length, f.ledger[0].answered_by, f.ledger[0].outcome], [0, 'jev', 'answered']);
+  assert.doesNotMatch(f.err(), /reader reads it now/u);
+});
+
+test('one way to ask: a reader that finds a goal defect writes the entry mc goal defect writes, and the goal waits for the desk', async () => {
+  const g = goalStore('defect');
+  const f = fixture({ response: missed(), env: sessionEnv('defect'), reader: verdictOf({ kind: 'defect', part: 'criterion 3', found: 'its check names a command that does not exist (src/x.js:4)' }) });
+  assert.equal(await run(goalArgs('defect'), { ...f.deps, read: g.read, write: g.write }), 1, `the session ends as after mc goal defect: ${f.err()}${f.out()}`);
+  const parsed = JSON.parse(g.store[g.file]);
+  assert.deepEqual([parsed.stage, parsed.status], ['build', 'Martin']);
+  const entry = parseLog(g.store[g.log]).at(-1);
+  assert.equal(entry.comment.split('\n')[0], 'goal defect: criterion 3 — its check names a command that does not exist (src/x.js:4)');
+  assert.equal(parseLog(g.store[g.log]).length, 1, 'one entry, as mc goal defect writes one');
+  assert.doesNotMatch(entry.comment, /Martin is asked/u);
+  assert.match(f.out(), /^mc: the reader found a goal defect — criterion 3\nmc: jev\/defect · build · Martin — goal defect reported/u);
+  assert.deepEqual([f.ledger.length, f.ledger[0].outcome, f.ledger[0].answered_by, f.ledger[0].chosen], [1, 'defect', 'reader', null]);
+});
+
+test('one way to ask: a text of Martin’s that would change is a desk item, the caller continues inside the wording and the goal does not wait', async () => {
+  const g = goalStore('textinside');
+  const brief = '## Vad den säger\nA.\n\n## Vad som föreslås\nB.\n\n## Vad som hittades\nC.\n';
+  const f = fixture({ response: missed(), env: sessionEnv('textinside'), reader: verdictOf({ kind: 'text', inside: 'fake_timer', text: 'docs/technical/mc-x.md — timers', brief }) });
+  assert.equal(await run(goalArgs('textinside'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.match(f.out(), /^mc: a text of Martin’s would change — desk item [0-9a-f]+; continue inside the wording with: inject a timer\n$/u);
+  const parsed = JSON.parse(g.store[g.file]);
+  assert.deepEqual([parsed.stage, parsed.status], ['build', 'ready'], 'stage and status unchanged');
+  assert.deepEqual([f.ledger[0].outcome, f.ledger[0].chosen, f.ledger[0].answered_by], ['text', 'fake_timer', 'reader']);
+  assert.match(f.ledger[0].desk_item, /^[0-9a-f]+$/u);
+  assert.match(parseLog(g.store[g.log]).at(-1).comment, /Text: docs\/technical\/mc-x\.md — timers/u);
+  assert.equal(parseLog(g.store[g.log]).at(-1).status, 'ready');
+});
+
+test('one way to ask: when no option stays inside the wording the call exits 1, names the item and leaves stage and status', async () => {
+  const g = goalStore('textnone');
+  const brief = '## Vad den säger\nA.\n\n## Vad som föreslås\nB none.\n\n## Vad som hittades\nC.\n';
+  const f = fixture({ response: missed(), env: sessionEnv('textnone'), reader: verdictOf({ kind: 'text', inside: null, text: 'docs/technical/mc-y.md — none', brief }) });
+  assert.equal(await run(goalArgs('textnone'), { ...f.deps, read: g.read, write: g.write }), 1, f.err());
+  assert.match(f.out(), /^mc: no option stays inside the wording — the part that needs it waits on desk item [0-9a-f]+; continue with the rest and say in LOG\.md what waits\n$/u);
+  const parsed = JSON.parse(g.store[g.file]);
+  assert.deepEqual([parsed.stage, parsed.status], ['build', 'ready']);
+  assert.deepEqual([f.ledger[0].outcome, f.ledger[0].chosen], ['text', null]);
+});
+
+test('one way to ask: a duplicate text names the other goal that asked it and takes this goal when it had none', async () => {
+  const briefOf = (what) => `## Vad den säger\nA.\n\n## Vad som föreslås\n${what}\n\n## Vad som hittades\nC.\n`;
+  const first = goalStore('dupfirst'); const second = goalStore('dupsecond'); const third = goalStore('dupthird');
+  const env = (name) => sessionEnv(name, { MC_WORK_ROOT: join(scratch, 'work-dup'), MC_HOME: join(scratch, 'home-dup') });
+  mkdirSync(join(scratch, 'work-dup', 'runner', 'projects'), { recursive: true });
+  const asked = async (g, name) => {
+    const f = fixture({ response: missed(), env: env(name), reader: verdictOf({ kind: 'text', inside: 'fake_timer', text: 'docs/technical/mc-z.md — same', brief: briefOf('The same wording.') }) });
+    assert.equal(await run(goalArgs(name), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+    return f;
+  };
+  const a = await asked(first, 'dupfirst');
+  const b = await asked(second, 'dupsecond');
+  assert.equal(a.ledger[0].other_goal, null);
+  assert.equal(b.ledger[0].other_goal, 'jev/dupfirst', 'the second goal is told the first asked it');
+  assert.equal(b.ledger[0].desk_item, a.ledger[0].desk_item, 'one item');
+  assert.match(b.out(), /already open\), also asked by goal jev\/dupfirst/u);
+  assert.match(parseLog(second.store[second.log]).at(-1).comment, /also asked by goal jev\/dupfirst/u);
+  void third;
+});
+
+test('one way to ask: an unread call is decided by the session on its recommendation, with the reason, and nothing waits on Martin', async () => {
+  for (const [label, reader, expected] of [
+    ['no verdict', { read: false, reason: 'the reader ended without a verdict (exit 1)', tool: 'codex', model: 'gpt' }, /the reader ended without a verdict/u],
+    ['a timeout', { read: false, reason: 'the reader did not answer within ten minutes' }, /did not answer within ten minutes/u],
+    ['no candidate', { read: false, reason: 'no reader can run: no candidate' }, /no reader can run/u],
+    ['a verdict that cannot be carried out', verdictOf({ kind: 'continue', key: 'nonexistent', why: 'x' }), /could not be carried out/u],
+    ['a throw', () => { throw new Error('launch exploded'); }, /launch exploded/u],
+  ]) {
+    const g = goalStore('unread');
+    const f = fixture({ response: missed(), env: sessionEnv('unread'), reader });
+    assert.equal(await run(goalArgs('unread'), { ...f.deps, read: g.read, write: g.write }), 0, `${label}: ${f.err()}`);
+    assert.match(f.out(), /^mc: decided by the session, unread \(.+\) — continue with: inject a timer\n$/u, label);
+    assert.match(f.out(), expected, label);
+    assert.equal(g.store[g.file], g.original, `${label}: the goal is untouched`);
+    assert.deepEqual([f.ledger.length, f.ledger[0].answered_by, f.ledger[0].outcome, f.ledger[0].chosen], [1, 'session', 'decided', 'fake_timer'], label);
+    assert.match(f.ledger[0].unread_reason, expected, label);
+  }
+});
+
+test('one way to ask: an unreadable keys source launches no reader and copies nothing', async () => {
+  const f = fixture({ env: sessionEnv('nokeys'), reader: verdictOf({ kind: 'continue', key: 'fake_timer' }) });
+  f.deps.readKeys = () => { throw new Error('keys source missing'); };
+  const g = goalStore('nokeys');
+  assert.equal(await run(goalArgs('nokeys'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.deepEqual([f.readers.length, f.requests.length], [0, 0]);
+  assert.match(f.out(), /^mc: decided by the session, unread \(the mc keys source cannot be read/u);
+});
+
+test('one way to ask: the ceiling — a held desk ceiling answers unread without launching a reader', async () => {
+  const f = fixture({ response: missed(), env: sessionEnv('ceiling'), budget: { held: true, spent: 1.5, ceiling: 1 }, reader: verdictOf({ kind: 'continue', key: 'real_wait', why: 'x' }) });
+  const g = goalStore('ceiling');
+  assert.equal(await run(goalArgs('ceiling'), { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  assert.equal(f.readers.length, 0);
+  assert.match(f.out(), /^mc: decided by the session, unread \(desk ceiling holds turns: \$1\.5000 today \(UTC\), ceiling \$1\) — continue with: inject a timer\n$/u);
+  assert.equal(f.ledger[0].outcome, 'decided');
+  const unreadable = fixture({ response: missed(), env: sessionEnv('ceiling'), budget: () => { throw new Error('desk.json is not JSON'); }, reader: verdictOf({ kind: 'continue', key: 'real_wait', why: 'x' }) });
+  assert.equal(await run(goalArgs('ceiling'), { ...unreadable.deps, read: g.read, write: g.write }), 0);
+  assert.equal(unreadable.readers.length, 0);
+  assert.match(unreadable.out(), /the desk ceiling cannot be read/u);
+});
+
+test('one way to ask: --kind is accepted with any value and ignored, with one stderr line, and the ledger kind is null', async () => {
+  for (const kind of ['technical', 'product', 'nonsense']) {
+    const f = fixture({ env: { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+    assert.equal(await run(['--kind', kind, ...options], f.deps), 0, f.err());
+    assert.equal(f.err(), 'mc: --kind is not read — whether a text of Martin’s would change is the reader’s finding\n');
+    assert.equal(f.ledger[0].kind, null);
+    assert.equal(f.requests.length, 1);
+  }
+  const without = fixture({ env: { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  assert.equal(await run(options, without.deps), 0);
+  assert.equal(without.err(), '', 'a call without --kind says nothing');
+});
+
+test('one way to ask: --kind is not asked for by the return instruction, the usage or the help', async () => {
+  const f = fixture({ env: { MC_PROGRAMME: 'jev', MC_TOOL: 'claude', MC_ROLE: 'build-session:goal', cwd: repoDir } });
+  assert.equal(await run(['--reason', 'missing choices'], f.deps), 2);
+  assert.doesNotMatch(f.err(), /--kind|mc goal martin/u);
+  assert.match(f.err(), /mc ask <programme>\/<goal>/u);
+  const { usage } = await import('../../../src/mc/commands/ask.js');
+  assert.doesNotMatch(usage(), /--kind/u);
+  assert.match(usage(), /mc ask answer/u);
+});
+
+test('one way to ask: the guard — an ask-reader session may only answer, and the other roles still refuse as before', async () => {
+  for (const argv of [options, ['answer'], ['--help']]) {
+    const f = fixture({ env: { MC_ROLE: 'ask-reader', MC_HEADLESS: '1', MC_TOOL: 'claude', cwd: repoDir } });
+    const code = await run(argv, f.deps);
+    assert.equal(code, 2);
+    assert.deepEqual([f.requests.length, f.ledger.length, f.readers.length], [0, 0, 0]);
+  }
+  const asked = fixture({ env: { MC_ROLE: 'ask-reader', MC_HEADLESS: '1', MC_TOOL: 'claude', cwd: repoDir } });
+  await run(options, asked.deps);
+  assert.match(asked.err(), /an ask-reader session cannot ask — it answers with mc ask answer/u);
+  const answering = fixture({ env: { MC_ROLE: 'ask-reader', MC_HEADLESS: '1', MC_TOOL: 'claude', cwd: repoDir } });
+  assert.equal(await run(['answer', 'not-a-call', 'continue', 'x'], answering.deps), 2);
+  assert.match(answering.err(), /ask answer is not recorded/u);
+  for (const [role, pattern] of [['desk-prepare', /desk-prepare cannot ask/u], ['plan-review', /plan-review session cannot ask/u]]) {
+    const f = fixture({ env: { MC_ROLE: role, cwd: repoDir } });
+    assert.equal(await run(options, f.deps), 2);
+    assert.match(f.err(), pattern);
+  }
+  const person = fixture({ env: { MC_ROLE: 'martin', MC_HEADLESS: '1', cwd: repoDir } });
+  assert.equal(await run(options, person.deps), 2);
+});
+
+test('one way to ask: reserved — a reserved act never reaches jev or a reader, sets the goal Martin, and names no kind', async () => {
+  const g = goalStore('reservedone');
+  const f = fixture({ env: sessionEnv('reservedone'), reader: verdictOf({ kind: 'continue', key: 'fake_timer' }) });
+  assert.equal(await run(goalArgs('reservedone', ['--reserved', 'deploy']), { ...f.deps, read: g.read, write: g.write }), 1, f.err());
+  assert.deepEqual([f.requests.length, f.readers.length], [0, 0]);
+  assert.equal(JSON.parse(g.store[g.file]).status, 'Martin');
+  assert.deepEqual([f.ledger[0].outcome, f.ledger[0].reserved, f.ledger[0].kind, f.ledger[0].answered_by], ['reserved', 'deploy', null, 'martin']);
+  assert.match(f.out(), /^mc: reserved act deploy — Martin decides, jev is not asked\n$/u);
+  assert.doesNotMatch(`${f.out()}${f.err()}`, /--kind/u);
+});
+
+test('one way to ask: the record — no key-source value reaches the ledger, LOG.md, stdout, stderr or the reader’s input', async () => {
+  const secret = 'sk-live-SECRETVALUE123';
+  const g = goalStore('secret');
+  const f = fixture({ response: missed(), env: sessionEnv('secret'), reader: (input) => { assert.ok(!JSON.stringify(input).includes(secret) || input.secrets.includes(secret)); return verdictOf({ kind: 'continue', key: 'real_wait', why: `uses ${secret}` }); } });
+  f.deps.readKeys = () => ({ TYPESAFE_API_KEY: secret });
+  const argv = ['jev/secret', '--reason', `Which, with ${secret}?`, '--option', `fake_timer: inject ${secret}`, '--option', 'real_wait: wait', '--recommend', 'fake_timer', '--evidence', `evidence ${secret}`];
+  assert.equal(await run(argv, { ...f.deps, read: g.read, write: g.write }), 0, f.err());
+  for (const text of [f.out(), f.err(), JSON.stringify(f.ledger), g.store[g.log]]) assert.ok(!text.includes(secret));
+});
+
+test('one way to ask: the record — a key-source value in the reader’s text and brief reaches neither the desk item, the ledger nor LOG.md', async () => {
+  const secret = 'sk-live-SECRETBRIEF456';
+  const g = goalStore('secretbrief');
+  const brief = `## Vad den säger\nIt says ${secret}.\n\n## Vad som föreslås\nB.\n\n## Vad som hittades\nC ${secret}.\n`;
+  const env = sessionEnv('secretbrief');
+  const f = fixture({ response: missed(), env, reader: verdictOf({ kind: 'text', inside: null, text: `docs/technical/mc-s.md — ${secret}`, brief }) });
+  f.deps.readKeys = () => ({ TYPESAFE_API_KEY: secret });
+  assert.equal(await run(goalArgs('secretbrief'), { ...f.deps, read: g.read, write: g.write }), 1, f.err());
+  const itemDir = join(itemStore(env), f.ledger[0].desk_item);
+  const written = readdirSync(itemDir).map((name) => join(itemDir, name));
+  assert.ok(written.some((path) => path.endsWith('item.json')) && written.some((path) => path.endsWith('brief.md')), `the desk item and its brief are written (${written.join(', ')})`);
+  for (const path of written) assert.ok(!readFileSync(path, 'utf8').includes(secret), `${path} carries no key value`);
+  assert.match(readFileSync(written.find((path) => path.endsWith('brief.md')), 'utf8'), /It says \S*REDACTED/iu, 'the brief is kept, its key value replaced');
+  for (const text of [f.out(), f.err(), JSON.stringify(f.ledger), g.store[g.log]]) assert.ok(!text.includes(secret));
 });

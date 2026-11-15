@@ -30,7 +30,7 @@ says. A technical call (the order of work, carrying out a decision already on
 record, a defect repaired by a pattern the app has, what a rule already implies
 for a case) is yours: make it, record it where it governs (the programme README,
 the goal, or `docs/technical/` when it reaches beyond the programme), and report
-it in a line. A choice between options goes through `mc ask`, as that page says.
+it in a line. A choice between options goes through `mc ask`, the one way to ask (jev, then a reader), as that page says.
 Never ask for a GO on a technical call, and never bring him a file, an id, a
 scope or a checklist line as a question. What is his and has no goal, you leave
 as a proposal and report it in a line; you do not put it to him as a question.

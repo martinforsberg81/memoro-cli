@@ -794,7 +794,8 @@ test('programmePlanPrompt names the programme directory, its README, the checkou
   assert.ok(plain.includes('mc goal areas <repo>'));
   assert.doesNotMatch(plain, /mc martin horizon show/u, 'no horizon command without a horizon');
   assert.match(plain, /mc programs after/u);
-  assert.match(plain, /mc ask --kind product/u);
+  assert.match(plain, /mc ask` on the draft that needs it: jev, then a reader, answers it/u);
+  assert.doesNotMatch(plain, /--kind/u);
   assert.match(plain, /Do not implement a goal, process proposals or commit/u);
   const horizon = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', horizon: 'h', repos: ['memoro'], checkouts: { memoro: '/c/memoro' } });
   assert.ok(horizon.includes('`mc martin horizon show h`'));

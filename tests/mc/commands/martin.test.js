@@ -45,10 +45,10 @@ function askFixture(home, reference, env = {}) {
     ledger: () => { effects.push('ledger'); },
   };
   return { ...output, effects, call: async ({ question = 'Original unresolved policy?', p = 0.5, at = '2026-01-01T00:00:00Z', reserved = false } = {}) => ask([
-    ...(reference ? [reference] : []), '--kind', 'product', '--reason', question,
+    ...(reference ? [reference] : []), '--reason', question,
     '--option', 'a: keep rule', '--option', 'b: change rule', '--recommend', 'a',
     '--evidence', 'Investigated evidence for this rule.', ...(reserved ? ['--reserved', 'admin'] : []),
-  ], { ...deps, now: () => new Date(at), jev: {
+  ], { ...deps, now: () => new Date(at), budget: () => ({ held: false }), askReader: async () => ({ read: false, reason: 'no reader in this test' }), jev: {
     transport: async () => { effects.push('provider'); return { status: 200, text: async () => JSON.stringify({ model: 'jev-1.14.0', answers: {
       answer: { choice: 'a', probabilities: { a: p } }, fits: { noul: 0.99 }, settled: { noul: 0.99 }, product: { noul: 0.1 },
     } }) }; }, timer: () => new Promise(() => {}),
@@ -104,7 +104,7 @@ describe('mc martin get', () => {
     f.make('beta', 'later', {}, [log('2026-01-01T12:00Z', 'Martin', 'Martin is asked: Later policy?')]);
     f.make('alpha', 'questionless', {}, [log('2026-01-03T00:00Z', 'Martin', 'runner failure: missing evidence')]);
     const writer = askFixture(f.home, 'alpha/waiting');
-    assert.equal(await writer.call(), 1, writer.out.stderr);
+    assert.equal(await writer.call({ reserved: true }), 1, writer.out.stderr);
     assert.equal(await writer.call({ question: 'Settled implementation detail?', p: 0.99, at: '2026-01-02T00:00:00Z' }), 0, writer.out.stderr);
     const questionless = askFixture(f.home, 'alpha/questionless');
     assert.equal(await questionless.call({ question: 'Another settled detail?', p: 0.99, at: '2026-01-04T00:00:00Z' }), 0, questionless.out.stderr);
@@ -138,7 +138,7 @@ describe('mc martin get', () => {
   it('preserves real ask readings and every populated tail field in text and JSON outside the question tail', async () => {
     const f = fixture(); const dir = f.make('alpha', 'waiting', { status: 'ready' });
     const writer = askFixture(f.home, 'alpha/waiting');
-    assert.equal(await writer.call(), 1, writer.out.stderr);
+    assert.equal(await writer.call({ reserved: true }), 1, writer.out.stderr);
     for (const day of [2, 3, 4]) appendEntry({ dir, entry: {
       at: `2026-01-0${day}T00:00Z`, tool: 'codex', role: 'martin', stage: 'build', status: 'Martin',
       done: `Failure evidence ${day}`, comment: `Brief comment ${day}`, next: `Recovery instructions ${day}`,
@@ -146,7 +146,7 @@ describe('mc martin get', () => {
     const before = snapshot(f.home);
     const result = collectMartinQueue({ home: f.home }); const item = result.items[0];
     const reading = writer.out.stdout.trim();
-    assert.match(reading, /^mc: jev did not settle it: a .*not answered: p 0\.50/u);
+    assert.match(reading, /^mc: reserved act admin — Martin decides, jev is not asked$/u);
     assert.equal(item.question.jev, reading);
     assert.deepEqual(item.question.options, [{ key: 'a', text: 'keep rule' }, { key: 'b', text: 'change rule' }]);
     assert.equal(item.question.recommendation, 'a');
@@ -1123,5 +1123,79 @@ describe('mc martin brief with a programme item', () => {
     assert.ok(out.includes('\nprog\n- 2026-11-14T10:20:00.000Z · The state file was repaired. (programme:prog, decision)'), 'decided without you, under the programme\'s name');
     assert.match(out, /Stuck after the decision pass, not yours: programme:prog \(/u, 'a for-martin programme item is mechanical: the runner\'s, listed as stuck');
     assert.doesNotMatch(out, /### \d+\. programme:prog/u, 'not among Martin\'s texts or acts');
+  });
+});
+
+describe('one way to ask: the desk', () => {
+  it('one way to ask: the record — the opening lists differing and unread answers first and names who answered', async () => {
+    const d = openingStore();
+    const at = (n) => `2026-11-14T0${n}:00:00.000Z`;
+    const decision = (n, summary) => d.put({ kind: 'decision', reference: `decision:${at(n)}`, source_at: at(n), state: 'closed', outcome: { by: 'decision', at: `2026-11-14T10:0${n}:00.000Z`, summary } });
+    decision(1, 'Took the recommendation.'); decision(2, 'The reader chose b.'); decision(3, 'Nobody read it.'); decision(4, 'An old decided row.');
+    const row = (n, extra) => ({ at: at(n), recommend: 'a', question: 'Q?', options: { a: 'A', b: 'B' }, ...extra });
+    mkdirSync(join(d.env.MC_HOME, 'jev'), { recursive: true });
+    writeFileSync(join(d.env.MC_HOME, 'jev', 'decisions.jsonl'), [
+      row(1, { outcome: 'read', answered_by: 'reader', chosen: 'a' }), row(2, { outcome: 'read', answered_by: 'reader', chosen: 'b' }),
+      row(3, { outcome: 'decided', answered_by: 'session', chosen: 'a', unread_reason: 'no verdict' }), row(4, { outcome: 'decided', answers: { answer: { choice: 'a' } } }),
+    ].map((x) => JSON.stringify(x)).join('\n') + '\n');
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    const items = JSON.parse(json.out.stdout).decided.programmes.flatMap((group) => group.items).filter((item) => item.reference.startsWith('decision:'));
+    assert.deepEqual(items.map((item) => [item.reference, item.answered_by, item.flagged === true, item.unread === true]), [
+      [`decision:${at(2)}`, 'reader', true, false], [`decision:${at(3)}`, 'session', true, true], [`decision:${at(1)}`, 'reader', false, false], [`decision:${at(4)}`, 'session', false, false],
+    ]);
+    const text = io(); assert.equal(await run(['brief'], { ...text, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, text.out.stderr);
+    assert.match(text.out.stdout, /- UNREAD: .*Nobody read it\. \(decision:[^,]+, decision, answered by session\)/u);
+    assert.match(text.out.stdout, /- NOT THE RECOMMENDATION: .*The reader chose b\. \(decision:[^,]+, decision, answered by reader\)/u);
+    assert.ok(text.out.stdout.indexOf('Nobody read it.') < text.out.stdout.indexOf('Took the recommendation.'));
+  });
+
+  it('one way to ask: the ceiling — the desk counts an ask-reader run under its daily ceiling, in the cost it reports', async () => {
+    const d = openingStore(); mkdirSync(join(d.env.MC_WORK_ROOT, 'runner', 'log'), { recursive: true });
+    const rows = [['2026-11-14T01:00:00Z', 'ask-reader', 1.5], ['2026-11-14T02:00:00Z', 'desk-prepare', 0.5], ['2026-11-13T02:00:00Z', 'ask-reader', 1], ['2026-11-14T03:00:00Z', 'build-session', 9]];
+    writeFileSync(deskRunsPath(d.env), `${tsvHeader()}\n${rows.map(([ts, kind, cost]) => tsvRow({ ts, kind, cost })).join('\n')}\n`);
+    setDeskCeiling(2, { env: d.env });
+    const json = io(); assert.equal(await run(['brief', '--json'], { ...json, env: d.env, home: d.home, now: () => new Date(NOW) }), 0, json.out.stderr);
+    const cost = JSON.parse(json.out.stdout).cost;
+    assert.deepEqual([cost.today, cost.last_seven_days, cost.ceiling], [2, 3, 2], 'a build session is not the desk\'s; the reader is');
+  });
+
+  it('one way to ask: reserved — an ask with --reserved sets Martin with the ask in the log and reaches neither jev nor a reader', async () => {
+    const f = fixture(); const dir = f.make('alpha', 'waiting', { status: 'ready' });
+    const writer = askFixture(f.home, 'alpha/waiting', { MC_ROLE: 'build-session:goal', MC_HEADLESS: '1' });
+    let readers = 0;
+    assert.equal(await writer.call({ reserved: true }), 1, writer.out.stderr);
+    assert.deepEqual(writer.effects.filter((effect) => effect === 'provider'), [], 'jev is not asked');
+    assert.equal(readers, 0);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'GOAL.json'), 'utf8')).status, 'Martin');
+    const [item] = collectMartinQueue({ home: f.home }).items;
+    assert.equal(item.question.question, 'Original unresolved policy?');
+    assert.deepEqual(item.question.options, [{ key: 'a', text: 'keep rule' }, { key: 'b', text: 'change rule' }]);
+  });
+
+  it('one way to ask: the guard — mc martin propose is refused to an ask-reader session, and writes nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-guard-')); roots.push(root);
+    const env = { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home'), MC_ROLE: 'ask-reader', MC_HEADLESS: '1' };
+    const file = join(root, 'brief.md'); writeFileSync(file, '## Vad den säger\nA\n\n## Vad som föreslås\nB\n\n## Vad som hittades\nC\n');
+    const result = io();
+    assert.equal(await run(['propose', '--text', 'canon/tasks/asking-martin.md#What mc does with it', '--file', file], { ...result, env, home: join(root, 'programs'), now: () => new Date(NOW) }), 2);
+    assert.match(result.out.stderr, /ask-reader cannot propose a text change/u);
+    assert.equal(existsSync(join(env.MC_WORK_ROOT, 'martin', 'items')), false);
+  });
+
+  it('one way to ask: mc martin propose --goal gives an open duplicate the goal when it names none, and leaves one that names another', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-dup-')); roots.push(root);
+    const env = { MC_WORK_ROOT: join(root, 'mc'), MC_HOME: join(root, 'mc-home'), MC_ROLE: 'person' };
+    mkdirSync(join(env.MC_WORK_ROOT, 'runner', 'projects'), { recursive: true });
+    for (const name of ['one', 'two']) { const dir = join(root, 'programs', 'alpha', 'goals', name); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready' })); writeFileSync(join(dir, 'LOG.md'), ''); }
+    writeFileSync(join(root, 'programs', 'alpha', 'README.md'), 'Alpha');
+    const file = join(root, 'brief.md'); writeFileSync(file, '## Vad den säger\nA\n\n## Vad som föreslås\nB\n\n## Vad som hittades\nC\n');
+    const propose = async (goal, at) => { const result = io(); const code = await run(['propose', '--text', 'canon/tasks/asking-martin.md#What mc does with it', '--file', file, ...(goal ? ['--goal', goal] : [])], { ...result, env, home: join(root, 'programs'), now: () => new Date(at) }); return { code, id: result.out.stdout.trim(), out: result.out }; };
+    const first = await propose(null, '2026-11-14T10:00:00Z'); assert.equal(first.code, 0, first.out.stderr);
+    const item = () => JSON.parse(readFileSync(join(env.MC_WORK_ROOT, 'martin', 'items', first.id, 'item.json'), 'utf8'));
+    assert.equal(item().goal, null);
+    const second = await propose('alpha/one', '2026-11-14T11:00:00Z'); assert.equal(second.code, 0, second.out.stderr); assert.equal(second.id, first.id);
+    assert.equal(item().goal, 'alpha/one');
+    const third = await propose('alpha/two', '2026-11-14T12:00:00Z'); assert.equal(third.id, first.id);
+    assert.equal(item().goal, 'alpha/one', 'one that names a goal is left as it is');
   });
 });

@@ -224,6 +224,7 @@ function propose(argv, deps) {
   const fail = (message) => { stderr.write(`mc: ${message}\n`); return 2; };
   const role = writerRole(env);
   if (role === 'desk-prepare') return fail('role desk-prepare cannot propose a text change: it only prepares');
+  if (role === 'ask-reader') return fail('role ask-reader cannot propose a text change: its answer is mc ask answer … text');
   const parsed = scanArgs(argv, ROUTES.propose);
   const error = parsed.error || ROUTES.propose.check(parsed);
   if (error) return fail(error);
@@ -489,7 +490,7 @@ export function renderOpening(data) {
   if (!data.decided.programmes.length) out.push('', 'Nothing was decided without you in this interval.');
   for (const group of data.decided.programmes) {
     out.push('', group.programme);
-    for (const item of group.items) out.push(`- ${item.at} · ${item.summary} (${item.reference}, ${item.by})`);
+    for (const item of group.items) out.push(`- ${item.flagged ? (item.unread ? 'UNREAD: ' : 'NOT THE RECOMMENDATION: ') : ''}${item.at} · ${item.summary} (${item.reference}, ${item.by}${item.answered_by ? `, answered by ${item.answered_by}` : ''})`);
   }
   out.push('', `Closed by source in the same interval: ${data.decided.closed_by_source}.`);
   out.push('', '## Not ready');

@@ -476,3 +476,40 @@ test('a text item is labelled by its text, a sync neither closes nor opens anoth
   assert.deepEqual(synced.map((item) => item.id).sort(), [old.id, text.id].sort(), 'the sync opened nothing beside them');
   assert.deepEqual([readDeskItem(old.id, { env: f.env }).sort, readDeskItem(old.id, { env: f.env }).due_at], ['product', '2026-11-16T10:00:00Z']);
 });
+
+test('one way to ask: the record — a reader row opens a decision item when its key differs, an unread row always does, and a row that took the recommendation does not',()=>{
+  const f=fixture(); const ledger=join(f.env.MC_HOME,'jev','decisions.jsonl'); mkdirSync(join(f.env.MC_HOME,'jev'),{recursive:true});
+  const row=(at,extra)=>({at,recommend:'a',question:'Question?',options:{a:'A',b:'B'},kind:null,...extra});
+  writeFileSync(ledger,[
+    row('2026-11-14T10:01:00Z',{outcome:'read',answered_by:'reader',chosen:'b',reader:{tool:'claude',model:'fable',key:'b',why:'the standard says b'}}),
+    row('2026-11-14T10:02:00Z',{outcome:'read',answered_by:'reader',chosen:'a',reader:{tool:'claude',model:'fable',key:'a'}}),
+    row('2026-11-14T10:03:00Z',{outcome:'decided',answered_by:'session',chosen:'a',unread_reason:'the reader ended without a verdict'}),
+    row('2026-11-14T10:04:00Z',{outcome:'answered',answered_by:'jev',chosen:'a',answers:{answer:{choice:'a'},product:0.9}}),
+    row('2026-11-14T10:05:00Z',{outcome:'answered',answered_by:'jev',chosen:'b',answers:{answer:{choice:'b'}}}),
+    row('2026-11-14T10:06:00Z',{outcome:'text',answered_by:'reader',chosen:'a',desk_item:'abc123',reader:{tool:'claude',model:'fable',key:'a'}}),
+  ].map(JSON.stringify).join('\n')+'\n');
+  const items=syncDeskItems({env:f.env,home:f.home,now:()=>new Date(stamp),read:fixtureRead});
+  assert.deepEqual(items.map(x=>x.reference).sort(),['decision:2026-11-14T10:01:00Z','decision:2026-11-14T10:03:00Z','decision:2026-11-14T10:05:00Z'],'a differing reader or jev answer and an unread one; the recommendation taken, however product jev read it, is not');
+});
+
+test('one way to ask: the record — an old decided row is flagged by the rule it had, and an old row with no answered_by is never unread',()=>{
+  const f=fixture(); const ledger=join(f.env.MC_HOME,'jev','decisions.jsonl'); mkdirSync(join(f.env.MC_HOME,'jev'),{recursive:true});
+  const old=(at,choice,product)=>({at,outcome:'decided',recommend:'a',question:'Question?',answers:{answer:{choice},product}});
+  writeFileSync(ledger,[old('2026-11-14T10:01:00Z','a',0.1),old('2026-11-14T10:02:00Z','b',0.1),old('2026-11-14T10:03:00Z','a',0.8)].map(JSON.stringify).join('\n')+'\n');
+  const items=syncDeskItems({env:f.env,home:f.home,now:()=>new Date(stamp),read:fixtureRead});
+  assert.deepEqual(items.map(x=>x.reference).sort(),['decision:2026-11-14T10:02:00Z','decision:2026-11-14T10:03:00Z']);
+});
+
+test('one way to ask: the record — a text item proposed with a goal is found by a call that names it, and the goal is set once',async()=>{
+  const { proposeText } = await import('../../src/mc/desk-texts.js');
+  const f=fixture(); const brief='## Vad den säger\nA\n\n## Vad som föreslås\nB\n\n## Vad som hittades\nC\n';
+  const text='canon/tasks/asking-martin.md#What mc does with it';
+  const first=proposeText({env:f.env,text,brief,goal:null,now:new Date(stamp)});
+  assert.ok(first.item,first.error); assert.equal(first.item.goal,null);
+  const second=proposeText({env:f.env,text,brief,goal:'alpha/one',now:new Date('2026-11-14T11:00:00Z')});
+  assert.equal(second.duplicate,true); assert.equal(second.item.id,first.item.id); assert.equal(second.item.goal,'alpha/one');
+  assert.equal(readDeskItem(first.item.id,{env:f.env}).goal,'alpha/one','stored');
+  const third=proposeText({env:f.env,text,brief,goal:'alpha/two',now:new Date('2026-11-14T12:00:00Z')});
+  assert.equal(third.duplicate,true); assert.equal(third.item.goal,'alpha/one','an item that names a goal keeps it');
+  assert.equal(readDeskItem(first.item.id,{env:f.env}).goal,'alpha/one');
+});

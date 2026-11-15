@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { martinDir, mcHome, programsHome } from './paths.js';
 import { itemDirectory, itemStore, listDeskItems } from './desk-items.js';
 import { costSum, deskCeiling, deskRunsPath, readDeskText } from './desk-budget.js';
-import { ledgerPath } from './jev.js';
+import { ledgerPath, rowAnswer } from './jev.js';
 import { FINISHED, goalReferences, programmeOrder, programsGoals } from './goals.js';
 import { readRunRows } from './landed.js';
 import { horizonsOpening } from './desk-horizons.js';
@@ -21,7 +21,7 @@ import { isTextSort } from './desk-texts.js';
 import { buildChanges, listLessons } from './desk-lessons.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-const PASSES = ['desk-prepare', 'decision', 'learning'];
+const PASSES = ['desk-prepare', 'decision', 'learning', 'ask-reader'];
 const BEGINNING = '1970-01-01T00:00:00.000Z';
 const LAST_OPEN = 'last-open.json';
 
@@ -147,13 +147,21 @@ export function openingStuck(items) {
   })).sort((a, b) => a.reference.localeCompare(b.reference) || a.id.localeCompare(b.id));
 }
 
-/** The items closed by the decision pass or by default in (since, now], by programme, and how many the source closed. */
-export function openingDecided({ items, since, now }) {
+/**
+ * The items closed by the decision pass or by default in (since, now], by programme, and how many the source closed.
+ * A decision item names who answered the ask it came from (`ledger`: the ledger's rows by their `decision:<at>`
+ * reference), and an unread one or one that is not the asker's recommendation is listed first.
+ */
+export function openingDecided({ items, since, now, ledger = {} }) {
   const sinceMs = timeOf(since), nowMs = now.getTime();
   const closed = items.filter((item) => item.state === 'closed' && item.outcome && timeOf(item.outcome.at) > sinceMs && timeOf(item.outcome.at) <= nowMs);
-  const decided = closed.filter((item) => ['decision', 'default'].includes(item.outcome.by)).map((item) => ({
-    id: item.id, reference: item.reference, programme: programmeOf(item), by: item.outcome.by, at: item.outcome.at, summary: oneLine(item.outcome.summary),
-  })).sort((a, b) => timeOf(a.at) - timeOf(b.at) || a.id.localeCompare(b.id));
+  const decided = closed.filter((item) => ['decision', 'default'].includes(item.outcome.by)).map((item) => {
+    const row = item.kind === 'decision' ? ledger[item.reference] : null;
+    const answer = row ? rowAnswer(row) : null;
+    const flagged = Boolean(answer && (answer.unread || (answer.chosen !== null && answer.chosen !== row.recommend)));
+    return { id: item.id, reference: item.reference, programme: programmeOf(item), by: item.outcome.by, at: item.outcome.at, summary: oneLine(item.outcome.summary),
+      ...(answer?.by ? { answered_by: answer.by } : {}), ...(answer?.unread ? { unread: true } : {}), ...(flagged ? { flagged: true } : {}) };
+  }).sort((a, b) => Number(Boolean(b.flagged)) - Number(Boolean(a.flagged)) || timeOf(a.at) - timeOf(b.at) || a.id.localeCompare(b.id));
   const programmes = [...new Set(decided.map((item) => item.programme))].sort().map((programme) => ({ programme, items: decided.filter((item) => item.programme === programme) }));
   return { since, programmes, closed_by_source: closed.filter((item) => item.outcome.by === 'source').length };
 }
@@ -175,7 +183,7 @@ export function openingNotReady({ items, stuck, now }) {
 }
 
 /**
- * The jev ledger's asks in (since, now]: `asks` the rows answered or decided, `against` the answered rows whose
+ * The jev ledger's asks in (since, now]: `asks` the rows a jev, a reader or the session answered, `against` the answered rows whose
  * choice differs from the recommendation (a decided row takes the recommendation, as `mc decisions` has it), and
  * the lines that did not parse. A missing ledger is no asks; any other read error throws.
  */
@@ -187,12 +195,22 @@ export function ledgerAsks({ env = process.env, since, now, read = readDeskText 
     if (!line.trim()) continue;
     let row;
     try { row = JSON.parse(line); } catch { out.unreadable_lines += 1; continue; }
-    if (!['answered', 'decided'].includes(row?.outcome)) continue;
+    if (!['answered', 'read', 'text', 'defect', 'decided'].includes(row?.outcome)) continue;
     const at = Date.parse(row.at);
     if (!(at > sinceMs && at <= nowMs)) continue;
     out.asks += 1;
-    if (row.outcome === 'answered' && row.answers?.answer?.choice !== row.recommend) out.against += 1;
+    const { chosen } = rowAnswer(row);
+    if (row.outcome !== 'decided' && row.outcome !== 'defect' && chosen !== null && chosen !== row.recommend) out.against += 1;
   }
+  return out;
+}
+
+/** The ledger's rows by their `decision:<at>` reference; an unreadable or missing ledger is no rows. */
+function ledgerRows({ env, read }) {
+  const out = {};
+  let text = '';
+  try { text = read(ledgerPath(mcHome(env))) ?? ''; } catch { return out; }
+  for (const line of String(text).split(/\n/u)) { try { const row = JSON.parse(line); if (row?.at) out[`decision:${row.at}`] = row; } catch { /* a line that does not parse */ } }
   return out;
 }
 
@@ -207,7 +225,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
   return {
     generated_at: now.toISOString(), last_opened: last, since,
     texts: openingTexts({ items, env, home, goals }), acts: openingActs({ items, env, home, goals }),
-    decided: openingDecided({ items, since, now }),
+    decided: openingDecided({ items, since, now, ledger: ledgerRows({ env, read }) }),
     not_ready: openingNotReady({ items, stuck, now }),
     cost: costReading({ env, now, read }),
     ...(horizonData ? { horizons: horizonData } : {}),
