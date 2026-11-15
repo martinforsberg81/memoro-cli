@@ -35,7 +35,12 @@ Before you finish: `mc gate` on what you changed, fix the red, commit, then
 model reads the PR, and queues it for the merger when it is OK. The goal is
 `done` when it lands. mc holds this: a plain `mc publish` or `mc merge` queues
 or lands nothing for a goal before stage `merge`, and says what hands it over
-(`mc goal stage merge`, a review's or finish session's verb, never yours).
+(`mc goal stage merge`, a review's verb, never yours).
+
+When the prompt says this is a repair, read `REVIEW.md` and repair its NOT OK
+items. Run their checks again and log the evidence; leave the other criteria's
+marks as they are. Publish with `--no-merge` and return the goal to review,
+where the repair is judged again.
 
 **Checks are yours to run.** Run a criterion's check, a gate or a live check
 as often as the work needs: after a fix, after a diagnosis, or to read a
@@ -85,7 +90,7 @@ moves forward. You do one of two things to it, nothing else:
 mc refuses every other move from a build session — `done`, `dropped`, any
 other stage, any move back. Then end the session, in that same turn. A
 session that ends with no log entry gets one from the runner, and three of
-those in a row move the goal to `finish`, where a finish session takes it.
+those in a row stop the goal in build with status `Martin`.
 A session that does write its entry but commits nothing and meets no
 criterion counts too: three such sessions in a row, with every head unchanged,
 stop the goal with `no progress:` and status `Martin`, and no fourth session

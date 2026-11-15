@@ -49,12 +49,12 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
    read: a failure under load or a broken fixture is diagnosed and run again,
    not counted. A build trace you inspect is an inspected observation, never an
    independently reproduced live fact. Missing essential proof is not
-   acceptance; it goes to finish with REVIEW.md.
+   acceptance; it returns to build with REVIEW.md.
    A change to what users see is judged at element level: take `mc shot`
    yourself in each viewport the goal names and compare it with the intended
    result — layout, spacing, alignment, typography, states, overflow, empty and
    error states. A visible deviation from the intent is not OK; it goes to
-   finish with the screenshots named in REVIEW.md.
+   build with the screenshots named in REVIEW.md.
 3. **Structure.** The change fits where it sits; no duplication; the right
    altitude; readable names; the documents the goal names are updated. For a
    goal in numbered parts, judge the diff against the parts as well as the
@@ -88,6 +88,27 @@ the worktree is yours to change; the route to `main` is the merger's, after you.
 that should stop it landing. Anything else is **not OK**. You decide; the
 runner reads neither your words nor your files.
 
+On a subsequent review, the prompt gives the prior heads and failed items.
+Judge those items again and the diff since those heads, including a free bug
+hunt on that diff. An earlier OK remains OK unless that diff touches what it
+rests on. Carry each item not judged again into the new verdict as
+`<id>: OK — carried from round <n>`. An old free-form review without heads
+requires a whole review instead.
+
+The prompt also lists changed files under paths of areas declared untouched.
+For each tripped area, judge its questions: give an OK line with the reason
+the touch does not concern them, or report a goal defect against that stand.
+
+Write `REVIEW.md` on every review, before moving the stage. Start with one
+`head: <repo> <sha>` line for each goal repository. Then write one line per
+item as `<id>: OK` or `<id>: NOT OK — <what and where>`. The ids are
+`criterion <n>`, each preserve id, `obligation <area>` for each touched
+obligation, `untouched <area>` for each tripped area, `change`, `out-of-scope`,
+`protection` and `bugs`. A version 1 goal requires only its criteria lines.
+Free text may follow the lines. Include the evidence needed to understand a
+failure. mc checks the form and heads, not your judgement, and keeps a copy
+under the round's name when you move the stage.
+
 Your output is exactly three things, and nothing else:
 
 Write the proposal and any REVIEW.md before the stage verb. In a runner
@@ -95,28 +116,25 @@ session, a successful `mc goal stage merge` ends the session and releases its
 lane as soon as every registered PR is queued; nothing follows that command.
 
 1. **The stage, always one of two.**
-   - OK: `mc goal stage merge`. It sends every registered pull request
+   - OK: write the complete verdict, then `mc goal stage merge`. It sends every registered pull request
      to the merger. Your decision is final: mc lands them through the ordinary
      measured round, reusing your change-scope receipt (exact or delta) and
      measuring the rest, then sets `done`. It does not re-check criteria or the
      reviewed head.
-   - Not OK: write `REVIEW.md` in the goal's directory first — the head sha
-     you judged, then what is wrong and where (file and line, the check that
-     failed and its output) — then `mc goal stage finish`. mc refuses
-     `finish` without REVIEW.md. A finish session reads it, fixes what you
-     found and sends the goal to merge; it is not reviewed again. Nobody
-     reads a review that went to `merge`, so then you write no REVIEW.md.
+   - Not OK: write the complete verdict with each failure and where it was
+     found, then `mc goal stage build`. A repair build fixes it and returns it
+     to review. The third rejection stays in review with status Martin.
 2. **One proposal, always** — whichever stage: one file in
    `~/mc/programs/<programme>/proposals/`, in the proposals skill's form,
    with what you noticed beyond this goal: observations, and improvements to
    make. The programme's interactive plan session takes a stand on it.
 3. **One line in LOG.md** — the stage verb's `--reason` naming the files you
-   wrote: `mc goal stage merge --reason "proposal <file>"`, or `mc goal
-   stage finish --reason "REVIEW.md, proposal <file>"`.
+   wrote: `mc goal stage merge --reason "REVIEW.md, proposal <file>"`, or `mc goal
+   stage build --reason "REVIEW.md, proposal <file>"`.
 
 Nothing else: no comment on the pull request, no long LOG.md entry, no
 `--next`, no status. You never move the goal anywhere but `merge` or
-`finish`.
+`build`.
 
 If the review itself cannot continue — an unavailable check, missing worktree or
 other unrecoverable in-role obstacle — wait directly on Martin, retaining the
@@ -134,7 +152,7 @@ review finding and not a choice. Verify it against the code and report it with
 `mc goal defect --part "<the part or criterion that is wrong>" --found "<what
 is wrong, with the file and line or the command and output>"`: one entry,
 status `Martin`, no options, and the session ends. Do not send such a goal to
-`finish`, where the same text would fail again.
+`build`, where the same text would fail again.
 
 You cannot end ready in `review`: the session's Stop hook (`mc hook stop`) refuses
 the end while the goal is in review or no proposal is written, and says what
