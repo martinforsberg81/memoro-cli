@@ -173,7 +173,7 @@ export async function run(argv, deps = {}) {
       return 2;
     }
     const wide = scanned.flags['whole-selection'] || commandId != null;
-    // An explicit command can repair a daily-only red, including a full-only
+    // An explicit command can repair a full-run-only red, including a full-only
     // counterpart. It needs the complete command inventory, not a diff that
     // may not select the failing command on an otherwise clean main.
     const selector = commandId != null && declaration.select_full

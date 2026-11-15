@@ -694,7 +694,8 @@ learning pass*.
 
 No external supervisor is needed. The runner's chore pass — the
 helper's collect, the intake drain, the tidying — ends with one more chore, the
-**full runs** (Martin, 2026-11-13): once a day (`nightlyDue`), `runNightly`
+**full runs** (Martin, 2026-11-13; they follow main since 2026-11-15, with no
+once-a-day gate): every pass, `runNightly` asks `fullRunDue` of each repository and
 starts, without waiting for it, `mc test <repo> --full` for each repository whose
 origin/main moved since its last measured full run and that has no full run in
 flight, as a meter beside the sessions and the merge rounds. One run per
@@ -780,7 +781,7 @@ afresh. The settlement pass and `runMainMend`'s finally remove a finished
 entry's worktree through the one function in `src/mc/main-repair.js`, `removeFinishedWorktrees`,
 keeping a tree an unfinished entry, a `current-*.json` or a live claim still
 names.
-The daily full run's once-a-day cadence and existing repair goals are unchanged.
+The full run's cadence (it follows main) and existing repair goals are unchanged.
 
 
 ## Decision lane

@@ -27,6 +27,7 @@ import { describe, it } from 'node:test';
 
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
+import { runOfReport } from '../../src/mc/nightly-loop.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { VERB_MODULES } from '../../src/mc-verbs.js';
 import { directGitDir, executedTimeoutOf, executionIdentity, gateRoot, nodeTestArgv, nodeTestFlags, resolveTestPlan, runGate, selectFiles, selectionState, realSuite, realTests, suiteEnv, suiteProgressLine, suiteTimeoutMs, TEST_TIMEOUT_MS, ROUND_STALL_MS, testBatches, testLanes, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
@@ -2598,6 +2599,123 @@ describe('a repository that selects by diff', () => {
         assert.deepEqual(probed, [[own]], 'only the change\'s red is asked of the base');
         assert.deepEqual(report.unmeasured.files, [scanner]);
         assert.deepEqual(report.alone.files, [], 'assertion red stops without rerunning unmeasured files');
+      } finally { fx.cleanup(); }
+    });
+
+    /**
+     * A full run beside the merge lane (`isolated`, no lease) measures to the end
+     * of its list: the whole suite cut three files out, and each is run alone.
+     * `redAlone` names the files that are red when run alone.
+     */
+    const fullRun = ({ files, redAlone, suiteRed = [], gates = [] }) => {
+      const fx = selecting({ files, full: true, scripts: Object.fromEntries(gates.map(name => [name, 'exit 0'])) });
+      const alone = [];
+      const sayings = [];
+      const run = (extra = {}) => fx.report({
+        isolated: true, holdLease: false, onProgress: line => sayings.push(line),
+        suite: async ({ cwd }) => ({ code: 1,
+          tap: withKilled({ killed: files, red: suiteRed }).replaceAll('/somewhere/candidate', cwd),
+          cut: files.map(file => join(cwd, file)) }),
+        tests: async ({ cwd, files: ran }) => {
+          alone.push(ran[0]);
+          const red = redAlone.some(file => ran[0].endsWith(file));
+          return { code: red ? 1 : 0, tap: red ? withKilled({ red: [ran[0].slice(cwd.length + 1)] }).replaceAll('/somewhere/candidate', cwd) : tapWith([]) };
+        },
+        readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+        ...extra,
+      });
+      return { fx, run, alone, sayings };
+    };
+    const a3 = 'tests/a.test.js';
+    const b3 = 'tests/b.test.js';
+    const c3 = 'tests/c.test.js';
+
+    it('a full run measures every unmeasured file alone: the first and the third red, both in the red list, in the order run', async () => {
+      const { fx, run, alone } = fullRun({ files: [a3, b3, c3], redAlone: [a3, c3] });
+      try {
+        const report = await run();
+        assert.equal(alone.length, 3, 'the third file was run after the first was red');
+        assert.deepEqual(report.alone.files.map(row => [basename(row.file), row.outcome]), [['a.test.js', 'failed'], ['b.test.js', 'passed'], ['c.test.js', 'failed']]);
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(report.alone.files.map(row => basename(row.file)), ['a.test.js', 'b.test.js', 'c.test.js'], 'the order the files were run');
+        assert.deepEqual(report.candidate.red_files.map(file => basename(file)), ['a.test.js', 'c.test.js'], 'the order of the reds');
+        const measured = runOfReport({ name: 'repo', path: fx.repoPath }, report);
+        assert.deepEqual(measured.red, [`a test in ${a3}`, `a test in ${c3}`], 'the history row and the repair request hold both reds');
+        assert.match(report.reason, /a\.test\.js/u);
+        assert.match(report.reason, /c\.test\.js/u);
+      } finally { fx.cleanup(); }
+    });
+
+    /** A declared extra gate, added to the fixture's operator table. */
+    const declaring = (fx, gates) => {
+      const tablePath = join(fx.mcHome, 'repo-gates.json');
+      const table = JSON.parse(readFileSync(tablePath, 'utf8'));
+      table.repo.extra_gates = gates.map(name => ({ name, command: `gate-${name}` }));
+      writeJson(tablePath, table);
+    };
+
+    it('a red declared gate that ran out of time and is red alone does not hide the next unmeasured gate: it runs, and the first is a failed command', async () => {
+      const { fx, run } = fullRun({ files: [a3], redAlone: [] });
+      declaring(fx, ['first', 'second']);
+      const shellCalls = [];
+      try {
+        const report = await run({
+          // Neither gate finishes in the run; alone the first is red and the second green.
+          suite: async () => ({ code: 0, tap: tapWith([], { tests: 42 }) }),
+          shell: async command => {
+            shellCalls.push(command);
+            const alone = shellCalls.filter(one => one === command).length > 1;
+            return { status: alone ? (command === 'gate-first' ? 1 : 0) : 124 };
+          },
+        });
+        assert.deepEqual(shellCalls, ['gate-first', 'gate-second', 'gate-first', 'gate-second'], 'the second gate ran alone after the first was red');
+        assert.deepEqual(report.alone.gates.map(row => [row.name, row.outcome]), [['first', 'failed'], ['second', 'passed']]);
+        assert.equal(report.verdict, 'red', report.reason);
+        assert.match(report.reason, /first/u);
+        const measured = runOfReport({ name: 'repo', path: fx.repoPath }, report);
+        assert.deepEqual(measured.red, ['command:first'], 'the first is among the failed commands, the second is not');
+      } finally { fx.cleanup(); }
+    });
+
+    it('a red whole-suite batch with unmeasured files: the declared gates and every listed file still run, and both reds are in the result', async () => {
+      const red = 'tests/red.test.js';
+      const { fx, run, alone } = fullRun({ files: [a3, b3, red], redAlone: [b3] });
+      declaring(fx, ['contract']);
+      const shellCalls = [];
+      try {
+        const report = await run({
+          suite: async ({ cwd }) => ({ code: 1,
+            tap: withKilled({ killed: [a3, b3], red: [red] }).replaceAll('/somewhere/candidate', cwd),
+            cut: [a3, b3].map(file => join(cwd, file)) }),
+          shell: async command => { shellCalls.push(command); return { status: 0 }; },
+        });
+        assert.deepEqual(shellCalls, ['gate-contract'], 'the declared gate ran after the red batch');
+        assert.deepEqual(alone.map(file => basename(file)), ['a.test.js', 'b.test.js'], 'every listed file ran alone');
+        assert.equal(report.verdict, 'red');
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(report.candidate.red, [`a test in ${red}`, `a test in ${b3}`], 'the batch red, then the alone red');
+        assert.deepEqual(report.candidate.red_tests.map(test => basename(test.file)), ['red.test.js', 'b.test.js']);
+        assert.deepEqual(runOfReport({ name: 'repo', path: fx.repoPath }, report).red, [`a test in ${red}`, `a test in ${b3}`]);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a merge round stops at the first red file measured alone: the next is not run', async () => {
+      const fx = selecting({ files: [a3, b3, c3] });
+      const alone = [];
+      try {
+        const report = await fx.report({
+          tests: async ({ cwd, files: ran }) => {
+            if (ran.length > 1) return { code: 1, tap: withKilled({ killed: ran }), cut: ran };
+            alone.push(ran[0]);
+            return { code: 1, tap: withKilled({ red: ran }) };
+          },
+          readMainEvidence: async () => ({ red_on_main: [], breaks: [] }),
+        });
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(alone, [a3], 'the second and third file were not run');
+        assert.deepEqual(report.alone.files.map(row => row.file), [a3]);
+        assert.deepEqual(report.candidate.red_files, [a3]);
       } finally { fx.cleanup(); }
     });
 

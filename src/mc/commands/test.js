@@ -22,7 +22,7 @@
  * `mc test <repo> --full` is the other reading, and the only one here that is
  * about the code rather than about a change: the repository's whole suite on
  * the default branch as fetched. Asked for here, and — since 2026-09-03 — also
- * taken by the runner's daily full run, which runs this same round
+ * taken by the runner's full run, which runs this same round
  * rather than a copy of it, so the scheduled reading and the asked-for one cannot disagree
  * about what a repository's whole suite is.
  *
@@ -30,8 +30,9 @@
  * status` reads the scheduled form of the round above, under the verb whose
  * round it runs (`mc repo nightly` was the old spelling and answers with this
  * one). Nothing starts or stops it from here: the full run is a chore of the
- * runner, started once a day for a repository whose origin/main moved since its
- * last measured full run (Martin, 2026-11-13; `runNightly`, `run.js`), and
+ * runner, started by a chore pass for a repository whose origin/main moved since
+ * its last measured full run, or whose last run the runner cut short (it
+ * follows main; Martin, 2026-11-15; `runNightly`, `run.js`), and
  * `mc run stop` is what stops it.
  *
  * It is a meter and nothing else. Whatever it finds refuses no merge, delays no
@@ -520,7 +521,7 @@ function readStdin(stream) {
  *
  * Nothing here starts a process — no page does, and this one would run whole
  * suites, which pin the machine for minutes at a time. The full run is a chore
- * of the runner and happens once a day, when main moved and the runner is running.
+ * of the runner and follows main: it starts when main moved and the runner is running.
  *
  * It is a meter and nothing else. Whatever it finds refuses no merge, delays
  * no round and changes no verdict (ruled by Martin, 2026-09-02).
@@ -590,10 +591,11 @@ export function tickState({ env = process.env, now = new Date(), alive = pidAliv
       // alive with STOP present is on its way out and will start no tick.
       stop_requested: stopFile,
     },
-    // Once a day (Martin, 2026-11-13): a repository's full run starts when its
-    // origin/main moved since its last measured full run, one at a time per
-    // repository (`nightlyDue`, `fullRunDue`). `last_started` is the runner's
-    // last pass that started one.
+    // The full run follows main (Martin, 2026-11-15): a repository's full run
+    // starts when its origin/main moved since its last measured full run, one at
+    // a time per repository (`fullRunDue`). `last_started` is the runner's last
+    // pass that started one. The `cadence` value keeps its old spelling: no
+    // reader depends on it, and a file format does not change with the cadence.
     cadence: 'daily',
     tick: { last_started: last?.at ?? null, detail: last?.why ?? null },
     log: nightlyLogPath(),

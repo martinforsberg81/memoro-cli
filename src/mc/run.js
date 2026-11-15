@@ -35,10 +35,10 @@
  * oldest files in `~/mc/intake/` up to `INTAKE_PER_ROUND`, one headless turn
  * each, each file archived under `~/mc/runner/log/intake/<date>/` the moment its
  * turn ends. `runTidyDaily` and `runDepsDaily` are `mc tidy --apply` and
- * `mc deps`, once a day each. The last a chore pass does is `runNightly`: once
- * a day it starts, without waiting for it, a full run of each repository whose
+ * `mc deps`, once a day each. The last a chore pass does is `runNightly`: every
+ * pass starts, without waiting for it, a full run of each repository whose
  * origin/main moved since its last measured full run and that has none in
- * flight (Martin, 2026-11-13). `mc run stop` starts no further run and ends the
+ * flight — the full run follows main (Martin, 2026-11-15). `mc run stop` starts no further run and ends the
  * runs in flight before the runner leaves; `--once` runs no chores and so no
  * full run.
  *
@@ -1139,16 +1139,17 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   }
 
   /**
-   * The full runs: once a day, each repository's whole suite on its main when
-   * main moved since its last measured full run, beside the sessions and the
-   * merge rounds (Martin, 2026-11-13). Returns 'ran' when a run was started,
+   * The full runs follow main: every chore pass, each repository's whole suite on
+   * its main when main moved since its last measured full run, beside the
+   * sessions and the merge rounds (Martin, 2026-11-15). Returns 'ran' when a run was started,
    * 'stopped', 'failed', or null when none was due.
    *
    * Not awaited. A full run takes minutes and the chore pass must not wait
    * behind it, so a pass only starts the runs that are due (`fullRunTick`) and
    * keeps them in `fullRuns`, which is what makes it one run at a time per
    * repository across passes. A row goes in runs.tsv only for a pass that
-   * started one; `nightlyDue` reads that row, so the next starts a day later. `mc run stop` and UPDATE
+   * started one, as the record of what the pass did; nothing reads it to decide
+   * the next pass (`fullRunDue` decides, per repository). `mc run stop` and UPDATE
    * are asked before each start, and the chore loop ends the runs in flight
    * (`settleFullRuns`) before the runner leaves, so no suite outlives it.
    *
@@ -1159,9 +1160,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const fullRunsAbort = new AbortController();
   async function runNightly() {
     if (stopRequested() || updateRequested()) return null;
-    // Once a day (Martin, 2026-11-13): a day since the last pass that started
-    // a run, and then only the repositories whose main moved (`fullRunDue`).
-    if (!nightlyDue({ tsv: deps.read(paths.runs) || '', now: deps.now() }).due) return null;
+    // No once-a-day gate (Martin, 2026-11-15): every pass asks `fullRunDue` of
+    // every repository, and only one whose main moved, or whose last run the
+    // runner cut short, is started.
     const t0 = deps.now().getTime();
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
     let outcome = null;

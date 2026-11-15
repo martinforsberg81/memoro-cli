@@ -240,7 +240,7 @@ daily run. A merge no longer carries a whole-suite measure
 `gateStage` in `commands/deploy.js`, and it measures the commit that would ship
 — `origin/main` as the reading saw it — and no other.
 
-**The whole suite.** `fullRunVerdict` reads the history the daily run writes
+**The whole suite.** `fullRunVerdict` reads the history the full run writes
 (`readNightlyHistory`) for a completed full run of *exactly* that sha. A green
 run of an older commit is no run of this one. A run that stopped because of the
 machine or the runner (`fetch`, `lease`, `busy`, …) measured nothing and is
@@ -249,7 +249,7 @@ passed over. What is left says:
 | state | what the gate does |
 |---|---|
 | `green` | says so, with the run's time, duration and counts, and goes on |
-| none | the preparation starts `fullRun` — the daily run's own round, so the same history and the same main-red mends — and the terminal follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
+| none | the preparation starts `fullRun` — the runner's full run's own round, so the same history and the same main-red mends — and the terminal follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
 | `red` | refuses, naming the commit measured, the red files and commands, and the main-red mend that holds them. When no mend holds it, says so; the history keeps red test names, not files, so the gate cannot queue one itself |
 | `stalled` | a run that began and never finished its suite: refuses like a red |
 | `unmeasured` | the run stopped for a reason that is not the machine's and measured nothing: refuses, never green, and `--accept-red` does not take it. A deploy starts a run only when there is none, so every later deploy of that sha reads the same run; the refusal names the way out — `mc test memoro --full`, which writes the history the gate reads |
@@ -306,12 +306,12 @@ said. Two things write them:
   far`.
 
 A deploy's full run is never lost to a lease: it runs isolated and holds no
-repository lease (`holdLease: false`), like the daily run. `--dry-run` starts
+repository lease (`holdLease: false`), like the runner's full run. `--dry-run` starts
 nothing and says a preparation is in flight; `--follow` follows a preparation as
 it follows a deploy.
 
 **One full run of a sha at a time, whoever starts it.** Three doors start a full
-run: this preparation, `mc test <repo> --full`, and the runner's daily run.
+run: this preparation, `mc test <repo> --full`, and the runner's full run.
 Each claims the run first in `<mc home>/full-runs.json`
 ([`src/mc/full-run-claim.js`](../../src/mc/full-run-claim.js)): `{ repo, sha,
 pid, started, verb }`, decided under a lock of the history's own root. A claim
@@ -324,7 +324,7 @@ whose pid is gone is no claim. A known, different sha is another tree and
 waits for the run in flight (`waitFor`), then claims: a repository has one
 checkout for its full run (`<slug>/full`), and a second run must never prepare
 it under the first. `mc test <repo> --full` with no pull request is the same
-kind of run as the daily one — beside the merge lane, in its own checkout, no
+kind of run as the runner's full run — beside the merge lane, in its own checkout, no
 lease, written to the history (2026-11-14: it stopped twice at `lease` because
 the merger held memoro.git).
 
@@ -374,7 +374,7 @@ first line; the verb's own refusal is the second, and the only one under Codex,
 whose hook has no such rule.
 
 **What it never does.** It never refuses or delays a merge — it runs in this
-verb and in the daily run only — and it reimplements nothing of `deploy.mjs` and
+verb and in the runner's full run only — and it reimplements nothing of `deploy.mjs` and
 hands it no new flag. The record keeps the verdicts (below).
 
 ## No lease, and one deploy at a time

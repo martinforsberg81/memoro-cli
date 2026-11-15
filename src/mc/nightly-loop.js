@@ -1,5 +1,5 @@
 /**
- * The full run: once a day, each repository's whole suite on its main when main
+ * The full run follows main: each repository's whole suite on its main when main
  * has moved, beside everything else on the machine.
  *
  * Kept apart from the runner that calls it (`runNightly` in `run.js`), for the
@@ -17,13 +17,13 @@
  * about its own round using the ordinary aggregator, and it is why there is no
  * second implementation here to drift.
  *
- * ## When: once a day, beside all other work (Martin, 2026-11-13)
+ * ## When: main moved, beside all other work (Martin, 2026-11-15)
  *
- * The runner's chore pass asks once a day (`nightlyDue` in `run.js`) and then,
- * for each repository, whether its full run is due (`fullRunDue`), and starts
- * the ones that are without waiting for them (`fullRunTick`). On mc-server
- * Martin ruled that the daily run goes beside the merges and sessions instead of
- * behind them, and that it stays once a day.
+ * Every chore pass of the runner asks, for each repository, whether its full run
+ * is due (`fullRunDue`) and starts the ones that are without waiting for them
+ * (`fullRunTick`); no clock gates the asking. On mc-server Martin ruled that
+ * the full run goes beside the merges and sessions instead of behind them
+ * (2026-11-13), and that it follows main instead of a day (2026-11-15).
  *
  *  - **Due when origin/main moved** since the last full run that measured
  *    something. Equal, and the tree is the one already measured: nothing runs
@@ -196,7 +196,7 @@ function failedCommandsOf(report) {
 
 /**
  * One round's report as the run the history stores: what was measured, on which
- * commit, what was red. Shared by the daily run and `mc test <repo> --full`, so
+ * commit, what was red. Shared by the runner's full run and `mc test <repo> --full`, so
  * both write the same record.
  */
 export function runOfReport(repo, report, { startedAt = Date.now(), clock = () => Date.now() } = {}) {
@@ -235,7 +235,7 @@ export async function fullRun(repo, {
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
   // a run already measuring this main — a deploy's, a hand-typed `--full`, the
-  // daily run's — is followed, and what it wrote to the history is the answer.
+  // runner's run — is followed, and what it wrote to the history is the answer.
   // One whose process died without writing it is no answer, and this starts its
   // own.
   for (;;) {
@@ -263,6 +263,54 @@ export async function fullRun(repo, {
       return { ...last, repo: repo.name, path: repo.path, joined: true };
     }
     say(`${repo.name} — the run being followed ended without a record; starting one`);
+  }
+}
+
+/**
+ * The reds of a finished full run, handed to main's repair: the one door the
+ * runner's run, a hand-typed `mc test <repo> --full` and a merge round's main
+ * red all go through, with the same evidence.
+ *
+ * Shared so that the two ways of starting a full run cannot disagree about
+ * what reaches the repair (mc-tests/full-run-follows-main, D3). Nothing is asked
+ * of a run that measured nothing (`run.red` null), of a green one, or of one
+ * without a commit.
+ */
+export function repairFromRun(repo, report, run, { repair = requestMainRepair, say = () => {} } = {}) {
+  const failedCommands = failedCommandsOf(report);
+  // Main's red, repaired as work of its own: the same door a merge round's
+  // main red goes through (`merger.js`, `tell`). Only a run that reached its
+  // summary — a red set read off a finished suite — and names its files.
+  // The files as `recordMainRed` reads them: a whole suite's result names its
+  // red tests with their files (`measure`), a selected one its files as well.
+  const redTests = report.candidate?.red_tests || [];
+  const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
+  if (repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
+    const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
+    const asked = repair({ repo: repo.name, base: run.commit, files, tests,
+      ...(failedCommands.length ? { commands: failedCommands } : {}) });
+    const where = [...files, ...failedCommands.map(command => `command:${command.packageScript}`)].join(', ');
+    const created = [].concat(asked?.created || []);
+    const open = [].concat(asked?.open || []);
+    if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
+    else if (open.length) say(`${repo.name}: main is red in ${where} — its main-red mend is under way: ${open.join(', ')}`);
+    else say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
+  }
+
+  // A test that never ends is a red test (Martin, 2026-11-14): a run stopped
+  // as stalled names the files still in flight (`repo-gate.js`, `stopStalled`),
+  // and each goes to the same main-red mend, with the stall as its failure.
+  // A stall that names no file has nothing to repair; the next run, when main has moved, measures again.
+  const hung = [...new Set(report.stalled_files || [])].filter(Boolean).sort();
+  if (repair && report.stopped_at === 'stalled' && run.commit && hung.length) {
+    const error = [`never ended in the full run: ${report.reason || 'stalled'}`];
+    const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })) });
+    const where = hung.join(', ');
+    const created = [].concat(asked?.created || []);
+    const open = [].concat(asked?.open || []);
+    if (created.length) say(`${repo.name}: a test never ended in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
+    else if (open.length) say(`${repo.name}: a test never ended in ${where} — its main-red mend is under way: ${open.join(', ')}`);
+    else say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
 }
 
@@ -294,7 +342,6 @@ async function measure(repo, {
     return threw;
   }
 
-  const failedCommands = failedCommandsOf(report);
   const run = runOfReport(repo, report, { startedAt, clock });
   // The history the page reads. It is written here rather than by the round,
   // because `mc test --full` typed by a person can be asked about a pull
@@ -303,40 +350,7 @@ async function measure(repo, {
   recordNightlyRun(run, { root });
   say(line(run));
 
-  // Main's red, repaired as work of its own: the same door a merge round's
-  // main red goes through (`merger.js`, `tell`). Only a run that reached its
-  // summary — a red set read off a finished suite — and names its files.
-  // The files as `recordMainRed` reads them: a whole suite's result names its
-  // red tests with their files (`measure`), a selected one its files as well.
-  const redTests = report.candidate?.red_tests || [];
-  const files = [...new Set([...(report.candidate?.red_files || []), ...redTests.map((test) => test.file)].filter(Boolean))].sort();
-  if (repair && Array.isArray(run.red) && run.commit && (files.length || failedCommands.length)) {
-    const tests = redTests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }));
-    const asked = repair({ repo: repo.name, base: run.commit, files, tests,
-      ...(failedCommands.length ? { commands: failedCommands } : {}) });
-    const where = [...files, ...failedCommands.map(command => `command:${command.packageScript}`)].join(', ');
-    const created = [].concat(asked?.created || []);
-    const open = [].concat(asked?.open || []);
-    if (created.length) say(`${repo.name}: main is red in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
-    else if (open.length) say(`${repo.name}: main is red in ${where} — its main-red mend is under way: ${open.join(', ')}`);
-    else say(`${repo.name}: main is red in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
-  }
-
-  // A test that never ends is a red test (Martin, 2026-11-14): a run stopped
-  // as stalled names the files still in flight (`repo-gate.js`, `stopStalled`),
-  // and each goes to the same main-red mend, with the stall as its failure.
-  // A stall that names no file has nothing to repair; the next day measures again.
-  const hung = [...new Set(report.stalled_files || [])].filter(Boolean).sort();
-  if (repair && report.stopped_at === 'stalled' && run.commit && hung.length) {
-    const error = [`never ended in the full run: ${report.reason || 'stalled'}`];
-    const asked = repair({ repo: repo.name, base: run.commit, files: hung, tests: hung.map((file) => ({ file, name: null, error })) });
-    const where = hung.join(', ');
-    const created = [].concat(asked?.created || []);
-    const open = [].concat(asked?.open || []);
-    if (created.length) say(`${repo.name}: a test never ended in ${where} at ${run.commit.slice(0, 7)} — main-red mend queued: ${created.join(', ')}${open.length ? `; already under way: ${open.join(', ')}` : ''}`);
-    else if (open.length) say(`${repo.name}: a test never ended in ${where} — its main-red mend is under way: ${open.join(', ')}`);
-    else say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
-  }
+  repairFromRun(repo, report, run, { repair, say });
   return run;
 }
 

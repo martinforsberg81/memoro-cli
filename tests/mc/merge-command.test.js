@@ -541,6 +541,53 @@ describe('mc test <repo> --full measures main beside the merge lane, and one run
     assert.match(d.out.out, /the full run followed has ended — memoro-cli aaaaaaa: 0 red, 12 tests/u);
   });
 
+  // The hand door hands main's reds to the main-red repair, as the runner's run
+  // does: a full run typed by hand is not a quieter one (the full run follows main).
+  const redReport = (extra = {}) => report({
+    ok: false, verdict: 'red', stopped_at: 'red', reason: '2 tests red',
+    candidate: {
+      commit: 'a'.repeat(40), red: ['suite › one', 'suite › two'], red_files: ['tests/a.test.js'],
+      red_tests: [{ file: 'tests/a.test.js', name: 'suite › one', error: ['expected 1'] }, { file: 'tests/b.test.js', name: 'suite › two', error: ['expected 2'] }],
+      totals: { tests: 12, finished: true },
+    },
+    extra_gates: [{ name: 'lint', id: 'lint', command: 'npm run lint', ok: false, exit_code: 1, failure: 'lint failed', output_path: '/tmp/lint.txt' }],
+    ...extra,
+  });
+
+  it('a hand-started full run that measured reds asks the main-red repair once, with the files, the tests and the commands', async () => {
+    const asked = [];
+    const d = fullRun(async () => redReport());
+    d.io.repair = (request) => { asked.push(request); return { created: ['mend-1'], open: [] }; };
+    await gate({ repo: 'memoro-cli', check: true, full: true }, d.io);
+    assert.equal(asked.length, 1, 'one request');
+    assert.equal(asked[0].repo, 'memoro-cli');
+    assert.equal(asked[0].base, 'a'.repeat(40));
+    assert.deepEqual(asked[0].files, ['tests/a.test.js', 'tests/b.test.js']);
+    assert.deepEqual(asked[0].tests.map((test) => [test.file, test.name, test.error]), [['tests/a.test.js', 'suite › one', ['expected 1']], ['tests/b.test.js', 'suite › two', ['expected 2']]]);
+    assert.deepEqual(asked[0].commands.map((command) => [command.packageScript, command.command]), [['lint', 'npm run lint']]);
+    assert.match(d.out.err, /main is red in tests\/a\.test\.js, tests\/b\.test\.js, command:lint at aaaaaaa — main-red mend queued: mend-1/u);
+    assert.equal(readNightlyHistory('/repos/memoro-cli', { root: home }).runs.length, 1, 'the history is written as before');
+  });
+
+  it('a hand-started full run that is green, or measured nothing, asks the repair for nothing', async () => {
+    for (const measured of [report(), report({ ok: false, verdict: 'stopped', stopped_at: 'fetch', reason: 'offline', candidate: null })]) {
+      const asked = [];
+      const d = fullRun(async () => measured);
+      d.io.repair = (request) => { asked.push(request); return { created: [], open: [] }; };
+      await gate({ repo: 'memoro-cli', check: true, full: true }, d.io);
+      assert.deepEqual(asked, [], measured.stopped_at || 'green');
+    }
+  });
+
+  it('a repair that throws does not change the full run\'s exit code or leave its claim behind', async () => {
+    const d = fullRun(async () => redReport());
+    d.io.repair = () => { throw new Error('queue unreadable'); };
+    const code = await gate({ repo: 'memoro-cli', check: true, full: true }, d.io);
+    assert.equal(code, 1, 'red is still red');
+    assert.match(d.out.err, /main's repair could not be asked for — queue unreadable/u);
+    assert.deepEqual(liveClaims({ root: home, alive: () => true }), []);
+  });
+
   it('a check of a pull request still holds the lease and runs in the lane', async () => {
     const seen = [];
     const d = fullRun(async (round) => { seen.push(round); return report({ full: false }); });

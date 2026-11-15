@@ -3,9 +3,10 @@
  *
  * The guarantees under test: a full run measures each repository mc knows
  * and writes down what it found — when it started, what it cost, which commit
- * of the branch it measured, and how it came out; once a day it runs where main
- * moved since the last measurement (Martin, 2026-11-13), one at a time per
- * repository, and a run starts nothing after it; a merge round's lock does not
+ * of the branch it measured, and how it came out; it follows main: a pass starts
+ * a run where main moved since the last measurement, or where the runner cut
+ * the last one short (Martin, 2026-11-15), one at a time per repository, and a
+ * run starts nothing after it; a merge round's lock does not
  * hold it back; a round that could not measure is never mistaken for one that
  * found nothing; its reds, and the files of a test that never ended, go to
  * the main-red mend (`requestMainRepair`);
@@ -310,6 +311,64 @@ describe('a full run, and whether main moved', () => {
   });
 });
 
+describe('a full run follows main: a pass starts what main or the runner left undone', () => {
+  const MINUTES_AGO = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const seedAt = (root, minutes, extra = {}) => recordNightlyRun({
+    repo: 'memoro', path: '/repos/memoro', started_at: MINUTES_AGO(minutes), duration_ms: 60_000,
+    commit: SHA, verdict: 'green', stopped_at: null, reason: null, red: [], tests: 17_982, ...extra,
+  }, { root });
+
+  it('main moved: started though the last run began minutes ago', async () => {
+    const root = home();
+    try {
+      seedAt(root, 5);
+      const { asked, outcome } = await pass(root, { repos: [REPOS[0]], head: () => OTHER });
+      assert.deepEqual(asked, ['/repos/memoro']);
+      assert.match(outcome.started[0].why, /main moved to bbbbbbb since the measurement of aaaaaaa/u);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  for (const stop of ['gone', 'killed']) {
+    it(`a run the runner cut short (${stop}) is started at once, on the same commit and minutes later`, async () => {
+      const root = home();
+      try {
+        seedAt(root, 20, { commit: OTHER });
+        seedAt(root, 3, { verdict: 'stopped', stopped_at: stop, reason: 'the runner ended it', red: null, tests: null });
+        const { asked } = await pass(root, { repos: [REPOS[0]], head: () => SHA });
+        assert.deepEqual(asked, ['/repos/memoro']);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+  }
+
+  it('a repository whose run is in flight is not started, though main moved', async () => {
+    const root = home();
+    try {
+      seedAt(root, 5);
+      const running = new Map([['/repos/memoro', new Promise(() => {})]]);
+      const { asked, outcome } = await pass(root, { repos: [REPOS[0]], head: () => OTHER, running });
+      assert.deepEqual(asked, []);
+      assert.deepEqual(outcome.running, ['memoro']);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a main that is the measured commit is not started, minutes or days after the run', async () => {
+    const root = home();
+    try {
+      seedAt(root, 5);
+      assert.deepEqual((await pass(root, { repos: [REPOS[0]], head: () => SHA })).asked, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run that stopped on this commit by something other than the runner is not started again on it', async () => {
+    const root = home();
+    try {
+      seedAt(root, 20, { commit: OTHER });
+      seedAt(root, 3, { verdict: 'stopped', stopped_at: 'stalled', reason: 'no progress for 15 min', red: null, tests: null });
+      assert.deepEqual((await pass(root, { repos: [REPOS[0]], head: () => SHA })).asked, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe('a full run, one at a time per repository', () => {
   it('a repository whose run is in flight is not started again', async () => {
     const root = home();
@@ -339,7 +398,7 @@ describe('a full run, one at a time per repository', () => {
           return report({ commit: measured });
         },
       });
-      assert.deepEqual(asked, [SHA], 'the next is the next day\'s');
+      assert.deepEqual(asked, [SHA], 'the next pass, not this run, measures the moved main');
       assert.deepEqual(runs.map((run) => run.commit), [SHA]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -654,7 +713,7 @@ describe('mc test nightly status — red, and since when', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('says the full runs are the runner\'s chore, once a day, while the runner runs', async () => {
+  it('says the full runs are the runner\'s chore, and follow main, while the runner runs', async () => {
     const fx = fixture({ name: 'nightly' });
     addArea(fx, 'alpha', 'alpha');
     try {
@@ -670,7 +729,7 @@ describe('mc test nightly status — red, and since when', () => {
       assert.equal(page.status, 0, page.stderr);
       assert.match(page.stdout, /runner running {2}pid \d+/u);
       assert.match(page.stdout, /the full runs are its chore/u);
-      assert.match(page.stdout, /once a day, a full run of each repository whose origin\/main moved since its last measured full run/u);
+      assert.match(page.stdout, /follows main: a full run of each repository whose origin\/main moved since its last measured full run/u);
       assert.match(page.stdout, /the last was started 2 h ago/u);
       assert.doesNotMatch(page.stdout, /due in/u);
       assert.match(page.stdout, /\n {4}full run\s+never/u, 'the per-repository block is still there');

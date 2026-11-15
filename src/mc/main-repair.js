@@ -36,7 +36,7 @@ export function updateMainMends({ root = workRoot(), repo, read = readTextOrNull
   }, { name: 'main-mend', strict: true });
 }
 
-/** Shared by merge rounds and the daily full run; finder is stable across repeats. */
+/** Shared by merge rounds and the runner's full run; finder is stable across repeats. */
 export function requestMainRepair({ repo, base, files, tests = [], commands = [], pr = null, now = () => new Date(), ...state }) {
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();

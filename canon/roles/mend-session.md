@@ -99,7 +99,7 @@ provider's installer. Use sudo when the host permits it non-interactively
 (`sudo -n`); never wait for a password. If provision is unavailable, leave the
 precise prerequisite and installer failure in the session output, not a goal.
 Never weaken, skip or delete a test, lower a threshold or substitute a runtime.
-A red met in a file you were not given is not yours; the merge round or daily
+A red met in a file you were not given is not yours; the merge round or the
 full run reports it independently. Existing repair goals finish as goals.
 
 Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` for

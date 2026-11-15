@@ -8,7 +8,7 @@ Read [the test strategy](references/test-strategy.md) before test work. It
 covers risk selection, levels, evidence and retirement; authority is in roles.
 
 ## What runs where
-What a merge checks, the change's own test scope and the daily full run are in the publish-and-merge skill.
+What a merge checks, the change's own test scope and the full run are in the publish-and-merge skill.
 ## Admission and evidence
 For each addition or change, name the concrete fault and consequence, the gap
 in existing protection, the cheapest credible test level, fault-sensitive

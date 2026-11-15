@@ -570,14 +570,14 @@ No transitive import closure, pin, scan, area blanket or registry target widens
 this set. Bare `mc gate` and the merge round use the same scope without cost
 deferral or command gates.
 
-The daily full run retains every test, including deferred tests and main-only
+The full run, which follows main, retains every test, including deferred tests and main-only
 ratchets, every CI binding command and all three contract suites, including
 `test:browser-contracts`. The wide selection remains available through
 `mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
 optional tools, never landing requirements. Wide regression protection belongs
-to the daily full run and before a deploy, not to a merge. Main may carry a
-red this merge did not look for: the daily run finds it within a day and sends
-it to a main-red mend; the deploy gate keeps it from production: `mc deploy`
+to the full run and before a deploy, not to a merge. Main may carry a
+red this merge did not look for: the runner's full run starts when main moves, finds it within
+one run's length and sends it to a main-red mend; the deploy gate keeps it from production: `mc deploy`
 ships a commit only when a completed full run of exactly that commit is green
 (it starts one when none exists) and the app's declared suites have been run
 against a local server of it, and a headless session cannot deploy
@@ -585,7 +585,7 @@ against a local server of it, and a headless session cannot deploy
 deploy's full run never refuses or delays a merge.
 
 The shipped declarations' `select` commands serve the change scope;
-`select_whole` serves the optional wide diff scope and `select_full` the daily
+`select_whole` serves the optional wide diff scope and `select_full` the
 full plan. All print JSON with `files` and optional `commands`. The full plan
 keeps command-suite membership beside the commands; it never filters the
 six live `main_only` ratchets in `repo-gate-table.js`. Wide selection retains its
@@ -699,7 +699,7 @@ failed merges, and it never starts a mend of that pull request. Instead the
 round reports `main_repair: { base, files, tests }` and the merger queues a
 main-red mend (`requestMainRepair` in
 [`src/mc/main-repair.js`](../../src/mc/main-repair.js); Martin, 2026-11-13).
-The daily full run uses the same entry point and keeps its once-daily cadence.
+The full run uses the same entry point, and so does `mc test <repo> --full` typed by hand.
 No red test becomes a goal; repair goals already in flight finish as goals.
 
 The atomic runner state `~/mc/runner/main-mend/<repo>.json` has version 1 and
@@ -1495,12 +1495,14 @@ measuring the selection` and goes on as before (`previousRedFiles` in
 
 ## The full run nobody asks for
 
-The runner runs `mc test <repo> --full` **once a day** for each repository mc
-knows whose origin/main has moved since its last measured full run, with nobody
-typing anything, **beside all other work** (Martin, 2026-11-13). On mc-server
-(12 cores, 31 GB) Martin ruled that the daily whole suite runs in parallel with
-all sessions and merges, and that it stays once a day; a run started by hand is
-an exception.
+The full run **follows main** (Martin, 2026-11-15): the runner runs
+`mc test <repo> --full` for each repository mc knows whose origin/main has moved
+since its last measured full run, or whose last run the runner itself cut short,
+with nobody typing anything, **beside all other work** (Martin, 2026-11-13). On
+mc-server (12 cores, 31 GB) Martin ruled that the whole suite runs in parallel
+with all sessions and merges; there is no clock between runs, so a pass every
+few minutes finds main's move within one run's length. A run started by hand is
+an exception, and hands its reds to the main-red repair like the runner's run.
 
 It is a **chore of the runner** (`runNightly` in `src/mc/run.js`, the last
 thing a chore pass does), implemented in
@@ -1547,19 +1549,21 @@ the one way the runner is: no runner, no full run.
   a repository's whole suite is. Every run is counted in `gate-rounds.jsonl`
   like any other round, so `mc repo rounds` stays true about what this machine
   did.
-- **When: once a day, and only a main that moved** (`nightlyDue`, then
-  `fullRunDue`). A day after the last chore pass that started a run, the pass
-  reads origin/main of each repository with `git ls-remote origin HEAD` and compares
+- **When: main moved** (`fullRunDue`, asked of every repository by every chore
+  pass; no once-a-day gate). Each pass reads origin/main of each repository with `git ls-remote origin HEAD` and compares
   it with the commit of the last run that measured something. Equal: the tree
   is the one already measured, so nothing runs and **nothing is written** — a
   branch that has not moved is not measured again, and a line per chore pass
   would push the measurements out of the history. A repository never measured
   is due. A head that cannot be read is measured, but not again within
   `FULL_RUN_RETRY_MS` (an hour) of the last attempt, so an offline machine does
-  not start a suite every pass. The day is `NIGHTLY_INTERVAL_MS`.
+  not start a suite every pass. A run the runner itself cut short (`gone`,
+  `killed`) is started again at once. The `nightly` row of `runs.tsv` is still
+  written for each pass that started a run, as the record of the pass; nothing
+  reads it to decide the next.
 - **One at a time per repository.** The runner keeps one map of the runs in
   flight across chore passes; a repository with a run in flight is not started
-  again. A run that ends starts nothing after it: the next is the next day's.
+  again. A run that ends starts nothing after it: the next pass starts the next run, when main has moved.
   Repositories run in parallel with each other. A repository the board lists under two paths is
   measured once, under the first.
 - **A run that stopped on a commit waits for main to move.** A suite that
@@ -1595,7 +1599,7 @@ the one way the runner is: no runner, no full run.
   2026-11-13). A test that never ends is red too (Martin, 2026-11-14): a run
   stopped as stalled hands the files it names as in flight to the same door,
   with the stall as their failure; a stall that names no file asks for nothing
-  and the next day measures again.
+  and the next run, when main has moved, measures again.
 - **STOP reaches it.** A chore pass that finds `~/mc/runner/STOP` or `UPDATE`
   starts no run. Before the runner leaves, the chore loop ends
   the runs in flight through their round's signal and waits for them
@@ -1676,7 +1680,8 @@ repository finds the same fact.
   own, because a dropped name comes back next run looking like a test that had
   gone green and broken again. The bound is the number of runs kept — fifty
   (`HISTORY_LIMIT`), raised from fourteen on 2026-11-13, when a run began to
-  follow every move of main instead of once a day.
+  follow every move of main instead of once a day (since 2026-11-15 by the
+  pass itself, with no day gate).
 - **A run that measured nothing is transparent, never green.** It neither
   continues a streak nor breaks one, and it is stored as what it was: the last
   *attempt* is its own row on the page, above the last *measurement* it could

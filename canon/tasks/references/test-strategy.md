@@ -93,14 +93,14 @@ No transitive import closure, pin, scan, area blanket or registry target widens
 this set. Bare `mc gate` and the merge round use the same scope without cost
 deferral or command gates.
 
-The daily full run retains every test, including deferred tests and main-only
+The full run, which follows main, retains every test, including deferred tests and main-only
 ratchets, every CI binding command and all three contract suites, including
 `test:browser-contracts`. The wide selection remains available through
 `mc gate --whole-selection`; named gates and `mc test <repo> --full` remain
 optional tools, never landing requirements. Wide regression protection belongs
-to the daily full run and before a deploy, not to a merge. Main may carry a
-red this merge did not look for: the daily run finds it within a day and sends
-it to a main-red mend; the deploy gate keeps it from production. Until the
+to the full run and before a deploy, not to a merge. Main may carry a
+red this merge did not look for: the runner's full run starts when main moves, finds it within
+one run's length and sends it to a main-red mend; the deploy gate keeps it from production. Until the
 separate deploy-gate goal lands, the person deploying must read that full run.
 
 Browser journeys, live integrations, AI evaluations and performance evidence
