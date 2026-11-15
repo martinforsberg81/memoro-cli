@@ -13,8 +13,8 @@ import { test } from 'node:test';
 
 import { executeCheck, readVerdictFile, verdictPath } from '../../src/mc/deploy-check.js';
 import {
-  CHECK_COLUMNS, DEPLOYED, DEPLOYS_HEADER, deploysPath, parseDeploys, readDeploys, recordCheck, recordEnd, recordRefusal,
-  recordStart, tsvRow, withDeploysLock,
+  CHECK_COLUMNS, DEPLOYED, DEPLOYS_HEADER, TAKES_BACK_COLUMNS, deploysPath, isTakeBackRow, parseDeploys, readDeploys, recordCheck,
+  recordEnd, recordRefusal, recordStart, takenBackShas, takeBackRowsOf, tsvRow, withDeploysLock,
 } from '../../src/mc/deploys.js';
 import { deployCheckTick } from '../../src/mc/deploy-check.js';
 import { lockPath } from '../../src/mc/runner-lock.js';
@@ -30,25 +30,49 @@ function workRoot() {
 }
 
 const upTo = (name) => DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf(name) + 1);
-/** The five headers the file had before the check columns, oldest first. */
+/** The six headers the file had before the take-back columns, oldest first. */
 const OLDER = [
   upTo('pid').slice(0, -1), // before `pid`
   upTo('pid'),
   upTo('accepted_red'),
   upTo('take_back_why'),
   upTo('versions_why'),
+  upTo('check_why'), // the 23-column header: before the take-back's three
 ];
 
 const rowFor = (header, n) => Object.fromEntries(header.map((name) => [name, name === 'started' ? `2026-11-1${n}T12:00:00.000Z` : `${name}-${n}`]));
 
-test('the check columns come last, after the versions', () => {
+test('the check columns follow the versions and the take-back columns come last', () => {
   assert.deepEqual(CHECK_COLUMNS, ['check', 'check_at', 'check_why']);
-  assert.deepEqual(DEPLOYS_HEADER.slice(-3), CHECK_COLUMNS);
+  assert.deepEqual(TAKES_BACK_COLUMNS, ['takes_back', 'takes_back_sha', 'takes_back_why']);
+  assert.deepEqual(DEPLOYS_HEADER.slice(-3), TAKES_BACK_COLUMNS);
+  assert.equal(DEPLOYS_HEADER.length, 26);
   assert.equal(DEPLOYS_HEADER.indexOf('versions_why') + 1, DEPLOYS_HEADER.indexOf('check'));
+  assert.equal(DEPLOYS_HEADER.indexOf('check_why') + 1, DEPLOYS_HEADER.indexOf('takes_back'));
+});
+
+test('a take-back row keeps its three cells, and the readers tell it and what it took back from a release', () => {
+  const { env, cleanup } = workRoot();
+  try {
+    const release = recordStart({ sha: SHA, started: KEY.started, pid: 1 }, env);
+    recordEnd(release, { outcome: DEPLOYED }, env);
+    const back = recordStart({
+      sha: 'b'.repeat(40), started: '2026-11-15T13:00:00.000Z', pid: 2,
+      takesBack: { takes_back: KEY.started, takes_back_sha: SHA, takes_back_why: 'frontend: 3 new errors' },
+    }, env);
+    recordEnd(back, { outcome: 'failed', stopped_at: 'take-back' }, env);
+    const rows = readDeploys(env);
+    assert.equal(isTakeBackRow(rows[0]), false);
+    assert.equal(isTakeBackRow(rows[1]), true);
+    assert.deepEqual([rows[1].takes_back, rows[1].takes_back_sha, rows[1].takes_back_why], [KEY.started, SHA, 'frontend: 3 new errors']);
+    assert.deepEqual(takenBackShas(rows), [SHA], 'a failed take-back counts too');
+    assert.equal(takeBackRowsOf(rows, KEY.started).length, 1);
+    assert.equal(takeBackRowsOf(rows, '2026-01-01T00:00:00.000Z').length, 0);
+  } finally { cleanup(); }
 });
 
 for (const [index, header] of OLDER.entries()) {
-  test(`a file with the ${index + 1}${['st', 'nd', 'rd', 'th', 'th'][index]} older header is rewritten with the current one on the next write, rows kept`, () => {
+  test(`a file with the ${index + 1}${['st', 'nd', 'rd', 'th', 'th', 'th'][index]} older header is rewritten with the current one on the next write, rows kept`, () => {
     const { env, cleanup } = workRoot();
     try {
       const rows = [rowFor(header, 1), rowFor(header, 2)];
@@ -84,9 +108,10 @@ test('recordCheck writes the three cells of one row and leaves every other byte 
     assert.equal(after.length, before.length);
     assert.equal(after[0], before[0]);
     assert.equal(after[2], before[2], 'the other row is byte-equal');
-    const tail = (line) => line.split('\t').slice(0, -3).join('\t');
-    assert.equal(tail(after[1]), tail(before[1]), 'every cell before the check columns is byte-equal');
-    assert.deepEqual(after[1].split('\t').slice(-3), ['red', '2026-11-15T12:40:00.000Z', 'database: down']);
+    const at = DEPLOYS_HEADER.indexOf('check');
+    const without = (line) => line.split('\t').filter((_, i) => i < at || i >= at + 3).join('\t');
+    assert.equal(without(after[1]), without(before[1]), 'every cell but the check columns is byte-equal');
+    assert.deepEqual(after[1].split('\t').slice(at, at + 3), ['red', '2026-11-15T12:40:00.000Z', 'database: down']);
     assert.equal(recordCheck({ started: 'nope', sha: SHA }, { check: 'green' }, env).written, false);
     assert.match(recordCheck({ started: 'nope', sha: SHA }, { check: 'green' }, env).why, /not in deploys.tsv/u);
   } finally { cleanup(); }

@@ -801,6 +801,7 @@ test('the header of a file the chore writes into is the current one', () => {
   try {
     deployed(env);
     assert.equal(readFileSync(deploysPath(env), 'utf8').split('\n')[0], DEPLOYS_HEADER.join('\t'));
-    assert.deepEqual(DEPLOYS_HEADER.slice(-3), ['check', 'check_at', 'check_why']);
+    const at = DEPLOYS_HEADER.indexOf('check');
+    assert.deepEqual(DEPLOYS_HEADER.slice(at, at + 3), ['check', 'check_at', 'check_why']);
   } finally { cleanup(); }
 });
