@@ -41,9 +41,10 @@ The runner starts a manager session in two cases, one at a time under one claim,
   horizon's playback, the area pages and read checkouts at origin/main of every repository that declares areas,
   the archived programmes that served the horizon, and the app with `mc shot`. It ends in one of three ways:
   `mc programs create <name> --end … --horizon <slug> --purpose …`; `mc martin horizon reached <slug>`; or an open
-  text item `horizon:<slug>` made with `mc martin propose`. Readable prerequisites
-  are reported as observed; remaining personal judgement is identified, never inferred
-  from satisfaction, production use or unmeasured time. The runner checks that one holds, without a model;
+  text item `horizon:<slug>` made with `mc martin propose`. Report only prerequisites
+  actually read as observed, and identify remaining personal judgement separately.
+  Never infer satisfaction, production use or unmeasured elapsed time from those
+  prerequisites. The runner checks that one holds, without a model;
   the second failure since the last item opens a desk item of kind `manager`
   ([mc-martin.md](mc-martin.md)).
 - **A curation turn**, when none started in the last 24 hours and the origin/main of a repository that declares
