@@ -792,7 +792,7 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
-  // The deploy is Martin's act (2026-11-14): refused before anything is read —
+  // A deploy is refused to an unattended session (2026-11-14): refused before anything is read —
   // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
   // the watching (`--follow`) change nothing in production and stay allowed.
   if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
