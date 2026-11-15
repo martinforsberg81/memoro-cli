@@ -920,6 +920,48 @@ test('a cleanup that is refused or fails is recorded as cleanup: the session, th
   }
 });
 
+/* ------------------------------------------------ the deploy check chore (deploy-check.js) */
+
+test('deploy check: the chore pass asks the tick once, with the runner\'s clock and liveness, and says its notes in the log', async () => {
+  const f = fixture({ now: '2026-09-19T10:00:00Z' });
+  const asked = [];
+  f.deps.deployCheckTick = async (options) => { asked.push(options); return { notes: ['started the check of 1a2b3c4 (pid 7)'], started: { pid: 7 } }; };
+  await createRunner({ deps: f.deps }).chores();
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].now(), Date.parse('2026-09-19T10:00:00Z'));
+  assert.equal(typeof asked[0].alive, 'function');
+  assert.equal(asked[0].stopRequested(), false);
+  assert.equal(asked[0].updateRequested(), false);
+  assert.match(f.files['/w/runner/log/runner.log'], /deploy check: started the check of 1a2b3c4 \(pid 7\)/u);
+});
+
+test('deploy check: a tick that throws is said, never stops the pass, and is asked again on the next', async () => {
+  const f = fixture();
+  let calls = 0;
+  f.deps.deployCheckTick = async () => { calls += 1; throw new Error('deploys.tsv is unreadable'); };
+  const runner = createRunner({ deps: f.deps });
+  await runner.chores();
+  await runner.chores();
+  assert.equal(calls, 2);
+  assert.match(f.files['/w/runner/log/runner.log'], /deploy check: the pass failed — deploys\.tsv is unreadable\. Asked again on the next chore pass\./u);
+});
+
+test('deploy check: nothing is asked under STOP or UPDATE, and a fixture without the dependency checks nothing', async () => {
+  for (const order of ['STOP', 'UPDATE']) {
+    const f = fixture();
+    let calls = 0;
+    f.deps.deployCheckTick = async () => { calls += 1; return { notes: [] }; };
+    f.files[`/w/runner/${order}`] = '';
+    await createRunner({ deps: f.deps }).chores();
+    assert.equal(calls, 0, order);
+  }
+  const bare = fixture();
+  delete bare.deps.deployCheckTick;
+  await createRunner({ deps: bare.deps }).chores();
+  assert.doesNotMatch(bare.files['/w/runner/log/runner.log'] || '', /deploy check/u);
+  assert.equal(typeof realDeps({ MC_WORK_ROOT: '/nowhere', MC_HOME: '/nowhere' }).deployCheckTick, 'function', 'the real runner has the chore');
+});
+
 test('the chore pass removes no scratch directory by age: what goes from scratch is tidy rule S\'s, on proof', async () => {
   const f = fixture({ now: '2026-09-19T10:00:00Z' });
   const now = Date.parse('2026-09-19T10:00:00Z');
