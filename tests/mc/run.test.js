@@ -6158,7 +6158,7 @@ function servedCheckouts(f, { dirty = [], unreachable = [], addFails = {} } = {}
   const base = f.deps.git;
   const repoOf = (path) => String(path).split('/').at(-1);
   f.deps.git = (cwd, args) => {
-    const inCheckout = String(cwd).startsWith('/w/runner/work/programme-turn-');
+    const inCheckout = /^\/w\/runner\/work\/(programme|archive)-turn-/u.test(String(cwd));
     if (inCheckout && args[0] === 'status') { f.calls.git.push([cwd, ...args]); return { ok: true, stdout: dirty.includes(repoOf(cwd)) ? ' M x' : '' }; }
     if (inCheckout && args[0] === 'merge-base') { f.calls.git.push([cwd, ...args]); return { ok: !unreachable.includes(repoOf(cwd)), stdout: '' }; }
     if (args[0] === 'worktree' && args[1] === 'add' && args.includes('--detach')) {
@@ -6601,4 +6601,205 @@ test('curation turn: an unreadable state starts no turn and is said once; a hori
   await second.pass({ repo: 'memoro' });
   await second.pass({ repo: 'memoro' });
   assert.deepEqual(managerSessions(both.f).map((call) => call.env.MC_HORIZON ?? null), ['h1', null], 'the horizon first, curation after');
+});
+
+/* ------------------------------------------------------------ the programme archive turn */
+
+const ARCHIVE_STATE = '/w/runner/archive-turn/prog.json';
+const ARCHIVED_TO = '/w/programs-archived/prog';
+const SHA = 'a'.repeat(40);
+const archiveCheckout = (repo) => `/w/runner/work/archive-turn-prog/${repo}`;
+const archiveSessions = (f) => f.calls.sessions.filter((call) => call.env.MC_ROLE === 'archive-reader');
+const archiveState = (f) => JSON.parse(f.files[ARCHIVE_STATE]);
+const archiveLine = 'g1: OK — memoro/docs/technical/mc-run.md § Programme archive turn';
+const writeBack = (verdict, line = archiveLine, sha = SHA) => `read: memoro ${sha}\n${line}\nverdict: ${verdict}\n`;
+
+/**
+ * A programme `prog` with a record whose only goal `g1` is archived as done, and the seams an archive reading and an archive
+ * need: read checkouts that answer a commit, an archive that moves the record to ARCHIVED_TO as `archiveProgramme` does,
+ * and a reader that writes `body`. `archived` is each archive call with what the fence said.
+ */
+function archiveFixture({ body = writeBack('OK'), record = plainText(), archiveRc = 0, dropped = false, ...options } = {}) {
+  const f = programmeFixture({ record, ...options });
+  servedCheckouts(f);
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (String(cwd).startsWith('/w/runner/work/archive-turn-') && args.join(' ') === 'rev-parse HEAD' ? { ok: true, stdout: `${SHA}\n` } : git(cwd, args));
+  f.files[`${GOALS}/.archive/g1/GOAL.json`] = goalJson({ stage: dropped ? 'dropped' : 'done', status: 'ready', repos: ['memoro'], title: 'g1', goal: [], prs: [] });
+  f.files[`${GOALS}/.archive/g1/LOG.md`] = '';
+  f.writes = { body };
+  f.archived = [];
+  f.rc = { archive: archiveRc };
+  f.deps.archiveProgramme = async (programme, options) => {
+    f.archived.push({ programme, fence: options.fence(), area: options.areaName });
+    if (f.rc.archive !== 0) return f.rc.archive;
+    f.files[`${ARCHIVED_TO}/PROGRAMME.json`] = f.files[RECORD_AT];
+    delete f.files[RECORD_AT];
+    options.onShelved(ARCHIVED_TO);
+    return 0;
+  };
+  f.answer = (call) => { if (f.writes.body !== null) f.files[`${PROG}/WRITE-BACK.md`] = f.writes.body; return okSession()(call); };
+  return f;
+}
+const archiveRunnable = (runner) => runner.nextWork()?.name === 'archive:prog';
+
+test('programme archive: an OK reading archives the programme through the runner, its record reads done, and no model or person is asked', async () => {
+  const f = archiveFixture();
+  const items = wireDesk(f);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal(runner.nextWork().name, 'archive:prog', 'the archive turn is the pick');
+  const seen = {};
+  const answer = f.answer;
+  f.answer = (call) => { seen.claimed = runner.claims.has('archive:prog'); seen.next = runner.nextWork()?.name ?? null; seen.checkouts = f.dirs.has(archiveCheckout('memoro')); return answer(call); };
+  const result = await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([result.ran, result.name], [1, 'archive:prog']);
+  const [call, ...rest] = archiveSessions(f);
+  assert.equal(rest.length, 0, 'one reading');
+  assert.deepEqual([call.env.MC_ROLE, call.env.MC_HEADLESS, call.env.MC_PROGRAMME], ['archive-reader', '1', 'prog']);
+  assert.equal('MC_GOAL' in call.env, false);
+  assert.equal(call.cwd, PROG);
+  assert.match(call.prompt, new RegExp(`${PROG}/WRITE-BACK\\.md`, 'u'));
+  assert.match(call.prompt, new RegExp(archiveCheckout('memoro'), 'u'), 'the read checkout at origin/main is named');
+  assert.match(call.prompt, /g1/u);
+  assert.deepEqual([seen.claimed, seen.next, seen.checkouts], [true, null, true], 'claimed, no second turn, checkouts up while it runs');
+  assert.equal(f.dirs.has(archiveCheckout('memoro')), false, 'taken down after it');
+  assert.deepEqual(f.archived.map((one) => [one.programme, one.fence]), [['prog', null]], 'archived once, the fence clear');
+  assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'done', 'the record at the destination reads done');
+  assert.deepEqual([archiveState(f).destination, archiveState(f).reading], [null, null]);
+  assert.deepEqual(items(), [], 'no desk item');
+  assert.equal(runner.claims.has('archive:prog'), false);
+  assert.deepEqual(runRows(f.files).map((row) => [row.name, row.kind]), [['archive:prog', 'plan']]);
+  assert.equal(archiveRunnable(runner), false, 'and nothing is due once it has moved');
+});
+
+test('programme archive: a NOT OK reading archives nothing, opens a prepared desk item with the NOT OK lines, and stops the next reading', async () => {
+  const f = archiveFixture({ body: writeBack('NOT OK', 'g1: NOT OK — the archive turn is in no page') });
+  const items = wireDesk(f);
+  let clock = Date.parse('2026-11-15T09:00:00Z');
+  f.deps.now = () => new Date(clock += 60_000);
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(f.archived, [], 'not archived');
+  assert.equal(JSON.parse(f.files[RECORD_AT]).state, 'open', 'the record stays open');
+  const [item] = items();
+  assert.deepEqual([item.kind, item.reference, item.state, item.sort, item.reversible], ['archive', 'archive:prog', 'prepared', 'mechanical', null]);
+  assert.ok(f.files[`${itemDirectory(item, f.deps.env)}/prepared.md`].includes('g1: NOT OK — the archive turn is in no page'));
+  assert.deepEqual(archiveState(f).failures, [], 'a finding is not a counted failure');
+  assert.equal(archiveRunnable(runner), false, 'no reading and no archive while the item is open');
+  await runner.pass({ repo: 'memoro' }); // the decision lane may take the prepared item; the archive turn starts nothing
+  assert.deepEqual([archiveSessions(f).length, f.archived.length], [1, 0]);
+  // Closed by decision: read again; a second NOT OK after a decision is for Martin.
+  f.files[`${itemDirectory(item, f.deps.env)}/item.json`] = JSON.stringify({ ...item, state: 'closed', outcome: { by: 'decision', at: '2026-11-15T10:00:00Z' } });
+  assert.equal(archiveRunnable(runner), true, 'closed: the programme is read again');
+  await runner.pass({ repo: 'memoro' });
+  const again = items().find((one) => one.id !== item.id);
+  assert.deepEqual([again.state, again.sort, again.reversible], ['for-martin', 'mechanical', false]);
+  assert.match(f.files[`${itemDirectory(again, f.deps.env)}/brief.md`], /## Vad det gäller/u);
+});
+
+test('programme archive: a malformed or missing WRITE-BACK.md is a failed reading; the second opens a for-martin item', async () => {
+  const f = archiveFixture({ body: null });
+  const items = wireDesk(f);
+  let clock = Date.parse('2026-11-15T09:00:00Z');
+  f.deps.now = () => new Date(clock += 60_000);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'a session ran');
+  assert.equal(archiveState(f).failures.length, 1);
+  assert.match(archiveState(f).failures[0].reason, /WRITE-BACK\.md is missing/u);
+  assert.deepEqual(items(), [], 'the first failure opens nothing');
+  f.writes.body = writeBack('OK', archiveLine, 'f'.repeat(40));
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(archiveState(f).failures.length, 2);
+  const [item] = items();
+  assert.deepEqual([item.kind, item.state, item.sort], ['archive', 'for-martin', 'mechanical']);
+  assert.match(f.files[`${itemDirectory(item, f.deps.env)}/brief.md`], /## Rekommendation och skäl/u);
+  assert.deepEqual(f.archived, [], 'never archived on a failed reading');
+  assert.equal(archiveRunnable(runner), false, 'and not again while the item is open');
+});
+
+test('programme archive: an OK reading is kept; a failed archive is tried again with no new reading, and the record write retries alone at the kept destination', async () => {
+  const f = archiveFixture({ archiveRc: 1 });
+  const items = wireDesk(f);
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(archiveSessions(f).length, 1);
+  assert.deepEqual(items(), [], 'the first failure opens nothing');
+  assert.equal(archiveState(f).failures.length, 1);
+  assert.deepEqual(archiveState(f).reading.goals, ['g1'], 'the OK reading is kept for the goals it judged');
+  assert.equal(archiveRunnable(runner), true);
+  // The archive moves the directory, then the record write fails: the destination stays in the state.
+  f.rc.archive = 0;
+  const write = f.deps.write;
+  f.deps.write = (path, text) => { if (path === `${ARCHIVED_TO}/PROGRAMME.json`) throw new Error('disk full'); write(path, text); };
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(archiveSessions(f).length, 1, 'no new reading on a kept one');
+  assert.equal(archiveState(f).destination, ARCHIVED_TO, 'the destination is recorded before the record is written');
+  assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'open');
+  assert.equal(runner.nextWork().name, 'archive:prog', 'the state alone is due although the programme directory is gone');
+  f.deps.write = write;
+  const result = await runner.pass({ repo: 'memoro' });
+  assert.deepEqual([result.ran, result.name], [1, 'archive:prog']);
+  assert.equal(f.archived.length, 2, 'the archive is not run again: the write alone');
+  assert.equal(archiveSessions(f).length, 1);
+  assert.equal(JSON.parse(f.files[`${ARCHIVED_TO}/PROGRAMME.json`]).state, 'done');
+  assert.equal(archiveState(f).destination, null);
+  assert.equal(archiveRunnable(runner), false);
+});
+
+test('programme archive: proposals move out of the programme before the archive', async () => {
+  const f = archiveFixture();
+  f.files[`${PROG}/proposals/idea.md`] = 'An idea\n';
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(f.archived.length, 1);
+  assert.equal(`${PROG}/proposals/idea.md` in f.files, false, 'moved out of the programme');
+  assert.ok(Object.entries(f.files).some(([path, text]) => path.endsWith('/idea.md') && !path.startsWith(PROG) && text.startsWith('From programme prog')), 'into the proposals folder, naming the programme');
+});
+
+test('programme archive: no turn for a programme without a record, with a live goal, with every goal dropped, or whose record reads done; nothing is read or archived', async () => {
+  const table = [
+    ['no record', (f) => { delete f.files[RECORD_AT]; }],
+    ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
+    ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
+    ['a live goal beside the archived one', (f) => { f.files[`${GOALS}/live/GOAL.json`] = goalJson({ stage: 'draft', status: 'Martin', repos: ['memoro'], title: 'x', goal: [], prs: [] }); }],
+    ['every goal dropped', (f) => { f.files[`${GOALS}/.archive/g1/GOAL.json`] = goalJson({ stage: 'dropped', status: 'ready', repos: ['memoro'], title: 'g1', goal: [], prs: [] }); }],
+    ['no archived goal', (f) => { delete f.files[`${GOALS}/.archive/g1/GOAL.json`]; }],
+  ];
+  for (const [kind, make] of table) {
+    const f = archiveFixture();
+    make(f);
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(archiveRunnable(runner), false, `${kind}: no candidate`);
+    await runner.pass({ repo: 'memoro' });
+    assert.deepEqual([archiveSessions(f).length, f.archived.length], [0, 0], `${kind}: no session, no archive`);
+    assert.equal(f.files[ARCHIVE_STATE], undefined, `${kind}: nothing counted`);
+  }
+  // A kept OK reading is no licence: a goal that appeared since stops the retry too.
+  const kept = archiveFixture({ archiveRc: 1 });
+  const runner = createRunner({ deps: kept.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(archiveState(kept).reading.verdict, 'OK');
+  kept.files[`${GOALS}/late/GOAL.json`] = goalJson({ stage: 'draft', status: 'Martin', repos: ['memoro'], title: 'late', goal: [], prs: [] });
+  assert.equal(archiveRunnable(runner), false);
+  await runner.pass({ repo: 'memoro' });
+  assert.equal(kept.archived.length, 1, 'the retry is not made while a goal is live');
+});
+
+test('programme archive: mixed versions — an older state file reads as nothing recorded, an unreadable one starts no turn and is said once, a programme already moved is no candidate', async () => {
+  const older = archiveFixture();
+  older.files[ARCHIVE_STATE] = JSON.stringify({ schema: 'mc-archive-turn', version: 0, programme: 'prog', failures: [{ x: 1 }] });
+  const first = createRunner({ deps: older.deps });
+  assert.equal(archiveRunnable(first), true, 'the older state is no failures and no kept reading: the programme is read');
+  assert.equal((await first.pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(older.archived.length, 1);
+  const bad = archiveFixture();
+  bad.files[ARCHIVE_STATE] = '{ not json';
+  const second = createRunner({ deps: bad.deps });
+  await second.pass({ repo: 'memoro' }); await second.pass({ repo: 'memoro' });
+  assert.deepEqual([archiveSessions(bad).length, bad.archived.length], [0, 0]);
+  assert.equal(bad.log.filter((line) => /runner\/archive-turn\/prog\.json is unreadable/u.test(line)).length, 1, 'said once while it lasts');
+  // A programme an older runner or `mc plan --archive` moved is no longer in the programmes home: no candidate, nothing to read.
+  const moved = archiveFixture();
+  moved.files[`${ARCHIVED_TO}/PROGRAMME.json`] = moved.files[RECORD_AT];
+  for (const path of Object.keys(moved.files)) if (path.startsWith(`${PROG}/`)) delete moved.files[path];
+  assert.equal(archiveRunnable(createRunner({ deps: moved.deps })), false);
 });

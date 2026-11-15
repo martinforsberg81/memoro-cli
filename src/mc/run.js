@@ -70,7 +70,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -81,7 +81,7 @@ import { rotateIfLarge } from './logger.js';
 import { runTidy } from './tidy.js';
 import { readDeps } from './deps.js';
 import { readRecord } from './programme-record.js';
-import { RUNNER_DISK, RUNNER_MEMORY, archivedProgramsHome, programsHome, runnerDir, runnerScratchDir, workRoot } from './paths.js';
+import { RUNNER_DISK, RUNNER_MEMORY, archivedProgramsHome, planAreaName, programsHome, restrictedProgrammeDir, runnerDir, runnerScratchDir, workRoot } from './paths.js';
 import { archiveGoal, finalizeDroppedGoal, goalArchiveDue } from './goal-archive.js';
 import {
   DIAGNOSE_TIMEOUT_MS, GITHUB_CAUSES, GITHUB_STATE, diagnoseGithub, failedAsk, mayAsk, nextAskAt,
@@ -104,6 +104,10 @@ import { itemDirectory, listDeskItems, readDeskItem, syncDeskItems } from './des
 import { decisionEligible, decisionFailure, decisionPrompt, decisionUnfinished } from './desk-decision.js';
 import { readHorizon, readHorizons } from './desk-horizons.js';
 import { MANAGER_CLAIM, archivedFor, areaPages, areaRepositories, curationDue, curationPrompt, curationState, curationWorktreesDir, headOf, horizonDue, horizonOutcome, horizonPrompt, proposalBacklog, readCurationState, curationStatePath, recordHorizonFailure, removeHorizonCheckouts, setUpCurationWorktrees, setUpHorizonCheckouts, settleCurationWorktrees } from './manager-pulse.js';
+import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue, archiveName, archiveOnOk, archiveReadPrompt, archiveCheckInPrompt, archiveReference, finishDestination, keepReading, openRestrictedItem, parseWriteBack, readArchiveState, recordArchiveFailure, statedProgrammes } from './archive-turn.js';
+import { archiveProgramme } from './archive-programme.js';
+import { runDocsMerge } from './docs-merge.js';
+import { releaseWorkArea } from './work-area.js';
 import { goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
@@ -171,6 +175,8 @@ const CAPACITY_READERS = Object.freeze({
 
 /** The role each goal session kind runs with (`goalSession`). */
 const GOAL_ROLES = Object.freeze({ plan: PLAN_ROLE, build: BUILD_ROLES.goal, repair: BUILD_ROLES.goal, review: REVIEW_ROLE, mend: MEND_ROLE });
+/** The role of the archive turn's one read-only reading (archive-turn.js). */
+const ARCHIVE_ROLE = 'archive-reader';
 const NO_REVIEW_PR = 'in review without an open pull request';
 
 /*
@@ -1897,6 +1903,230 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     }
   }
 
+  /* ------------------------------------------------------ programme archive turn */
+
+  const archiveSaid = new Map();
+  /** Whether `programme` is due the archive turn now, read through the runner's own list and read (archive-turn.js). */
+  function archiveDueNow(programme, items = turnItems()) {
+    const state = readArchiveState({ root, programme, read: deps.read });
+    return archiveDue({ programme, home: programsHome(deps.env), root, list: deps.list, read: deps.read, items, state });
+  }
+  function archiveWork(names, passed = new Set()) {
+    if (!names.length) return [];
+    const held = new Set([...claims, ...stepsHeld().map(x => x.name)]);
+    const items = turnItems();
+    const home = programsHome(deps.env);
+    // A programme whose directory has moved is still named by its state file while its record is not yet set to done.
+    const programmes = [...new Set([...programmeDirs({ home, list: deps.list }), ...statedProgrammes({ root, list: deps.list })])].sort();
+    return programmes.flatMap(programme => {
+      const name = archiveName(programme);
+      if (passed.has(name) || held.has(name)) return [];
+      const due = archiveDueNow(programme, items);
+      if (due.notice) {
+        if (archiveSaid.get(programme) !== due.notice) { say(due.notice); archiveSaid.set(programme, due.notice); }
+      } else archiveSaid.delete(programme);
+      if (!due.due) return [];
+      return [{ name, repo: names[0], kind: 'archive', variant: null, since: due.record?.created ?? stamp(), resumed: false,
+        archiveTurn: due, programme, priority: readProgrammePriority(programme, { home, read: deps.read }) }];
+    });
+  }
+  async function archivePass(item, { lane }) {
+    const { name, repo: repoName } = item;
+    const claimed = lock(root, () => {
+      if (claims.has(name) || stepsHeld().some(x => x.name === name)) return false;
+      claims.add(name); claimRepos.set(name, repoName);
+      return true;
+    }, { strict: true, name: 'archive-claim' });
+    if (!claimed) return { ran: 0 };
+    try {
+      const outcome = await runArchive(item, { lane });
+      if (outcome === 'stop') return { ran: 0, stop: true };
+      if (outcome === 'skipped:disk' || outcome === 'skipped:disk-busy') return { ran: 0, waited: outcome };
+      return outcome === 'ran' ? { ran: 1, name, goal: false } : { ran: 0, reason: outcome };
+    } finally { claims.delete(name); claimRepos.delete(name); }
+  }
+  /** The seams `archive-turn.js` takes: the runner's own file reads, writes and lock. */
+  const archiveSeams = (programme) => ({ root, programme, read: deps.read, writeJson, lock });
+  /** A failure of the turn, counted under the lock; one that cannot be written is said, never a missing outcome. */
+  function countArchive(programme, { kind = 'failed', reason, log = null, lines = [] }) {
+    const name = archiveName(programme);
+    try {
+      const reference = archiveReference(programme);
+      const decided = turnItems().some(item => item.kind === 'archive' && item.reference === reference && item.outcome?.by === 'decision');
+      const failed = recordArchiveFailure({ ...archiveSeams(programme), kind, reason, log, lines, at: stamp(), decided, env: deps.env, write: deps.write, itemDirectory });
+      if (failed.item) say(`${name}: desk item ${failed.item.id} (${failed.item.state}) opened — ${reason}`);
+      else say(`${name}: ${reason} — failure ${failed.count} of ${FAILURES_TO_ITEM}`);
+      return failed;
+    } catch (error) { say(`${name}: the failure was not counted — ${error.message || String(error)}`); return null; }
+  }
+  /** The archive itself (C3), tried after an OK reading, or again on a kept one: no model, no lane slot. */
+  async function attemptArchive(programme) {
+    const name = archiveName(programme);
+    const home = programsHome(deps.env);
+    const areaName = planAreaName(programme, { root });
+    const captured = [];
+    const sink = { write: (text) => { captured.push(String(text)); return true; } };
+    const archive = ({ fence, onShelved }) => (deps.archiveProgramme || archiveProgramme)(programme, {
+      repos, env: deps.env, areaName, areaPath: join(root, areaName), stdout: sink, stderr: sink, now: deps.now, fence, onShelved,
+      deps: { git: deps.git, gh: deps.gh, docsMerge: deps.docsMerge || runDocsMerge, release: deps.release || releaseWorkArea },
+    });
+    let result;
+    try {
+      result = await archiveOnOk({ ...archiveSeams(programme), home, restrictedDir: restrictedProgrammeDir(programme, deps.env), proposalsHome: join(root, 'proposals'),
+        list: deps.list, write: deps.write, remove, exists: deps.exists, archive });
+    } catch (error) { result = { ok: false, reason: error.message || String(error) }; }
+    for (const line of captured.join('').split('\n').filter(Boolean)) say(`${name}: ${line}`);
+    if (result.ok) { say(`${name}: programme archived — ${result.destination}, its record reads done`); return 'ran'; }
+    if (result.restricted) {
+      try {
+        const opened = openRestrictedItem({ ...archiveSeams(programme), entries: result.restricted, at: stamp(), env: deps.env, write: deps.write, itemDirectory });
+        say(`${name}: ~/mc/restricted/${programme}/ holds data — desk item ${opened.item.id} (for-martin, reserved) opened`);
+      } catch (error) { say(`${name}: the restricted-data item was not written — ${error.message || String(error)}`); }
+      return 'skipped:restricted';
+    }
+    countArchive(programme, { reason: `archive failed: ${result.reason}` });
+    return 'skipped:archive-failed';
+  }
+  async function runArchive(item, { lane }) {
+    const { name, programme, archiveTurn: due } = item;
+    if (due.mode === 'state') {
+      // The directory moved and the record still reads open: that write alone, no reading and no session.
+      const finished = finishDestination({ ...archiveSeams(programme), destination: due.destination, write: deps.write });
+      if (finished.ok) { say(`${name}: the record at ${due.destination} reads done`); return 'ran'; }
+      countArchive(programme, { reason: finished.reason });
+      return 'skipped:state-write';
+    }
+    if (due.mode === 'archive') return attemptArchive(programme);
+    const read = await runArchiveReading(item, { lane });
+    return read === 'kept' ? attemptArchive(programme) : read;
+  }
+  /** The reading: one read-only session under the claim; 'kept' when it ends OK and the OK reading is kept. */
+  async function runArchiveReading(item, { lane }) {
+    const { name, repo: repoName, programme, archiveTurn: due } = item;
+    const dir = join(programsHome(deps.env), programme);
+    const roleName = ARCHIVE_ROLE;
+    const role = deps.role(roleName);
+    if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
+    const route = routeClass('large');
+    if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
+    const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available on this machine (${launch?.hint || launch?.reason}), skip`); return 'skipped:tool-missing'; }
+    const slot = await waitForSlot(name, { repo: repoName, lane });
+    if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+    if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
+    let admission; let scratch; let marker; let result; let set = null; let outcome = 'ran';
+    const currentPath = paths.currentFor(repoName, lane);
+    const readRepos = [];
+    try {
+      const picked = await billingFor(launch, route);
+      if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
+      admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
+      if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
+      if (offlineHeld()) { say(`${name}: not started — the API server cannot be reached until ${untilText(offlineHold.until)}`); return 'skipped:offline'; }
+      // Read again after admission: a goal made, an item opened or the record changed meanwhile leaves nothing to read.
+      const again = archiveDueNow(programme);
+      if (!again.due || again.mode !== 'read') { say(`${name}: programme changed during admission — reading deferred (${again.reason ?? again.mode})`); return 'skipped:programme-changed'; }
+      // The repositories of the done goals and every repository that declares areas, each at origin/main.
+      const wanted = new Map();
+      for (const repo of repos) if (due.repos.includes(repo.name)) wanted.set(repo.name, repo);
+      for (const repo of areaRepos().repos) wanted.set(repo.name, { name: repo.name, path: repo.path });
+      readRepos.push(...wanted.values());
+      if (!readRepos.length) { countArchive(programme, { reason: 'no repository to read: no done goal names one this machine holds and none declares areas' }); return 'skipped:setup'; }
+      set = setUpReadCheckouts({ git: deps.git, root, programme, repos: readRepos, exists: deps.exists, prefix: ARCHIVE_CHECKOUTS_PREFIX });
+      if (!set.ok) {
+        const refused = set;
+        set = null;
+        // A fetch that fails is the network's, not the programme's: nothing is counted.
+        if (refused.fetch) { say(`${name}: ${refused.reason} — skip`); return 'skipped:fetch'; }
+        if (!retainedSaid.has(refused.reason)) { retainedSaid.add(refused.reason); say(`${name}: no session started — ${refused.reason}`); }
+        countArchive(programme, { reason: refused.reason });
+        return 'skipped:setup';
+      }
+      const shas = {};
+      for (const [repo, path] of Object.entries(set.paths)) {
+        const head = deps.git(path, ['rev-parse', 'HEAD']);
+        shas[repo] = String(head.stdout ?? '').trim();
+        if (!head.ok || !shas[repo]) { countArchive(programme, { reason: `cannot read the commit of the checkout ${path}` }); return 'skipped:setup'; }
+      }
+      const rechecked = await admission.recheck?.();
+      if (rechecked && !rechecked.admitted) return 'skipped:disk';
+      if (stopRequested()) return 'stop';
+      if (updateRequested()) return 'skipped:update';
+      // A file left by an earlier reading is not this one's.
+      remove(join(dir, WRITE_BACK_FILE));
+      const prompt = archiveReadPrompt({ programme, dir, goals: due.goals, dropped: due.dropped, checkouts: set.paths, archive: archiveDirIn(programsHome(deps.env), programme) });
+      const instructions = instructionsFor(launch.id, role.overlay);
+      const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, effort: settings.effort, advisor: settings.advisor, instructions, prompt, profileArgs, cache: role.cache });
+      const stem = `archive-${programme}-${stamp().replace(/[-:]/gu, '')}-${randomUUID().slice(0, 8)}`;
+      const out = join(paths.log, stem);
+      scratch = join(paths.scratch, stem);
+      marker = { schema: SCRATCH_SCHEMA, version: 1, owner: 'runner', runner_pid: pid, session: name, kind: 'plan', stem, started: stamp() };
+      deps.mkdir(scratch); writeJson(join(scratch, SCRATCH_MARKER), marker);
+      const current = { name, step: null, kind: 'plan', variant: null, programme, repo: repoName, lane, tool: settings.tool, model: settings.model,
+        effort: settings.effort, advisor: settings.advisor, class: 'large', billing: picked.billing,
+        check_in_minutes: launch.id === 'codex' ? null : settings.checkInMinutes, check_ins: 0, started: stamp(), pid, worktree: dir,
+        ...(marked?.generation ? { generation: marked.generation } : {}), ...(deps.identity?.(pid) || {}),
+        role: roleRecord({ name: role.name || roleName, source: roleSourceOf(role) || 'canon', overlay: role.overlay, instructions }) };
+      writeJson(currentPath, current);
+      say(`${name}: archive reading starting (${describeSettings(launch.shortName, settings)}, ${describeWatch(launch.id, settings)})${picked.billing === 'credits' ? ` · on credits (${picked.why})` : ''} · large list: ${route.basis} (${route.why})`);
+      const t0 = deps.now().getTime();
+      const tool = gatewayLaunch({ provider: launch.id === 'codex' ? 'codex' : 'claude', model: settings.model, bin: launch.spec.bin, args, billing: picked.billing });
+      try {
+        const pending = deps.session({ bin: tool.bin, args: tool.args, cwd: dir, logPath: `${out}.jsonl`,
+          onSpawn: childPid => { current.session_pid = childPid; writeJson(currentPath, current); },
+          ...watchFor(launch, settings, { prompt, name, checkInText: archiveCheckInPrompt, onCheckIn: count => writeJson(currentPath, { ...current, check_ins: count }) }),
+          // Nobody watches: the hook refuses Martin's acts (HEADLESS_RULES). No MC_GOAL: this session is the programme's, not a goal's.
+          env: { MC_HEADLESS: '1', MC_ROLE: roleName, MC_PROGRAMME: programme, MC_TOOL: settings.tool, ...(settings.model ? { MC_MODEL: settings.model } : {}), MC_SCRATCH: scratch },
+          unsetEnv: ['MC_GOAL', 'MC_PROJECT', 'MC_STEP', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'OPENAI_API_KEY', 'MC_CODEX_API_KEY'] });
+        admission.release?.();
+        result = await pending;
+      } catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
+      writeSessionLogs(out, result);
+      const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, stalled: result.stalled, now: deps.now(), model: settings.model });
+      noteWindows({ name, launch }, result.stdout || '');
+      noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
+      recordRefusal({ name, launch, route }, read, picked.billing);
+      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+      // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas });
+      let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
+      if (!parsed.ok) {
+        if (!providerEnding) {
+          const reason = `archive reading exited ${result.status ?? 1}: ${parsed.problems.join('; ')}`;
+          countArchive(programme, { reason, log: `${out}.jsonl` });
+          note = reason;
+        }
+      } else if (parsed.verdict === 'OK') {
+        try {
+          keepReading({ ...archiveSeams(programme), at: stamp(), goals: due.goals, lines: [] });
+          outcome = 'kept';
+          note = `${note},write-back OK`;
+        } catch (error) { say(`${name}: the OK reading was not kept — ${error.message || String(error)}`); }
+      } else {
+        countArchive(programme, { kind: 'not-ok', reason: `write-back NOT OK: ${parsed.lines.join(' | ')}`, log: `${out}.jsonl`, lines: parsed.lines });
+        note = `${note},write-back NOT OK`;
+      }
+      logRun({ ...read, ts: stamp(), name, kind: 'plan', exit: result.status, seconds, pr: '-', note, model: settings.model, cls: 'large', tool: settings.tool, effort: settings.effort, billing: picked.billing });
+      say(`${name}: archive reading done rc=${result.status} ${seconds}s turns=${read.turns} note=${note}`);
+      return outcome;
+    } finally {
+      remove(currentPath);
+      try {
+        if (scratch) { writeJson(join(scratch, SCRATCH_MARKER), { ...marker, ended: stamp(), exit: result?.status ?? null }); await reclaimSessionExports(scratch, name); }
+      } finally {
+        try {
+          if (set?.ok) {
+            const kept = removeReadCheckouts({ git: deps.git, root, programme, repos: readRepos, exists: deps.exists, prefix: ARCHIVE_CHECKOUTS_PREFIX });
+            for (const path of kept) say(`${name}: read checkout ${path} holds work and was kept`);
+          }
+        } finally { admission?.release?.(); dropSlot(); }
+      }
+    }
+  }
+
   /* ------------------------------------------------------------ manager turns */
 
   /** A notice, said once while it lasts: the key is its place, the text is replaced when it changes and dropped when it stops. */
@@ -3280,11 +3510,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   function nextWork({ repo = null, passed = new Set(), waited = new Map(), carry = null } = {}) {
     const others = stepsHeld().filter((held) => held.other);
     const names = (repo ? [repo] : repos.map((item) => item.name)).filter((name) => !waited.has(name));
-    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed), ...managerWork(names, passed)];
+    const items = [...goalWork({ repos: names, passed }), ...mainMendWork(names, passed), ...deployMendWork(names, passed), ...decisionWork(names, passed), ...programmeWork(names, passed), ...archiveWork(names, passed), ...managerWork(names, passed)];
     const held = [...claimRepos.values(), ...others.map((item) => item.repo)].filter(Boolean);
     const priorities = new Map();
     for (const item of items) {
-      if (item.mainMend || item.decision || item.deployMend || item.programmeTurn || item.managerTurn) continue;
+      if (item.mainMend || item.decision || item.deployMend || item.programmeTurn || item.archiveTurn || item.managerTurn) continue;
       const programme = item.goal.programme;
       if (!priorities.has(programme)) priorities.set(programme, readProgrammePriority(programme, { home: programsHome(deps.env), read: deps.read }));
       item.priority = priorities.get(programme);
@@ -3393,6 +3623,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         ? await decisionPass(pick, { lane })
         : pick.programmeTurn
         ? await programmePass(pick, { lane })
+        : pick.archiveTurn
+        ? await archivePass(pick, { lane })
         : pick.managerTurn
         ? await managerPass(pick, { lane })
         : pick.mainMend
