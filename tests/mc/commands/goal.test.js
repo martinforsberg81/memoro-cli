@@ -3605,3 +3605,36 @@ test('mc goal phase that empties a phase says in one line what it no longer wait
   assert.equal(fresh.phase, 3);
   assert.equal(phaseOpen(fresh, goals.filter((goal) => goal.programme === 'prog'), programmeOrder('prog', { home: HOME, read: f.deps.read })), true, 'no old dependency stays on the freed number');
 });
+
+/* ------------------------------ one repair goal in flight per area (D8) */
+
+const AREA_RECORD = `${JSON.stringify({ ...STATED_RECORD, area: 'memoro-cli/operations' }, null, 2)}\n`;
+const newInProg = (name) => ['new', `prog/${name}`, '--repo', 'memoro', '--class', 'fast', '--title', 'T'];
+
+test('mc goal new in an area repair programme is refused while a goal is neither done nor dropped, exit 1, naming the live goal, and makes nothing', async () => {
+  for (const stage of ['draft', 'build', 'review', 'merge']) {
+    const f = fixture({ files: { ...progGoal('first', stage, 1), [PROG_RECORD_PATH]: AREA_RECORD } });
+    assert.equal(await run(newInProg('second'), f.deps), 1, stage);
+    assert.match(f.err(), /prog repairs the area memoro-cli\/operations and holds the live goal first — one repair goal in flight per area/u);
+    assert.equal(f.store[`${HOME}/prog/goals/second/GOAL.json`], undefined, stage);
+    assert.deepEqual(f.calls, [], 'nothing fetched: the refusal comes before any repository is touched');
+  }
+});
+
+test('mc goal new in an area repair programme is made once the goal before it is done or dropped; a goal whose file cannot be read still holds it', async () => {
+  for (const stage of ['done', 'dropped']) {
+    const f = fixture({ files: { ...progGoal('first', stage, 1), [PROG_RECORD_PATH]: AREA_RECORD } });
+    assert.equal(await run(newInProg('second'), f.deps), 0, `${stage}: ${f.err()}`);
+    assert.ok(f.store[`${HOME}/prog/goals/second/GOAL.json`], stage);
+  }
+  const unreadable = fixture({ files: { [`${HOME}/prog/goals/first/GOAL.json`]: '{ not json', [PROG_RECORD_PATH]: AREA_RECORD } });
+  assert.equal(await run(newInProg('second'), unreadable.deps), 1);
+  assert.match(unreadable.err(), /holds the live goal first/u);
+});
+
+test('mc goal new in a programme with no area in its record, no record or an unreadable one is not held back by a live goal', async () => {
+  for (const [label, record] of [['a record without area', plainRecord()], ['a stated record', statedRecord()], ['no record', null], ['a record that is not JSON', '{ not json']]) {
+    const f = fixture({ files: { ...progGoal('first', 'build', 1), ...(record === null ? {} : { [PROG_RECORD_PATH]: record }) } });
+    assert.equal(await run(newInProg('second'), f.deps), 0, `${label}: ${f.err()}`);
+  }
+});
