@@ -25,7 +25,7 @@ import { test } from 'node:test';
 import {
   BEFORE_WINDOW_MS, CHECK_RUN, COULD_NOT_RUN, GREEN, RED, SETTLE_MS, SURVEY_SCRIPT,
   attemptDeadline, attemptInFlight, ask, beforePath, checkCells, checkDatabase, checkWords, combine, deployCheckTick,
-  executeCheck, judgeErrors, judgeSuites, judgeVersion, parseSurvey, readBeforeFile, readSurvey, readStored,
+  executeCheck, startReactionDefault, judgeErrors, judgeSuites, judgeVersion, parseSurvey, readBeforeFile, readSurvey, readStored,
   readVerdictFile, readVersion, runCheck, statePath, storedTime, takeBeforeReading, verdictPath, writeVerdictFile,
 } from '../../src/mc/deploy-check.js';
 import {
@@ -573,6 +573,61 @@ test('executeCheck: a check that throws is could-not-run with its words, never a
     const result = await executeCheck({ job: { started: row.started, sha: row.sha }, env, deps });
     assert.equal(result.verdict.check, COULD_NOT_RUN);
     assert.match(readDeploys(env).at(-1).check_why, /the check failed: git is gone/u);
+  } finally { cleanup(); }
+});
+
+test('executeCheck: a red verdict starts the reaction at once, once, detached; green and could-not-run start nothing', async () => {
+  const red = boundaries({ readAfter: async () => survey([print('old', '2026-11-10 08:00:00'), print('new', '2026-11-15 12:40:00', 'RangeError')]) });
+  const cases = [['red', red.deps, 1], ['green', boundaries().deps, 0], ['could-not-run', boundaries({ declare: () => { throw new Error('git is gone'); } }).deps, 0]];
+  for (const [name, deps, expected] of cases) {
+    const { env, cleanup } = workRoot();
+    try {
+      const row = deployed(env);
+      const started = [];
+      const said = [];
+      deps.startReaction = (job, options) => { started.push({ job, options }); return { pid: 321, log: '/log' }; };
+      const result = await executeCheck({ job: { started: row.started, sha: row.sha }, env, deps, say: (line) => said.push(line) });
+      assert.equal(started.length, expected, name);
+      if (expected) {
+        assert.equal(readDeploys(env).at(-1).check, RED);
+        assert.deepEqual(started[0].job, { started: row.started });
+        assert.equal(result.reaction.pid, 321);
+        assert.ok(said.some((line) => /reaction/u.test(line)), 'the start is said');
+        assert.ok(said.findIndex((line) => /reaction/u.test(line)) > said.findIndex((line) => /is red/u.test(line)), 'the row is written first');
+      }
+    } finally { cleanup(); }
+  }
+});
+
+test('executeCheck: a red whose row could not be written starts no reaction — the chore restores the verdict, then reacts', async () => {
+  const { env, cleanup } = workRoot();
+  try {
+    const row = deployed(env);
+    const { deps } = boundaries({ readAfter: async () => survey([print('new', '2026-11-15 12:40:00', 'RangeError')]) });
+    const started = [];
+    deps.startReaction = (job) => { started.push(job); return { pid: 1 }; };
+    deps.record = () => { throw new Error('the runner lock is held by pid 7 — try again'); };
+    const result = await executeCheck({ job: { started: row.started, sha: row.sha }, env, deps });
+    assert.equal(result.written, false);
+    assert.deepEqual(started, []);
+  } finally { cleanup(); }
+});
+
+test('startReactionDefault: runs the installed take-back-run.js detached in its own group, with the row as its argument, logging beside the verdict', () => {
+  const { env, cleanup } = workRoot();
+  try {
+    const spawned = [];
+    const result = startReactionDefault({ started: STARTED }, { env, spawnProcess: (command, args, options) => { spawned.push({ command, args, options }); return { pid: 77, unref() { spawned.at(-1).unref = true; } }; } });
+    assert.equal(result.pid, 77);
+    assert.equal(spawned[0].command, process.execPath);
+    assert.match(spawned[0].args[0], /take-back-run\.js$/u);
+    assert.equal(spawned[0].args[1], STARTED);
+    assert.equal(spawned[0].options.detached, true);
+    assert.equal(spawned[0].unref, true);
+    assert.match(result.log, new RegExp(`${STARTED.replace(/[.]/gu, '\\.')}\\.take-back\\.log$`, 'u'));
+    const failing = startReactionDefault({ started: STARTED }, { env, spawnProcess: () => { throw new Error('EAGAIN'); } });
+    assert.equal(failing.pid, null);
+    assert.match(failing.error, /EAGAIN/u);
   } finally { cleanup(); }
 });
 

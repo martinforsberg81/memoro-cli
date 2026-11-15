@@ -583,3 +583,12 @@ test('one way to ask: the record — a text item proposed with a goal is found b
   assert.equal(third.duplicate,true); assert.equal(third.item.goal,'alpha/one','an item that names a goal keeps it');
   assert.equal(readDeskItem(first.item.id,{env:f.env}).goal,'alpha/one');
 });
+
+test('a take-back item from the red ledger is read by mc martin get and never synced as a desk item', () => {
+  const f=fixture();
+  const started='2026-11-15T10:00:00.000Z';
+  writeFileSync(join(f.env.MC_WORK_ROOT,'runner','check-red.json'),JSON.stringify({version:1,from:'2026-11-01T00:00:00.000Z',entries:{[started]:{sha:'b'.repeat(40),parts:[],pid:null,repair:[],take_back:'failed',desk:'Martin',reason:'memoro-tail was not taken back',created:started,done:true,steps:['Red: x']}}}));
+  const dep={env:f.env,home:f.home,now:()=>new Date(stamp),read:fixtureRead};
+  assert.deepEqual(syncDeskItems(dep),[],'the desk syncs goals and main-red only');
+  assert.deepEqual(readdirSync(join(f.env.MC_WORK_ROOT,'martin','items')).filter(name=>!name.startsWith('.')),[]);
+});

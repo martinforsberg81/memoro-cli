@@ -15,6 +15,8 @@ import { deskItemId, itemDirectory, writeDeskItem } from '../../../src/mc/desk-i
 import { writeJsonAtomic } from '../../../src/mc/atomic-write.js';
 import { lessonsDir, renderLesson } from '../../../src/mc/desk-lessons.js';
 import { goalJson, goalJsonV2 } from '../_helpers/goal-file.js';
+import { DEPLOYS_HEADER, tsvRow as deployRow } from '../../../src/mc/deploys.js';
+import { endDesk } from '../../../src/mc/take-back-run.js';
 
 const roots = [];
 after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -89,6 +91,53 @@ describe('mc martin get', () => {
     assert.equal(item.reason, 'two repairs failed');
     const text = renderMartinQueue(collectMartinQueue({ home: f.home }));
     assert.match(text, /deploy-mend:dm-1 · Martin\nRepair a stopped deploy \(mc repo mend deploy <id> requeue\|drop --reason "…"\)\ntwo repairs failed\nSession log: \/logs\/dm-1\.log/u);
+  });
+  it('lists a red release the runner did not take back as a take-back item with its steps, until a later row ships or a person ends it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-root-'));
+    roots.push(root);
+    const home = join(root, 'programs');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    const started = '2026-11-15T10:00:00.000Z';
+    const entry = (desk) => ({
+      sha: 'b'.repeat(40), parts: [{ part: 'errors', why: '3 new fingerprints' }], pid: null, repair: ['m1'], take_back: 'not-made', desk,
+      reason: 'the reading says it would not undo migration-after: 0042', created: started, done: true,
+      steps: ['Red: the check of bbbbbbb — errors: 3 new fingerprints.', 'To take it back anyway: mc deploy take-back --despite "<reason>".'],
+    });
+    const ledger = (desk) => writeFileSync(join(root, 'runner', 'check-red.json'), JSON.stringify({ version: 1, from: '2026-11-01T00:00:00.000Z', entries: { [started]: entry(desk) } }));
+    ledger('none');
+    assert.deepEqual(collectMartinQueue({ home }).items, [], 'an entry that does not ask the desk is no item');
+    ledger('Martin');
+    const [item] = collectMartinQueue({ home }).items;
+    assert.equal(item.kind, 'take-back');
+    assert.equal(item.reference, `take-back:${started}`);
+    assert.deepEqual(item.steps, entry('Martin').steps);
+    const text = renderMartinQueue(collectMartinQueue({ home }));
+    assert.match(text, new RegExp(`take-back:${started} · Martin\\nA red release was not taken back: bbbbbbb — the reading says it would not undo migration-after: 0042\\nRed: the check of bbbbbbb`, 'u'));
+    assert.match(text, /To take it back anyway: mc deploy take-back --despite "<reason>"\./u);
+    assert.match(text, new RegExp(`mc deploy take-back --end ${started} --reason`, 'u'));
+    assert.match(text, /1 item waiting on Martin/u);
+    // A later deployed row ends it.
+    mkdirSync(join(root, 'runner', 'log'), { recursive: true });
+    const deploys = [{ started: '2026-11-15T11:00:00.000Z', sha: 'c'.repeat(40), outcome: 'deployed', ended: '2026-11-15T11:05:00.000Z' }];
+    writeFileSync(join(root, 'runner', 'log', 'deploys.tsv'), `${DEPLOYS_HEADER.join('\t')}\n${deploys.map((row) => deployRow(row)).join('\n')}\n`);
+    assert.deepEqual(collectMartinQueue({ home }).items, []);
+    rmSync(join(root, 'runner', 'log', 'deploys.tsv'));
+    assert.equal(collectMartinQueue({ home }).items.length, 1, 'with no later row it is still asked');
+    // A person ends it.
+    endDesk({ env: { MC_WORK_ROOT: root }, started, reason: 'rolled back by hand' });
+    assert.deepEqual(collectMartinQueue({ home }).items, []);
+  });
+  it('reads an unreadable red ledger as no take-back items and says so', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-martin-root-'));
+    roots.push(root);
+    const home = join(root, 'programs');
+    mkdirSync(home, { recursive: true });
+    mkdirSync(join(root, 'runner'), { recursive: true });
+    writeFileSync(join(root, 'runner', 'check-red.json'), '{ no');
+    const result = collectMartinQueue({ home });
+    assert.deepEqual(result.items, []);
+    assert.match(result.issues.map((issue) => `${issue.path}: ${issue.error}`).join('\n'), /check-red\.json: the red ledger .* is not JSON/u);
   });
   it('does not queue a decided technical entry, and reads an unresolved question and its options whole', () => {
     const f = fixture();

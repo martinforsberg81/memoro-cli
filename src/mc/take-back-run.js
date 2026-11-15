@@ -242,10 +242,11 @@ export function pendingReds({ env = process.env, rows = null, alive = processAli
  * row. `{ items, ended, error }` — `ended` are the keys that now read ended,
  * for the chore to write.
  */
-export function deskEntries({ env = process.env, rows = null } = {}) {
-  const ledger = readLedgerSafe(env);
+export function deskEntries({ env = process.env, rows = null, read = undefined } = {}) {
+  const ledger = readLedgerSafe(env, read ? { read } : {});
   if (ledger.error) return { items: [], ended: [], error: ledger.error };
-  const all = rows || readDeploys(env);
+  let all;
+  try { all = rows || readDeploys(env); } catch (error) { return { items: [], ended: [], error: `deploys.tsv cannot be read (${error.message})` }; }
   const items = []; const ended = [];
   for (const [started, entry] of Object.entries(ledger.entries)) {
     if (entry.desk !== 'Martin') continue;
