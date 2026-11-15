@@ -522,7 +522,7 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
 
   it('refuses the end while the goal is in review, and while no proposal was written since the review began, naming each', () => {
     const both = reviewStopDecision({ env: REVIEW, ...world('review') });
-    assert.match(both.reason, /^the goal is still in review — mc goal stage merge \(OK to land: it merges all registered pull requests\) or write REVIEW\.md in the goal's directory and mc goal stage finish \(not OK\); no proposal written — one file in \/p\/mc\/proposals\/ /u);
+    assert.match(both.reason, /^the goal is still in review — mc goal stage merge \(OK to land: it merges all registered pull requests\) or write REVIEW\.md in the goal's directory and mc goal stage build \(not OK\); no proposal written — one file in \/p\/mc\/proposals\/ /u);
     const stage = reviewStopDecision({ env: REVIEW, ...world('review', { '2026-11-03-mc-x.md': after }) });
     assert.match(stage.reason, /^the goal is still in review/u);
     assert.doesNotMatch(stage.reason, /proposal/u);
@@ -530,8 +530,8 @@ describe('mc hook stop: a goal\'s review ends only once it has decided and writt
     assert.match(old.reason, /^no proposal written/u, 'one from before the review, or no .md, is none');
   });
 
-  it('lets the review end once it is in merge or finish with a proposal; and holds no other session', () => {
-    for (const stage of ['merge', 'finish']) assert.equal(reviewStopDecision({ env: REVIEW, ...world(stage, { '2026-11-03-mc-x.md': after }) }), null, stage);
+  it('lets the review end once it is in merge or build with a proposal; and holds no other session', () => {
+    for (const stage of ['merge', 'build']) assert.equal(reviewStopDecision({ env: REVIEW, ...world(stage, { '2026-11-03-mc-x.md': after }) }), null, stage);
     for (const env of [{ ...REVIEW, MC_ROLE: 'build-session:goal' }, { ...REVIEW, MC_GOAL: undefined }, {}]) {
       assert.equal(reviewStopDecision({ env, ...world('review') }), null);
     }
