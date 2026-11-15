@@ -126,6 +126,7 @@ import { currentHolder } from '../repo-lease.js';
 import { ghCommand } from './publish.js';
 import { run as mergeRun } from './merge.js';
 import { scanArgs } from './flags.js';
+import { parseTakeBackArgs, runTakeBack } from './deploy-take-back.js';
 import { commandUsage } from '../command-help.js';
 
 export {
@@ -139,6 +140,12 @@ export const REPO = 'memoro';
 const short = (sha) => (sha ? String(sha).slice(0, 7) : null);
 
 export function parseDeployArgs(argv) {
+  // `mc deploy take-back …` is a verb of its own (deploy-take-back.js); `mc deploy` itself gains no flag.
+  if (argv[0] === 'take-back') {
+    const parsed = parseTakeBackArgs(argv.slice(1));
+    const opts = { dryRun: Boolean(parsed.dryRun), json: Boolean(parsed.json), follow: false, acceptRed: null };
+    return parsed.error ? { ...opts, error: parsed.error } : { ...opts, takeBack: parsed };
+  }
   const scanned = scanArgs(argv, { booleans: ['--dry-run', '--json', '--follow'], strictValues: ['--accept-red'] });
   const opts = { dryRun: false, json: false, follow: false, acceptRed: null };
   if (scanned.error) return { ...opts, error: scanned.error };
@@ -787,13 +794,18 @@ export async function run(argv, deps = {}) {
   // no fetch, no history, no full run, no suite. The reading (`--dry-run`) and
   // the watching (`--follow`) change nothing in production and stay allowed.
   if (env.MC_HEADLESS === '1' && !opts.dryRun && !opts.follow) {
-    stderr.write('mc: an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading.\n');
-    return 1;
+    stderr.write(opts.takeBack
+      ? 'mc: an unattended session does not take a release back — a take-back is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was taken back. mc deploy take-back --dry-run is the reading.\n'
+      : 'mc: an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading.\n');
+    return opts.takeBack ? 2 : 1;
   }
   if (opts.follow) return follow({ env, stdout, deps });
 
   const repos = deps.repos || defaultRepos(env);
   const path = repos.find((repo) => repo.name === REPO)?.path;
+  if (opts.takeBack) {
+    return runTakeBack(opts.takeBack, { stdout, stderr, env, repoPath: path, deps: deps.takeBackVerb || {} });
+  }
   if (!path) {
     stderr.write(`mc: no checkout of ${REPO} on this machine — mc deploy deploys that repository and no other\n`);
     return 1;

@@ -618,6 +618,14 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
     // The check after a deploy holds production's tokens; only the runner starts it.
     'node ~/mc/self/memoro/src/mc/deploy-check-run.js \'{"started":"2026-11-15T10:00:00.000Z","sha":"abc"}\'': 'headless-deploy-check',
     'MC_HOME=/tmp/x node src/mc/deploy-check-run.js {}': 'headless-deploy-check',
+    // The red reaction and the provider script of the take-back are the same act as mc deploy take-back.
+    'node ~/mc/self/memoro/src/mc/take-back-run.js 2026-11-15T10:00:00.000Z': 'headless-take-back',
+    'MC_HOME=/tmp/x node src/mc/take-back-run.js x': 'headless-take-back',
+    'node scripts/release/take-back.mjs --worker memoro=a:b --message x': 'headless-take-back',
+    'cd /tmp/deploy && node /tmp/scripts/release/take-back.mjs --worker memoro=a:b': 'headless-take-back',
+    'mc deploy take-back': 'headless-deploy',
+    'mc deploy take-back --despite "known"': 'headless-deploy',
+    'mc deploy take-back --end 2026-11-15T10:00:00.000Z --reason x': 'headless-deploy',
   };
   for (const [command, id] of Object.entries(REFUSED)) {
     it(`refuses ${command} headless, with no escape`, () => {
@@ -654,7 +662,7 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
   });
 
   it('names one rule per act', () => {
-    assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials', 'headless-deploy-check']);
+    assert.deepEqual(HEADLESS_RULES.map((rule) => rule.id), ['headless-deploy', 'headless-admin', 'headless-production-data', 'headless-credentials', 'headless-deploy-check', 'headless-take-back']);
   });
 
   // 2026-11-14: one Bash call held two reserved-act questions; the words of an
@@ -670,6 +678,11 @@ describe('a headless session is refused Martin\'s acts, and only it', () => {
       `echo "mc merge memoro 1 --admin is Martin's"`,
       'grep -rn "mc test token --set" docs/',
       'grep -rn "deploy-check-run.js" docs/ src/',
+      'grep -rn "take-back-run.js" docs/ src/',
+      'git commit -m "docs: take-back.mjs is memoro\'s script"',
+      'node scripts/release/take-back.mjs --worker memoro=a:b --dry-run',
+      'mc deploy take-back --dry-run',
+      'mc deploy take-back --dry-run --json',
       'git commit -m "docs: deploy-check-run.js is the runner\'s"',
       'echo done # mc deploy',
       'mc ask alpha/one --kind product --reason "Ship it?" --option "a: run mc deploy after the gate" --option "b: wait" --recommend b',
