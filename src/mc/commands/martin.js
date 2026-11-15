@@ -262,15 +262,18 @@ function lessons(argv, deps) {
 // ---- Horizons -----------------------------------------------------------------------
 
 const HORIZON_VERBS = ['set', 'show', 'move', 'reached', 'reopen', 'drop'];
-const HORIZON_USAGE = 'mc: usage: mc martin horizon set <slug> --title <t> --file <path|-> [--position n]\n  | show <slug> [--json] | move <slug> --position n | reached <slug> --file <path|-> | reopen <slug> --reason <t> [--position n] | drop <slug> --reason <t>\n';
+const HORIZON_USAGE = 'mc: usage: mc martin horizon set <slug> --title <t> --file <path|-> [--position n] | show <slug> [--json] | move <slug> --position n | reached <slug> --file <path|-> | reopen <slug> --reason <t> [--position n] | drop <slug> --reason <t>\n';
 
 /** Who may write a horizon: the interactive desk or a person; `reached` also the unattended manager. Null when the caller may. */
 function horizonRefusal(verb, role, env) {
   const headless = env.MC_HEADLESS === '1';
   if (!headless && (role === 'martin' || role === 'person')) return null;
   if (verb === 'reached' && headless && role === 'manager') return null;
-  if (verb === 'reached' && role === 'manager') return 'horizon reached is for the unattended manager; the interactive manager takes it to the desk (mc martin)';
-  return `horizon ${verb} is not open to ${headless ? 'an unattended ' : 'the '}${role}${verb === 'reached' ? '' : '; the interactive desk or a person sets, moves, reopens and drops horizons'}`;
+  if (verb === 'reached' && role === 'manager') return 'horizon reached is refused to the interactive manager; take it to the desk (mc martin), or let the unattended manager mark it';
+  const caller = `${headless ? 'an unattended ' : ''}${role}`;
+  return verb === 'reached'
+    ? `horizon reached is refused to ${caller}; only the interactive desk (mc martin), a person or the unattended manager marks a horizon reached`
+    : `horizon ${verb} is refused to ${caller}; only the interactive desk (mc martin) or a person sets, moves, reopens or drops a horizon`;
 }
 
 function horizon(argv, deps) {
