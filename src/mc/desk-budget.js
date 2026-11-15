@@ -24,7 +24,7 @@ export function deskCeiling({ env = process.env, read = readDeskText } = {}) {
 export function deskBudget({ env = process.env, now = new Date(), read = readDeskText } = {}) {
   const ceiling = deskCeiling({ env, read });
   const day = now.toISOString().slice(0, 10);
-  const spent = costSum(readRunRows(read(deskRunsPath(env))).filter(row => ['desk-prepare', 'decision', 'learning'].includes(row.kind) && String(row.ts).slice(0, 10) === day));
+  const spent = costSum(readRunRows(read(deskRunsPath(env))).filter(row => ['desk-prepare', 'decision', 'learning', 'ask-reader'].includes(row.kind) && String(row.ts).slice(0, 10) === day));
   return { ceiling, spent, day, held: ceiling !== null && spent >= ceiling };
 }
 export function setDeskCeiling(ceiling, { env = process.env } = {}) {

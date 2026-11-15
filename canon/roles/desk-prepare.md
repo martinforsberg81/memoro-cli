@@ -33,5 +33,5 @@ that it concerns; decide nothing.
 Then `mc martin item <id> prepared --sort <sort>` and stop.
 Make no recommendation. Change no goal, log, ledger or repository file.
 Write only the preparation and, for a visual question, its screenshot evidence.
-Ask nobody; do not run `mc ask` or `mc goal martin`. The headless rules apply
+Ask nobody; do not run `mc ask` (`mc goal martin` is gone). The headless rules apply
 unchanged; a reserved act is evidence to name, never an act to carry out.

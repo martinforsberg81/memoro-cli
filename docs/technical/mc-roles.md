@@ -60,7 +60,7 @@ There are two catalogues, and they are looked up in that order:
   a verb must be able to launch its own session on a machine with no rulebook
   at all.
 
-What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation and decision roles and the three that
+What canon holds today: five stage/goal roles, each one file, plus the Martin desk, preparation, decision and ask-reader roles and the three that
 stay apart (Martin, 2026-11-03, goal `plan-session-roles`: a role says what
 the session is for; a verb file says how a verb is used). Plan supports interactive planning and focused next-draft completion. Mend retains its former delivery recovery work (Martin, 2026-11-07 and 2026-11-09). The finish role was removed on 2026-11-15: a rejected goal returns to build, and `finish` is a name kept for old records (their stage, their run rows, the `finish` model list).
 
@@ -68,6 +68,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `plan-review` | sonnet | `plan-review` | `mc goal plan-review`, one headless read-only turn on a draft goal, never the runner ([mc-goals.md](mc-goals.md) § *Plan review*) |
+| `ask-reader` | fable | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
 | `mend-session` | opus | `mend-session` | `mc run`, one headless session only after a merge failure (conflict, failed candidate check or moved judged head) ([mc-goals.md](mc-goals.md) § *Repair and mend*) |

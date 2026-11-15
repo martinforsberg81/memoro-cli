@@ -736,7 +736,7 @@ export function headlessRule(command) {
 
 /** What a headless session is told about a refused act: the way forward is `mc ask` with its reserved name. */
 function headlessReason(rule) {
-  return `${rule.reason} is refused to an unattended session and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Ask for it: mc ask <programme>/<goal> --kind technical --reserved ${rule.act} --reason "…" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> records the question and sets the goal Martin. A session without a goal says in its step note what waits on it.`;
+  return `${rule.reason} is refused to an unattended session and happens only in an interactive session; this one is headless (MC_HEADLESS=1). Ask for it: mc ask <programme>/<goal> --reserved ${rule.act} --reason "…" --option "<key>: <text>" --option "<key>: <text>" --recommend <key> records the question and sets the goal Martin. A session without a goal says in its step note what waits on it.`;
 }
 
 /** Whether the session was started by the runner or the intake turn, with nobody at the terminal. */

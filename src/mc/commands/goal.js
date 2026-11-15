@@ -24,7 +24,7 @@
  *                                  (`project-convert.js`); a finished one is refused
  *   mc goal phase [<programme>/<goal>] <n>   the goal moved to phase <n>; the programme's phases renumbered
  *   mc goal log [<programme>/<goal>] [--done "…"|--done-file <path|->] [--comment "…"|--comment-file <path|->] [--next "…"|--next-file <path|->] [--stage <stage>] [--status ready|blocked]
- *                                  (--status Martin is refused with a return instruction: Martin is asked with mc goal martin)
+ *                                  (--status Martin is refused with a return instruction: a question goes through mc ask)
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
  *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
@@ -36,8 +36,7 @@
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
  *   mc goal hold [<programme>/<goal>] --reason "…"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay
  *   mc goal release [<programme>/<goal>] [--reason "…"]   the hold removed; one log entry with each worktree's state
- *   mc goal martin [<programme>/<goal>] --kind technical|product --reason "…" --option "<key>: <text>"… --recommend <key> [--evidence "…"|--evidence-file <path|->]
- *                  [--document <repo>/<path>]… [--reserved <act>]   one jev consultation (`askMartin`)
+ *   mc goal martin …   gone: exits 2 and prints the mc ask call to make (`retiredMartin`)
  *   mc goal defect [<programme>/<goal>] --part "…" --found "…" [--evidence "…"|--evidence-file <path|->] [--next "…"|--next-file <path|->]
  *                  the goal itself is wrong: one entry, status Martin, no options and no jev (`reportDefect`)
  *   mc goal done [<programme>/<goal>] [--reason "…"]   stage done, a person's (the merger sets it when the pull request lands)
@@ -93,19 +92,17 @@ import { realLock } from '../runner-lock.js';
 import { mergesPath, parseQueue } from '../merge-queue.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
 import { NAME_RE } from '../plan-schema.js';
-import { mcHome, programsHome } from '../paths.js';
+import { programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { MERGE_HANDOFF_FILE } from '../session-role.js';
-import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, judge, JEV_KEY, ledgerPath, LOG_ENTRIES, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256 } from '../jev.js';
+import { documentPath, LOG_ENTRIES, redactText, returnInstruction, secretsOf } from '../jev.js';
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { knownRepositories } from '../work-area.js';
 import { only, scanArgs } from './flags.js';
 
 /** Every flag any verb takes as a value. */
-const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--recommend', '--kind', '--evidence', '--evidence-file', '--reserved', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
-/** The flags given once per value, each value kept in order (`mc goal martin --option … --option …`). */
-const REPEATABLE_FLAGS = ['--option', '--document'];
-const SCAN = { booleans: ['--all'], strictValues: VALUE_FLAGS, repeatable: REPEATABLE_FLAGS };
+const VALUE_FLAGS = ['--part', '--found', '--repo', '--class', '--title', '--phase', '--stage', '--done', '--done-file', '--comment', '--comment-file', '--next', '--next-file', '--status', '--reason', '--text', '--label', '--path', '--criterion', '--check', '--evidence', '--evidence-file', '--structure', '--source', '--basis', '--at', '--by', '--on', '--where', '--upheld-by', '--settled-by', '--owner', '--stand', '--standard', '--avoid', '--file'];
+const SCAN = { booleans: ['--all'], strictValues: VALUE_FLAGS };
 /** The flags the fields of the numbered parts are given by (`item add|set`); a part takes its own and refuses the others. */
 const ITEM_FLAGS = Object.freeze([...new Set(Object.values(ITEM_PARTS).flatMap((part) => part.fields.map((field) => `--${flagOf(field)}`)))]);
 /** The flags each verb takes; any other given is refused with exit 2. */
@@ -132,7 +129,6 @@ const VERB_FLAGS = {
   status: ['--reason'],
   hold: ['--reason'],
   release: ['--reason'],
-  martin: ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'],
   defect: ['--part', '--found', '--evidence', '--evidence-file', '--next', '--next-file'],
   pr: [],
   archive: ['--all'],
@@ -142,17 +138,16 @@ const VERB_FLAGS = {
   'plan-review': ['--avoid'],
 };
 /** The verbs that set one field: `blocked` and `ready` the status, `done` and `drop` the final stage. */
-const STATUS_VERBS = ['blocked', 'martin', 'ready', 'done', 'drop'];
-const STATUS_VERB_FIELDS = { martin: { status: 'Martin' }, blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
+const STATUS_VERBS = ['blocked', 'ready', 'done', 'drop'];
+const STATUS_VERB_FIELDS = { blocked: { status: 'blocked' }, ready: { status: 'ready' }, done: { stage: 'done' }, drop: { stage: 'dropped' } };
 /** Each verb and what it accepts, from the lists above (help-routes.test.js walks the help with it). */
 export const ROUTES = Object.fromEntries([
-  ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status' && verb !== 'martin'),
+  ...Object.entries(VERB_FLAGS).filter(([verb]) => verb !== 'status'),
   ...STATUS_VERBS.map((verb) => [verb, verbFlagsOf(verb)]),
 ].map(([verb, names]) => [verb, only(SCAN, names)]));
 
-/** The flags verb `verb` takes, or null when it is not one: a status verb takes --reason, and martin its call's. */
+/** The flags verb `verb` takes, or null when it is not one: a status verb takes --reason. */
 function verbFlagsOf(verb) {
-  if (verb === 'martin') return VERB_FLAGS.martin;
   if (STATUS_VERBS.includes(verb)) return VERB_FLAGS.status;
   return Object.hasOwn(VERB_FLAGS, verb) ? VERB_FLAGS[verb] : null;
 }
@@ -161,6 +156,7 @@ export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const env = deps.env || process.env;
   const rawStderr = deps.stderr || process.stderr;
+  if (argv[0] === 'martin') return retiredMartin(argv, rawStderr);
   // Preparation has no goal mutation authority, including goal-less calls.
   if (env.MC_ROLE === 'desk-prepare' && !['show', 'list', 'areas'].includes(argv[0])) {
     rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
@@ -169,8 +165,12 @@ export async function run(argv, deps = {}) {
   if (env.MC_ROLE === 'plan-review' && !(['show', 'list', 'areas'].includes(argv[0]) || (argv[0] === 'plan-review' && argv[2] === 'verdict'))) {
     rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
   }
+  // An ask-reader reads, and records its verdict with mc ask answer.
+  if (env.MC_ROLE === 'ask-reader' && !['show', 'list', 'areas'].includes(argv[0])) {
+    rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
+  }
   let refusalSecrets = [];
-  if (argv[0] === 'martin' || (argv[0] === 'log' && argv.includes('Martin'))) {
+  if (argv[0] === 'log' && argv.includes('Martin')) {
     try { refusalSecrets = secretsOf((deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values))()); } catch { refusalSecrets = []; }
   }
   const stderr = { write: (text) => rawStderr.write(redactText(text, refusalSecrets)) };
@@ -220,12 +220,10 @@ export async function run(argv, deps = {}) {
     appendText: deps.appendText || appendText,
     remove: deps.remove || unlinkSync,
     readFile: deps.readFile || readEntryFile,
-    // jev (`mc goal martin`): the keys source's values, the transport and its timers, and the ledger. A test stands in for each.
+    // The keys source's values (a defect's redaction); a test stands in for it.
     readKeys: deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values),
-    jev: deps.jev || {},
     // The plan review's injected launch, session, clock and checkout (`planReviewCall`); a test stands in for each.
     planReview: deps.planReview || {},
-    ledger: deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)),
   };
   const { flags } = scanned;
 
@@ -252,7 +250,7 @@ export async function run(argv, deps = {}) {
   if (verb === 'from-project') return fromProject(rest, ctx);
   if (verb === 'log') {
     if (flags.status === 'Martin') {
-      stderr.write(returnInstruction(['mc goal log --status Martin is not how Martin is asked: a question for Martin goes through mc goal martin, with its options and your recommendation'], rest[0] ?? env.MC_GOAL, 'mc: log is not written'));
+      stderr.write(returnInstruction(['mc goal log --status Martin is not how Martin is asked: a question goes through mc ask, with its options and your recommendation'], rest[0] ?? env.MC_GOAL, 'mc: log is not written'));
       return 2;
     }
     const texts = entryTexts(flags, ctx);
@@ -264,7 +262,6 @@ export async function run(argv, deps = {}) {
     const stage = rest.pop();
     return logEntry(rest, { stage, status: null, done: null, comment: flags.reason, next: null, via: 'stage', reason: flags.reason }, ctx);
   }
-  if (verb === 'martin') return askMartin(rest, flags, ctx);
   if (verb === 'defect') return reportDefect(rest, flags, ctx);
   if (verb === 'drop' && !flags.reason) { stderr.write('mc: drop needs --reason "…" — why the goal is let go\n'); return 2; }
   if (STATUS_VERBS.includes(verb)) return logEntry(rest, { stage: null, status: null, ...STATUS_VERB_FIELDS[verb], done: null, comment: flags.reason, next: null }, ctx);
@@ -495,108 +492,16 @@ function logEntry(args, fields, ctx) {
 }
 
 /**
- * `mc goal martin [<programme>/<goal>] --kind technical|product --reason "<question>" --option "<key>: <text>"…
- * --recommend <key> [--evidence "…" | --evidence-file <path|->] [--document <repo>/<path>]…
- * [--reserved <act>]` — one jev consultation (`jev.js`, docs/technical/mc-jev.md).
- *
- * A call that is not well formed exits 2 with a return instruction and writes
- * nothing; so does one whose question, options, evidence and goal alone are
- * over jev's budget. Who may set Martin is `refusedMove`'s. A reserved act, or
- * a person (MC_TOOL unset or `person`), goes to Martin with no request. A
- * session's question goes to jev once: when jev answers, the status is kept,
- * stdout says the answer and the session continues with it. An unsettled
- * technical question uses the recommendation when jev does not settle it;
- * product choices and reserved acts reach Martin. Every valid call is ledgered.
+ * `mc goal martin` is gone: a question goes through `mc ask` (docs/technical/mc-jev.md). The refusal reads no goal,
+ * no keys source and no jev, writes nothing, and prints the call to make with flag names only — a value the caller
+ * gave never comes back (the goal id is the one exception, when it is a goal id), and neither does the retired `--kind`.
  */
-async function askMartin(args, flags, ctx) {
-  const { stdout, stderr, env, read } = ctx;
-  if (args.length > 1) { stderr.write(usage()); return 2; }
-  const named = args[0] ?? env.MC_GOAL;
-  let values = null;
-  try { values = ctx.readKeys(); } catch { values = null; }
-  const secrets = secretsOf(values);
-  const clean = (value) => redactText(value, secrets);
-  const session = Boolean(env.MC_TOOL && env.MC_TOOL !== 'person');
-  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, kind: flags.kind, requireKind: session, reserved: flags.reserved });
-  const problems = [...(call.problems ?? [])];
-  if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
-  let evidence = flags.evidence ?? '';
-  if (!problems.length && flags['evidence-file'] !== null) {
-    try { evidence = ctx.readFile(flags['evidence-file']).replace(/\n$/u, ''); }
-    catch (error) { problems.push(`--evidence-file ${flags['evidence-file']} cannot be read (${error.message})`); }
-  }
-  if (problems.length) { stderr.write(clean(returnInstruction(problems, named))); return 2; }
-
-  const target = goalNamed(args[0], ctx);
-  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
-  const text = read(join(target.dir, GOAL_FILE));
-  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
-  const goal = parseGoal(text);
-  if (goal.problems) {
-    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
-    return 1;
-  }
-  if (FINISHED.includes(goal.stage)) { stderr.write(`mc: ${target.name} is ${goal.stage} — a finished goal cannot be asked or changed\n`); return 1; }
-  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot ask for ${target.name}\n`); return 2; }
-  const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env, dir: target.dir });
-  if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
-
-  const tool = env.MC_TOOL || 'person';
-  const { question, options, recommend, kind } = call;
-  let sent = { documents: [], trimmed: [], length: null, sha256: null, budget: null, error_type: null };
-  let asked = null;
-  if (call.reserved) asked = { martin: `jev not asked: reserved act ${call.reserved}` };
-  else if (tool === 'person') asked = { martin: 'jev not asked: person' };
-  else {
-    const context = jevContext(target, goal, flags.document, { ...ctx, stderr: { write: (line) => stderr.write(clean(line)) } });
-    const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
-    const { built, answer: result, budget, limit } = await askWithinLimit({
-      build: (within) => buildState({ question, options, evidence, ...context }, { secrets, budget: within }),
-      ask: (state) => (values === null ? { unavailable: 'the mc keys source cannot be read' }
-        : askJev({ body: requestBody(state, state.options), key, ...ctx.jev })),
-    });
-    if (built.problems?.[0]?.includes('alone are')) { stderr.write(clean(returnInstruction(built.problems, named))); return 2; }
-    if (built.problems) {
-      asked = { unavailable: 'jev unavailable: state over budget after trimming', martin: 'jev unavailable: state over budget after trimming' };
-      sent = { documents: [], trimmed: built.trimmed ?? [], length: null, sha256: null, budget: null, error_type: limit };
-    } else {
-      sent = { documents: key ? built.state.documents.map((item) => item.path) : [], trimmed: built.trimmed, length: built.text.length, sha256: sha256(built.text), budget, error_type: limit };
-      const parsed = result.unavailable ? result : readAnswers(result.response, options);
-      if (parsed.unavailable) asked = { unavailable: `jev unavailable: ${parsed.unavailable}`, martin: `jev unavailable: ${parsed.unavailable}` };
-      else {
-        const judged = judge(parsed.answers, recommend);
-        asked = { ...parsed, outcome: judged.outcome, reading: reading(parsed.answers, parsed.model), misses: judged.misses };
-        if (judged.outcome !== 'answered') asked.martin = `jev: ${asked.reading} — not answered: ${judged.misses.join('; ')}`;
-      }
-    }
-  }
-
-  const lines = [...Object.entries(options).map(([key, option]) => `Option ${key}: ${oneLine(option)}`), `Recommended: ${recommend}`];
-  const answered = asked.outcome === 'answered';
-  const decided = session && kind === 'technical' && !call.reserved && !answered;
-  const said = answered ? `jev answered ${asked.reading} — continue with: ${oneLine(options[asked.answers.answer.choice])}`
-    : decided ? `decided by the session: ${recommend} — jev did not settle it (${asked.reading || asked.unavailable}) — continue with: ${oneLine(options[recommend])}`
-    : asked.martin;
-  const comment = clean([`${answered ? `jev was asked: ${oneLine(question)}` : decided ? `Decided by the session (technical): ${oneLine(question)}` : `Martin is asked: ${oneLine(question)}`}`, ...lines, `Evidence: ${evidence || 'none supplied'}`, decided ? `jev reading: ${asked.reading || asked.unavailable}` : said].join('\n'));
-  const ledger = redactValue({
-    at: ctx.now.toISOString(), goal: target.name, verb: 'goal martin', programme: target.programme, tool, role: writerRole(env),
-    question, options, recommend, kind, reserved: call.reserved,
-    documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
-    model: asked.model ?? null, answers: asked.answers ?? null,
-    outcome: answered ? 'answered' : decided ? 'decided' : 'martin', reason: said,
-  }, secrets);
-  try { ctx.ledger(`${JSON.stringify(ledger)}\n`); }
-  catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
-
-  if (!answered && !decided) {
-    const resultCode = logEntry(args, { stage: null, status: 'Martin', done: null, comment, next: null }, ctx);
-    if (tool === 'person' || call.reserved) return resultCode;
-    return 1;
-  }
-  const entry = { at: logStamp(ctx.now), tool, model: env.MC_MODEL || null, role: writerRole(env), done: null, comment, next: null, stage: goal.stage, status: goal.status };
-  appendEntry({ dir: target.dir, entry, read: ctx.read, write: ctx.write });
-  stdout.write(`mc: ${clean(said)}\n`);
-  return 0;
+function retiredMartin(argv, stderr) {
+  const reserved = argv.includes('--reserved');
+  // The goal argument comes back only when it is a goal id (two short lowercase slugs); any other value is not echoed.
+  const goal = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/u.test(argv[1] || '') ? argv[1] : '<p>/<g>';
+  stderr.write(`mc: mc goal martin is gone — ask with: mc ask ${goal} --reason "<the question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>${reserved ? ' --reserved <act>' : ''}\n`);
+  return 2;
 }
 
 /**
@@ -610,7 +515,7 @@ async function askMartin(args, flags, ctx) {
  * writes nothing. A finished goal is refused; a build or review session reports only the goal in its
  * own stage, and a mend session never; plan, the desk roles and a person any.
  */
-function reportDefect(args, flags, ctx) {
+export function reportDefect(args, flags, ctx) {
   const { stderr, env, read, write } = ctx;
   if (args.length > 1) { stderr.write(usage()); return 2; }
   const named = args[0] ?? env.MC_GOAL;
@@ -648,7 +553,7 @@ function reportDefect(args, flags, ctx) {
   const refused = refusedMove({ from: goal.stage, to: null, status: 'Martin', env });
   if (refused) { stderr.write(`mc: ${refused}\n`); return 2; }
   const role = isSession(env) ? writerRole(env) : null;
-  if (role === 'mend') { stderr.write('mc: a mend session does not report a goal defect — a merge failure it cannot repair is Martin\'s (mc goal martin)\n'); return 2; }
+  if (role === 'mend') { stderr.write('mc: a mend session does not report a goal defect — a merge failure it cannot repair is Martin\'s (ask it with mc ask)\n'); return 2; }
   if (['build', 'review'].includes(role) && goal.stage !== role) { stderr.write(`mc: a ${role} session reports a goal defect only for a goal in ${role}, and this one is ${goal.stage}\n`); return 2; }
 
   const secrets = (() => { try { return secretsOf(ctx.readKeys()); } catch { return []; } })();
@@ -1955,6 +1860,7 @@ function goalNamed(arg, { env, home }) {
 export function refusedMove({ from, to = null, status = null, env }) {
   if (to === 'finish') return 'finish is no longer a goal stage to move to — use mc goal stage build for a rejected review';
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
+  if (env.MC_ROLE === 'ask-reader') return 'an ask-reader session reads (mc goal show, list, areas) and answers with mc ask answer; it changes no goal and asks no one';
   if (env.MC_ROLE === 'plan-review') return 'a plan-review session reads and writes only PLAN-REVIEW.md, then records its verdict with mc goal plan-review <programme>/<goal> verdict ok|not-ok; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
     if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';

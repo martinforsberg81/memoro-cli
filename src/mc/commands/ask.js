@@ -1,22 +1,36 @@
-/** `mc ask` — a decision-support question for jev, without changing a goal. */
+/**
+ * `mc ask` — the one way to ask for advice. jev is asked first; when jev does not settle it, a fresh read-only
+ * reader (`ask-reader.js`) answers inside the same call. The answer is one of four: continue with an option, a
+ * goal defect (written as `mc goal defect` writes it), a text of Martin's that would change (a desk item, and the
+ * caller continues inside the wording that stands), or the session's own recommendation recorded as unread.
+ * Nothing it asks makes a goal wait on Martin except a reserved act and a defect. Every answer is a ledger row.
+ */
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
+import { answerVerb, areaStandards, askReaderCall } from '../ask-reader.js';
+import { deskBudget, deskBudgetReason } from '../desk-budget.js';
+import { proposeText } from '../desk-texts.js';
 import { appendLedgerLine, askJev, askWithinLimit, buildState, documentPath, INSTRUCTIONS, judge, JEV_KEY, ledgerPath, readAnswers, reading, readMartinCall, redactText, redactValue, requestBody, returnInstruction, secretsOf, sha256, WORK_INSTRUCTIONS } from '../jev.js';
 import { readKeysDotenv } from '../keys-dotenv.js';
 import { mcHome, programsHome } from '../paths.js';
 import { repoNameOf } from '../repos.js';
 import { appendEntry, goalDirIn, GOAL_FILE, parseGoal, setGoalState } from '../goals.js';
 import { knownRepositories } from '../work-area.js';
-import { jevContext } from './goal.js';
+import { jevContext, reportDefect } from './goal.js';
 import { only, scanArgs } from './flags.js';
 
+// --kind stays a value flag so an old call still parses; it is ignored (one stderr line).
 const VALUE_FLAGS = ['--reason', '--option', '--recommend', '--kind', '--evidence', '--evidence-file', '--document', '--reserved'];
 const SCAN = { strictValues: VALUE_FLAGS, repeatable: ['--option', '--document'] };
 const ASK_ROUTE = only(SCAN, VALUE_FLAGS);
-export const ROUTES = { '': ASK_ROUTE, '*': ASK_ROUTE };
+const ANSWER_ROUTE = { strictValues: ['--why', '--part', '--found', '--inside', '--text', '--file'], booleans: ['--none'] };
+export const ROUTES = { '': ASK_ROUTE, answer: ANSWER_ROUTE, '*': ASK_ROUTE };
+
+const KIND_LINE = 'mc: --kind is not read — whether a text of Martin’s would change is the reader’s finding\n';
+const flat = (value) => String(value ?? '').replace(/\s*\n\s*/gu, ' ').trim();
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -28,18 +42,25 @@ export async function run(argv, deps = {}) {
     stderr.write('mc: the Martin role is interactive-only; unattended sessions cannot use mc ask\n');
     return 2;
   }
-  const scanned = scanArgs(argv, SCAN);
-  const named = scanned.positional?.[0] ?? env.MC_GOAL;
+  if (env.MC_ROLE === 'ask-reader' && argv[0] !== 'answer') {
+    stderr.write('mc: an ask-reader session cannot ask — it answers with mc ask answer <id> continue|defect|text …\n');
+    return 2;
+  }
   let values = null;
   try { values = (deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values))(); } catch { values = null; }
   const secrets = secretsOf(values);
+  if (argv[0] === 'answer') {
+    return answerVerb({ argv: argv.slice(1), ctx: { stdout, stderr, env, now: deps.now ? deps.now() : new Date(), readFile: deps.readFile, secrets }, deps: deps.answer || {} });
+  }
+  const scanned = scanArgs(argv, SCAN);
+  const named = scanned.positional?.[0] ?? env.MC_GOAL;
   const clean = (value) => redactText(value, secrets);
   if (scanned.error) { stderr.write(clean(`mc: ${scanned.error}\n${usage()}`)); return 2; }
   const args = scanned.positional;
   const flags = scanned.flags;
   if (args.length > 1) { stderr.write(clean(usage())); return 2; }
-  const session = Boolean(env.MC_TOOL && env.MC_TOOL !== 'person');
-  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, kind: flags.kind, requireKind: session, reserved: flags.reserved });
+  if (flags.kind !== null && flags.kind !== undefined) stderr.write(KIND_LINE);
+  const call = readMartinCall({ reason: flags.reason, option: flags.option, recommend: flags.recommend, reserved: flags.reserved });
   const problems = [...(call.problems || [])];
   if (flags.evidence !== null && flags['evidence-file'] !== null) problems.push('--evidence and --evidence-file are one or the other, not both');
   let evidence = flags.evidence ?? '';
@@ -47,11 +68,12 @@ export async function run(argv, deps = {}) {
     try { evidence = (deps.readFile || readEntryFile)(flags['evidence-file']).replace(/\n$/u, ''); }
     catch (error) { problems.push(`--evidence-file ${flags['evidence-file']} cannot be read (${error.message})`); }
   }
-  if (problems.length) { stderr.write(clean(returnInstruction(problems, named, 'mc: mc ask is not called').replaceAll('mc goal martin', 'mc ask'))); return 2; }
+  if (problems.length) { stderr.write(clean(returnInstruction(problems, named, 'mc: mc ask is not called'))); return 2; }
   const home = deps.home || programsHome(env);
   const now = deps.now ? deps.now() : new Date();
   const stamp = now.toISOString().replace(/\.\d{3}Z$/u, 'Z');
   const read = deps.read || readTextOrNull;
+  const cwd = env.cwd || process.cwd();
   let target = null;
   let goal = null;
   let roleStage = null;
@@ -69,27 +91,36 @@ export async function run(argv, deps = {}) {
     roleStage = { 'build-session:goal': 'build', 'review-session:goal': 'review', 'mend-session': 'merge' }[env.MC_ROLE] ?? null;
     if (roleStage && goal.stage !== roleStage) { stderr.write(clean(`mc: ${env.MC_ROLE} cannot ask for ${named} in ${goal.stage}\n`)); return 2; }
   }
-  const programme = target?.programme || env.MC_PROGRAMME || programmeFromCwd(env.cwd || process.cwd(), home);
-  if (call.reserved) {
-    const said = `mc: reserved act ${call.reserved} — Martin decides, jev is not asked`;
+  const programme = target?.programme || env.MC_PROGRAMME || programmeFromCwd(cwd, home);
+  const writeLedger = (fields) => {
     const ledger = redactValue({ at: now.toISOString(), goal: target?.name ?? null, verb: 'ask', programme: programme ?? null,
-      tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend, kind: call.kind,
-      reserved: call.reserved, documents: [], trimmed: [], state_length: null, state_sha256: null, budget: null, error_type: null,
-      model: null, answers: null, outcome: 'reserved', reason: said }, secrets);
+      tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend, kind: null,
+      reserved: null, documents: [], trimmed: [], state_length: null, state_sha256: null, budget: null, error_type: null,
+      model: null, answers: null, ...fields }, secrets);
     try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
     catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
-    if (target) {
-      const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: true, read, write: deps.write || writeFileAtomic,
-        entry: { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: said.replace(/^mc: /u, ''), comment: clean([`Martin is asked: ${call.question}`, ...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${option}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`, said].join('\n')), next: 'wait for Martin' } });
-      if (why) stderr.write(clean(`mc: ${why}\n`));
-    }
+  };
+  const writeEntry = ({ toMartin, done, comment, next }) => {
+    if (!target) return;
+    const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin, read, write: deps.write || writeFileAtomic,
+      entry: { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: clean(done), comment: clean(comment), next: clean(next) } });
+    if (why) stderr.write(clean(`mc: ${why}\n`));
+  };
+  const optionLines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${flat(option)}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`];
+  const question = flat(call.question);
+
+  if (call.reserved) {
+    const said = `mc: reserved act ${call.reserved} — Martin decides, jev is not asked`;
+    writeLedger({ answered_by: 'martin', reserved: call.reserved, outcome: 'reserved', reason: said });
+    writeEntry({ toMartin: true, done: said.replace(/^mc: /u, ''), comment: [`Martin is asked: ${call.question}`, ...optionLines.slice(0, -1), `Evidence: ${evidence || 'none supplied'}`, said].join('\n'), next: 'wait for Martin' });
     stdout.write(`${clean(said)}\n`);
     return 1;
   }
+
   let context;
   const safeStderr = { write: (line) => stderr.write(clean(line)) };
-  if (target) context = jevContext(target, goal, flags.document, { read, env, home, stderr: safeStderr, realpath: deps.realpath, cwd: env.cwd || process.cwd() });
-  else context = noGoalContext(programme, flags.document, { home, env, read, stderr: safeStderr, list: deps.list, known: deps.known || (() => knownRepositories(env)), realpath: deps.realpath, gitRoot: deps.gitRoot, cwd: env.cwd || process.cwd() });
+  if (target) context = jevContext(target, goal, flags.document, { read, env, home, stderr: safeStderr, realpath: deps.realpath, cwd });
+  else context = noGoalContext(programme, flags.document, { home, env, read, stderr: safeStderr, list: deps.list, known: deps.known || (() => knownRepositories(env)), realpath: deps.realpath, gitRoot: deps.gitRoot, cwd });
 
   const key = values && typeof values[JEV_KEY] === 'string' && values[JEV_KEY] ? values[JEV_KEY] : null;
   const { built, answer: result, budget, limit } = await askWithinLimit({
@@ -99,10 +130,10 @@ export async function run(argv, deps = {}) {
   });
   if (built.problems) {
     const core = built.problems[0].includes('alone are');
-    if (core) { stderr.write(clean(returnInstruction(built.problems, named, 'mc: mc ask is not called').replaceAll('mc goal martin', 'mc ask'))); return 2; }
+    if (core) { stderr.write(clean(returnInstruction(built.problems, named, 'mc: mc ask is not called'))); return 2; }
   }
   let asked;
-  let sent = { documents: [], trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null, budget: built.text ? budget : null, error_type: limit };
+  const sent = { documents: [], trimmed: built.trimmed || [], length: built.text?.length ?? null, sha256: built.text ? sha256(built.text) : null, budget: built.text ? budget : null, error_type: limit };
   if (built.problems) asked = { unavailable: 'state over budget after trimming' };
   else {
     if (key) sent.documents = built.state.documents.map((item) => item.path);
@@ -113,32 +144,101 @@ export async function run(argv, deps = {}) {
       asked = { ...parsed, outcome: outcome.outcome, misses: outcome.misses, reading: reading(parsed.answers, parsed.model) };
     }
   }
-  const answered = asked.outcome === 'answered';
-  const decided = call.kind === 'technical' && !answered;
-  const said = answered
-    ? `mc: jev answered ${asked.reading} — continue with: ${call.options[asked.answers.answer.choice]}`
-    : decided ? `mc: decided by the session: ${call.recommend} — jev did not settle it (${asked.reading || asked.unavailable}) — continue with: ${call.options[call.recommend]}`
-      : `mc: jev did not settle it: ${asked.reading ? `${asked.reading} — not answered: ${asked.misses.join('; ')}` : asked.unavailable} — ${target ? 'take it to Martin' : GOALLESS_PRODUCT}`;
-  const ledger = redactValue({ at: now.toISOString(), goal: target?.name ?? null, verb: 'ask', programme: programme ?? null,
-    tool: env.MC_TOOL || null, role: env.MC_ROLE || null, question: call.question, options: call.options, recommend: call.recommend, kind: call.kind,
-    reserved: null, documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type,
-    model: asked.model ?? null, answers: asked.answers ?? null, outcome: answered ? 'answered' : decided ? 'decided' : (asked.outcome || 'unavailable'), reason: said.replace(/^mc: /u, '') }, secrets);
-  try { (deps.ledger || ((line) => appendLedgerLine(ledgerPath(mcHome(env)), line)))(`${JSON.stringify(ledger)}\n`); }
-  catch (error) { stderr.write(`mc: warning: the jev ledger is not written (${clean(error.message)})\n`); }
-  if (target) {
-    const lines = [...Object.entries(call.options).map(([key, option]) => `Option ${key}: ${String(option).replace(/\s*\n\s*/gu, ' ')}`), `Recommended: ${call.recommend}`, `Evidence: ${evidence || 'none supplied'}`];
-    const heading = answered ? `jev was asked: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}` : decided ? `Decided by the session (technical): ${String(call.question).replace(/\s*\n\s*/gu, ' ')}` : `Martin is asked: ${String(call.question).replace(/\s*\n\s*/gu, ' ')}`;
-    const comment = clean([heading, ...lines, `Evidence: ${evidence || 'none supplied'}`, decided ? `jev reading: ${asked.reading || asked.unavailable}` : said].join('\n'));
-    const entry = { at: stamp, tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: env.MC_ROLE || 'person', done: answered ? clean(`jev answered ${asked.reading}`) : decided ? clean(`Decided by the session (technical): ${call.options[call.recommend]}`) : clean(`Martin is asked: ${asked.reading || asked.unavailable}`), comment, next: answered || decided ? clean(`continue with: ${call.options[answered ? asked.answers.answer.choice : call.recommend]}`) : 'wait for Martin' };
-    const why = recordGoalAsk({ target, snapshot: goal, roleStage, toMartin: !answered && !decided, entry, read, write: deps.write || writeFileAtomic });
-    if (why) stderr.write(clean(`mc: ${why}\n`));
+  const jevFields = { documents: sent.documents, trimmed: sent.trimmed, state_length: sent.length, state_sha256: sent.sha256, budget: sent.budget, error_type: sent.error_type, model: asked.model ?? null, answers: asked.answers ?? null };
+  const optionText = (choice) => call.options[choice];
+
+  if (asked.outcome === 'answered') {
+    const said = `mc: jev answered ${asked.reading} — continue with: ${optionText(asked.answers.answer.choice)}`;
+    writeLedger({ ...jevFields, answered_by: 'jev', outcome: 'answered', chosen: asked.answers.answer.choice, reason: said.replace(/^mc: /u, '') });
+    writeEntry({ toMartin: false, done: `jev answered ${asked.reading}`, comment: [`jev was asked: ${question}`, ...optionLines, said].join('\n'), next: `continue with: ${optionText(asked.answers.answer.choice)}` });
+    stdout.write(`${clean(said)}\n`);
+    return 0;
   }
-  stdout.write(`${clean(said)}\n`);
-  return answered || decided ? 0 : 1;
+
+  // jev did not settle it: a reader reads it now, or nothing could and the session decides, recorded as unread.
+  const jevText = asked.reading ? `${asked.reading} — not answered: ${(asked.misses || []).join('; ')}` : `jev was not read: ${asked.unavailable}`;
+  const jevWhy = asked.reading || asked.unavailable;
+  const unreadAnswer = ({ why, reader = null }) => {
+    const said = `mc: decided by the session, unread (${why}) — continue with: ${optionText(call.recommend)}`;
+    writeLedger({ ...jevFields, answered_by: 'session', outcome: 'decided', chosen: call.recommend, unread_reason: why, ...(reader ? { reader } : {}), reason: said.replace(/^mc: /u, '') });
+    writeEntry({ toMartin: false, done: `Decided by the session, unread: ${optionText(call.recommend)}`, comment: [`Decided by the session, unread: ${question}`, ...optionLines, `jev reading: ${jevWhy}`, `Unread because: ${why}`, said].join('\n'), next: `continue with: ${optionText(call.recommend)}` });
+    stdout.write(`${clean(said)}\n`);
+    return 0;
+  };
+  if (values === null) return unreadAnswer({ why: 'the mc keys source cannot be read, so nothing was copied and no reader was launched' });
+  let held = null;
+  try { const b = deps.budget ? deps.budget() : deskBudget({ env, now }); if (b.held) held = deskBudgetReason(b); }
+  catch (error) { held = `the desk ceiling cannot be read: ${error.message}`; }
+  if (held) return unreadAnswer({ why: held });
+
+  stderr.write('mc: jev did not settle it — a reader reads it now (up to 10 minutes)\n');
+  const trees = readerTrees({ target, goal, cwd, deps });
+  const standards = target && goal ? (deps.areaStandards || areaStandards)({ goal, goalDir: target.dir, home, programme: target.programme, read }) : [];
+  let reader;
+  try {
+    reader = await (deps.askReader || askReaderCall)({ call, evidence, jevText, goalName: target?.name ?? null, goal, programme, readme: context.programme?.readme ?? null,
+      standards, documents: context.documents || [], trees, asker: { tool: env.MC_TOOL || null, model: env.MC_MODEL || null }, env, secrets, stderr: safeStderr, deps: deps.reader || {} });
+  } catch (error) { reader = { read: false, reason: `the reader could not be launched: ${error.message}` }; }
+  if (!reader?.read) return unreadAnswer({ why: reader?.reason || 'no reader answered', reader: reader?.tool ? { tool: reader.tool, model: reader.model } : null });
+  // The reader's words are redacted before anything carries them out: the ledger, LOG.md and the desk item.
+  const verdict = redactValue(reader.verdict, secrets);
+  const who = { tool: reader.tool, model: reader.model };
+  const readerRow = (extra = {}) => ({ ...jevFields, answered_by: 'reader', reader: { ...who, ...extra } });
+
+  if (verdict.kind === 'continue' && optionText(verdict.key) !== undefined) {
+    const differs = verdict.key !== call.recommend;
+    const said = `mc: the reader answered ${verdict.key} — continue with: ${optionText(verdict.key)}${differs ? `\n  why: ${verdict.why}` : ''}`;
+    writeLedger({ ...readerRow({ key: verdict.key, why: verdict.why }), outcome: 'read', chosen: verdict.key, reason: said.replace(/^mc: /u, '').replace(/\n\s*/gu, ' ') });
+    writeEntry({ toMartin: false, done: `the reader answered ${verdict.key}`, comment: [`The reader (${who.tool} ${who.model}) was asked: ${question}`, ...optionLines, `jev reading: ${jevWhy}`, said].join('\n'), next: `continue with: ${optionText(verdict.key)}` });
+    stdout.write(`${clean(said)}\n`);
+    return 0;
+  }
+
+  if (verdict.kind === 'defect' && target) {
+    const out = { text: '', err: '' };
+    const ctx = { stdout: { write: (t) => { out.text += t; } }, stderr: { write: (t) => { out.err += t; } }, env, home, now, read, write: deps.write || writeFileAtomic,
+      readFile: deps.readFile || readEntryFile, readKeys: () => values };
+    const flagsOf = { part: verdict.part, found: verdict.found, evidence: `the ask reader (${who.tool} ${who.model}) found this answering: ${question}`, 'evidence-file': null, next: null, 'next-file': null };
+    const code = reportDefect([target.name], flagsOf, ctx);
+    if (code === 0) {
+      writeLedger({ ...readerRow({ part: verdict.part, found: verdict.found }), outcome: 'defect', chosen: null, reason: `the reader found a goal defect: ${verdict.part}` });
+      stdout.write(`mc: the reader found a goal defect — ${clean(verdict.part)}\n${clean(out.text)}`);
+      return 1;
+    }
+    return unreadAnswer({ why: `the reader found a goal defect, which could not be recorded (${flat(out.err).replace(/^mc: /u, '')})`, reader: who });
+  }
+
+  if (verdict.kind === 'text' && (verdict.inside === null || optionText(verdict.inside) !== undefined)) {
+    let proposed;
+    try { proposed = proposeText({ env, text: verdict.text, brief: verdict.brief, goal: target?.name ?? null, now, ...(deps.lock ? { lock: deps.lock } : {}), ...(deps.proposeRead ? { read: deps.proposeRead } : {}) }); }
+    catch (error) { proposed = { error: error.message || String(error) }; }
+    if (!proposed.error) {
+      const item = proposed.item;
+      const other = item.goal && item.goal !== (target?.name ?? null) ? item.goal : null;
+      const itemNote = `desk item ${item.id}${proposed.duplicate ? ' (already open)' : ''}${other ? `, also asked by goal ${other}` : ''}`;
+      const inside = verdict.inside;
+      const said = inside !== null
+        ? `mc: a text of Martin’s would change — ${itemNote}; continue inside the wording with: ${optionText(inside)}`
+        : `mc: no option stays inside the wording — the part that needs it waits on ${itemNote}; continue with the rest and say in LOG.md what waits`;
+      writeLedger({ ...readerRow({ inside, text: verdict.text }), outcome: 'text', chosen: inside, desk_item: item.id, other_goal: other, reason: said.replace(/^mc: /u, '') });
+      writeEntry({ toMartin: false, done: inside !== null ? `a text of Martin’s would change: continue with ${optionText(inside)}` : 'a text of Martin’s would change: no option stays inside the wording',
+        comment: [`The reader (${who.tool} ${who.model}) was asked: ${question}`, ...optionLines, `jev reading: ${jevWhy}`, `Text: ${verdict.text}`, said].join('\n'),
+        next: inside !== null ? `continue with: ${optionText(inside)}` : 'continue with the rest; what needs the text waits on the desk item' });
+      stdout.write(`${clean(said)}\n`);
+      return inside !== null ? 0 : 1;
+    }
+    return unreadAnswer({ why: `the reader found a text of Martin’s would change, which could not be recorded (${flat(proposed.error)})`, reader: who });
+  }
+  return unreadAnswer({ why: 'the reader’s verdict could not be carried out', reader: who });
 }
 
-/** What a goal-less product call that jev did not settle tells the session: no goal is set, so the change goes to the desk by its own verb. */
-const GOALLESS_PRODUCT = 'no goal is set; leave the change to his text at the desk with mc martin propose --text \'<the text>\' --file <path|-> (the file has three parts: ## Vad den säger, ## Vad som föreslås, ## Vad som hittades) and continue inside the wording that stands';
+/** The worktrees the reader gets a copy of: the goal's repositories that exist in its directory, or the working directory's repository. */
+function readerTrees({ target, goal, cwd, deps }) {
+  const exists = deps.exists || existsSync;
+  if (target && goal) return (goal.repos || []).map((repo) => ({ repo, path: join(target.dir, repo) })).filter((one) => exists(one.path));
+  const top = (deps.gitRoot || gitRoot)(cwd);
+  return top ? [{ repo: basename(top), path: top }] : [];
+}
 
 /**
  * Logs a goal-bound ask in the goal's LOG.md and, when `toMartin`, sets the goal

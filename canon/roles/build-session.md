@@ -79,9 +79,8 @@ moves forward. You do one of two things to it, nothing else:
   all, add `--stage review`. mc refuses it while one is not met, naming it.
 - **Acceptance obstacle:** investigate and repair it within the goal and its
   commission. If it cannot be resolved in this role and the work, the
-  environment or the checkout is what is wrong, take it to Martin with
-  `mc goal martin` (or goal-bound `mc ask`) and the obstacle and its
-  evidence; do not use pre-merge mend. It is not a goal defect: the goal's
+  environment or the checkout is what is wrong, ask with goal-bound `mc ask` and
+  the obstacle and its evidence; do not use pre-merge mend. It is not a goal defect: the goal's
   text is not what is wrong.
 - **The goal itself is wrong:** a criterion that cannot hold, a check that
   does not test what the criterion says, a check a headless session cannot run
@@ -97,15 +96,19 @@ moves forward. You do one of two things to it, nothing else:
   its check that does not fit the code is such a defect: do not read it as
   something the code can satisfy. Do not edit the goal. A check you cannot run
   is reported by the first session that meets it: do not ask about it with
-  `mc ask` or `mc goal martin`, and do not leave the goal `build · ready` for
+  `mc ask`, and do not leave the goal `build · ready` for
   someone to run it.
 - **Unresolved choice:** read relevant technical standards and programme design;
-  ordinary details are settled there. Call `mc ask` with `--kind technical` or
-  `--kind product`; if jev does not settle a `technical` question, record your
-  recommendation and continue. What `product` means and what reaches Martin is
-  in asking-martin; an unsettled `product` ask leaves the goal `Martin`.
-  A check that passes through a reserved act is not such a choice: it is the
-  goal defect above. Follow asking-martin for evidence and proposed design wording.
+  ordinary details are settled there. Call `mc ask <programme>/<goal>` — the one
+  way to ask, with no kind: jev reads it first and a fresh reader answers inside
+  the same call, so run it in the background when your tool call cannot wait
+  fifteen minutes. Continue on the answer it prints: an option, or inside the
+  wording that stands when a text of Martin's would change (the reader brings
+  that to the desk), or on your own recommendation when the call says unread. A
+  reader's finding that the goal is wrong is recorded as a goal defect for you.
+  What reaches Martin is in asking-martin. A check that passes through a reserved
+  act is not such a choice: it is the goal defect above. Follow asking-martin
+  for evidence.
 - Otherwise the goal stays `build · ready`: the next session continues from
   your `Next`.
 

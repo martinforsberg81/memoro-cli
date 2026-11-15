@@ -1,14 +1,13 @@
 /**
- * jev — TypeSafe's System One model, asked before a question is decided
- * (`mc goal martin`, docs/technical/mc-jev.md).
+ * jev — TypeSafe's System One model, asked first when a session asks
+ * (`mc ask`, docs/technical/mc-jev.md).
  *
  * A session's question comes with 2 to 4 options and its recommendation. mc
  * builds one state from the goal, the programme and the session's evidence,
  * asks jev four typed questions (`answer`, a Choice over the option keys;
- * `fits`, `settled` and `product`, Nouls). A settled answer continues; an
- * unsettled technical question is decided by the session's recommendation.
- * A product choice or reserved act reaches
- * Martin. jev never makes the verb fail.
+ * `fits`, `settled` and `product`, Nouls). A settled answer continues; one jev
+ * does not settle goes to a reader (`ask-reader.js`). A reserved act is not
+ * asked of jev. jev never makes the verb fail.
  *
  * The key is read here from the `mc keys` source (`keys-dotenv.js`) and goes
  * only into the Authorization header; every value of 8 or more characters
@@ -74,7 +73,7 @@ export const WORK_INSTRUCTIONS = Object.freeze({
   product: 'Choosing between the options is a choice of product direction that changes what users are promised, what the product costs or how personal data is handled, and that the programme page and the standards in the state do not already answer',
 });
 
-/** The ledger: one JSON line per `mc ask` or `mc goal martin` call. */
+/** The ledger: one JSON line per `mc ask` call. */
 export function ledgerPath(mcHomeDir) {
   return join(mcHomeDir, 'jev', 'decisions.jsonl');
 }
@@ -85,13 +84,33 @@ export function appendLedgerLine(path, line) {
   appendFileSync(path, line);
 }
 
+/** The outcomes a ledger row of `mc ask` can carry: jev answered, a reader answered, a reader found a goal defect, a reader found a text of Martin's, the session decided unread, a reserved act. */
+export const ASK_OUTCOMES = Object.freeze(['answered', 'read', 'defect', 'text', 'decided', 'reserved']);
+
+/**
+ * Who answered a ledger row and what it chose. A row written since the one way to ask names `answered_by` (`jev`,
+ * `reader`, `session`) and the key it continued with as `chosen`; an older row is read as it always was: `answered`
+ * is jev's, `decided` the session's recommendation, `martin` an ask that went to Martin. `unread` is a row the session
+ * decided because no reader read it. `chosen` is null for an answer that is no option (a goal defect, a text with no
+ * option inside the wording).
+ */
+export function rowAnswer(row) {
+  const old = typeof row?.answered_by !== 'string';
+  const by = old ? ({ answered: 'jev', decided: 'session', martin: 'martin' })[row?.outcome] ?? null : row.answered_by;
+  let chosen = null;
+  if (!old) chosen = typeof row.chosen === 'string' ? row.chosen : null;
+  else if (row?.outcome === 'decided') chosen = typeof row.recommend === 'string' ? row.recommend : null;
+  else if (row?.outcome === 'answered') chosen = row.answers?.answer?.choice ?? null;
+  return { by, chosen, unread: !old && by === 'session' && row.outcome === 'decided', old };
+}
+
 /**
  * A complete, correct call, for a return instruction: the session reads what
  * was wrong and calls again.
  */
 export function exampleCall(goal = '<programme>/<goal>') {
   return [
-    `  mc goal martin ${goal} --kind technical --reason "Which timer should the timeout test use?" \\`,
+    `  mc ask ${goal} --reason "Which timer should the timeout test use?" \\`,
     '    --option "fake_timer: inject a timer that fires at once, as the goal\'s deterministic clock asks" \\',
     '    --option "real_wait: wait the full 15 seconds in the test" \\',
     '    --recommend fake_timer --evidence "criterion 2: no real waits over 1 s"',
@@ -99,17 +118,15 @@ export function exampleCall(goal = '<programme>/<goal>') {
 }
 
 /** The return instruction for a call that is refused: what is wrong, an example, and to call again. */
-export function returnInstruction(problems, goal, lead = 'mc: goal martin is not called') {
+export function returnInstruction(problems, goal, lead = 'mc: mc ask is not called') {
   return [
     `${lead} — ${problems.join('; ')}. Nothing was written.`,
-    'mc goal martin asks jev before Martin: --reason is the question, --option "<key>: <text>" is given 2 to 4 times',
+    'mc ask asks jev first, then a reader: --reason is the question, --option "<key>: <text>" is given 2 to 4 times',
     '(keys: a lower-case letter, then up to 31 of a-z, 0-9 and _, each once), --recommend names one key;',
     '--evidence "…" or --evidence-file <path|->, --document <repo>/<path> and --reserved deploy|production-data|credentials|admin are optional.',
     'For example:',
     exampleCall(goal),
-    'Kinds: technical — everything else: implementation, architecture, tooling, environment, order of work, adopting or changing what a goal’s own criteria need, and carrying out an already decided design, even when users see it.',
-    '        product — a choice of direction not already answered by the goal, programme page or standards, changing promises, cost, personal-data handling or test strategy.',
-    'Call mc goal martin again with this fixed; when jev answers, continue with its answer.',
+    'Call mc ask again with this fixed; when it answers, continue with its answer.',
     '',
   ].join('\n');
 }
@@ -119,7 +136,7 @@ export function returnInstruction(problems, goal, lead = 'mc: goal martin is not
  * options: { key: text }, recommend, reserved }`, or `{ problems }` naming each
  * thing wrong.
  */
-export function readMartinCall({ reason, option = [], recommend, reserved, kind, requireKind = false }) {
+export function readMartinCall({ reason, option = [], recommend, reserved }) {
   const problems = [];
   const question = typeof reason === 'string' ? reason.trim() : '';
   if (!question) problems.push('--reason "<the question>" is required');
@@ -139,10 +156,8 @@ export function readMartinCall({ reason, option = [], recommend, reserved, kind,
   if (recommend === null || recommend === undefined || !recommend.trim()) problems.push('--recommend <key> is required');
   else if (!Object.hasOwn(options, recommend.trim())) problems.push(`--recommend ${recommend} is not one of the option keys${Object.keys(options).length ? ` (${Object.keys(options).join(', ')})` : ''}`);
   if (reserved !== null && reserved !== undefined && !RESERVED_ACTS.includes(reserved)) problems.push(`--reserved is ${RESERVED_ACTS.join(', ')}, not ${reserved}`);
-  if (requireKind && !kind) problems.push('--kind technical|product is required for a session call');
-  else if (kind !== null && kind !== undefined && !['technical', 'product'].includes(kind)) problems.push(`--kind is technical or product, not ${kind}`);
   if (problems.length) return { problems };
-  return { question, options, recommend: recommend.trim(), reserved: reserved ?? null, kind: kind ?? null };
+  return { question, options, recommend: recommend.trim(), reserved: reserved ?? null };
 }
 
 /** The values of the keys source that are redacted: every one of `REDACT_MIN` characters or more, longest first. */

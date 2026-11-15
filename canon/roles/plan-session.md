@@ -58,10 +58,9 @@ Complete that draft's planning: read the programme README first, its relevant
 design, technical contracts, goal and log, and the affected code.
 Resolve implementation questions yourself; finish the goal's parts, its stand on every rule area, documents and executable criteria through `mc goal`. Reconcile the README, phases and shedding (a section whose goals have landed is in `docs/technical/` and leaves the README). Move the completed goal to
 `build` immediately, including when it belongs in a later phase. Ask a
-remaining question through goal-bound `mc ask --kind technical|product`; continue
-on a jev answer. An unsettled `technical` question is decided by the session's
-recommendation and recorded; an unsettled `product` one leaves the
-draft waiting on Martin. Amend the canonical rule and goal consistently.
+remaining question through goal-bound `mc ask`, the one way to ask: jev, then a
+reader, answer it inside the call, and you continue on the answer (or on your
+recommendation when the call says unread). Amend the canonical rule and goal consistently.
 
 Your headless assignment ends after that one draft is ready for build or
 waits on a concrete decision. Do not implement it, plan another draft or
@@ -86,9 +85,8 @@ draft first, each with its title, phase and outcome through `mc goal`; state a
 stated programme's dependencies with `mc programs after`. Then take the drafts
 in turn: complete one as for a next draft, read it with `mc goal plan-review`,
 repair what the reading finds, and move it to `build` in its phase before the
-next. A product question, or a text of Martin's that would change, goes through
-goal-bound `mc ask --kind product` on the draft that needs it; the other drafts
-go on. Do not implement a goal, process proposals or plan beyond the page.
+next. A question goes through goal-bound `mc ask` on the draft that needs it: jev,
+then a reader, answers it, and the other drafts go on. Do not implement a goal, process proposals or plan beyond the page.
 
 The turn ends when you stop. A turn that leaves the programme holding no goal
 counts as a failure; drafts left unfinished are planned by the next-draft
@@ -110,8 +108,7 @@ verbs and set it ready with `mc goal ready`. A decision kept only in LOG.md is j
 the next reader.
 
 - A **build session** builds a goal in `build · ready` and moves it to
-  `review`, or records a technical decision, or makes a `--kind product` ask
-  or a reserved-act ask, or reports a wrong goal with `mc goal defect`. Three
+  `review`, or records a technical decision, or makes a reserved-act ask, or reports a wrong goal with `mc goal defect`. Three
   build sessions in a row without a commit or a criterion met stop the goal
   (`no progress:`, status `Martin`).
 - A **review session** judges and moves it to `merge` (all OK) or back to
@@ -122,15 +119,13 @@ the next reader.
   check, or moved judged head. It repairs and requeues merge; bounded repeated
   recovery waits on Martin. No pre-merge blocker goes to mend.
 - `Martin` waits for him and wakes nothing. Interactive planning reads those goals when it
-  starts: each carries an unsettled `--kind product` ask, a reserved act or a runner issue, and a recommendation.
+  starts: each carries a reserved act, a reader's finding that the goal is wrong, or a runner issue, and a recommendation.
 
 You move a stage forward only; mc refuses a session's move back. When you take
 over a goal yourself — one in build or one waiting on Martin — hold
 it first: `mc goal hold <programme>/<goal> --reason "…"` keeps the runner from
 starting a session on it and writes the log entry, and `mc goal release` hands
-it back with what the worktree holds. `mc goal blocked` and `mc goal martin` are
-not holds: the runner turns the first into a question for Martin, and the second
-is one.
+it back with what the worktree holds. `mc goal blocked` is not a hold: the runner turns it into a question for Martin. `mc goal martin` is gone; a question goes through `mc ask`.
 
 ## Commissioning test protection
 
@@ -175,15 +170,14 @@ duplicate of something already taken or declined.
 
 If a goal is wrong, close its pull request, write the right goal with the
 verbs when needed, and `mc goal drop --reason "…"`. Only what
-tasks/asking-martin.md names reaches him: goal-bound `mc ask` (or compatible
-`mc goal martin`) with `--kind technical|product --reason "<the
-question>" --option "<key>: <text>" --option "<key>: <text>" --recommend <key>
-[--evidence "…"] [--document <repo>/<path>] [--reserved <act>]`, 2 to 4
-options. jev reads it first; when it prints `mc: jev answered <key> … —
-continue with: <text>`, the goal's status stays and you continue with that
-answer. An unsettled `technical` question is decided by the session's
-recommendation and recorded; an unsettled `product` one leaves the
-goal `Martin` with jev's reading. With Martin at the terminal, a change to a
+tasks/asking-martin.md names reaches him; a question you cannot settle goes
+through goal-bound `mc ask --reason "<the question>" --option "<key>: <text>"
+--option "<key>: <text>" --recommend <key> [--evidence "…"] [--document
+<repo>/<path>] [--reserved <act>]`, 2 to 4 options, with no kind. jev reads it
+first and a fresh reader answers inside the same call; the goal's status stays
+and you continue on the answer, or on your recommendation when the call says
+unread. Only a reserved act or a reader's finding that the goal is wrong leaves
+the goal `Martin`. With Martin at the terminal, a change to a
 text he holds is left as `tasks/asking-martin.md` says, not put to him as a
 question. A failing check, missing instructions,
 review rejection or check-in alone is not a reason to stop.
