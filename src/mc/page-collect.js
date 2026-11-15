@@ -58,7 +58,7 @@ import { readDeployProgress } from './deploy-progress.js';
 import { criteriaCount } from './criteria.js';
 import { recordedProgrammes } from './programme-record.js';
 import { readProgrammePriority } from './programme-priority.js';
-import { FINISHED, goalName, goalSession, mergeAnswered, phaseOpen, programsGoals, readHold, sessions as goalSessions, waitsOnPerson } from './goals.js';
+import { FINISHED, SEQUENTIAL, goalName, goalSession, mergeAnswered, phaseOpen, phaseStanding, programmeOrder, programsGoals, readHold, sessions as goalSessions, waitsOnPerson } from './goals.js';
 import { statePath } from './docker.js';
 import { devSection, readPool } from './dev-pool.js';
 import { GITHUB_STATE, githubFailures, mayAsk } from './github-backoff.js';
@@ -1159,8 +1159,24 @@ function statusesOf(goals) {
   return out;
 }
 
-/** Phase structure and eligibility carried by JSON and drawn by the tree. */
-function phaseSection(goals) {
+/** A programme's phase order from its record under the programmes home, each read once per call of this. */
+function orderReader(env) {
+  const seen = new Map();
+  return (name) => {
+    if (!seen.has(name)) seen.set(name, programmeOrder(name, { home: programsHome(env) }));
+    return seen.get(name);
+  };
+}
+
+/**
+ * Phase structure and eligibility carried by JSON and drawn by the tree.
+ * `order` is the programme's (`phaseOrder`): for a programme whose phases are
+ * stated, or whose record is invalid, every phase's state, `after` and each
+ * goal's `held` are the one rule's (`phaseStanding`), so the page cannot say
+ * otherwise than the runner; a sequential programme is as it always was.
+ */
+function phaseSection(goals, order = SEQUENTIAL) {
+  if (order.kind !== 'sequential') return statedPhaseSection(goals, order);
   const unfinished = goals.filter((goal) => !FINISHED.includes(goal.stage ?? goal.status) && !goal.problems?.length);
   const current = unfinished.length ? Math.min(...unfinished.map((goal) => goal.phase ?? 1)) : null;
   const phases = new Map();
@@ -1180,6 +1196,31 @@ function phaseSection(goals) {
   };
 }
 
+/** `phaseSection` of a programme whose record states its phases, or is invalid (every unfinished goal held). */
+function statedPhaseSection(goals, order) {
+  const standing = phaseStanding(goals, order);
+  const byNumber = new Map(standing.phases.map((item) => [item.phase, item]));
+  const phases = new Map();
+  for (const goal of goals) {
+    const finished = FINISHED.includes(goal.stage ?? goal.status);
+    goal.phase = goal.problems?.length ? null : goal.phase ?? 1;
+    goal.held = !finished && goal.phase != null && !byNumber.get(goal.phase)?.open;
+    if (!phases.has(goal.phase)) phases.set(goal.phase, []);
+    phases.get(goal.phase).push(goal);
+  }
+  return {
+    ...(order.kind === 'invalid' ? { record_invalid: true } : {}),
+    current_phase: standing.current,
+    phases: [...phases].sort(([a], [b]) => a == null ? 1 : b == null ? -1 : a - b)
+      .map(([number, own]) => ({
+        number,
+        state: number == null ? 'invalid' : byNumber.get(number).state,
+        after: number == null ? [] : byNumber.get(number).after,
+        goals: own,
+      })),
+  };
+}
+
 /**
  * Programme → phases → goals. Flat goals retain their stable menu numbers
  * (programme then name); phase groups reference those same goal objects.
@@ -1187,7 +1228,7 @@ function phaseSection(goals) {
  */
 export function programmesSection({
   planning = {}, planningSessions = {}, programmeSessions = {}, goalRows = [], programmes = [], proposalCounts = {},
-  strays = [], sessionStrays = [], runnerSessions = [], priority = () => 0,
+  strays = [], sessionStrays = [], runnerSessions = [], priority = () => 0, order = () => SEQUENTIAL,
 } = {}) {
 
   const runnerPlanning = {};
@@ -1225,7 +1266,7 @@ export function programmesSection({
       // one line (Martin, 2026-11-02).
       dormant: goals.length === 0,
       goals,
-      ...phaseSection(goals),
+      ...phaseSection(goals, order(name)),
       proposals: proposalCounts[name] || 0,
       repos: [...new Set(goals.flatMap((goal) => goal.repos || []))].sort(),
       planning: planning[name] || null,
@@ -1261,10 +1302,11 @@ export function programmesSection({
  * names the goal. The runner names a goal session `goal:<programme>/<goal>`,
  * and a current file whose process is gone is not a session, as `nowBlock` reads
  * them. `goals` is `programsGoals`' answer, and nothing is read here.
- * `phase` is its phase; `held` whether a lower phase of its programme is
- * still to finish (`phaseOpen`), so the runner does not pick it yet.
+ * `phase` is its phase; `held` whether its phase is not open (`phaseOpen`, by
+ * `order(programme)`: a lower phase still to finish, or a stated phase it waits
+ * for, or an invalid record), so the runner does not pick it yet.
  */
-export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
+export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL } = {}) {
   return goals.map((goal) => {
     const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
     const sessions = goalSessions(goal.log);
@@ -1289,7 +1331,7 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive } = {}) {
     // it took over from a project (`mc goal from-project`).
     carries: goal.prs ?? [],
     phase: goal.phase ?? null,
-    held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals),
+    held: goal.problems.length === 0 && !FINISHED.includes(goal.stage) && !phaseOpen(goal, goals, order(goal.programme)),
     sessions,
     // `{ met, all }` of its success criteria; the row says `criteria <met>/<all>`.
     criteria: criteriaCount(goal),
@@ -1449,14 +1491,16 @@ export function readProgrammes({
   for (const repo of present) {
     for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
   }
+  const order = orderReader(env);
   const section = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
-    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive }),
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
     programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
+    order,
   });
   return { section, homes };
 }
@@ -1619,16 +1663,18 @@ export async function collectPage({
     alive, goals, recoverySessions: runner.sessions,
   });
   const programmeProposals = readProgrammeProposalCounts(programsHome(env));
+  const order = orderReader(env);
   const programmes = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     programmeSessions: sessions.programme_sessions,
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
-    goalRows: goalsOf({ goals, currents, alive }),
+    goalRows: goalsOf({ goals, currents, alive, order }),
     programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
     proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
+    order,
     strays: readStrays(root, { git }),
   });
   const worktrees = Object.fromEntries(present.map((repo) => [
