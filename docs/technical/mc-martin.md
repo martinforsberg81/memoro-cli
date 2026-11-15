@@ -346,7 +346,7 @@ unchanged.
 
 ## Horizons
 
-A horizon is what Martin has decided is worked toward. The desk keeps a standing
+A horizon is what Martin has decided is worked toward now, roughly one to two months, across several programmes, not a standing aim per area. A one-end deliverable is a programme. Before drafting, the desk reads [writing a horizon](../../canon/tasks/writing-a-horizon.md); it confirms each part in Swedish and stores the playback in English. The desk keeps a standing
 list of them, each with its playback; the order of the open ones is the
 priority. Everything stored in a horizon is English text.
 

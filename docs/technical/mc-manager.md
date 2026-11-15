@@ -41,7 +41,10 @@ The runner starts a manager session in two cases, one at a time under one claim,
   horizon's playback, the area pages and read checkouts at origin/main of every repository that declares areas,
   the archived programmes that served the horizon, and the app with `mc shot`. It ends in one of three ways:
   `mc programs create <name> --end … --horizon <slug> --purpose …`; `mc martin horizon reached <slug>`; or an open
-  text item `horizon:<slug>` made with `mc martin propose`. The runner checks that one holds, without a model;
+  text item `horizon:<slug>` made with `mc martin propose`. Report only prerequisites
+  actually read as observed, and identify remaining personal judgement separately.
+  Never infer satisfaction, production use or unmeasured elapsed time from those
+  prerequisites. The runner checks that one holds, without a model;
   the second failure since the last item opens a desk item of kind `manager`
   ([mc-martin.md](mc-martin.md)).
 - **A curation turn**, when none started in the last 24 hours and the origin/main of a repository that declares
@@ -63,7 +66,7 @@ has `MC_HORIZON=<slug>`.
 The manager reads the app and the area pages, never only a programme's own account of itself. It writes facts
 into the area texts and never an aim or a design decision; those, and any held text, it proposes at the desk with
 `mc martin propose --text <repo>/<path>`. Candidates for new horizons are brought to the desk the same way, as a
-text item `horizon:<proposed-slug>`; they become horizons only by Martin.
+text item `horizon:<proposed-slug>`; before drafting, apply [writing a horizon](../../canon/tasks/writing-a-horizon.md). They become horizons only by Martin.
 
 When `MC_ROLE=manager`, `mc publish` refuses with exit 2 and one `mc:` line naming the file a branch whose diff
 against origin/main (a) changes a file outside `docs/technical/`, (b) changes `docs/technical/memoro-me.md`,
@@ -76,8 +79,11 @@ session's judgement. Other roles are unaffected (`managerGuard` in `src/mc/publi
 The same rule for programmes: `mc programs create` by the manager requires `--purpose` and exactly one of
 `--horizon` and `--area`, refuses a horizon that is not open or already has a valid open record, writes the
 programme's page before its record, and `mc programs record` is refused to it ([mc-plan.md](mc-plan.md)). A
-defect against an area text may get a programme without a horizon (`--area <repo>/<id>`): at most one is open
-per area, and the rest of the proposals wait in the order they were written.
+small fix or other small work may run as a goal without a horizon, marked with an area when possible. The existing
+single-goal carrier (`--area <repo>/<id>`) is storage, not a product planning level: create refuses a second open
+carrier for an identified area and goal new refuses a second live goal in it. The rest wait oldest first. An
+area that cannot responsibly be assigned is unassigned; no global guard is claimed. A change to the user
+promise needs a horizon.
 
 ## Decisions and work
 

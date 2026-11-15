@@ -22,6 +22,7 @@ const DEFINING = {
   'dev-servers': 'Dev servers start only through mc',
   'asking-martin': 'Never a question without its options.',
   memory: 'A rule about how to work is never a memory.',
+  'writing-a-horizon': 'A horizon is what is worked toward now, over roughly one to two months.',
   'writing-a-goal': 'A goal is written through the verbs; the files are mc',
   'designing-a-programme': 'A programme is thought through once, before its goals are written',
   'writing-tests': 'A pinned number is a summary of a list, and the list is what to pin.',

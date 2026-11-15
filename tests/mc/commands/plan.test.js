@@ -464,7 +464,7 @@ describe('a standing planning checkout', () => {
     assert.equal(result.readme, 'written');
     assert.equal(readFileSync(readmePath, 'utf8'), expected);
     assert.deepEqual([...expected.matchAll(/^## .+$/gmu)].map(([heading]) => heading), [
-      '## Aim', '## Measures', '## Gap', '## Next horizon', '## Phases', "## Martin's", '## Where things are',
+      '## What it is for', '## End', '## Decisions', '## Phases', '## Where things are',
     ]);
     assert.match(stdout.out.text, /written from the programme template/u);
     const role = readCanonRole(PLAN_ROLE);

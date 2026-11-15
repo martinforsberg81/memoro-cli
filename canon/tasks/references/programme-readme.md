@@ -1,65 +1,37 @@
 # The programme page — `~/mc/programs/<programme>/README.md`
 
-The shape of a programme's README. Every section is short; the detail stays
-where it is and the page points at it. Written and kept by the plan session
-([designing a programme](../designing-a-programme.md)). A programme with a record
-(`PROGRAMME.json`) has [the other page](programme-record-readme.md).
+The bounded implementation plan without a record. The enduring direction is
+in the area pages. See [designing a programme](../designing-a-programme.md)
+and [the record page](programme-record-readme.md).
 
 ```markdown
-# <programme> — <the aim in one line>
+# <programme> — <one line on what this programme delivers>
 
 <One paragraph on what this programme covers and does not cover.>
 
-## Aim
+## What it is for
 
-<What the area is for its user when it is as good as it can be. State the
-user's enduring direction in terms of what they can do and rely on, not a list
-of work. This aim has no end: the programme is not finished when its goals
-are. It changes only with Martin.>
+<The work and, when applicable, the horizon it serves.>
 
-## Measures
+## End
 
-<Three to five observable or countable signs that the area is closer to the
-aim. Give each sign today's reading and its date. Where no reading exists yet,
-say so and what would give one.>
+<When this implementation plan is finished and its work written back.>
 
-## Gap
+## Decisions
 
-<Date. What stands between today and the aim, largest first, each gap in a
-sentence or two. Rewrite this section, do not append to it, whenever a goal
-lands and at the end of every plan session. What landed belongs in `mc goal
-list` and `docs/technical/`, not here.>
-
-## Next horizon
-
-<The next reachable state, in terms of what the user can do then and which
-gaps it closes. When it is reached, write the next one. A programme with no
-open goal is waiting for its next horizon, not finished.>
+<Decisions for this programme, with who decided and when. Cross-programme
+rules belong in `docs/technical/`.>
 
 ## Phases
 
-<One line per phase that has goals: which part of the next horizon the phase
-serves and why it comes before the next. The goals themselves are in `mc goal
-list <programme>`; they are not repeated here.>
-
-1. <purpose of phase 1>
-2. <purpose of phase 2>
-
-## Martin's
-
-<Only his dated decisions for this programme. What reaches Martin in every
-programme is in asking-martin, not here. Leave the section out when there is
-nothing.>
+<One line per phase with goals, its purpose and dependencies. Goals are in
+`mc goal list <programme>`, not repeated here.>
 
 ## Where things are
 
-<Pointers: the `docs/technical/` standards this work rests on, evidence
-directories, the repositories and the documents that hold the detail. Pointers
-only: the detail stays where it is.>
+<Pointers to area pages, technical standards, evidence and repositories.>
 ```
 
-A decision settled with Martin is written on this page, or in the goal it
-governs, and dated. When it reaches other programmes it goes to
-`docs/technical/`; the page records where it went, not the decision again.
-When a goal lands, its functionality is described in `docs/technical/`, and
-its section leaves this page.
+When work lands, describe it in `docs/technical/` and remove its section here.
+After work and write-back, use the supported manual archive route for a programme
+without a record; automatic archive requires a valid record and its checks.

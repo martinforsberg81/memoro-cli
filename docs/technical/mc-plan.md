@@ -15,7 +15,7 @@ Help remains available.
 
 ## A programme, and why it is not a workarea
 
-A programme is the initiative the work serves. Its aim is in
+A programme is a bounded implementation plan, archived when its work is finished. Its plan is in
 `~/mc/programs/<programme>/README.md`. Its interactive session starts in that
 directory, with a worktree of each known repository beside it on
 `plan/<programme>`. The directory also holds `goals/<goal>/`, each goal with
@@ -31,19 +31,13 @@ When `mc plan` opens a programme whose planning directory has no `README.md`,
 it writes the fenced page from `canon/tasks/references/programme-readme.md`
 before the session starts, and the opening prompt says it is a template to
 fill in. An existing README is never touched by the command; its next plan
-session brings it to the template's shape, settling its aim with Martin.
-
-The page of a programme without a record keeps an enduring user-state Aim,
-Measures, Gap, Next horizon, Phases, Martin's and Where things are, in that
-order (Martin, 2026-11-14). A programme with a record has the other page, below.
-Measures are three to five observable signs, with dated readings or an explicit
-missing reading and how to obtain it. At plan end and when a goal lands, rewrite
-the dated Gap largest-first; the session taking a landing also rereads measures
-and replaces a reached horizon. Phases say which part of the horizon they serve.
-Landed functionality belongs in `docs/technical/`, not the Gap. The aim changes
-only with Martin; having no open goals does not finish it. Archive only when
-Martin says the aim is over or has moved to another programme. This is said of
-a programme without a record.
+session reconciles it with the bounded template. The page has What it is for,
+End, Decisions, Phases and Where things are. Enduring direction belongs to area
+pages. For a legacy programme, preserve its held Aim in the appropriate area
+without silently changing its meaning, finish active work in place, write back
+and archive. Its enduring direction need not be declared over. Without a valid
+record use the supported manual archive route; an established valid record can
+use the runner route subject to its checks.
 
 With no programme named, `chooseProgramme` offers a numbered list, a new name,
 or an empty answer to leave. A pipe gets usage instead of a question. The
@@ -54,9 +48,8 @@ before it has documents on main, or after all its goals have been archived.
 ## A programme with a record
 
 A programme may have a record, `PROGRAMME.json` directly in its directory
-(`src/mc/programme-record.js`): a bounded piece of work that serves a horizon
-and ends, or that repairs one area's text. A programme without the file is a
-programme as above, and nothing about it changes. The file has seven keys, in
+(`src/mc/programme-record.js`): a bounded piece of work serving a horizon, or storage for small area work
+without one. A programme without the file is also bounded. The file has seven keys, in
 this order, and two more that are optional (`area` after `horizon`, `phases`
 last), and no other:
 
@@ -72,10 +65,12 @@ last), and no other:
 | `created_by` | `person`, `martin` or `manager` |
 | `phases` | optional, last: `{"order": "stated"}` with, when a phase waits, `"after": {"3": [1, 2]}` |
 
-A programme serves a horizon or repairs an area, never both (the record is
-invalid with both): an `area` programme is the repair of a deviation from an
-area text and has no horizon; it is made only by the manager from a proposal or
-by a person, and at most one is open per area.
+A record cannot name both a horizon and an area. An area carrier is existing
+storage for one small goal without a horizon, not an extra product planning
+level. Small work includes a single fix; a user-promise change needs a horizon.
+The create guard refuses a second open carrier for an identified area and goal
+creation refuses a second live goal in it. Other work waits oldest first. If no
+area can responsibly be assigned, say unassigned; no global guard covers it.
 
 `phases` says how the programme's phases run. A record without it is a
 sequential programme: a phase starts when every lower phase is finished. With
@@ -166,18 +161,11 @@ each programme: `null`, `{ horizon, end, state, created, created_by }` or
 (`no horizon` without one) or `record invalid`; a programme without a record
 keeps its seven cells.
 
-The two kinds have two page templates, both under
-`canon/tasks/references/`. `programme-readme.md` (no record) has Aim, Measures,
-Gap, Next horizon, Phases, Martin's and Where things are.
-`programme-record-readme.md` has What it is for, End, Decisions, Phases and
-Where things are: the enduring aim belongs to the area pages. `create` fills in
-the name, the end sentence and the horizon; the plan session fills in the rest.
-`mc plan` still writes the first page only for a programme with no README.
-
-`mc goal new` in a programme that repairs an area is refused (exit 1) while
-that programme holds a live goal: one repair goal is in flight per area, and the
-next waits until it is done or dropped. `mc programs show` prints the `area`
-line and `--json` the key.
+Both page templates under `canon/tasks/references/` have What it is for, End,
+Decisions, Phases and Where things are. The record page has extractable purpose
+and end headings; `create` fills the name, end and horizon. `mc plan` writes
+the no-record page only when no README exists. `mc programs show` prints the
+`area` line and `--json` the key.
 
 ## What the session is told
 
@@ -327,10 +315,11 @@ name if needed); its remaining documents are not deleted. A network failure
 leaves the planning area intact so a later attempt can continue.
 
 `--archive` refuses session-selection flags and requires an explicit name.
-No automatic pass can decide that the aim of a programme without a record is
-over. A programme with a record is bounded, so its end is checked, not judged:
-the runner archives it (above), and this command archives one too, leaving its
-`state` as it finds it and moving its `proposals/` with the directory, whole.
+No-record programmes are not automatically archived or migrated. The manual
+command can archive one after work and write-back without declaring its enduring
+direction over. For a valid record, the runner checks its end and safety as
+above; the manual command also archives it, leaving `state` as it finds it and
+moving its `proposals/` with the directory, whole.
 The runner's archive moves the top-level `proposals/*.md` to `~/mc/proposals/`
 first, so a finding is not shelved with the programme.
 

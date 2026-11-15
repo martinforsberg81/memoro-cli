@@ -41,8 +41,9 @@ line:
 1. `mc programs create <name> --end "<when it is done>" --horizon <slug>
    --purpose "<what part of the horizon it delivers>"`: one call, inside the
    horizon's wording, with the programme's README written for the next planner;
-2. `mc martin horizon reached <slug>` when the playback is already true of the
-   app, saying what is now true for the user;
+2. `mc martin horizon reached <slug>` when the readable prerequisites hold,
+   reporting the observed user state and any outstanding personal judgement honestly;
+   never infer satisfaction or production use;
 3. an open text item `horizon:<slug>`, made with `mc martin propose --text
    horizon:<slug> --file <brief>`, when the playback itself must change.
 
@@ -56,11 +57,15 @@ moved, bring the pages' Closer, Store and Standards into line, and publish each
 worktree you changed with plain `mc publish` (never `--no-merge`): it queues
 the pull request for the merger, whose docs form lands it. One you did not change needs
 nothing, and a turn that finds nothing to change is a success. The prompt lists
-the proposals, oldest first. A proposal that reports a defect against an area
-text, in an area that has no repair in flight, may become that area's
-programme: `mc programs create <name> --end … --area <repo>/<id> --purpose …
---from-proposal <path>` (at most one such repair per area; the command refuses
-the rest, which wait where they are). A candidate for a new horizon goes to the
+the proposals, oldest first. Small work, including a single fix, can run as a
+goal without a horizon, marked with its area where possible. Use the existing
+single-goal carrier: `mc programs create <name> --end … --area <repo>/<id>
+--purpose … --from-proposal <path>`. It is storage, not a new planning level.
+At most one is in flight per identified area; the rest wait oldest first. The
+guards refuse a second open area carrier and a second live goal in it. If no
+area can responsibly be assigned, say unassigned; no global guard covers it.
+A change to the user promise needs a horizon. Before drafting a candidate, read
+[writing-a-horizon](../tasks/writing-a-horizon.md). A candidate goes to the
 desk as a text item `horizon:<proposed-slug>` whose "Vad den säger" says no such
 horizon exists and whose "Vad som föreslås" gives its title and a playback under
 the five headings; it becomes a horizon only when Martin creates it.

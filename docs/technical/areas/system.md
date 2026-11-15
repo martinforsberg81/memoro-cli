@@ -6,6 +6,10 @@ The `mc` command, the runner, the merger, the gate, the roles, verbs and task re
 
 - "One developer drives many tracks at once: the work is delivered at high quality, the system maintains and improves itself, and only the right kind of question reaches him. This is a direction, not a finish line: the programme is not done because a piece of work is." (Martin, 2026-11-14; programme `mc`)
 
+The enduring direction in this historical quotation is the area direction. Its
+programme-survival implication is superseded by the 2026-11-15 bounded-programme
+decision below; it is not an active programme lifetime instruction.
+
 ## Closer
 
 Measured, with the baselines of 2026-11-14 (programme `mc`):
@@ -22,12 +26,13 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - Three kinds of thing reach Martin: a product choice, a judgement (look, listen, try) and a reserved act (deploy, money, credentials, production data). Every technical question is decided by the system, by the goal, the standards, the app's pattern and established practice, and reported afterwards in a record he can read and overturn; a question that established practice answers is never his, also when it concerns privacy, security or cost (Martin, 2026-11-14; programme `mc`).
 - `mc martin` is his one way in: he reads no ledger, queue or programme page himself (Martin, 2026-11-14; programme `mc`).
 - Learning has happened only when the code of how mc works, the prompts of the sessions or a technical standard in `docs/technical/` has changed on main, in that order of preference; a list of notes that grows is the failure (Martin, 2026-11-14; programme `mc`).
-- A programme page keeps the future in sight: a programme with no open goal waits for its next horizon, it is not done (Martin, 2026-11-14; programme `mc`).
+- Every programme is an implementation plan, archived when its work is finished and written back. This replaces the 2026-11-14 idle-programme rule and the historical Aim quotation's programme-survival implication. For legacy programmes preserve the held Aim in the area without changing its meaning, finish active work in place, write back and archive by a supported route (Martin, 2026-11-15; programme `horizon`).
 - Nobody owns an area and no programme belongs to one; areas are sources and references (Martin, 2026-11-15; programme `mc`).
 - A horizon is always created in `mc martin`; the system never sets one. The manager's two tasks are to keep the area texts curated and to create new programmes (Martin, 2026-11-15; programme `horizon`).
 - The order of the open horizons is the one priority, and candidates for new horizons are brought to the desk by the manager and become horizons only by Martin (Martin, 2026-11-15; programme `horizon`).
 - The interactive `mc manager` entrance goes; a person's manual headless run stays (Martin, 2026-11-15; programme `horizon`).
-- A deviation from an area text is repaired without a horizon, inside a ceiling that is a structure and not a figure: at most one such repair in flight per area, the rest wait in order; a figure is set when a month of use shows one is needed (Martin, 2026-11-15; programme `horizon`).
+- Small work, including a single fix, runs as a goal without a horizon, marked with its area when possible; at most one is in flight per area and the rest wait in order. A change to the user promise needs a horizon (Martin, 2026-11-15; programme `horizon`).
+- A horizon is what is worked toward now, for roughly one to two months, taking several programmes; it is not standing or per area. A single deliverable with one end is a programme (Martin, 2026-11-15; programme `horizon`).
 - Sessions have one way to ask for advice, `mc ask`, not several (Martin, 2026-11-15; programme `reach`).
 - The only questions directed to Martin are those about a reformulation of an aim, and about strategy and design at that level (Martin, 2026-11-15; programme `mc`).
 - A programme with a record is bounded: it is done when its goals are done and its write-back reads OK, and the system then archives it (Martin, 2026-11-15; programme `horizon`).

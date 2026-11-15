@@ -2,7 +2,7 @@
 
 The shape of the README of a programme that has a record (`PROGRAMME.json`,
 made by `mc programs create`): a bounded piece of work that serves a horizon
-and ends. `mc programs create` writes this page with the name, the end and the
+and ends, or carries a small goal without a horizon. `mc programs create` writes this page with the name, the end and the
 horizon filled in; the plan session fills in the rest and keeps it
 ([designing a programme](../designing-a-programme.md)). It has no Aim, Measures
 or Gap: the enduring aim belongs to the area pages, and the programme points to
@@ -15,14 +15,13 @@ them. A programme without a record has [the other page](programme-readme.md).
 
 ## What it is for
 
-<The horizon this programme serves, by the slug in its record, and the part of
-that horizon this programme delivers.>
+<The horizon this programme serves and the part it delivers, or the small
+area work carried without a horizon.>
 
 ## End
 
 <When the programme is done, as the record says it. It is done when its goals
-are done and what is now true is written back to `docs/technical/`; the system
-archives it once its write-back reads OK.>
+are done and what is now true is written back to `docs/technical/`; the runner archives it after its write-back reads OK and its other safety checks pass.>
 
 ## Decisions
 
