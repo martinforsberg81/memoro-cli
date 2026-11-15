@@ -23,6 +23,7 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
   deps/<name>/<repo>/               dependency-update worktrees
   log/  merges.json  register.lock  runner and merger records
 ~/mc/martin/items/<id>/              durable Martin desk records (outside programmes)
+~/mc/martin/horizons/<slug>/            the horizons the desk holds, each with its playback
 ~/mc/archive/programs/              programmes archived by the person
 ```
 
