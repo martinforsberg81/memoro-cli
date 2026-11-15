@@ -14,7 +14,7 @@ import { drainDeskPreparation, prepareDeskItem } from '../desk-prepare.js';
 import { costSum, deskBudget, deskRunsPath, readDeskText, setDeskCeiling } from '../desk-budget.js';
 import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
-import { FINISHED, goalReferences, programsGoals } from '../goals.js';
+import { FINISHED, goalReferences, programmeOrder, programsGoals } from '../goals.js';
 import { readRunRows } from '../landed.js';
 import { writeJsonAtomic } from '../atomic-write.js';
 import { HORIZON_STATES, PLAYBACK_PARTS, horizonsOpening, parsePlaybackInput, planDrop, planMove, planReached, planReopen, planSet, readHorizon, readHorizons, renderHorizons, updateDeskHorizons, validSlug } from '../desk-horizons.js';
@@ -424,13 +424,31 @@ function storeStart(env) {
   try { return JSON.parse(readDeskText(join(itemStore(env), '.store.json')))?.first_sync_at ?? null; } catch { return null; }
 }
 
-/** Goals of the item's programme in a later phase that are not finished: each waits on this goal's phase. */
-function laterPhaseGoals(item, goals) {
-  if (item.kind !== 'goal') return 0;
+/**
+ * Goals of the item's programme that are not finished and wait on this goal's
+ * phase, as `{ count, stated }`. In a programme whose phases run in sequence
+ * these are the goals in a later phase; in one whose record states its phases,
+ * the goals in the phases that wait for this goal's phase, directly or through
+ * other phases (`stated` is then true, and the words say so). An invalid record
+ * counts none: no phase is open, so nothing is known to wait on this goal.
+ */
+function laterPhaseGoals(item, goals, { home, read }) {
+  if (item.kind !== 'goal') return { count: 0, stated: false };
   const [programme, goal] = item.reference.split('/');
   const own = goals.find((g) => g.programme === programme && g.goal === goal && !g.problems.length);
-  if (!own) return 0;
-  return goals.filter((g) => g.programme === programme && !g.problems.length && !FINISHED.includes(g.stage) && g.phase > own.phase).length;
+  if (!own) return { count: 0, stated: false };
+  const unfinished = goals.filter((g) => g.programme === programme && !g.problems.length && !FINISHED.includes(g.stage));
+  const order = programmeOrder(programme, { home, read });
+  if (order.kind === 'invalid') return { count: 0, stated: false };
+  if (order.kind === 'sequential') return { count: unfinished.filter((g) => g.phase > own.phase).length, stated: false };
+  const waiting = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [phase, list] of Object.entries(order.after)) {
+      if (!waiting.has(Number(phase)) && list.some((named) => named === own.phase || waiting.has(named))) { waiting.add(Number(phase)); grew = true; }
+    }
+  }
+  return { count: unfinished.filter((g) => waiting.has(g.phase)).length, stated: true };
 }
 
 function programmeOf(item) {
@@ -454,6 +472,12 @@ function costReading({ env, now, read }) {
   return out;
 }
 
+/** `blocks`, and for a programme that states its phases `blocks_stated` (the words of its line). */
+function blocksOf(item, goals, home) {
+  const { count, stated } = laterPhaseGoals(item, goals, { home, read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } } });
+  return { blocks: count, ...(stated ? { blocks_stated: true } : {}) };
+}
+
 /** The opening as data. Reads only; `last` is the previous opening's time, or null. */
 export function buildOpening({ env = process.env, home = programsHome(env), now = new Date(), last = null, read = readDeskText } = {}) {
   const nowMs = now.getTime();
@@ -464,7 +488,7 @@ export function buildOpening({ env = process.env, home = programsHome(env), now 
 
   const yours = items.filter((item) => item.state === 'for-martin').map((item) => ({
     id: item.id, kind: item.kind, reference: item.reference, source_at: item.source_at, sort: item.sort, reversible: item.reversible,
-    blocks: laterPhaseGoals(item, goals), due: item.due_at && timeOf(item.due_at) - nowMs <= DAY_MS ? item.due_at : null,
+    ...blocksOf(item, goals, home), due: item.due_at && timeOf(item.due_at) - nowMs <= DAY_MS ? item.due_at : null,
     brief: readDeskText(join(itemDirectory(item, env), 'brief.md')),
   })).sort((a, b) => b.blocks - a.blocks || timeOf(a.source_at) - timeOf(b.source_at) || a.id.localeCompare(b.id));
 
@@ -503,7 +527,10 @@ export function renderOpening(data) {
   out.push('', `## Yours (${data.yours.length})`);
   if (!data.yours.length) out.push('', 'Nothing waits for you.');
   data.yours.forEach((item, index) => {
-    const blocks = item.blocks ? `, blocks ${plural(item.blocks, 'later-phase goal')} of ${item.reference.split('/')[0]}` : '';
+    const programme = item.reference.split('/')[0];
+    const blocks = !item.blocks ? ''
+      : item.blocks_stated ? `, blocks ${plural(item.blocks, 'goal')} of ${programme} whose ${item.blocks === 1 ? 'phase waits' : 'phases wait'} for it`
+        : `, blocks ${plural(item.blocks, 'later-phase goal')} of ${programme}`;
     out.push('', `### ${index + 1}. ${item.reference} · ${item.sort ?? 'unsorted'} · ${item.reversible ? 'reversible' : 'not reversible'}`);
     out.push(`Item ${item.id}, waiting since ${item.source_at}${blocks}.`);
     if (item.due) out.push(`Due ${item.due}: if nothing is said by then, the recommendation in the brief is carried out and the item is closed by default.`);
