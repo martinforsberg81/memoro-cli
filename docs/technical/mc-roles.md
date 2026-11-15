@@ -251,7 +251,10 @@ principle, full freedom to move the programme toward the aim, a goal's branch
 included: it may finish a goal's work itself when that is quicker than a new
 build session. That freedom is interactive. The runner may instead assign
 one next draft under [the programme trigger](mc-goals.md#next-draft-planning)
-(Martin, 2026-11-09), with the role limited to completing that brief. It names
+(Martin, 2026-11-09), with the role limited to completing that brief, or one
+programme turn for a recorded programme with no goals
+([mc-run.md](mc-run.md#programme-planning-turn), Martin, 2026-11-15): the same
+role, told apart by `MC_GOAL` (a next draft) or `MC_PROGRAMME` alone (a turn). It names
 the headless roles and what each owns, so it knows the goal's text is its
 own and a headless session's `Martin` is a question for it. A goal
 is what the runner builds, a means toward the aim. `refusedMove`

@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { answerHeldDeployMend, publishDeployMend, readDeployMends, recordRepaired, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { answerHeldMend, answerMainMend, publishMainMend, readMainMends, requestMainRepair, updateMainMends } from '../../src/mc/main-repair.js';
 import { MEMORY_MIN_FREE_PERCENT, RUNNER_LOG_MAX_BYTES, createRunner, dockerNote, realDeps, runLoop, UPDATE_POLL_MS } from '../../src/mc/run.js';
+import { removeReadCheckouts, setUpReadCheckouts } from '../../src/mc/programme-turn.js';
 import { freeMemoryPercent } from '../../src/mc/dev-servers.js';
 import { rotateIfLarge } from '../../src/mc/logger.js';
 import { COOLDOWN_MS, EVENTS_KEEP, POLL_MS } from '../../src/mc/disk-pressure.js';
@@ -5845,4 +5846,408 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
     assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
     assert.deepEqual(planned(f), [], 'the younger draft is not planned past the older');
   }
+});
+
+/* ------------------------------------------------------------ the programme planning turn */
+
+const PROG = '/w/programs/prog';
+const TURN_STATE = '/w/runner/programme-turn/prog.json';
+const readCheckout = (repo) => `/w/runner/work/programme-turn-prog/${repo}`;
+const recordWith = (changes) => `${JSON.stringify({ ...JSON.parse(plainText()), ...changes }, null, 2)}\n`;
+
+/** A programme `prog` with a record and a README and no goal, as a turn finds it; `goals` are goals it already holds. */
+function programmeFixture({ record = plainText(), readme = true, goals = {}, ...options } = {}) {
+  const f = goalFixture(goals, options);
+  if (record !== null) f.files[RECORD_AT] = record;
+  if (readme) f.files[`${PROG}/README.md`] = '# prog\n\nEnd: Done when it holds.\n';
+  return f;
+}
+/** The desk's items as the runner's fake store reads them out of the fixture's files. */
+function wireDesk(f) {
+  const items = () => Object.entries(f.files).filter(([path]) => /^\/w\/martin\/items\/[^/]+\/item\.json$/u.test(path)).map(([, text]) => JSON.parse(text));
+  f.deps.deskItems = { list: items, read: (id) => items().find((item) => item.id === id) ?? null };
+  return items;
+}
+/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them. */
+function writesGoals(f, goals) {
+  for (const [name, { stage = 'draft', phase = 1 }] of Object.entries(goals)) {
+    const text = goalJson({ stage, status: 'ready', phase, repos: ['memoro'], title: name, goal: [], prs: [] });
+    f.files[`${GOALS}/${name}/GOAL.json`] = stage === 'draft' ? withGoal(text, { success_criteria: [] }) : text;
+    f.files[`${GOALS}/${name}/LOG.md`] = '';
+    f.dirs.add(`${GOALS}/${name}/memoro`);
+  }
+}
+const turnSessions = (f) => f.calls.sessions.filter((call) => call.env.MC_PROGRAMME === 'prog' && !call.env.MC_GOAL);
+const turnState = (f) => JSON.parse(f.files[TURN_STATE]);
+const draftPlans = (f) => planned(f).filter(Boolean);
+const noRunnableTurn = (runner) => runner.nextWork()?.name !== 'programme:prog';
+
+test('programme turn: a recorded open programme with a README and no goals gets one turn at the next pick, sequential and stated alike', async () => {
+  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
+    const f = programmeFixture({ record });
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(runner.nextWork().name, 'programme:prog', `${kind}: the turn is the pick`);
+    const seen = {};
+    f.answer = (call) => {
+      seen.currents = Object.entries(f.files).filter(([path]) => path.startsWith('/w/runner/current-')).map(([, text]) => JSON.parse(text));
+      seen.claimed = runner.claims.has('programme:prog');
+      seen.next = runner.nextWork()?.name ?? null;
+      return okSession()(call);
+    };
+    const result = await runner.pass({ repo: 'memoro' });
+    assert.deepEqual([result.ran, result.name], [1, 'programme:prog'], kind);
+    const [call, ...rest] = f.calls.sessions;
+    assert.equal(rest.length, 0, `${kind}: one session`);
+    assert.deepEqual([call.env.MC_ROLE, call.env.MC_HEADLESS, call.env.MC_PROGRAMME], ['plan', '1', 'prog'], kind);
+    assert.equal('MC_GOAL' in call.env, false, `${kind}: no MC_GOAL`);
+    assert.ok(call.unsetEnv.includes('MC_GOAL'), `${kind}: an inherited MC_GOAL is removed`);
+    assert.equal(call.cwd, PROG, `${kind}: in the programme directory`);
+    assert.match(call.prompt, new RegExp(`${PROG}/README\\.md`, 'u'), kind);
+    assert.match(call.prompt, /\bEnd\b/u, kind);
+    assert.deepEqual(seen.currents.map((current) => [current.name, current.kind, current.programme]), [['programme:prog', 'plan', 'prog']], `${kind}: its current record while it runs`);
+    assert.equal(seen.claimed, true, `${kind}: its claim while it runs`);
+    assert.equal(seen.next, null, `${kind}: no second turn of the programme while it runs`);
+    assert.equal(Object.keys(f.files).some((path) => path.startsWith('/w/runner/current-')), false, `${kind}: the current record is gone after it`);
+    assert.equal(runner.claims.has('programme:prog'), false, `${kind}: the claim is released`);
+    const rows = runRows(f.files);
+    assert.deepEqual(rows.map((row) => [row.name, row.kind]), [['programme:prog', 'plan']], kind);
+  }
+});
+
+test('programme turn: no turn for a programme that is not eligible, and another programme\'s goal still starts in the same pass', async () => {
+  const goalAt = (path) => (f) => { f.files[path] = goalJson({ stage: 'draft', status: 'Martin', phase: 1, repos: ['memoro'], title: 'x', goal: [], prs: [] }); };
+  const table = [
+    ['no record', (f) => { delete f.files[RECORD_AT]; }],
+    ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
+    ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
+    ['no README.md', (f) => { delete f.files[`${PROG}/README.md`]; }],
+    ['a draft in goals/', goalAt(`${GOALS}/a-draft/GOAL.json`)],
+    ['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }],
+    ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }],
+    ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }],
+    ['a horizon that is reached', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }],
+    ['a horizon that is dropped', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'dropped' }); }],
+    ['a horizon that is missing', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => null; }],
+  ];
+  for (const [kind, make] of table) {
+    const f = programmeFixture();
+    make(f);
+    const runner = createRunner({ deps: f.deps });
+    assert.ok(noRunnableTurn(runner), `${kind}: programmeWork offers no candidate`);
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, kind);
+    assert.deepEqual(turnSessions(f), [], `${kind}: no session`);
+    assert.equal(f.files[TURN_STATE], undefined, `${kind}: nothing counted`);
+  }
+  // Dot-entries of goals/ are not goals: the programme is eligible.
+  const dots = programmeFixture();
+  dots.files[`${GOALS}/.hold.json`] = '{}';
+  assert.equal(createRunner({ deps: dots.deps }).nextWork().name, 'programme:prog', 'a dot-entry alone is no goal');
+  // A horizon that is not open is said once over two passes.
+  const reached = programmeFixture({ record: recordWith({ horizon: 'h' }) });
+  reached.deps.horizon = () => ({ state: 'reached' });
+  const runner = createRunner({ deps: reached.deps });
+  await runner.pass({ repo: 'memoro' }); await runner.pass({ repo: 'memoro' });
+  assert.equal(reached.log.filter((line) => /prog: its horizon h reads reached/u.test(line)).length, 1, 'said once while it lasts');
+  // An eligible programme beside another programme's build: the build starts, the turn follows on the next pass.
+  const both = programmeFixture();
+  both.files['/w/programs/other/goals/go/GOAL.json'] = goalJson({ repos: ['memoro'], title: 'go', goal: [] });
+  both.files['/w/programs/other/goals/go/LOG.md'] = '';
+  both.dirs.add('/w/programs/other/goals/go/memoro');
+  const together = createRunner({ deps: both.deps });
+  both.answer = (call) => { if (call.env.MC_GOAL) both.files['/w/programs/other/goals/go/GOAL.json'] = withGoal(both.files['/w/programs/other/goals/go/GOAL.json'], { stage: 'done' }); return okSession()(call); };
+  assert.equal((await together.pass({ repo: 'memoro' })).name, 'goal:other/go', 'the build is the first pick');
+  assert.deepEqual(turnSessions(both), []);
+  assert.equal((await together.pass({ repo: 'memoro' })).name, 'programme:prog', 'the turn follows');
+  assert.equal(turnSessions(both).length, 1);
+});
+
+/** A programme with one ready draft, as a turn leaves it. */
+function draftedProgramme(record) {
+  const f = programmeFixture({ record, goals: { d1: { stage: 'draft' } } });
+  f.files[`${GOALS}/d1/GOAL.json`] = withGoal(f.files[`${GOALS}/d1/GOAL.json`], { success_criteria: [] });
+  return f;
+}
+
+test('programme turn: while a turn is claimed or current no next-draft plan session of its programme starts — at the pick or at its admission — and one does once it has ended', async () => {
+  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
+    // (a) The claim taken, no current record yet: the pick offers the draft to nobody.
+    const claimed = draftedProgramme(record);
+    const held = createRunner({ deps: claimed.deps });
+    assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: without the claim the draft is the pick`);
+    held.claims.add('programme:prog');
+    assert.equal(held.nextWork(), null, `${kind}: claim only — no pick`);
+    assert.equal((await held.pass({ repo: 'memoro' })).ran, 0, `${kind}: claim only — no session`);
+    assert.deepEqual(draftPlans(claimed), [], kind);
+    held.claims.delete('programme:prog');
+    assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: the claim released, the draft is the pick`);
+
+    // (c) The claim taken while a next-draft session is admitted: it yields and launches nothing.
+    const admitted = draftedProgramme(record);
+    const admitting = createRunner({ deps: admitted.deps });
+    admitted.deps.attachDeps = async () => { admitting.claims.add('programme:prog'); return { ok: true }; };
+    assert.equal((await admitting.pass({ repo: 'memoro' })).ran, 0, `${kind}: admission`);
+    assert.deepEqual(admitted.calls.sessions, [], `${kind}: nothing launched at admission`);
+    assert.match(admitted.log.join('\n'), /goal:prog\/d1: programme changed during admission/u, kind);
+    assert.equal(where(admitted, 'd1'), 'draft · ready', `${kind}: the draft is as it was`);
+
+    // (b) The turn current, a second lane's pass; (d) the turn ended, the next pass plans its draft.
+    const f = programmeFixture({ record });
+    const runner = createRunner({ deps: f.deps });
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    f.answer = async (call) => {
+      if (call.env.MC_PROGRAMME) { writesGoals(f, { d1: {} }); await gate; }
+      return okSession()(call);
+    };
+    const turn = runner.pass({ repo: 'memoro', lane: 1, tag: 'memoro#1' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(Object.entries(f.files).some(([path, text]) => path.startsWith('/w/runner/current-') && JSON.parse(text).name === 'programme:prog'), `${kind}: the turn is current`);
+    assert.equal(where(f, 'd1'), 'draft · ready');
+    assert.equal((await runner.pass({ repo: 'memoro', lane: 2, tag: 'memoro#2' })).ran, 0, `${kind}: current — the second lane starts nothing`);
+    assert.deepEqual(draftPlans(f), [], `${kind}: no plan session while the turn is current`);
+    release();
+    assert.equal((await turn).name, 'programme:prog');
+    assert.equal(runner.claims.has('programme:prog'), false);
+    assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/d1', `${kind}: after the turn the draft is planned`);
+    assert.deepEqual(draftPlans(f), ['prog/d1'], kind);
+  }
+});
+
+test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left is next-draft planning\'s, stated programme', async () => {
+  const f = programmeFixture({ record: statedText() });
+  const items = wireDesk(f);
+  f.answer = (call) => {
+    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
+    return okSession()(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
+  assert.match(runRows(f.files)[0].note, /2 goals$/u, 'the note says how many goals the programme holds');
+  assert.equal(f.files[TURN_STATE], undefined, 'no failure');
+  assert.deepEqual(items(), [], 'no item');
+  assert.equal(where(f, 'two'), 'draft · ready', 'the draft left is not set Martin');
+  assert.equal(where(f, 'one'), 'build · ready');
+  await lane(runner, 'memoro');
+  assert.ok(draftPlans(f).includes('prog/two'), 'next-draft planning takes it');
+  assert.deepEqual(turnSessions(f).length, 1, 'and no second turn');
+});
+
+test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left waits for the sequential trigger', async () => {
+  const f = programmeFixture({ record: plainText() });
+  const items = wireDesk(f);
+  f.answer = (call) => {
+    if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
+    return okSession()(call);
+  };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
+  assert.match(runRows(f.files)[0].note, /2 goals$/u);
+  assert.equal(f.files[TURN_STATE], undefined, 'no failure');
+  assert.deepEqual(items(), [], 'no item');
+  assert.equal(where(f, 'two'), 'draft · ready');
+  await lane(runner, 'memoro');
+  assert.deepEqual(draftPlans(f), [], 'while the staged goal is in build, no plan session for the draft');
+  f.files[`${GOALS}/one/GOAL.json`] = withGoal(f.files[`${GOALS}/one/GOAL.json`], { stage: 'done' });
+  assert.equal((await runner.pass({ repo: 'memoro' })).name, 'goal:prog/two', 'once it is done the draft is planned');
+  assert.deepEqual(draftPlans(f), ['prog/two']);
+});
+
+test('programme turn: the second failure opens a prepared item, a closed one lets the turn start again, two more open a for-martin brief', async () => {
+  const f = programmeFixture();
+  const items = wireDesk(f);
+  let clock = Date.parse('2026-11-15T09:00:00Z');
+  f.deps.now = () => new Date(clock += 60_000);
+  const runner = createRunner({ deps: f.deps });
+  const pass = async () => (await runner.pass({ repo: 'memoro' })).ran;
+  assert.equal(await pass(), 1);
+  assert.equal(turnState(f).failures.length, 1, 'one failure written');
+  assert.match(turnState(f).failures[0].reason, /^planning session exited 0 with the programme holding no goal/u);
+  assert.deepEqual(items(), [], 'the first failure opens nothing and the next pick may try again');
+  assert.equal(await pass(), 1, 'tried again');
+  assert.equal(turnState(f).failures.length, 2);
+  const [first] = items();
+  assert.deepEqual([first.kind, first.reference, first.state, first.sort, first.reversible, first.due_at], ['programme', 'programme:prog', 'prepared', 'mechanical', null, null]);
+  const dir = itemDirectory(first, f.deps.env);
+  const prepared = f.files[`${dir}/prepared.md`];
+  assert.equal(turnState(f).failures.filter((failure) => prepared.includes(failure.reason)).length, 2, 'prepared.md names both reasons');
+  for (const failure of turnState(f).failures) assert.ok(prepared.includes(failure.log), 'and both session logs');
+  assert.ok(`${dir}/item.json` in f.files);
+  // The item is the decision lane's; no turn starts while it is open.
+  f.answer = okSession();
+  const before = turnSessions(f).length;
+  runner.claims.add('x');
+  assert.ok(noRunnableTurn(runner), 'no turn while the item is open');
+  runner.claims.delete('x');
+  assert.equal(turnSessions(f).length, before);
+  // Closed by decision: the turn starts again; two more failures open a for-martin item.
+  f.files[`${dir}/item.json`] = JSON.stringify({ ...first, state: 'closed', outcome: { by: 'decision', at: '2026-11-15T10:00:00Z' } });
+  assert.equal(runner.nextWork().name, 'programme:prog', 'closed: the turn is due again');
+  assert.equal(await pass(), 1);
+  assert.equal(items().length, 1, 'one failure since the item opens nothing');
+  assert.equal(await pass(), 1);
+  const second = items().find((item) => item.id !== first.id);
+  assert.deepEqual([second.kind, second.state, second.sort, second.reversible, second.due_at], ['programme', 'for-martin', 'mechanical', false, null]);
+  const brief = f.files[`${itemDirectory(second, f.deps.env)}/brief.md`];
+  assert.match(brief, /## Vad det gäller/u);
+  assert.match(brief, /## Rekommendation och skäl/u);
+  assert.equal(`${itemDirectory(second, f.deps.env)}/prepared.md` in f.files, false);
+  assert.equal(turnState(f).items.length, 2);
+  assert.ok(noRunnableTurn(runner), 'and no turn while that is open');
+  assert.equal(await pass(), 0);
+});
+
+test('programme turn: a quota, an offline and a refused-login ending write no failure, and a missing state file reads as none', async () => {
+  for (const [kind, ending] of [['quota', REFUSED_429], ['offline', UNREACHABLE], ['login', apiEndedSession('Not logged in · Please run /login', { api_error_status: null })]]) {
+    const f = programmeFixture();
+    wireDesk(f);
+    f.answer = ending;
+    const runner = createRunner({ deps: f.deps });
+    assert.equal(f.files[TURN_STATE], undefined, `${kind}: no state file to begin with — no failures`);
+    await runner.pass({ repo: 'memoro' });
+    assert.equal(turnSessions(f).length, 1, kind);
+    assert.equal(f.files[TURN_STATE], undefined, `${kind}: written nothing`);
+    assert.deepEqual(Object.keys(f.files).filter((path) => path.startsWith('/w/martin/items/')), [], kind);
+  }
+});
+
+test('programme turn: an unreadable state file starts no turn and is said once', async () => {
+  for (const text of ['{ not json', JSON.stringify({ schema: 'mc-programme-turn', version: 1, programme: 'other', failures: [], items: [] })]) {
+    const f = programmeFixture();
+    f.files[TURN_STATE] = text;
+    const runner = createRunner({ deps: f.deps });
+    assert.ok(noRunnableTurn(runner));
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+    await runner.pass({ repo: 'memoro' });
+    assert.deepEqual(turnSessions(f), []);
+    assert.equal(f.log.filter((line) => /prog: runner\/programme-turn\/prog\.json is unreadable/u.test(line)).length, 1, 'said once');
+    assert.equal(f.files[TURN_STATE], text, 'left as it was');
+  }
+});
+
+/** The runner's fake git with the read checkouts answered per repository: `dirty`, `unreachable` leftovers and `addFails` (repo → git's message). */
+function servedCheckouts(f, { dirty = [], unreachable = [], addFails = {} } = {}) {
+  const base = f.deps.git;
+  const repoOf = (path) => String(path).split('/').at(-1);
+  f.deps.git = (cwd, args) => {
+    const inCheckout = String(cwd).startsWith('/w/runner/work/programme-turn-');
+    if (inCheckout && args[0] === 'status') { f.calls.git.push([cwd, ...args]); return { ok: true, stdout: dirty.includes(repoOf(cwd)) ? ' M x' : '' }; }
+    if (inCheckout && args[0] === 'merge-base') { f.calls.git.push([cwd, ...args]); return { ok: !unreachable.includes(repoOf(cwd)), stdout: '' }; }
+    if (args[0] === 'worktree' && args[1] === 'add' && args.includes('--detach')) {
+      f.calls.git.push([cwd, ...args]);
+      const path = args.at(-2);
+      if (repoOf(path) in addFails) return { ok: false, stdout: '', stderr: `Preparing worktree\nfatal: ${addFails[repoOf(path)]}` };
+      f.dirs.add(path);
+      return { ok: true, stdout: '' };
+    }
+    return base(cwd, args);
+  };
+  return (call) => call.slice(1).join(' ');
+}
+const gitOn = (f, path) => f.calls.git.filter((call) => call[0] === path || call.includes(path));
+const TOUCHING = /^(reset|checkout|clean|restore|stash)\b|worktree remove|--force|-f\b/u;
+
+test('programme turn: read checkouts over three served repositories — add --detach at origin/main for each, a remove for the clean leftover only, none for a dirty or an unreachable one, and no git call names plan/<programme>', () => {
+  const root = '/w';
+  const base = `${root}/runner/work/programme-turn-prog`;
+  const repos = ['a', 'b', 'c'].map((name) => ({ name, path: `/repos/${name}` }));
+  const world = ({ leftovers = [], dirty = [], unreachable = [] }) => {
+    const present = new Set(leftovers.map((name) => `${base}/${name}`));
+    const calls = [];
+    const git = (cwd, args) => {
+      calls.push([cwd, ...args]);
+      if (args[0] === 'status') return { ok: true, stdout: dirty.some((name) => cwd.endsWith(`/${name}`)) ? ' M x' : '' };
+      if (args[0] === 'merge-base') return { ok: !unreachable.some((name) => cwd.endsWith(`/${name}`)), stdout: '' };
+      if (args[0] === 'worktree' && args[1] === 'remove') { present.delete(args[2]); return { ok: true, stdout: '' }; }
+      if (args[0] === 'worktree' && args[1] === 'add') { present.add(args.at(-2)); return { ok: true, stdout: '' }; }
+      return { ok: true, stdout: '' };
+    };
+    return { calls, git, present, exists: (path) => present.has(path) };
+  };
+  const text = (calls) => calls.map((call) => call.join(' '));
+  const none = (calls) => assert.equal(text(calls).some((line) => line.includes('plan/prog')), false, 'no git call names plan/prog');
+
+  const clean = world({ leftovers: ['a'] });
+  const set = setUpReadCheckouts({ git: clean.git, root, programme: 'prog', repos, exists: clean.exists });
+  assert.deepEqual(set, { ok: true, paths: { a: `${base}/a`, b: `${base}/b`, c: `${base}/c` } });
+  for (const repo of repos) assert.ok(text(clean.calls).includes(`${repo.path} worktree add -q --detach ${base}/${repo.name} origin/main`), `${repo.name}: added detached at origin/main`);
+  assert.deepEqual(text(clean.calls).filter((line) => line.includes('worktree remove')), [`/repos/a worktree remove ${base}/a`], 'the clean leftover is removed, and only it');
+  assert.ok(text(clean.calls).indexOf(`/repos/a worktree remove ${base}/a`) < text(clean.calls).indexOf(`/repos/a worktree add -q --detach ${base}/a origin/main`), 'removed before it is added again');
+  assert.deepEqual(removeReadCheckouts({ git: clean.git, root, programme: 'prog', repos, exists: clean.exists }), []);
+  none(clean.calls);
+
+  for (const [kind, options] of [['a dirty leftover', { dirty: ['b'] }], ['a status-clean leftover whose HEAD origin/main lacks', { unreachable: ['b'] }]]) {
+    const held = world({ leftovers: ['b'], ...options });
+    const refused = setUpReadCheckouts({ git: held.git, root, programme: 'prog', repos, exists: held.exists });
+    assert.deepEqual(refused, { ok: false, retained: `${base}/b`, reason: `read checkout retained: ${base}/b` }, kind);
+    assert.equal(text(held.calls).some((line) => line.includes(`worktree remove ${base}/b`) || line.includes(`worktree add -q --detach ${base}/b`)), false, `${kind}: never removed, never added over`);
+    assert.equal(text(held.calls).some((line) => TOUCHING.test(line.split(' ').slice(1).join(' ')) && line.includes(`${base}/b`)), false, `${kind}: nothing that changes it`);
+    assert.equal(held.present.has(`${base}/a`), false, `${kind}: the checkout made before it is taken down again`);
+    assert.equal(text(held.calls).some((line) => line.includes(`${base}/c`)), false, `${kind}: none made after it`);
+    assert.deepEqual(removeReadCheckouts({ git: held.git, root, programme: 'prog', repos, exists: held.exists }), [`${base}/b`], `${kind}: a removal after a turn leaves it too`);
+    none(held.calls);
+  }
+});
+
+test('programme turn: a leftover read checkout that is clean and reachable is removed and made again; the turn plans from all of them', async () => {
+  const f = programmeFixture();
+  servedCheckouts(f);
+  f.dirs.add(readCheckout('memoro'));
+  const during = [];
+  f.answer = (call) => { during.push(['memoro', 'memoro-cli'].map((repo) => f.dirs.has(readCheckout(repo)))); return okSession()(call); };
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1);
+  const line = (call) => call.join(' ');
+  assert.ok(f.calls.git.some((call) => line(call) === `/home/memoro worktree remove ${readCheckout('memoro')}`), 'the clean leftover removed through git');
+  for (const repo of ['memoro', 'memoro-cli']) assert.ok(f.calls.git.some((call) => line(call) === `/home/${repo} worktree add -q --detach ${readCheckout(repo)} origin/main`), `${repo} added detached at origin/main`);
+  assert.deepEqual(during, [[true, true]], 'both stand while the session runs');
+  assert.match(f.calls.sessions[0].prompt, new RegExp(`${readCheckout('memoro')}`, 'u'));
+  assert.match(f.calls.sessions[0].prompt, new RegExp(`${readCheckout('memoro-cli')}`, 'u'));
+  assert.deepEqual(['memoro', 'memoro-cli'].map((repo) => f.dirs.has(readCheckout(repo))), [false, false], 'taken down after it');
+  assert.equal(f.calls.git.some((call) => call.some((arg) => String(arg).includes('plan/prog'))), false, 'plan/prog is never named');
+  assert.equal(f.calls.git.some((call) => call[0] === '/home/memoro' && call[1] === 'fetch'), true, 'fetched before the checkouts');
+});
+
+test('programme turn: a read checkout that holds work is retained — no session, the failure counted, said once, the second opening an item naming the path', async () => {
+  for (const [kind, options] of [['dirty', { dirty: ['memoro-cli'] }], ['unreachable', { unreachable: ['memoro-cli'] }]]) {
+    const f = programmeFixture();
+    const items = wireDesk(f);
+    servedCheckouts(f, options);
+    const kept = readCheckout('memoro-cli');
+    f.dirs.add(kept);
+    const runner = createRunner({ deps: f.deps });
+    const counts = [];
+    for (let pass = 0; pass < 2; pass += 1) { await runner.pass({ repo: 'memoro' }); counts.push(turnSessions(f).length); }
+    const [item] = items();
+    assert.deepEqual([item.kind, item.state], ['programme', 'prepared'], kind);
+    assert.ok(noRunnableTurn(runner), `${kind}: no turn while the item is open`);
+    await runner.pass({ repo: 'memoro' }); counts.push(turnSessions(f).length);
+    assert.deepEqual(counts, [0, 0, 0], `${kind}: no session on any pass`);
+    assert.equal(f.log.filter((line) => line.includes(`read checkout retained: ${kept}`)).length, 1, `${kind}: said once`);
+    const forbidden = f.calls.git.filter((call) => (call[0] === kept || call.includes(kept)) && !['status', 'merge-base'].includes(call[1]));
+    assert.deepEqual(forbidden, [], `${kind}: no reset, checkout, clean, remove or add on the retained path`);
+    assert.equal(f.calls.git.some((call) => call.includes('--force') || ['reset', 'clean', 'checkout'].includes(call[1])), false, kind);
+    assert.ok(f.dirs.has(kept), `${kind}: still there`);
+    assert.equal(f.dirs.has(readCheckout('memoro')), false, `${kind}: the checkout made before it is taken down again`);
+    assert.deepEqual(turnState(f).failures.map((failure) => failure.reason), [`read checkout retained: ${kept}`, `read checkout retained: ${kept}`], kind);
+    assert.ok(f.files[`${itemDirectory(item, f.deps.env)}/prepared.md`].includes(kept), `${kind}: prepared.md names the path`);
+  }
+});
+
+test('programme turn: another failure to add a read checkout is a setup failure, and a failing fetch counts nothing', async () => {
+  const f = programmeFixture();
+  servedCheckouts(f, { addFails: { 'memoro-cli': 'invalid reference: origin/main' } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(turnSessions(f), []);
+  assert.deepEqual(turnState(f).failures.map((failure) => failure.reason), ['setup: fatal: invalid reference: origin/main']);
+  assert.equal(f.dirs.has(readCheckout('memoro')), false, 'the checkout made before it is taken down again');
+
+  const offline = programmeFixture({ fetchFails: ['memoro-cli'] });
+  const down = createRunner({ deps: offline.deps });
+  await down.pass({ repo: 'memoro' });
+  await down.pass({ repo: 'memoro' });
+  assert.deepEqual(turnSessions(offline), []);
+  assert.equal(offline.files[TURN_STATE], undefined, 'nothing counted');
+  assert.ok(offline.log.some((line) => /programme:prog: fetch memoro-cli: could not read from remote — skip/u.test(line)));
+  assert.equal(offline.calls.git.some((call) => call[1] === 'worktree'), false, 'no checkout made when a fetch failed');
 });

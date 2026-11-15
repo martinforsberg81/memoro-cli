@@ -29,6 +29,14 @@ branch (the reason goes into the mend prompt), or `drop --reason "<text>"` to
 end it. `mc martin item <id> close` is refused while the entry still reads
 Martin; once you have answered, the close succeeds.
 
+A programme item is a planning turn that failed twice: the programme holds a
+valid open record and its page but no goal. Read its state file and each session
+log it names (the prompt gives both paths). Repair what failed within your reach,
+such as a retained read checkout, a stale lock or a page the turn could not read,
+then close it with `mc martin item <id> close --by decision --summary …` so the
+runner plans the programme again. A text of Martin's that would have to change
+goes to a brief instead; do not edit the page's End yourself.
+
 ## Decide here
 
 What is Martin's is what [asking-martin](../tasks/asking-martin.md) names.

@@ -10,6 +10,7 @@ import { writeJsonAtomic } from '../../src/mc/atomic-write.js';
 import { run as martin } from '../../src/mc/commands/martin.js';
 import { goalJson } from './_helpers/goal-file.js';
 import { NO_PROGRESS_STOP } from '../../src/mc/goals.js';
+import { writeDeskItem } from '../../src/mc/desk-items.js';
 
 const roots=[]; after(()=>roots.forEach(x=>rmSync(x,{recursive:true,force:true})));
 function fixture() { const root=mkdtempSync(join(tmpdir(),'mc-desk-items-')); roots.push(root); const env={MC_WORK_ROOT:join(root,'mc'),MC_HOME:join(root,'mc-home')}; const home=join(env.MC_WORK_ROOT,'programs'); mkdirSync(join(env.MC_WORK_ROOT,'runner','projects'),{recursive:true}); mkdirSync(join(home,'alpha','goals','one'),{recursive:true}); return {root,env,home,dir:join(home,'alpha','goals','one')}; }
@@ -397,6 +398,69 @@ test('a main-red repair that reaches Martin again after an answer is a new desk 
   assert.equal(reopened.state, 'new');
   assert.equal(all.find((item) => item.id === first.id).state, 'closed');
   assert.equal(items().length, 2, 'another sync opens nothing more');
+});
+
+/* ---- a programme item: the programme planning turn's */
+
+const PROGRAMME_RECORD = JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' });
+/** A programme `prog` with a record and a page, and the prepared item its planning turn opened. */
+function programmeItem(f, fields = {}) {
+  const dir = join(f.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
+  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n');
+  const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', stamp), kind: 'programme', reference: 'programme:prog', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
+  writeDeskItem(item, { env: f.env });
+  return item;
+}
+const turnStateAt = (f) => join(f.env.MC_WORK_ROOT, 'runner', 'programme-turn', 'prog.json');
+function writeTurnState(f, text) { mkdirSync(join(f.env.MC_WORK_ROOT, 'runner', 'programme-turn'), { recursive: true }); writeFileSync(turnStateAt(f), text); }
+const turnStateText = (...reasons) => JSON.stringify({ schema: 'mc-programme-turn', version: 1, programme: 'prog', failures: reasons.map((reason, index) => ({ at: `2026-11-14T10:0${index}:00Z`, reason, log: null })), items: [] });
+function syncProgramme(f) {
+  const issues = [];
+  const item = syncDeskItems({ env: f.env, home: f.home, now: () => new Date(stamp), read: fixtureRead, reportIssue: (issue) => issues.push(issue) }).find((one) => one.reference === 'programme:prog');
+  return { item, issues };
+}
+
+test('a programme item closes by source when the programme holds a goal, its record no longer reads valid and open, or its directory is gone', () => {
+  const open = fixture(); programmeItem(open);
+  assert.equal(syncProgramme(open).item.state, 'prepared', 'a programme with no goal keeps its item open');
+  writeFileSync(join(open.home, 'prog', 'goals', '.hold.json'), '{}');
+  assert.equal(syncProgramme(open).item.state, 'prepared', 'a dot-entry of goals/ is no goal');
+
+  const goal = fixture(); programmeItem(goal);
+  mkdirSync(join(goal.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(goal.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
+  const held = syncProgramme(goal).item;
+  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'The programme now holds a goal.']);
+
+  for (const [kind, record] of [['done', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' })], ['invalid', '{ not json']]) {
+    const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
+    const closed = syncProgramme(f).item;
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and open.'], kind);
+  }
+
+  const gone = fixture(); programmeItem(gone); rmSync(join(gone.home, 'prog'), { recursive: true, force: true });
+  const missing = syncProgramme(gone).item;
+  assert.deepEqual([missing.state, missing.outcome.by, missing.outcome.summary], ['closed', 'source', 'The programme directory is gone.']);
+});
+
+test('a programme item whose turn state cannot be read stays open, and the sync reports the file', () => {
+  const f = fixture(); programmeItem(f);
+  mkdirSync(join(f.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(f.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
+  writeTurnState(f, '{ not json');
+  const { item, issues } = syncProgramme(f);
+  assert.equal(item.state, 'prepared', 'not closed on a source that could not be read, though the programme holds a goal');
+  const reported = issues.filter((issue) => issue.path === turnStateAt(f));
+  assert.equal(reported.length, 1, 'the unreadable state file is reported');
+  assert.match(reported[0].error, /not JSON/u);
+});
+
+test('a programme item is labelled by the reason of the last failure in its turn state', () => {
+  const f = fixture(); const item = programmeItem(f);
+  const ask = () => deskItemQuestion(item, { env: f.env, home: f.home, read: fixtureRead });
+  assert.equal(ask(), 'Source reason unavailable.', 'no state file: no label to give');
+  writeTurnState(f, turnStateText('planning session exited 0 with the programme holding no goal (a)', 'read checkout retained: /w/runner/work/programme-turn-prog/memoro'));
+  assert.equal(ask(), 'read checkout retained: /w/runner/work/programme-turn-prog/memoro');
+  writeTurnState(f, '{ not json');
+  assert.equal(ask(), 'Source reason unavailable.', 'an unreadable state file gives none');
 });
 
 test('a text item is labelled by its text, a sync neither closes nor opens another for it, and an old-sort or due record still reads', () => {

@@ -81,6 +81,13 @@ twice, never the phase itself, no cycle), the rule, what renumbering does to
 it and what is shown are in [mc-goals.md](mc-goals.md#phases). A `phases` of
 another form is a problem, so the record is invalid.
 
+The record is also what lets the runner plan the programme with nobody present:
+a programme with a valid `open` record, a `README.md` and no goal gets one
+headless planning turn that cuts its phases and goals inside the page's End
+([mc-run.md](mc-run.md#programme-planning-turn)). A programme with no record, or
+with an invalid one, is never started that way; `mc plan` stays the person's
+entrance.
+
 The slug is not checked against the desk's horizons: mc stores what it is
 given. Its reader says `none`, `valid` or `invalid` with the problems; a
 record is validated before every write and a write never replaces a file that

@@ -42,8 +42,8 @@ build session. The programme aim is written in
 Martin opens interactive planning with `mc plan`; a session never runs that
 command. With Martin at the terminal you have full freedom toward the programme aim.
 
-When `MC_HEADLESS=1`, the runner assigns exactly one next draft, named by
-`MC_GOAL`. It starts only when the programme has at least one draft and all
+When `MC_HEADLESS=1` and `MC_GOAL` names a draft, the runner assigns exactly
+that one next draft. It starts only when the programme has at least one draft and all
 its goals are draft, done or dropped. The next draft is the lowest phase,
 then oldest creation time, then name. A first draft waiting on Martin or held, or
 unreadable goal data, holds automatic planning. A programme with no drafts
@@ -70,6 +70,29 @@ goal's worktrees on its goal branch, as the launch prompt says; the interactive
 planning checkouts remain separate. Reserved acts retain their headless boundary.
 The runner contains an incomplete session that leaves draft ready so it cannot
 launch indefinitely without progress.
+
+## The headless programme turn
+
+When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme but `MC_GOAL` is not
+set, you are the programme's one planning turn: it holds a valid open record and
+its page, and no goals. The launch prompt gives the programme directory, its
+README, the horizon command when the record names a horizon, and read
+checkouts of the served repositories, detached at origin/main. Read the page and
+`mc programs show <programme>` first, then the code in the checkouts. Change
+nothing there, commit nothing and create no branch.
+
+Cut the goals inside the page's End and nowhere else. Create every goal as a
+draft first, each with its title, phase and outcome through `mc goal`; state a
+stated programme's dependencies with `mc programs after`. Then take the drafts
+in turn: complete one as for a next draft, read it with `mc goal plan-review`,
+repair what the reading finds, and move it to `build` in its phase before the
+next. A product question, or a text of Martin's that would change, goes through
+goal-bound `mc ask --kind product` on the draft that needs it; the other drafts
+go on. Do not implement a goal, process proposals or plan beyond the page.
+
+The turn ends when you stop. A turn that leaves the programme holding no goal
+counts as a failure; drafts left unfinished are planned by the next-draft
+sessions that follow and are not set to Martin.
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 

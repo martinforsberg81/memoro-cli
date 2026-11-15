@@ -136,8 +136,8 @@ preparation, decisions and the interactive desk. Its schema is
 `mc-desk-item` version 1; `id` is a stable digest of kind, reference and
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
-(`lesson:<name>`, written only by `mc martin lesson brief`, never by sync) and `text`
-(`text:<the text>`, written only by `mc martin propose`, never by sync). A goal's source time
+(`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing.
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
@@ -165,6 +165,20 @@ are reported and preserve the item: absence from the live queue alone is not
 resolution. One absence is resolution: a goal whose directory has left `goals/` and stands in the programme's `goals/.archive/` with a readable `done` or `dropped` state closes its item by source, with that state and the drop's reason as the outcome. A goal otherwise closes only on a readable finished/non-Martin state or an
 established later question; a main-red closes only on readable state showing
 that its entry no longer waits. Chores syncs once each round.
+
+A `programme` item is the programme planning turn's second failure
+([mc-run.md](mc-run.md#programme-planning-turn)): the first is `prepared` with a
+model-free `prepared.md`, a later one `for-martin` (sort mechanical, not
+reversible, no due time) with a Swedish `brief.md`. Its source is the
+programme's record, directory and goals, and the turn's state file
+`runner/programme-turn/<programme>.json`. Sync closes it by source when the
+programme holds a goal, its record no longer reads valid and `open`, or its
+directory is gone; an unreadable state file is reported and keeps it open (an
+unreadable record reads invalid and closes it). A decision session answers it at its source: it repairs what failed within
+reach and closes it `--by decision`, so the runner plans again, and a text of
+Martin's that would have to change goes to a brief. The opening lists one decided
+under the programme's name, and a `for-martin` one, being mechanical, among the
+stuck items of **Not ready**: it is the runner's, not his.
 
 A main-red item is answered at its source: `mc repo mend <repo> <id>
 requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item
