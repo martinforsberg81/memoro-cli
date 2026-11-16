@@ -82,11 +82,13 @@ affected contracts. Preserve checks and evidence. Then close each settled
 item: `mc martin item <id> close --by decision --summary …`. The summary is two
 or three sentences Martin could read, in Swedish, saying what changed and why.
 
-### A goal defect, and a stop for no progress
+### A goal defect, and a stop for no progress or five build sessions
 
 An item whose first line begins `goal defect:` is a session saying the goal's
 text is wrong; one whose reason begins `no progress:` is the runner having
-stopped a build that met no criterion and committed nothing three times. Both
+stopped a build that met no criterion and committed nothing three times, or
+one that had five build sessions without leaving build
+(`no progress: five build sessions …`). All
 are technical or mechanical, not Martin's, until the text is amended and fails
 again. Decide them so:
 

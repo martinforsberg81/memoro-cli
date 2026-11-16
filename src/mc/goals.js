@@ -504,11 +504,40 @@ export const NOT_COUNTED = 'session not counted for progress';
 export const WAITS_FOR_MAIN = `${NOT_COUNTED}: main-red repair unfinished`;
 export const PROGRESS_AGAIN = 'progress again';
 export const NO_PROGRESS_STOP = `no progress: three build sessions in a row met no criterion and committed nothing`;
+/**
+ * The runner's cap on build sessions (Martin, 2026-11-16): the fifth build session since the count began
+ * (`buildSessionCount`) that ends with the goal still in `build · ready` stops it, progress or not. A session that
+ * made progress with no no-progress count running gets the runner's `BUILD_SESSION` entry, so every build session the
+ * runner judges leaves exactly one runner entry the count reads. The stop's comment begins `no progress:`, so the desk,
+ * martin-collect and the decision pass take it up as the three-in-a-row stop.
+ */
+export const BUILD_SESSION_LIMIT = 5;
+export const BUILD_SESSION = 'build session';
+export const BUILD_SESSION_STOP = 'no progress: five build sessions without the goal leaving build';
 
-/** Whether the entry is a runner entry of a session judged (`NO_PROGRESS_SESSION`) or left unjudged (`NOT_COUNTED`): not a session that ended without a word. */
+/** Whether the entry is a runner entry of a session judged (`NO_PROGRESS_SESSION`, `PROGRESS_AGAIN`, `BUILD_SESSION`) or left unjudged (`NOT_COUNTED`): not a session that ended without a word. */
 export function noProgressEntry(entry) {
   const comment = String(entry.comment ?? '');
-  return entry.tool === 'runner' && (comment.startsWith(NO_PROGRESS_SESSION) || comment.startsWith(NOT_COUNTED));
+  return entry.tool === 'runner' && [NO_PROGRESS_SESSION, NOT_COUNTED, PROGRESS_AGAIN, BUILD_SESSION].some((word) => comment.startsWith(word));
+}
+
+/**
+ * How many build sessions the runner has judged since the count began, from LOG.md: its `noProgressEntry` entries in
+ * stage `build`, back to the goal's start in build (an entry in `draft`) or to the last entry by someone other than the
+ * runner or a build session (a desk, decision, plan, review or person entry) that set status `ready` from another
+ * status — the goal set ready after a stop. A change of stage alone (back from review) does not start it again.
+ * Silent sessions are the three-silent rule's (`goalWithoutWord`) and are not counted here.
+ */
+export function buildSessionCount(log) {
+  let count = 0;
+  for (let i = log.length - 1; i >= 0; i -= 1) {
+    const entry = log[i];
+    if (entry.stage === 'draft') break;
+    const resumed = entry.status === 'ready' && entry.tool !== 'runner' && entry.role !== 'build' && i > 0 && log[i - 1].status !== 'ready';
+    if (resumed) break;
+    if (entry.stage === 'build' && noProgressEntry(entry)) count += 1;
+  }
+  return count;
 }
 
 /**

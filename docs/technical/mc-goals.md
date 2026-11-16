@@ -1068,8 +1068,31 @@ session followed by two silent ones does not set Martin, while three silent
 sessions with nothing between still do. An unreadable head, and a quota, login
 or offline ending, are not counted. A session without progress while a main-red repair of one of the goal's repositories is queued, running or published is not counted either: the runner writes one entry whose comment begins `session not counted for progress: main-red repair unfinished in <repo> (<entry ids>)`, leaves the goal `build · ready`, and starts no build session on it until no such repair remains (the pick, step 2, in [mc-run.md](mc-run.md)). A repair in state `Martin` does not hold a build, and a repair state that cannot be read does not either. The stopped goal loses nothing: its branch,
 worktree, pull request and log stay, and `mc goal ready` after the desk has
-amended the text continues it. Progress is never stopped: the count looks
-only at sessions that did nothing. `blocked` is for
+amended the text continues it. The count of sessions without progress looks
+only at sessions that did nothing.
+
+**Five build sessions stop a goal, progress or not** (Martin, 2026-11-16: a goal
+ran 28 build sessions, each committing something, and the three-in-a-row stop
+never tripped). Every build session the runner judges above leaves exactly one
+runner entry in stage `build` — `no progress this session (n of 3)`,
+`progress again: …`, `session not counted for progress: …`, or, for a session
+that made progress with no count running, `build session (n of 5): met … of …
+criteria, heads …` — and `buildSessionCount` (`goals.js`) counts those
+entries. The fifth (`BUILD_SESSION_LIMIT`) that ends with the goal still in
+`build · ready` is instead one runner entry with status `Martin` whose comment
+begins `no progress: five build sessions without the goal leaving build` and
+carries the heads, the criteria count and the last `Next`, so the desk, its
+sort `mechanical` and the decision pass treat it as the three-in-a-row stop;
+when both apply, the three-in-a-row stop is written. The count begins when
+the goal came to build from `draft`, and starts again only when someone other
+than the runner or a build session (the desk, the decision pass, a plan, a
+review or a person) sets status `ready` from another status — the goal set
+ready after a stop. A change of stage alone, such as a review sending the goal
+back to build, does not start it again: five build sessions are five, whatever
+reviews lie between them. Sessions that end without a word, and quota, login or
+offline endings, are not counted here; the three-silent rule covers the first.
+The runner's count entries are skipped by the three-silent rule as its
+no-progress entries are. `blocked` is for
 compatibility only: a `blocked` goal before merge, left by an older session, is
 reconciled to Martin by the runner without a session and wakes no mend. A build session
 publishes; it never authorizes PR landing, sets `done` or moves the goal
@@ -1370,7 +1393,7 @@ Each stage has one owner, and a goal passes each once:
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
   when it is complete (*Completeness gate*). (Named `plan` until 2026-11-07.)
-- `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
+- `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met, or five build sessions since it began building or was last set ready after a stop, stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
 - `merge` — the merger's; the runner starts no session, except one mend session for an unqueued merge failure.

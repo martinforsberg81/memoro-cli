@@ -194,7 +194,7 @@ order without a model call:
    and once it is no longer in the merger's line. A merge failure or a queued main-red request wakes a mend session; legacy blocked work outside merge is reconciled to Martin without a launch; `finish · ready` (a name kept for old records) is moved to `build · ready` with a log entry before any session starts, and a build in `build · ready` after a review's rejection is a repair build. `Martin`
    waits for the desk decision pass, not a delivery session: this includes a
    goal reported by `mc goal defect` and one stopped after three build sessions
-   without progress (`no progress:`; *What a build session does* in
+   without progress or after five build sessions (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` do not start a
    delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded ready programme whose README.md has parts no goal names gets the programme planning turn (*Programme planning turn*).
 3. Hold any goal whose phase is not open in its programme. The runner reads
