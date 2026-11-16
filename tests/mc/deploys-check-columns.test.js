@@ -45,8 +45,10 @@ const rowFor = (header, n) => Object.fromEntries(header.map((name) => [name, nam
 test('the check columns follow the versions and the take-back columns come last', () => {
   assert.deepEqual(CHECK_COLUMNS, ['check', 'check_at', 'check_why']);
   assert.deepEqual(TAKES_BACK_COLUMNS, ['takes_back', 'takes_back_sha', 'takes_back_why']);
-  assert.deepEqual(DEPLOYS_HEADER.slice(-3), TAKES_BACK_COLUMNS);
-  assert.equal(DEPLOYS_HEADER.length, 26);
+  // The gate's `output_path` (2026-11-16) was appended after them: a column is added at the end, never inserted.
+  assert.deepEqual(DEPLOYS_HEADER.slice(-4, -1), TAKES_BACK_COLUMNS);
+  assert.equal(DEPLOYS_HEADER.at(-1), 'output_path');
+  assert.equal(DEPLOYS_HEADER.length, 27);
   assert.equal(DEPLOYS_HEADER.indexOf('versions_why') + 1, DEPLOYS_HEADER.indexOf('check'));
   assert.equal(DEPLOYS_HEADER.indexOf('check_why') + 1, DEPLOYS_HEADER.indexOf('takes_back'));
 });
