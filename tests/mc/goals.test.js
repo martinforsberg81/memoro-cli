@@ -936,7 +936,17 @@ test('renumberPhases keeps each stated dependency on the phase it was stated for
   const made = renumberPhases({ home: '/h', programme: 'prog', list, read: io.read, write: io.write });
   assert.deepEqual(made.map((move) => [move.goal.goal, move.from, move.to]), [['b', 2, 1], ['c', 3, 2], ['e', 5, 3]]);
   assert.deepEqual(JSON.parse(io.store[RECORD_PATH]).phases, { order: 'stated', after: { 2: [1], 3: [1, 2] } });
-  assert.deepEqual(Object.keys(JSON.parse(io.store[RECORD_PATH])), [...Object.keys(PROG_RECORD), 'phases']);
+  // A real write upgrades the legacy record; renumbering preserves its other values.
+  assert.deepEqual(JSON.parse(io.store[RECORD_PATH]), {
+    ...PROG_RECORD,
+    version: 2,
+    phases: { order: 'stated', after: { 2: [1], 3: [1, 2] } },
+    signed_at: null,
+    signed_by: null,
+    signed_text: null,
+    cut_text: null,
+    legacy: true,
+  });
 });
 
 test('renumberPhases writes no record where there is none, and leaves a record without phases or an invalid one as it is', () => {
