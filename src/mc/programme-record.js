@@ -277,6 +277,25 @@ export function returnRecord(dir, options = {}) {
   return replaceRecord(dir, (record) => ({ ...record, state: 'draft', signed_at: null, signed_by: null, signed_text: null }), options, 'programme-return', { state: 'open' });
 }
 
+/**
+ * The planning turn's one completion write: `cut_text` takes `signed`, the signature the turn launched on, and nothing
+ * else changes. Under the strict lock, on a fresh read: a record no longer `open` is `returned` (draft) or `settled`
+ * (done, dropped), a signature other than `signed` is `resigned` (a newer sign-off is never consumed by an older turn),
+ * an unsigned legacy or area record is `settled`, and `check({ record })` returning problems is `incomplete`. Each leaves
+ * the record as it was. Returns `{ ok: true, record, changed }` or `{ ok: false, status, problems }`.
+ */
+export function cutRecord(dir, { signed, check = () => [], ...options } = {}) {
+  return replaceRecord(dir, (record) => {
+    if (record.state === 'draft') return { status: 'returned', problems: ['state: the programme was returned to draft'] };
+    if (record.state !== 'open') return { status: 'settled', problems: [`state: reads ${record.state}`] };
+    if (record.legacy === true || record.signed_text === null) return { status: 'settled', problems: ['the record carries no signature to cut from'] };
+    if (record.signed_text !== signed) return { status: 'resigned', problems: ['signed_text: a newer signature than the turn read'] };
+    const problems = check({ record });
+    if (problems.length) return { status: 'incomplete', problems };
+    return { ...record, cut_text: signed };
+  }, options, 'programme-cut');
+}
+
 /** Shelving and its reason belong to the command; this writer never moves or deletes a directory. */
 export function dropRecord(dir, options = {}) {
   return replaceRecord(dir, (record) => ({ ...record, state: 'dropped' }), options, 'programme-drop', { state: 'draft' });
@@ -289,7 +308,7 @@ function replaceRecord(dir, change, { root = workRoot(), lock = realLock, read, 
     if (found.status !== 'valid') return { ok: false, status: found.status, problems: found.problems ?? [] };
     if (state && found.record.state !== state) return { ok: false, status: 'refused', problems: [`state: must be ${state}, reads ${found.record.state}`] };
     const record = change(found.record);
-    if (record.problems) return { ok: false, status: 'refused', problems: record.problems };
+    if (record.problems) return { ok: false, status: record.status ?? 'refused', problems: record.problems };
     const problems = validateRecord(record);
     if (problems.length) return { ok: false, status: 'refused', problems };
     const changed = JSON.stringify(record) !== JSON.stringify(found.record);

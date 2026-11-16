@@ -1,5 +1,6 @@
 import { createDiskPressure } from '../../src/mc/disk-pressure.js';
 import { effortArgs as codexEffortArgs } from '../../src/adapters/codex.js';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -6113,12 +6114,20 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
 const PROG = '/w/programs/prog';
 const TURN_STATE = '/w/runner/programme-turn/prog.json';
 const readCheckout = (repo) => `/w/runner/work/programme-turn-prog/${repo}`;
-const recordWith = (changes) => `${JSON.stringify({ ...JSON.parse(plainText()), ...changes }, null, 2)}\n`;
+/** The signed document a turn cuts: two parts. A record is signed on its bytes (`signed_text`); `cut_text` null is not yet cut. */
+const SIGNED_MD = '# prog\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
+const SIGNED_AT = `${PROG}/SIGNED.md`;
+const SIGNED_SHA = createHash('sha256').update(SIGNED_MD).digest('hex');
+/** `text` (a record) as a v2 record signed on SIGNED_MD, `changes` applied: a programme a turn can cut. */
+const signedOf = (text, changes = {}) => `${JSON.stringify({ ...JSON.parse(text), version: 2, signed_at: '2026-11-14T11:00:00Z', signed_by: 'martin', signed_text: SIGNED_SHA, cut_text: null, ...changes }, null, 2)}\n`;
+const cutOf = (text) => signedOf(text, { cut_text: SIGNED_SHA });
+const recordWith = (changes) => signedOf(plainText(), changes);
 
 /** A programme `prog` with a record and a README and no goal, as a turn finds it; `goals` are goals it already holds. */
-function programmeFixture({ record = plainText(), readme = true, goals = {}, ...options } = {}) {
+function programmeFixture({ record = signedOf(plainText()), readme = true, signedDocument = true, goals = {}, ...options } = {}) {
   const f = goalFixture(goals, options);
   if (record !== null) f.files[RECORD_AT] = record;
+  if (signedDocument) f.files[SIGNED_AT] = SIGNED_MD;
   if (readme) f.files[`${PROG}/README.md`] = '# prog\n\nEnd: Done when it holds.\n';
   return f;
 }
@@ -6128,10 +6137,11 @@ function wireDesk(f) {
   f.deps.deskItems = { list: items, read: (id) => items().find((item) => item.id === id) ?? null };
   return items;
 }
-/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them. */
+/** What a turn's session leaves in the programme: goals as `mc goal new` and `mc goal stage` write them, each naming `parts` of SIGNED.md. */
 function writesGoals(f, goals) {
-  for (const [name, { stage = 'draft', phase = 1 }] of Object.entries(goals)) {
-    const text = goalJson({ stage, status: 'ready', phase, repos: ['memoro'], title: name, goal: [], prs: [] });
+  for (const [name, { stage = 'draft', phase = 1, parts = [1, 2] }] of Object.entries(goals)) {
+    const documents = parts.length ? [{ label: `Signed design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: SIGNED_AT }] : [];
+    const text = goalJson({ stage, status: 'ready', phase, repos: ['memoro'], title: name, goal: [], prs: [], documents });
     f.files[`${GOALS}/${name}/GOAL.json`] = stage === 'draft' ? withGoal(text, { success_criteria: [] }) : text;
     f.files[`${GOALS}/${name}/LOG.md`] = '';
     f.dirs.add(`${GOALS}/${name}/memoro`);
@@ -6201,8 +6211,8 @@ test('programme return leaves a running build free to finish and a queued merge 
   assert.match(goalEntries(f, 'queued').at(-1).done, /landed memoro#31/u);
 });
 
-test('programme turn: a recorded open programme with a README and no goals gets one turn at the next pick, sequential and stated alike', async () => {
-  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
+test('programme turn: a signed open programme whose signature is not yet cut gets one turn at the next pick, sequential and stated alike', async () => {
+  for (const [kind, record] of [['sequential', signedOf(plainText())], ['stated', signedOf(statedText())]]) {
     const f = programmeFixture({ record });
     const runner = createRunner({ deps: f.deps });
     assert.equal(runner.nextWork().name, 'programme:prog', `${kind}: the turn is the pick`);
@@ -6221,8 +6231,7 @@ test('programme turn: a recorded open programme with a README and no goals gets 
     assert.equal('MC_GOAL' in call.env, false, `${kind}: no MC_GOAL`);
     assert.ok(call.unsetEnv.includes('MC_GOAL'), `${kind}: an inherited MC_GOAL is removed`);
     assert.equal(call.cwd, PROG, `${kind}: in the programme directory`);
-    assert.match(call.prompt, new RegExp(`${PROG}/README\\.md`, 'u'), kind);
-    assert.match(call.prompt, /\bEnd\b/u, kind);
+    assert.match(call.prompt, new RegExp(`${PROG}/SIGNED\\.md`, 'u'), `${kind}: the signed document is what it reads`);
     assert.deepEqual(seen.currents.map((current) => [current.name, current.kind, current.programme]), [['programme:prog', 'plan', 'prog']], `${kind}: its current record while it runs`);
     assert.equal(seen.claimed, true, `${kind}: its claim while it runs`);
     assert.equal(seen.next, null, `${kind}: no second turn of the programme while it runs`);
@@ -6240,9 +6249,9 @@ test('programme turn: no turn for a programme that is not eligible, and another 
     ['an invalid record', (f) => { f.files[RECORD_AT] = '{ not json'; }],
     ['a record in state done', (f) => { f.files[RECORD_AT] = recordWith({ state: 'done' }); }],
     ['no README.md', (f) => { delete f.files[`${PROG}/README.md`]; }],
-    ['a draft in goals/', goalAt(`${GOALS}/a-draft/GOAL.json`)],
-    ['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }],
-    ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }],
+    ['a legacy record that carries no signature', (f) => { f.files[RECORD_AT] = plainText(); }],
+    ['a record in state draft', (f) => { f.files[RECORD_AT] = draftRecordText(); }],
+    ['a record already cut from its signature', (f) => { f.files[RECORD_AT] = cutOf(plainText()); }],
     ['an open desk item of kind programme', (f) => { wireDesk(f); f.files['/w/martin/items/x/item.json'] = JSON.stringify({ id: 'x', kind: 'programme', reference: 'programme:prog', state: 'for-martin', sort: 'mechanical', reversible: false, due_at: null }); }],
     ['a horizon that is reached', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'reached' }); }],
     ['a horizon that is dropped', (f) => { f.files[RECORD_AT] = recordWith({ horizon: 'h' }); f.deps.horizon = () => ({ state: 'dropped' }); }],
@@ -6257,10 +6266,12 @@ test('programme turn: no turn for a programme that is not eligible, and another 
     assert.deepEqual(turnSessions(f), [], `${kind}: no session`);
     assert.equal(f.files[TURN_STATE], undefined, `${kind}: nothing counted`);
   }
-  // Dot-entries of goals/ are not goals: the programme is eligible.
-  const dots = programmeFixture();
-  dots.files[`${GOALS}/.hold.json`] = '{}';
-  assert.equal(createRunner({ deps: dots.deps }).nextWork().name, 'programme:prog', 'a dot-entry alone is no goal');
+  // Goals do not keep a signature that is not cut from the turn: a draft, a goal with no file and an archived one are all due.
+  for (const [kind, make] of [['a draft in goals/', goalAt(`${GOALS}/a-draft/GOAL.json`)], ['a goal directory with no goal file', (f) => { f.files[`${GOALS}/unreadable/LOG.md`] = ''; }], ['an entry in goals/.archive/', (f) => { f.files[`${GOALS}/.archive/old/LOG.md`] = ''; }], ['a dot-entry', (f) => { f.files[`${GOALS}/.hold.json`] = '{}'; }]]) {
+    const holding = programmeFixture();
+    make(holding);
+    assert.equal(createRunner({ deps: holding.deps }).nextWork().name, 'programme:prog', `${kind}: the turn is due while the signature is not cut`);
+  }
   // A horizon that is not open is said once over two passes.
   const reached = programmeFixture({ record: recordWith({ horizon: 'h' }) });
   reached.deps.horizon = () => ({ state: 'reached' });
@@ -6288,9 +6299,9 @@ function draftedProgramme(record) {
 }
 
 test('programme turn: while a turn is claimed or current no next-draft plan session of its programme starts — at the pick or at its admission — and one does once it has ended', async () => {
-  for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
+  for (const [kind, record] of [['sequential', signedOf(plainText())], ['stated', signedOf(statedText())]]) {
     // (a) The claim taken, no current record yet: the pick offers the draft to nobody.
-    const claimed = draftedProgramme(record);
+    const claimed = draftedProgramme(cutOf(record));
     const held = createRunner({ deps: claimed.deps });
     assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: without the claim the draft is the pick`);
     held.claims.add('programme:prog');
@@ -6301,7 +6312,7 @@ test('programme turn: while a turn is claimed or current no next-draft plan sess
     assert.equal(held.nextWork().name, 'goal:prog/d1', `${kind}: the claim released, the draft is the pick`);
 
     // (c) The claim taken while a next-draft session is admitted: it yields and launches nothing.
-    const admitted = draftedProgramme(record);
+    const admitted = draftedProgramme(cutOf(record));
     const admitting = createRunner({ deps: admitted.deps });
     admitted.deps.attachDeps = async () => { admitting.claims.add('programme:prog'); return { ok: true }; };
     assert.equal((await admitting.pass({ repo: 'memoro' })).ran, 0, `${kind}: admission`);
@@ -6333,7 +6344,7 @@ test('programme turn: while a turn is claimed or current no next-draft plan sess
 });
 
 test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left is next-draft planning\'s, stated programme', async () => {
-  const f = programmeFixture({ record: statedText() });
+  const f = programmeFixture({ record: signedOf(statedText()) });
   const items = wireDesk(f);
   f.answer = (call) => {
     if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
@@ -6341,7 +6352,8 @@ test('programme turn: a turn that leaves goals writes no failure and no item; th
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.match(runRows(f.files)[0].note, /2 goals$/u, 'the note says how many goals the programme holds');
+  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u, 'the note says how many goals the programme holds and that it cut');
+  assert.equal(JSON.parse(f.files[RECORD_AT]).cut_text, SIGNED_SHA, 'cut_text takes the signature the turn launched on');
   assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), [], 'no item');
   assert.equal(where(f, 'two'), 'draft · ready', 'the draft left is not set Martin');
@@ -6352,7 +6364,7 @@ test('programme turn: a turn that leaves goals writes no failure and no item; th
 });
 
 test('programme turn: a turn that leaves goals writes no failure and no item; the draft it left waits for the sequential trigger', async () => {
-  const f = programmeFixture({ record: plainText() });
+  const f = programmeFixture({ record: signedOf(plainText()) });
   const items = wireDesk(f);
   f.answer = (call) => {
     if (call.env.MC_PROGRAMME) writesGoals(f, { one: { stage: 'build', phase: 1 }, two: { phase: 2 } });
@@ -6360,7 +6372,7 @@ test('programme turn: a turn that leaves goals writes no failure and no item; th
   };
   const runner = createRunner({ deps: f.deps });
   assert.equal((await runner.pass({ repo: 'memoro' })).name, 'programme:prog');
-  assert.match(runRows(f.files)[0].note, /2 goals$/u);
+  assert.match(runRows(f.files)[0].note, /2 goals,cut from the signature$/u);
   assert.equal(f.files[TURN_STATE], undefined, 'no failure');
   assert.deepEqual(items(), [], 'no item');
   assert.equal(where(f, 'two'), 'draft · ready');
@@ -6380,7 +6392,7 @@ test('programme turn: the second failure opens a prepared item, a closed one let
   const pass = async () => (await runner.pass({ repo: 'memoro' })).ran;
   assert.equal(await pass(), 1);
   assert.equal(turnState(f).failures.length, 1, 'one failure written');
-  assert.match(turnState(f).failures[0].reason, /^planning session exited 0 with the programme holding no goal/u);
+  assert.match(turnState(f).failures[0].reason, /^planning session exited 0 without a goal naming every part of the signed document/u);
   assert.deepEqual(items(), [], 'the first failure opens nothing and the next pick may try again');
   assert.equal(await pass(), 1, 'tried again');
   assert.equal(turnState(f).failures.length, 2);

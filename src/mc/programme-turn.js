@@ -1,17 +1,19 @@
 /**
  * The programme planning turn, model-free (mc-run.md, "Programme planning turn").
  *
- * A programme with a record, a page and no goals is planned by one headless plan
+ * A programme whose signed document has not yet been cut is planned by one headless plan
  * session with nobody present. Everything here is what the runner decides around
  * that session without a model: whether a programme is due, the state file that
  * counts the turns that failed, the desk item the second failure opens, and the
  * read checkouts the turn stands beside. The runner (`run.js`) supplies its own
  * file reads, lock and git, so a fixture drives all of it in memory.
  */
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { join, resolve } from 'node:path';
 import { deskItemId } from './desk-items.js';
+import { ARCHIVE_DIR, GOAL_FILE, GOALS_DIR, parseGoal } from './goals.js';
 import { NAME_RE } from './plan-schema.js';
-import { readRecord } from './programme-record.js';
+import { cutRecord, readRecord } from './programme-record.js';
 
 export const TURN_SCHEMA = 'mc-programme-turn';
 export const TURN_VERSION = 1;
@@ -66,24 +68,88 @@ export function failuresSinceItem(state) {
 /** The names of the programme directories under `home`. */
 export const programmeDirs = ({ home, list }) => list(home).filter((name) => NAME_RE.test(name)).sort();
 
-/** Whether the programme holds a goal: any entry of `goals/` but a dot-entry, or any entry of `goals/.archive/`. */
-export function holdsGoals({ home, programme, list }) {
-  return goalCount({ home, programme, list }) > 0;
-}
-
 /** How many goals the programme holds now: the entries of `goals/` but a dot-entry, and of `goals/.archive/`. */
 export function goalCount({ home, programme, list }) {
   const goals = join(home, programme, 'goals');
   return list(goals).filter((name) => !name.startsWith('.')).length + list(join(goals, '.archive')).length;
 }
 
+/** The `### Part n —` headings of the signed document's `## Parts` entry (fenced examples do not count), as numbers. */
+export function signedParts(text) {
+  const lines = String(text ?? '').replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u);
+  const start = lines.indexOf('## Parts');
+  if (start < 0) return [];
+  let end = lines.findIndex((line, at) => at > start && /^## /u.test(line));
+  if (end < 0) end = lines.length;
+  return lines.slice(start + 1, end).flatMap((line) => {
+    const found = /^### Part ([1-9]\d*)\s+—\s+\S/u.exec(line);
+    return found ? [Number(found[1])] : [];
+  });
+}
+
+/** The part numbers one document label names: `Part 1; Part 2`, `Parts 1, 2 and 4`. No range is read. */
+export function partsNamed(label) {
+  const named = new Set();
+  for (const found of String(label ?? '').matchAll(/\bParts?\s+(\d+(?:\s*(?:,|;|&|and)\s*\d+)*)/giu)) {
+    for (const number of found[1].match(/\d+/gu)) named.add(Number(number));
+  }
+  return named;
+}
+
+/**
+ * The parts of the signed document the programme's goals name, live and archived (mc-goals.md, "Part association"): a
+ * document of a goal whose path is this programme's `SIGNED.md`, labelled with explicit `Part n` references. A goal that
+ * does not parse, or points elsewhere, names nothing.
+ */
+export function partsCut({ home, programme, list, read }) {
+  const signed = resolve(join(home, programme, 'SIGNED.md'));
+  const goals = join(home, programme, GOALS_DIR);
+  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => join(goals, name)),
+    ...list(join(goals, ARCHIVE_DIR)).map((name) => join(goals, ARCHIVE_DIR, name))];
+  const named = new Set();
+  for (const dir of dirs) {
+    let text;
+    try { text = read(join(dir, GOAL_FILE)); } catch { continue; }
+    if (text == null) continue;
+    const parsed = parseGoal(text);
+    if (parsed.problems) continue;
+    for (const document of parsed.documents ?? []) {
+      if (typeof document?.path !== 'string' || resolve(document.path) !== signed) continue;
+      for (const part of partsNamed(document.label)) named.add(part);
+    }
+  }
+  return named;
+}
+
+/**
+ * The problems that keep a signed document from being cut: none when `record`'s signed document, read as `SIGNED.md` in
+ * the programme directory, matches its signature and every one of its parts is named by a goal. The runner's completion
+ * write, the desk's failure-item closure and the model-free tests share this one predicate.
+ */
+export function cutProblems({ home, programme, record, list, read }) {
+  if (typeof record.signed_text !== 'string') return ['the record carries no signature'];
+  let text;
+  try { text = read(join(home, programme, 'SIGNED.md')); } catch { text = null; }
+  if (text == null) return ['SIGNED.md is missing'];
+  if (createHash('sha256').update(text).digest('hex') !== record.signed_text) return ['SIGNED.md does not match the signature'];
+  const parts = signedParts(text);
+  if (!parts.length) return ['SIGNED.md names no part'];
+  const named = partsCut({ home, programme, list, read });
+  const missing = parts.filter((part) => !named.has(part));
+  return missing.length ? [`no goal names part${missing.length === 1 ? '' : 's'} ${missing.join(', ')}`] : [];
+}
+
+/** A record the turn cuts from: valid, `open`, signed, not legacy. An area repair or legacy record is never due again. */
+export const cuttable = (record) => record.state === 'open' && record.legacy !== true && typeof record.signed_text === 'string';
+
 /**
  * Whether `programme` is due a planning turn now (D3), read through the
  * runner's own `list`/`read`: `{ due: true, record }`, or `{ due: false,
  * reason, notice }` where `notice` is the line the runner says once while it
- * lasts (null when there is nothing to say: a directory that is not a recorded
- * open programme, one that holds goals, one a turn is already at).
+ * lasts (null when there is nothing to say: a directory that is not a signed
+ * open programme, one already cut from its signature, one a turn is already at).
  *
+ * A programme is cut once per signature: it is due when `cut_text` differs from `signed_text`, also when it holds goals.
  * `items` are the desk items, `horizon(slug)` reads a horizon (null when it is
  * missing or unreadable), `state` is `readTurnState`'s answer.
  */
@@ -94,8 +160,9 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   // The runner already says an invalid record once (`orderOf`).
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
   if (record.record.state !== 'open') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
+  if (!cuttable(record.record)) return { due: false, reason: 'its record carries no signature to cut from', notice: null };
+  if (record.record.cut_text === record.record.signed_text) return { due: false, reason: 'it is cut from its current signature', notice: null };
   if (read(join(dir, 'README.md')) == null) return { due: false, reason: 'it has no README.md', notice: null };
-  if (holdsGoals({ home, programme, list })) return { due: false, reason: 'it holds goals', notice: null };
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };
   }
@@ -113,7 +180,25 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
 }
 
 /**
- * A turn that ended without the programme holding a goal, counted (D6). Under
+ * How the turn ended, written once, under the record's strict lock and on a fresh read (`cutRecord`): `signed` is the
+ * signature the turn launched on. Returns `{ kind }`: `cut` (every part named: `cut_text` now equals `signed`), `returned`
+ * (the record is `draft` again: a success, nothing written), `resigned` (a newer signature: not consumed, the next pick
+ * cuts again), `settled` (done, dropped, invalid, gone), or `incomplete` with `problems` (nothing written: the runner counts
+ * a failure). A lock or write that fails is `failed` with its `problems`, counted like `incomplete`.
+ */
+export function finishTurn({ programme, home, signed, list, read, write, lock, root }) {
+  let result;
+  try {
+    result = cutRecord(join(home, programme), { signed, root, lock, read, write,
+      check: ({ record }) => cutProblems({ home, programme, record, list, read }) });
+  } catch (error) { return { kind: 'failed', problems: [error.message || String(error)] }; }
+  if (result.ok) return { kind: 'cut' };
+  if (result.status === 'returned' || result.status === 'resigned' || result.status === 'incomplete') return { kind: result.status, problems: result.problems };
+  return { kind: 'settled', problems: result.problems };
+}
+
+/**
+ * A turn that ended without its signed document cut, counted (D6). Under
  * the lock, on the state read inside it: the failure is added, and the second
  * since the last item opens the item — the first is `prepared` with a
  * `prepared.md` for the decision lane, a later one `for-martin` with a Swedish
@@ -151,7 +236,7 @@ const failureLines = (failures) => failures.map((failure) => `- ${failure.at}: $
 /** What the decision session reads for the first item: the turns that failed, and where to look. */
 function preparedText({ programme, failures, item }) {
   return `# Programme ${programme}: its planning turn failed twice\n\n`
-    + `The runner's planning turn for programme ${programme} ended twice with the programme still holding no goal. `
+    + `The runner's planning turn for programme ${programme} ended twice without a goal naming every part of its signed document. `
     + `Nothing was asked of Martin; this is a mechanical failure to repair within reach.\n\n`
     + `## The failures\n${failureLines(failures)}\n\n`
     + `## Where to look\n- Programme directory: ${programme} under the programmes home, with README.md, PROGRAMME.json and goals/.\n`

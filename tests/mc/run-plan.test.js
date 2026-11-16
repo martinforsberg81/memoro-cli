@@ -784,24 +784,35 @@ test('cacheTtlMs: claude follows the role, codex keeps its five minutes', () => 
   assert.equal(codexAdapter.cacheTtlMs('5m'), 5 * 60_000);
 });
 
-test('programmePlanPrompt names the programme directory, its README, the checkouts, and the horizon command only with a horizon', () => {
+test('programmePlanPrompt cuts from the signed document: its source, part-named goals, copied sections, an unchanged part kept, a return on an open choice', () => {
   const checkouts = { memoro: '/w/runner/work/programme-turn-prog/memoro', 'memoro-cli': '/w/runner/work/programme-turn-prog/memoro-cli' };
   const plain = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', repos: ['memoro', 'memoro-cli'], checkouts });
-  assert.ok(plain.includes('plan programme prog, with nobody present'));
+  assert.ok(plain.includes('cut programme prog from the document Martin signed, with nobody present'));
   assert.ok(plain.includes('Its directory is `/p/prog`'));
-  assert.ok(plain.includes('`/p/prog/README.md`'));
+  assert.ok(plain.includes('`/p/prog/SIGNED.md`'), 'the signed document is the source');
+  assert.match(plain, /SIGNED\.md is the only source: README\.md is the working copy/u);
   assert.ok(plain.includes('`mc programs show prog`'));
   for (const path of Object.values(checkouts)) assert.ok(plain.includes(`\`${path}\``), path);
   assert.ok(plain.includes('mc goal areas <repo>'));
   assert.doesNotMatch(plain, /mc martin horizon show/u, 'no horizon command without a horizon');
+  assert.match(plain, /one or more goals per part/u);
+  assert.match(plain, /labelled with `Part <n>`/u, 'a goal names its part by a labelled document');
+  assert.match(plain, /Solution, Design and Proved by/u, 'a goal copies the part, it does not invent');
+  assert.match(plain, /no solution, design or decision of your own/u);
+  assert.match(plain, /a part unchanged since then keeps its goals/u);
+  assert.match(plain, /a goal already built gets a new goal for the difference/u);
+  assert.match(plain, /mc programs return prog --reason/u, 'an open choice returns the programme');
   assert.match(plain, /mc programs after/u);
-  assert.match(plain, /mc ask` on the draft that needs it: jev, then a reader, answers it/u);
+  assert.match(plain, /mc ask` on the draft that needs it/u);
   assert.doesNotMatch(plain, /--kind/u);
   assert.match(plain, /Do not implement a goal, process proposals or commit/u);
+  assert.doesNotMatch(plain, /README\.md`.*End/u, 'the end sentence is not the source any more');
   const horizon = programmePlanPrompt({ programme: 'prog', dir: '/p/prog', horizon: 'h', repos: ['memoro'], checkouts: { memoro: '/c/memoro' } });
   assert.ok(horizon.includes('`mc martin horizon show h`'));
-  assert.ok(horizonLessCheckIn().includes('Programme planning check-in after 20 minutes (2)'));
-  function horizonLessCheckIn() { return programmePlanCheckInPrompt({ minutes: 20, count: 2 }); }
+  const checkIn = programmePlanCheckInPrompt({ minutes: 20, count: 2 });
+  assert.ok(checkIn.includes('Programme planning check-in after 20 minutes (2)'));
+  assert.match(checkIn, /Keep cutting SIGNED\.md: one or more goals per part, each naming its part/u);
+  assert.match(checkIn, /mc programs return/u);
 });
 
 describe('the agy-stream reader (fixtures in tests/fixtures/agy, synthesised from the documentation: see its README)', () => {

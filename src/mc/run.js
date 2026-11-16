@@ -112,7 +112,7 @@ import { ARCHIVE_CHECKOUTS_PREFIX, FAILURES_TO_ITEM, WRITE_BACK_FILE, archiveDue
 import { archiveProgramme } from './archive-programme.js';
 import { runDocsMerge } from './docs-merge.js';
 import { releaseWorkArea } from './work-area.js';
-import { goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
+import { finishTurn, goalCount, programmeDirs, programmeDue, readTurnState, recordTurnFailure, removeReadCheckouts, setUpReadCheckouts, turnName } from './programme-turn.js';
 import { runLearningPass } from './desk-learning.js';
 import { reconcileLessons } from './desk-lessons.js';
 import { readProgrammePriority } from './programme-priority.js';
@@ -1943,9 +1943,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
+      // The signature this turn read is the only one it may consume: the record is read again under its lock (finishTurn).
+      const ended = finishTurn({ programme, home: programsHome(deps.env), signed: due.record.signed_text, list: deps.list, read: deps.read, write: deps.write, lock, root });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
-      if (count === 0 && !providerEnding) {
-        const reason = `planning session exited ${result.status ?? 1} with the programme holding no goal (${read.note})`;
+      if (ended.kind === 'cut') note = `${note},cut from the signature`;
+      else if (ended.kind === 'returned') note = `${note},returned to draft`;
+      else if (ended.kind === 'resigned' || ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
+      else if (!providerEnding) {
+        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of the signed document (${ended.problems.join('; ')}; ${read.note})`;
         countTurnFailure(programme, reason, `${out}.jsonl`);
         note = reason;
       }
