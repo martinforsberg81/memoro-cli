@@ -4335,8 +4335,12 @@ export async function runLoop({
       const nap = async (ms, { until = () => false, mainRed = false } = {}) => {
         const tickets = () => `${runner.mainMendTicket()}|${runner.deployMendTicket()}`;
         const ticket = mainRed ? tickets() : null;
+        // A desk act writes runner/WAKE (`wakeRunner`): a changed mark ends the idle wait at the next poll.
+        const wakePath = join(dirname(runner.paths.update), 'WAKE');
+        const wakeMark = () => { try { return deps.read(wakePath); } catch { return null; } };
+        const woke = wakeMark();
         for (let left = ms; left > 0; left -= UPDATE_POLL_MS) {
-          if (runner.stopRequested() || runner.updateRequested() || until() || (mainRed && tickets() !== ticket)) return;
+          if (runner.stopRequested() || runner.updateRequested() || until() || (mainRed && tickets() !== ticket) || wakeMark() !== woke) return;
           reconcile();
           await deps.sleep(Math.min(left, UPDATE_POLL_MS));
         }

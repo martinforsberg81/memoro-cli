@@ -464,7 +464,11 @@ merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 
 ## Sleeping and stopping
 
-STOP and UPDATE are read between picks and inside idle waits. The helper's
+STOP and UPDATE are read between picks and inside idle waits. So is
+`runner/WAKE`: a desk act that changes what may run — `mc programs sign`, a
+`mc goal` stage move, `mc goal release`, a closed desk item — rewrites it, and
+an idle lane whose wait began before that ends its wait at the next 30-second
+poll instead of sleeping out `--idle-sleep`. The helper's
 shared quota pause reports `every lane sleeping 30m` when no reset is named;
 a named reset sleeps until one minute after it. Orders break the pause in
 short slices. A goal's provider refusal instead records that provider's

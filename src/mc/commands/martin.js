@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { commandUsage } from '../command-help.js';
 import { martinDir, mcHome, programsHome, workRoot } from '../paths.js';
+import { wakeRunner } from '../run-control.js';
 import { readMainMends } from '../main-repair.js';
 import { readCanonRole, roleSourceOf } from '../roles.js';
 import { openInWorkArea } from '../work-open.js';
@@ -215,6 +216,8 @@ function item(argv, deps) {
   };
   try { updateDeskItem(id, decide, { env, ...(deps.lock ? { lock: deps.lock } : {}) }); }
   catch (error) { stderr.write(`mc: ${error.message}\n`); return 1; }
+  // A closed item may free work (a horizon, a goal waiting on the desk): the runner's idle lanes wake for it.
+  if (code === 0) (deps.wake || (() => wakeRunner(workRoot(env))))();
   return code;
 }
 /**
