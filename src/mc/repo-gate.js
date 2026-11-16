@@ -600,9 +600,12 @@ export async function runGate({
     if (clock() - lastProgress >= stallMs) stopStalled(`no progress for ${stallMs / 60_000} min`);
   }, stallMs);
   // A completed command is progress; its invocation names a stalled child.
+  // Its process group is the round's own, so what it leaves standing in the
+  // worktree is ended with the round (`endOwnProcesses`).
+  const ownSpawn = (options) => (pid) => { timesOf.spawned(pid); options?.onSpawn?.(pid); };
   const trackedCommand = async (command, options) => {
     activeCommands.add(command);
-    try { return await runShell(command, options); }
+    try { return await runShell(command, { ...options, onSpawn: ownSpawn(options) }); }
     finally { activeCommands.delete(command); progressed(); }
   };
 
@@ -781,7 +784,7 @@ export async function runGate({
         prepare: declared.declaration.prepare,
         headDir,
         cacheDir: prepareCacheDir({ repoPath, env }),
-        shell: (command, options) => shell(command, { ...options, env, signal: childSignal() }),
+        shell: (command, options) => shell(command, { ...options, env, signal: childSignal(), onSpawn: ownSpawn(options) }),
         say,
       }));
       if (ready.status !== 0) {
@@ -818,7 +821,7 @@ export async function runGate({
     if (declared.declaration.derived.length) {
       const fresh = await timed('derived', async () => regenerateDerived({
         derived: declared.declaration.derived, cwd: headDir, env, git: askGit, say,
-        shell: (command, options) => shell(command, { ...options, signal: childSignal() }),
+        shell: (command, options) => shell(command, { ...options, signal: childSignal(), onSpawn: ownSpawn(options) }),
       }));
       report.derived = {
         commands: declared.declaration.derived.map((item) => item.command),

@@ -319,7 +319,7 @@ the deploy, so it is refused.
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
 | **a gate suite is red** | 1 | names the suite and what it states: its closing `verdict: ` lines, at most ten, verbatim and without the prefix, then `whole output: <path>`; a red suite that closes with none is *"suite `<name>` failed (exit N) and states no verdict; whole output: `<path>`"*. Says that a repair is queued and which (the main-red mend's member `suite:<name>`); code `red`; refused row |
 | **a suite could not run** (the server never came up, a suite never started, a holder's pid gone and never released) | 1 | names the suite and why, with `whole output: <path>` where there is one; code `suites`, technical: queues the deploy mend; refused row |
-| **the full run of the pick cannot start or finish** (its worktree held, a lease, a reservation, the run threw) | 1 | names the commit, the stop and what held it; code `full-run`, technical: queues the deploy mend; refused row |
+| **the full run of the pick cannot start or finish** (its worktree held, a lease, a reservation, its base, the run threw) | 1 | names the commit, the stop and what held it; code `full-run`, technical: queues the deploy mend as a deploy row naming what held it, and the one retry applies; refused row |
 | another deploy is running | 1 | names its sha, start and pid; refused row. There is no queue |
 | **a language run is running** | 1 | names its manifest, start and pid; refused row *"a language run of `<manifest>` is running"*. A language run writes to the same production ([`mc-language.md`](mc-language.md)) |
 | the deployer could not be started | 1 | row completed `failed`, stopped at `start` |
@@ -769,14 +769,20 @@ closed or red pull request. The request is **repaired** when every recorded pull
 
 **A full run that cannot start (2026-11-16).** The hourly full run has no deploy row, and a full run that
 stops at `worktree` (held by a process), `threw`, `lease`, `reservation` or `base` is mc's own fault, neither red nor said
-before. The preparation refuses it with the code `full-run`, and the nightly loop queues the same request for an
-incomplete run stopped at `worktree` (`requestDeployRepair`, origin `full-run`): the note names the repository, the stop and
-what held it — the pids, their command lines and working directory; the request joins the open one when the same stop is
-already in it, is repaired by the same mend session, and is **never retried as a deploy** (nothing was typed): it ends when
-its repair has landed. The page says it in one line for as long as the request is unfinished: *full run of `<repo>`
-cannot start: `<what held it>`; repair queued*. The full run itself ends, in a `finally` of its own round and before it
-reports a hold, the processes its round started in its own worktree (the round's process group, recorded as it starts);
-a process there that the round did not start, a live session's, is never ended and the run stops at `worktree` naming it.
+before. A typed deploy refused for it with the code `full-run` is a deploy's technical stop like any other: its row keeps
+origin `deploy`, names the repository and what held its full run (`holders`, *the full run of `<repo>` was held by* in the
+mend prompt), and the one retry below applies to it unchanged. The nightly loop queues a request of its own for every
+run of its own that stopped at one of those steps (`FULL_RUN_FAULTS`: `worktree`, `threw`, `lease`, `reservation`, `base`;
+`requestDeployRepair`, origin `full-run`): the note names the repository, the stop and what held it — the pids, their
+command lines and working directory; the request joins the open one when a full-run row of that repository is already in
+it, is repaired by the same mend session, and a request of only such rows is **never retried as a deploy** (the nightly's
+run is no deploy; nothing was typed): it ends when its repair has landed. The page says it in one line for as long as the
+request is unfinished: *full run of `<repo>` cannot start: `<what held it>`; repair queued*. The full run itself ends, in
+a `finally` of its own round and before it reports a hold, the processes its round started in its own worktree: the
+process group of every spawn of the round — the suite, the test batches, a declared command gate, the preparation and the
+derived commands — is recorded as it starts, and a process standing in the worktree in one of those groups is ended
+(SIGKILL); a process there that the round did not start, a live session's, is never ended and the run stops at
+`worktree` naming it.
 Every suite of a round runs with `MC_TEST_MODE=1`, so a test of mc never reaches the platform keychain.
 
 **The retry.** Once, through the same path as a typed deploy — the same pick, the same gate, the same admission, the same
@@ -1275,11 +1281,15 @@ have one case each. The whole output has cases of its own: a suite that prints
 (and one that states none is refused as stating none, with the path); the
 settled stop removes the earlier preparations' directories and keeps one a queued
 repair names; a red suite and a red full run are queued as members, once per
-stop; a full run that cannot start is queued as the deploy mend's and never
-retried as a deploy; a refusal on the code `red` is not technical and starts no
+stop; a typed deploy whose full run cannot start queues a deploy row naming
+what held it, and its retry applies; a nightly full run stopped at any of
+`FULL_RUN_FAULTS` is queued as the deploy mend's and never retried as a deploy
+(`tests/mc/nightly.test.js`); a refusal on the code `red` is not technical and starts no
 retry; and a live holder is waited for without a refusal while a dead one is
-stale state. `tests/mc/repo-gate.test.js` holds the full run's own end (a
-process its round left in its worktree is ended, a live session's never is). The headless cases assert that no git, history, full-run or
+stale state. `tests/mc/repo-gate.test.js` holds the full run's own end with real
+processes (a `node -e` left in the worktree by the round's own suite, or by a
+declared command gate, is found by lsof and `ps -o pgid` and ended; a live
+session's never is). The headless cases assert that no git, history, full-run or
 suite call was made. A fault check holds the first set: accepting a green run of
 an older commit makes the "older commit" case fail, and the test file is green
 again without it.

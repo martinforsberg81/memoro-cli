@@ -120,7 +120,10 @@ export function requestDeployRepair({ row, holder = '', acceptRed = false, logs 
       target.rows.push({ started: row.started, sha: row.sha || '', stopped_at: row.stopped_at || '', note: row.note || '',
         holder: holder || row.holder || '', accept_red: Boolean(acceptRed), copies, logs: kept,
         // `full-run`: not a deploy but a full run that could not start; who held it is named for the session.
-        ...(origin === 'full-run' ? { origin, repo: String(repo || ''), holders: (holders || []).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}) });
+        ...(origin === 'full-run' ? { origin, repo: String(repo || ''), holders: (holders || []).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}),
+        // A typed deploy refused because its full run could not start stays a deploy (its retry applies, D14);
+        // who held the full run's checkout is named for the session all the same.
+        ...(origin !== 'full-run' && holders?.length ? { repo: String(repo || ''), holders: holders.map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}) });
       if (!open) entries.push(target);
       return { id: target.id, joined: Boolean(open) };
     });
@@ -312,7 +315,8 @@ function shippedAfter(deploys, at) {
 export function deployMendPrompt({ entry, branch, worktrees, root }) {
   const rows = entry.rows.map((row) => row.origin === 'full-run'
     ? `- ${row.started} full run of ${row.repo || 'a repository'} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a step of its own'}: ${row.note}\n  held by: ${fullRunHeld(row)}`
-    : `- ${row.started} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a refusal'}: ${row.note}\n  logs: ${row.copies}${row.logs?.length ? ` (${row.logs.join(', ')})` : ''}`).join('\n');
+    : `- ${row.started} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a refusal'}: ${row.note}\n  logs: ${row.copies}${row.logs?.length ? ` (${row.logs.join(', ')})` : ''}`
+      + `${row.holders?.length ? `\n  the full run of ${row.repo || 'the repository'} was held by: ${fullRunHeld(row)}` : ''}`).join('\n');
   const what = onlyFullRun(entry)
     ? 'A full run cannot start or finish for a reason of mc\'s own (rows marked "full run": nothing is deployed and no deploy is retried); find what holds it, and repair it at its cause'
     : 'A deploy stopped on a technical fault (a row marked "full run" is a full run that could not start, not a deploy); find the cause from these rows and logs and repair it at its cause';

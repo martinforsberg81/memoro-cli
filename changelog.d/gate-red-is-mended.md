@@ -8,10 +8,12 @@ section: Changed
   also in the row's new `output_path` cell, `deploy-prepare.json`, the page and
   `--follow`; a red suite that states none is refused as stating none. A red gate
   suite is a main-red member `suite:<name>`, and a red or stalled full run that
-  no mend holds is queued by the preparation, once per stop. A full run that
-  cannot start (worktree held, lease, reservation) is a deploy-mend request of
-  origin `full-run`, said on the page and never retried as a deploy; the full run
-  ends the processes its own round started, and every suite of a round runs with
-  `MC_TEST_MODE=1`. The 10-minute hold refusal of the deploy gate is a wait said
+  no mend holds is queued by the preparation, once per stop. A typed deploy whose
+  full run cannot start (worktree held, lease, reservation, base, the run threw)
+  queues a deploy repair naming what held it, and its one retry applies; the
+  nightly's own such run is a deploy-mend request of origin `full-run`, said on the
+  page and never retried as a deploy. The full run ends the processes its own
+  round's spawns (suite, command gates, preparation) left in its worktree, and
+  every suite of a round runs with `MC_TEST_MODE=1`. The 10-minute hold refusal of the deploy gate is a wait said
   each minute, and a deploy or a merge never makes time a verdict: a slow test is
   recorded.

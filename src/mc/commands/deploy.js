@@ -1118,9 +1118,9 @@ function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = nul
     // The runner's retry queues nothing: it says what stopped it, and the runner counts it (D5).
     if (deps.retry) { deps.onStop?.({ row, code, technical }); return null; }
     if (!technical) return null;
-    // A full run mc could not start is not a deploy that failed: the request says whose checkout is held, and the
-    // runner never retries it as a deploy (`retryVerdict`).
-    const fullRun = code === 'full-run' ? { origin: 'full-run', repo: REPO, holders: full?.run?.holders || [] } : {};
+    // A typed deploy refused because its full run could not start is a deploy's technical stop: its row keeps
+    // origin `deploy`, so the one retry applies unchanged (D14), and it names whose checkout is held.
+    const fullRun = code === 'full-run' ? { repo: REPO, holders: full?.run?.holders || [] } : {};
     return (deps.queueRepair || requestDeployRepair)({
       row, holder, acceptRed: Boolean(acceptRed), root, ...(deps.mend || {}), ...fullRun,
       logs: [{ name: 'deploy.log', path: deployLogPath(root) }, { name: 'deploy-prepare.log', path: preparationLogPath(root) }],

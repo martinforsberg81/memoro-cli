@@ -4507,23 +4507,22 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
     holders: [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }], ...extra,
   });
 
-  it('a full run that could not start queues one deploy-mend request naming who held it; the next joins it; it is never retried as a deploy', async () => {
+  it('a typed deploy whose full run could not start queues one deploy-mend request naming who held it, stays a deploy, and its one retry applies (D14)', async () => {
     const first = await attempt([], { runs: [], started: heldRun() });
     assert.equal(first.code, 1);
     assert.equal(first.spawned.length, 0);
-    assert.match(first.out.stderr, /a repair of the deploy .* is queued|full run of memoro cannot start: .*repair queued/u);
+    assert.match(first.out.stderr, /a repair of the deploy .* is queued/u);
     const [request, ...others] = queued();
     assert.equal(others.length, 0);
     assert.equal(request.state, 'queued');
-    assert.deepEqual([request.rows[0].origin, request.rows[0].repo], ['full-run', 'memoro']);
+    assert.equal(request.rows[0].origin, undefined, 'a typed deploy\'s row is a deploy\'s, not a full run\'s');
+    assert.equal(request.rows[0].repo, 'memoro');
     assert.deepEqual(request.rows[0].holders, [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }]);
     assert.equal(first.row.outcome, 'refused');
     await attempt([], { runs: [], started: heldRun() });
     assert.equal(queued().length, 1, 'a second attempt joins the open request');
-    assert.equal(queued()[0].rows.length, 1, 'the same fault is the same row');
-    const verdict = retryVerdict({ entry: queued()[0], now: new Date(Date.parse(request.rows[0].started) + 60_000) });
-    assert.equal(verdict.retry, undefined, 'no deploy is retried for a full run');
-    assert.match(verdict.drop, /a full run is not a deploy/u);
+    const verdict = retryVerdict({ entry: queued()[0], now: new Date(Date.parse(queued()[0].rows.at(-1).started) + 60_000) });
+    assert.deepEqual(verdict, { retry: true }, 'the existing retry of a technical stop applies unchanged');
   });
 
   it('a refusal on the code red is never technical, whatever else is queued', () => {

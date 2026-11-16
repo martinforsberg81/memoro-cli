@@ -70,7 +70,7 @@ import { tryGit } from './git.js';
 import { mcHome, workRoot } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
 import { requestMainRepair, shapeMainRedTest } from './main-repair.js';
-import { requestDeployRepair } from './deploy-repair.js';
+import { FULL_RUN_FAULTS, requestDeployRepair } from './deploy-repair.js';
 import { mainRecord } from './selector-miss.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
@@ -339,17 +339,19 @@ export function repairFromRun(repo, report, run, {
     else if (!asked?.stale_members?.length) say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
 
-  // A full run that cannot start for a reason of mc's own — its checkout is held — is mc's fault, not main's
-  // red: it goes to the deploy mend as `full-run`, with who holds the checkout. It joins the open request
-  // (one at most), and never makes a deploy to retry.
-  if (repair && repairFullRun && report.stopped_at === 'worktree') {
+  // A full run that cannot start for a reason of mc's own — every stop in FULL_RUN_FAULTS, the same set
+  // the preparation refuses as `full-run` — is mc's fault, not main's red: it goes to the deploy mend as
+  // `full-run`, with the stop and who holds the checkout. It joins the open request (one at most), and
+  // never makes a deploy to retry: nothing was typed.
+  if (repair && repairFullRun && FULL_RUN_FAULTS.includes(report.stopped_at)) {
     const started = run.started_at || new Date().toISOString();
+    const why = report.reason || (report.stopped_at === 'worktree' ? 'its checkout is held' : `stopped at ${report.stopped_at}`);
     const asked = repairFullRun({
-      row: { started, sha: run.commit || '', stopped_at: 'worktree', note: `full run of ${repo.name} cannot start: ${report.reason || 'its checkout is held'}` },
+      row: { started, sha: run.commit || '', stopped_at: report.stopped_at, note: `full run of ${repo.name} cannot start: ${why}` },
       holder: 'the full run', origin: 'full-run', repo: repo.name, holders: report.holders || [], root: workRoot(env),
     });
-    if (asked?.skipped) say(`${repo.name}: the full run cannot start (${report.reason || 'its checkout is held'}) — no deploy-mend repair requested: ${asked.skipped}`);
-    else say(`${repo.name}: the full run cannot start (${report.reason || 'its checkout is held'}) — deploy-mend repair ${asked?.joined ? 'already under way' : 'queued'}: ${asked?.id}`);
+    if (asked?.skipped) say(`${repo.name}: the full run cannot start (${why}) — no deploy-mend repair requested: ${asked.skipped}`);
+    else say(`${repo.name}: the full run cannot start (${why}) — deploy-mend repair ${asked?.joined ? 'already under way' : 'queued'}: ${asked?.id}`);
   }
   return asks;
 }
@@ -435,6 +437,8 @@ async function measure(repo, {
     recordNightlyRun(threw, { root });
     say(`${repo.name}  stopped at threw  started ${threw.started_at}  `
       + `took ${seconds(threw.duration_ms)}  main unknown — ${threw.reason}`);
+    // A round that threw is mc's own fault too: the deploy mend is asked, as for any FULL_RUN_FAULTS stop.
+    repairFromRun(repo, { stopped_at: 'threw', reason: threw.reason }, threw, { repair, say, repairFullRun, env });
     return threw;
   }
 

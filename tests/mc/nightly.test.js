@@ -846,7 +846,37 @@ describe('a full run that cannot start is the deploy mend\'s', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('only a stop at worktree is asked: a red run, a stalled run and a fetch failure are not', () => {
+  it('every stop of mc\'s own is asked — threw, lease, reservation and base as well as worktree — each as a full run', () => {
+    for (const stopped_at of ['threw', 'lease', 'reservation', 'base']) {
+      const fx = setup();
+      try {
+        fx.ask({ stopped_at, reason: `the round stopped at ${stopped_at}` });
+        const [request, ...others] = fx.mends();
+        assert.equal(others.length, 0, stopped_at);
+        assert.deepEqual([request.rows[0].origin, request.rows[0].repo, request.rows[0].stopped_at], ['full-run', 'memoro', stopped_at]);
+        assert.match(request.rows[0].note, new RegExp(`^full run of memoro cannot start: the round stopped at ${stopped_at}`, 'u'));
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('a round that threw is asked by the full run itself, as a full run', async () => {
+    const fx = setup();
+    const root = mkdtempSync(join(tmpdir(), 'nightly-threw-'));
+    try {
+      const run = await fullRun(repo, {
+        root, env: { ...process.env, MC_WORK_ROOT: fx.work }, say: (line) => fx.said.push(line),
+        round: async () => { throw new Error('the round fell over'); }, repair: () => ({ created: [], open: [] }),
+        repairFullRun: (request) => requestDeployRepair({ ...request, root: fx.work, lock: (_root, fn) => fn() }),
+      });
+      assert.equal(run.stopped_at, 'threw');
+      const [request, ...others] = fx.mends();
+      assert.equal(others.length, 0);
+      assert.deepEqual([request.rows[0].origin, request.rows[0].stopped_at], ['full-run', 'threw']);
+      assert.match(request.rows[0].note, /^full run of memoro cannot start: the round fell over/u);
+    } finally { rmSync(root, { recursive: true, force: true }); fx.cleanup(); }
+  });
+
+  it('only a stop of mc\'s own is asked: a red run, a stalled run and a fetch failure are not', () => {
     const fx = setup();
     try {
       for (const report of [{ stopped_at: 'fetch', reason: 'offline' }, { stopped_at: 'busy', reason: 'a round holds the lane' }, { stopped_at: null }]) fx.ask(report);
