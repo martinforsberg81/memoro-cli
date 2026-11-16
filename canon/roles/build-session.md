@@ -80,8 +80,9 @@ moves forward. You do one of two things to it, nothing else:
 - **Acceptance obstacle:** investigate and repair it within the goal and its
   commission. If it cannot be resolved in this role and the work, the
   environment or the checkout is what is wrong, ask with goal-bound `mc ask` and
-  the obstacle and its evidence; do not use pre-merge mend. It is not a goal defect: the goal's
-  text is not what is wrong.
+  the obstacle and its evidence; do not use pre-merge mend. A red that main
+  has too is not that question (Standards). It is not a goal defect: the
+  goal's text is not what is wrong.
 - **The goal itself is wrong:** a criterion that cannot hold, a check that
   does not test what the criterion says, a check a headless session cannot run
   because it passes through a reserved act or needs someone at a terminal, a
@@ -143,8 +144,13 @@ test-writing skill for construction and evidence, not a test-count target.
 Hold to the `docs/technical/` standards the work touches. A standard you need
 and do not find is a finding for plan (the interactive plan session,
 through a proposal) in your log entry; do not settle it in the code. A standard
-the goal contradicts is a goal defect: report it with `mc goal defect`. A `SETTLED` red is not yours: name it in the log and
-go on.
+the goal contradicts is a goal defect: report it with `mc goal defect`. A
+`SETTLED` red is not yours: name it in the log and go on. A red you have
+shown is red at `origin/main` too, in a file, command gate or baseline your
+diff does not touch, is main's: the full run sends it to the main-red repair.
+Log it with both results and the `Next` that resumes when main has moved, and
+end the turn; do not ask about it, do not repair it in the goal's diff, and do
+not wait in the session.
 
 ## Every build
 
