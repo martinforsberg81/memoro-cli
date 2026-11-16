@@ -20,8 +20,8 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
 5. `mc goal criterion add <p>/<g> --criterion "…" --check "…" [--evidence "…"]` per success criterion; the runner starts no goal without one.
    `mc goal document add <p>/<g> --label "…" --path "…"` for each document the build session must read.
 6. `mc goal show <p>/<g>` renders it as the build session will read it. Then `mc goal plan-review <p>/<g>`: a fresh session reads the goal in
-   `draft` against its questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK). It takes up to 20 minutes: a session whose
-   tool call is shorter runs it in the background and waits. An interactive session passes `--avoid <tool>:<model>` with its own model.
+   `draft` against its questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK, 3 when no reader could run and nothing was read). It takes up to 20 minutes: a session whose
+   tool call is shorter runs it in the background and waits. An interactive session passes `--avoid <tool>:<model>` with its own model. `--avoid` names the draft's author, whoever calls.
    Repair what it finds yourself and read again; after two rounds decide, and move with `mc goal stage <p>/<g> build --reason "…"`.
    `mc goal stage <p>/<g> build` moves a goal that is complete and has an OK reading of its current text; any change to the text asks for a new one.
 
