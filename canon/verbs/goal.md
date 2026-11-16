@@ -97,7 +97,8 @@ its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **Programme readers.** `mc programs review <programme>` commissions an
-  advisory document reading. Its reader writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
+  advisory document reading; only Martin's interactive session calls it, and
+  nothing reads its report. Its reader writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
 - **Programme state.** `new` refuses draft records (exit 1), naming
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.

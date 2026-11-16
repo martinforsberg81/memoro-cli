@@ -184,7 +184,7 @@ preparation, decisions and the interactive desk. Its schema is
 `source_at`. Kinds are `goal` (`<programme>/<goal>`), `main-red`
 (`main-red:<repo>/<id>`), `decision` (`decision:<at>`), `lesson`
 (`lesson:<name>`, written only by `mc martin lesson brief`, never by sync), `text`
-(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written only by the runner when a horizon turn of the manager has failed twice; see below) and `archive` (`archive:<programme>`, written only by the runner when a finished programme's write-back reading found a gap, failed twice or found restricted data; see below). A goal's source time
+(`text:<the text>`, written only by `mc martin propose`, never by sync) and `programme` (`programme:<programme>`, written only by the runner when a programme's planning turn has failed twice; see below) and `manager` (`manager:<slug>`, written by the manager's removed horizon turn and never now; an old one closes by source, see below) and `archive` (`archive:<programme>`, written only by the runner when a finished programme's write-back reading found a gap, failed twice or found restricted data; see below). A goal's source time
 is the time of its current question: its newest structured ask (`Martin is asked:`), else its newest goal-defect or runner-stop entry (`goal defect:`, `no progress:`), else the entry that set it `Martin`. A later question is a distinct item; a later entry that only carries status `Martin` — an account, a takeover note, a criterion rewrite — is not a question, supersedes nothing and opens nothing. A `decision:<at>` item opens for a new ledger row of `mc ask` whose chosen key differs from the recommendation and for every unread row (`answered_by: "session"`), with the answer's who and why ([mc-jev.md](mc-jev.md), *The ledger*).
 Fields are `schema`, `version`, `id`, `kind`, `reference`, `source_at`,
 `opened_at`, `state`, `sort`, `reversible`, `due_at` and `outcome`; a text item
@@ -219,8 +219,8 @@ model-free `prepared.md`, a later one `for-martin` (sort mechanical, not
 reversible, no due time) with a Swedish `brief.md`. Its source is the
 programme's record, directory and goals, and the turn's state file
 `runner/programme-turn/<programme>.json`. Sync closes it by source when the
-signature is cut (goals name every signed part), its record carries no signature or no
-longer reads valid and `open`, or its directory is gone; an unreadable state file is reported and keeps it open (an
+goals name every part of its README.md, its record no longer reads valid and
+`ready` (an old `open` reads ready), or its directory is gone; an unreadable state file is reported and keeps it open (an
 unreadable record reads invalid and closes it). A decision session answers it at its source: it repairs what failed within
 reach and closes it `--by decision`, so the runner plans again, and a text of
 Martin's that would have to change goes to a brief. The opening lists one decided
@@ -246,20 +246,13 @@ statement within reach) and closes it `--by decision`, so the runner reads again
 it never archives the programme. A `for-martin` mechanical one is among the stuck
 items of **Not ready**, like a `programme` item; a reserved one is his.
 
-A `manager` item is the manager's horizon turn's second failure since its last
-item ([mc-run.md](mc-run.md#the-managers-turns)): the first is `prepared` with a
-model-free `prepared.md`, a later one `for-martin` (sort mechanical, not
-reversible, no due time) with a Swedish `brief.md` under the five headings.
-Its reference is `manager:<slug>` of the open horizon; its source is the horizon,
-the open programme records that name it and the turn's state file
-`runner/manager-turn/horizon/<slug>.json`. Sync closes it by source when the horizon is
-no longer open, a valid open programme record names it or the text item
-`horizon:<slug>` is open; an unreadable state
-file is reported and keeps it open. A decision session answers it at its source
-and closes it `--by decision`, so the runner takes the turn again. A curation
-turn that fails opens no item. The opening lists a `for-martin` one among the
-stuck items of **Not ready**, like a `programme` item: it is the runner's, not
-his.
+A `manager` item was the manager's horizon turn's second failure, with
+reference `manager:<slug>`. That turn is removed
+([mc-run.md](mc-run.md#the-managers-turns)) and nothing opens such an item now:
+an open one left on disk closes by source at the next sync ("The manager's
+horizon turn is removed."), and its state file under
+`runner/manager-turn/horizon/` stays as it was, read only for labels. A
+curation turn that fails opens no item.
 
 A main-red item is answered at its source: `mc repo mend <repo> <id>
 requeue|drop --reason "<text>"` ([`mc-merge.md`](mc-merge.md)). `mc martin item
@@ -447,9 +440,9 @@ those with `reached_at` in `(since, now]`, oldest first.
 
 **What does not read horizons.** The page reads them to order its overview
 (HORIZONS, [mc-ui.md](mc-ui.md#horizons)); the runner's pick, `PRIORITY.json` and `mc programs` do not: the order of the horizons does not change
-which programme the runner works on. The one reader besides the desk is the
-manager's horizon turn, which takes the open horizons in position order and
-creates the next programme of the first that has none ([mc-run.md](mc-run.md#the-managers-turns)).
+which programme the runner works on. No other reader takes them: the manager has no horizon turn and creates no
+programme ([mc-run.md](mc-run.md#the-managers-turns)); a horizon's next
+programme is created by Martin in `mc martin` or by a person.
 
 ## Unattended preparation
 

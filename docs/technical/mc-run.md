@@ -185,7 +185,7 @@ order without a model call:
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` do not start a
-   delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded open programme signed and not yet cut gets the programme planning turn (*Programme planning turn*).
+   delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded ready programme whose README.md has parts no goal names gets the programme planning turn (*Programme planning turn*).
 3. Hold any goal whose phase is not open in its programme. The runner reads
    each programme's record at every pick (`programmeOrder`), as it reads
    `PRIORITY.json`, so a dependency stated, removed or renumbered counts at the
@@ -203,7 +203,7 @@ order without a model call:
    programme record is `draft`, and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
-   The draft hold says `waits for sign-off of <programme>`, once while it
+   The draft hold says `<programme> is draft`, once while it
    lasts. It is re-read during admission, before spawning plan, build, review
    or mend, not just at the pick. A running session finishes normally; neither
    the merger's queued work nor the runner's landed-PR reconciliation is held.
@@ -576,8 +576,8 @@ billing boundaries starts a cold cache context.
 A goal names a work class, `fast`, `medium` or `large`, not a model, and the class
 routes the goal's build sessions only. Every other unattended role runs on its
 own catalog list, whatever the goal's class: `review`, `finish` (a repair build), `mend`, `plan`
-(the runner's next-draft planning and the programme turn that cuts a signed
-document into goals; Martin, 2026-11-16), `manager` (an unattended manager turn
+(the runner's next-draft planning and the programme turn that cuts a ready
+programme's README.md into goals; Martin, 2026-11-16), `manager` (an unattended manager turn
 without an explicit tool or model) and `decision` (desk items). A role list never borrows a class's
 candidates: with none of its own usable and its API off, the session waits
 (Martin, 2026-11-09). Interactive `mc plan` and `mc martin` keep their own
@@ -880,7 +880,11 @@ into its phases and goals from `README.md`, with nobody present.
 all hold:
 
 - the record is valid and `ready`, and `README.md` exists;
-- its goals are not already cut;
+- its goals are not already cut: a part of `README.md` is named by no goal;
+- every parseable goal of the programme, live or archived, names a part of
+  `README.md`. A goal that names none, one made by hand or one a removed
+  version cut from another document, means the programme was planned already:
+  no turn starts, and the programme is silent (*Legacy goals*, below);
 - no open desk item of kind `programme` has the reference `programme:<p>`;
 - when the record names a horizon, that horizon reads `open`.
 
@@ -920,6 +924,12 @@ runner lock and reads the Part headings (`### Part <n> — …` inside
 - `settled`: the record is no longer ready. Nothing counts;
 - `incomplete`: a part is named by no goal, or `README.md` is missing. A failure (below).
 
+**Legacy goals.** A goal whose `documents` names no part of `README.md` is
+never rewritten and never cut again: its programme is not due while it is
+there, live or archived (`goalsNamingNoPart`). A goal that names a part of
+another file, such as a `SIGNED.md` a removed version wrote, counts as naming
+none. Nothing on disk is deleted or rewritten by reading it.
+
 `runs.tsv` notes say `cut` or `not cut (<problem>; …)`.
 
 **Next-draft planning waits.** While a programme turn is claimed or current in a
@@ -942,9 +952,8 @@ checkouts are removed, and any a refusal kept are named.
 
 **Failure.** A session that ends `incomplete` or fails to read the record is a
 failure, with its reason (`planning session exited <n> without a goal naming every
-part of the signed document (<problems>)`) and its log kept in
-`runner/programme-turn/<p>.json`; a `cut`, `returned`, `resigned` or `settled`
-ending counts none.
+part of README.md (<problems>)`) and its log kept in
+`runner/programme-turn/<p>.json`; a `cut` or `settled` ending counts none.
 Provider endings (quota, offline, refused login), a refusal at admission and a
 fetch failure count nothing. The first failure retries on the next pick. The
 second opens a desk item of kind `programme`, reference `programme:<p>`: the
@@ -952,9 +961,9 @@ first such item is `prepared`, with a model-free `prepared.md` of the failures
 and their logs, so a decision session repairs it; a later one is `for-martin`,
 sort `mechanical`, `reversible: false`, `due_at: null`, with a `brief.md` in
 Swedish. No turn starts while an item is open. A failure is counted again only
-after the item closed. The item closes by source when the signature is cut (every signed part is
-named by a goal), the record carries no signature, no longer reads valid and open,
-or the directory is gone, and
+after the item closed. The item closes by source when goals name every part
+of `README.md`, the record no longer reads valid and ready, or the directory is
+gone, and
 by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
 file that cannot be read starts no turn and counts nothing; the runner says it
 once in `runner.log`, the desk sync reports it and the item stays open.
@@ -964,8 +973,8 @@ once in `runner.log`, the desk sync reports it and the item stays open.
 Martin, 2026-11-15: a programme with a record is bounded. Once every goal is
 done or dropped, the runner checks that what the programme made true is written
 into `docs/technical/` and the area pages, archives the programme and sets its
-record to `done`, with nobody present; the manager's horizon turn then follows
-the horizon without it. Only a programme **with a valid record** is touched: one
+record to `done`, with nobody present; a horizon it served then waits for
+Martin's next programme. Only a programme **with a valid record** is touched: one
 without a record, or with an invalid one, is never read or archived by the
 runner, and `mc plan <p> --archive` stays that programme's person's act
 ([mc-plan.md](mc-plan.md#archiving-a-programme)). The write-back is also judged in
@@ -974,7 +983,7 @@ each goal's own review (`write-back:` line, [mc-goals.md](mc-goals.md#the-verdic
 `archiveDue` (`archive-turn.js`) is model-free and reads at every pick. A programme
 is due when all hold:
 
-- the record is valid and `open`;
+- the record is valid and `ready`;
 - `goals/` holds no live goal (a dot-entry is none), and `goals/.archive/` holds at
   least one done goal: a programme whose goals were all dropped made nothing true
   and is never read or archived;
@@ -1039,7 +1048,7 @@ keeps one (no new reading, no session), the runner:
 4. records the destination it returns in the state file at once, then sets the
    record there to `done` (`setRecordState`) and clears the state.
 
-A state that names a destination whose record still reads `open` (the move
+A state that names a destination whose record still reads `ready` (the move
 happened and the write did not) is due that write alone on the next pick: no
 reading, no session, no second archive. A write that throws (a filesystem
 error) is a refusal like any other: the destination stays, the failure is
@@ -1066,52 +1075,24 @@ longer in the programmes home and is no candidate. The cases are in
 
 ## The manager's turns
 
-The runner starts the headless manager ([mc-manager.md](mc-manager.md)) for two
-turns, with nobody present. Both are one session of the `manager` role, class
-large, named `manager:<slug>` (a horizon turn) or `manager:curation` in the
-claim, the current record and `runs.tsv`; routing, admission, provider refusals,
-offline holds, STOP and UPDATE are those of every session. They share the one
-claim `manager`, so only one runs at a time, and they come last in the pick,
-after the programme planning turn (`rank 7` in `lane-pick.js`). The session has
-`MC_HEADLESS=1` and `MC_ROLE=manager`; a horizon turn also has `MC_HORIZON=<slug>`,
-which a curation turn leaves unset. Its note in `runs.tsv` ends `,programme`,
-`,reached` or `,text` for a horizon turn that ended in that way, and `,curated`
-for a curation turn. `manager-pulse.js` holds the model-free parts.
+The runner starts the headless manager ([mc-manager.md](mc-manager.md)) for one
+turn, curation, with nobody present. It is one session of the `manager` role,
+class large, named `manager:curation` in the claim, the current record and
+`runs.tsv`; routing, admission, provider refusals, offline holds, STOP and
+UPDATE are those of every session. It holds the claim `manager`, so only one
+runs at a time, and it comes last in the pick, after the programme planning
+turn (`rank 7` in `lane-pick.js`). The session has `MC_HEADLESS=1` and
+`MC_ROLE=manager`, and `MC_HORIZON` is unset. Its note in `runs.tsv` ends
+`,curated` for a turn that succeeded. `manager-pulse.js` holds the model-free
+parts.
 
-**The horizon turn is due** when an open horizon has no valid open programme
-record that names it. The horizons are taken in the desk's order; the first one
-that is due and not held is the turn's. A horizon is held by any of: an open
-text item `horizon:<slug>`; an open desk item `manager:<slug>`; a state file
-`runner/manager-turn/horizon/<slug>.json` that cannot be read; and, for every
-horizon, a programme record that is invalid (said once in `runner.log`). The
-record is the trigger and a horizon is never made by the runner. The turn goes
-before curation and is checked again after admission: when the horizon has
-changed (reached, dropped, named by a record, held), the turn is deferred
-(`skipped:horizon-changed`) and counts nothing.
-
-**Read checkouts.** Before the launch the runner fetches every repository that
-declares areas (`.mc/areas.json` at origin/main), then makes
-`runner/work/manager-horizon-<slug>/<repo>` for each, detached at origin/main,
-with the rules of the programme planning turn's read checkouts: a clean leftover
-that is reachable from origin/main is replaced, a dirty or unreachable one is
-kept and the turn fails with `read checkout retained: <path>`, and another add
-failure is `setup: <git's last line>`. A fetch failure ends the pick and counts
-nothing. The checkouts are removed afterwards; the session changes nothing in
-them.
-
-**A horizon turn ends** in one of three ways, judged without a model after the
-session: a valid open record naming the horizon (`mc programs create`), the
-horizon no longer open (`mc martin horizon reached`) or an open text item
-`horizon:<slug>` (`mc martin propose`). Anything else is a failure with its
-reason and log in the state file. Provider endings (quota, offline, refused
-login) and the admission and fetch skips count nothing. The first failure
-retries on the next pick. The second since the last item opens a desk item of
-kind `manager`, reference `manager:<slug>`: the first such item is `prepared`,
-with a model-free `prepared.md` of the failures and their logs, so a decision
-session repairs it; a later one is `for-martin`, sort `mechanical`,
-`reversible: false`, `due_at: null`, with a `brief.md` in Swedish. No turn starts
-for that horizon while an item is open, and a failure is counted again only after
-it closed. The item closes by source ([mc-martin.md](mc-martin.md#durable-desk-items)).
+There is no horizon turn and no repair turn: the manager creates no programme
+(`mc programs create` refuses every headless role), and a horizon with no
+programme waits for Martin. A desk item of kind `manager` that the removed
+horizon turn opened closes by source at the next sync
+([mc-martin.md](mc-martin.md#durable-desk-items)); the state files under
+`runner/manager-turn/horizon/` stay on disk as they were and are read only for
+that item's label.
 
 **The curation turn is due** at most once in 24 hours from the start of the last
 one, and then only when the origin/main of a repository that declares areas has

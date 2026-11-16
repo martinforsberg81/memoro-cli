@@ -137,9 +137,9 @@ Martin role, the manager and the plan role may call it, the last two also
 unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order).
 
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
-`draft` (or `open` for an area repair), created now), `README.md` from its template, and empty `goals/`,
+`draft`, an area repair included, created now), `README.md` from its template, and empty `goals/`,
 `proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
-is available after sign-off (immediately for an area repair). It refuses a name that exists (exit 1) and, when the page
+is available once Martin sets the programme `ready`. It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
 without a record its record and touches nothing else; it refuses a directory
 that is missing or already has a record (exit 1). Both refuse a bad name, a
@@ -161,9 +161,8 @@ exits 1, and a word that is not a programme name exits 2.
 
 Who may write is decided from the environment alone: `MC_ROLE` through
 `normalizeSessionRole`, else `MC_GOAL` alone is a build session, else a person.
-A person, the interactive Martin role and the manager may create and record,
-and `created_by` says which (`person`, `martin`). Only a person and the
-interactive Martin role may create and record; every headless role, the manager
+Only a person and the interactive Martin role may create and record, and
+`created_by` says which (`person`, `martin`); every headless role, the manager
 included, is refused (exit 2). The page is
 written before the record, so the runner never offers a programme whose page
 is not whole. Every other role
