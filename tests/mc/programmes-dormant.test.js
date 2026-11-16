@@ -40,7 +40,7 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 /** PROGRAMMES' lines, from its heading to the next section's. */
 function programmesOf(lines) {
   const text = lines.map(plain);
-  const head = text.findIndex((line) => line.startsWith('  PROGRAMMES'));
+  const head = text.findIndex((line) => line.startsWith('  ┌─ PROGRAMMES'));
   assert.ok(head >= 0, 'PROGRAMMES is drawn');
   const end = text.findIndex((line, n) => n > head && line.startsWith('  ┌─ MERGE '));
   return text.slice(head, end < 0 ? undefined : end);
@@ -90,8 +90,8 @@ describe('dormant programmes in the collector', () => {
 describe('dormant programmes on the page', () => {
   it('draws only active programmes, and one line for the dormant ones under the heading', () => {
     const lines = programmesOf(renderPageLines(pageData({ programmes: section() }), { columns: 120, now: NOW }));
-    assert.match(lines[0], /^ {2}PROGRAMMES/u);
-    assert.ok(lines.includes('  ▸ 1 dormant'));
+    assert.match(lines[0], /^ {2}┌─ PROGRAMMES/u);
+    assert.ok(lines.some((line) => /^ {2}┌─ 1 dormant programme ─+┐$/u.test(line)), lines.join('\n'));
     assert.ok(lines.some((line) => line.startsWith('  ┌─ planned ')));
     assert.ok(lines.some((line) => line.includes('PLAN')));
     assert.ok(!lines.some((line) => /no goal yet/u.test(line)), lines.join('\n'));
@@ -124,7 +124,7 @@ describe('dormant programmes on the page', () => {
   it('leaves the plan-session count out when no dormant programme has one', () => {
     const programmes = programmesSection({ goalRows: GOALS.slice(0, 2), programmes: ['empty'] });
     const lines = programmesOf(renderPageLines(pageData({ programmes }), { columns: 120, now: NOW }));
-    assert.ok(lines.includes('  ▸ 1 dormant'));
+    assert.ok(lines.some((line) => /^ {2}┌─ 1 dormant programme ─+┐$/u.test(line)), lines.join('\n'));
     assert.match(lines[0], /PROGRAMMES/u);
   });
 
@@ -141,7 +141,7 @@ describe('dormant programmes on the page', () => {
     for (const name of ['done-only', 'empty', 'goal-only', 'mc', 'planned']) {
       assert.ok(lines.some((line) => new RegExp(`^  ┌─ ${name}(?: |$)`, 'u').test(line)), `${name} has its heading`);
     }
-    assert.ok(lines.some((line) => /^ {2}┌─ empty · 0 goals/u.test(line)));
+    assert.ok(lines.some((line) => /^ {2}┌─ empty {2}0 goals/u.test(line)));
     assert.ok(!lines.some((line) => /mc programs list/u.test(line)));
     const numbers = data.programmes.programmes.flatMap((group) => group.goals).map((row) => row.number);
     assert.deepEqual(numbers.sort(), [1, 2, 3]);

@@ -225,7 +225,7 @@ describe('PROGRAMMES without finished goals', () => {
     const [group] = data.programmes.programmes;
     assert.equal(group.finished, 3);
     const lines = draw(data);
-    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), /inbox.* · 3 done/u);
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), /inbox {2}3 done/u);
     assert.ok(lines.some((line) => line.includes('Title c')));
     for (const name of ['a', 'b', 'd']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1/u.test(line)), 'phase 1 holds nothing drawn');
@@ -239,9 +239,9 @@ describe('PROGRAMMES without finished goals', () => {
     const data = page([...goalsFor(['x', 1, { stage: 'done' }]), goal('y', 1, { programme: 'second', stage: 'dropped' }), goal('z', 1, { programme: 'third' })]);
     const lines = draw(data);
     const first = lines.findIndex((line) => /^  ┌─ inbox /u.test(line));
-    assert.match(lines[first], /· 1 done/u);
+    assert.match(lines[first], / {2}1 done/u);
     assert.match(lines[first + 1], /^  ┌─ second /u, 'the next heading follows at once');
-    assert.match(lines[first + 1], /· 1 done/u);
+    assert.match(lines[first + 1], / {2}1 done/u);
     assert.ok(!programmeOf(lines, 'inbox').some((line) => /Phase|Title x|NEEDS/u.test(line)));
     assert.ok(programmeOf(lines, 'third').some((line) => line.includes('Title z')));
     assert.ok(width(lines[first]) <= 120);
@@ -295,7 +295,7 @@ describe('PROGRAMMES without finished goals', () => {
     const lines = draw(data);
     for (const name of ['asks', 'halted']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1|NEEDS ATTENTION|▸ Finished/u.test(line)));
-    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), / · 2 done/u);
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), / {2}2 done/u);
     const expanded = draw(data, { expand: true });
     for (const name of ['asks', 'halted']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
   });
