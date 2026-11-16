@@ -233,11 +233,11 @@ test('falls through: a candidate that cannot launch, or whose billing route is u
   };
   const noCodexLaunch = await readBy({ launch: (tool) => (tool === 'codex' ? { ok: false, reason: 'no adapter' } : f.deps.launch()) });
   assert.equal(noCodexLaunch.model, 'claude:opus', 'the author\'s model reads when the other cannot launch');
-  assert.match(noCodexLaunch.err, /codex gpt-6\.1-sol set aside — no adapter/u);
+  assert.match(noCodexLaunch.err, /codex:gpt-6\.1-sol cannot read — no adapter; trying the next reader/u);
   assert.match(noCodexLaunch.out, /on claude opus — the author is claude opus \(no other model could run\)/u);
   const noCodexRoute = await readBy({ billingRoute: (tool) => (tool === 'codex' ? { billing: 'unavailable', why: 'no API route' } : { billing: 'plan' }) });
   assert.equal(noCodexRoute.model, 'claude:opus');
-  assert.match(noCodexRoute.err, /codex gpt-6\.1-sol set aside — no API route/u);
+  assert.match(noCodexRoute.err, /codex:gpt-6\.1-sol cannot read — no API route; trying the next reader/u);
   const onBoth = await readBy({}, { ...f.baseEnv, MC_TOOL: 'codex', MC_MODEL: 'gpt-6.1-sol' });
   assert.equal(onBoth.model, 'claude:opus', 'the caller\'s model is the author, so it is last and the other reads');
 });
@@ -257,8 +257,8 @@ test('falls through: with [A, B, C] and the author C, A is set aside by its bill
     },
   });
   assert.equal(model, 'codex:gpt-6.1-sol', 'the author\'s model reads last');
-  assert.match(result.err, /agy gemini-4-argon-high set aside — no API route/u);
-  assert.match(result.err, /claude opus set aside — no adapter/u);
+  assert.match(result.err, /agy:gemini-4-argon-high cannot read — no API route; trying the next reader/u);
+  assert.match(result.err, /claude:opus cannot read — no adapter; trying the next reader/u);
   assert.match(result.out, /on codex gpt-6\.1-sol — the author is codex gpt-6\.1-sol \(no other model could run\)/u);
 });
 

@@ -6207,9 +6207,9 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
 /* ------------------------------------------------- a draft waiting for a plan reader (C4, C5) */
 
 /** The unread record `mc goal plan-review` writes for the draft's text as it is on disk (`hash` names another text when given). */
-const unreadRecord = (f, name, { hash = null } = {}) => {
+const unreadRecord = (f, name, { hash = null, at = '2026-11-15T10:00:00.000Z' } = {}) => {
   const current = goalHash(parseGoal(f.files[`${GOALS}/${name}/GOAL.json`]));
-  f.files[`${GOALS}/${name}/${UNREAD_FILE}`] = `${JSON.stringify({ hash: hash ?? current, author: null, set_aside: [], reason: 'no candidate is left', at: '2026-11-15T10:00:00.000Z' }, null, 2)}\n`;
+  f.files[`${GOALS}/${name}/${UNREAD_FILE}`] = `${JSON.stringify({ hash: hash ?? current, author: null, set_aside: [], reason: 'no candidate is left', at }, null, 2)}\n`;
 };
 
 /** The review list is one candidate whose tool cannot launch here, so the reader walk finds no reader. Returns the restore. */
@@ -6248,16 +6248,25 @@ test('a stated programme passes over a draft that waits for a plan reader and of
   assert.equal(where(f, 'd1'), 'draft · ready');
 });
 
-test('a plan session that ends with its draft ready and a current unread record waits for a plan reader, not Martin; another text\'s record, or none, puts it on Martin', async () => {
+test('a plan session that ends with its draft ready and a current unread record waits for a plan reader, not Martin; another text\'s record, an earlier session\'s record, or none, puts it on Martin', async () => {
   const ended = (record) => {
     const f = goalFixture({ a: { stage: 'draft' } });
     f.answer = (call) => { if (record) record(f); return okSession()(call); };
     return f;
   };
-  const waiting = ended((f) => unreadRecord(f, 'a'));
+  const waiting = ended((f) => unreadRecord(f, 'a', { at: f.deps.now().toISOString() }));
   await createRunner({ deps: waiting.deps }).pass();
   assert.equal(where(waiting, 'a'), 'draft · ready', 'the reader is the wait, not Martin');
   assert.doesNotMatch(waiting.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
+  assert.equal(waiting.log.filter((line) => /prog\/a: the draft is complete and waits for a plan reader \(no candidate is left\)/u.test(line)).length, 1, 'the session\'s end is said');
+  // An earlier session's record, current for the text, that this session leaves untouched: this session read nothing
+  // and answered nothing, so it is contained, or a reader that can run would relaunch it without progress.
+  const stale = goalFixture({ a: { stage: 'draft' } });
+  unreadRecord(stale, 'a', { at: new Date(stale.deps.now().getTime() - 3_600_000).toISOString() });
+  stale.answer = okSession();
+  await createRunner({ deps: stale.deps }).pass();
+  assert.deepEqual(planned(stale), ['prog/a'], 'a reader can run: the draft is offered to planning');
+  assert.equal(where(stale, 'a'), 'draft · Martin', 'a record written before the session is not this session\'s answer');
   const other = ended((f) => unreadRecord(f, 'a', { hash: '0'.repeat(64) }));
   await createRunner({ deps: other.deps }).pass();
   assert.equal(where(other, 'a'), 'draft · Martin', 'a record of another text is not a wait');

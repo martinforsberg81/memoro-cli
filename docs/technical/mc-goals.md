@@ -1390,7 +1390,7 @@ move exits 1 and writes nothing.
   another candidate can run (the author is `--avoid` when given, else the
   caller's `MC_TOOL`/`MC_MODEL`; with neither, nothing is excluded and the call
   and the record say the author is unknown). A candidate that cannot be launched
-  or whose billing route answers `unavailable` is set aside with its reason and
+  or whose billing route answers `unavailable` is set aside with its reason (stderr: `<tool>:<model> cannot read — <why>; trying the next reader`) and
   the next is asked, the author's model last; setting one aside makes no other
   the first choice. It is a child of the call with a 20-minute limit,
   no runner lane, in a read-only checkout with a unique path per call. The call
@@ -1527,7 +1527,7 @@ reconcile the programme README and phases, and move it to build immediately
 when ready. Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends or has a current unread record (`.plan-review-unread.json`, *Plan review*): then nothing is set, and the unread draft waits for a plan reader as a held draft waits, and is offered to planning again when a reader can run; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends or has a current unread record (`.plan-review-unread.json`, *Plan review*) that the session wrote (its `at` no earlier than the session's start): then nothing is set, and the unread draft waits for a plan reader as a held draft waits, and is offered to planning again when a reader can run; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its

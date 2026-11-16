@@ -127,7 +127,7 @@ import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapaci
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, billingRouteNow, gatewayLaunch } from './billing-route.js';
-import { goalHash, readerWalk, UNREAD_FILE, unreadFor } from './plan-review.js';
+import { goalHash, readerWalk, UNREAD_FILE, unreadFor, unreadReasons } from './plan-review.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
@@ -3538,9 +3538,14 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (planning) {
         const now = stateNow(goal);
-        // A draft with a current unread record waits for a reader, not for Martin (C5): no reader was asked, so nothing is wrong with it.
-        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready' && !unreadFor(goal.dir, deps.read, currentHash(goal.dir))) {
-          goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
+        // A draft whose reading found no reader during this session waits for a reader, not for Martin (C4): nothing was
+        // read, so nothing is wrong with it. A record older than the session is not this session's answer: a session that
+        // leaves it untouched is contained as any other, or a reader that can run would relaunch it without progress.
+        const unread = now.stage === 'draft' && now.status === 'ready' ? unreadFor(goal.dir, deps.read, currentHash(goal.dir)) : null;
+        const fresh = unread && Date.parse(unread.at ?? '') >= t0 ? unread : null;
+        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
+          if (fresh) say(`${name}: the draft is complete and waits for a plan reader (${unreadReasons(fresh)})`);
+          else goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
         }
       }
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });

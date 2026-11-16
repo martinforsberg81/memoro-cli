@@ -331,7 +331,7 @@ export function readerWalk({ catalog, capacity, now, author, env = {}, choose = 
       for (const one of pool) if (!gone.has(one) && !launchOf(one.tool)?.ok) sideline(one, launchReason(one));
       const live = pool.filter((one) => !gone.has(one));
       if (!live.length) return { reason: 'no candidate is left' };
-      const answer = choose({ cls: 'review', catalog: { ...catalog, review: live }, capacity, now, priority, first: live.includes(top) ? top : null });
+      const answer = choose({ cls: 'review', catalog: { ...catalog, review: live }, capacity, now, priority, first: live.includes(top) ? top : null, setAside: setAside.map(({ tool, model }) => ({ tool, model })) });
       if (!answer?.ok || !answer.candidate) return { reason: answer?.reason || 'no answer' };
       if (gone.has(answer.candidate)) return { reason: `the choice answered ${answer.candidate.tool} ${answer.candidate.model}, which is already set aside` };
       const launched = launchOf(answer.candidate.tool);
@@ -359,6 +359,12 @@ export function chooseReader({ catalog, capacity, now, author, choose = chooseCa
 }
 
 /** The unread record for the goal's current text (`hash`), or null: another text's record, or one that does not parse, is absent. */
+/** The reasons an unread record names, as the call wrote them: each candidate set aside, then the walk's own reason. */
+export function unreadReasons(record) {
+  const aside = Array.isArray(record?.set_aside) ? record.set_aside.map((one) => `${one.tool} ${one.model}: ${one.reason ?? one.why ?? '—'}`) : [];
+  return [...aside, record?.reason].filter(Boolean).join('; ') || '—';
+}
+
 export function unreadFor(dir, read, hash) {
   const record = jsonOrNull(read(join(dir, UNREAD_FILE)) ?? '');
   return record && typeof record === 'object' && record.hash === hash ? record : null;
@@ -505,11 +511,11 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   try {
     walked = readerWalk({
       catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author, env,
-      choose: deps.route ? () => deps.route('review') : deps.choose, launch: deps.launch ?? resolveLaunch,
+      choose: deps.route ? ({ setAside }) => deps.route('review', { setAside }) : deps.choose, launch: deps.launch ?? resolveLaunch,
       billing: deps.billingRoute ?? billingRouteNow, fallThrough: Boolean(policy.fallThrough),
     });
   } catch (error) { walked = { ok: false, reason: error.message || String(error), setAside: [] }; }
-  for (const one of walked.setAside ?? []) stderr.write(`mc: ${kind} ${target.name}: ${one.tool} ${one.model} set aside — ${one.reason}\n`);
+  for (const one of walked.setAside ?? []) stderr.write(`mc: ${kind} ${target.name}: ${one.tool}:${one.model} cannot read — ${one.reason}; trying the next reader\n`);
   if (!walked.ok) {
     if (!policy.unreadFile) { stderr.write(`mc: ${kind} ${target.name}: ${walked.failed ? walked.reason : `no review candidate can run — ${walked.reason}`}\n`); return invalidExit; }
     // No reader: nothing was read. The unread record is written under the claim, never beside a live launch.
