@@ -28,8 +28,8 @@ The page has two views of the whole: the overview, which is what `mc` opens on, 
 the operations view behind `o`. A programme has a third, its own view (HORIZONS,
 below).
 
-**The overview** (`page-overview.js`, `overviewLines`) is one screen on a normal
-day. In order: the header (two rows), DESK, the warnings, HORIZONS, the programmes
+**The overview** (`page-overview.js`, `overviewLines`) is as long as the work
+(No budget, below). In order: the header (two rows), DESK, the warnings, HORIZONS, the programmes
 with something under way (each its own frame, in name order), one folded frame for
 the others, MAINTENANCE, then one MERGE row per repository with a landing or a queue
 and a DEPLOY row while a deploy or its preparation runs. It draws from `data` alone,
@@ -85,8 +85,10 @@ header and the frame it had.
 `a` has always drawn a programme (a frame with its phases, goals, sessions and pull
 requests), in name order, not in the horizons' order. Its heading is its number and name in
 the title and, in the top rule, its horizon (`horizon 5`, the number the HORIZONS row gives, or
-`no horizon`), its phase (`phase 2 of 4`, `draft`), its goal count, proposals, priority
-and done count. Held, blocked and malformed goals, the sessions at work on a goal (under that
+`no horizon`), then its phase (`phase 2 of 4`, `draft`), its goal count, proposals, priority
+and done count; `  ·  ` sets the horizon apart from the name and from the phase, and ` · `
+joins the rest: `28  inbox-library-chat-repairs  ·  no horizon  ·  phase 1 of 2 · 2 goals · 7 proposals`
+(`programmeHeading`, `page-horizons.js`). Held, blocked and malformed goals, the sessions at work on a goal (under that
 goal) and the programme's plan sessions are drawn in its frame, so nothing is repeated
 in a separate attention list. Something under way is a `draft` record, an unfinished goal, a
 session, an open pull request or an item needing attention. The programmes with nothing under
@@ -95,10 +97,25 @@ way are one frame, `<n> programmes with nothing under way`, in its top rule alon
 
 **MAINTENANCE** is drawn when anything belongs to no programme, headed
 `MAINTENANCE  <n> outside the programmes`; one row per item, its label then its text
-(`maintenanceItems`, `page-overview.js`): a stray directory or a session of no area mc
-knows, a plan or runner session with no goal of a programme (a runner session's pull
-requests are its child rows, `↳ repo#N`) and a pull request outside the goals. The
-operations view's MAINTENANCE (proposals, errors) is a different frame and unchanged.
+(`maintenanceItems`, `page-overview.js`), in this order:
+
+- a failed merge that no goal's pull request carries (`merge failed — repo#N · <why>`);
+  a goal's failed merge is drawn under the goal;
+- a main-red repair that waits on Martin, or a main-red record mc cannot read;
+- a deploy repair that waits on Martin, or a deploy repair record mc cannot read;
+- a failed deploy preparation, and a failed deploy attempt with the step it stopped at
+  (a preparation that runs is DEPLOY's row, not maintenance);
+- a stray directory, with its checkout and uncommitted count, or a tmux or register
+  session of no area mc knows, with how long it has been open and its pid;
+- a plan or runner session with no goal of a programme (a runner session's pull
+  requests are its child rows, `↳ repo#N`);
+- a pull request outside the goals, with whose it is.
+
+A held, blocked, malformed or stopped goal, a finished goal not archived and a goal's
+failed merge are its programme's, drawn in its frame, never here. The live page's key
+reads each item without its age (`fact`), as it reads a session by its identity: an item
+growing older does not reprint the page. The operations view's MAINTENANCE (proposals,
+errors) is a different frame and unchanged.
 
 **The desk's sessions** are counted in DESK's title (`<n> desk sessions open`), not
 listed: the martin, manager and helper sessions.
@@ -554,7 +571,7 @@ The prompt answers against the page on the screen: `run()` numbers each draw as 
 
 The reader uses `/dev/tty`, not the stdin the next tool inherits. A number
 shows a goal or opens a programme; it starts no coding session. `pageKey` includes every goal's
-programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. It also includes the overview's rows: which sessions are in flight (not their ages), each NEEDS ATTENTION item and its text, and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
+programme, name, title, phase, stage, status, phase hold, criteria and running mark, plus session identity and check-ins and the desk's identity (the ids waiting, the not-ready, failed and stuck counts and the decided figures; not an age and not the cost) and the overview's: each programme's number, name and horizon, and the open horizons' slugs. It also includes the overview's rows: which sessions are in flight (not their ages), each MAINTENANCE item and its text without its age (a session item by its identity alone), and each MERGE and DEPLOY row's fact. A change in any of them is a new page, so it is printed whole like any other. If
 that key changes while the top of the page is off-screen, the live reader
 prints the page whole so scrolling up finds the new state. Clocks alone do
 not trigger that reset.

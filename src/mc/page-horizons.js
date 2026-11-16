@@ -80,15 +80,19 @@ export function horizonWords(data, group) {
 export function programmeHeading(c, wide, data, group, facts) {
   const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
   const goals = group.goals?.length || 0;
-  const parts = [
-    horizonWords(data, group),
+  // README.md Part 2: `28  name  ·  no horizon  ·  phase 1 of 2 · 2 goals · 7 proposals`.
+  const rest = [
     phase,
     plural(goals, 'goal'),
     group.proposals ? plural(group.proposals, 'proposal') : '',
     group.priority ? `priority ${group.priority}` : '',
     facts.done ? `${facts.done} done` : '',
   ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
-  if (group.record_invalid) parts.push({ text: 'record invalid', styles: ['red'] });
+  if (group.record_invalid) rest.push({ text: 'record invalid', styles: ['red'] });
+  // With no horizons read there is no horizon to set apart: the facts follow the name as any frame's do.
+  const horizon = horizonWords(data, group);
+  if (horizon && rest.length) rest[0] = { ...rest[0], sep: '  ·  ' };
+  const parts = horizon ? [{ text: horizon, styles: ['grey'], sep: '·  ' }, ...rest] : rest;
   const number = group.number != null ? `${group.number}  ` : '';
   return frameTop(c, wide, `${number}${group.programme}`, parts);
 }

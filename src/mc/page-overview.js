@@ -165,7 +165,8 @@ export function outsidePrs(prs, sessionPrs = []) {
 export function maintenanceItems(data) {
   const items = [];
   const groups = data.programmes?.programmes || [];
-  const add = (key, label, text, tone = ['red'], children = []) => items.push({ key, label, text: one(text), tone, children });
+  // `fact` is what the live page key reads when the text carries an age (pageKey): the item without how old it is.
+  const add = (key, label, text, tone = ['red'], children = [], fact) => items.push({ key, label, text: one(text), tone, children, ...(fact != null ? { fact: one(fact) } : {}) });
 
   const mine = new Set();
   for (const group of groups) for (const goal of group.goals || []) for (const pr of goal.prs || []) if (pr.merge_red) mine.add(`${pr.repo || 'unknown'}#${pr.number}`);
@@ -192,11 +193,14 @@ export function maintenanceItems(data) {
     add('deploy:attempt', 'deploy', `attempt failed ${production.failed.short || ''}${production.failed.stopped_at || production.progress?.step ? ` — ${production.failed.stopped_at || production.progress.step}` : ''}`.replace(/ {2,}/gu, ' '));
   }
   for (const stray of data.programmes?.strays || []) {
-    const facts = stray.kind === 'directory' || !stray.kind
-      ? `not an area mc knows · checkout ${stray.checkout ? `yes · ${stray.uncommitted} uncommitted` : 'no'}`
-      : stray.kind === 'tmux' ? `not an area mc knows · tmux session · ${openFor(stray.age_seconds)}`
-        : `not an area mc knows · ${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme · ${openFor(stray.age_seconds)}${stray.pid ? ` · pid ${stray.pid}` : ''}`;
-    add(`stray:${stray.name}`, stray.name, facts, ['yellow']);
+    if (stray.kind === 'directory' || !stray.kind) {
+      add(`stray:${stray.name}`, stray.name, `not an area mc knows · checkout ${stray.checkout ? `yes · ${stray.uncommitted} uncommitted` : 'no'}`, ['yellow']);
+      continue;
+    }
+    const what = stray.kind === 'tmux' ? 'not an area mc knows · tmux session'
+      : `not an area mc knows · ${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme`;
+    const pid = stray.kind !== 'tmux' && stray.pid ? ` · pid ${stray.pid}` : '';
+    add(`stray:${stray.name}`, stray.name, `${what} · ${openFor(stray.age_seconds)}${pid}`, ['yellow'], [], `${what}${pid}`);
   }
 
   // Sessions no programme explains: a runner session on no goal of any programme, and a plan or programme session

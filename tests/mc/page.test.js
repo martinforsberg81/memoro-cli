@@ -55,7 +55,7 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * The programme frames of a page by programme name: `{ heading, body }` for every frame whose heading names a programme
  * (its number when it has one, then its horizon words), the body being the rows up to the frame's bottom rule.
  */
-const programmeFramesOf = (lines, pattern = /^ {2}┌─ (?:\d+ {2})?(\S+) {2}(?:horizon|no horizon)/u) => {
+const programmeFramesOf = (lines, pattern = /^ {2}┌─ (?:\d+ {2})?(\S+) {2}· {2}(?:horizon|no horizon)/u) => {
   const frames = new Map();
   lines.forEach((row, i) => {
     const head = pattern.exec(row);
@@ -2343,7 +2343,7 @@ describe('collectPage', () => {
       const lines = renderPageLines(data, { columns, now: NOW, overview: true });
       const frame = programmeFramesOf(lines).get('draft-programme');
       assert.ok(frame, `${columns}: draft is under way, drawn in its own frame\n${lines.join('\n')}`);
-      assert.match(frame.heading, /draft-programme {2}horizon 1 · draft/u);
+      assert.match(frame.heading, /draft-programme {2}· {2}horizon 1 {2}· {2}draft/u);
       assert.doesNotMatch(frame.heading, /dormant|phase/u);
       assert.ok(lines.every(line => width(line) <= columns), `${columns}: width`);
     }
@@ -2376,8 +2376,8 @@ describe('collectPage', () => {
     const group = { programme: 'p', number: 7, record_state: 'open', current_phase: 2, horizon: 'first', priority: 3, finished: 4, proposals: 1, goals: [{ stage: 'build', phase: 2 }, { stage: 'plan', phase: 3 }] };
     const draft = { programme: 'd', number: 8, record_state: 'draft', current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
     const head = (item, columns = 160) => programmeHeading(text => text, columns - 2, data, item, programmeFacts(item));
-    assert.match(head(group), /^ {2}┌─ 7 {2}p {2}horizon 5 · phase 2 of 3 · 2 goals · 1 proposal · priority 3 · 4 done ─+┐$/u);
-    assert.match(head(draft), /^ {2}┌─ 8 {2}d {2}no horizon · draft · 1 goal ─+┐$/u);
+    assert.match(head(group), /^ {2}┌─ 7 {2}p {2}· {2}horizon 5 {2}· {2}phase 2 of 3 · 2 goals · 1 proposal · priority 3 · 4 done ─+┐$/u);
+    assert.match(head(draft), /^ {2}┌─ 8 {2}d {2}· {2}no horizon {2}· {2}draft · 1 goal ─+┐$/u);
     assert.doesNotMatch(head(draft), /phase/u, 'a draft has no phase');
     assert.ok(width(head({ ...group, programme: 'x'.repeat(60) }, 80)) <= 80);
     assert.match(programmeHeading(text => text, 158, { horizons: { open: [], none: [], unreadable: [] } }, { ...group, horizon: 'ghost', horizon_state: 'not held' }, programmeFacts(group)), /horizon ghost \(not held\)/u);
@@ -2471,9 +2471,9 @@ describe('collectPage', () => {
       // Below it, every programme with something under way, in name order: a plan-PR-only programme and one naming a horizon nobody holds too.
       const frames = programmeFramesOf(lines);
       assert.deepEqual([...frames.keys()], ['mc', 'p-unheld', 'plan-only']);
-      assert.match(frames.get('mc').heading, /^ {2}┌─ \d+ {2}mc {2}horizon 1 · phase 1 of 1 · 1 goal/u);
-      assert.match(frames.get('p-unheld').heading, /^ {2}┌─ \d+ {2}p-unheld {2}horizon ghost \(not held\)/u);
-      assert.match(frames.get('plan-only').heading, /^ {2}┌─ \d+ {2}plan-only {2}no horizon/u);
+      assert.match(frames.get('mc').heading, /^ {2}┌─ \d+ {2}mc {2}· {2}horizon 1 {2}· {2}phase 1 of 1 · 1 goal/u);
+      assert.match(frames.get('p-unheld').heading, /^ {2}┌─ \d+ {2}p-unheld {2}· {2}horizon ghost \(not held\)/u);
+      assert.match(frames.get('plan-only').heading, /^ {2}┌─ \d+ {2}plan-only {2}· {2}no horizon/u);
       assert.ok(frames.get('plan-only').body.some((row) => /PRs without a goal/u.test(row)), 'its plan pull request is in its frame');
       // The ones with nothing under way are folded into one frame that says how many, and where they are.
       assert.ok(!/p-second|p-none/u.test(text), 'nothing under way is folded, not drawn');
@@ -2517,7 +2517,7 @@ describe('collectPage', () => {
       assert.match(body, /runner pid 4000/u, `${columns}: the runner session sits under its goal`);
       assert.equal(body.match(/runner pid 4000/gu).length, 1);
       assert.match(body, /PLAN/u, `${columns}: the plan session`);
-      if (columns === 160) assert.match(frame.heading, /horizon 1 · phase 1 of 3 · 6 goals · 2 proposals · priority 5 · 1 done · record invalid/u, frame.heading);
+      if (columns === 160) assert.match(frame.heading, / {2}· {2}horizon 1 {2}· {2}phase 1 of 3 · 6 goals · 2 proposals · priority 5 · 1 done · record invalid/u, frame.heading);
       // HORIZONS counts the same goals: open, landed, held, and a mark while a session works.
       const row = lines.find((line) => /Title of first/u.test(line));
       assert.match(row, /1 programme +4 open · 1 landed · ⊘ 1 +●$/u, `${columns}: ${row}`);
@@ -3061,6 +3061,19 @@ describe('MC', () => {
     assert.equal(activity(), activity({ elapsed_seconds: 120 }), 'clock ticks do not reprint off-screen work');
     assert.notEqual(activity(), activity({ started: '2026-11-05T09:00:00Z' }), 'a replacement session is visible');
     assert.notEqual(activity(), activity({ check_ins: 1 }), 'a check-in is visible even off-screen');
+    // A stray session's MAINTENANCE row says how long it has been open; that is not news, its arrival and its pid are.
+    for (const kind of ['tmux', 'register']) {
+      const stray = (over = {}) => pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS,
+        sessionStrays: [{ kind, name: 'mc-odd', verb: 'plan', pid: 41, age_seconds: 60, ...over }] }) }));
+      const text = (age_seconds) => maintenanceItems(pageData({ programmes: programmesSection({ goalRows: GOALS,
+        sessionStrays: [{ kind, name: 'mc-odd', verb: 'plan', pid: 41, age_seconds }] }) })).find((item) => item.key === 'stray:mc-odd').text;
+      assert.notEqual(text(60), text(7200), `${kind}: the row says its age`);
+      assert.match(text(7200), / · open /u);
+      assert.equal(stray(), stray({ age_seconds: 7200 }), `${kind}: an ageing stray does not reprint the page`);
+      assert.notEqual(key({}), stray(), `${kind}: a stray arriving does`);
+    }
+    assert.notEqual(pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, sessionStrays: [{ kind: 'register', name: 'mc-odd', pid: 41, age_seconds: 60 }] }) })),
+      pageKey(pageData({ programmes: programmesSection({ goalRows: GOALS, sessionStrays: [{ kind: 'register', name: 'mc-odd', pid: 42, age_seconds: 60 }] }) })), 'another pid is another session');
     assert.equal(pageKey({}), '');
     assert.notEqual(pageKey({ providerPriority: 'codex' }), pageKey({ providerPriority: 'claude' }));
   });
@@ -3760,7 +3773,7 @@ describe('the overview: its order, its programmes and what belongs to none', () 
     assert.ok(hasFrame(lines, 'MERGE', 'memoro · 1 queued'));
     // The programmes name their horizon; the five serving none say so.
     const frames = framesOf(lines);
-    assert.match(frames.get('prog-01').heading, /horizon 1 · phase 1 of 1/u);
+    assert.match(frames.get('prog-01').heading, /prog-01 {2}· {2}horizon 1 {2}· {2}phase 1 of 1/u);
     assert.match(frames.get('prog-10').heading, /no horizon/u);
     assert.match(lines.find((row) => /Horizon 1 /u.test(row)), /3 programmes +3 open · ⊘ 1 +●$/u);
   });
