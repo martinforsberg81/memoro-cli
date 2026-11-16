@@ -54,7 +54,7 @@ import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
 import {
-  KIND_TONE, PR_QUIET_S, PR_TONE, STAGE_TONE, STATE_TONE, clipCell, duration, kindTone,
+  KIND_TONE, PR_QUIET_S, PR_TONE, STAGE_TONE, STATE_TONE, duration, kindTone,
 } from './page-grid.js';
 import { clip, pad, painter, width } from './status-render.js';
 
@@ -99,21 +99,6 @@ function paint(c, parts, space = Infinity) {
   const plain = items.map((part) => part.text).join('');
   if (plain.length > space) return c(clip(plain, space), 'grey');
   return items.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
-}
-
-/** Wrap fields before painting so narrow layouts retain results and warnings. */
-function wrappedParts(lines, c, wide, indent, parts) {
-  let current = [];
-  const flush = () => {
-    if (current.length) lines.push(`${' '.repeat(indent)}${paint(c, between(current, ' · '))}`);
-    current = [];
-  };
-  for (const part of parts.filter(part => part.text)) {
-    if (width(paint(c, between([...current, part], ' · '))) > wide - indent) flush();
-    if (part.text.length > wide - indent) detail(lines, c, wide, indent, part.text, part.styles);
-    else current.push(part);
-  }
-  flush();
 }
 
 /**
@@ -321,49 +306,6 @@ const LANE_REPO = 11;
 /** Past this, the age is the thing on the row worth looking at. */
 const STALE_SESSION_S = 24 * 60 * 60;
 const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
-
-/** Aggregated maintenance queues and recorded error priorities. */
-function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
-  panelHeading(lines, c, wide, 'MAINTENANCE');
-  const countTone = count => count == null || count > 0 ? ['yellow'] : ['grey'];
-  detail(lines, c, wide, 4, 'Proposals', ['orange', 'bold']);
-  wrappedParts(lines, c, wide, 6, [
-    { text: `New / unassigned ${intake?.proposals ?? '?'}`, styles: countTone(intake?.proposals) },
-    { text: `Unhandled ${intake?.unhandled ?? '?'}`, styles: countTone(intake?.unhandled) },
-  ]);
-  lines.push('');
-  detail(lines, c, wide, 4, 'Errors', ['orange', 'bold']);
-  // Fixed numeric cells keep priorities aligned; paint after padding.
-  const repoWidth = 14;
-  lines.push(`      ${pad('', repoWidth)}${'New'.padStart(7)}${'Critical'.padStart(10)}${'High'.padStart(7)}`);
-  const repos = [...new Set(['memoro', 'memoro-cli', ...(intake?.repos || []).map(repo => repo.repo)])];
-  for (const name of repos) {
-    const digest = intake?.repos?.find(repo => repo.repo === name);
-    const fresh = digest && !digest.first ? digest.new_errors : null;
-    const number = (value, size, tone) => c(String(value ?? '?').padStart(size), ...(value == null ? ['yellow'] : value > 0 ? tone : ['grey']));
-    lines.push(`      ${c(pad(clipCell(name, repoWidth), repoWidth), 'bold')}${number(fresh, 7, [])}${number(digest?.critical, 10, ['red'])}${number(digest?.high, 7, ['yellow'])}`);
-    const age = !digest ? 'no digest' : digest.age_seconds == null ? 'age unknown' : `collected ${ageWords(digest.age_seconds)} ago`;
-    detail(lines, c, wide, 8, `${age}${digest?.first ? ' · no baseline' : ''}`, ['grey']);
-    if (expand) {
-      const reading = checks?.repos?.find(repo => repo.repo === name);
-      const test = reading?.test;
-      const deps = reading?.deps;
-      detail(lines, c, wide, 8, test ? `full test ${ageWords(test.age_seconds)} · ${test.short || '?'} · ${test.red == null ? 'unknown' : test.red ? `${test.red} red` : 'green'}` : 'full test never run', test?.red ? ['red'] : ['grey']);
-      detail(lines, c, wide, 8, deps ? `deps ${ageWords(deps.age_seconds)} · ${deps.short || '?'} · ${deps.critical} critical · ${deps.high} high` : 'deps never read', deps?.critical ? ['red'] : deps?.high ? ['yellow'] : ['grey']);
-    }
-  }
-  const last = intake?.last_run;
-  if (last && !last.ok) detail(lines, c, wide, 6, `Last collection failed · ${ageWords(last.age_seconds)} ago`, ['red']);
-  lines.push('');
-  detail(lines, c, wide, 4, 'Other intake', ['orange', 'bold']);
-  detail(lines, c, wide, 6, `${intake?.other_intake ?? '?'} waiting`, countTone(intake?.other_intake));
-  const helpers = sessions?.desk_sessions?.helper || (sessions?.desks?.helper ? [sessions.desks.helper] : []);
-  for (const helper of helpers) {
-    lines.push('');
-    lines.push(...activityLines(c, wide, { ...helper, kind: 'helper' }, { indent: 4, expand }));
-  }
-  panelEnd(lines, c, wide);
-}
 
 /**
  * MERGE's loose PR group — open pull requests no programme or session draws.
@@ -840,33 +782,16 @@ function pipelineLines(lines, c, raw, wide, data) {
 /* ------------------------------------------------------------------- page */
 
 /**
- * The operations view's panels, and what `a` draws after the overview: MARTIN QUEUE, merges, pull requests, deploy,
- * DEV, MAINTENANCE and SYSTEM. No budget applies to them.
+ * The operations view's panels, and what `a` draws after the overview: merges, pull requests, deploy, DEV and SYSTEM.
+ * MAINTENANCE and DESK (the Martin queue) are the overview's. No budget applies to them.
  */
 function operationsBody(lines, c, wide, data, { expand, version, at }) {
   const runner = data.runner || {};
-  const sessions = data.sessions || { desks: {} };
   if (lines.length && lines.at(-1) !== '') lines.push('');
-  const mendMartin = (data.checks?.main_mend || []).flatMap((repo) => repo.entries.filter((entry) => entry.state === 'Martin').map((entry) => ({ ...entry, repo: repo.repo })));
-  if (mendMartin.length) {
-    panelHeading(lines, c, wide, 'MARTIN QUEUE', `${mendMartin.length} main-red files waiting`, 'mc martin get');
-    for (const entry of mendMartin) {
-      detail(lines, c, wide, 4, `${entry.repo} · ${entry.file}${entry.pr ? ` · #${entry.pr}` : ''}`, ['red', 'bold']);
-      detail(lines, c, wide, 6, entry.reason, ['red']);
-      detail(lines, c, wide, 6, entry.session_log);
-    }
-    panelEnd(lines, c, wide);
-  }
   for (const repo of data.checks?.main_mend || []) if (repo.error) detail(lines, c, wide, 2, `${repo.repo}: ${repo.error}`, ['red']);
   const deployMend = data.checks?.deploy_mend;
   if (deployMend?.error) detail(lines, c, wide, 2, `deploy repair: ${deployMend.error}`, ['red']);
-  if (deployMend?.state === 'Martin') {
-    panelHeading(lines, c, wide, 'MARTIN QUEUE', '1 deploy repair waiting', 'mc martin get');
-    detail(lines, c, wide, 4, deployMend.line, ['red', 'bold']);
-    detail(lines, c, wide, 6, deployMend.reason, ['red']);
-    detail(lines, c, wide, 6, deployMend.session_log);
-    panelEnd(lines, c, wide);
-  } else if (deployMend?.line) detail(lines, c, wide, 2, deployMend.line.replace(/^mc: /u, ''), ['yellow']);
+  if (deployMend?.state !== 'Martin' && deployMend?.line) detail(lines, c, wide, 2, deployMend.line.replace(/^mc: /u, ''), ['yellow']);
   mergesLines(lines, c, wide, data.merges, expand);
   prsLines(lines, c, wide, data.prs, (runner.sessions || []).flatMap(session => session.prs || []));
   lines.push('');
@@ -876,8 +801,6 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
   const devTop = lines.length;
   devLines(lines, c, wide, data.dev, expand);
   frameEnd(lines, c, wide, devTop);
-  lines.push('');
-  maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);
   lines.push('');
   panelHeading(lines, c, wide, 'SYSTEM');
   mcLine(lines, c, wide, data.mc, data.caches, version);
@@ -921,7 +844,8 @@ export function renderPageLines(data, {
     return lines;
   }
   if (operations) {
-    headerLines(lines, c, paintText, wide, data, version, { header: true });
+    // FIGURES 24 h and PIPELINE are its first frames: the header rows are the overview's.
+    headerLines(lines, c, paintText, wide, data, version);
     warningLines(lines, c, wide, data);
     operationsBody(lines, c, wide, data, body);
     return lines;
