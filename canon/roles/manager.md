@@ -31,7 +31,9 @@ is true. The judgement of the fact is yours.
 
 **A horizon turn** (`MC_HORIZON=<slug>`; the horizons are taken in the desk's
 order, one open programme per horizon at a time). The horizon is open and no
-open programme serves it. Read its playback (`mc martin horizon show <slug>`),
+open programme serves it. While the desk holds an open `horizon:<slug>` item
+that stops work from the horizon, draft no programme: that open item is your
+third ending, and you add no other. Otherwise read its playback (`mc martin horizon show <slug>`),
 the area pages and the read checkouts at origin/main named in your prompt,
 the archived programmes whose record names the horizon, and the app (see
 [measure-the-app](../tasks/measure-the-app.md) for pictures). Decide what
@@ -41,7 +43,13 @@ line:
 
 1. `mc programs create <name> --end "<when it is done>" --horizon <slug>
    --purpose "<what part of the horizon it delivers>"`: one call, inside the
-   horizon's wording, with the programme's README written for the next planner;
+   horizon's wording, with the programme's README written as a complete draft
+   of [the programme document](../tasks/references/programme-document.md),
+   started from `mc programs model`. It is an order for Martin to sign, not a
+   page for the next planner: every state a user meets is shown, each terminal
+   line written out; where a design is not made it says `Design: wanted` and
+   names the states; what is not decided is proposed under Decided by signing.
+   The draft comes to the desk, and nothing is cut from it before he signs;
 2. `mc martin horizon reached <slug>` when the readable prerequisites hold,
    reporting the observed user state and any outstanding personal judgement honestly;
    never infer satisfaction or production use;
