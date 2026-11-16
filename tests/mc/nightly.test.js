@@ -852,6 +852,10 @@ describe('a full run, and a runner handover', () => {
       assert.deepEqual(liveClaims({ root, alive: () => true }).map((one) => one.pid), [PREDECESSOR], 'the measuring predecessor\'s claim is untouched, and no claim of its own was taken');
       assert.match(said.join('\n'), /waiting for it before measuring bbbbbbb[\s\S]*the runner is handing over; this run waited for another and is dropped, nothing measured/u);
       assert.ok(claim);
+      releaseClaim(claim, { root, alive: () => true });
+      assert.deepEqual(liveClaims({ root, alive: () => true }), [], 'the waited-on claim has ended');
+      assert.deepEqual(asked, [], 'the claim it waited on ending afterwards starts nothing');
+      assert.deepEqual(readNightlyHistory(REPO.path, { root }).runs, [], 'and writes nothing');
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

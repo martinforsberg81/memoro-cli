@@ -2952,6 +2952,27 @@ test('full run: a STOP during the drain of a measured run ends it through the st
   assert.doesNotMatch(log, /every session pid 4242 held has ended — exiting/u);
 });
 
+test('full run: a STOP with no UPDATE ends a measuring and a waiting run alike through both signals, and exits on STOP', async () => {
+  const f = goalFixture({}, { livePids: [4242] });
+  const probe = measuringNightly(f, { order: 'STOP', extra: ['follower'] });
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  const handovers = [];
+  f.deps.handOver = async () => { handovers.push('handed over'); return { ok: true, pid: 9001 }; };
+  pollsWith(f, () => {});
+  // The measuring run ends only through the stop signal, the waiting one only
+  // through the handover signal: the loop resolves only if both fired.
+  const exit = await runLoop({ deps: f.deps });
+  const settled = { stop: probe.seen.stop.aborted, handover: probe.seen.handover.aborted, followers: probe.seen.waiting.slice() };
+  assert.equal(exit, 0);
+  assert.deepEqual(handovers, [], 'STOP alone hands nothing over');
+  assert.deepEqual(settled, { stop: true, handover: true, followers: ['follower'] },
+    'settleFullRuns fired both signals: the stop signal ended the measuring round, the handover signal the waiting run');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /full run: ending 2 runs in flight before the runner leaves/u, 'both runs were in the map when STOP settled them');
+  assert.match(log, /chores: STOP — exiting/u);
+  assert.match(log, /runner exit on STOP/u);
+});
+
 test('full run: a runner taken over by another still finishes the run it measures, and says so', async () => {
   const f = goalFixture({}, { livePids: [4242, 9001] });
   const probe = measuringNightly(f, { order: 'NOTHING' });

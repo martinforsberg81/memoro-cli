@@ -35,14 +35,22 @@ not a message typed into the session being built.
 - `start` spawns the detached runner and writes runner.json as soon as the pid
   is known; it removes a previous STOP. A runner already running is refused.
   On a stopping runner, start takes over: a new runner takes new work while
-  its predecessor finishes only the sessions it already holds.
+  its predecessor finishes only the sessions it already holds and any full
+  run it is measuring.
 - `stop` writes `~/mc/runner/STOP`. It is sticky once seen: every lane finishes
-  its session and takes nothing more. `--force` also terminates the runner's
+  its session and takes nothing more, and every full run in flight, measuring
+  or waiting, is ended at once (a measured one is written `stopped at gone`
+  and is due again for the next runner). `--force` also terminates the runner's
   process group and removes its current files. It is not ordinary shutdown.
 - `--update` (`update` is equivalent) writes UPDATE. The first reader
   fast-forwards the installed checkout and starts its successor with the same
-  arguments and stdio; the old runner finishes its sessions. A requested
-  restart still happens when the checkout cannot fast-forward, with a warning.
+  arguments and stdio; the old runner finishes its sessions and any full run
+  it is measuring, starts no new one, and drops at once a run that only waits
+  for another or follows it. The successor starts no second run of a
+  repository whose run the old runner still measures: it follows or waits
+  through the claim, and measures the newer main once that run has ended.
+  The handover and drain lines name such a run (repository, short commit,
+  since when). A requested restart still happens when the checkout cannot fast-forward, with a warning.
 - The runner writes `runner/UPDATE` itself when origin/main has moved and
   that checkout is clean and fast-forwards, once per origin/main sha.
   Local work or divergence is said once, not silently discarded. The merger
@@ -838,7 +846,8 @@ that started a run. A chore pass with STOP or UPDATE present starts none. STOP
 ends the runs in flight before the runner leaves; an UPDATE does not end a run
 the runner is measuring — the runner that handed over finishes it like a
 session and exits after it, while a run that only waits for another or follows
-it is dropped at once — and `--once` runs no chores and so no full run. The detached scheduler that once did this
+it is dropped at once; the successor follows or waits for that run through
+its claim, and starts its own only once the run has ended — and `--once` runs no chores and so no full run. The detached scheduler that once did this
 (`mc test nightly start`, a pid file) is deleted; `mc test nightly status` says
 where the full runs now come from. See [`mc-merge.md`](mc-merge.md) § *The full
 run nobody asks for*.
