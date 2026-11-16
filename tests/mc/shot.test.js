@@ -265,7 +265,6 @@ describe('mc shot — the surface', () => {
   it('refuses what does not belong, each in one line', async () => {
     const fx = fixture();
     const cases = [
-      { name: 'not-loaded', result: { ok: false, code: 'not-loaded', error: 'loading' }, diagnostic: /page did not load/u },
       [['dev', 'home', '--me'], /--me is for prod/u],
       [['prod', 'home', '--here'], /--here is for dev/u],
       [['login', 'dev'], /is for prod only/u],
@@ -545,6 +544,7 @@ describe('mc shot — design sets', () => {
 
   it('stops on each diagnostic failure without opening or claiming the failed rendering', async () => {
     const cases = [
+      { name: 'not-loaded', result: { ok: false, code: 'not-loaded', error: 'loading' }, diagnostic: /page did not load/u },
       { name: 'action', result: { failed: { step: 1, kind: 'click', selector: '.a', error: 'missing' } }, diagnostic: /failed.*missing/u },
       { name: 'eval', result: { evaluated: [{ error: 'bad evaluation' }] }, diagnostic: /threw: bad evaluation/u },
       { name: 'access', result: { access: { requires: 'admin', account: 'new', role: 'user', expected: 'denied', page: 'granted', status: 200, holds: false } }, diagnostic: /gate did not hold/u },
