@@ -96,9 +96,23 @@ export function controlPaths(root) {
     runner: join(dir, 'runner.json'),
     stop: join(dir, 'STOP'),
     update: join(dir, 'UPDATE'),
+    wake: join(dir, 'WAKE'),
     log: join(dir, 'log', 'runner.log'),
     agentLog: join(dir, 'log', 'login-agent.log'),
   };
+}
+
+/**
+ * Wake the runner's sleeping lanes now: a desk act (a signature, a stage move, a release, a closed item) changed
+ * what may run, and the lanes should not sleep out their idle wait. Best effort: a failed write wakes nothing and
+ * the lanes find the work at their next pass.
+ */
+export function wakeRunner(root) {
+  try {
+    const { dir, wake } = controlPaths(root);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(wake, `${new Date().toISOString()} ${process.pid}\n`);
+  } catch { /* the next pass finds it */ }
 }
 
 export function realControlDeps(env = process.env) {

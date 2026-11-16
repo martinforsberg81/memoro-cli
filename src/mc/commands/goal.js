@@ -88,6 +88,7 @@ import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, e
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
+import { wakeRunner } from '../run-control.js';
 import { realLock } from '../runner-lock.js';
 import { mergesPath, parseQueue } from '../merge-queue.js';
 import { pidAlive, readCurrents } from '../status-collect.js';
@@ -228,6 +229,8 @@ export async function run(argv, deps = {}) {
     readKeys: deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values),
     // The plan review's injected launch, session, clock and checkout (`planReviewCall`); a test stands in for each.
     planReview: deps.planReview || {},
+    // A stage move or a release wakes the runner's idle lanes (`wakeRunner`); a test stands in for it.
+    wake: deps.wake || (() => wakeRunner(workRoot(env))),
   };
   const { flags } = scanned;
 
@@ -461,6 +464,7 @@ function logEntry(args, fields, ctx) {
       return 1;
     }
     now = outcome.goal;
+    if (moves) ctx.wake();
     // The first move out of draft by an interactive caller frees a creation hold (`created: true`) and no other hold (D3, C3).
     if (goal.stage === 'draft' && now.stage !== 'draft' && env.MC_HEADLESS !== '1' && readHold(target.dir, read)?.created === true) {
       ctx.remove(join(target.dir, HOLD_FILE));
@@ -1538,6 +1542,7 @@ function releaseVerb(args, flags, ctx) {
   ctx.remove(join(target.dir, HOLD_FILE));
   stdout.write(`mc: ${target.name} released\n`);
   for (const line of lines) stdout.write(`${line}\n`);
+  ctx.wake();
   return 0;
 }
 

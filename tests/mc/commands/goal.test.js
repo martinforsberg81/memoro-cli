@@ -3506,7 +3506,10 @@ test('a goal cut from a part of a signed programme moves to build without a plan
   const part = DRAFT_V2({ documents: [{ label: 'Part 1', path: `${HOME}/mc/SIGNED.md` }] });
   const cut = gateFixture({ text: part, verdicts: [] });
   cut.store[`${HOME}/mc/PROGRAMME.json`] = signed;
+  let woke = 0;
+  cut.deps.wake = () => { woke += 1; };
   assert.equal(await run(['stage', 'mc/plain', 'build'], cut.deps), 0, cut.err());
+  assert.equal(woke, 1, 'the stage move wakes the runner\'s idle lanes');
   assert.equal(parseGoal(cut.store[`${DIR}/GOAL.json`]).stage, 'build');
   assert.match(cut.store[`${DIR}/LOG.md`], /moved without a plan review — cut from a part of the signed programme document/u);
 

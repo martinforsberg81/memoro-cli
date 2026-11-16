@@ -17,6 +17,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
 import { archivedProgramsHome, programsHome, workRoot } from '../paths.js';
+import { wakeRunner } from '../run-control.js';
 import { shelveProgramme } from '../archive-programme.js';
 import { readAreas } from '../areas.js';
 import { readHorizons } from '../desk-horizons.js';
@@ -500,6 +501,7 @@ function signVerb({ positional: [name], flags }, { env, stdout, stderr, now = ne
     const before = readTextOrNull(log) ?? '';
     writeFileAtomic(log, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${result.record.signed_at} · martin · signed${reason ? ` — ${reason}` : ''}${earlier ? ' (the reading read an earlier text; the edits since were made at the desk)' : ''}\n`);
     stdout.write(`${name}: signed — goals may be cut\n`);
+    wakeRunner(workRoot(env));
     return 0;
   } catch (error) { stderr.write(`mc: could not sign ${name}: ${error.message}\n`); return 1; }
 }
