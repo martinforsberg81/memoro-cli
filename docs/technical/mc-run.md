@@ -635,7 +635,7 @@ With no file, the defaults are: `fast`, `claude:haiku:high` then
 `codex:gpt-6.1-sol:high`; mend, `claude:sonnet:medium` then
 `codex:gpt-6.1-sol:medium`; plan, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`; manager, `claude:opus:medium` then
-`codex:gpt-6.1-sol:medium`; decision, `claude:fable:high` then
+`codex:gpt-6.1-sol:medium`; decision, `claude:opus:high` then
 `codex:gpt-6.1-sol:high`. A file without finish, mend, plan, manager or decision reads
 that list from the defaults; a file without `medium` also reads its default.
 Missing defaulted lists are written back with every list the first time

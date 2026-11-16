@@ -68,7 +68,7 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
 | `programme-review` | sonnet | `programme-review` | `mc programs review`, called only by Martin's interactive session: an in-session advisory document reading that records no verdict and gates nothing, never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#programme-state-and-advisory-reading)) |
-| `ask-reader` | fable | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
+| `ask-reader` | opus | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `archive-reader` | sonnet | `archive-reader` | `mc run`, once per programme with a record whose goals are all finished: one headless read-only session on a fresh checkout at `origin/main` that writes `WRITE-BACK.md` in the programme directory ([mc-run.md](mc-run.md) § *Programme archive turn*) |
 | `build-session` | opus | `build-session:goal` | `mc run`, one headless session on a goal in `build`, a repair build when a review rejected it ([mc-goals.md](mc-goals.md) § *Repair and mend*) |
 | `review-session` | opus | `review-session:goal` | `mc run`, the review of a goal in `review` |
@@ -76,9 +76,9 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | `manager` | opus | `manager` | `mc run`, the manager's horizon and curation turns ([mc-run.md](mc-run.md)); `mc manager --headless`, an explicit fresh task; never a conversation |
 | `martin` | opus | `martin` | `mc martin`, foreground in `~/mc/martin/`; never the runner |
 | `intake` | sonnet | `intake` | the inbox drain, one headless turn per file |
-| `decision` | fable | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
+| `decision` | opus | `decision` | runner lane or a person’s `mc decision [<id>]`, unattended on its own `decision` list; full goal desk authority within headless hooks ([mc-martin.md](mc-martin.md)) |
 | `desk-prepare` | sonnet | `desk-prepare` | chores or the person’s `mc martin prepare`, one fresh headless evidence-only turn per new item on the `medium` list; no goal identity or mutation authority ([mc-martin.md](mc-martin.md)) |
-| `learning` | fable | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
+| `learning` | opus | `learning` | chores, at most once a UTC day when five lessons are open or the oldest is seven days old; one headless session in `~/mc/martin/lessons/` on the `decision` list. It may create goals and write the ones it created in the session, and nothing else ([mc-martin.md](mc-martin.md) § *Lessons and the learning pass*) |
 
 `programme-review` reads the document, horizon playback/basis, cited code and
 standards, unread places and pictures at origin/main. Its eight questions and
@@ -105,7 +105,7 @@ stage, hand off to an appropriate stage, rewrite goal/criteria/programme plan,
 move stages backward or forward, or drop. The goal verbs enforce it and log
 `by martin`; the role text alone is not authorization. It preserves JSON
 validation and acceptance, review, gate, publish and merge evidence. It cannot
-mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:fable:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
+mark criteria met administratively. The unattended `decision` role has the same goal authority, including rewriting, backward moves and dropping, but never administrative done. Its default list is `claude:opus:high`, then `codex:gpt-6.1-sol:high`; the interactive Martin role stays interactive-only. Headless hooks still refuse decision deploy/admin/production-data/credential acts. Other session roles retain their bounds.
 
 Horizons, what the desk holds as worked toward, are set, moved, reopened and dropped only by the interactive Martin role or a person; the unattended manager may mark one reached and may propose one as a text item, and never creates one. [mc-martin.md](mc-martin.md) § Horizons holds the rest.
 

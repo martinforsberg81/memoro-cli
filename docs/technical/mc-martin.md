@@ -508,7 +508,7 @@ exactly the runner's decision launch and prints the outcome and new state.
 The runner supplies every `prepared` item, oldest source first, as lane work; no
 `for-martin` item is ever lane work, however long it has waited, behind merge-failure and
 main-red mend and ahead of finish, review, build and planning. The `decision`
-list defaults to `claude:fable:high`, then `codex:gpt-6.1-sol:high`; old catalogs
+list defaults to `claude:opus:high`, then `codex:gpt-6.1-sol:high`; old catalogs
 without it read these defaults without rewriting the file. Its first usable
 subscription candidate wins in catalog order (including unknown-Claude
 bootstrap); if none can run, existing API-reserve admission applies. It never

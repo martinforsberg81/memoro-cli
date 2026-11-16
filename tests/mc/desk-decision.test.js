@@ -24,8 +24,8 @@ test('three prepared items receive decision identity, role, default candidate, c
     const item = [a,b,c].find(x => call.prompt.includes(x.id));
     assert.ok(item);
     assert.equal(call.env.MC_ROLE, 'decision'); assert.equal(call.env.MC_HEADLESS, '1');
-    assert.equal(call.env.MC_TOOL, 'claude'); assert.equal(call.env.MC_MODEL, 'fable');
-    assert.ok(call.args.includes('fable')); assert.ok(call.args.includes('high'));
+    assert.equal(call.env.MC_TOOL, 'claude'); assert.equal(call.env.MC_MODEL, 'opus');
+    assert.ok(call.args.includes('opus')); assert.ok(call.args.includes('high'));
     const instructions = call.args[call.args.indexOf('--append-system-prompt') + 1];
     assert.ok(instructions.includes(readCanonRole('decision').overlay));
     assert.ok(call.checkInMs > 0); assert.ok(call.stallMs > 0);
@@ -135,7 +135,7 @@ test('decision uses its first usable candidate, falling back within its own list
   const f = fixture(t), item = f.add('decision:record');
   let capacity = applyObservation(normaliseCapacity(null), 'codex', { windows:{primary:{fraction_used:0.1,resets_at:'2026-11-14T15:00:00Z'}}, models:[{id:'gpt-6.1-sol',efforts:['high']}] },NOW);
   f.deps.capacity = {read:()=>capacity,write(){}};
-  f.deps.session = async call => { assert.equal(call.env.MC_MODEL,'fable','catalog order wins over measured fallback capacity'); await f.close(item); return result; };
+  f.deps.session = async call => { assert.equal(call.env.MC_MODEL,'opus','catalog order wins over measured fallback capacity'); await f.close(item); return result; };
   assert.equal((await f.runner().pass()).ran,1);
   capacity = applyRefusal(capacity,'claude','2026-11-14T15:00:00Z');
   const fallback = f.add('decision:fallback');
