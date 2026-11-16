@@ -146,6 +146,9 @@ export const PLAN_WINDOWS = Object.freeze(['five_hour', 'weekly']);
 /** A login interruption refuses the plan: a login that cannot succeed is not relaunched. */
 export const LOGIN_REFUSES_PLAN = true;
 
+/** A quota refusal names the model that was refused: the plan's other models still run. */
+export const QUOTA_SCOPE = 'model';
+
 /** No plan refusal or stream window is recorded in billing state for this tool. */
 export const PLAN_STATE = null;
 

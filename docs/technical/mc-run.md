@@ -350,7 +350,8 @@ review build-model avoidance; within that provider the existing capacity and
 model ranking remains. Preferred Claude with unknown, stale, failed or reset
 usage is an attempted subscription launch even when Codex has measured room;
 this does not assert unknown usage is zero. A live refusal or unexpired full
-window excludes that provider until reset. An unavailable preferred Codex
+window of a provider excludes that provider until its reset; a quota refusal
+of agy excludes only the model it refused (*Quota scope*). An unavailable preferred Codex
 model/effort falls back to another subscription before API reserve. Existing
 API-off guards still apply.
 `auto` keeps capacity balancing. Manager and intake use role-appropriate
@@ -470,9 +471,10 @@ an idle lane whose wait began before that ends its wait at the next 30-second
 poll instead of sleeping out `--idle-sleep`. The helper's
 shared quota pause reports `every lane sleeping 30m` when no reset is named;
 a named reset sleeps until one minute after it. Orders break the pause in
-short slices. A goal's provider refusal instead records that provider's
-unavailability and lets the next goal route past it. API and plan refusals
-are recorded separately for the next launch.
+short slices. That pause is for a plan-scoped quota only: a quota that refused
+one model (agy) pauses no lane (*Quota scope*). A goal's provider refusal instead
+records that provider's unavailability and lets the next goal route past it. API
+and plan refusals are recorded separately for the next launch.
 
 ### Billing
 
@@ -486,7 +488,8 @@ This applies to every current MC session path: build, review, repair, mend,
 helper, and interactive sessions. An ordinary interactive `mc plan` still lets
 Martin choose the tool and model; billing follows that choice. A repair build or
 mend session runs on its own catalog list (finish, mend; `finish` is the list's name, kept), never the goal's
-class, and is billed as any other session. `mc run --billing` shows both providers' next routes. The MC page shows
+class, and is billed as any other session. `mc run --billing` shows both providers' next routes, and names an agy model
+that refused and its reset (*Quota scope*). The MC page shows
 one billing line.
 
 The API reserve is switched per provider:
@@ -496,6 +499,39 @@ class-routed goal routed to the reserve waits instead of starting. The wrapper r
 the switch again before it opens the key, so a launch decided before the switch
 was turned off never reaches the API. A running session keeps its billing.
 Absent, both are on.
+
+### Quota scope (`QUOTA_SCOPE`)
+
+A quota refusal names who was refused. Each adapter declares it as
+`QUOTA_SCOPE`, read through the registry like every other capability, and a tool
+that declares none is refused by name where the refusal is written:
+
+- `'model'` (agy) — the quota is a model's. The refusal is written for that
+  `tool:model` until the reset the message names, else for the quota sleep
+  (`QUOTA_SLEEP_MS`). The provider stays eligible and review passes the model by;
+  another agy model is still chosen. agy's text names the reset relative
+  (`Resets in 149h56m21s`); `quotaResetAt` reads that form, capped at eight days
+  (`QUOTA_RESET_MAX_MS`), as it reads a clock time.
+- `'plan'` (claude, codex) — the quota is the plan's. The provider is refused
+  until the reset, as before, and Claude's `plan.refused_until` is written as it
+  always was.
+
+The provider is refused whole in three cases only: a plan-scoped quota, a login
+refusal on a tool whose plan counts it (`LOGIN_REFUSES_PLAN`: agy, claude), and
+a full measured window (agy's `/usage` read at 100 %). A quota read whose model
+is not known is written provider-wide.
+
+The refusal is written by `refusePlanOnRead` (`plan-refusal.js`), the one rule
+every unattended caller uses, to `model-capacity.json` as `model_refusals` — an
+optional map per provider, model slug to ISO instant, beside `refusal_until`. A
+file without the map reads as empty, and an instant that has passed holds
+nothing. `chooseCandidate` judges the provider's refusal first and then the
+candidate's own model refusal; a model refusal is never a reason to route to an
+API key. The lane-wide `quotaPause` (the intake drain, the learning pass and
+desk preparation) runs for a plan-scoped quota only. `mc run --billing` names
+the refused model and its reset (`agy 57% (gemini-4-argon-high refused until
+2026-11-22T17:27:21.000Z) plan …`), and `billingRoute` for another model of the
+provider still reads *plan available*.
 
 The gateway wrapper opens only the fixed `mc-anthropic-api-key` (Anthropic) or
 `mc-openai-api-key` (OpenAI) record from MC Vault. The provider key stays in the
@@ -675,8 +711,9 @@ never zero.
   recorded (`tests/fixtures/agy/README`).
 - **A plan refusal is written by every unattended caller.** A session whose
   read is `quota`, or a `login` on a tool whose plan counts it as a refusal
-  (agy, claude), on the plan route, is written as the provider's refusal until
-  the reset it names, else for the quota sleep, by one function
+  (agy, claude), on the plan route, is written as a refusal until the reset it
+  names, else for the quota sleep — the model's for a model-scoped quota, the
+  provider's otherwise (*Quota scope*) — by one function
   (`plan-refusal.js`) the runner's `refuseProvider`, the helper
   and manager turns, the learning pass and desk preparation all call; a write
   that fails is said and the session's result stands.
@@ -719,7 +756,8 @@ never zero.
 **The choice at launch.** `chooseCandidate` judges each candidate of the class
 at that instant:
 
-- *refused* — its provider refused, and the refusal has not passed. Never chosen.
+- *refused* — its provider, or its own model, refused, and the refusal has not
+  passed. Never chosen.
 - *exhausted* — a window in force is at 100 % or more. Never chosen until that
   window resets.
 - *known* — every window in force has a read, each under 100 %. Its headroom is

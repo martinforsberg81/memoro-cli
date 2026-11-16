@@ -15,7 +15,7 @@ import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { realLock } from './runner-lock.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
-import { refusePlanOnRead } from './plan-refusal.js';
+import { quotaFields, refusePlanOnRead } from './plan-refusal.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 import { pidAlive } from './status-collect.js';
@@ -85,7 +85,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
     try { result = await (deps.session || realSession)({ ...processLaunch, cwd: dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: PREPARE_TIMEOUT_MS, group: true }); }
     catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
-    refusePlanOnRead({ read: summary, launch, billing: billing.billing, env, now: now(), say: deps.say });
+    refusePlanOnRead({ read: summary, launch, model: candidate.model, billing: billing.billing, env, now: now(), say: deps.say });
     let prepared = false;
     let reason = result.timedOut ? 'preparation exceeded fifteen minutes' : `turn exited ${result.status ?? 1} without preparing the item (${summary.note})${result.stderr ? `: ${String(result.stderr).slice(0, 1000)}` : ''}`;
     // The failure is counted on the record read under the lock, and only while it is still new.
@@ -105,7 +105,7 @@ export async function prepareDeskItem({ id, env = process.env, now = () => new D
       seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: prepared ? 'prepared' : reason,
       model: candidate.model, cls: 'medium', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
     (deps.logRun || (row => appendRun(row, env)))(row);
-    return { started: true, ok: prepared, ...summary, reason: prepared ? null : reason };
+    return { started: true, ok: prepared, ...summary, ...quotaFields(summary, launch), reason: prepared ? null : reason };
   } finally { release(); }
 }
 
@@ -116,7 +116,7 @@ export async function drainDeskPreparation({ env = process.env, now = () => new 
     const turn = await prepareDeskItem({ id: item.id, env, now, deps });
     if (turn.started) done.push(item.id);
     if (turn.reason) deps.say?.(`desk-prepare: ${turn.reason}`);
-    if (turn.quota) { await deps.quotaPause?.(turn.quotaReset); break; }
+    if (turn.quota && turn.quotaScope !== 'model') { await deps.quotaPause?.(turn.quotaReset); break; }
     if (turn.held) break;
   }
   return { done };

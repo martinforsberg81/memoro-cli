@@ -558,6 +558,9 @@ export const PLAN_WINDOWS = Object.freeze(['five_hour', 'seven_day']);
 /** A login interruption means the plan refused the session. */
 export const LOGIN_REFUSES_PLAN = true;
 
+/** A quota refusal is the plan's: every model of the provider is refused with it. */
+export const QUOTA_SCOPE = 'plan';
+
 /**
  * The plan's refusal is recorded in billing state (`plan.refused_until`) and
  * its windows are read from the session's stream: the mechanism `src/mc/run.js`

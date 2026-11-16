@@ -13,6 +13,7 @@ import * as registry from '../../src/adapters/index.js';
 import { contextUsage, deleteConversation, lastModel } from '../../src/mc/conversations.js';
 import { billingRoute } from '../../src/mc/billing-route.js';
 import { gatewayToolConfig } from '../../src/mc/billing-gateway-session.js';
+import { quotaScopeOf, refusePlanOnRead } from '../../src/mc/plan-refusal.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { describeWatch, headlessArgs, readSessionOutput } from '../../src/mc/run-plan.js';
 
@@ -42,6 +43,15 @@ describe('a tool with no declaration is refused where it would launch, bill or a
 
   it('billingRoute names the tool and BILLING_PROVIDER', () => {
     refuses(() => billingRoute({ provider: 'cursor' }), 'BILLING_PROVIDER');
+  });
+
+  it('a quota refusal names the tool and QUOTA_SCOPE', () => {
+    refuses(() => refusePlanOnRead({ read: { quota: true }, launch: { id: 'cursor' }, model: 'm', billing: 'plan', write: () => {} }), 'QUOTA_SCOPE');
+    refuses(() => quotaScopeOf({ id: 'cursor' }), 'QUOTA_SCOPE');
+  });
+
+  it('every implemented tool declares QUOTA_SCOPE: agy by model, claude and codex by plan', () => {
+    assert.deepEqual(registry.implementedTools().map((tool) => [tool, registry.requireCapability(tool, 'QUOTA_SCOPE')]).sort(), [['agy', 'model'], ['claude', 'plan'], ['codex', 'plan']]);
   });
 
   it('gatewayToolConfig names the tool and API_ROUTE', () => {

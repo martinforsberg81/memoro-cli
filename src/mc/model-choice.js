@@ -85,6 +85,9 @@ function judge(capacity, candidate, now) {
   if (!provider || !rule) return { state: 'unavailable', headroom: null, retry_at: null, why: `${candidate.tool} declares no ${provider ? 'MODEL_CHOICE' : 'BILLING_PROVIDER'}` };
   const standing = providerAt(capacity, provider, now);
   if (standing.refusal_until) return refused(provider, standing.refusal_until);
+  // A model-scoped quota refused this model alone: the provider's others stay candidates.
+  const spent = candidate.model ? standing.model_refusals[candidate.model] : null;
+  if (spent) return refused(`${provider}:${candidate.model}`, spent);
   if (rule.perModel) {
     const listed = codexCandidateAt(capacity, candidate, now);
     if (!listed.available) return { state: 'unavailable', headroom: null, retry_at: null, why: listed.why };

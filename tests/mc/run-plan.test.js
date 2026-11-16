@@ -641,6 +641,29 @@ describe('quotaResetAt', () => {
     assert.equal(quotaResetAt('resets 13pm', now), null);
   });
 
+  it('reads a relative reset as now plus the duration, and the clock-time forms as before', () => {
+    const now = new Date('2026-11-16T12:00:00Z');
+    const ahead = (text) => iso(quotaResetAt(text, now));
+    assert.equal(ahead('RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 149h56m21s.'), '2026-11-22T17:56:21.000Z');
+    assert.equal(ahead('Resets in 5h'), '2026-11-16T17:00:00.000Z');
+    assert.equal(ahead('Resets in 12m30s'), '2026-11-16T12:12:30.000Z');
+    assert.equal(ahead('Resets in 45s'), '2026-11-16T12:00:45.000Z');
+    assert.equal(ahead('limit reached, resets in 1d2h'), '2026-11-17T14:00:00.000Z');
+    assert.equal(iso(quotaResetAt(logged, new Date('2026-09-08T09:05:00Z'))), '2026-09-11T13:00:00.000Z');
+    assert.equal(ahead('resets 3pm (Europe/Stockholm)'), '2026-11-16T14:00:00.000Z');
+  });
+
+  it('a relative reset is null for a zero duration, no duration, and one beyond eight days, and kept at the boundary', () => {
+    const now = new Date('2026-11-16T12:00:00Z');
+    assert.equal(quotaResetAt('Resets in 0s', now), null);
+    assert.equal(quotaResetAt('Resets in 0h0m0s', now), null);
+    assert.equal(quotaResetAt('Resets in soon', now), null);
+    assert.equal(quotaResetAt('Resets in 193h', now), null, 'one hour beyond eight days');
+    assert.equal(quotaResetAt('Resets in 9d', now), null);
+    assert.equal(iso(quotaResetAt('Resets in 192h', now)), '2026-11-24T12:00:00.000Z', 'exactly QUOTA_RESET_MAX_MS is kept');
+    assert.equal(iso(quotaResetAt('Resets in 8d', now)), '2026-11-24T12:00:00.000Z');
+  });
+
   it('readSessionOutput carries it for a quota answer and null for anything else', () => {
     const now = new Date('2026-09-08T09:05:00Z');
     const stdout = JSON.stringify({ subtype: 'success', num_turns: 1, result: logged });

@@ -64,6 +64,7 @@ test('declarations: the terminal driver, no background or remote control, and ev
   const id = 'antigravity-cli';
   assert.equal(declared(id, 'PERSISTENT_DRIVER'), 'terminal');
   assert.deepEqual({ ...declared(id, 'SERVER_SESSION') }, { mechanism: 'tty', name: 'Antigravity' });
+  assert.equal(declared(id, 'QUOTA_SCOPE'), 'model', 'a spent model is not the plan');
   assert.equal(declared(id, 'BACKGROUND'), false);
   assert.equal(declared(id, 'REMOTE_CONTROL'), false);
   assert.equal(declared(id, 'PLAN_MODEL'), 'gemini-4-argon-high');

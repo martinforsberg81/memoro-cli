@@ -13,11 +13,15 @@
  *     adapter declares `LOGIN_REFUSES_PLAN`;
  *   - the session ran on the plan route (an API-billed session refused nothing
  *     about the plan);
- *   - the provider is refused until the reset the read names when that lies
- *     ahead, else for `QUOTA_SLEEP_MS` from now.
+ *   - what is refused is the launch's model when the read is a quota and the
+ *     tool's adapter declares `QUOTA_SCOPE` 'model' (agy: a spent model says
+ *     nothing about the plan's others), else the whole provider — a login
+ *     refusal, and a quota the adapter declares 'plan' (claude, codex);
+ *   - the refusal runs until the reset the read names when that lies ahead,
+ *     else for `QUOTA_SLEEP_MS` from now.
  *
- * The write is the provider's `refusal_until` in the capacity file, under the
- * runner lock; the runner passes its own `write` so its capacity observation
+ * The write is the provider's `refusal_until`, or its `model_refusals` entry
+ * for the model, in the capacity file, under the runner lock; the runner passes its own `write` so its capacity observation
  * (in memory, flushed by its ticker) stays the one writer inside the runner.
  * A write that fails is said and the caller's own result stands.
  */
@@ -40,28 +44,47 @@ export function planRefused(read, launch) {
   return Boolean(read?.quota) || (read?.interrupted === 'login' && declared(launch.id, 'LOGIN_REFUSES_PLAN') === true);
 }
 
-/** The file write: the provider's `refusal_until` under the runner lock. */
+/**
+ * Whether a read's quota is the plan's (every model of the provider is refused
+ * with it, and every lane may sleep on it) or one model's. A tool that declares
+ * no `QUOTA_SCOPE` is refused, as the other seams do.
+ */
+export function quotaScopeOf(launch) {
+  return requireCapability(launch.id, 'QUOTA_SCOPE');
+}
+
+/** The fields of a turn's result that say whether its quota may pause every lane (`quotaScope`). */
+export function quotaFields(read, launch) {
+  return read?.quota ? { quotaScope: quotaScopeOf(launch) } : {};
+}
+
+/** The file write: the provider's `refusal_until`, or the model's `model_refusals` entry, under the runner lock. */
 function writeRefusal({ env, lock }) {
-  return (provider, until) => {
+  return (provider, until, model = null) => {
     const root = runnerDir(env);
     mkdirSync(root, { recursive: true });
-    lock(workRoot(env), () => writeCapacity(applyRefusal(readCapacity({ root }), provider, until), { root }), { name: 'plan-refusal' });
+    lock(workRoot(env), () => writeCapacity(applyRefusal(readCapacity({ root }), provider, until, model), { root }), { name: 'plan-refusal' });
   };
 }
 
 /**
  * Write the plan refusal a read names, if it names one. `billing` is the route's
- * billing (`'plan'` or `'credits'`). Returns `{ provider, until }` when a
- * refusal was written (or attempted: `error` says why it failed), else null.
+ * billing (`'plan'` or `'credits'`); `model` is the model the launch ran. Returns
+ * `{ provider, model, until }` when a refusal was written (or attempted: `error`
+ * says why it failed), else null; `model` is null for a provider-wide refusal.
+ * A model-scoped quota whose launch names no model is written provider-wide.
  */
-export function refusePlanOnRead({ read, launch, billing, env = process.env, now = new Date(), lock = realLock, write = writeRefusal({ env, lock }), say = () => {} }) {
+export function refusePlanOnRead({ read, launch, model = null, billing, env = process.env, now = new Date(), lock = realLock, write = writeRefusal({ env, lock }), say = () => {} }) {
   if (billing !== 'plan' || !planRefused(read, launch)) return null;
+  const scope = read.quota ? quotaScopeOf(launch) : 'plan';
   const provider = requireCapability(launch.id, 'BILLING_PROVIDER');
+  const refusedModel = scope === 'model' && model ? model : null;
   const until = refusalInstant(read.quotaReset, now).toISOString();
-  try { write(provider, until); } catch (error) {
-    say(`could not record that ${provider} refused its plan until ${until}: ${error.message || String(error)}`);
-    return { provider, until, error };
+  const what = refusedModel ? `${provider}:${refusedModel}` : provider;
+  try { write(provider, until, refusedModel); } catch (error) {
+    say(`could not record that ${what} refused its plan until ${until}: ${error.message || String(error)}`);
+    return { provider, model: refusedModel, until, error };
   }
-  say(`${provider} refused until ${until}`);
-  return { provider, until };
+  say(`${what} refused until ${until}`);
+  return { provider, model: refusedModel, until };
 }

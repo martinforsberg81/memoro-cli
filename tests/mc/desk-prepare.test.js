@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import * as agy from '../../src/adapters/antigravity-cli.js';
 import * as codex from '../../src/adapters/codex.js';
+import { readCapacity } from '../../src/mc/model-capacity.js';
+import { runnerDir } from '../../src/mc/paths.js';
 import { prepareDeskItem, drainDeskPreparation } from '../../src/mc/desk-prepare.js';
 import { deskBudget, deskRunsPath, setDeskCeiling } from '../../src/mc/desk-budget.js';
 import { deskItemId, itemDirectory, readDeskItem, writeDeskItem } from '../../src/mc/desk-items.js';
@@ -81,6 +84,25 @@ test('quota and timeout endings record failed attempts, and quota pauses the dra
   assert.equal(readDeskItem(f.item.id, { env: f.env }).state, 'new');
   await f.call({ session: () => ({ ...result, status: 142, timedOut: true }) });
   assert.match(readFileSync(join(itemDirectory(f.item, f.env), 'prepared.md'), 'utf8'), /preparation exceeded fifteen minutes/u);
+});
+
+test('an agy quota refuses the model that was refused and pauses no lane, and the drain goes on to the next item', async t => {
+  const f = fixture(t), pauses = [], ran = [];
+  const second = { ...f.item, id: deskItemId('goal', 'example/second', f.now().toISOString()), reference: 'example/second' };
+  writeDeskItem(second, { env: f.env });
+  const out = await drainDeskPreparation({ env: f.env, now: f.now, deps: { ...f.deps,
+    route: () => ({ ok: true, candidate: { tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' } }),
+    launch: () => ({ ok: true, id: 'antigravity-cli', shortName: 'agy', spec: { bin: '/fake/agy' }, adapter: agy }),
+    session: () => { ran.push(1); return { status: 1, stdout: '', stderr: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 149h56m21s.' }; },
+    quotaPause: reset => pauses.push(reset),
+  } });
+  assert.deepEqual(pauses, [], 'a model-scoped quota sleeps no lane');
+  assert.equal(ran.length, 2, 'the drain went on');
+  assert.equal(out.done.length, 2);
+  const stored = readCapacity({ root: runnerDir(f.env) }).providers.agy;
+  assert.deepEqual(Object.keys(stored.model_refusals), ['gemini-4-argon-high']);
+  assert.equal(stored.model_refusals['gemini-4-argon-high'], new Date(f.now().getTime() + ((149 * 60 + 56) * 60 + 21) * 1000).toISOString());
+  assert.equal(stored.refusal_until, null);
 });
 
 test('absent and null ceilings never hold; set ceilings count only today desk kinds', async t => {

@@ -959,17 +959,27 @@ export function creditsResetAt(text) {
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const RESET_RE = /resets (?:([a-z]{3}) (\d{1,2}) at )?(\d{1,2})(?::(\d{2}))?\s?(am|pm)(?: \(([^)]+)\))?/iu;
 /** A reset further off than this is a misreading, not a limit. */
-const QUOTA_RESET_MAX_MS = 8 * 24 * 60 * 60 * 1000;
+export const QUOTA_RESET_MAX_MS = 8 * 24 * 60 * 60 * 1000;
+/** `Resets in 149h56m21s`: any ordered subset of d, h, m, s units after "resets in". */
+const RELATIVE_RESET_RE = /resets in (?=\d)(?:(\d+)d)?\s?(?:(\d+)h)?\s?(?:(\d+)m)?\s?(?:(\d+)s)?(?![a-z])/iu;
 
 /**
  * The time a quota refusal says it resets — `You've hit your weekly limit ·
  * resets Sep 11 at 3pm (Europe/Stockholm)` — as an instant, or null when the
  * text carries none that can be read. No date is today in that zone, or
  * tomorrow when the time has passed; a date more than a day behind `now` is
- * next year; no zone is the machine's. A time more than eight days out is
- * null: the pause is for a reset, not for a guess.
+ * next year; no zone is the machine's. A relative reset — agy's `Resets in
+ * 149h56m21s` — is `now` plus that duration; a zero duration reads as none.
+ * A time more than eight days out is null: the pause is for a reset, not for
+ * a guess.
  */
 export function quotaResetAt(text, now = new Date()) {
+  const relative = RELATIVE_RESET_RE.exec(String(text || ''));
+  if (relative && relative.slice(1).some((part) => part != null)) {
+    const [, days, hours, minutes, seconds] = relative.map((part) => (part == null ? 0 : Number(part)));
+    const ms = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+    return ms > 0 && ms <= QUOTA_RESET_MAX_MS ? new Date(now.getTime() + ms) : null;
+  }
   const m = RESET_RE.exec(String(text || ''));
   if (!m) return null;
   const [, mon, dayText, hourText, minText, meridiem, zone] = m;

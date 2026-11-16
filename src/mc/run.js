@@ -863,8 +863,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * `refusePlanOnRead`'s, the one every unattended caller writes; the runner
    * records it through its own capacity observation.
    */
-  function refuseProvider(read, launch, billing) {
-    return refusePlanOnRead({ read, launch, billing, now: deps.now(), say, write: (provider, until) => observeCapacity((state) => applyRefusal(state, provider, until)) });
+  function refuseProvider(read, launch, billing, model = null) {
+    return refusePlanOnRead({ read, launch, model, billing, now: deps.now(), say, write: (provider, until, refusedModel) => observeCapacity((state) => applyRefusal(state, provider, until, refusedModel)) });
   }
   /**
    * The API server cannot be reached (`apiInterruption` kind `offline`): no new
@@ -1358,7 +1358,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
           // The one way the drain fails to terminate, so it is said out loud
           // rather than inferred from the same file appearing every round.
           if (!archived) say(`intake: ${file} could not be moved out of the inbox — the next round will take it again`);
-          if (turn.quota) await quotaPause(turn.quotaReset);
+          if (turn.quota && turn.quotaScope !== 'model') await quotaPause(turn.quotaReset);
         },
       },
     });
@@ -1393,7 +1393,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       } });
       if (out.started) say(`learning: pass ran (${out.reason}); exit ${out.ok ? 0 : 'non-zero'}`);
       else if (out.reason) say(`learning: waiting — ${out.reason}`);
-      if (out.quota) await quotaPause(out.quotaReset);
+      if (out.quota && out.quotaScope !== 'model') await quotaPause(out.quotaReset);
     } catch (error) { say(`learning: waiting — ${error?.message || error}`); }
   }
 
@@ -1477,9 +1477,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const claims = new Set();
   const claimRepos = new Map();
   /** The billing of a launch: the route's when it sent the class to the API reserve, otherwise the plan's until a window is full or the plan has refused. */
-  async function billingFor(launch, route) {
+  async function billingFor(launch, route, model = null) {
     return route?.billing === 'credits' ? { billing: 'credits', why: route.why } : billingRoute({
-      provider: providerOf(launch),
+      provider: providerOf(launch), model,
       capacity: capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.(), now: deps.now(),
     });
   }
@@ -1734,7 +1734,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let admission; let scratch; let marker; let result;
     const currentPath = paths.currentFor(repoName, lane);
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') return 'skipped:no-capacity';
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -1787,7 +1787,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       const ended = deps.deskItems.read(name);
       // An item the session left prepared is not a successful ending.
       const unfinished = decisionUnfinished(ended);
@@ -1883,7 +1883,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let admission; let scratch; let marker; let result; let set = null;
     const currentPath = paths.currentFor(repoName, lane);
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -1937,7 +1937,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
@@ -2086,7 +2086,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const currentPath = paths.currentFor(repoName, lane);
     const readRepos = [];
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') { say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -2154,10 +2154,10 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      if ((read.quota || (launch.id !== 'codex' && read.interrupted === 'login')) && picked.billing === 'plan') refuseProvider(settings.tool, read.quotaReset);
+      refuseProvider(read, launch, picked.billing, settings.model);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
-      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && launch.id !== 'codex' && picked.billing === 'plan');
+      const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
       const parsed = parseWriteBack(deps.read(join(dir, WRITE_BACK_FILE)), { goals: due.goals, checkouts: shas });
       let note = `${read.note},${due.goals.length} goal${due.goals.length === 1 ? '' : 's'}`;
       if (!parsed.ok) {
@@ -2266,7 +2266,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let before = null;
     const currentPath = paths.currentFor(repoName, lane);
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') { say(`${turnLabel}: Anthropic credits unavailable (${picked.why}) — skip`); return 'skipped:no-capacity'; }
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -2334,7 +2334,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout || '');
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       const seconds = Math.round((deps.now().getTime() - t0) / 1000);
       // An ending the provider caused says nothing about the area texts: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
@@ -2463,7 +2463,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const ids = new Set(item.mainMend.map((entry) => entry.id));
     const state = mendState(repoName);
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') return 'skipped:no-capacity';
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -2518,7 +2518,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -2600,7 +2600,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let scratch; let marker; let out; let claimed = false; let result;
     const state = deployMendState();
     try {
-      const picked = await billingFor(launch, route);
+      const picked = await billingFor(launch, route, settings.model);
       if (picked.billing === 'unavailable') return 'skipped:no-capacity';
       admission = disk ? await disk.admit({ trigger: 'session:start', what: 'no session', hold: true }) : { admitted: true };
       if (!admission.admitted) return admission.busy ? 'skipped:disk-busy' : 'skipped:disk';
@@ -2658,7 +2658,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       noteWindows({ name, launch }, result.stdout);
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       logRun({ ts: stamp(), name, kind: 'mend', exit: result.status, seconds: Math.round((deps.now().getTime() - t0) / 1000), pr: '-', turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note: read.note, model: settings.model, cls: 'fast', tool: settings.tool, effort: settings.effort, billing: picked.billing, cost: read.cost });
       return 'ran';
     } finally {
@@ -3259,7 +3259,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const slot = await waitForSlot(name, { repo: repoName, lane });
     if (slot === 'stop') { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     if (slot !== 'ok') { say(`${name}: UPDATE while waiting for a lane — starting no session, skip`); return 'skipped:update'; }
-    const picked = await billingFor(launch, route);
+    const picked = await billingFor(launch, route, settings.model);
     if (picked.billing === 'unavailable') {
       dropSlot();
       say(`${name}: Anthropic credits unavailable (${picked.why}) — skip`);
@@ -3453,7 +3453,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       if (result.handedOff) read.note = 'success,queued';
       noteOfflineEnding(name, read.interrupted, { startedAt: t0 });
       recordRefusal({ name, launch, route }, read, picked.billing);
-      refuseProvider(read, launch, picked.billing);
+      refuseProvider(read, launch, picked.billing, settings.model);
       const spoke = parseLog(deps.read(logPath) ?? '').filter((entry) => entry.tool !== 'runner').length > entriesBefore;
       // A goal held when its session ends belongs to its hold's owner (D2): no stage, status or entry is written here.
       const holdAtEnd = readHold(goal.dir, deps.read);

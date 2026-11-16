@@ -616,6 +616,9 @@ export const PLAN_WINDOWS = Object.freeze(['primary', 'secondary']);
 /** A login interruption is not a plan refusal for this tool. */
 export const LOGIN_REFUSES_PLAN = false;
 
+/** A quota refusal is the plan's: every model of the provider is refused with it. */
+export const QUOTA_SCOPE = 'plan';
+
 /** No plan refusal or stream window is recorded for this tool. */
 export const PLAN_STATE = null;
 

@@ -8,7 +8,9 @@
  *
  * Per provider it holds the last valid observation — when it was taken, the
  * windows (the fraction of the plan used, and the instant the window resets),
- * the models the provider lists where that is known, and a refusal instant —
+ * the models the provider lists where that is known, a refusal instant (the
+ * provider's) and per-model refusal instants (`model_refusals`, additive: a file
+ * without it reads as none, an older mc ignores it) —
  * and, beside it, the last failure. A failure never erases the snapshot before
  * it; it says so. A window whose reset has passed is expired: its usage is
  * unknown, never zero.
@@ -78,6 +80,12 @@ function failure(value) {
   return { at: iso(value.at), why: value.why };
 }
 
+/** `{ <model>: <ISO instant> }` of the models a provider refused, bad entries dropped; empty when the file has none. */
+function modelRefusals(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([id, until]) => id && iso(until)).map(([id, until]) => [id, until]));
+}
+
 /** One provider as the file holds it, every bad field null or empty. Windows are null until something was observed. */
 function normaliseProvider(raw, provider) {
   const observed = iso(raw?.observed_at);
@@ -87,6 +95,7 @@ function normaliseProvider(raw, provider) {
     windows,
     models: observed && Array.isArray(raw?.models) ? raw.models.map(model).filter(Boolean) : null,
     refusal_until: iso(raw?.refusal_until),
+    model_refusals: modelRefusals(raw?.model_refusals),
     failure: failure(raw?.failure),
   };
 }
@@ -157,9 +166,16 @@ export function applyCollectedCapacity(state, provider, answer, now = new Date()
   return applyFailure(current, provider, { why: answer?.why || 'subscription read failed' }, now);
 }
 
-/** The instant a provider refused until, or null to clear it. */
-export function applyRefusal(state, provider, until) {
-  return withProvider(state, provider, { refusal_until: iso(until) });
+/**
+ * The instant a provider refused until, or null to clear it. With a `model`, the
+ * refusal is that model's alone (`model_refusals`): the provider's other models
+ * stay eligible. A passed instant of another model is dropped on the way.
+ */
+export function applyRefusal(state, provider, until, model = null, now = new Date()) {
+  if (!model) return withProvider(state, provider, { refusal_until: iso(until) });
+  const held = normaliseCapacity(state).providers[provider].model_refusals;
+  const live = Object.fromEntries(Object.entries(held).filter(([id, at]) => id !== model && after(at, now)));
+  return withProvider(state, provider, { model_refusals: iso(until) ? { ...live, [model]: iso(until) } : live });
 }
 
 /** `{ five_hour, seven_day }` of a claude stream, as fractions; a missing window is null. */
@@ -216,6 +232,7 @@ export function providerAt(state, provider, now = new Date()) {
     windows: windowsAt(state, provider, now),
     models: current.models,
     refusal_until: after(current.refusal_until, now) ? current.refusal_until : null,
+    model_refusals: Object.fromEntries(Object.entries(current.model_refusals).filter(([, until]) => after(until, now))),
   };
 }
 

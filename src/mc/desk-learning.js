@@ -19,7 +19,7 @@ import { runnerDir } from './paths.js';
 import { profileArgs } from './portrait.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, readSessionOutput, TIMEOUT_EXIT, tsvHeader, tsvRow } from './run-plan.js';
-import { refusePlanOnRead } from './plan-refusal.js';
+import { quotaFields, refusePlanOnRead } from './plan-refusal.js';
 import { scrubProviderApiKeysFromEnv } from './runtime-secrets.js';
 import { withoutSessionIdentity } from './session-role.js';
 
@@ -101,10 +101,10 @@ export async function runLearningPass({ env = process.env, now = () => new Date(
   try { result = await (deps.session || realSession)({ ...processLaunch, cwd: dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LEARNING_TIMEOUT_MS, group: true }); }
   catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
   const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
-  refusePlanOnRead({ read: summary, launch, billing: billing.billing, env, now: now(), say: deps.say });
+  refusePlanOnRead({ read: summary, launch, model: candidate.model, billing: billing.billing, env, now: now(), say: deps.say });
   const row = { ...summary, ts: now().toISOString(), name: 'learning', kind: 'learning', exit: result.status ?? 1,
     seconds: Math.round((now().getTime() - started.getTime()) / 1000), pr: '-', note: `${due}; ${result.timedOut ? 'exceeded the time limit' : `exit ${result.status ?? 1} (${summary.note})`}`,
     model: candidate.model, cls: 'decision', tool: candidate.tool, effort: candidate.effort, billing: billing.billing };
   (deps.logRun || ((entry) => appendRun(entry, env)))(row);
-  return { started: true, ok: result.status === 0, ...summary, reason: due, quota: summary.quota, quotaReset: summary.quotaReset };
+  return { started: true, ok: result.status === 0, ...summary, reason: due, quota: summary.quota, quotaReset: summary.quotaReset, ...quotaFields(summary, launch) };
 }

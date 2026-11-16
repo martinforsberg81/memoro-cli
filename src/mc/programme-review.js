@@ -239,7 +239,7 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd: target.dir, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: limitMs, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }
       summary = readSessionOutput({ toolId: launched.id, stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status, timedOut: result.timedOut, now: now(), model: candidate.model });
-      refusePlanOnRead({ read: summary, launch: launched, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: ${kind} ${target.name}: ${text}\n`) });
+      refusePlanOnRead({ read: summary, launch: launched, model: candidate.model, billing: billing.billing, env, now: now(), say: (text) => stderr.write(`mc: ${kind} ${target.name}: ${text}\n`) });
     }
   } finally {
     if (made) {

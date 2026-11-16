@@ -59,7 +59,7 @@ import { profileArgs } from './portrait.js';
 import { gitDirOf } from './repos.js';
 import { instructionsFor, readCanonRole } from './roles.js';
 import { headlessArgs, intakeQueue, INTAKE_PER_ROUND, readSessionOutput, sessionFinished, TIMEOUT_EXIT } from './run-plan.js';
-import { refusePlanOnRead } from './plan-refusal.js';
+import { quotaFields, refusePlanOnRead } from './plan-refusal.js';
 
 /** One turn over one file. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
@@ -365,7 +365,7 @@ export async function runHelperTurn({
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now, model: selectedModel,
   });
-  refusePlanOnRead({ read, launch, billing: billing.billing, env, now, say: deps.say });
+  refusePlanOnRead({ read, launch, model: selectedModel, billing: billing.billing, env, now, say: deps.say });
   const after = listAll(env);
   const wrote = after.filter((p) => !before.has(p.path));
   return {
@@ -374,6 +374,7 @@ export async function runHelperTurn({
     note: read.note,
     quota: read.quota,
     quotaReset: read.quotaReset,
+    ...quotaFields(read, launch),
     turns: read.turns,
     session: read.session,
     // What it cost, in the same columns runs.tsv keeps for a step: the daily
