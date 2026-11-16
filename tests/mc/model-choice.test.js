@@ -396,3 +396,19 @@ test('the API reserve never takes a tool with no API route: review and another l
   assert.equal(withRoute.spec, 'claude:opus:high', 'the reserve takes the candidate that has a route');
   assert.equal(withRoute.billing, 'credits');
 });
+
+test('a model refused by a model-scoped quota is passed by and the provider\'s other models stay eligible', () => {
+  const FLASH = { tool: 'agy', model: 'gemini-3.8-flash-high', effort: 'high' };
+  const room = claude(agy(empty(), win(0.57), win(0.16)), win(0.9));
+  const refusedArgon = applyRefusal(room, 'agy', AHEAD, ARGON.model);
+  const list = (review, capacity = refusedArgon) => chooseCandidate({ cls: 'review', catalog: { ...DEFAULT_CATALOG, review }, capacity, now: NOW });
+  assert.equal(list([ARGON, OPUS]).spec, 'claude:opus:high');
+  assert.equal(list([ARGON, FLASH, OPUS]).spec, 'agy:gemini-3.8-flash-high:high');
+  assert.equal(list([FLASH, ARGON]).spec, 'agy:gemini-3.8-flash-high:high');
+  const only = list([ARGON]);
+  assert.equal(only.ok, false);
+  assert.equal(only.retry_at, AHEAD);
+  assert.match(only.reason, /agy:gemini-4-argon-high refused until 2026-10-27T15:00:00\.000Z; no API route/u);
+  assert.equal(chooseCandidate({ cls: 'review', catalog: { ...DEFAULT_CATALOG, review: [ARGON, OPUS] }, capacity: refusedArgon, now: new Date(Date.parse(AHEAD) + 1) }).spec, 'agy:gemini-4-argon-high:high', 'its instant has passed');
+  assert.equal(list([ARGON, FLASH, OPUS], applyRefusal(refusedArgon, 'agy', AHEAD)).spec, 'claude:opus:high', 'a provider-wide refusal still passes every agy model');
+});

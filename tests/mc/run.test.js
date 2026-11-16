@@ -2913,6 +2913,31 @@ test('a turn that threw is archived too, and named as having thrown', async () =
 });
 
 /**
+ * A quota that refused one model (agy) refuses that model only: no lane sleeps on it (D5). A
+ * plan-scoped quota, and a turn that names no scope, still stop every lane until the reset.
+ */
+test('an intake turn refused on a model-scoped quota pauses no lane; a plan-scoped one, or none named, still does', async () => {
+  const ran = async (turn) => {
+    const f = fixture({ inbox: ['errors-memoro-2026-08-26.md'], helperTurn: async () => ({ ok: false, status: 1, reason: 'quota', note: 'quota', wrote: [], waiting: [], ...turn }) });
+    const sleeps = [];
+    f.deps.sleep = async (ms) => { sleeps.push(ms); };
+    await createRunner({ deps: f.deps }).runIntakeDrain();
+    assert.deepEqual(inboxLeft(f.files), [], 'the file had its turn either way');
+    return { sleeps, said: f.log.filter((line) => /every lane sleeping/u.test(line)) };
+  };
+  const reset = new Date('2026-08-29T20:00:00Z');
+  const model = await ran({ quota: true, quotaScope: 'model', quotaReset: reset });
+  assert.deepEqual([model.sleeps, model.said], [[], []], 'agy: no pause');
+  const plan = await ran({ quota: true, quotaScope: 'plan', quotaReset: reset });
+  assert.ok(plan.sleeps.length > 0, 'claude/codex: every lane sleeps');
+  assert.match(plan.said[0], /quota seen — every lane sleeping until 2026-08-29T20:01:00\.000Z/u);
+  const unnamed = await ran({ quota: true, quotaReset: null });
+  assert.equal(unnamed.said.length, 1, 'a turn naming no scope keeps the lane-wide pause');
+  const clean = await ran({ quota: false });
+  assert.deepEqual([clean.sleeps, clean.said], [[], []], 'no quota, no pause');
+});
+
+/**
  * The gate the split exists for: the drain asks whether there is a file, not
  * whether the day's collect has run. Thirteen files is five rounds, not
  * thirteen days.
@@ -7021,6 +7046,50 @@ test('programme archive: a NOT OK reading archives nothing, opens a prepared des
   const again = items().find((one) => one.id !== item.id);
   assert.deepEqual([again.state, again.sort, again.reversible], ['for-martin', 'mechanical', false]);
   assert.match(f.files[`${itemDirectory(again, f.deps.env)}/brief.md`], /## Vad det gäller/u);
+});
+
+/** The archive reading routed to agy's Argon (the large list's first entry), as the programme turn is on the plan list. */
+function archiveOnAgy(f) {
+  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), large: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
+  const launch = f.deps.launch;
+  f.deps.launch = (tool) => (tool === 'agy' ? { ok: true, id: 'antigravity-cli', shortName: 'agy', adapter: agyAdapter, spec: { bin: '/bin/agy' } } : launch(tool));
+}
+
+test('programme archive: an agy quota refuses that model until the reset it names, no provider and no failure; a claude quota refuses the provider', async () => {
+  const f = archiveFixture({ body: null });
+  wireDesk(f);
+  archiveOnAgy(f);
+  f.answer = () => ({ status: 1, stdout: '', stderr: 'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 149h56m21s.', timedOut: false });
+  const runner = createRunner({ deps: f.deps });
+  await runner.pass({ repo: 'memoro' });
+  assert.deepEqual(archiveSessions(f).map((call) => call.env.MC_TOOL), ['agy']);
+  const { agy, claude } = f.deps.capacity.read().providers;
+  const reset = new Date(f.deps.now().getTime() + ((149 * 60 + 56) * 60 + 21) * 1000).toISOString();
+  assert.deepEqual([agy.refusal_until, agy.model_refusals], [null, { 'gemini-4-argon-high': reset }], 'the model is refused until the reset, the provider is not');
+  assert.equal(claude.refusal_until, null);
+  assert.equal(f.files[ARCHIVE_STATE], undefined, 'a quota ending counts for nothing against the programme');
+
+  // Claude's quota is the plan's: the provider is refused, and no model is.
+  const c = archiveFixture({ body: null });
+  wireDesk(c);
+  c.answer = REFUSED_429;
+  await createRunner({ deps: c.deps }).pass({ repo: 'memoro' });
+  const claudeRefused = c.deps.capacity.read().providers.claude;
+  assert.ok(claudeRefused.refusal_until, 'claude refused as a provider');
+  assert.deepEqual(claudeRefused.model_refusals, {});
+  assert.equal(c.files[ARCHIVE_STATE], undefined);
+});
+
+test('programme archive: a login ending on agy refuses the provider through LOGIN_REFUSES_PLAN and counts no failure', async () => {
+  const f = archiveFixture({ body: null });
+  wireDesk(f);
+  archiveOnAgy(f);
+  f.answer = () => ({ status: 1, stdout: '', stderr: 'authentication required: please sign in', timedOut: false });
+  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
+  const { agy } = f.deps.capacity.read().providers;
+  assert.ok(agy.refusal_until, 'the provider is refused');
+  assert.deepEqual(agy.model_refusals, {});
+  assert.equal(f.files[ARCHIVE_STATE], undefined, 'a refused login counts for nothing against the programme');
 });
 
 test('programme archive: a malformed or missing WRITE-BACK.md is a failed reading; the second opens a for-martin item', async () => {

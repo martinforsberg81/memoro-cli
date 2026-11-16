@@ -76,7 +76,7 @@ export async function runManagerTurn({ prompt, tool = null, model = null, minute
       result = { status: 1, stdout: '', stderr: error.message || String(error) };
     }
     const summary = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut, now, model: selectedModel });
-    refusePlanOnRead({ read: summary, launch, billing: billing.billing, env, now, say: deps.say });
+    refusePlanOnRead({ read: summary, launch, model: selectedModel, billing: billing.billing, env, now, say: deps.say });
     const ok = sessionFinished(result, summary);
     const answer = sessionAnswer(launch.id, result.stdout);
     const receipt = { ...summary, answer, ok, status: result.status, tool: launch.shortName || launch.id, model: selectedModel, providerPriority: priority, routeWhy, billing: billing.billing, started: now.toISOString(), finished: new Date().toISOString(), prompt, stdout: result.stdout, stderr: result.stderr };

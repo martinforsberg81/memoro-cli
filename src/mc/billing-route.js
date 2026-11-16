@@ -12,12 +12,14 @@ const after = (value, now) => Number.isFinite(Date.parse(value || '')) && Date.p
 /**
  * `api` is `readBillingApi`'s switch per API provider: a provider switched off
  * stays on its plan when the plan is spent, and the session meets the plan's
- * own refusal instead of the API key. Absent, both are on.
+ * own refusal instead of the API key. Absent, both are on. `model` names the
+ * model the launch will run: a refusal of that model alone spends the plan for it.
  */
-export function billingRoute({ provider, capacity, state, api, now = new Date() } = {}) {
+export function billingRoute({ provider, model = null, capacity, state, api, now = new Date() } = {}) {
   if (!billingProviders().includes(provider)) throw new Error(`unknown billing provider: ${provider} declares no BILLING_PROVIDER`);
   const standing = providerAt(capacity, provider, now);
-  const refused = standing.refusal_until || (adapterOfProvider(provider).PLAN_STATE != null && after(state?.plan?.refused_until, now) ? state.plan.refused_until : null);
+  // A model's refusal spends the plan for that model only; another model of the provider still has it.
+  const refused = standing.refusal_until || (model ? standing.model_refusals[model] : null) || (adapterOfProvider(provider).PLAN_STATE != null && after(state?.plan?.refused_until, now) ? state.plan.refused_until : null);
   const full = Object.values(standing.windows).filter((window) => window.status === 'known' && window.fraction_used >= 1);
   const spent = refused ? `plan refused until ${refused}` : full.length ? 'plan reached 100 %' : null;
   if (spent && api?.[provider] === false) return { billing: 'plan', why: `${spent}; API off` };
@@ -48,7 +50,8 @@ export function billingStatus({ capacity, state, api, now = new Date() } = {}) {
     const used = windows.length ? `${Math.round(Math.max(...windows.map((window) => window.fraction_used)) * 100)}%` : '?';
     const freshness = standing.status === 'failed' ? ' (read failed)' : standing.status === 'stale' ? ' (stale)' : '';
     const route = billingRoute({ provider, capacity, state, api, now });
-    return `${provider} ${used}${freshness} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
+    const spent = Object.entries(standing.model_refusals).map(([model, until]) => ` (${model} refused until ${until})`).join('');
+    return `${provider} ${used}${freshness}${spent} ${route.billing === 'plan' ? 'plan' : 'API'}${api?.[provider] === false ? ' (API off)' : ''}`;
   }).join(' · ');
 }
 
