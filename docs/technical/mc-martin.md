@@ -11,6 +11,11 @@ remembers of earlier openings. Launch does not make per-goal checkouts.
 
 ## What the desk is for
 
+`mc martin` may do everything: there are no limits in Martin's interactive
+sessions (Martin, 2026-11-16). What he says in the conversation is carried
+out, whatever it touches; the defaults below describe how the desk works
+when he has said nothing.
+
 The desk is Martin's way into the whole project, all work on memoro me and on
 mc (`canon/roles/martin.md`). Six kinds of work are done there: horizons are
 set and ordered; programmes are designed and ordered; what was not settled
