@@ -702,6 +702,48 @@ describe('mc shot — the run', () => {
     }
   });
 
+  it('reports a real retried start failure through both dev shot branches', async () => {
+    const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+    writeFileSync(join(fx.worktree, '.mc', 'dev.json'), JSON.stringify({
+      schema_version: 1, default_service: 'memoro-worker', services: {
+        'memoro-worker': { default_profile: 'full', profiles: { full: { start: { argv: ['npm', 'run', 'dev'] } } } },
+      },
+    }));
+    const logs = join(fx.worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(logs, { recursive: true });
+    for (const target of ['home', 'landing-sv']) {
+      for (const json of [false, true]) {
+        let t = 0;
+        let spawned = 0;
+        const result = await shot(['dev', target, ...(json ? ['--json'] : [])], fx, {
+          ensureDevServer: undefined,
+          root: join(fx.home, `registry-${target}-${json}`), tmpDir: fx.home,
+          processCwd: () => null, freeMemory: () => null,
+          clock: () => t, now: () => t, sleep: async (ms) => { t += ms; },
+          admit: async () => { t += 3000; return { ok: true, waited_ms: 3000 }; },
+          spawn: () => {
+            spawned += 1;
+            writeFileSync(join(logs, `dev-${target}-${json}-${spawned}.log`), `start failed: attempt ${spawned}\nstep ${spawned}\n`);
+            return { pid: 4242, unref() {} };
+          },
+          pidAlive: () => false,
+        });
+        assert.equal(result.code, 1);
+        assert.equal(spawned, 2);
+        if (json) {
+          const answer = JSON.parse(result.stdout);
+          assert.match(answer.error, /^start failed: attempt 2\n.*exited before it registered[\s\S]*step 2$/u);
+          assert.deepEqual(answer.timing, { slot_wait_s: 6, server_start_s: 7, shot_s: 0 });
+          assert.doesNotMatch(result.stderr, /mc: timing/u);
+        } else {
+          assert.equal(result.stdout, '');
+          assert.match(result.stderr, /mc: start failed: attempt 2\n.*exited before it registered[\s\S]*step 2\nmc: timing — slot wait 6 s, server start 7 s, shot 0 s \(server start failed\)\n$/u);
+        }
+        assert.equal((result.stderr.match(/starting once more/gu) || []).length, 1);
+      }
+    }
+  });
+
   it('the four first-criterion forms each build their request', async () => {
     const fx = fixture();
     const forms = [
