@@ -100,7 +100,7 @@ describe('bare mc', () => {
       const result = await runVerb(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'programmes', 'horizons', 'language', 'mc', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'billing', 'providerPriority', 'desk', 'sessions', 'dev', 'merges', 'prs', 'checks', 'docker', 'landed', 'desk_cost', 'intake', 'maintenance', 'programmes', 'horizons', 'language', 'mc', 'caches', 'notes']);
       assert.equal(page.providerPriority, 'auto');
       assert.deepEqual(page.merges.repos.map((repo) => [repo.repo, repo.state, repo.waiting, repo.day_count]),
         [['memoro', 'idle', [], 0], ['memoro-cli', 'idle', [], 0]]);
@@ -414,12 +414,14 @@ describe('the menu under the page', () => {
     const data = numbered([row('first-goal', '1'), row('second-goal', 'manager')]);
     assert.deepEqual(data.programmes.programmes.map((group) => [group.programme, group.number]), [['1', 3], ['manager', 4]]);
     const shown = [];
-    const session = drive(['manager', '4', '1', '3', 'q'], { data, show: (name) => shown.push(name) });
+    const maintained = [];
+    const session = drive(['manager', '4', '1', '3', 'q'], { data, show: (name) => shown.push(name), maintain: (on) => maintained.push(on) });
     assert.equal(await session.run(), 0);
-    // `manager` is the retired manager's letter (it says so and keeps the page), `1` is goal 1, and the numbers open the programmes.
+    // `manager` is the maintenance view's word (it opens it), `1` is goal 1, and the numbers open the programmes.
     assert.deepEqual(shown, ['manager', '1']);
+    assert.deepEqual(maintained, [true]);
     assert.deepEqual(session.opened, ['1/first-goal']);
-    assert.match(session.written.join(''), /the interactive manager is gone/u);
+    assert.doesNotMatch(session.written.join(''), /the interactive manager is gone/u);
   });
 
   it('opens the operations view on o or operations, from the overview and from a programme\'s view, and h or a number leaves it', async () => {
@@ -467,22 +469,30 @@ describe('the menu under the page', () => {
     assert.deepEqual(calls, []);
   });
 
-  // The interactive manager is gone (D10): its old letters print the refusal and the page stays; no session opens.
-  it('answers m, manager, b and brief with the refusal and draws the page again', async () => {
-    for (const answer of ['m', 'manager', 'b', 'brief']) {
+  // `m` and `manager` open the maintenance view (they no longer open the manager); `b` and `brief` still print the refusal (D10).
+  it('opens the maintenance view on m or manager, and answers b and brief with the refusal and draws the page again', async () => {
+    for (const answer of ['m', 'manager']) {
+      const calls = [];
+      const session = drive([answer, '1', 'q'], { maintain: (on) => calls.push(`maintain ${on}`), show: (name) => calls.push(`show ${name}`) });
+      assert.equal(await session.run(), 0, answer);
+      assert.deepEqual(calls, ['maintain true'], answer);
+      assert.doesNotMatch(session.written.join(''), /the interactive manager is gone/u, answer);
+      assert.deepEqual(session.opened, ['docx-editing-surface/docx-editor'], `${answer}: the page is still there to answer`);
+    }
+    for (const answer of ['b', 'brief']) {
       const session = drive([answer, '1', 'q']);
       assert.equal(await session.run(), 0, answer);
-      const said = session.written.join('');
-      assert.match(said, /mc: the interactive manager is gone — talk to the desk with `mc martin`, or give the manager one task with `mc manager --headless --prompt/u, answer);
+      assert.match(session.written.join(''), /mc: the interactive manager is gone — talk to the desk with `mc martin`, or give the manager one task with `mc manager --headless --prompt/u, answer);
       assert.deepEqual(session.opened, ['docx-editing-surface/docx-editor'], `${answer}: the page is still there to answer`);
     }
   });
 
-  it('names the desk and the operations view in the first line of keys, and keeps every line of keys within it', async () => {
+  it('names the desk and the operations view in the first line of keys, the maintenance view in another, and keeps every line of keys within it', async () => {
     const session = drive(['q']);
     await session.run();
     const keys = session.written.join('').split('\n').filter((line) => /^ {2}\S/u.test(line) && /·|<n>|priority|start/u.test(line));
     assert.ok(keys.some((line) => /^ {2}<n> {2}show a goal or open a programme {3}· {3}a {2}all \/ collapse {3}· {3}o {2}operations {3}· {3}h {2}home {3}· {3}d {2}desk$/u.test(line)), keys.join('\n'));
+    assert.ok(keys.some((line) => /^ {2}r {2}refresh {3}· {3}m {2}maintenance {3}·/u.test(line)), keys.join('\n'));
     // The first line is the widest: the other lines of keys are no wider than it, and it is no wider than 110 columns.
     const first = keys.find((line) => /<n>/u.test(line));
     assert.ok(first.length <= 110, `${first.length} columns`);
