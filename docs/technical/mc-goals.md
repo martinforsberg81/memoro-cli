@@ -169,7 +169,14 @@ written, and a write that would make one is refused with the field named.
   least one criterion. `mc goal new`'s skeleton has none yet, and parses as a
   draft: the runner starts no session on a goal in `build` with no criterion,
   and it cannot go to review.
-- `documents` — `[{ label, path }]` (`validateDocuments`).
+- `documents` — `[{ label, path }]` (`validateDocuments`). A document whose path
+  is its programme's `SIGNED.md` and whose label carries explicit `Part <n>`
+  references (`Part 1`, `Parts 1 and 2`, `Part 1; Part 2`; no range) names those
+  parts of the signed document: the programme turn's coverage reads them from
+  parsed live and archived goals, with no stage excluded (*Programme planning
+  turn* in [mc-run.md](mc-run.md#programme-planning-turn)). A path that
+  resolves to another file counts for nothing. The goal file has no other form
+  for it.
 
 **Version 2.** A GOAL.json of `"version": 2` is what `mc goal new` writes;
 version 1 is what `mc goal new --structure 1` and the converters write, and what
@@ -1014,7 +1021,7 @@ headless plan also ran (`no_goals_remaining`, `daily_proposals`) are
 disabled: their instructions were too poor to use (Martin, 2026-11-07), and
 `programme-plan.js` and `MC_PLAN_REASON` remain removed. The proposal and daily
 turns stay disabled. Next-draft planning below uses the existing goal-session
-mechanism instead, and a recorded open programme with no goals is planned by the
+mechanism instead, and a signed open programme not yet cut is planned by the
 programme planning turn ([mc-run.md](mc-run.md#programme-planning-turn)).
 
 ## What a build session does
@@ -1516,6 +1523,6 @@ proposal backlog in the headless planning turn. A completed session leaving
 `draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
-nor the daily-proposal turn: a programme with no goals is planned only when its
-record is valid and open (*Programme planning turn* in [mc-run.md](mc-run.md#programme-planning-turn)),
+nor the daily-proposal turn: a programme is planned by that turn only when its
+record is valid, open and signed, and its signature uncut (*Programme planning turn* in [mc-run.md](mc-run.md#programme-planning-turn)),
 and while that turn is claimed or current no next draft is planned in it.

@@ -15,7 +15,9 @@ its check, and each worktree's state.
   (a blank line parts paragraphs), `mc goal item add|set|remove <p>/<g> problem|premise|decision|change|preserve|risk|out-of-scope …`
   (it prints the item's id, B, P, D, C, V, R or X and a number, never given
   twice), `mc goal obligation set|remove <p>/<g> <area> …` (an area is `<repo>/<id>` where the repository declares areas; `mc goal areas <repo>|<p>/<g> [--at <rev>]` lists them),
-  `mc goal document add <p>/<g> --label "…" --path "…"`, `mc goal criterion add
+  `mc goal document add <p>/<g> --label "…" --path "…"` (a goal cut from a signed
+  programme names its part by adding the programme's SIGNED.md with the label
+  `Part <n>`, several as `Part 1; Part 2`), `mc goal criterion add
   <p>/<g> --criterion "…" --check "…"`, and `--evidence "…"`
   on `criterion add|set`. A build, review or mend
   session cannot write the parts. A session that ran a criterion's check
@@ -121,7 +123,7 @@ its check, and each worktree's state.
   oldest creation time, name). Unreadable goal data, or a first draft that waits on Martin or is held, prevents that launch. One session completes only that draft into
   build using its goal worktrees. Interactive mc plan remains the person's
   entrance; an empty programme without a valid open record, and proposals alone, start no plan turn.
-  A recorded open programme with no goals gets the programme planning turn
+  A recorded open programme signed and not yet cut gets the programme planning turn
   (`mc-run.md#Programme planning turn`).
   In a programme whose record states its phases each phase offers its oldest
   draft when it is open, none of its goals is in build, review or merge, and the

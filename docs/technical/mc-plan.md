@@ -116,8 +116,9 @@ it and what is shown are in [mc-goals.md](mc-goals.md#phases). A `phases` of
 another form is a problem, so the record is invalid.
 
 The record is also what lets the runner plan the programme with nobody present:
-a programme with a valid `open` record, a `README.md` and no goal gets one
-headless planning turn that cuts its phases and goals inside the page's End
+a programme with a valid, signed, non-legacy `open` record, a `README.md` and a
+signature not yet cut gets one headless planning turn that cuts its phases and
+goals from the signed document
 ([mc-run.md](mc-run.md#programme-planning-turn)). A programme with no record, or
 with an invalid one, is never started that way; `mc plan` stays the person's
 entrance.

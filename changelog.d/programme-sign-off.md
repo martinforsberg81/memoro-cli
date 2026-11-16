@@ -31,3 +31,13 @@ section: Changed
   for sign-off when an item already exists. JSON carries the record state.
   Signed copies, reading metadata and return reasons have the programme-file
   guard, with the existing file-tool and Bash escape rules unchanged.
+
+- **A signed programme is cut once per signature.** The programme planning turn
+  is due while a signed, open, non-legacy programme's `cut_text` is not its
+  `signed_text`, even when goals exist, and cuts the programme from SIGNED.md
+  alone. A goal names its part with `Part <n>` in the label of a document whose
+  path is the programme's SIGNED.md. On completion the runner reads the record
+  again under the lock and writes `cut_text` only when every signed part is
+  named by a goal and the signature is unchanged; a return to draft is a
+  success, a newer signature or a settled record counts no failure, and the
+  desk item closes when the signature is cut.
