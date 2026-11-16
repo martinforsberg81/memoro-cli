@@ -737,7 +737,9 @@ describe('programme document structure at sign-off', () => {
         const position = label === labels[0] ? rest.indexOf('## Order') : rest.indexOf('Closes:');
         cases.push({ name: `reordered ${label}`, entry: 'order', text: rest.slice(0, position) + template.slice(start, next + 2) + rest.slice(position) });
       }
+      const parts = section(template, 'Parts');
       cases.push(
+        { name: 'Parts with prose and no part heading', entry: '### Part n', text: `${template.slice(0, parts.start)}## Parts\n\nSome prose, and no part.\n\n${template.slice(parts.end)}` },
         { name: 'missing title', entry: 'title', text: template.replace(/^# .+\n/u, '') },
         { name: 'empty title', entry: 'title', text: template.replace(/^# .+\n/u, '# \n') },
         { name: 'missing scope', entry: 'scope', text: template.replace(/<One paragraph[^\n]+>\n/u, '') },
