@@ -16,7 +16,7 @@
  * refused, not exhausted, its tool launchable, and known under the plan limit or
  * unknown on a tool that bootstraps). Only build-model avoidance outranks it:
  * when the first candidate's model built the goal, or when the caller says the
- * catalog's first is not in the list (`first: null`, plan review having removed
+ * catalog's first is not in the list (`first: null`, having removed
  * the author), the ranking below chooses, as it does among the rest when the
  * first cannot run.
  *

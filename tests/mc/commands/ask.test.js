@@ -485,11 +485,9 @@ test('one way to ask: the guard — an ask-reader session may only answer, and t
   const answering = fixture({ env: { MC_ROLE: 'ask-reader', MC_HEADLESS: '1', MC_TOOL: 'claude', cwd: repoDir } });
   assert.equal(await run(['answer', 'not-a-call', 'continue', 'x'], answering.deps), 2);
   assert.match(answering.err(), /ask answer is not recorded/u);
-  for (const [role, pattern] of [['desk-prepare', /desk-prepare cannot ask/u], ['plan-review', /plan-review session cannot ask/u]]) {
-    const f = fixture({ env: { MC_ROLE: role, cwd: repoDir } });
-    assert.equal(await run(options, f.deps), 2);
-    assert.match(f.err(), pattern);
-  }
+  const f = fixture({ env: { MC_ROLE: 'desk-prepare', cwd: repoDir } });
+  assert.equal(await run(options, f.deps), 2);
+  assert.match(f.err(), /desk-prepare cannot ask/u);
   const person = fixture({ env: { MC_ROLE: 'martin', MC_HEADLESS: '1', cwd: repoDir } });
   assert.equal(await run(options, person.deps), 2);
 });

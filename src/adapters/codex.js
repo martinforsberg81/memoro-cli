@@ -604,7 +604,7 @@ export const PROVIDER_PRIORITY_RANK = 0;
 /** Intake and other catalog-routed turns run on a candidate the catalog lists for this tool; the name is what a refusal calls it. */
 export const INTAKE_FROM_CATALOG = 'Codex';
 
-/** A plan review does not pass the checkout as an allowed directory. */
+/** A reading does not pass the checkout as an allowed directory. */
 export const ALLOWED_DIR = null;
 
 /** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */

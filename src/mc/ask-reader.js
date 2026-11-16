@@ -2,8 +2,8 @@
  * The ask reader: the one model that answers `mc ask` when jev did not settle it (docs/technical/mc-jev.md,
  * "The reader"; canon/roles/ask-reader.md).
  *
- * `askReaderCall` launches one fresh headless read-only session in the role `ask-reader`, as `mc goal plan-review`
- * launches its reader, and waits for it inside the asking call. The reader works in a copy of the asking session's
+ * `askReaderCall` launches one fresh headless read-only session in the role `ask-reader`
+ * and waits for it inside the asking call. The reader works in a copy of the asking session's
  * worktree (`snapshotTree`), the key source's values redacted from every file, and ends with one verdict through
  * `mc ask answer` (`answerVerb`), accepted only from the session the call launched: the role, the call's id and a
  * token whose sha256 is in the launch file, while the call is live, once.
@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { requireCapability, resolveLaunch } from '../adapters/index.js';
 import { writeFileAtomic } from './atomic-write.js';
 import { billingRouteNow, gatewayLaunch } from './billing-route.js';
-import { checkoutIdentity, appendRun, realDiscard, realSession } from './plan-review.js';
+import { checkoutIdentity, appendRun, realDiscard, realSession } from './programme-review.js';
 import { redactText, redactValue } from './jev.js';
 import { chooseCandidate } from './model-choice.js';
 import { readCapacity } from './model-capacity.js';
@@ -309,7 +309,7 @@ export async function askReaderCall({ call, evidence = '', jevText = '', goalNam
       if (at > 0) args.splice(at, 0, allowed.flag, treeRoot);
       const spawned = gatewayLaunch({ provider: requireCapability(launched.id, 'BILLING_PROVIDER'), model: candidate.model, bin: launched.spec.bin, args, billing: billing.billing });
       const childEnv = withoutSessionIdentity(env);
-      for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PLAN_REVIEW_TOKEN']) delete childEnv[key];
+      for (const key of ['MC_GOAL', 'MC_PROGRAMME', 'MC_REPO', 'MC_WORKAREA', 'MC_REVIEW_HEAD', 'MC_REVIEW_PR', 'MC_REVIEW_SEEN', 'MC_REVIEW_WRITE_BACK', 'MC_SESSION_STARTED', 'MC_SCRATCH', 'MC_PROGRAMME_REVIEW_TOKEN']) delete childEnv[key];
       Object.assign(childEnv, { MC_ROLE: ASK_READER_ROLE, MC_HEADLESS: '1', MC_TOOL: candidate.tool, MC_MODEL: candidate.model, [TOKEN_ENV]: token, [CALL_ENV]: id });
       try { result = await (deps.session ?? realSession)({ ...spawned, cwd, env: scrubProviderApiKeysFromEnv(childEnv), timeoutMs: LIMIT_MS, group: true }); }
       catch (error) { result = { status: 1, stdout: '', stderr: error.message || String(error) }; }

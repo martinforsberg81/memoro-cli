@@ -37,7 +37,7 @@ Measured, with the baselines of 2026-11-14 (programme `mc`):
 - The only questions directed to Martin are those about a reformulation of an aim, and about strategy and design at that level (Martin, 2026-11-15; programme `mc`).
 - A programme with a record is bounded: it is done when its goals are done and its write-back reads OK, and the system then archives it (Martin, 2026-11-15; programme `horizon`).
 - A programme record has four states, `draft`, `open`, `done` and `dropped`. Every new programme but a repair starts as a draft, with a horizon or without, whoever creates it, and no goal is cut from a programme document Martin has not signed off (Martin, 2026-11-15; programme `programme-sign-off`).
-- Repairs (`--area`) are exempt from sign-off: one goal against an area text, gated by plan review (Martin, 2026-11-15; programme `programme-sign-off`).
+- Repairs (`--area`) are exempt from sign-off: one goal against an area text (Martin, 2026-11-15; programme `programme-sign-off`).
 - The programmes open on 2026-11-15 are not flipped: they stay open as legacy records and come to sign-off one by one at the desk; the finished ones are archived as before, without sign-off (Martin, 2026-11-15; programme `programme-sign-off`).
 - What is signed is a copy, `SIGNED.md`, with the hashes of the design files. `README.md` stays the working page where sessions record decisions; the build and the reviews are held to the copy. Changing what is signed means return, review and sign again (Martin, 2026-11-15; programme `programme-sign-off`).
 - A headless session cannot make a goal in a programme without a record (Martin, 2026-11-15; programme `programme-sign-off`).

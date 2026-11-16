@@ -149,7 +149,7 @@ describe('mc programs after: refuses with the state on disk', () => {
   it('exits 2 for a role that may not state the order, and names it', async () => {
     const a = area();
     try {
-      for (const role of ['build-session:goal', 'review-session:goal', 'mend-session', 'plan-review', 'decision', 'learning', 'work']) {
+      for (const role of ['build-session:goal', 'review-session:goal', 'mend-session', 'decision', 'learning', 'work']) {
         await refused(a, ['after', 'prog', '3', '1'], new RegExp(`${role}`, 'u'), 2, { ...a.env, MC_ROLE: role });
       }
       await refused(a, ['after', 'prog', '3', '1'], /Martin role is interactive-only/u, 2, { ...a.env, MC_ROLE: 'martin', MC_HEADLESS: '1' });

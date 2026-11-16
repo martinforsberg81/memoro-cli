@@ -796,7 +796,7 @@ test('programmePlanPrompt cuts from the signed document: its source, part-named 
   assert.ok(plain.includes('mc goal areas <repo>'));
   assert.doesNotMatch(plain, /mc martin horizon show/u, 'no horizon command without a horizon');
   assert.match(plain, /one goal per part/u);
-  assert.match(plain, /has no plan review/u, 'a goal cut from a signed part is not read by plan review');
+  assert.match(plain, /complete it and move it to build in its phase/u);
   assert.match(plain, /labelled with `Part <n>`/u, 'a goal names its part by a labelled document');
   assert.match(plain, /Solution, Design and Proved by/u, 'a goal copies the part, it does not invent');
   assert.match(plain, /no solution, design or decision of your own/u);
