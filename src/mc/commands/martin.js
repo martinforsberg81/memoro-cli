@@ -17,7 +17,7 @@ import { sessionIdentity } from '../session-role.js';
 import { ledgerPath } from '../jev.js';
 import { isGoalRef, programsGoals } from '../goals.js';
 import { writeJsonAtomic } from '../atomic-write.js';
-import { HORIZON_STATES, PLAYBACK_PARTS, parsePlaybackInput, planDrop, planMove, planReached, planReopen, planSet, readHorizon, readHorizons, renderHorizons, updateDeskHorizons, validSlug } from '../desk-horizons.js';
+import { HORIZON_STATES, PLAYBACK_PARTS, horizonsDir, parsePlaybackInput, planDrop, planMove, planReached, planReopen, planSet, readHorizon, readHorizons, renderHorizons, updateDeskHorizons, validSlug } from '../desk-horizons.js';
 import { isTextSort, proposeText, textForm, textName } from '../desk-texts.js';
 import { DAY_MS, buildOpening, lastOpenPath, oneLine, readLastOpen } from '../desk-opening.js';
 import { addLesson, briefLesson, briefOptions, carryLesson, dismissLesson, lessonRefusal, listLessons, parseLessonInput, recordAnswerDiffers, renderChanges, LESSON_STATES } from '../desk-lessons.js';
@@ -364,6 +364,7 @@ function horizon(argv, deps) {
     if (found.reopened_at) lines.push(`reopened ${found.reopened_at} by ${found.reopened_by}: ${found.reopen_reason}`);
     if (found.dropped_at) lines.push(`dropped ${found.dropped_at} by ${found.dropped_by}: ${found.drop_reason}`);
     for (const [key, title] of PLAYBACK_PARTS) lines.push('', `## ${title}`, '', found.playback[key]);
+    lines.push('', `basis: ${join(horizonsDir(env), slug, 'basis.md')}`);
     if (found.now_true !== null) lines.push('', `## Now true (reached ${found.reached_at} by ${found.reached_by})`, '', found.now_true.trim());
     stdout.write(`${lines.join('\n')}\n`);
     return 0;

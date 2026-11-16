@@ -1974,7 +1974,7 @@ test('mc goal new without MC_HEADLESS holds the draft from creation: the hold is
 });
 
 test('mc goal new with MC_HEADLESS=1 writes no hold, and its entry and stdout carry no held line', async () => {
-  const f = fixture({ env: { MC_HEADLESS: '1' } });
+  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: { MC_HEADLESS: '1' } });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T'], f.deps), 0, f.err());
   assert.equal(f.store[`${DIR}/.hold.json`], undefined, 'no hold file');
   assert.equal(parseLog(f.store[`${DIR}/LOG.md`])[0].comment, null, 'no held comment');
@@ -2557,7 +2557,7 @@ const LEARNING = { MC_ROLE: 'learning', MC_HEADLESS: '1', MC_TOOL: 'claude', MC_
 const snapshot = (f) => JSON.stringify(f.store);
 
 test('the learning role creates a goal and writes it: set, criterion add and draft → build succeed on a goal it created in this session', async () => {
-  const f = fixture({ env: LEARNING });
+  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned', '--structure', '1'], f.deps), 0, f.err());
   for (const argv of [
     ['set', 'mc/plain', 'goal', '--text', 'A lesson becomes a change.'],
@@ -2589,7 +2589,7 @@ test('the learning role is refused every verb on a goal it did not create, and n
 });
 
 test('the learning role moves its own goal only from draft to build', async () => {
-  const f = fixture({ env: LEARNING });
+  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
   const before = snapshot(f);
   for (const stage of ['review', 'merge', 'done']) {
@@ -2797,7 +2797,7 @@ test('every new writing verb is refused a build, review and mend session, and wr
 
 test('the learning role makes a version 2 goal and adds, sets and removes an item and sets and removes an obligation on it; each of the five is refused on a goal it did not create, with nothing written', async () => {
   const git = areasGit({ [CLI_PATH]: DECLARATION('documentation') });
-  const f = fixture({ env: LEARNING, git });
+  const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING, git });
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Learned'], f.deps), 0, f.err());
   assert.equal(v2At(f).version, 2, 'made in version 2 without a flag');
   for (const argv of [
@@ -2828,7 +2828,7 @@ test('the learning role makes a version 2 goal and adds, sets and removes an ite
   }
   // It gains no other verb.
   for (const argv of [['item', 'frobnicate', 'mc/plain'], ['drop', 'mc/plain', '--reason', 'x'], ['convert', 'mc'], ['phase', 'mc/plain', '2']]) {
-    const g = fixture({ env: LEARNING });
+    const g = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: legacyRecord() }, env: LEARNING });
     assert.notEqual(await run(argv, g.deps), 0, argv.join(' '));
   }
 });
@@ -3468,5 +3468,57 @@ test('one way to ask: the guard — mc goal in the ask-reader role allows show, 
     const f = fixture({ files: inStage('review'), env });
     await run(argv, f.deps);
     assert.doesNotMatch(f.err(), /ask-reader/u, `${argv.join(' ')} is not refused to the role`);
+  }
+});
+
+
+test('programme-review is a reader: every goal mutation, including goal-less creation, is refused before effects', async () => {
+  for (const argv of [['new', 'mc/new', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'Do not create'], ['set', 'mc/plain', 'title', '--text', 'Do not rewrite'], ['stage', 'mc/plain', 'build'], ['log', '--done', 'Do not log'], ['plan-review', 'mc/plain']]) {
+    const f = fixture({ env: { MC_ROLE: 'programme-review', MC_PROGRAMME: 'mc', MC_HEADLESS: '1' } });
+    const before = { ...f.store };
+    assert.equal(await run(argv, f.deps), 2, argv.join(' '));
+    assert.match(f.err(), /programme-review session reads and writes only PROGRAMME-REVIEW.md/u);
+    assert.deepEqual(f.store, before);
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+// These command-store cases prove the new refusal precedes Git and every write.
+const legacyRecord = () => JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done.', state: 'open', created: '2026-11-01T20:00:00Z', created_by: 'person' });
+const unsignedRecord = (state) => ({ ...JSON.parse(legacyRecord()), version: 2, state, signed_at: null, signed_by: null, signed_text: null, cut_text: null });
+const newArgv = ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'A signed part'];
+
+test('goal new refuses draft and dropped programmes before any fetch or goal write', async () => {
+  for (const state of ['draft', 'dropped']) {
+    for (const env of [{}, { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }]) {
+      const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: JSON.stringify(unsignedRecord(state)) }, env });
+      const before = { ...f.store };
+      assert.equal(await run(newArgv, f.deps), 1, state);
+      assert.equal(f.err(), 'mc: mc is not signed off — mc programs show mc\n');
+      assert.deepEqual(f.store, before);
+      assert.deepEqual(f.calls, []);
+    }
+  }
+});
+
+test('goal new refuses headless recordless creation but admits signed, legacy, area and interactive recordless paths', async () => {
+  const denied = fixture({ env: { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' } });
+  const before = { ...denied.store };
+  assert.equal(await run(newArgv, denied.deps), 1);
+  assert.equal(denied.err(), 'mc: mc has no record — a goal here is made at the desk\n');
+  assert.deepEqual(denied.store, before);
+  assert.deepEqual(denied.calls, []);
+  const signature = { signed_at: '2026-11-01T20:00:00Z', signed_by: 'martin', signed_text: 'a'.repeat(64) };
+  for (const record of [legacyRecord(), JSON.stringify({ ...unsignedRecord('open'), ...signature }), JSON.stringify({ ...unsignedRecord('open'), area: 'memoro-cli/operations' })]) {
+    const f = fixture({ env: { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }, files: { [`${HOME}/mc/PROGRAMME.json`]: record } });
+    assert.equal(await run(newArgv, f.deps), 0, f.err());
+    assert.equal(parseGoal(f.store[`${HOME}/mc/goals/fresh/GOAL.json`]).stage, 'draft');
+    assert.ok(f.calls.some(({ args }) => args[0] === 'fetch'));
+    assert.equal(f.store[`${HOME}/mc/PROGRAMME.json`], record, 'admission is not migration');
+  }
+  for (const env of [{}, { MC_ROLE: 'martin' }]) {
+    const f = fixture({ env });
+    assert.equal(await run(newArgv, f.deps), 0, f.err());
+    assert.equal(parseGoal(f.store[`${HOME}/mc/goals/fresh/GOAL.json`]).stage, 'draft');
   }
 });

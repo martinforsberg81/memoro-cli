@@ -73,24 +73,41 @@ launch indefinitely without progress.
 ## The headless programme turn
 
 When `MC_HEADLESS=1` and `MC_PROGRAMME` names a programme but `MC_GOAL` is not
-set, you are the programme's one planning turn: it holds a valid open record and
-its page, and no goals. The launch prompt gives the programme directory, its
-README, the horizon command when the record names a horizon, and read
-checkouts of the served repositories, detached at origin/main. Read the page and
-`mc programs show <programme>` first, then the code in the checkouts. Change
-nothing there, commit nothing and create no branch.
+set, you are the programme's one planning turn: its record is `open` and signed,
+and `SIGNED.md` is the document Martin signed, not yet cut from. The launch
+prompt gives the programme directory, the horizon command when the record names
+a horizon, and read checkouts of the served repositories, detached at
+origin/main. Read `SIGNED.md` and `mc programs show <programme>` first, then the
+code in the checkouts. `README.md` is the working copy and not your source.
+Change nothing in the checkouts, commit nothing and create no branch.
 
-Cut the goals inside the page's End and nowhere else. Create every goal as a
-draft first, each with its title, phase and outcome through `mc goal`; state a
-stated programme's dependencies with `mc programs after`. Then take the drafts
-in turn: complete one as for a next draft, read it with `mc goal plan-review`,
-repair what the reading finds, and move it to `build` in its phase before the
-next. A question goes through goal-bound `mc ask` on the draft that needs it: jev,
-then a reader, answers it, and the other drafts go on. Do not implement a goal, process proposals or plan beyond the page.
+Cut one or more goals per part. Each goal's change, criteria and protection are
+taken from that part's Solution, Design and Proved by, and the goal names its
+part: a document whose path is `SIGNED.md` of this programme, labelled with
+`Part <n>` (several parts as `Part 1; Part 2`; a slice of a part also says its
+scope in its outcome and change). You add nothing the part does not say: no
+solution, design or decision of your own, and no proposal. Where goals exist from
+an earlier cut, a part unchanged since then keeps its goals; for a changed part a
+goal not yet in build is rewritten, and a goal already built gets a new goal for
+the difference. Create every goal as a draft first, each with its title, phase
+and outcome through `mc goal`; state a stated programme's dependencies with
+`mc programs after`. Then take the drafts in turn: complete one as for a next
+draft, read it with `mc goal plan-review`, repair what the reading finds, and
+move it to `build` in its phase before the next.
 
-The turn ends when you stop. A turn that leaves the programme holding no goal
-counts as a failure; drafts left unfinished are planned by the next-draft
-sessions that follow and are not set to Martin.
+Where a part leaves a choice open, do not make it: run `mc programs return
+<programme> --reason "<the part and the choice>"` and end. The record is `draft`
+again; that is a success and the programme waits for Martin's next sign-off. A
+question that is not such a choice goes through goal-bound `mc ask` on the draft
+that needs it: jev, then a reader, answers it, and the other drafts go on. Do not
+implement a goal or process proposals.
+
+The turn ends when you stop. It succeeds when a goal names every part of the
+signed document: the runner then records the signature you read as cut and does
+not cut it twice. It also succeeds when the record is `draft` again: nothing is
+recorded as cut, and the programme is cut after Martin's next sign-off. Any
+other ending counts as a failure. Drafts left unfinished are planned by the
+next-draft sessions that follow and are not set to Martin.
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.
 

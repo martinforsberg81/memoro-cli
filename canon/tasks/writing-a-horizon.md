@@ -15,6 +15,12 @@ open ends on record and the app (with `mc shot`). Distinguish facts actually
 read from unavailable evidence; do not present an assumption as an observation.
 The enduring direction belongs to the area, not the horizon.
 
+Before confirmation, the desk writes `basis.md` beside `playback.md`: what runs
+today, binding decisions, numbered gaps with where each was read, and what is
+not decided. Playback prerequisites name basis gaps by number. Anything not
+yet designed (a new thing or “polished”) goes under not decided: a programme
+document settles it, never the planner. The basis is authored context, not parsed.
+
 Draft English playback with exactly these five non-empty headings in order:
 
 ## How it is read

@@ -264,6 +264,29 @@ describe('mc hook — a goal file under ~/mc/programs is mc\'s to change', () =>
     assert.equal(preToolDecision(bash(`${ALLOW_MARK} jq . > ${file}`), { programs }), null, 'the escape lets it through');
   });
 
+  for (const filename of ['SIGNED.md', '.programme-review.json', 'RETURNED.md']) {
+    it(`guards ${filename} through file tools including relative paths with no file-tool escape`, () => {
+      const cwd = join(programs, 'a');
+      for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+        for (const file_path of [join(cwd, filename), filename, `../a/${filename}`]) {
+          const decision = deny({ tool_name: tool, cwd, tool_input: { file_path, content: ALLOW_MARK, new_string: ALLOW_MARK } });
+          assert.equal(decision?.id, 'programme-file', `${tool} ${file_path}`);
+          assert.match(decision.reason, /mc programs show/u);
+        }
+      }
+      assert.equal(protectedProgrammeFile(`${programs}-other/a/${filename}`, { programs }), false);
+      assert.equal(deny({ tool_name: 'Write', tool_input: { file_path: `/elsewhere/${filename}` } }), null);
+    });
+
+    it(`guards ${filename} through Bash writes and preserves read and Bash escape routes`, () => {
+      for (const command of [`echo x > ${join(programs, 'a', filename)}`, `sed -i s/a/b/ ${filename}`, `mv x ${filename}`, `cp x ${filename}`, `rm ${filename}`, `truncate -s 0 ${filename}`, `install x ${filename}`, `echo x | tee ${filename}`]) {
+        assert.equal(preToolDecision(bash(command), { programs })?.id, 'programme-file', command);
+        assert.equal(preToolDecision(bash(`${ALLOW_MARK} ${command}`), { programs }), null, command);
+      }
+      assert.equal(preToolDecision(bash(`cat ${filename}`), { programs }), null);
+    });
+  }
+
   it('the PreToolUse matcher carries the edit tools, so the refusal sees them', () => {
     assert.equal(MC_HOOKS.find((hook) => hook.which === 'pre-tool').matcher, 'Bash|Write|Read|Edit|MultiEdit|mcp__claude-in-chrome__.*');
   });

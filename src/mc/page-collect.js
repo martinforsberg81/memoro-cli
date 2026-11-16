@@ -102,6 +102,7 @@ import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
+import { listDeskItems } from './desk-items.js';
 import { agyBrainDir } from './agy-brain.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
@@ -1507,13 +1508,25 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
     try { readdirSync(horizonsDir(env)); } catch (cause) { if (cause?.code !== 'ENOENT') error = cause.message || String(cause); }
   } catch (cause) { error = cause.message || String(cause); }
   const held = new Map(read.horizons.map((item) => [item.slug, item]));
+  // Read an existing item only. Creating or scheduling sign-off items belongs to a later step.
+  let waiting = new Set();
+  try { waiting = new Set(listDeskItems({ env }).filter((item) => item.kind === 'sign-off' && item.state !== 'closed').map((item) => item.reference)); }
+  catch { /* An unreadable item store does not hide the programme's draft state. */ }
   const groups = programmes?.programmes || [];
   let number = programmes?.count ?? 0;
   for (const group of groups) {
     number += 1;
     group.number = number;
     let named = null;
-    try { const record = found(group.programme); named = record?.status === 'valid' ? record.record.horizon ?? null : null; } catch { named = null; }
+    group.record_state = null;
+    try {
+      const record = found(group.programme);
+      if (record?.status === 'valid') {
+        named = record.record.horizon ?? null;
+        group.record_state = record.record.state;
+      }
+    } catch { named = null; }
+    group.sign_off_waiting = waiting.has(`sign-off:${group.programme}`);
     group.horizon = named;
     group.horizon_state = named === null ? null : held.get(named)?.state ?? 'not held';
   }

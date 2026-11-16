@@ -402,11 +402,18 @@ test('a main-red repair that reaches Martin again after an answer is a new desk 
 
 /* ---- a programme item: the programme planning turn's */
 
-const PROGRAMME_RECORD = JSON.stringify({ schema: 'mc-programme', version: 1, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person' });
+const SIGNED_MD = '# prog\n\n## Parts\n\n### Part 1 — One\n\n### Part 2 — Two\n';
+const SIGNED_SHA = createHash('sha256').update(SIGNED_MD).digest('hex');
+const PROGRAMME_RECORD = JSON.stringify({ schema: 'mc-programme', version: 2, horizon: null, end: 'Done when it holds.', state: 'open', created: '2026-11-14T10:20:30Z', created_by: 'person', signed_at: '2026-11-14T11:00:00Z', signed_by: 'martin', signed_text: SIGNED_SHA, cut_text: null });
+/** A goal of `prog` that names `parts` of its SIGNED.md, as the turn's session writes it. */
+function namesParts(f, name, parts) {
+  const dir = join(f.home, 'prog', 'goals', name); mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'GOAL.json'), goalJson({ status: 'ready', documents: [{ label: `Signed design, ${parts.map((part) => `Part ${part}`).join('; ')}`, path: join(f.home, 'prog', 'SIGNED.md') }] }));
+}
 /** A programme `prog` with a record and a page, and the prepared item its planning turn opened. */
 function programmeItem(f, fields = {}) {
   const dir = join(f.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
-  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n');
+  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n'); writeFileSync(join(dir, 'SIGNED.md'), SIGNED_MD);
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', stamp), kind: 'programme', reference: 'programme:prog', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
   writeDeskItem(item, { env: f.env });
   return item;
@@ -420,16 +427,29 @@ function syncProgramme(f) {
   return { item, issues };
 }
 
-test('a programme item closes by source when the programme holds a goal, its record no longer reads valid and open, or its directory is gone', () => {
+test('a programme item closes by source when goals name every part of the signed document, its record no longer reads valid, open and signed, or its directory is gone', () => {
   const open = fixture(); programmeItem(open);
   assert.equal(syncProgramme(open).item.state, 'prepared', 'a programme with no goal keeps its item open');
   writeFileSync(join(open.home, 'prog', 'goals', '.hold.json'), '{}');
   assert.equal(syncProgramme(open).item.state, 'prepared', 'a dot-entry of goals/ is no goal');
 
-  const goal = fixture(); programmeItem(goal);
-  mkdirSync(join(goal.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(goal.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
-  const held = syncProgramme(goal).item;
-  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'The programme now holds a goal.']);
+  // A goal that is there does not close it: only a document naming every part does (the runner's own completion predicate).
+  const partial = fixture(); programmeItem(partial);
+  mkdirSync(join(partial.home, 'prog', 'goals', 'plain'), { recursive: true }); writeFileSync(join(partial.home, 'prog', 'goals', 'plain', 'GOAL.json'), goalJson({ status: 'ready' }));
+  namesParts(partial, 'one', [1]);
+  assert.equal(syncProgramme(partial).item.state, 'prepared', 'goals naming no part, or part 1 only, leave the item open');
+  namesParts(partial, 'two', [2]);
+  const held = syncProgramme(partial).item;
+  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'Goals now name every part of the signed document.']);
+
+  const changed = fixture(); programmeItem(changed); namesParts(changed, 'all', [1, 2]);
+  writeFileSync(join(changed.home, 'prog', 'SIGNED.md'), `${SIGNED_MD}\nEdited after the signature.\n`);
+  assert.equal(syncProgramme(changed).item.state, 'prepared', 'a SIGNED.md that no longer matches the signature closes nothing');
+
+  for (const [kind, record] of [['legacy', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), version: 1, signed_at: undefined, signed_by: undefined, signed_text: undefined, cut_text: undefined })], ['draft', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'draft', signed_at: null, signed_by: null, signed_text: null })]]) {
+    const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
+    assert.equal(syncProgramme(f).item.state, 'closed', `${kind}: a record the turn can no longer cut from closes it`);
+  }
 
   for (const [kind, record] of [['done', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' })], ['invalid', '{ not json']]) {
     const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
@@ -444,10 +464,10 @@ test('a programme item closes by source when the programme holds a goal, its rec
 
 test('a programme item whose turn state cannot be read stays open, and the sync reports the file', () => {
   const f = fixture(); programmeItem(f);
-  mkdirSync(join(f.home, 'prog', 'goals', 'g'), { recursive: true }); writeFileSync(join(f.home, 'prog', 'goals', 'g', 'GOAL.json'), goalJson({ status: 'ready' }));
+  namesParts(f, 'g', [1, 2]);
   writeTurnState(f, '{ not json');
   const { item, issues } = syncProgramme(f);
-  assert.equal(item.state, 'prepared', 'not closed on a source that could not be read, though the programme holds a goal');
+  assert.equal(item.state, 'prepared', 'not closed on a source that could not be read, though goals name every part');
   const reported = issues.filter((issue) => issue.path === turnStateAt(f));
   assert.equal(reported.length, 1, 'the unreadable state file is reported');
   assert.match(reported[0].error, /not JSON/u);

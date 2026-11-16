@@ -167,10 +167,11 @@ move, copy, removal, truncate or install are caught by the corresponding
 Bash rule; the usual `MC_HOOK_ALLOW=1` escape applies there. Codex has no
 registered hook, so this catches mistakes, not intent.
 
-A programme's record lives directly in a programme's directory, and a file named
-PROGRAMME.json anywhere under `~/mc/programs/` is guarded the same way with id `programme-file`: the file tools are refused with no
+A programme's record lives directly in a programme's directory. Files named
+`PROGRAMME.json`, `SIGNED.md`, `.programme-review.json` or `RETURNED.md`
+anywhere under `~/mc/programs/` are guarded the same way with id `programme-file`: the file tools are refused with no
 escape, the Bash rule has the `MC_HOOK_ALLOW=1` escape, and the reason names
-`mc programs create`, `mc programs record` and `mc programs show`. GOAL.json
+the `mc programs` create/record/sign/return/drop/review verbs and `mc programs show`. GOAL.json
 keeps `goal-file`.
 
 The answer is a `deny` with the reason, which names the verb and the escape: a

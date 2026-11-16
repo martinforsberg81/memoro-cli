@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { canonRolesDir, instructionsFor, readCanonRole } from '../../src/mc/roles.js';
-import { canonSkills, canonSkillsDir } from '../../src/mc/skills.js';
+import { canonSkills, canonSkillsDir, wantedSkills } from '../../src/mc/skills.js';
 
 /** Canon text wraps at about 80 columns, so a phrase test crosses newlines. */
 const phrase = (words) => new RegExp(words.split(' ').map((w) => w.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('\\s+'), 'u');
@@ -38,6 +38,9 @@ const flat = (text) => text.replace(/\s+/gu, ' ');
 describe('one home per rule in canon/', () => {
   it('every canon skill has a defining sentence here, and none is missing from canon', () => {
     assert.deepEqual(canonSkills().map((s) => s.name).sort(), Object.keys(DEFINING).sort());
+    const [bundle] = wantedSkills();
+    for (const reference of ['programme-document.md', 'repair-page.md']) assert.ok(bundle.files[`tasks/references/${reference}`], reference);
+    assert.equal(bundle.files['tasks/references/programme-record-readme.md'], undefined);
   });
 
   for (const [name, sentence] of Object.entries(DEFINING)) {

@@ -26,6 +26,7 @@ import {
 import { intakeArchiveDir, intakeDir } from '../../src/mc/helper-collect.js';
 import { actEnd, actStart, endRun, startRun } from '../../src/mc/language-runs.js';
 import { colourFor, columnsFor, renderPageLines as drawPage } from '../../src/mc/page-render.js';
+import { programmeFacts, programmeRow } from '../../src/mc/page-horizons.js';
 import { OVERVIEW_ROWS, attentionItems, flightRows, mergeDeployRows } from '../../src/mc/page-overview.js';
 import { KIND_TONE, STATE_TONE } from '../../src/mc/page-grid.js';
 import { controlPaths, drainLine, drainState } from '../../src/mc/run-control.js';
@@ -2243,9 +2244,10 @@ describe('collectPage', () => {
         set_at: '2026-11-14T10:00:00.000Z', set_by: 'martin', ...extra,
       }));
     };
-    const record = (name, horizonSlug) => {
+    const record = (name, horizonSlug, state = 'open') => {
       mkdirSync(join(programsHome(env), name), { recursive: true });
-      writeRecord(join(programsHome(env), name), newRecord({ horizon: horizonSlug, end: 'it is over', createdBy: 'person', now: NOW }));
+      const draft = newRecord({ horizon: horizonSlug, end: 'it is over', createdBy: 'person', now: NOW });
+      writeRecord(join(programsHome(env), name), state === 'open' ? { ...draft, state, legacy: true } : draft);
     };
     const collect = (over = {}) => collectPage({
       claudeSettings: () => null, env, now: NOW, repos: [], offline: true, checkout: null,
@@ -2255,6 +2257,72 @@ describe('collectPage', () => {
     });
     return { root, env, horizon, record, collect };
   }
+
+  it('collects a draft with no goals into JSON and draws draft or the existing sign-off wait at 160 and 80 columns', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.horizon('first', 'open', 1);
+    fx.record('draft-programme', 'first', 'draft');
+    const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('sign-off', 'sign-off:draft-programme', NOW.toISOString()), kind: 'sign-off', reference: 'sign-off:draft-programme', source_at: NOW.toISOString(), state: 'for-martin', sort: 'sign-off' };
+    const snapshots = [];
+    for (const state of ['absent', 'for-martin', 'closed', 'removed']) {
+      if (state === 'for-martin' || state === 'closed') writeDeskItem({ ...item, state }, { env: fx.env });
+      if (state === 'removed') rmSync(itemDirectory(item, fx.env), { recursive: true });
+      const data = await fx.collect();
+      const json = JSON.parse(JSON.stringify(data));
+      const group = json.programmes.programmes.find(group => group.programme === 'draft-programme');
+      assert.equal(group.record_state, 'draft');
+      assert.deepEqual(group.goals, []);
+      assert.equal(group.sign_off_waiting, state === 'for-martin');
+      assert.deepEqual(json.horizons.open[0].programmes, ['draft-programme']);
+      snapshots.push(pageKey(data));
+      for (const columns of [160, 80]) {
+        const lines = renderPageLines(data, { columns, now: NOW, overview: true });
+        const row = lines.find(line => /\d+ draft-programme/u.test(line));
+        assert.ok(row, `${state} ${columns}: draft is under way`);
+        assert.match(row, state === 'for-martin' ? /draft-programme\s+waits for sign-off/u : /draft-programme\s+draft/u);
+        assert.doesNotMatch(row, /dormant|phase/u);
+        assert.ok(lines.every(line => width(line) <= columns), `${state} ${columns}: width`);
+      }
+    }
+    assert.notEqual(snapshots[0], snapshots[1], 'opening an item redraws');
+    assert.notEqual(snapshots[1], snapshots[2], 'closing an item redraws');
+    assert.equal(snapshots[0], snapshots[3], 'removed item restores draft');
+  });
+
+  it('carries the programme sign-off wait to a goal line and restores it after sign-off', async (t) => {
+    const fx = horizonsFixture();
+    t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+    fx.record('mc', null, 'draft');
+    const data = await fx.collect();
+    const group = data.programmes.programmes.find(group => group.programme === 'mc');
+    assert.equal(group.record_state, 'draft');
+    for (const columns of [160, 80]) {
+      const lines = renderPageLines(data, { columns, now: NOW, view: 'mc' });
+      assert.ok(lines.some(line => line.includes('waits for sign-off of mc')));
+      assert.ok(lines.every(line => width(line) <= columns));
+    }
+    const recordPath = join(programsHome(fx.env), 'mc', 'PROGRAMME.json');
+    writeFileSync(recordPath, JSON.stringify({ ...JSON.parse(readFileSync(recordPath, 'utf8')), state: 'open', legacy: true }));
+    const signed = await fx.collect();
+    const free = signed.programmes.programmes.find(group => group.programme === 'mc');
+    assert.equal(free.record_state, 'open');
+    assert.ok(!renderPageLines(signed, { columns: 80, now: NOW, view: 'mc' }).some(line => line.includes('waits for sign-off of mc')));
+    assert.equal(free.goals[0].phase, group.goals[0].phase);
+    assert.notEqual(pageKey(data), pageKey(signed), 'sign-off redraws');
+  });
+
+  it('gives draft and sign-off text the phase position and narrow-width rank', () => {
+    for (const waiting of [false, true]) {
+      const group = { programme: 'x'.repeat(60), number: 1, record_state: 'draft', sign_off_waiting: waiting, current_phase: 1, goals: [{ stage: 'build', phase: 1 }] };
+      const facts = programmeFacts(group);
+      const draw = columns => programmeRow(text => text, columns, group, facts);
+      assert.match(draw(160), waiting ? /waits for sign-off · 1 build/u : /draft · 1 build/u);
+      assert.doesNotMatch(draw(80), /draft|sign-off|phase/u, 'the phase-position text gives way before stage counts');
+      assert.match(draw(80), /1 build/u);
+      assert.ok(width(draw(80)) <= 80);
+    }
+  });
 
   it('numbers the programmes after the goals and reads the horizon each record names, with its state', async (t) => {
     const fx = horizonsFixture({ plan: ['plan-only'] });

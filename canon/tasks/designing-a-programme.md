@@ -6,11 +6,13 @@ description: Designing a programme in mc — its README, decisions, phases and b
 
 A programme is thought through once, before its goals are written. Its design is read from one
 page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
-means the programme was not designed.
+means the programme was not designed. A builder who has only the document and the code
+decides nothing; where a builder would have to choose, the document is not finished.
 
 Every programme is a bounded implementation plan, archived when its work is
 finished and written back. Its enduring direction belongs to the area pages.
-A recorded programme uses [the record page](references/programme-record-readme.md);
+A recorded programme uses [the programme document](references/programme-document.md);
+a repair uses [the repair page](references/repair-page.md);
 a programme without a record uses [the programme page](references/programme-readme.md).
 Legacy pages preserve the held Aim in the appropriate area without silently
 changing its meaning. Finish active work where it stands, write back, then archive:
@@ -19,7 +21,7 @@ already established. Do not require the enduring direction to be declared over.
 
 ## Files
 
-- `README.md` — purpose, end, decisions, phases and pointers; read first.
+- `README.md` — the working document; read first. The document reference owns its headings and part entries.
 - `goals/<goal>/` — goal briefs written with [writing-a-goal](writing-a-goal.md); README does not repeat them.
 - `proposals/` and `proposals/archive/` — findings and dispositions ([proposals](proposals.md)).
 - `docs/technical/` (memoro, memoro-cli) — what runs; README points to it. No session writes
@@ -40,8 +42,9 @@ already established. Do not require the enduring direction to be declared over.
 5. Order by prerequisites and shared files. A programme whose record states its phases runs independent phases side by side: state a prerequisite, shared files included, with `mc programs after`. Elsewhere independent goals share a phase and dependent goals go later. In both a prerequisite is a phase dependency, never a note.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
-7. Write and read back the README in heading order: What it is for, End,
-   Decisions, Phases, Where things are. Landed sections leave the README.
+7. Write and read back the README against [the document structure](references/programme-document.md)
+   (repairs use their short page). Start from `mc programs model`: copy form, never content.
+   Landed sections leave the README.
 
 ## When a goal lands
 

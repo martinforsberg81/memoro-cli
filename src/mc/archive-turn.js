@@ -414,7 +414,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
   if (noted) return { ok: false, reason: `the destination ${destination} was not recorded: ${noted.message || String(noted)}` };
   const where = destination || (exists(dir) ? dir : null);
   if (!where) return { ok: false, reason: 'the programme directory is gone and no destination was recorded' };
-  const set = setDoneSafely(setDone, where, { read, write: (path, text) => write(path, text) });
+  const set = setDoneSafely(setDone, where, { root, lock, read, write: (path, text) => write(path, text) });
   if (!set.ok) return { ok: false, reason: `the record at ${where} could not be set to done: ${set.problems?.join('; ') || set.status}`, destination: where };
   try { clearDestination({ programme, ...seams }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}`, destination: where }; }
   return { ok: true, destination: where };
@@ -422,7 +422,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
 
 /** What the state write alone does (D: a destination named in the state and its record still open): sets it done, clears it. */
 export function finishDestination({ programme, destination, read, write, setDone = setRecordState, root, writeJson, lock }) {
-  const set = setDoneSafely(setDone, destination, { read, write });
+  const set = setDoneSafely(setDone, destination, { root, lock, read, write });
   if (!set.ok) return { ok: false, reason: `the record at ${destination} could not be set to done: ${set.problems?.join('; ') || set.status}` };
   try { clearDestination({ programme, root, read, writeJson, lock }); } catch (error) { return { ok: false, reason: `the destination was not cleared: ${error.message || String(error)}` }; }
   return { ok: true, destination };

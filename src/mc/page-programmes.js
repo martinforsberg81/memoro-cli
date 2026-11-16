@@ -118,7 +118,7 @@ export function programmeTreeLines(c, wide, group, { expand = false, sessions = 
     lines.push(line(c, wide, 4, `Phase ${phase.number}${phaseWaits(phase, group)}`, ['cyan', 'bold']));
     for (const [index, goal] of visible.entries()) {
       if (index > 0) lines.push('');
-      goalLines(lines, c, wide, goal, expand, owned(goal));
+      goalLines(lines, c, wide, goal, expand, owned(goal), !finished(goal) && group.record_state === 'draft' ? `waits for sign-off of ${group.programme}` : null);
     }
   }
   if (needing.length) {

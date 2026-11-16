@@ -16,7 +16,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
-import { programsHome, workRoot } from '../paths.js';
+import { archivedProgramsHome, programsHome, workRoot } from '../paths.js';
+import { shelveProgramme } from '../archive-programme.js';
 import { readAreas } from '../areas.js';
 import { readHorizons } from '../desk-horizons.js';
 import { run as runGit } from '../git.js';
@@ -24,9 +25,9 @@ import { repoNameOf } from '../repos.js';
 import { knownRepositories } from '../work-area.js';
 import { setProgrammePriorities, validPriority } from '../programme-priority.js';
 import {
-  AREA_RE, RECORD_FILE, changePhases, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, writeRecord,
+  AREA_RE, RECORD_FILE, changePhases, documentProblems, dropRecord, returnRecord, signRecord, cycleOf, newRecord, readRecord, recordPage, recordPageTemplate, recordView, recordedProgrammes, writeRecord,
 } from '../programme-record.js';
-import { PLAN_ROLE, listDirsOf, programsGoals } from '../goals.js';
+import { PLAN_ROLE, listDirsOf, programsGoals, readTextOrNull } from '../goals.js';
 import { NAME_RE } from '../plan-schema.js';
 import { reservedRoleHint, reservedRoleName } from '../roles.js';
 import { normalizeSessionRole } from '../session-role.js';
@@ -34,6 +35,9 @@ import { readProgrammes } from '../page-collect.js';
 import { planProviders, statusRollup } from '../page-render.js';
 import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
+import { writeFileAtomic } from '../atomic-write.js';
+import { realLock } from '../runner-lock.js';
+import { currentProgrammeReading, programmeRepositories, programmeReviewCall, programmeVerdictVerb } from '../plan-review.js';
 
 export function usage() {
   return commandUsage('programs');
@@ -50,6 +54,14 @@ export const ROUTES = {
   ) },
   create: { strictValues: ['--end', '--horizon', '--area', '--purpose', '--from-proposal'], check: (scanned) => writeCheck('create', scanned) },
   record: { strictValues: ['--end', '--horizon'], check: (scanned) => writeCheck('record', scanned) },
+  sign: { strictValues: ['--reason'], check: ({ positional, flags }) => programmeNameCheck('sign', positional) || (flags.reason !== null && !flags.reason.trim() ? '--reason needs nonempty text' : null) },
+  return: { strictValues: ['--reason'], check: (scanned) => reasonCheck('return', scanned) },
+  drop: { strictValues: ['--reason'], check: (scanned) => reasonCheck('drop', scanned) },
+  model: { check: ({ positional }) => positional.length ? 'mc programs model takes no arguments' : null },
+  review: { check: ({ positional }) => {
+    const [name, action, word] = positional;
+    return programmeNameCheck('review', [name]) || (positional.length === 1 || (positional.length === 3 && action === 'verdict' && ['ok', 'not-ok'].includes(word)) ? null : 'mc programs review needs <programme> or <programme> verdict ok|not-ok');
+  } },
   after: { booleans: ['--none'], check: (scanned) => afterCheck(scanned) },
   show: { booleans: ['--json'], check: ({ positional }) => (
     positional.length !== 1 ? 'mc programs show needs one programme'
@@ -58,7 +70,15 @@ export const ROUTES = {
   '*': { booleans: ['--json'], check: ({ positional }) => `mc programs has no ${positional[0]}` },
 };
 
-const VERBS = ['list', 'priority', 'create', 'record', 'after', 'show'];
+const VERBS = ['list', 'priority', 'create', 'record', 'after', 'show', 'sign', 'review', 'return', 'drop', 'model'];
+
+function reasonCheck(verb, { positional, flags }) {
+  return programmeNameCheck(verb, positional) || (!flags.reason?.trim() ? `mc programs ${verb} needs --reason "<text>"` : null);
+}
+
+function programmeNameCheck(verb, positional) {
+  return positional.length !== 1 || !NAME_RE.test(positional[0] ?? '') ? `mc programs ${verb} needs one programme name` : null;
+}
 
 const PHASE_RE = /^[1-9]\d{0,8}$/u;
 
@@ -142,12 +162,16 @@ export async function run(argv, deps = {}) {
   if (error) { stderr.write(`mc: ${error}\n${usage()}`); return 2; }
   const env = deps.env || process.env;
   if (verb === 'create' || verb === 'record') return writeVerb(verb, scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'sign') return signVerb(scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'return' || verb === 'drop') return transitionVerb(verb, scanned, { ...deps, env, stdout, stderr });
+  if (verb === 'model') return modelVerb({ env, stdout, stderr });
+  if (verb === 'review') return reviewVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'after') return afterVerb(scanned, { ...deps, env, stdout, stderr });
   if (verb === 'show') return showVerb(scanned, { env, stdout, stderr });
 
   const read = deps.read || (() => readProgrammes({ env }));
   const home = programsHome(env);
-  const listing = programmesListing(read(), { record: (name) => recordView(readRecord(join(home, name))) });
+  const listing = programmesListing(read(), { record: (name) => recordView(readRecord(join(home, name)), { dir: join(home, name) }) });
   if (verb === 'priority') {
     try {
       const result = setProgrammePriorities(scanned.positional, Number(scanned.flags.set), {
@@ -194,7 +218,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 /** The last cell of a line whose programme has a record. */
 function recordCell(record) {
   if (record.problems) return 'record invalid';
-  return `record ${record.state} · ${record.horizon ? `horizon ${record.horizon}` : 'no horizon'}`;
+  return `record ${record.state} · ${record.horizon ? `horizon ${record.horizon}` : 'no horizon'}${record.legacy ? ' · legacy: not signed' : ''}${record.signed_at ? ` · signed ${record.signed_at} by ${record.signed_by}` : ''}${record.designs_changed ? ' · designs changed since sign-off' : ''}`;
 }
 
 /** The cells of one programme's line, in the page's words. */
@@ -299,7 +323,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       if (!existsSync(dir)) return problem(`no programme ${name} — ${dir} does not exist; mc programs create ${name} --end "…" makes a new one`);
       if (existsSync(join(dir, RECORD_FILE))) return problem(`${name} already has a record (${join(dir, RECORD_FILE)}) — mc programs show ${name} prints it; it is not replaced`);
       writeRecord(dir, newRecord({ horizon: flags.horizon, end: flags.end.trim(), createdBy: writer.by, now }));
-      stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state open\n`);
+      stdout.write(`${name}: record written to ${join(dir, RECORD_FILE)} — state draft\n`);
       return 0;
     }
     const exists = existsSync(dir) || (read ? read() : readProgrammes({ env })).section.programmes.some((group) => group.programme === name);
@@ -322,8 +346,8 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
       proposal = proposalIn(flags['from-proposal'], { env, home });
       if (proposal.error) return problem(proposal.error);
     }
-    const template = recordPageTemplate(canon ? { canon } : {});
-    if (template === null) return problem('could not read the programme record page template (canon/tasks/references/programme-record-readme.md) — nothing was made');
+    const template = recordPageTemplate({ ...(canon ? { canon } : {}), area: flags.area });
+    if (template === null) return problem(`could not read the programme page template (canon/tasks/references/${flags.area ? 'repair-page.md' : 'programme-document.md'}) — nothing was made`);
     const page = recordPage(template, { name, end: flags.end, horizon: flags.horizon, area: flags.area, purpose: flags.purpose });
     const record = newRecord({ horizon: flags.horizon, area: flags.area, end: flags.end.trim(), createdBy: writer.by, now, stated: true });
     mkdirSync(home, { recursive: true });
@@ -331,7 +355,7 @@ function writeVerb(verb, { positional, flags }, { env, stdout, stderr, read, can
     for (const sub of ['goals', join('proposals', 'archive'), 'evidence']) mkdirSync(join(dir, sub), { recursive: true });
     writeFileSync(join(dir, 'README.md'), page, { flag: 'wx' });
     writeRecord(dir, record);
-    stdout.write(`${name}: programme made at ${dir} — record state open, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
+    stdout.write(`${name}: programme made at ${dir} — record state ${record.state}, phases stated, page README.md to fill in; mc goal new ${name}/<goal> makes its first goal\n`);
     if (proposal) {
       const moved = join(dir, 'proposals', basename(proposal.path));
       try {
@@ -354,7 +378,7 @@ function showVerb({ positional, flags }, { env, stdout, stderr }) {
   const dir = join(programsHome(env), name);
   if (!existsSync(dir)) { stderr.write(`mc: no programme ${name} — ${dir} does not exist\n`); return 1; }
   const found = readRecord(dir);
-  const view = recordView(found);
+  const view = recordView(found, { dir });
   if (flags.json) { stdout.write(`${JSON.stringify({ name, record: view }, null, 2)}\n`); return found.status === 'invalid' ? 1 : 0; }
   if (found.status === 'none') { stdout.write(`${name} has no record — mc programs record ${name} --end "…" gives it one\n`); return 0; }
   if (found.status === 'invalid') {
@@ -363,6 +387,9 @@ function showVerb({ positional, flags }, { env, stdout, stderr }) {
   }
   const { horizon, end, state, created, created_by: by, phases, area } = found.record;
   stdout.write(`${name}\n  horizon  ${horizon ?? 'none'}\n${area ? `  area     ${area}\n` : ''}  end      ${end}\n  state    ${state}\n  created  ${created} by ${by}\n`);
+  if (view.legacy) stdout.write('  legacy: not signed\n');
+  if (view.signed_at) stdout.write(`  signed   ${view.signed_at} by ${view.signed_by}\n  signed_text  ${view.signed_text}\n`);
+  if (view.designs_changed) stdout.write('  designs changed since sign-off\n');
   if (phases) {
     stdout.write('  phases: stated\n');
     for (const [phase, waits] of Object.entries(phases.after ?? {})) stdout.write(`  phase ${phase} after ${phaseWords(waits)}\n`);
@@ -379,7 +406,7 @@ const phaseWords = (phases) => `phase ${phases.join(', ')}`;
  * goals before the one write, a change of `phases` in the record
  * (`changePhases`) that touches nothing else.
  */
-function afterVerb({ positional, flags }, { env, stdout, stderr, read }) {
+function afterVerb({ positional, flags }, { env, stdout, stderr, read, lock }) {
   const writer = afterWriter(env);
   if (writer.refusal) { stderr.write(`mc: ${writer.refusal}\n`); return 2; }
   const [name, waitingWord, ...words] = positional;
@@ -407,8 +434,118 @@ function afterVerb({ positional, flags }, { env, stdout, stderr, read }) {
   };
   const cycle = cycleOf(stated(found.record.phases).after);
   if (cycle) return refuse(`phases ${cycle.join(', ')} would wait for one another in a cycle — nothing is changed`);
-  const outcome = changePhases(dir, stated);
+  let outcome;
+  try { outcome = changePhases(dir, stated, { root: workRoot(env), lock }); } catch (error) {
+    return refuse(`could not change ${name}'s record: ${error.message}`);
+  }
   if (!outcome.ok) return refuse(`could not change ${name}'s record: ${outcome.problems.join('; ')}`);
   stdout.write(`mc: ${name} · phase ${waiting} · ${named.length ? `after ${phaseWords(named)}` : 'waits for no phase'}\n`);
+  return 0;
+}
+
+
+/** The desk and document authors may commission a reading, never goal delivery or other readers. */
+function reviewAuthor(env) {
+  const role = normalizeSessionRole(env.MC_ROLE);
+  if (role === 'manager') return true;
+  if (role === 'martin') return env.MC_HEADLESS !== '1';
+  if (role === PLAN_ROLE) return env.MC_HEADLESS !== '1' && !env.MC_GOAL;
+  return !role && !env.MC_GOAL && env.MC_HEADLESS !== '1';
+}
+
+async function reviewVerb({ positional: [name, action, word] }, deps) {
+  const { env, stdout, stderr } = deps;
+  const target = { name, dir: join(programsHome(env), name) };
+  const ctx = { env, stdout, stderr, read: readTextOrNull, write: writeFileAtomic, remove: unlinkSync,
+    lock: deps.lock ?? realLock, now: deps.now ?? (() => new Date()), alive: deps.alive };
+  if (action === 'verdict') return programmeVerdictVerb({ target, word, ctx, deps: deps.review ?? {} });
+  if (!reviewAuthor(env)) { stderr.write('mc: only the manager, the interactive desk or programme plan, or a person calls a programme reading\n'); return 2; }
+  const text = ctx.read(join(target.dir, 'README.md'));
+  if (text === null) { stderr.write(`mc: ${name} has no README.md to read\n`); return 2; }
+  const known = (deps.known ?? (() => knownRepositories(env)))().map((path) => ({ repo: repoNameOf(path), path }));
+  const found = programmeRepositories(text, known);
+  if (found.error) { stderr.write(`mc: ${found.error}\n`); return 2; }
+  try { return await programmeReviewCall({ target, ctx, text, repos: found.repos, deps: deps.review ?? {} }); }
+  catch (error) { stderr.write(`mc: programme-review ${name}: ${error.message}\n`); return 2; }
+}
+
+/** Sign checks the document and current independent reading inside the record writer's strict lock. */
+function signVerb({ positional: [name], flags }, { env, stdout, stderr, now = new Date(), lock }) {
+  if (env.MC_ROLE !== 'martin' || env.MC_HEADLESS === '1') {
+    stderr.write('mc: only Martin at the desk signs a programme\n'); return 2;
+  }
+  const dir = join(programsHome(env), name);
+  const reason = flags.reason?.trim() || null;
+  try {
+    const result = signRecord(dir, { at: typeof now === 'function' ? now() : now, root: workRoot(env), ...(lock ? { lock } : {}),
+      check: ({ text }) => {
+        const problems = documentProblems(text);
+        if (problems.length) return problems;
+        const reading = currentProgrammeReading(dir, text);
+        if (!reading) return [`${name} has no reading of its current text — mc programs review ${name}`];
+        if (reading.verdict === 'not-ok' && !reason) return [`${name}'s reading is NOT OK — repair PROGRAMME-REVIEW.md or sign with --reason "…"`];
+        return [];
+      },
+    });
+    if (!result.ok) {
+      const problems = result.problems.length ? result.problems : [`${name} has no valid record — mc programs show ${name}`];
+      for (const problem of problems) stderr.write(`mc: ${problem}\n`);
+      return 1;
+    }
+    // The command owns the human record of the act, not another PROGRAMME.json key.
+    const log = join(dir, 'LOG.md');
+    const before = readTextOrNull(log) ?? '';
+    writeFileAtomic(log, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${result.record.signed_at} · martin · signed${reason ? ` — ${reason}` : ''}\n`);
+    stdout.write(`${name}: signed — goals may be cut\n`);
+    return 0;
+  } catch (error) { stderr.write(`mc: could not sign ${name}: ${error.message}\n`); return 1; }
+}
+
+/** Return is also the programme planner's safe ending; a goal planner has no such authority. */
+function transitionVerb(verb, { positional: [name], flags }, { env, stdout, stderr, now = new Date(), lock, shelve = shelveProgramme }) {
+  const martin = env.MC_ROLE === 'martin' && env.MC_HEADLESS !== '1';
+  const planner = env.MC_ROLE === PLAN_ROLE && env.MC_PROGRAMME === name && !env.MC_GOAL;
+  if (!(martin || (verb === 'return' && planner))) {
+    stderr.write(`mc: only Martin at the desk${verb === 'return' ? ' or its programme planning turn returns' : ' drops'} a programme\n`);
+    return 2;
+  }
+  const dir = join(programsHome(env), name);
+  const reason = flags.reason.trim();
+  try {
+    const result = (verb === 'return' ? returnRecord : dropRecord)(dir, { root: workRoot(env), ...(lock ? { lock } : {}) });
+    if (!result.ok) {
+      for (const problem of result.problems.length ? result.problems : [`${name} has no valid record — mc programs show ${name}`]) stderr.write(`mc: ${problem}\n`);
+      return 1;
+    }
+    const path = join(dir, 'RETURNED.md');
+    const before = readTextOrNull(path) ?? '';
+    const at = (typeof now === 'function' ? now() : now).toISOString();
+    writeFileAtomic(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${at} · ${env.MC_ROLE} · ${verb === 'return' ? 'returned to draft' : 'dropped'} — ${reason}\n`);
+    if (verb === 'return') stdout.write(`${name}: returned to draft — ${reason}\n`);
+    else {
+      // No release, worktree cleanup, proposal move or restricted-data deletion: retain the whole draft.
+      const destination = shelve(dir, name, env);
+      stdout.write(`${name}: dropped — ${reason}\n  retained at ${destination}\n`);
+    }
+    return 0;
+  } catch (error) {
+    stderr.write(`mc: could not ${verb} ${name}: ${error.message} — material retained; inspect ${dir}\n`);
+    return 1;
+  }
+}
+
+/** The most recent signature, not directory order, supplies the form of the next document. */
+function modelVerb({ env, stdout, stderr }) {
+  const signed = [];
+  for (const home of [programsHome(env), archivedProgramsHome(env)]) {
+    for (const name of listDirsOf(home)) {
+      const dir = join(home, name);
+      const found = readRecord(dir);
+      if (found.status === 'valid' && found.record.signed_at && existsSync(join(dir, 'SIGNED.md'))) signed.push({ dir, at: found.record.signed_at });
+    }
+  }
+  signed.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || a.dir.localeCompare(b.dir));
+  if (!signed.length) { stderr.write('mc: no programme document is signed yet\n'); return 1; }
+  stdout.write(`${join(signed[0].dir, 'SIGNED.md')}\n`);
   return 0;
 }

@@ -185,7 +185,7 @@ order without a model call:
    goal reported by `mc goal defect` and one stopped after three build sessions
    without progress (`no progress:`; *What a build session does* in
    [mc-goals.md](mc-goals.md)), which start no session until `mc goal ready`. A `build · ready` goal whose last entry is the runner's main-red wait (*What a build session does* in [mc-goals.md](mc-goals.md)) is held while a main-red repair of one of its repositories is queued, running or published. `draft · ready`, `done` and `dropped` do not start a
-   delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded open programme that holds no goal gets the programme planning turn (*Programme planning turn*).
+   delivery session. A focused plan session may complete the next draft under the programme rule below, and a recorded open programme signed and not yet cut gets the programme planning turn (*Programme planning turn*).
 3. Hold any goal whose phase is not open in its programme. The runner reads
    each programme's record at every pick (`programmeOrder`), as it reads
    `PRIORITY.json`, so a dependency stated, removed or renumbered counts at the
@@ -199,9 +199,14 @@ order without a model call:
    there is no separate queue file. The rule is `phaseStanding`
    ([mc-goals.md](mc-goals.md), *Phases*).
 4. Exclude goals already claimed or named by a live current file, held goals
-   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
+   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), goals whose valid
+   programme record is `draft`, and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
+   The draft hold says `waits for sign-off of <programme>`, once while it
+   lasts. It is re-read during admission, before spawning plan, build, review
+   or mend, not just at the pick. A running session finishes normally; neither
+   the merger's queued work nor the runner's landed-PR reconciliation is held.
 5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build, then the programme archive turn ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never
@@ -866,17 +871,20 @@ remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-pl
 
 ## Programme planning turn
 
-Martin, 2026-11-15: a programme with a valid open record and a README page and
-no goals is planned into its phases and goals with nobody present. The record
-is the trigger: `mc plan` and `mc programs` create it, and a programme with no
-record, or an invalid one, starts nothing (the programmes' rules are in
+Martin, 2026-11-15, 2026-11-16: a programme whose record Martin signed is cut
+into its phases and goals from the signed document, with nobody present. The
+signature is the trigger, not the absence of goals: `mc programs sign` writes
+it, and a programme with no record, an invalid one, a draft one, a legacy one
+or an area record starts nothing (the programmes' rules are in
 [mc-plan.md](mc-plan.md#a-programme-with-a-record)). `programmeDue`
 (`programme-turn.js`) is model-free and reads at every pick. A turn is due when
 all hold:
 
-- the record is valid and `open`, and `README.md` exists;
-- `goals/` holds only dot-entries and `goals/.archive/` is empty, so a programme
-  that ever held a goal is never planned again by this turn;
+- the record is valid, `open`, signed (`signed_text` set) and not `legacy`, and
+  `README.md` exists;
+- `cut_text` is not `signed_text`: the signature has not been cut yet. Goals
+  already in the programme do not stop a turn, so a re-sign is cut again from
+  the new document and the goals of an unchanged part stay;
 - no open desk item of kind `programme` has the reference `programme:<p>`;
 - when the record names a horizon, that horizon reads `open`.
 
@@ -892,13 +900,42 @@ offline holds, STOP and UPDATE are those of every session. It never uses a
 `plan/<programme>` worktree and commits nothing: the served repositories are
 given as read checkouts at `runner/work/programme-turn-<p>/<repo>`, detached at
 origin/main. The prompt is `programmePlanPrompt` (`run-plan.js`), and the plan
-role's headless programme-turn section says the rest. In order, the session
-creates every goal as a draft with its title, phase and outcome; then completes,
-plan-reviews and moves each to build in turn, stating dependencies of a stated
-programme with `mc programs after`. A question is a goal-bound
-`mc ask` on the draft that needs it (one way to ask: jev, then a reader), and the other drafts go on.
-Drafts it leaves are not set to Martin: the next-draft sessions take them.
-Proposals are not processed.
+role's headless programme-turn section says the rest. SIGNED.md is the only
+source: the session cuts the programme from it, one or more goals per part,
+each naming the part it carries as `Part <n>` in the label of a `documents`
+entry whose path is the programme's SIGNED.md (a path that resolves to another
+file counts for nothing, and no part range is read). It copies the part's
+Solution, Design and Proved by into the goal and decides nothing the document
+does not; a part already built gets a goal for the difference only, and the
+goals of an unchanged part are kept. Dependencies of a stated programme are
+stated with `mc programs after`. A choice the document leaves open is not
+settled and not asked by the session: it returns the programme with
+`mc programs return <p> --reason "<part and choice>"` and ends (the record is
+`draft` again and no turn starts until the next sign-off). Only a question that
+is not such a choice is asked, with a goal-bound `mc ask` on the draft that
+needs it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
+leaves are not set to Martin: the next-draft sessions take them. Proposals are
+not processed.
+
+**The cut.** After the session `finishTurn` reads the record again under the
+runner lock and reads the signed Part headings (`### Part <n> — …` inside
+`## Parts`, fenced blocks ignored) against the parsed live and archived goals
+(`partsCut`, no stage excluded). The ending is one of:
+
+- `cut`: SIGNED.md still matches the signature the turn launched on and every
+  part is named by a goal. `cut_text` is set to that signature in the record's
+  one atomic write, and the other fields are read fresh and kept;
+- `returned`: the record is `draft` again (the session returned it). Success; the
+  earlier `cut_text` is kept and no turn starts while it is draft;
+- `resigned`: the record carries a newer `signed_text` than the turn read.
+  Nothing is cut and nothing counts; the next pick cuts the new signature;
+- `settled`: the record is `done`, `dropped`, legacy or gone, or carries no
+  signature. Nothing is written and nothing counts;
+- `incomplete`: the record is as launched but SIGNED.md is missing or does not
+  match it, names no part, or a part is named by no goal. A failure (below).
+
+`runs.tsv` notes say `cut from the signature`, `returned to draft` or
+`not cut (<problem>; …)`.
 
 **Next-draft planning waits.** While a programme turn is claimed or current in a
 programme, no next-draft plan session starts in it: the sequential pick filter,
@@ -918,8 +955,11 @@ checkout made earlier in the same setup is undone. Another add failure is a
 failure with the reason `setup: <git's last line>`. After the session the
 checkouts are removed, and any a refusal kept are named.
 
-**Failure.** A session that ends with the programme holding no goal is a
-failure, with its reason and its log kept in `runner/programme-turn/<p>.json`.
+**Failure.** A session that ends `incomplete` or fails to read the record is a
+failure, with its reason (`planning session exited <n> without a goal naming every
+part of the signed document (<problems>)`) and its log kept in
+`runner/programme-turn/<p>.json`; a `cut`, `returned`, `resigned` or `settled`
+ending counts none.
 Provider endings (quota, offline, refused login), a refusal at admission and a
 fetch failure count nothing. The first failure retries on the next pick. The
 second opens a desk item of kind `programme`, reference `programme:<p>`: the
@@ -927,8 +967,9 @@ first such item is `prepared`, with a model-free `prepared.md` of the failures
 and their logs, so a decision session repairs it; a later one is `for-martin`,
 sort `mechanical`, `reversible: false`, `due_at: null`, with a `brief.md` in
 Swedish. No turn starts while an item is open. A failure is counted again only
-after the item closed. The item closes by source when the programme holds a
-goal, the record no longer reads valid and open, or the directory is gone, and
+after the item closed. The item closes by source when the signature is cut (every signed part is
+named by a goal), the record carries no signature, no longer reads valid and open,
+or the directory is gone, and
 by decision otherwise ([mc-martin.md](mc-martin.md#durable-desk-items)). A state
 file that cannot be read starts no turn and counts nothing; the runner says it
 once in `runner.log`, the desk sync reports it and the item stays open.
