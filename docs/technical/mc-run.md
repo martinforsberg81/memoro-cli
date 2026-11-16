@@ -72,7 +72,10 @@ absolute Node and mc entry with `run start --if-was-running`; it has no
 rewrite the unit only when its content changes, daemon-reload only after a
 change, and enable it without `--now`; they never stop or restart an existing
 cgroup. Unit environment is restricted to resolved `HOME`, `PATH`, `MC_HOME`,
-`MC_WORK_ROOT` and `MC_REPOS_HOME` values. Unit paths and arguments use
+`MC_WORK_ROOT` and `MC_REPOS_HOME` values; `MC_REPOS_HOME` is written only when
+the starting environment sets it, never invented, because it moves `self/` with
+the bare repositories ([mc-layout](mc-layout.md)) and `<root>/repos` would leave
+every session of a boot-started runner without a shared checkout. Unit paths and arguments use
 systemd quoting with specifier and environment expansion escaped. Credentials,
 shell directive flags and runtime successor/session identity are not persisted.
 
