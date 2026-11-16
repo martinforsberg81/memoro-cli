@@ -865,6 +865,143 @@ describe('bringing one up', () => {
     return { ensured, left };
   }
 
+  it('re-admits once after a dead wrapper and returns the second registered server', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const pauses = [];
+    const progress = [];
+    const reservations = [];
+    let spawned = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => { pauses.push(ms); t += ms; },
+      spawn: (_command, _args, options) => {
+        reservations.push(options.env.MC_DEV_ADMITTED);
+        spawned += 1;
+        if (spawned === 2) registerServer(root, worktree, { port: 8900 });
+        return { pid: 4242, unref() {} };
+      },
+      pidAlive: () => false, fetch: async () => ({ ok: true }), onRetry: (line) => progress.push(line),
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.server.url, 'http://127.0.0.1:8900');
+    assert.equal(spawned, 2);
+    assert.ok(reservations.every((id) => /^res-/u.test(id)));
+    assert.notEqual(reservations[0], reservations[1], 'each attempt is freshly admitted');
+    assert.deepEqual(pauses, [1000, 5000, 1000]);
+    assert.equal(progress.length, 1);
+    assert.match(progress[0], /starting once more/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('reports the second failed attempt, not an older start failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'dev-old.log'), 'start failed: old cause\n');
+    let t = 0;
+    let attempts = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t, sleep: async (ms) => { t += ms; },
+      spawn: () => { attempts += 1; writeFileSync(join(dir, `dev-${attempts}.log`), `start failed: cause ${attempts}\nlast ${attempts}\n`); return { pid: 4242, unref() {} }; },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 2);
+    assert.match(result.error, /^start failed: cause 2\n/u);
+    assert.match(result.error, /last 2$/u);
+    assert.doesNotMatch(result.error, /old cause|cause 1/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('reuses a server registered during the retry pause without another spawn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    let spawned = 0;
+    const pauses = [];
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t,
+      sleep: async (ms) => {
+        pauses.push(ms);
+        t += ms;
+        if (ms === 5000) registerServer(root, worktree, { port: 8901 });
+      },
+      spawn: () => { spawned += 1; return { pid: 4242, unref() {} }; },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.started, false);
+    assert.equal(result.server.url, 'http://127.0.0.1:8901');
+    assert.equal(spawned, 1);
+    assert.deepEqual(pauses, [1000, 5000]);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('does not attribute the first attempt log to a silent second exit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    let t = 0;
+    let spawned = 0;
+    const result = await ensureDevServer(worktree, DECLARATION, {
+      root, processCwd: () => null, freeMemory: () => null,
+      now: () => t, sleep: async (ms) => { t += ms; },
+      spawn: () => {
+        spawned += 1;
+        if (spawned === 1) writeFileSync(join(dir, 'dev-first.log'), 'start failed: first cause\n');
+        return { pid: 4242, unref() {} };
+      },
+      pidAlive: () => false, fetch: async () => ({ ok: true }),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(spawned, 2);
+    assert.match(result.error, /exited before it registered/u);
+    assert.match(result.error, /no log for this attempt/u);
+    assert.doesNotMatch(result.error, /first cause/u);
+    assert.deepEqual(readReservations(devPoolPath(root)), []);
+    for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('says when the current attempt log has no startup reason', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const worktree = worktreeWith();
+    const dir = join(worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(dir, { recursive: true });
+    let t = 0;
+    let spawned = 0;
+    try {
+      const result = await ensureDevServer(worktree, DECLARATION, {
+        root, processCwd: () => null, freeMemory: () => null,
+        now: () => t, sleep: async (ms) => { t += ms; },
+        spawn: () => {
+          spawned += 1;
+          writeFileSync(join(dir, `dev-${spawned}.log`), spawned === 1 ? 'start failed: old cause\n' : 'bundle: starting\n');
+          return { pid: 4242, unref() {} };
+        },
+        pidAlive: () => false, fetch: async () => ({ ok: true }),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(spawned, 2);
+      assert.match(result.error, /^no start failed reason in this attempt’s log\n/u);
+      assert.match(result.error, /exited before it registered/u);
+      assert.match(result.error, /bundle: starting$/u);
+      assert.doesNotMatch(result.error, /old cause/u);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+    } finally {
+      for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('leaves no keys child file in the temp directory once its start registered', async () => {
     const { ensured, left } = await decidedStart({ registers: true, wrapperAlive: true });
     assert.equal(ensured.ok, true, ensured.error);
@@ -890,6 +1027,8 @@ describe('bringing one up', () => {
     const worktree = worktreeWith();
     let t = 0;
     let stopped = 0;
+    let spawned = 0;
+    const retries = [];
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
@@ -899,8 +1038,9 @@ describe('bringing one up', () => {
       sleep: async (ms) => { t += ms; },
       registerTimeoutMs: 5_000,
       // A child that is really alive: it may still register, so it keeps the slot.
-      spawn: () => ({ pid: process.ppid, unref() {} }),
+      spawn: () => { spawned += 1; return { pid: process.ppid, unref() {} }; },
       stopServer: () => { stopped += 1; return { ok: true }; },
+      onRetry: (line) => retries.push(line),
       onSlowStart: () => {},
       fetch: async () => ({ ok: true }),
     });
@@ -910,6 +1050,8 @@ describe('bringing one up', () => {
     assert.match(ensured.error, new RegExp(`pid ${process.ppid} is still alive and keeps its slot`, 'u'));
     assert.ok(t >= 10_000, `gave up after ${t}ms`);
     assert.equal(stopped, 0, 'a live child is named, never stopped');
+    assert.equal(spawned, 1);
+    assert.deepEqual(retries, [], 'a still-starting wrapper is not retried');
     assert.deepEqual(readReservations(devPoolPath(root)).map((item) => item.pids), [[process.ppid]], 'held by the child alone once mc gave up');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -938,7 +1080,7 @@ describe('bringing one up', () => {
     assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
     assert.doesNotMatch(ensured.error, /still alive/u);
     assert.deepEqual(waiting, []);
-    assert.equal(t, 1_000, `named after ${t}ms, at the first poll rather than the end of the window`);
+    assert.equal(t, 7_000, `two first-poll exits and the 5s retry pause took ${t}ms`);
     assert.deepEqual(readReservations(devPoolPath(root)), [], 'a starter that is gone frees its slot');
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -948,6 +1090,8 @@ describe('bringing one up', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
     const { now, sleep } = clock();
+    let spawned = 0;
+    const retries = [];
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
@@ -955,7 +1099,8 @@ describe('bringing one up', () => {
       freeMemory: () => null,
       now,
       sleep,
-      spawn: () => { registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
+      spawn: () => { spawned += 1; registerServer(root, worktree, { port: 8900 }); return { unref() {} }; },
+      onRetry: (line) => retries.push(line),
       fetch: async () => {
         // It registered, then went. The registration is swept on the next read.
         rmSync(join(root, 'dev-8900.json'), { force: true });
@@ -965,6 +1110,8 @@ describe('bringing one up', () => {
 
     assert.equal(ensured.ok, false);
     assert.match(ensured.error, /stopped before it answered/u);
+    assert.equal(spawned, 1);
+    assert.deepEqual(retries, [], 'a registered server is not retried');
     assert.ok(now() < 60_000, `waited ${now()}ms for a wrapper that was gone`);
 
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
@@ -1626,15 +1773,20 @@ describe('admission before a start', () => {
   it('a spawn that throws frees the slot it was given', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
+    let spawned = 0;
+    const retries = [];
     const ensured = await ensureDevServer(worktree, DECLARATION, {
       root,
       env: {},
       processCwd: () => null,
       freeMemory: () => 50,
-      spawn: () => { throw new Error('EAGAIN'); },
+      spawn: () => { spawned += 1; throw new Error('EAGAIN'); },
+      onRetry: (line) => retries.push(line),
     });
     assert.equal(ensured.ok, false);
     assert.match(ensured.error, /could not be started: EAGAIN/u);
+    assert.equal(spawned, 1);
+    assert.deepEqual(retries, [], 'a synchronous spawn error is not retried');
     assert.deepEqual(readReservations(devPoolPath(root)), []);
     for (const path of [root, worktree]) rmSync(path, { recursive: true, force: true });
   });
@@ -1720,6 +1872,52 @@ describe('editedSince — a change nobody committed', () => {
 });
 
 describe('ensureAppServer', () => {
+  it('keeps both admission waits separate from failed retry start time', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const temp = mkdtempSync(join(tmpdir(), 'mc-test-env-temp-'));
+    const worktree = worktreeWith();
+    let t = 0;
+    const waits = [3000, 4000];
+    const reservations = [];
+    const progress = [];
+    let spawned = 0;
+    try {
+      const result = await ensureAppServer(worktree, DECLARATION, {
+        stdout: { write: (line) => progress.push(line) },
+        deps: {
+          root, tmpDir: temp, processCwd: () => null, freeMemory: () => null,
+          clock: () => t, now: () => t,
+          sleep: async (ms) => { t += ms; },
+          admit: async () => {
+            const waited = waits.shift();
+            t += waited;
+            return { ok: true, waited_ms: waited };
+          },
+          spawn: (_command, _args, options) => {
+            spawned += 1;
+            reservations.push(options.env.MC_DEV_ADMITTED);
+            writeFileSync(options.env.MC_KEYS_CHILD_FILE, JSON.stringify({ pid: 4243, exit: 1 }));
+            return { pid: 4242, unref() {} };
+          },
+          pidAlive: (pid) => pid === 4242,
+          fetch: async () => ({ ok: true }),
+        },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(spawned, 2);
+      assert.deepEqual(waits, []);
+      assert.deepEqual(reservations, ['', '']);
+      assert.deepEqual(result.timing, { slot_wait_ms: 7000, server_ms: 7000 });
+      assert.match(result.error, /server \(pid 4243\) exited with code 1/u);
+      assert.match(result.error, /wrapper \(pid 4242\) is still alive/u);
+      assert.equal(progress.filter((line) => line.includes('starting once more')).length, 1);
+      assert.deepEqual(readdirSync(temp), []);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+    } finally {
+      for (const path of [root, temp, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('says a slot wait and a slow start apart, and neither throws (network-hub-avatars, 2026-11-02)', async () => {
     const said = [];
     const ensured = await ensureAppServer('/w', DECLARATION, {
@@ -1859,7 +2057,7 @@ describe('a restart keeps its slot, and a dead start is named at once', () => {
     const worktree = worktreeWith();
     const logs = join(worktree, '.wrangler', 'dev-server', 'logs');
     mkdirSync(logs, { recursive: true });
-    writeFileSync(join(logs, 'dev-2026-11-06.log'), `${Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join('\n')}\n`);
+    const logFile = join(logs, 'dev-2026-11-06.log');
     let t = 0;
 
     const ensured = await ensureDevServer(worktree, DECLARATION, {
@@ -1869,14 +2067,14 @@ describe('a restart keeps its slot, and a dead start is named at once', () => {
       freeMemory: () => null,
       now: () => t,
       sleep: async (ms) => { t += ms; },
-      spawn: () => ({ pid: 4242, unref() {} }),
+      spawn: () => { writeFileSync(logFile, `${Array.from({ length: 25 }, (_, index) => `line ${index + 1}`).join('\n')}\n`); return { pid: 4242, unref() {} }; },
       // Alive for two seconds, then the wrapper is gone and nothing will register.
       pidAlive: () => t < 2_000,
       fetch: async () => ({ ok: false }),
     });
 
     assert.equal(ensured.ok, false);
-    assert.ok(t < 3_000, `named after ${t}ms, not at the end of the register window`);
+    assert.equal(t, 8_000, 'first exit at 2s, 5s pause and second exit at its first poll');
     assert.match(ensured.error, /\(pid 4242\) exited before it registered/u);
     assert.match(ensured.error, /line 25$/u, 'the last line of the log is in the error');
     assert.doesNotMatch(ensured.error, /^line 5$/mu, 'only the last twenty lines');
@@ -1912,10 +2110,53 @@ describe('a server that dies behind its wrapper', () => {
     };
   }
 
+  it('re-admits after a known dead server while its wrapper lives, without signalling it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const temp = mkdtempSync(join(tmpdir(), 'mc-test-env-temp-'));
+    const worktree = worktreeWith();
+    const reservations = [];
+    const pauses = [];
+    const progress = [];
+    let t = 0;
+    let signals = 0;
+    try {
+      const result = await ensureDevServer(worktree, DECLARATION, {
+        root, tmpDir: temp, processCwd: () => null, freeMemory: () => null,
+        now: () => t,
+        sleep: async (ms) => { pauses.push(ms); t += ms; },
+        spawn: (_command, _args, options) => {
+          reservations.push(options.env.MC_DEV_ADMITTED);
+          if (reservations.length === 1) {
+            writeFileSync(options.env.MC_KEYS_CHILD_FILE, JSON.stringify({ pid: SERVER, exit: 1 }));
+          } else {
+            registerServer(root, worktree, { port: 8902 });
+          }
+          return { pid: WRAPPER, unref() {}, kill() { signals += 1; } };
+        },
+        pidAlive: (pid) => pid === WRAPPER,
+        fetch: async () => ({ ok: true }),
+        onRetry: (line) => progress.push(line),
+      });
+      assert.equal(result.ok, true, result.error);
+      assert.equal(result.server.url, 'http://127.0.0.1:8902');
+      assert.equal(reservations.length, 2);
+      assert.ok(reservations.every((id) => /^res-/u.test(id)));
+      assert.notEqual(reservations[0], reservations[1]);
+      assert.deepEqual(pauses, [1000, 5000, 1000]);
+      assert.equal(progress.length, 1);
+      assert.match(progress[0], /starting once more/u);
+      assert.equal(signals, 0);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+      assert.deepEqual(readdirSync(temp), []);
+    } finally {
+      for (const path of [root, temp, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('a server that dies while its wrapper lives is named at the next poll, with its exit and the end of its log', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
-    const log = logIn(worktree, ['worker options: {"port":8900}', 'the last line before the exit'], T0 + 1_000);
+    let log;
     const tracked = {};
     let t = 0;
     let diedAt = null;
@@ -1933,13 +2174,13 @@ describe('a server that dies behind its wrapper', () => {
           writeFileSync(tracked.file, JSON.stringify({ pid: SERVER, exit: 1, signal: null }));
         }
       },
-      spawn: spawnWrapper(tracked),
+      spawn: (...args) => { diedAt = null; log = logIn(worktree, ['worker options: {"port":8900}', `attempt at ${t}`, 'the last line before the exit'], T0 + t + 1_000); return spawnWrapper(tracked)(...args); },
       pidAlive: (pid) => pid === WRAPPER || (pid === SERVER && diedAt === null),
       fetch: async () => ({ ok: false }),
     });
 
     assert.equal(ensured.ok, false);
-    assert.ok(t - diedAt <= 1_000, `named ${t - diedAt}ms after the server died, not at the end of the register window`);
+    assert.equal(t, 8_000, 'one retry pause and a first-poll second exit');
     assert.match(ensured.error, /memoro-worker's server \(pid 5151\) exited with code 1 before it registered/u);
     assert.match(ensured.error, /its wrapper \(pid 4242\) is still alive/u);
     assert.ok(ensured.error.includes(log), 'the newest log is named');

@@ -72,7 +72,7 @@ import { reap as reapDevServers } from './dev-reap.js';
 import { freeMemoryPercent } from './dev-servers.js';
 import { sweepDocker, tidyDocker } from './docker.js';
 import { REVIEW_CLASS } from './plan-schema.js';
-import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
+import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
 import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
@@ -1598,7 +1598,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
-        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all, orders.get(goal.programme)) && !heldBy(goal) && may(goal))
+        && names.includes(goal.repos[0]) && !held.has(goalName(goal)) && !decisionClaimed(join(goal.dir, '.decision.json')) && phaseOpen(goal, all, orders.get(goal.programme)) && !heldBy(goal) && may(goal) && !heldForMain(goal))
       .map((goal) => {
         const kind = goalSession(goal, merge);
         return { name: goalName(goal), repo: goal.repos[0], kind, variant: goalVariant(kind), since: goal.log.at(-1)?.at ?? '', resumed: false, goal };
@@ -2412,6 +2412,35 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
 
   const mendState = (repo) => ({ root, repo, read: deps.read, write: writeJson, lock });
 
+  /** The main-red repair states a build waits for: queued, running or published. Martin and the final states do not hold a build. */
+  const MAIN_WAIT_STATES = ['queued', 'running', 'published'];
+  /** The goal's repairs a build waits for, by repository (`{ repo, ids }`); a state that cannot be read waits for nothing. */
+  function mainRepairWaits(goal) {
+    return goal.repos.map((repo) => {
+      let entries = [];
+      try { entries = readMainMends(mendState(repo)).filter((entry) => MAIN_WAIT_STATES.includes(entry.state)); }
+      catch { entries = []; } // mainMendWork reports the unreadable state at the next pick.
+      return { repo, ids: entries.map((entry) => entry.id) };
+    }).filter((wait) => wait.ids.length);
+  }
+  /** Each goal whose pick is held by main's wait is said once while it lasts, by the repairs it waits for (`waitSaid`). */
+  const waitSaid = new Map();
+  /**
+   * Whether a build goal waits for main's repair: its last entry is the runner's `WAITS_FOR_MAIN` and a repository of
+   * the goal still has a repair in `MAIN_WAIT_STATES`. Any other last entry is never held here, and the hold ends by
+   * itself when the repair ends.
+   */
+  function heldForMain(goal) {
+    const last = goal.log.at(-1);
+    const waiting = goal.stage === 'build' && goal.status === 'ready' && last?.tool === 'runner' && String(last.comment ?? '').startsWith(WAITS_FOR_MAIN);
+    const waits = waiting ? mainRepairWaits(goal) : [];
+    const name = goalName(goal);
+    if (!waits.length) { waitSaid.delete(name); return false; }
+    const key = waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ');
+    if (waitSaid.get(name) !== key) { say(`${name}: waits for main's repair in ${key}`); waitSaid.set(name, key); }
+    return true;
+  }
+
   // An idle lane notices newly queued main reds on the existing control poll,
   // not after its ten-minute idle sleep. Unstartable existing work does not spin.
   function mainMendTicket() {
@@ -3183,7 +3212,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * one runner entry; the third in a row (`noProgressStreak`, from LOG.md) gets
    * instead one entry with status `Martin`, which the runner starts nothing on and the
    * desk takes up. A reading that cannot be had is said in a runner entry that
-   * counts neither way. A goal the session left out of `build · ready` is not
+   * counts neither way. A session with no progress while a main-red repair of one of the goal's repositories is
+   * queued, running or published is not counted either: the runner writes `WAITS_FOR_MAIN` and the pick holds the
+   * goal until that repair ends (`mainRepairWaits`, `heldForMain`). A goal the session left out of `build · ready` is not
    * the runner's to judge.
    */
   function afterBuild(goal, name, before) {
@@ -3198,6 +3229,11 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const progress = after.met > before.met || after.heads.some(({ head }, index) => head !== before.heads[index]?.head);
     if (progress) {
       if (streak > 0) goalState(goal, name, {}, { comment: `${PROGRESS_AGAIN}: met ${after.met} of ${after.total} criteria (${before.met} before), heads ${headsText} — the count of sessions without progress starts again` });
+      return;
+    }
+    const waits = mainRepairWaits(goal);
+    if (waits.length) {
+      goalState(goal, name, {}, { comment: `${WAITS_FOR_MAIN} in ${waits.map(({ repo, ids }) => `${repo} (${ids.join(', ')})`).join('; ')} — no session starts on this goal until it has ended` });
       return;
     }
     const count = `met ${after.met} of ${after.total} criteria`;

@@ -14,6 +14,12 @@ Two questions, two commands. **How is it now** — what main looks like — is
 followed to main while idle, from any worktree. **How does my change look** is
 `mc shot dev <target>` from your worktree, which serves your tree.
 
+For a design state in an already-provided worktree at any path or local branch,
+run from that worktree (or a directory inside it):
+`mc shot dev /app/courses --set ~/mc/programs/my-programme/designs/hub --state filled`.
+This takes desktop and phone in light and dark; actions repeat four times. Read
+checkouts are not editable; this task does not provision a design worktree.
+
 - `--viewport iphone` carries the safe area. `--measure <css>` prints one JSON
   line per match: rectangle, padding, position, computed colours, scroll state
   and visibility with the ancestors walked.

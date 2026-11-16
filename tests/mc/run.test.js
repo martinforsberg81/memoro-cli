@@ -3879,6 +3879,100 @@ test('a quota or offline ending and a HEAD that cannot be read are not counted, 
   assert.equal(stuckWhere(f), 'build · Martin', 'the third counted session stops it: none of those between was counted or started the count');
 });
 
+/* ------------------------------------------------ a session without progress during a main-red repair (the wait) */
+
+/** `~/mc/runner/main-mend/memoro.json` of the fixture: the rows `state` names, by `id`. */
+const mendRows = (f, rows) => { f.files['/w/runner/main-mend/memoro.json'] = JSON.stringify({ version: 1, entries: rows.map(([id, state]) => ({ id, state, repo: 'memoro', file: 'tests/red.test.js', branch: `main-red/${id}`, owner: `main-red:${id}`, base: 'main-head', worktree: null, pr: null })) }); };
+/** The runner's wait entry a session without progress during a repair leaves (`afterBuild`), as LOG.md holds it. */
+const waitLog = (ids = 'm1') => `\n## 2026-08-29T10:00Z · runner · build · ready\n\nComment: session not counted for progress: main-red repair unfinished in memoro (${ids}) — no session starts on this goal until it has ended\n`;
+/** The runner's lines about the hold on `stuck`, the way `say` writes them to runner.log. */
+const holdSaid = (f) => (f.files['/w/runner/log/runner.log'] ?? '').split('\n').filter((line) => /stuck: waits for main's repair/u.test(line)).length;
+
+test('a build session without progress during a main-red repair is not counted, even at two, and the goal waits for the repair', async () => {
+  const f = noProgressFixture();
+  await stuckPass(f, builds(f));
+  await stuckPass(f, builds(f));
+  assert.equal(noProgressEntries(f).length, 2);
+  mendRows(f, [['m1', 'published']]);
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · ready', 'two no-progress sessions and one during the repair are not three');
+  assert.equal(noProgressEntries(f).length, 2, 'the session during the repair writes no no-progress entry');
+  const wait = stuckEntries(f).at(-1);
+  assert.deepEqual([wait.tool, wait.stage, wait.status], ['runner', 'build', 'ready']);
+  assert.equal(wait.comment, 'session not counted for progress: main-red repair unfinished in memoro (m1) — no session starts on this goal until it has ended');
+  assert.equal((await stuckPass(f, builds(f))).ran, 0, 'the goal is held while the repair stays published');
+});
+
+test('a goal that waits for a main-red repair is not offered while the repair is queued or published, says so once, and is offered again when it ends', async () => {
+  const f = noProgressFixture();
+  f.files[`${GOALS}/stuck/LOG.md`] += waitLog();
+  mendRows(f, [['m1', 'published']]);
+  // One runner, as the daemon is: its hold is said once per goal while it lasts.
+  const runner = createRunner({ deps: f.deps });
+  assert.ok(!runner.nextWork(), 'no pick while the repair is published');
+  f.answer = builds(f);
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'no session starts on the goal');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.equal(holdSaid(f), 1, 'the hold is said once while it lasts');
+
+  mendRows(f, [['m1', 'queued']]);
+  const mend = runner.nextWork();
+  assert.equal(mend.kind, 'mend', 'the queued repair is the pick itself');
+  assert.ok(!runner.nextWork({ passed: new Set([mend.name]) }), 'no pick for the goal while the repair is queued');
+  assert.equal(holdSaid(f), 1, 'the same repair, still held: not said again');
+
+  for (const state of ['landed', 'dropped', 'Martin']) {
+    mendRows(f, [['m1', state]]);
+    const pick = createRunner({ deps: f.deps }).nextWork();
+    assert.equal(pick.kind, 'build', `${state}: the goal is offered again`);
+    assert.match(pick.name, /stuck$/u);
+  }
+  assert.equal(holdSaid(f), 1, 'released, nothing is said');
+});
+
+test('a goal whose last entry is not the main-red repair wait is offered whatever the repair state', async () => {
+  const f = noProgressFixture();
+  mendRows(f, [['m1', 'published']]);
+  assert.match(createRunner({ deps: f.deps }).nextWork().name, /stuck$/u, 'published: offered');
+  mendRows(f, [['m1', 'queued']]);
+  const mend = createRunner({ deps: f.deps }).nextWork();
+  assert.equal(mend.kind, 'mend');
+  assert.match(createRunner({ deps: f.deps }).nextWork({ passed: new Set([mend.name]) }).name, /stuck$/u, 'queued: offered behind the repair');
+  assert.equal(holdSaid(f), 0, 'nothing is held, so nothing is said');
+});
+
+test('a main-red repair that has ended does not hold a session without progress: the count is as today', async () => {
+  for (const state of ['landed', 'dropped', 'Martin']) {
+    const f = noProgressFixture();
+    await stuckPass(f, builds(f));
+    mendRows(f, [['m1', state]]);
+    await stuckPass(f, builds(f));
+    assert.match(stuckEntries(f).at(-1).comment, /^no progress this session \(2 of 3\): met 0 of 1 criteria, heads memoro head-0 unchanged$/u, state);
+    await stuckPass(f, builds(f));
+    assert.equal(stuckWhere(f), 'build · Martin', `${state}: the third session without progress stops the goal`);
+    assert.match(stuckEntries(f).at(-1).comment, /^no progress: three build sessions in a row/u, state);
+  }
+});
+
+test('an unreadable main-red repair state does not hold a session without progress: the count is as today', async () => {
+  const f = noProgressFixture();
+  await stuckPass(f, builds(f));
+  f.files['/w/runner/main-mend/memoro.json'] = '{ not json';
+  await stuckPass(f, builds(f));
+  assert.match(stuckEntries(f).at(-1).comment, /^no progress this session \(2 of 3\)/u);
+  await stuckPass(f, builds(f));
+  assert.equal(stuckWhere(f), 'build · Martin', 'the unreadable state is no wait: the third session stops the goal');
+});
+
+test('a session that makes progress during a main-red repair is not held and writes no wait entry', async () => {
+  const f = noProgressFixture();
+  mendRows(f, [['m1', 'published']]);
+  await stuckPass(f, builds(f, { commit: true }));
+  assert.equal(stuckEntries(f).some((entry) => /^session not counted/u.test(String(entry.comment))), false, 'progress writes no wait');
+  assert.equal(stuckWhere(f), 'build · ready');
+  assert.equal((await stuckPass(f, builds(f))).ran, 1, 'the goal is offered again: its last entry is a session\'s own');
+});
+
 /** The result of an API the runner cannot reach (2026-11-06): ten retries, then this, with no tokens. */
 const UNREACHABLE = streamed(apiEndedSession("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", { api_error: 'connection_failed', api_error_status: null, num_turns: 1, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }));
 

@@ -500,6 +500,8 @@ export function reviewDiedBefore(log) {
 export const NO_PROGRESS_LIMIT = 3;
 export const NO_PROGRESS_SESSION = 'no progress this session';
 export const NOT_COUNTED = 'session not counted for progress';
+/** The runner's entry for a session without progress while a main-red repair of one of the goal's repositories is unfinished (`afterBuild`); the pick holds the goal until that repair ends. */
+export const WAITS_FOR_MAIN = `${NOT_COUNTED}: main-red repair unfinished`;
 export const PROGRESS_AGAIN = 'progress again';
 export const NO_PROGRESS_STOP = `no progress: three build sessions in a row met no criterion and committed nothing`;
 

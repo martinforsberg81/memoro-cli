@@ -33,7 +33,8 @@ is true. The judgement of the fact is yours.
 order, one open programme per horizon at a time). The horizon is open and no
 open programme serves it. Read its playback (`mc martin horizon show <slug>`),
 the area pages and the read checkouts at origin/main named in your prompt,
-the archived programmes whose record names the horizon, and the app. Decide what
+the archived programmes whose record names the horizon, and the app (see
+[measure-the-app](../tasks/measure-the-app.md) for pictures). Decide what
 stands between the app as it is and the playback. Change nothing in the
 checkouts. Then end in exactly one of three ways, and say which in your last
 line:

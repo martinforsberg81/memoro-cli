@@ -1066,7 +1066,7 @@ session (n of 3)`, `progress again: …`, `session not counted for progress: …
 are skipped by both counts: they are not a session's word, so a no-progress
 session followed by two silent ones does not set Martin, while three silent
 sessions with nothing between still do. An unreadable head, and a quota, login
-or offline ending, are not counted. The stopped goal loses nothing: its branch,
+or offline ending, are not counted. A session without progress while a main-red repair of one of the goal's repositories is queued, running or published is not counted either: the runner writes one entry whose comment begins `session not counted for progress: main-red repair unfinished in <repo> (<entry ids>)`, leaves the goal `build · ready`, and starts no build session on it until no such repair remains (the pick, step 2, in [mc-run.md](mc-run.md)). A repair in state `Martin` does not hold a build, and a repair state that cannot be read does not either. The stopped goal loses nothing: its branch,
 worktree, pull request and log stay, and `mc goal ready` after the desk has
 amended the text continues it. Progress is never stopped: the count looks
 only at sessions that did nothing. `blocked` is for

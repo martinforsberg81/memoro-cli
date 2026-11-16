@@ -135,6 +135,28 @@ it('receipt: acted answers every action kind and clicked remains valid for all-c
   assert.equal(mixed.code, 0, mixed.stderr);
 });
 
+it('not-loaded removes only the requested output and never opens or reports a failed picture', async () => {
+  const fx = fixture();
+  const requested = join(fx.home, 'requested.png');
+  const unrelated = join(fx.home, 'other.png');
+  writeFileSync(unrelated, 'keep');
+  let opened = false;
+  const result = await shot(['dev', 'home', '--out', requested, '--open', '--allow-unsettled'], fx, {
+    runCapture: ({ request }) => {
+      assert.equal(request.allow_unsettled, true);
+      writeFileSync(request.out, 'incomplete');
+      return { ok: true, result: { ok: false, code: 'not-loaded', error: '.app-loading still visible', file: unrelated } };
+    },
+    spawn: () => { opened = true; },
+  });
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /mc: the page did not load — \.app-loading still visible\n/u);
+  assert.equal(existsSync(requested), false);
+  assert.equal(readFileSync(unrelated, 'utf8'), 'keep');
+  assert.equal(opened, false);
+});
+
 it('receipt: incomplete answers are refused, but failed steps are not unsupported', async () => {
   const fx = fixture();
   const runResult = (result) => shot(['dev', 'home', '--click', '.a', '--click', '.b'], fx, {
@@ -415,6 +437,191 @@ describe('mc shot — the pieces', () => {
   });
 });
 
+describe('mc shot — design sets', () => {
+  it('replays every ordered action and request option in all four renderings', async () => {
+    const fx = fixture();
+    const requests = [];
+    let ensures = 0;
+    const dir = join(fx.home, 'designs');
+    writeFileSync(join(fx.home, 'probe.js'), 'document.title');
+    writeFileSync(join(fx.home, 'rows.csv'), 'a,b');
+    const deps = {
+      ensureAppServer: async () => { ensures += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: {}, timing: { slot_wait_ms: 0, server_ms: 0 } }; },
+      runCapture: ({ request }) => {
+        requests.push(request);
+        writeFileSync(request.out, 'picture');
+        return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
+      },
+    };
+    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--account', 'seeded',
+      '--el', '.panel', '--full', '--locale', 'sv-SE', '--safe-area', '1,2,3,4', '--scroll', '@end',
+      '--measure', '.panel', '--timeout', '45', '--click', '.x', '--context-click', '.y',
+      '--long-press', '.z@800', '--fill', 'input=hello', '--wait-for', '.ready', '--eval', '1+1',
+      '--eval-file', 'probe.js', '--upload', 'input.file=rows.csv', '--press', 'Enter'], fx, deps);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(ensures, 1);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out.split('/').at(-1)]), [
+      ['desktop', 'light', 'filled-desktop-light.png'], ['desktop', 'dark', 'filled-desktop-dark.png'],
+      ['iphone', 'light', 'filled-phone-light.png'], ['iphone', 'dark', 'filled-phone-dark.png'],
+    ]);
+    assert.deepEqual(requests.map((r) => r.actions), Array(4).fill([
+      { kind: 'click', selector: '.x' }, { kind: 'context-click', selector: '.y' },
+      { kind: 'long-press', selector: '.z', ms: 800 }, { kind: 'fill', selector: 'input', text: 'hello' },
+      { kind: 'wait-for', selector: '.ready' }, { kind: 'eval', script: '1+1' },
+      { kind: 'eval', script: 'document.title' }, { kind: 'upload', selector: 'input.file', file: join(fx.home, 'rows.csv') },
+      { kind: 'press', key: 'Enter' },
+    ]));
+    for (const request of requests) {
+      assert.deepEqual({ account: request.account, target: request.target, element: request.element, full: request.full_page,
+        locale: request.locale, safe: request.safe_area, scroll: request.scroll, measure: request.measure, timeout: request.timeout_ms },
+      { account: 'seeded', target: { name: 'home' }, element: '.panel', full: true,
+        locale: 'sv-SE', safe: { top: 1, right: 2, bottom: 3, left: 4 }, scroll: { selector: null, to: 'end' }, measure: '.panel', timeout: 45000 });
+    }
+    assert.deepEqual(result.stdout.trim().split('\n'), requests.map((r) => r.out));
+    assert.ok(requests.every((r) => existsSync(r.out)));
+    assert.match(result.stderr, /desktop-light: mc: warning — notice/u);
+    assert.match(result.stderr, /mc: timing — /u);
+  });
+
+  it('returns the complete ordered matrix in JSON and opens only successful files', async () => {
+    const fx = fixture();
+    const dir = join(fx.home, 'designs');
+    const requests = [];
+    const opened = [];
+    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--json', '--open', '--click', '.a'], fx, {
+      runCapture: ({ request }) => {
+        requests.push(request);
+        return { ok: true, result: { ok: true, file: request.out, acted: request.actions } };
+      },
+      platform: () => 'linux',
+      spawn: (_command, args) => { opened.push(args[0]); return { on() {}, unref() {} }; },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const aggregate = JSON.parse(result.stdout);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme]), [
+      ['desktop', 'light'], ['desktop', 'dark'], ['iphone', 'light'], ['iphone', 'dark'],
+    ]);
+    assert.deepEqual(aggregate.files, requests.map((r) => r.out));
+    assert.deepEqual(opened, aggregate.files);
+    assert.deepEqual(aggregate.results.map((r) => r.rendering), ['desktop-light', 'desktop-dark', 'phone-light', 'phone-dark']);
+    assert.equal(aggregate.ok, true);
+    assert.ok(aggregate.timing);
+    assert.doesNotMatch(result.stderr, /mc: timing/u);
+  });
+
+  it('prints all four successful renderings with labelled diagnostics and one timing line', async () => {
+    const fx = fixture();
+    const requests = [];
+    let ensures = 0;
+    const result = await shot(['dev', 'home', '--set', 'designs', '--state', 'filled', '--shell', 'window', '--click', '.a'], fx, {
+      ensureAppServer: async () => { ensures += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: {}, timing: { slot_wait_ms: 0, server_ms: 0 } }; },
+      runCapture: ({ request }) => {
+        requests.push(request);
+        writeFileSync(request.out, 'picture');
+        return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
+      },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(ensures, 1);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out]), [
+      ['desktop', 'light', join(fx.home, 'designs/filled-desktop-light.png')],
+      ['desktop', 'dark', join(fx.home, 'designs/filled-desktop-dark.png')],
+      ['iphone', 'light', join(fx.home, 'designs/filled-phone-light.png')],
+      ['iphone', 'dark', join(fx.home, 'designs/filled-phone-dark.png')],
+    ]);
+    for (const request of requests) {
+      assert.equal(request.shell, 'window');
+      assert.deepEqual(request.actions, [{ kind: 'click', selector: '.a' }]);
+      assert.ok(existsSync(request.out));
+    }
+    assert.deepEqual(result.stdout.trim().split('\n'), requests.map((r) => r.out));
+    for (const rendering of ['desktop-light', 'desktop-dark', 'phone-light', 'phone-dark']) {
+      assert.match(result.stderr, new RegExp(`${rendering}: mc: warning — notice`, 'u'));
+    }
+    assert.equal((result.stderr.match(/mc: timing —/gu) || []).length, 1);
+    assert.match(result.stderr, /mc: timing — [^\n]+\n$/u);
+  });
+
+  it('stops on each diagnostic failure without opening or claiming the failed rendering', async () => {
+    const cases = [
+      { name: 'not-loaded', result: { ok: false, code: 'not-loaded', error: 'loading' }, diagnostic: /page did not load/u },
+      { name: 'action', result: { failed: { step: 1, kind: 'click', selector: '.a', error: 'missing' } }, diagnostic: /failed.*missing/u },
+      { name: 'eval', result: { evaluated: [{ error: 'bad evaluation' }] }, diagnostic: /threw: bad evaluation/u },
+      { name: 'access', result: { access: { requires: 'admin', account: 'new', role: 'user', expected: 'denied', page: 'granted', status: 200, holds: false } }, diagnostic: /gate did not hold/u },
+      { name: 'malformed', result: null },
+    ];
+    for (const test of cases) {
+      const fx = fixture();
+      const dir = join(fx.home, 'designs');
+      const requests = [];
+      const opened = [];
+      const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--open', '--click', '.a'], fx, {
+        runCapture: ({ request }) => {
+          requests.push(request);
+          writeFileSync(request.out, 'picture');
+          if (requests.length === 3 && test.result === null) return { ok: true, result: null };
+          return { ok: true, result: { ok: true, file: request.out, acted: request.actions, ...(requests.length === 3 ? test.result : {}) } };
+        },
+        platform: () => 'linux',
+        spawn: (_command, args) => { opened.push(args[0]); return { on() {}, unref() {} }; },
+      });
+      assert.equal(result.code, 1, test.name);
+      assert.deepEqual(requests.map((r) => r.out.split('/').at(-1)), ['filled-desktop-light.png', 'filled-desktop-dark.png', 'filled-phone-light.png'], test.name);
+      assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out), test.name);
+      assert.deepEqual(opened, requests.slice(0, 2).map((r) => r.out), test.name);
+      assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)), test.name);
+      if (test.name === 'not-loaded') assert.equal(existsSync(requests[2].out), false);
+      assert.match(result.stderr, /mc: phone-light failed/u, test.name);
+      if (test.diagnostic) assert.match(result.stderr, test.diagnostic, test.name);
+    }
+  });
+
+  it('reports the ordered completed members and failure in partial JSON', async () => {
+    const fx = fixture();
+    const requests = [];
+    const result = await shot(['dev', 'home', '--set', join(fx.home, 'designs'), '--state', 'filled', '--json'], fx, {
+      runCapture: ({ request }) => {
+        requests.push(request);
+        return requests.length === 3
+          ? { ok: true, result: { ok: false, code: 'not-loaded', error: 'loading' } }
+          : { ok: true, result: { ok: true, file: request.out } };
+      },
+    });
+    assert.equal(result.code, 1);
+    const aggregate = JSON.parse(result.stdout);
+    assert.equal(aggregate.ok, false);
+    assert.equal(aggregate.failed, 'phone-light');
+    assert.deepEqual(aggregate.files, requests.slice(0, 2).map((r) => r.out));
+    assert.deepEqual(aggregate.results.map((r) => r.rendering), ['desktop-light', 'desktop-dark', 'phone-light']);
+    assert.equal(aggregate.results[2].result.code, 'not-loaded');
+    assert.ok(aggregate.timing);
+    assert.doesNotMatch(result.stderr, /mc: timing/u);
+  });
+
+  it('refuses incompatible or incomplete sets before starting a server or making a directory', async () => {
+    const fx = fixture();
+    const dir = join(fx.home, 'never');
+    const calls = [
+      ['dev', 'home', '--set', dir, '--state', 'x', '--viewport', 'desktop'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--theme', 'dark'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--out', 'x.png'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--keep'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--compare'],
+      ['dev', 'home', '--set', dir, '--state', 'x', '--list'],
+      ['prod', 'home', '--set', dir, '--state', 'x'],
+      ['dev', 'home', '--state', 'x'], ['dev', 'home', '--set', dir],
+      ['dev', '--set', dir, '--state', 'x'],
+      ...['', '../x', 'Upper'].map((state) => ['dev', 'home', '--set', dir, '--state', state]),
+    ];
+    for (const argv of calls) {
+      const result = await shot(argv, fx, { ensureAppServer: async () => { throw new Error('unexpected server'); } });
+      assert.equal(result.code, 2, argv.join(' '));
+      assert.match(result.stderr, /mc shot dev <target> --set <dir> --state <name>/u);
+      assert.equal(existsSync(dir), false);
+    }
+  });
+});
+
 describe('mc shot — the run', () => {
   it('dev signs in through /dev/login as the seeded account, and prints the path first', async () => {
     const fx = fixture();
@@ -471,6 +678,70 @@ describe('mc shot — the run', () => {
     assert.equal(prod.code, 0, prod.stderr);
     assert.deepEqual(prod.stderr.split('\n').filter((line) => line.startsWith('mc: timing')), ['mc: timing — shot 9 s']);
     assert.ok(!prod.stderr.includes('slot wait'), prod.stderr);
+  });
+
+  it('reports failed server timing for signed-in and public shots, including JSON', async () => {
+    const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+    let t = 0;
+    const deps = {
+      clock: () => t,
+      ensureDevServer: async () => {
+        t += 12_000;
+        return { ok: false, error: 'start failed: database\nprocess exited\nlog tail', waited_ms: 3_000 };
+      },
+    };
+    for (const target of ['home', 'landing-sv']) {
+      const plain = await shot(['dev', target], fx, deps);
+      assert.equal(plain.code, 1);
+      assert.equal(plain.stdout, '');
+      assert.match(plain.stderr, /mc: start failed: database\nprocess exited\nlog tail\nmc: timing — slot wait 3 s, server start 9 s, shot 0 s \(server start failed\)\n$/u);
+      const json = await shot(['dev', target, '--json'], fx, deps);
+      assert.equal(json.code, 1);
+      assert.deepEqual(JSON.parse(json.stdout), { ok: false, error: 'start failed: database\nprocess exited\nlog tail', timing: { slot_wait_s: 3, server_start_s: 9, shot_s: 0 } });
+      assert.doesNotMatch(json.stderr, /mc: timing/u);
+    }
+  });
+
+  it('reports a real retried start failure through both dev shot branches', async () => {
+    const fx = fixture({ shot: PUBLIC_SHOT_JSON });
+    writeFileSync(join(fx.worktree, '.mc', 'dev.json'), JSON.stringify({
+      schema_version: 1, default_service: 'memoro-worker', services: {
+        'memoro-worker': { default_profile: 'full', profiles: { full: { start: { argv: ['npm', 'run', 'dev'] } } } },
+      },
+    }));
+    const logs = join(fx.worktree, '.wrangler', 'dev-server', 'logs');
+    mkdirSync(logs, { recursive: true });
+    for (const target of ['home', 'landing-sv']) {
+      for (const json of [false, true]) {
+        let t = 0;
+        let spawned = 0;
+        const result = await shot(['dev', target, ...(json ? ['--json'] : [])], fx, {
+          ensureDevServer: undefined,
+          root: join(fx.home, `registry-${target}-${json}`), tmpDir: fx.home,
+          processCwd: () => null, freeMemory: () => null,
+          clock: () => t, now: () => t, sleep: async (ms) => { t += ms; },
+          admit: async () => { t += 3000; return { ok: true, waited_ms: 3000 }; },
+          spawn: () => {
+            spawned += 1;
+            writeFileSync(join(logs, `dev-${target}-${json}-${spawned}.log`), `start failed: attempt ${spawned}\nstep ${spawned}\n`);
+            return { pid: 4242, unref() {} };
+          },
+          pidAlive: () => false,
+        });
+        assert.equal(result.code, 1);
+        assert.equal(spawned, 2);
+        if (json) {
+          const answer = JSON.parse(result.stdout);
+          assert.match(answer.error, /^start failed: attempt 2\n.*exited before it registered[\s\S]*step 2$/u);
+          assert.deepEqual(answer.timing, { slot_wait_s: 6, server_start_s: 7, shot_s: 0 });
+          assert.doesNotMatch(result.stderr, /mc: timing/u);
+        } else {
+          assert.equal(result.stdout, '');
+          assert.match(result.stderr, /mc: start failed: attempt 2\n.*exited before it registered[\s\S]*step 2\nmc: timing — slot wait 6 s, server start 7 s, shot 0 s \(server start failed\)\n$/u);
+        }
+        assert.equal((result.stderr.match(/starting once more/gu) || []).length, 1);
+      }
+    }
   });
 
   it('the four first-criterion forms each build their request', async () => {

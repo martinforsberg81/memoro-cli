@@ -540,7 +540,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     session: holder,
     replacing: replaced,
   });
-  if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted };
+  if (!admitted.ok) return { ok: false, error: refusalText(admitted), refused: admitted, waited_ms: admitted.waited_ms ?? 0 };
   const reservation = admitted.reservation || null;
   const letGo = (pids) => {
     if (!reservation) return;
@@ -558,13 +558,13 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const stopped = (deps.stopServer || stopServer)(replacing);
     if (!stopped.ok) {
       letGo([process.pid]);
-      return { ok: false, error: replacedHung
+      return { ok: false, waited_ms: admitted.waited_ms ?? 0, error: replacedHung
         ? `${replaced} is alive but does not answer ${replacing.health_url || replacing.url}, and it could not be stopped: ${stopped.error}`
         : `${replaced} serves ${restartedFrom.was}, the worktree is at ${restartedFrom.now}, and it could not be stopped: ${stopped.error}` };
     }
     if (serversFor(worktree, { root }).some((server) => server.instance_id === replaced)) {
       letGo([process.pid]);
-      return { ok: false, error: `${replaced} is still running after its stop command — nothing was started; mc dev stop ${replaced}, then run this again` };
+      return { ok: false, waited_ms: admitted.waited_ms ?? 0, error: `${replaced} is still running after its stop command — nothing was started; mc dev stop ${replaced}, then run this again` };
     }
     if (restartedFrom) deps.onRestart?.(replacing, restartedFrom);
   }
@@ -574,10 +574,12 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     // Another start for this worktree and service registered while this one
     // waited, or one was already up: taken, not started again.
     server = serversFor(worktree, { root }).find((item) => item.instance_id === admitted.reuse) || null;
-    if (!server) return { ok: false, error: `${admitted.reuse} was registered for ${worktree} and left before it could be reused` };
+    if (!server) return { ok: false, waited_ms: admitted.waited_ms ?? 0, error: `${admitted.reuse} was registered for ${worktree} and left before it could be reused` };
     started = false;
   } else {
     let child;
+    // A failure must be attributed to a log changed by this attempt, never an older start.
+    const beforeLog = newestLogTail(worktree);
     // Where keys-run writes the server's pid as it starts, and its exit as it leaves while the file is still
     // there. The wrapper's pid is not the server's, and a server can die while its wrapper lives (see keys-run.js).
     // Once this start has decided, the file is removed: nothing of it stays in the temp directory.
@@ -595,7 +597,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       child.unref?.();
     } catch (error) {
       letGo([process.pid]);
-      return { ok: false, error: `${start.service} could not be started: ${error.message}` };
+      return { ok: false, waited_ms: admitted.waited_ms ?? 0, error: `${start.service} could not be started: ${error.message}` };
     }
 
     // Stage one: has it said where it will serve? One window, and one more if the
@@ -640,15 +642,27 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     }
     if (!server) {
       const gone = serverGone();
-      const tail = newestLogTail(worktree);
-      const logEnd = tail ? `; the end of ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/';
+      const latest = newestLogTail(worktree);
+      const tail = latest && (!beforeLog || latest.file !== beforeLog.file || latest.mtimeMs !== beforeLog.mtimeMs || latest.text !== beforeLog.text) ? latest : null;
+      const logEnd = tail ? `; the end of ${tail.file}:\n${tail.text}` : ' — there is no log for this attempt under .wrangler/dev-server/logs/';
+      const retry = async () => {
+        if (deps._retryingStart) return null;
+        deps.onRetry?.(`mc: ${start.service} exited before registration — starting once more after 5s`);
+        await sleep(5000);
+        const result = await ensureDevServer(worktree, declaration, { ...deps, _retryingStart: true });
+        return { ...result, waited_ms: (admitted.waited_ms ?? 0) + (result.waited_ms ?? 0) };
+      };
+      const reason = tail?.reason;
+      const lead = reason ? `${reason}\n` : (tail ? 'no start failed reason in this attempt’s log\n' : '');
       if (wrapperGone()) {
         // Gone, and it will not register: the slot is freed now, and the end of its log says why.
         letGo([process.pid, wrapperPid, ...(gone ? [gone.pid] : [])]);
         forgetChild();
+        const retried = await retry();
+        if (retried) return retried;
         return {
-          ok: false,
-          error: `${start.service} (pid ${wrapperPid}) exited before it registered for ${worktree}`
+          ok: false, waited_ms: admitted.waited_ms ?? 0,
+          error: lead + `${start.service} (pid ${wrapperPid}) exited before it registered for ${worktree}`
             + (gone ? ` — its server (pid ${gone.pid}) ${exitWord(gone)}` : '') + logEnd,
         };
       }
@@ -657,9 +671,11 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
         // wrapper is named, not stopped — mc does not stop a process it did not see leave.
         letGo([process.pid, ...(wrapperPid !== null ? [wrapperPid] : []), gone.pid]);
         forgetChild();
+        const retried = await retry();
+        if (retried) return retried;
         return {
-          ok: false,
-          error: `${start.service}'s server (pid ${gone.pid}) ${exitWord(gone)} before it registered for ${worktree}`
+          ok: false, waited_ms: admitted.waited_ms ?? 0,
+          error: lead + `${start.service}'s server (pid ${gone.pid}) ${exitWord(gone)} before it registered for ${worktree}`
             + (wrapperPid !== null ? `; its wrapper (pid ${wrapperPid}) is still alive` : '') + logEnd,
         };
       }
@@ -668,14 +684,14 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
       letGo([process.pid]);
       const record = readKeysChild(serverFile);
       forgetChild();
-      const silent = tail ? ` — the log has been silent for ${seconds(Math.max(0, now() - tail.mtimeMs))}` : '';
+      const silent = latest ? ` — the log has been silent for ${seconds(Math.max(0, now() - latest.mtimeMs))}` : '';
       return {
-        ok: false,
+        ok: false, waited_ms: admitted.waited_ms ?? 0,
         error: `no ${start.service} registered for ${worktree} within ${seconds(registerMs)}`
           + ` — wrapper ${wrapperPid === null ? 'has no pid' : `pid ${wrapperPid} is alive`}`
           + `, ${record ? `server pid ${record.pid} is alive` : 'no server pid is recorded yet'}${silent}`
           + (wrapperPid !== null && extended ? ` (pid ${wrapperPid} is still alive and keeps its slot — mc dev stop it, or wait for it and run this again)` : '')
-          + (tail ? `; its last lines, from ${tail.file}:\n${tail.text}` : ' — there is no log under .wrangler/dev-server/logs/'),
+          + (latest ? `; its last lines, from ${latest.file}:\n${latest.text}` : ' — there is no log under .wrangler/dev-server/logs/'),
       };
     }
     // Registered: the record counts now, and the registration fulfilled the reservation.
@@ -701,7 +717,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     const still = fresh();
     if (!still) {
       return {
-        ok: false,
+        ok: false, waited_ms: admitted.waited_ms ?? 0,
         error: `${worktree}'s ${start.service} (${server.instance_id}) stopped before it answered`
           + ' — its log is under .wrangler/dev-server/logs/',
       };
@@ -710,7 +726,7 @@ export async function ensureDevServer(worktree, declaration, deps = {}) {
     await sleep(2000);
   }
   return {
-    ok: false,
+    ok: false, waited_ms: admitted.waited_ms ?? 0,
     error: `${worktree}'s ${start.service} registered as ${server.instance_id} but had not answered`
       + ` ${server.health_url || server.url} after ${seconds(readyMs)}`,
   };
@@ -747,8 +763,13 @@ export async function ensureAppServer(worktree, declaration, {
     // A wrapper still building when its register window lapses gets one more;
     // the line says so, on stdout with the others.
     onSlowStart: quiet ? null : (line) => stdout.write(`${line}\n`),
+    onRetry: quiet ? null : (line) => stdout.write(`${line}\n`),
   });
-  if (!ensured.ok) return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}) };
+  if (!ensured.ok) {
+    const slotWaitMs = ensured.waited_ms ?? 0;
+    return { ok: false, error: ensured.error, ...(ensured.refused ? { refused: ensured.refused } : {}),
+      timing: { slot_wait_ms: slotWaitMs, server_ms: Math.max(0, clock() - started - slotWaitMs) } };
+  }
   const { server } = ensured;
   const baseUrl = String(server.url).replace(/\/+$/u, '');
   if (!quiet) {
@@ -819,8 +840,9 @@ export function newestLogTail(worktree, { lines = 20 } = {}) {
   const newest = files[0];
   if (!newest) return null;
   try {
-    const text = readFileSync(newest.path, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
-    return { file: newest.path, text, mtimeMs: newest.mtimeMs };
+    const all = readFileSync(newest.path, 'utf8').trimEnd().split('\n');
+    const text = all.slice(-lines).join('\n');
+    return { file: newest.path, text, mtimeMs: newest.mtimeMs, reason: all.findLast((line) => line.includes('start failed:')) };
   } catch {
     return null;
   }
