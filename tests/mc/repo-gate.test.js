@@ -18,6 +18,7 @@
  * one review this step cannot survive is "it looked like it only checked".
  */
 import assert from 'node:assert/strict';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, utimesSync, writeFileSync, watch } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -360,6 +361,147 @@ describe('the round measures a state worth measuring', () => {
       // A person's --full is still a round in the lane.
       assert.equal((await fx.run({ pr: null, full: true })).stopped_at, 'busy');
     } finally { fx.cleanup(); }
+  });
+
+  // B5, 2026-11-16: a suite's orphaned child (parent 1, cwd in the full run's own
+  // worktree) held the worktree and stopped every later full run at 'worktree'.
+  const orphans = (fx, { groupOfChild }) => {
+    const dir = measurementCheckoutPath(fx.repoPath, fx.workRoot, 'full');
+    const standing = [];
+    const killed = [];
+    return {
+      killed,
+      standing,
+      options: {
+        pr: null, full: true, isolated: true, holdLease: false, lanes: 2,
+        candidateCwds: () => standing.map((one) => ({ ...one })),
+        processGroupOf: async (pid) => (pid === 777 ? groupOfChild : null),
+        killProcess: (pid) => { killed.push(pid); standing.splice(0, standing.length, ...standing.filter((one) => one.pid !== pid)); return true; },
+        suite: ({ cwd, times }) => {
+          // The round's own spawn (group leader 555) leaves a child standing in its worktree.
+          times.spawned(555);
+          standing.push({ pid: 777, cwd: join(dir, 'src') });
+          return fx.suite({ cwd });
+        },
+      },
+    };
+  };
+
+  it('a full run ends what its own spawn left standing in its own worktree, so the next run measures', async () => {
+    const fx = fixture();
+    try {
+      const own = orphans(fx, { groupOfChild: 555 });
+      const first = await fx.run(own.options);
+      assert.equal(first.ok, true, first.reason);
+      assert.deepEqual(own.killed, [777], 'the orphan of the round\'s own spawn was ended');
+      assert.deepEqual(own.standing, []);
+      const second = await fx.run({ ...own.options, suite: fx.suite });
+      assert.notEqual(second.stopped_at, 'worktree', 'the next full run was held by a process the last one left');
+      assert.equal(second.ok, true, second.reason);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a process of a live session in the full run\'s worktree is never ended, and the next run stops at worktree naming it', async () => {
+    const fx = fixture();
+    try {
+      const own = orphans(fx, { groupOfChild: 9999 });
+      await fx.run(own.options);
+      assert.deepEqual(own.killed, [], 'a process of another group was ended');
+      assert.equal(own.standing.length, 1);
+      const second = await fx.run({ ...own.options, suite: fx.suite });
+      assert.equal(second.stopped_at, 'worktree');
+      assert.match(second.reason, /is in use by pid 777/u);
+    } finally { fx.cleanup(); }
+  });
+
+  // The same B5, replayed with real processes: a command started by the round's own
+  // spawn starts a `node -e` in the worktree and exits, so the child's parent is gone
+  // and it is reparented (to 1, or the session's subreaper). Nothing here is faked:
+  // the lookup is lsof and `ps -o pgid`, and the end is SIGKILL.
+  const alive = (pid) => {
+    const stat = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
+    return stat !== '' && !stat.startsWith('Z');
+  };
+  const parentOf = (pid) => Number(spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim()) || null;
+  const gone = async (pid) => {
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    return !alive(pid);
+  };
+  const leaver = (fx) => {
+    const script = join(fx.root, 'leave.mjs');
+    const pids = join(fx.root, 'left.txt');
+    writeFileSync(script, [
+      "import { spawn } from 'node:child_process';",
+      "import { writeFileSync } from 'node:fs';",
+      "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { cwd: process.cwd(), stdio: 'ignore' });",
+      'writeFileSync(process.argv[2], `${process.pid} ${child.pid}`);',
+      'child.unref();',
+    ].join('\n'));
+    const left = () => readFileSync(pids, 'utf8').trim().split(' ').map(Number);
+    return { command: `node "${script}" "${pids}"`, left, kill: () => { try { process.kill(left()[1], 'SIGKILL'); } catch { /* gone or never started */ } } };
+  };
+  const realFull = { pr: null, full: true, isolated: true, holdLease: false, lanes: 2, candidateCwds: undefined };
+
+  it('a full run ends the real orphan its own suite spawn left standing in its worktree, so the next run measures', async () => {
+    const fx = fixture();
+    const leave = leaver(fx);
+    const progress = [];
+    try {
+      const env = { ...process.env, MC_WORK_ROOT: fx.workRoot };
+      const first = await fx.run({ ...realFull, onProgress: (line) => progress.push(line),
+        suite: async ({ cwd, times }) => {
+          const ran = await realSuite({ cwd, times, env, command: leave.command });
+          assert.equal(ran.code, 0, ran.tap);
+          const [parent, orphan] = leave.left();
+          assert.ok(alive(orphan), 'the orphan is standing when the suite returns');
+          assert.notEqual(parentOf(orphan), parent, 'the orphan\'s parent is gone');
+          return fx.suite({ cwd });
+        } });
+      assert.equal(first.ok, true, first.reason);
+      const [, orphan] = leave.left();
+      assert.ok(await gone(orphan), `pid ${orphan}, left by the round's own suite, is still standing`);
+      assert.ok(progress.some((line) => line.includes(`ended pid ${orphan}`)), progress.join('\n'));
+      const second = await fx.run({ ...realFull, suite: fx.suite });
+      assert.notEqual(second.stopped_at, 'worktree', second.reason);
+      assert.equal(second.ok, true, second.reason);
+    } finally { leave.kill(); fx.cleanup(); }
+  });
+
+  it('a full run ends the real orphan a declared command gate left standing in its worktree', async () => {
+    const fx = fixture();
+    const leave = leaver(fx);
+    try {
+      writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { prepare: null, prepare_why: 'a test', extra_gates: [{ name: 'leaver', command: leave.command }], merge_log: null } });
+      const first = await fx.run({ ...realFull, suite: fx.suite });
+      assert.equal(first.ok, true, first.reason);
+      assert.equal(first.extra_gates?.[0]?.ok, true, JSON.stringify(first.extra_gates));
+      const [, orphan] = leave.left();
+      assert.ok(await gone(orphan), `pid ${orphan}, left by the round's own command gate, is still standing`);
+      writeJson(join(fx.mcHome, 'repo-gates.json'), { repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null } });
+      const second = await fx.run({ ...realFull, suite: fx.suite });
+      assert.notEqual(second.stopped_at, 'worktree', second.reason);
+      assert.equal(second.ok, true, second.reason);
+    } finally { leave.kill(); fx.cleanup(); }
+  });
+
+  it('a real process of a live session in the full run\'s worktree is never ended, and the next run stops at worktree naming it', async () => {
+    const fx = fixture();
+    let live = null;
+    try {
+      const env = { ...process.env, MC_WORK_ROOT: fx.workRoot };
+      const first = await fx.run({ ...realFull,
+        suite: async ({ cwd, times }) => {
+          // The round has a group of its own, so the end is asked; the live process is in none of the round's.
+          await realSuite({ cwd, times, env, command: 'true' });
+          live = spawnChild(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { cwd, stdio: 'ignore' });
+          return fx.suite({ cwd });
+        } });
+      assert.equal(first.ok, true, first.reason);
+      assert.ok(alive(live.pid), 'a live session\'s process was ended');
+      const second = await fx.run({ ...realFull, suite: fx.suite });
+      assert.equal(second.stopped_at, 'worktree');
+      assert.match(second.reason, new RegExp(`is in use by pid ${live.pid}`, 'u'));
+    } finally { try { live?.kill('SIGKILL'); } catch { /* gone */ } fx.cleanup(); }
   });
 
   it('heals a dirty or unfinished checkout and recreates a missing or orphaned checkout before measuring', async () => {
@@ -3637,7 +3779,9 @@ describe('the suite\'s environment and its time', () => {
 
   it('suiteEnv: a suite never inherits the runner\'s own ~/mc or a nested test context', () => {
   const env = suiteEnv({ MC_WORK_ROOT: '/Users/me/mc', MC_HOME: '/Users/me/.memoro/mc', NODE_TEST_CONTEXT: 'child', MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
-  assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
+  // MC_TEST_MODE: no suite reaches the user's keychain (the secret-tool children of B5, 2026-11-15).
+  assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', MC_TEST_MODE: '1', PATH: '/bin' });
+  assert.equal(suiteEnv({}).MC_TEST_MODE, '1');
 });
 
   it('suiteTimeoutMs: an hour, or MC_GATE_SUITE_MINUTES when it is a positive number', () => {

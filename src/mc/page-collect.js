@@ -218,6 +218,8 @@ export function preparationOf(record, { alive = pidAlive, now = new Date() } = {
     pid: Number(record.pid) || null,
     age_seconds: Number.isNaN(since) ? null : Math.max(0, Math.round((now.getTime() - since) / 1000)),
     error: record.error || null,
+    // The directory holding each suite's whole output (an old record has none).
+    output_dir: record.output_dir || null,
   };
 }
 
@@ -264,6 +266,9 @@ export function productionSection({
     at: row.ended || row.started || null,
     age_seconds: age(row.ended || row.started),
     stopped_at: row.stopped_at || null,
+    // What the refusal said (the verdict lines of each red) and where the whole output is; an old row has neither.
+    note: row.note || null,
+    output_path: row.output_path || null,
   });
   const running = since?.outcome === 'running' ? attemptState(since) : null;
   // From the record: a row with a pid is late exactly when that process is

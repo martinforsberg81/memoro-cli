@@ -45,11 +45,16 @@ export function runTool(tool, args = [], { cwd, env, maxBuffer = MAX_BUFFER, tim
  * person writes them (`npm ci`, `npm run test:msr:contract`), and splitting
  * those by hand would be a second grammar to get wrong.
  */
-export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal, graceMs = GRACE_MS } = {}) {
-  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs, group: true });
+export function runShell(command, { cwd, env, maxBuffer = MAX_BUFFER, timeoutMs = null, signal, graceMs = GRACE_MS, onSpawn = null } = {}) {
+  return collect(() => spawn(command, { cwd, env: env || process.env, shell: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { maxBuffer, timeoutMs, signal, graceMs, group: true, onSpawn });
 }
 
-function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false }) {
+/**
+ * `onSpawn(pid)` is told the pid of a child that started: for runShell it is
+ * the leader of the child's own process group, which a full run records so
+ * that what the command leaves standing in its worktree is ended with it.
+ */
+function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false, onSpawn = null }) {
   return new Promise((resolve) => {
     const out = [];
     const err = [];
@@ -79,7 +84,8 @@ function collect(start, { maxBuffer, timeoutMs, signal, graceMs, group = false }
       settle(null, null);
       return;
     }
-    const kill = (code, message) => {
+    if (child.pid !== undefined) { try { onSpawn?.(child.pid); } catch { /* a recorder never stops the child */ } }
+    const kill =(code, message) => {
       if (error) return;
       error = Object.assign(new Error(message), { code });
       stop('SIGTERM');

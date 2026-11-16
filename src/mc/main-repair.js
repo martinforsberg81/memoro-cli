@@ -49,16 +49,23 @@ export function shapeMainRedTest(test) {
   };
 }
 
-export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], pr = null, contains = null, now = () => new Date(), ...state }) {
+/**
+ * A gate suite's own member: `suite:<name>`, with what the suite said and where its whole output is
+ * (`{ name, exit, verdict, output_path, sha }`). One per suite name while unfinished, like a command.
+ */
+export const suiteMemberKey = (name) => `suite:${name}`;
+
+export function requestMainRepair({ repo, base, files, tests = [], commands = [], checks = [], suites = [], pr = null, contains = null, now = () => new Date(), ...state }) {
   try {
     const red = [...new Set(files || [])].filter(Boolean).sort();
     const members = [...red.map(file => ({ file })), ...commands.map(command => ({
       file: `command:${command.packageScript}`, command,
-    })), ...checks.map(check => ({ file: check.key, check }))];
+    })), ...suites.filter((suite) => suite?.name).map(suite => ({ file: suiteMemberKey(suite.name), suite })),
+    ...checks.map(check => ({ file: check.key, check }))];
     if (!repo || !base || !members.length) return { skipped: 'nothing to repair' };
     return updateMainMends({ ...state, repo }, (entries) => {
       const created = []; const open = []; const finished = []; const stale = []; const staleMembers = [];
-      for (const { file, command, check } of members) {
+      for (const { file, command, check, suite } of members) {
         // A check member is once-only on its key in any state: a finished one is returned, never made again.
         const pending = entries.find((entry) => entry.file === file && (check || !FINISHED.includes(entry.state)));
         if (pending) { (check && FINISHED.includes(pending.state) ? finished : open).push(pending.id); continue; }
@@ -71,7 +78,9 @@ export function requestMainRepair({ repo, base, files, tests = [], commands = []
         const id = randomUUID();
         entries.push({ id, file, tests: tests.filter((test) => test.file === file), base,
           ...(command ? { command } : {}),
-          ...(check ? { check: { part: check.part, why: check.why, sha: check.sha, started: check.started, verdict: check.verdict, taken_back: Boolean(check.taken_back) } } : {}),
+          ...(suite ? { suite: { name: suite.name, exit: suite.exit ?? null, verdict: [...(suite.verdict || [])], output_path: suite.output_path || null, sha: suite.sha || null } } : {}),
+          ...(check ? { check: { part: check.part, why: check.why, sha: check.sha, started: check.started, verdict: check.verdict, taken_back: Boolean(check.taken_back),
+            ...(check.output_path ? { output_path: check.output_path } : {}) } } : {}),
           finder: check?.finder || (pr ? `round of ${repo}#${pr}` : 'the full run'),
           state: 'queued', failures: 0, created: now().toISOString() });
         created.push(id);
@@ -128,15 +137,30 @@ function answersOf(entries) {
 
 /** What a `check:` member asks of its session, in its own words (the mend role's main-red section says how it is proved). */
 function checkMemberText(entry) {
-  const { sha = '', why = '', verdict = '', started = '', taken_back: back } = entry.check;
+  const { sha = '', why = '', verdict = '', started = '', taken_back: back, output_path: output = null } = entry.check;
+  // The full run's own member: no file or command could be named, so the run itself is what is red.
+  if (entry.file.startsWith('full-run:')) {
+    return `${entry.file} at base ${entry.base}:\n` +
+      `the full run of ${String(sha).slice(0, 7)} (started ${started}) was ${why || 'red'} and names no file or command to repair. ` +
+      `Whole output: ${output || verdict || '(not kept)'}. Read it, find the cause at base, repair it in ${entry.repo || 'the repository'}, and prove the repair with the gate on what you changed. Do not deploy.`;
+  }
   return `${entry.file} at base ${entry.base}:\n` +
     `production's check after the deploy of ${String(sha).slice(0, 7)} (started ${started}) was red with ${why || 'no reason given'}. ` +
     `${back ? 'The release was taken back; production serves the version before it.' : 'The release was not taken back.'} ` +
     `Read the verdict ${verdict || '(its file is gone)'} and the check log beside it, find the cause at base, repair it in ${entry.repo || 'the repository'}, and prove the repair with the gate on what you changed. Do not deploy: the next deploy of a later green commit ships it.`;
 }
 
+/** What a `suite:` member asks of its session: the suite's verdict lines and its whole output, read before anything is run. */
+function suiteMemberText(entry) {
+  const { name, exit, verdict = [], output_path: output, sha } = entry.suite;
+  return `${entry.file} at base ${entry.base}:\n` +
+    `the gate suite ${name} was red${exit == null ? '' : ` (exit ${exit})`}${sha ? ` at ${String(sha).slice(0, 7)}` : ''}.\n` +
+    (verdict.length ? `It said:\n${verdict.map((line) => `  ${line}`).join('\n')}\n` : 'It stated no verdict.\n') +
+    `Whole output: ${output || '(not kept)'}. Read it before you run anything; repair the cause in ${entry.repo || 'the repository'} and prove it by running the suite's own command, then bare mc gate.`;
+}
+
 export function mainMendPrompt({ repo, entries, branch, worktree, history = [], root = mcHome(), exists = () => false }) {
-  const files = entries.filter(entry => !entry.command && !entry.check).map(entry => entry.file);
+  const files = entries.filter(entry => !entry.command && !entry.check && !entry.suite).map(entry => entry.file);
   const checks = [
     ...(files.length ? [`mc gate --fresh ${files.join(' ')}`] : []),
     ...entries.filter(entry => entry.command).map(entry => `mc gate --fresh --command ${entry.command.id || entry.command.packageScript}`),
@@ -157,6 +181,7 @@ export function mainMendPrompt({ repo, entries, branch, worktree, history = [], 
   const memberText = (entry) => {
     if (entry.check) return checkMemberText({ ...entry, repo });
     if (entry.command) return `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command, null, 2)}`;
+    if (entry.suite) return suiteMemberText({ ...entry, repo });
     const record = pathFor(entry);
     const prior = history.filter(old => old.file === entry.file && FINISHED.includes(old.state)).map(old =>
       `Earlier ${old.file}: state ${old.state}; PR #${old.pr ?? 'none'}; landed_commit ${old.landed_commit || 'unknown'}; ${old.reason || 'no reason recorded'}`);

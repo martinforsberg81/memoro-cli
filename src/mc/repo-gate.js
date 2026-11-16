@@ -60,6 +60,7 @@ import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from '.
 import { runShell as runShellAsync, runTool } from './child-async.js';
 import { runAsync as runGitAsync } from './git.js';
 import { measurementCheckout, measurementCheckoutPath } from './measurement-checkout.js';
+import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { log } from './logger.js';
 import { commandFailure, combinedOutput, writeCommandOutput } from './command-failure.js';
 import { mcHome, workGatePath, workRoot } from './paths.js';
@@ -215,6 +216,9 @@ export async function runGate({
   // Explicit receipt binding for a caller that has one; null is every round today.
   evidence = null,
   candidateCwds = undefined,
+  // How a process's group is read and how a process is ended, for the processes this round left in its worktree.
+  processGroupOf = realProcessGroup,
+  killProcess = realKill,
 } = {}) {
   const startedAt = clock();
   const origin = monotonic();
@@ -319,9 +323,12 @@ export async function runGate({
   // gate the free cores (`testLanes`). The round record names both.
   const load = Math.round(loadavg()[0] * 10) / 10;
   const lanes = Number.isInteger(declaredLanes) && declaredLanes > 0 ? declaredLanes : testLanes({ env, load, mode: gateMode });
+  // The process groups this round's own spawns lead (`spawned`, told at each spawn):
+  // what stands in the round's own worktree after it and leads back to one of these is its own.
+  const ownGroups = new Set();
   // `where` names this round in the too-slow file (`recordTooSlow`): its pull requests, or the whole suite.
   const timesOf = { root, repo: lane, where: numbers.length ? numbers.map((n) => `#${n}`).join(' ') : 'full', track: progress.track, complete: progress.complete,
-    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses };
+    trackProcesses: progress.trackProcesses, completeProcesses: progress.completeProcesses, spawned: (pid) => { if (Number.isInteger(pid)) ownGroups.add(pid); } };
   // Every test the round's runs measured, all on the candidate: the ones over the
   // slow-test indicator are named in the report (`slow_tests`), never its red.
   const measuredTests = [];
@@ -593,9 +600,12 @@ export async function runGate({
     if (clock() - lastProgress >= stallMs) stopStalled(`no progress for ${stallMs / 60_000} min`);
   }, stallMs);
   // A completed command is progress; its invocation names a stalled child.
+  // Its process group is the round's own, so what it leaves standing in the
+  // worktree is ended with the round (`endOwnProcesses`).
+  const ownSpawn = (options) => (pid) => { timesOf.spawned(pid); options?.onSpawn?.(pid); };
   const trackedCommand = async (command, options) => {
     activeCommands.add(command);
-    try { return await runShell(command, options); }
+    try { return await runShell(command, { ...options, onSpawn: ownSpawn(options) }); }
     finally { activeCommands.delete(command); progressed(); }
   };
 
@@ -681,7 +691,11 @@ export async function runGate({
       repoPath, sha: facts.pr && !batch ? facts.pr.head_sha : baseRef,
       git: askGit, cwds: candidateCwds, root: workRoot(env), name: checkoutName,
     });
-    if (!candidate.ok) return finish('worktree', candidate.reason);
+    if (!candidate.ok) {
+      // Who stands there, for the deploy mend: pid, command line and cwd.
+      if (candidate.holders?.length) report.holders = candidate.holders;
+      return finish('worktree', candidate.reason);
+    }
     say(beside ? `using the full run's own measurement checkout ${headDir}` : `using the merger's measurement checkout ${headDir}`);
 
     if (!facts.pr) {
@@ -770,7 +784,7 @@ export async function runGate({
         prepare: declared.declaration.prepare,
         headDir,
         cacheDir: prepareCacheDir({ repoPath, env }),
-        shell: (command, options) => shell(command, { ...options, env, signal: childSignal() }),
+        shell: (command, options) => shell(command, { ...options, env, signal: childSignal(), onSpawn: ownSpawn(options) }),
         say,
       }));
       if (ready.status !== 0) {
@@ -807,7 +821,7 @@ export async function runGate({
     if (declared.declaration.derived.length) {
       const fresh = await timed('derived', async () => regenerateDerived({
         derived: declared.declaration.derived, cwd: headDir, env, git: askGit, say,
-        shell: (command, options) => shell(command, { ...options, signal: childSignal() }),
+        shell: (command, options) => shell(command, { ...options, signal: childSignal(), onSpawn: ownSpawn(options) }),
       }));
       report.derived = {
         commands: declared.declaration.derived.map((item) => item.command),
@@ -1441,6 +1455,13 @@ export async function runGate({
     cancelCeiling();
     cancelStall();
     for (const signal of caught) process.off(signal, onSignal);
+    // What this round's own spawns left standing in its own worktree is ended
+    // before the next round can find the worktree held by it. Only that: a process
+    // of a live session, or of anybody else, is never ended.
+    if (beside) {
+      try { await endOwnProcesses({ dir: headDir, groups: ownGroups, cwds: candidateCwds, groupOf: processGroupOf, kill: killProcess, say }); }
+      catch { /* a hold that is left is reported by the next round, with who holds it */ }
+    }
     // Always, and last. A round that died half way through must not leave the
     // repository held by a session that is no longer running — but a round
     // running inside somebody else's lease gives back nothing, because the
@@ -2599,6 +2620,42 @@ export function suiteTimeoutMs(env = process.env) {
 export const TEST_TIMEOUT_MS = 10 * 60_000;
 export const ROUND_STALL_MS = 15 * 60_000;
 
+/** The process group of `pid`, or null when it cannot be read (the process is gone). `ps` is asked asynchronously. */
+function realProcessGroup(pid) {
+  return new Promise((resolvePid) => {
+    execFile('ps', ['-o', 'pgid=', '-p', String(pid)], (error, out) => resolvePid(error ? null : (Number(String(out).trim()) || null)));
+  });
+}
+
+function realKill(pid) {
+  try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; }
+}
+
+/**
+ * End the processes this round's own spawns left standing in its own worktree
+ * (B5, 2026-11-16): the ones whose cwd is in `dir` and whose process group is one
+ * a spawn of the round leads (`groups`, recorded as each started). A process of a
+ * live session, or of anybody who stands there, is in no such group and is never
+ * touched; what it holds is the next round's 'worktree' stop, naming its pid.
+ * Returns `[{ pid, cwd }]` of what was ended.
+ */
+export async function endOwnProcesses({ dir, groups, cwds = cwdsOfUser, groupOf = realProcessGroup, kill = realKill, say = () => {} }) {
+  if (!groups?.size) return [];
+  const standing = cwds();
+  if (!Array.isArray(standing)) return [];
+  const ended = [];
+  for (const { pid, cwd } of processesStandingIn([dir], { cwds: standing })) {
+    if (pid === process.pid) continue;
+    const group = await groupOf(pid);
+    if (group === null || !groups.has(group)) continue;
+    if (kill(pid)) {
+      ended.push({ pid, cwd });
+      say(`ended pid ${pid} standing in ${cwd}: it was started by this round and left behind`);
+    }
+  }
+  return ended;
+}
+
 /**
  * The environment a suite runs in: the caller's, without what belongs to the
  * caller alone. `NODE_TEST_CONTEXT` makes a suite think it is nested and skip
@@ -2612,6 +2669,10 @@ export function suiteEnv(env) {
   const clean = { ...env };
   const home = env.MC_HOME;
   for (const key of ['NODE_TEST_CONTEXT', 'MC_WORK_ROOT', 'MC_HOME']) delete clean[key];
+  // A suite is a test: nothing in it reaches the machine's keychain. Without this
+  // every hourly full run left `secret-tool lookup` children standing in its own
+  // worktree, and the next run stopped at 'worktree' (B5, 2026-11-16).
+  clean.MC_TEST_MODE = '1';
   // A test-started round must keep its model/counting shim first on PATH.
   const direct = env.MC_GIT_CALLS ? null : directGitDir({ home });
   if (direct && clean.PATH) clean.PATH = `${direct}:${clean.PATH}`;
@@ -2817,6 +2878,7 @@ function runTestBatch({ cwd, files, plan = null, flags = [], onBatch = null, onL
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
+    times?.spawned?.(child.pid);
     // Launched: this is what the batch was given, whatever becomes of it.
     onBatch?.(record());
     let timedOut = false;
@@ -3050,6 +3112,7 @@ export function realSuite({ cwd, command = 'npm test', onLine = () => {}, env = 
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
+    times?.spawned?.(child.pid);
     let timedOut = false;
     // Stopped from outside: the process group goes at once, and the close says
     // `aborted`. A child that cannot be signalled as a group is signalled alone.

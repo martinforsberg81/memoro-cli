@@ -358,6 +358,40 @@ describe('the round', () => {
     rmSync(worktree, { recursive: true, force: true });
   });
 
+  it('a red suite\'s whole output is kept in a file as it ran, and the result names the file and the closing verdict lines', async () => {
+    // 2026-11-15: the record held the last eight lines, which for msr-performance were the closing braces of a dump.
+    // The file holds every line the suite wrote, stdout and stderr in the order they came; the verdict is read from
+    // the end of it, ten lines at most.
+    const worktree = worktreeWith();
+    const outputDir = mkdtempSync(join(tmpdir(), 'mc-suite-output-'));
+    const script = [
+      'for (let i = 1; i <= 5000; i += 1) (i % 2 ? process.stdout : process.stderr).write(`line ${i}\\n`);',
+      'process.stdout.write("}\\n".repeat(40));',
+      'for (let i = 1; i <= 12; i += 1) process.stdout.write(`verdict: finding ${i}\\n`);',
+      'process.exitCode = 1;',
+    ].join('');
+    const silent = 'process.stdout.write("a\\n".repeat(5000)); process.exitCode = 1;';
+    const declaration = {
+      ...DECLARATION,
+      suites: [
+        { name: 'loud', argv: [process.execPath, '-e', script], needs_account: false },
+        { name: 'mute', argv: [process.execPath, '-e', silent], needs_account: false },
+      ],
+    };
+    const { results } = await runSuites({ declaration, worktree, baseUrl: 'http://127.0.0.1:8787', outputDir });
+    const [loud, mute] = results;
+    const lines = readFileSync(loud.output_path, 'utf8').split('\n');
+    assert.equal(lines.length, 5000 + 40 + 12 + 1, 'every line, none cut');
+    assert.deepEqual(lines.slice(0, 5000), Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`), 'stdout and stderr in the order they came');
+    assert.equal(loud.output_path.startsWith(outputDir), true, 'in the directory the preparation gave');
+    assert.equal(loud.ok, false);
+    assert.deepEqual(loud.verdict, Array.from({ length: 10 }, (_, i) => `finding ${i + 3}`), 'the closing ten, without the prefix');
+    assert.equal(readFileSync(mute.output_path, 'utf8').split('\n').length, 5001);
+    assert.deepEqual(mute.verdict, [], 'a suite that ends with no verdict line states none');
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(outputDir, { recursive: true, force: true });
+  });
+
   it('one suite can be named, and only that one runs', async () => {
     const worktree = worktreeWith();
     const seen = [];

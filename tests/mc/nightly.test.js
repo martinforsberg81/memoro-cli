@@ -31,6 +31,7 @@ import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
 import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { readDeployMends, requestDeployRepair } from '../../src/mc/deploy-repair.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
 import { awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
@@ -809,6 +810,80 @@ describe('repairFromRun stale report wiring', () => {
     assert.equal(entries[0].tests[0].at, `${file}:99:5`);
     assert.equal(entries[0].tests[0].detail.length, 40);
     assert.deepEqual(entries[0].tests[0].stack, ['async TestContext.<anonymous> (tests/stack.test.js:99:5)']);
+  });
+});
+
+describe('a full run that cannot start is the deploy mend\'s', () => {
+  const repo = { name: 'memoro', path: '/fixture/repo' };
+  const holders = [{ pid: 4711, command: 'secret-tool lookup', cwd: '/work/full/src' }];
+  const stopped = (extra = {}) => ({ stopped_at: 'worktree', reason: 'its checkout is in use by pid 4711', holders, ...extra });
+  const run = { commit: 'abc1234def', started_at: '2026-11-16T04:00:00.000Z', red: [] };
+  const setup = () => {
+    const work = mkdtempSync(join(tmpdir(), 'nightly-fullrun-'));
+    const lock = (_root, fn) => fn();
+    const said = [];
+    const ask = (report, extra = {}) => repairFromRun(repo, report, run, {
+      say: (line) => said.push(line), env: { ...process.env, MC_WORK_ROOT: work }, repair: () => ({ created: [], open: [] }),
+      repairFullRun: (request) => requestDeployRepair({ ...request, root: work, lock }), ...extra });
+    return { work, said, ask, mends: () => readDeployMends({ root: work }), cleanup: () => rmSync(work, { recursive: true, force: true }) };
+  };
+
+  it('queues one deploy-mend request naming the holders and where they stand, and a second stop joins it', () => {
+    const fx = setup();
+    try {
+      fx.ask(stopped());
+      const [request] = fx.mends();
+      assert.equal(request.state, 'queued');
+      assert.equal(request.rows[0].origin, 'full-run');
+      assert.deepEqual(request.rows[0].holders, holders);
+      assert.match(request.rows[0].note, /^full run of memoro cannot start: its checkout is in use by pid 4711/u);
+      assert.ok(fx.said.some((line) => /deploy-mend repair queued/u.test(line)), fx.said.join('\n'));
+
+      fx.ask(stopped());
+      assert.equal(fx.mends().length, 1, 'a second attempt queued a second request');
+      assert.equal(fx.mends()[0].rows.length, 1);
+      assert.ok(fx.said.some((line) => /deploy-mend repair already under way/u.test(line)), fx.said.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('every stop of mc\'s own is asked — threw, lease, reservation and base as well as worktree — each as a full run', () => {
+    for (const stopped_at of ['threw', 'lease', 'reservation', 'base']) {
+      const fx = setup();
+      try {
+        fx.ask({ stopped_at, reason: `the round stopped at ${stopped_at}` });
+        const [request, ...others] = fx.mends();
+        assert.equal(others.length, 0, stopped_at);
+        assert.deepEqual([request.rows[0].origin, request.rows[0].repo, request.rows[0].stopped_at], ['full-run', 'memoro', stopped_at]);
+        assert.match(request.rows[0].note, new RegExp(`^full run of memoro cannot start: the round stopped at ${stopped_at}`, 'u'));
+      } finally { fx.cleanup(); }
+    }
+  });
+
+  it('a round that threw is asked by the full run itself, as a full run', async () => {
+    const fx = setup();
+    const root = mkdtempSync(join(tmpdir(), 'nightly-threw-'));
+    try {
+      const run = await fullRun(repo, {
+        root, env: { ...process.env, MC_WORK_ROOT: fx.work }, say: (line) => fx.said.push(line),
+        round: async () => { throw new Error('the round fell over'); }, repair: () => ({ created: [], open: [] }),
+        repairFullRun: (request) => requestDeployRepair({ ...request, root: fx.work, lock: (_root, fn) => fn() }),
+      });
+      assert.equal(run.stopped_at, 'threw');
+      const [request, ...others] = fx.mends();
+      assert.equal(others.length, 0);
+      assert.deepEqual([request.rows[0].origin, request.rows[0].stopped_at], ['full-run', 'threw']);
+      assert.match(request.rows[0].note, /^full run of memoro cannot start: the round fell over/u);
+    } finally { rmSync(root, { recursive: true, force: true }); fx.cleanup(); }
+  });
+
+  it('only a stop of mc\'s own is asked: a red run, a stalled run and a fetch failure are not', () => {
+    const fx = setup();
+    try {
+      for (const report of [{ stopped_at: 'fetch', reason: 'offline' }, { stopped_at: 'busy', reason: 'a round holds the lane' }, { stopped_at: null }]) fx.ask(report);
+      assert.deepEqual(fx.mends(), []);
+      fx.ask(stopped(), { repairFullRun: null });
+      assert.deepEqual(fx.mends(), [], 'with no deploy-mend door nothing is asked');
+    } finally { fx.cleanup(); }
   });
 });
 

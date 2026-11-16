@@ -24,13 +24,14 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
-import { readDeployMends } from '../../../src/mc/deploy-repair.js';
+import { classifyStop, readDeployMends, retryVerdict } from '../../../src/mc/deploy-repair.js';
+import { readMainMends, requestMainRepair } from '../../../src/mc/main-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
-import { exerciseApp, gateSet, HOLD_WAIT_MS, pickCommit } from '../../../src/mc/deploy-gate.js';
+import { exerciseApp, gateSet, pickCommit } from '../../../src/mc/deploy-gate.js';
 import {
   HOLDER_WAIT_MS, holderPath, placeWorktree, readHolder, takeHolder,
 } from '../../../src/mc/deploy-worktree.js';
-import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
+import { preparationLogPath, preparationPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
@@ -244,6 +245,7 @@ function gateFake({
     return {
       name, ok: how === 'ok' || how === 'skip', unmeasured: how === 'unmeasured', skipped: how === 'skip',
       status: how === 'ok' ? 0 : how === 'skip' ? 78 : 1, seconds: 3, tail: outcomes[`${name}:tail`] || `${name} said ${how}\n`,
+      ...(outcomes[`${name}:output`] ? { output_path: outcomes[`${name}:output`] } : {}),
     };
   };
   const gate = {
@@ -1985,6 +1987,63 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
     assert.match(out.stderr, /no main-red mend holds it/u);
   });
 
+  it('a red full run no mend holds is queued by the refusal as its command members, once per stop', async () => {
+    const red = () => RED_RUN({ red: ['command:lint'] });
+    const first = await attempt([], { runs: [red()] });
+    assert.equal(first.code, 1);
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const queuedNow = () => readMainMends({ root: work, repo: 'memoro' }).map((entry) => [entry.file, entry.state]).sort();
+    assert.deepEqual(queuedNow(), [['command:lint', 'queued']]);
+    const second = await attempt([], { runs: [red()] });
+    assert.equal(second.code, 1);
+    assert.match(second.out.stderr, /mc: repair already queued — main-red mend /u);
+    assert.doesNotMatch(second.out.stderr, /repair queued —/u, 'the second preparation says it queued none');
+    assert.deepEqual(queuedNow(), [['command:lint', 'queued']], 'and queued none');
+  });
+
+  it('a red full run that names nothing a mend can take is queued as full-run:<commit>, once', async () => {
+    const red = () => RED_RUN({ red: ['tests/lib/money.test.js'] });
+    const first = await attempt([], { runs: [red()] });
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const [entry, ...rest] = readMainMends({ root: work, repo: 'memoro' });
+    assert.equal(rest.length, 0);
+    assert.deepEqual([entry.file, entry.state], [`full-run:${SHA}`, 'queued']);
+    await attempt([], { runs: [red()] });
+    assert.equal(readMainMends({ root: work, repo: 'memoro' }).length, 1, 'the second preparation queued none');
+  });
+
+  it('a red suite is queued by the refusal as suite:<name> with its verdict and where its whole output is, once per stop', async () => {
+    const dir = '/runner/deploy-prepare/2026-11-15T19-18-00-000Z';
+    const outcomes = { perf: 'red', 'perf:output': `${dir}/perf.log`, 'perf:tail': 'verdict: long task 60 ms, bound 50 ms\n' };
+    const first = await attempt([], { suites: ['smoke', 'perf'], outcomes });
+    assert.equal(first.code, 1);
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const [entry, ...rest] = readMainMends({ root: work, repo: 'memoro' });
+    assert.equal(rest.length, 0);
+    assert.deepEqual([entry.file, entry.state], ['suite:perf', 'queued']);
+    assert.deepEqual(entry.suite, { name: 'perf', exit: 1, verdict: ['long task 60 ms, bound 50 ms'], output_path: `${dir}/perf.log`, sha: SHA });
+    const second = await attempt([], { suites: ['smoke', 'perf'], outcomes });
+    assert.match(second.out.stderr, /mc: repair already queued — main-red mend /u);
+    assert.equal(readMainMends({ root: work, repo: 'memoro' }).length, 1, 'the second preparation queued none');
+  });
+
+  it('a refusal keeps every earlier preparation\'s whole output; a gate that passes removes them, except what an unfinished repair names', async () => {
+    const base = join(work, 'runner', 'deploy-prepare');
+    const dirs = ['2026-11-13T01-00-00-000Z', '2026-11-14T01-00-00-000Z', 'HELD'].map((name) => join(base, name));
+    const lay = () => { for (const dir of dirs) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'journeys.log'), 'old output\n'); } };
+    lay();
+    const refused = await attempt([], { suites: ['smoke', 'perf'], outcomes: { perf: 'red' } });
+    assert.equal(refused.code, 1);
+    assert.deepEqual(dirs.map(existsSync), [true, true, true], 'the stop is not settled: nothing is removed');
+
+    const held = join(dirs[2], 'journeys.log');
+    requestMainRepair({ root: work, repo: 'memoro', base: SHA, files: [], suites: [{ name: 'journeys', exit: 1, verdict: [], output_path: held, sha: SHA }] });
+    rmSync(preparationPath(work), { force: true }); // the red suite is mended: measured again, and it ships
+    const shipped = await attempt([]);
+    assert.equal(shipped.code, 0, shipped.out.stderr);
+    assert.deepEqual(dirs.map(existsSync), [false, false, true], 'the earlier ones are removed; the one an unfinished repair holds stays');
+  });
+
   it('a mend a person dropped is not named as holding the red', async () => {
     const { out } = await attempt([], { runs: [RED_RUN()], mends: [MEND({ state: 'dropped' }), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
     assert.match(out.stderr, /main-red mend: command:lint \(running #77\)/u);
@@ -2037,7 +2096,7 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
   it('--accept-red ships with every red listed, the reason in the one line, and the row keeps the reason', async () => {
     const reason = 'money rounding is tracked in #4412; the refund path is not in this release';
     const { code, out, started, spawned, row } = await attempt(['--accept-red', reason], {
-      runs: [RED_RUN()], mends: [MEND()], outcomes: { smoke: 'red', 'smoke:tail': 'expected 200\ngot 500\n' },
+      runs: [RED_RUN()], mends: [MEND()], outcomes: { smoke: 'red', 'smoke:tail': 'noise\nverdict: expected 200\nverdict: got 500\n' },
     });
     assert.equal(code, 0);
     assert.equal(started.length, 1, 'the deployer started once, nothing asked');
@@ -2087,17 +2146,62 @@ describe('mc deploy — the app, used, before the deployer starts', () => {
     assert.equal(row.suites, 'smoke:ok,journeys:ok');
   });
 
-  it('one failing suite refuses, naming it and its last lines', async () => {
+  it('one failing suite refuses, naming it, the verdict lines it states and where its whole output is', async () => {
+    const output = '/runner/deploy-prepare/T/journeys.log';
     const { code, out, spawned, started, row } = await attempt([], {
-      suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:tail': 'step 3 failed\nTypeError: x is not a function\n' },
+      suites: ['smoke', 'journeys'],
+      outcomes: {
+        journeys: 'red', 'journeys:output': output,
+        'journeys:tail': 'step 3 failed\n}\n}\nverdict: step 3 failed\nverdict: TypeError: x is not a function\n',
+      },
     });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0, 'the deploy script was not started');
     assert.equal(started.length, 0);
-    assert.match(out.stderr, /suite journeys failed \(exit 1\) — its last lines:\nmc: {5}step 3 failed\nmc: {5}TypeError: x is not a function/u);
+    assert.match(out.stderr, /suite journeys failed \(exit 1\):\nmc: {5}step 3 failed\nmc: {5}TypeError: x is not a function\nmc: {5}whole output: \/runner\/deploy-prepare\/T\/journeys\.log/u);
     assert.doesNotMatch(out.stderr, /suite smoke failed/u);
     assert.equal(row.outcome, 'refused');
     assert.equal(row.suites, 'smoke:ok,journeys:red');
+    assert.equal(row.output_path, output, 'the record keeps where the whole output is');
+    assert.match(row.note, /step 3 failed; TypeError: x is not a function; whole output: \/runner\/deploy-prepare\/T\/journeys\.log/u);
+  });
+
+  it('a red suite whose output ends with no verdict line is refused as stating none, with where its whole output is', async () => {
+    const output = '/runner/deploy-prepare/T/journeys.log';
+    const { code, out, row } = await attempt([], {
+      suites: ['smoke', 'journeys'], outcomes: { journeys: 'red', 'journeys:output': output, 'journeys:tail': 'step 3 failed\n}\n}\n' },
+    });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /suite journeys failed \(exit 1\) and states no verdict; whole output: \/runner\/deploy-prepare\/T\/journeys\.log/u);
+    assert.doesNotMatch(out.stderr, /step 3 failed/u, 'no closing lines are passed off as a verdict');
+    assert.match(row.note, /suite journeys failed \(exit 1\) and states no verdict; whole output: /u);
+  });
+
+  it('msr-performance replayed: a long dump closing in braces and then its verdict lines is refused with the verdict, in every place that names it', async () => {
+    // 2026-11-15: the row said `suite msr-performance failed (exit 1):` and nothing after the colon, because the
+    // last eight lines of the output were the dump's closing braces. The verdict is read from the end of the whole
+    // output; a suite that states none is said so, and is not given a guess from its braces.
+    const dir = '/runner/deploy-prepare/2026-11-15T19-18-00-000Z';
+    const dump = `{\n"profile": "mobile-constrained",\n"pass": false,\n"longTaskMs": [60]\n${'}\n'.repeat(30)}`;
+    const { code, out, row } = await attempt([], {
+      suites: ['smoke', 'perf', 'closure'],
+      outcomes: {
+        perf: 'red', 'perf:output': `${dir}/perf.log`,
+        'perf:tail': `${dump}verdict: mobile-constrained: long task 60 ms, bound 50 ms\nverdict: 1 of 4 profiles failed\n`,
+        closure: 'red', 'closure:output': `${dir}/closure.log`,
+        'closure:tail': `verdict: performance-long-task-duration\n${dump}`,
+      },
+    });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /suite perf failed \(exit 1\):\nmc: {5}mobile-constrained: long task 60 ms, bound 50 ms\nmc: {5}1 of 4 profiles failed\nmc: {5}whole output: \/runner\/deploy-prepare\/2026-11-15T19-18-00-000Z\/perf\.log/u);
+    assert.match(out.stderr, /suite closure failed \(exit 1\) and states no verdict; whole output: \/runner\/deploy-prepare\/2026-11-15T19-18-00-000Z\/closure\.log/u);
+    assert.doesNotMatch(out.stderr, /performance-long-task-duration/u, 'a line that is not the closing one is not read as a verdict');
+    assert.match(row.note, /suite perf failed \(exit 1\): mobile-constrained: long task 60 ms, bound 50 ms; 1 of 4 profiles failed; whole output: /u);
+    assert.match(row.note, /suite closure failed \(exit 1\) and states no verdict; whole output: /u);
+    assert.equal(row.output_path, `${dir}/perf.log,${dir}/closure.log`, 'the cell names where each whole output is');
+    const record = JSON.stringify(readPreparation(work));
+    assert.ok(record.includes('mobile-constrained: long task 60 ms, bound 50 ms'), 'deploy-prepare.json keeps the verdict');
+    assert.ok(record.includes(`${dir}/perf.log`), 'and the path');
   });
 
   it('a suite that cannot start refuses: the server never came up', async () => {
@@ -2113,7 +2217,7 @@ describe('mc deploy — the app, used, before the deployer starts', () => {
     const { code, out, spawned, row } = await attempt([], { suites: ['smoke', 'journeys'], outcomes: { journeys: 'unmeasured' } });
     assert.equal(code, 1);
     assert.equal(spawned.length, 0);
-    assert.match(out.stderr, /suite journeys could not run — its last lines:/u);
+    assert.match(out.stderr, /suite journeys could not run:/u);
     assert.equal(row.suites, 'smoke:ok,journeys:cannot-run');
   });
 
@@ -2818,10 +2922,10 @@ describe('mc deploy — the suites are run against exactly the commit that would
 });
 
 describe('mc deploy — a busy or kept main server is asked before the checkout is moved', () => {
-  const exercise = async (fakeOptions, over = {}) => {
+  const exercise = async (fakeOptions, over = {}, deps = {}) => {
     const fake = gateFake({ head: TIP, served: 'checkout', ...fakeOptions });
     const said = [];
-    const result = await exerciseApp({ sha: MID, env: {}, say: (line) => said.push(line), deps: fake.suites, ...over });
+    const result = await exerciseApp({ sha: MID, env: {}, say: (line) => said.push(line), deps: { ...fake.suites, ...deps }, ...over });
     return { result, calls: fake.calls, said };
   };
   const checkoutIndex = (calls) => calls.order.indexOf('git:checkout');
@@ -2846,7 +2950,7 @@ describe('mc deploy — a busy or kept main server is asked before the checkout 
     assert.deepEqual(gitWhileHeld(calls), [`show ${MID}:.mc/test.json`], 'while held, the checkout was only read');
     assert.deepEqual(placed(calls), ['branch', 'merge-base', 'checkout'], 'then placed: branch, ancestor check, detach');
     assert.deepEqual(said.filter((line) => /is held/u.test(line)), [
-      'mc: suites — the main server main-1 is held (mc used it within the last 60 s); waiting up to 10 min for the hold to end before the checkout is moved',
+      'mc: suites — the main server main-1 is held (mc used it within the last 60 s); waiting for the hold to end before the checkout is moved',
     ], 'said once, and nobody is asked to do anything');
   });
 
@@ -2860,28 +2964,41 @@ describe('mc deploy — a busy or kept main server is asked before the checkout 
     assert.deepEqual(gitWhileHeld(calls), [`show ${MID}:.mc/test.json`], 'while held, the checkout was only read');
     assert.deepEqual(placed(calls), ['branch', 'merge-base', 'checkout'], 'then placed: branch, ancestor check, detach');
     assert.deepEqual(said.filter((line) => /is held/u.test(line)), [
-      'mc: suites — the main server main-1 is held (a kept browser stepped on it within the last 60 s); waiting up to 10 min for the hold to end before the checkout is moved',
+      'mc: suites — the main server main-1 is held (a kept browser stepped on it within the last 60 s); waiting for the hold to end before the checkout is moved',
     ]);
     assert.equal(said.some((line) => /close|mc shot/u.test(line)), false, 'nobody is asked to close anything');
   });
 
-  it('a hold of either kind that outlasts the ten-minute bound refuses, names the hold, and the checkout is untouched', async () => {
-    assert.ok(HOLD_WAIT_MS >= 10 * 60_000, 'the bound is not under ten minutes');
+  it('a live holder past ten minutes is waited for and said once a minute — elapsed time is never a refusal', async () => {
     for (const [kind, words] of [['busy', 'mc used it within the last 60 s'], ['kept', 'a kept browser stepped on it within the last 60 s']]) {
-      const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', hold: () => kind } } });
-      assert.equal(result.error, `the main server main-1 is still held (${words}) after 10 min of waiting — the checkout is not moved under it`, kind);
-      assert.deepEqual(result.suites, [], kind);
-      assert.equal(calls.clock, HOLD_WAIT_MS, `${kind}: waited the whole bound on the injected clock, no more`);
-      assert.deepEqual(calls.git.map((call) => call.args.join(' ')), [`show ${MID}:.mc/test.json`], `${kind}: the shared checkout was only read`);
-      assert.deepEqual(calls.ensures, [], kind);
+      const { result, calls, said } = await exercise({ held: { app: { instance_id: 'main-1', pid: 4242, hold: (now) => (now < 15 * 60_000 ? kind : null) } } }, {}, { alive: () => true });
+      assert.equal(result.error, null, `${kind}: no refusal at ten minutes or after`);
+      assert.deepEqual(result.suites.map((suite) => `${suite.name}:${suite.state}`), ['smoke:ok'], `${kind}: the suites ran once the hold ended`);
+      assert.ok(calls.clock >= 15 * 60_000, `${kind}: waited past ten minutes on the injected clock`);
+      const lines = said.filter((line) => /is held/u.test(line));
+      assert.equal(lines.length, 15, `${kind}: said at the start and once a minute after, not on every poll`);
+      assert.equal(lines[0], `mc: suites — the main server main-1 is held (${words}); waiting for the hold to end before the checkout is moved`);
+      assert.match(lines[11], /, 11 min so far; waiting for the hold to end/u, `${kind}: the line after ten minutes still says it waits`);
+      assert.equal(said.some((line) => /after 10 min of waiting|still held/u.test(line)), false, kind);
+      assert.deepEqual(gitWhileHeld(calls), [`show ${MID}:.mc/test.json`], `${kind}: while held, the checkout was only read`);
     }
+  });
+
+  it('a holder whose process is gone and never released the hold is refused as stale state, at once and without a wait', async () => {
+    const { result, calls } = await exercise({ held: { app: { instance_id: 'main-1', pid: 4242, hold: () => 'busy' } } }, {}, { alive: (pid) => pid !== 4242 });
+    assert.match(result.error, /^stale state: the main server main-1 is held \(mc used it within the last 60 s\) by a process \(pid 4242\) that is gone and never released it/u);
+    assert.deepEqual(result.suites, []);
+    assert.deepEqual(calls.sleeps, [], 'nothing to wait for');
+    assert.deepEqual(calls.git.map((call) => call.args.join(' ')), [`show ${MID}:.mc/test.json`], 'the shared checkout was only read');
+    assert.deepEqual(calls.ensures, []);
   });
 
   it('the static service\'s main server is asked as well as the app\'s', async () => {
     const declared = { suites: [{ name: 'smoke' }], environments: { dev: { service: 'app', static_service: 'static' } } };
-    const { result, calls } = await exercise({ declared, held: { static: { instance_id: 'static-9', hold: 'kept' } } });
-    assert.match(result.error, /the main server static-9 is still held \(a kept browser stepped on it/u);
-    assert.equal(checkoutIndex(calls), -1);
+    const { result, calls, said } = await exercise({ declared, held: { static: { instance_id: 'static-9', hold: (now) => (now < 10_000 ? 'kept' : null) } } });
+    assert.equal(result.error, null);
+    assert.ok(said.some((line) => /the main server static-9 is held \(a kept browser stepped on it/u.test(line)));
+    assert.ok(checkoutIndex(calls) > calls.order.lastIndexOf('hold'), 'the checkout moved after the hold ended');
   });
 
   it('no server running is no hold: nothing is asked of it and the checkout moves', async () => {
@@ -3793,15 +3910,17 @@ describe('mc deploy — the own route: the suites run in the deploy worktree, at
       assert.equal(calls.suites.length, 1);
     });
 
-    it('after 90 minutes of a live holder every suite is cannot-run, naming it, and nothing was placed', async () => {
+    it('a live holder past 90 minutes is still waited for — time alone is never the verdict — and nothing is placed meanwhile', async () => {
       holdBy(4242, 'deploy');
-      const { result, calls } = await exercise({}, { alive: (pid) => pid === 4242 });
-      assert.match(result.error, /the deploy worktree is held by deploy \(pid 4242\), since 2026-11-15 10:00, 90 min ago — waited 90 min/u);
-      assert.deepEqual(result.suites, []);
-      assert.equal(clock - Date.parse('2026-11-15T10:00:00.000Z'), HOLDER_WAIT_MS);
-      assert.deepEqual(calls.placed, []);
-      assert.deepEqual(calls.ensures, []);
-      assert.equal(readHolder(env)?.pid, 4242, 'the other\'s record was not touched');
+      const { result, said, calls } = await exercise({}, {
+        alive: (pid) => pid === 4242 && existsSync(holderPath(env)),
+        swap: { onSleep: (n, now) => { if (now - Date.parse('2026-11-15T10:00:00.000Z') >= 100 * 60_000) rmSync(holderPath(env), { force: true }); } },
+      });
+      assert.equal(result.error, null, 'it ran once the holder was released');
+      assert.ok(clock - Date.parse('2026-11-15T10:00:00.000Z') > HOLDER_WAIT_MS, 'it waited past the old bound');
+      assert.ok(said.some((line) => /waiting for the deploy worktree — held by deploy \(pid 4242\)/u.test(line)));
+      assert.deepEqual([...new Set(slept.map((one) => one.placed))], [0], 'nothing was placed while it waited');
+      assert.equal(calls.placed.length, 1);
     });
 
     it('a holder whose pid is gone is taken over, not waited for', async () => {
@@ -4381,6 +4500,35 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
     const requests = queued();
     assert.equal(requests.length, 1);
     assert.equal(requests[0].rows.length, 2);
+  });
+
+  const heldRun = (extra = {}) => fullRunOf(SHA, {
+    outcome: 'failed', red: null, stopped_at: 'worktree', reason: 'its checkout is held by a live process',
+    holders: [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }], ...extra,
+  });
+
+  it('a typed deploy whose full run could not start queues one deploy-mend request naming who held it, stays a deploy, and its one retry applies (D14)', async () => {
+    const first = await attempt([], { runs: [], started: heldRun() });
+    assert.equal(first.code, 1);
+    assert.equal(first.spawned.length, 0);
+    assert.match(first.out.stderr, /a repair of the deploy .* is queued/u);
+    const [request, ...others] = queued();
+    assert.equal(others.length, 0);
+    assert.equal(request.state, 'queued');
+    assert.equal(request.rows[0].origin, undefined, 'a typed deploy\'s row is a deploy\'s, not a full run\'s');
+    assert.equal(request.rows[0].repo, 'memoro');
+    assert.deepEqual(request.rows[0].holders, [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }]);
+    assert.equal(first.row.outcome, 'refused');
+    await attempt([], { runs: [], started: heldRun() });
+    assert.equal(queued().length, 1, 'a second attempt joins the open request');
+    const verdict = retryVerdict({ entry: queued()[0], now: new Date(Date.parse(queued()[0].rows.at(-1).started) + 60_000) });
+    assert.deepEqual(verdict, { retry: true }, 'the existing retry of a technical stop applies unchanged');
+  });
+
+  it('a refusal on the code red is never technical, whatever else is queued', () => {
+    assert.equal(classifyStop({ outcome: 'refused', code: 'red' }), false);
+    assert.equal(classifyStop({ outcome: 'refused', code: 'suites' }), true);
+    assert.equal(classifyStop({ outcome: 'refused', code: 'full-run' }), true);
   });
 
   it('--accept-red is carried by the request, and its holder is the deploy\'s', async () => {

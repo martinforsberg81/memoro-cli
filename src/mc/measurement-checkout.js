@@ -7,12 +7,22 @@
  * 2026-11-13), which runs beside the merge lane and so never stands in the
  * merger's tree. Both resolve the shared dependency tree the same way.
  */
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { cwdsOfUser, processesStandingIn } from './standing.js';
 import { workRoot } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { ownAncestry } from './work-stop.js';
+
+/** The command line of `pid` (Linux `/proc`), or null when it cannot be read. */
+export function commandOf(pid) {
+  try {
+    const line = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ');
+    return line.slice(0, 300) || null;
+  } catch {
+    return null;
+  }
+}
 
 const failure = (run) => run?.error?.message || String(run?.stderr || '').trim() || `git exited ${run?.status}`;
 
@@ -32,7 +42,11 @@ export async function measurementCheckout({ repoPath, sha, git, cwds = cwdsOfUse
     const requesting = ownAncestry();
     busy = busy.filter(({ pid }) => !requesting.has(pid));
   }
-  if (busy.length) return { ok: false, reason: `${dir} is in use by pid ${busy.map((p) => p.pid).join(', ')}` };
+  if (busy.length) {
+    // Who holds it, as far as it can be read: the deploy mend names pids, command lines and cwd.
+    const holders = busy.map(({ pid, cwd }) => ({ pid, cwd, command: commandOf(pid) }));
+    return { ok: false, reason: `${dir} is in use by pid ${busy.map((p) => p.pid).join(', ')}`, holders };
+  }
 
   const pruned = await git(['worktree', 'prune'], { cwd: repoPath });
   if (pruned.status !== 0) return { ok: false, reason: failure(pruned) };

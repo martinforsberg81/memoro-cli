@@ -142,6 +142,25 @@ line after fifteen minutes, without a session, with `MAX_REQUEUES` unchanged.
 Exhausted requeues are answered as before. The session's `mc gate` retains its
 own hard ceiling and stall guard; this round policy does not change it.
 
+**Time in a round (Martin, 2026-11-15).** There are two purposes for a test run
+and two rules for time. A run made to develop — a session's `mc gate`, `mc test
+dev` — is where time counts: its limits and the 1 s slow-test indicator apply
+there. A run made to go on — the merge round, the full run a deploy reads, the
+gate suites of a deploy — never makes time a verdict: a long round, a slow
+test or a time measurement over its bound does not refuse, stop or delay a
+merge or a deploy. It is recorded, with what was slow and by how much
+(`~/mc/runner/too-slow/<repo>.tsv`, below), so that it can be optimised
+afterwards. What stays is the bound on what never ends, and it is a fault to
+repair, not a slow test: the round's no-progress stall (`ROUND_STALL_MS`), a
+test cut at the never-ends bound (`TEST_TIMEOUT_MS`, 600 s) and the last
+process bound; the same holds for a server or an account that never came up
+(`READY_TIMEOUT_MS`, `REGISTER_TIMEOUT_MS`) and a tool that never answers
+(`KEYCHAIN_TIMEOUT_MS`). The 900 s memoro-cli round ceiling and the 30 s
+`--test-timeout` of a merge or full round are records, not verdicts, as above.
+A wait for another run or for a holder is said each minute and is no refusal
+while the thing waited for is alive. A suite whose verdict is a measured time
+is not a gate of a deploy ([`mc-deploy.md`](mc-deploy.md), *The gate*).
+
 Measured reason (2026-11-09): of 128 non-green memoro rounds since November 5,
 38 ended on time cuts at median load 25 on eight cores, 32 at load 15 or more;
 green rounds had median load 17.75. Suite seconds per selected file doubled

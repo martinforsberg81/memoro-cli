@@ -257,7 +257,8 @@ export function selectorMissReading(repoPath, { root = mcHome(), now = Date.now(
 const mainRedDir = (root, repo) => join(root, 'main-red', basename(repo).replace(/\.git$/u, ''));
 export const mainRedPath = (root, repo, commit) => join(mainRedDir(root, repo), `${commit}.json`);
 
-function mainRecord(root, repo, commit) {
+/** The exact-commit main-red evidence of `commit` (`{ files, tests, … }`), or null. */
+export function mainRecord(root, repo, commit) {
   if (!commit || basename(commit) !== commit) return null;
   try {
     const path = mainRedPath(root, repo, commit);

@@ -30,10 +30,13 @@
  */
 import { deployWorktreePath, placeWorktree, strayLines, takeHolder } from './deploy-worktree.js';
 import { KEPT_HOLD_SECONDS, mainIdleSecondsOf, stopServer } from './dev-servers.js';
+import { verdictOf } from './gate-output.js';
 import { run as runGit } from './git.js';
 import { readMainMends } from './main-repair.js';
 import { fullRun, RETRY_LATER, RETRY_NOW } from './nightly-loop.js';
 import { readNightlyHistory } from './nightly-history.js';
+import { nightlyLogPath } from './nightly.js';
+import { processAlive } from './lease-owner.js';
 import { mcHome, workRoot } from './paths.js';
 import {
   answers, ensureAppServer, ensureDevServer, isGate, mainHold, NO_SHARED_WORKTREE, parseDeclaration,
@@ -66,6 +69,8 @@ function normalized(run) {
     tests: run?.tests ?? null,
     red: measured ? [...run.red] : null,
     measured,
+    // Who held the checkout of a run that could not start: the deploy mend names them.
+    ...(Array.isArray(run?.holders) && run.holders.length ? { holders: run.holders } : {}),
   };
 }
 
@@ -199,7 +204,9 @@ export async function measureFull({
   const mends = state === 'red' || state === 'stalled'
     ? mendsFor(commit, { root: mendRoot, read: deps.readMends || readMainMends })
     : [];
-  return { state, run, commit, mends, started, lines: fullRunLines({ state, run, sha, mends, started }) };
+  // The whole of a full run's output stays where the nightly keeps it.
+  const output = state === 'red' || state === 'stalled' || state === 'unmeasured' ? nightlyLogPath(root) : null;
+  return { state, run, commit, mends, started, output, lines: fullRunLines({ state, run, sha, mends, started, output }) };
 }
 
 /**
@@ -210,7 +217,7 @@ export async function measureFull({
 export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
   if (!full || (full.state !== 'red' && full.state !== 'stalled')) return full;
   const mends = mendsFor(full.commit, { root: deps.mendRoot || workRoot(env), read: deps.readMends || readMainMends });
-  return { ...full, mends, lines: fullRunLines({ state: full.state, run: full.run, sha: full.commit, mends, started: full.started }) };
+  return { ...full, mends, lines: fullRunLines({ state: full.state, run: full.run, sha: full.commit, mends, started: full.started, output: full.output }) };
 }
 
 /**
@@ -225,6 +232,7 @@ export function withMendsNow(full, { env = process.env, deps = {} } = {}) {
  */
 export async function measureGate({
   sha, path, acceptRed = false, dryRun = false, env = process.env, say = () => {}, deps = {}, suites = {}, stage = () => {}, own = false,
+  outputDir = null,
 }) {
   stage('full-run');
   const full = await measureFull({
@@ -235,12 +243,12 @@ export async function measureGate({
   if (unmeasured || (redFull && !dryRun && !acceptRed)) return { full, exercise: null };
   stage('suites');
   say(`mc: suites — starting a local server of ${short(sha)} and running what .mc/test.json declares`);
-  const exercise = await exerciseApp({ sha, env, say, deps: suites, own });
+  const exercise = await exerciseApp({ sha, env, say, deps: suites, own, outputDir });
   return { full, exercise };
 }
 
 /** What the reading says about the full run. */
-export function fullRunLines({ state, run, sha, mends = [], started = false }) {
+export function fullRunLines({ state, run, sha, mends = [], started = false, output = null }) {
   const where = `${short(sha)}`;
   const of = run ? `${when(run.at)}${minutes(run.duration_ms) ? `, took ${minutes(run.duration_ms)}` : ''}` : '';
   const tests = run?.tests != null ? `${run.tests} tests, ` : '';
@@ -256,18 +264,21 @@ export function fullRunLines({ state, run, sha, mends = [], started = false }) {
         `mc: full run — ${where} measured whole: RED, ${run.red.length} red, ${of}`,
         ...(files.length ? [`mc:   red files and commands: ${files.join(', ')}`] : []),
         `mc:   red tests: ${names}`,
-        `mc:   ${mend || 'no main-red mend holds it — none names a file for this run; the daily run queues one when it next measures this commit'}`,
+        `mc:   ${mend || 'no main-red mend holds it — the deploy that refuses on this run queues one'}`,
+        ...(output ? [`mc:   whole output: ${output}`] : []),
       ];
     }
     case 'stalled':
       return [
         `mc: full run — ${where} STALLED: ${run.reason || 'a test never ended'}, ${of}`,
         ...(mends.length ? [`mc:   red files and commands: ${mends.map((entry) => entry.file).join(', ')}`] : []),
-        `mc:   ${mend || 'no main-red mend holds it — none names a file for this run'}`,
+        `mc:   ${mend || 'no main-red mend holds it — the deploy that refuses on this run queues one'}`,
+        ...(output ? [`mc:   whole output: ${output}`] : []),
       ];
     case 'unmeasured':
       return [
         `mc: full run — ${where} stopped at ${run.stopped_at || 'an unknown step'} and measured nothing${run.reason ? `: ${run.reason}` : ''}`,
+        ...(output ? [`mc:   whole output: ${output}`] : []),
         // A deploy starts a run only when there is none of the commit, so this run is what every later
         // deploy of it reads: the way out is a new run, which writes the history read here.
         `mc:   nothing to accept — mc test memoro --full measures ${where} again and writes the history this reads; then deploy`,
@@ -313,14 +324,14 @@ function pathsWords(paths) {
 }
 
 /**
- * How long the hold check waits, in all, for the main servers to be free before
- * the exercise gives up. Both holds end by themselves — a busy one when mc has
+ * How often the hold check looks at the main servers again, and how often it says
+ * that it is still waiting. Both holds end by themselves — a busy one when mc has
  * not used the server for the idle window, a kept browser's KEPT_HOLD_SECONDS
  * after its last step — so the deploy waits rather than asking anybody to close
- * anything; only a server somebody keeps using for this long refuses.
+ * anything, and no amount of waiting is a refusal.
  */
-export const HOLD_WAIT_MS = 10 * 60_000;
 const HOLD_POLL_MS = 5_000;
+const HOLD_SAY_MS = 60_000;
 
 function gitIn(worktree, args) {
   const asked = runGit(worktree, args);
@@ -343,8 +354,9 @@ function gitIn(worktree, args) {
  *    app service;
  * 3. that service's main server is not held: a hold of either kind — busy (mc
  *    used it within the idle window) or a kept browser's — is waited out and
- *    asked again, within one bound for the whole check (`HOLD_WAIT_MS`); a hold
- *    that outlasts it refuses and names the hold;
+ *    asked again, said once a minute and with no bound: time is never the
+ *    refusal. Only a hold whose process is gone and never released it is
+ *    refused, as stale state of mc's own;
  * 4. the checkout is on main or on no branch and its HEAD an ancestor of
  *    origin/main, then `git checkout --detach <sha>`. Otherwise every suite is
  *    cannot-run with the reason and nothing is moved;
@@ -373,14 +385,16 @@ function gitIn(worktree, args) {
  * `not_in_commit` the names of the tip's gates the commit does not have;
  * `not_on_tip` the names of the commit's suites the tip does not declare.
  */
-export async function exerciseApp({ sha, env = process.env, say = () => {}, deps = {}, own = false }) {
+export async function exerciseApp({
+  sha, env = process.env, say = () => {}, deps = {}, own = false, outputDir = null,
+}) {
   const d = {
     sharedWorktree, readDeclaration, ensureAppServer, ensureDevServer, runSuites, tokenFor, head: headOf, dirty: dirtyOf,
     gitIn, servingWorktree, mainHold, now: () => Date.now(), sleep: (ms) => new Promise((done) => { setTimeout(done, ms); }),
-    takeHolder, placeWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath,
+    takeHolder, placeWorktree, serversFor, stopServer, deployWorktree: deployWorktreePath, alive: processAlive,
     ...deps,
   };
-  if (own) return exerciseOwn({ sha, env, say, deps, d });
+  if (own) return exerciseOwn({ sha, env, say, deps, d, outputDir });
   const worktree = d.sharedWorktree(env);
   if (!worktree) return cannot(NO_SHARED_WORKTREE);
   const dirtyNow = d.dirty(worktree);
@@ -403,7 +417,7 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
   }
 
   // Every ensure pins: the checkout is where it was placed, and following main would move it.
-  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true });
+  return runDeclared({ d, deps, worktree, sha, env, say, pinned: true, outputDir });
 }
 
 /**
@@ -421,10 +435,12 @@ export async function exerciseApp({ sha, env = process.env, say = () => {}, deps
  * 4. whatever happened, the servers the exercise started are stopped and the holder is released;
  *    a server that was already there is left.
  */
-async function exerciseOwn({ sha, env, say, deps, d }) {
+async function exerciseOwn({ sha, env, say, deps, d, outputDir }) {
   const worktree = d.deployWorktree(env);
+  // No bound on the wait: a holder that is alive is waited for and said each minute (`takeHolder`), a holder
+  // that is gone is taken over, and elapsed time is never the reason the suites do not run (D6, D16).
   const taken = await d.takeHolder({
-    env, verb: 'deploy suites', say, now: d.now, sleep: d.sleep, alive: d.alive, lock: d.holderLock, root: d.holderRoot,
+    env, verb: 'deploy suites', say, now: d.now, sleep: d.sleep, alive: d.alive, lock: d.holderLock, root: d.holderRoot, waitMs: Infinity,
   });
   if (!taken.ok) return cannot(taken.reason);
   let already = null;
@@ -438,7 +454,7 @@ async function exerciseOwn({ sha, env, say, deps, d }) {
     if (placed.moved) say(`mc: suites — the deploy worktree ${worktree} stands at ${short(sha)} now (${placed.how === 'reset' ? 'moved back from' : 'fast-forwarded from'} ${short(placed.from)})`);
     for (const line of strayLines(placed.strays)) say(line);
     already = new Set(d.serversFor(worktree, { root: d.root }).map((server) => server.instance_id));
-    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false });
+    return await runDeclared({ d, deps, worktree, sha, env, say, pinned: false, outputDir });
   } finally {
     // Its own servers only: one that was there before the exercise is somebody's, and left.
     if (already) {
@@ -457,7 +473,7 @@ async function exerciseOwn({ sha, env, say, deps, d }) {
  * themselves — the same on both routes. `pinned` is the shared checkout's: it is placed once and no
  * ensure may follow main, which would move it.
  */
-async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
+async function runDeclared({ d, deps, worktree, sha, env, say, pinned, outputDir = null }) {
   const read = d.readDeclaration(worktree);
   if (!read.ok) return cannot(read.error);
   const { declaration } = read;
@@ -541,18 +557,27 @@ async function runDeclared({ d, deps, worktree, sha, env, say, pinned }) {
     stillThere: (suite) => (deps.answers || answers)(probeFor(suite)),
     revive,
     onStart: null,
-    onEnd: (result) => say(`mc:   ${result.skipped ? 'skip' : result.ok ? 'ok  ' : 'RED '} ${result.name} ${result.seconds}s`),
+    onEnd: (result) => say(`mc:   ${result.skipped ? 'skip' : result.ok ? 'ok  ' : 'RED '} ${result.name} ${result.seconds}s${result.output_path && !result.ok && !result.skipped ? ` — whole output: ${result.output_path}` : ''}`),
+    ...(outputDir ? { outputDir } : {}),
   });
 
-  const suites = results.map((result) => ({
-    name: result.name,
-    state: result.unmeasured ? 'cannot-run' : result.skipped ? 'skipped' : result.ok ? 'ok' : 'red',
-    seconds: result.seconds,
-    status: result.status,
-    tail: result.unmeasured
-      ? 'the server left while it was running — it measured nothing'
-      : lastLines(result.tail),
-  }));
+  // `tail` is what a reading says of the suite: the verdict lines it closes with when it is red (and nothing when
+  // it states none — the refusal says that, with the path), the reason it could not run, a skip's own closing lines.
+  const suites = results.map((result) => {
+    const state = result.unmeasured ? 'cannot-run' : result.skipped ? 'skipped' : result.ok ? 'ok' : 'red';
+    const verdict = state === 'red' ? [...(result.verdict || verdictOf(result.tail))] : [];
+    return {
+      name: result.name,
+      state,
+      seconds: result.seconds,
+      status: result.status,
+      verdict,
+      ...(result.output_path ? { output_path: result.output_path } : {}),
+      tail: state === 'cannot-run' ? 'the server left while it was running — it measured nothing'
+        : state === 'red' ? verdict.join('\n')
+          : lastLines(result.tail),
+    };
+  });
   for (const name of neverRan || []) {
     suites.push({ name, state: 'cannot-run', seconds: 0, status: null, tail: `never ran — ${gone?.length ? 'the server left before it' : 'it was not started'}` });
   }
@@ -610,17 +635,20 @@ export function gateSet({ tip, shipped }) {
 /**
  * Wait out a held main server — busy or a kept browser's, both end by
  * themselves — with the checkout untouched: `null` when none of the declared
- * services' main servers is held (or running), else, once the one bound of the
- * whole check has passed, why the exercise cannot go on. Each new hold waited
- * for is said once; nobody is asked to do anything.
+ * services' main servers is held (or running). A hold whose holder is alive is
+ * waited for with no bound, said when it begins and once a minute after, with
+ * who holds it, since when and what is waited for — elapsed time is never a
+ * refusal (D6, D16). Only a hold whose holder's process is gone and which was
+ * never released is refused: stale state of mc's own, which no waiting ends.
  */
 async function awaitHold({ d, worktree, services, env, say }) {
   const idleMs = mainIdleSecondsOf(env) * 1000;
-  const until = d.now() + HOLD_WAIT_MS;
+  const began = d.now();
   const why = (hold) => (hold === 'kept'
     ? `a kept browser stepped on it within the last ${KEPT_HOLD_SECONDS} s`
     : `mc used it within the last ${Math.round(idleMs / 1000)} s`);
   let saidFor = null;
+  let saidAt = null;
   for (;;) {
     let held = null;
     for (const service of services.filter(Boolean)) {
@@ -629,15 +657,19 @@ async function awaitHold({ d, worktree, services, env, say }) {
       if (hold) { held = { running, hold }; break; }
     }
     if (!held) return null;
-    if (d.now() >= until) {
-      return `the main server ${held.running.instance_id} is still held (${why(held.hold)}) after ${Math.round(HOLD_WAIT_MS / 60_000)} min of waiting — the checkout is not moved under it`;
+    const { pid } = held.running;
+    if (Number.isInteger(pid) && !d.alive(pid)) {
+      return `stale state: the main server ${held.running.instance_id} is held (${why(held.hold)}) by a process (pid ${pid}) that is gone and never released it — the checkout is not moved under it`;
     }
+    const at = d.now();
     const key = `${held.running.instance_id}:${held.hold}`;
-    if (key !== saidFor) {
-      say(`mc: suites — the main server ${held.running.instance_id} is held (${why(held.hold)}); waiting up to ${Math.round(HOLD_WAIT_MS / 60_000)} min for the hold to end before the checkout is moved`);
+    if (key !== saidFor || at - saidAt >= HOLD_SAY_MS) {
+      const waited = at - began >= HOLD_SAY_MS ? `, ${Math.floor((at - began) / 60_000)} min so far` : '';
+      say(`mc: suites — the main server ${held.running.instance_id} is held (${why(held.hold)})${waited}; waiting for the hold to end before the checkout is moved`);
       saidFor = key;
+      saidAt = at;
     }
-    await d.sleep(Math.min(HOLD_POLL_MS, Math.max(1, until - d.now())));
+    await d.sleep(HOLD_POLL_MS);
   }
 }
 
@@ -713,16 +745,32 @@ export function failedSuites(exercise) {
 // ---------------------------------------------------------------------------
 
 /**
+ * What a failed suite says of itself: the verdict lines it closed with and
+ * where its whole output is — or, when it stated none, that it did not, with
+ * the path. Never a guess from its last lines.
+ */
+export function suiteWords(suite) {
+  const where = suite.output_path ? `whole output: ${suite.output_path}` : null;
+  if (suite.state === 'cannot-run') return `suite ${suite.name} could not run:\n${suite.tail}${where ? `\n${where}` : ''}`;
+  const exit = `exit ${suite.status ?? 'unknown'}`;
+  const verdict = suite.verdict || verdictOf(suite.tail);
+  if (!verdict.length) return `suite ${suite.name} failed (${exit}) and states no verdict${where ? `; ${where}` : ''}`;
+  return `suite ${suite.name} failed (${exit}):\n${verdict.join('\n')}${where ? `\n${where}` : ''}`;
+}
+
+/**
  * Every red in one list, as a reading and a refusal name them: the full run's
- * (red or stalled) and each failed or unrunnable suite, with its last lines.
+ * (red or stalled) and each failed or unrunnable suite, with the verdict it
+ * states and where its whole output is.
  */
 export function reds({ full, exercise }) {
   const found = [];
-  if (full && (full.state === 'red' || full.state === 'stalled')) found.push(`the full run of ${short(full.commit)} is ${full.state === 'red' ? `red (${full.run.red.length})` : 'stalled'}`);
+  if (full && (full.state === 'red' || full.state === 'stalled')) {
+    found.push(`the full run of ${short(full.commit)} is ${full.state === 'red' ? `red (${full.run.red.length})` : 'stalled'}${full.output ? `; whole output: ${full.output}` : ''}`);
+  }
   if (exercise?.error) found.push(`the suites could not run: ${exercise.error}`);
   for (const suite of exercise?.suites || []) {
-    if (suite.state === 'red') found.push(`suite ${suite.name} failed (exit ${suite.status ?? 'unknown'}):\n${suite.tail}`);
-    if (suite.state === 'cannot-run') found.push(`suite ${suite.name} could not run:\n${suite.tail}`);
+    if (suite.state === 'red' || suite.state === 'cannot-run') found.push(suiteWords(suite));
   }
   return found;
 }
@@ -734,10 +782,16 @@ export function reds({ full, exercise }) {
  * cell empty — which says it was not measured, not that it passed.
  */
 export function gateRecord({ full = null, exercise = null, accepted = '' }) {
+  const paths = [
+    ...(full && (full.state === 'red' || full.state === 'stalled') && full.output ? [full.output] : []),
+    ...(exercise?.suites || []).filter((suite) => suite.state === 'red' || suite.state === 'cannot-run').map((suite) => suite.output_path),
+  ].filter(Boolean);
   return {
     full_commit: full?.run?.commit || full?.commit || '',
     full_verdict: full && full.state !== 'needed' ? full.state : '',
     suites: exercise?.error ? `cannot-run:${exercise.error}` : (exercise?.suites || []).map((suite) => `${suite.name}:${suite.state}`).join(','),
     accepted_red: accepted || '',
+    // Where the whole output of what failed is: the full run's log and each failed suite's file.
+    output_path: paths.join(','),
   };
 }

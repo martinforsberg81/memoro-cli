@@ -52,6 +52,7 @@ describe('classifyStop: what a technical stop is', () => {
     ['a preparation replaced by a newer one (replaced)', { outcome: 'refused', code: 'replaced' }, false],
     ['a tip nobody measured (unmeasured)', { outcome: 'refused', code: 'unmeasured' }, false],
     ['a red gate suite (red)', { outcome: 'refused', code: 'red' }, false],
+    ['a full run that could not start for a reason of mc\'s own (full-run)', { outcome: 'refused', code: 'full-run' }, true],
     ['main dirty in a worktree that is not mc\'s own (dirty)', { outcome: 'refused', code: 'dirty' }, false],
     ['main ahead in a worktree that is not mc\'s own (ahead)', { outcome: 'refused', code: 'ahead' }, false],
     ['a deployed row', { outcome: 'deployed' }, false],
@@ -286,5 +287,51 @@ describe('the reading line', () => {
     updateDeployMends({ root, lock: (_r, fn, options) => { held += 1; assert.equal(options.name, 'deploy-mend'); return fn(); } }, (entries) => entries.push(entry()));
     assert.equal(held, 1);
     assert.equal(read().length, 1);
+  });
+});
+
+describe('a full run that could not start is the deploy mend\'s, and no deploy is retried for it', () => {
+  const now = new Date('2026-11-16T12:00:00.000Z');
+  const held = (started, extra = {}) => ({ started, sha: 'b'.repeat(40), stopped_at: 'worktree', note: 'full run of memoro cannot start: its checkout is held' });
+  const holders = [{ pid: 4711, command: 'secret-tool lookup', cwd: '/work/full/src' }];
+  const ask = (started, extra = {}) => requestDeployRepair({ ...state(), row: held(started), holder: 'the full run', origin: 'full-run', repo: 'memoro', holders, ...extra });
+
+  it('a code of its own is technical; a red gate is not, whatever else is queued', () => {
+    assert.equal(classifyStop({ outcome: 'refused', code: 'full-run' }), true);
+    assert.equal(classifyStop({ outcome: 'refused', code: 'red' }), false);
+    assert.equal(gateStopCode({ full: { state: 'unmeasured', run: { stopped_at: 'worktree' } } }), 'full-run');
+    assert.equal(gateStopCode({ full: { state: 'unmeasured', run: { stopped_at: 'threw' } } }), 'full-run');
+    assert.equal(gateStopCode({ full: { state: 'unmeasured', run: { stopped_at: 'fetch' } } }), 'unmeasured', 'the machine\'s own stop is tried again, not mended');
+    assert.equal(gateStopCode({ full: { state: 'red', run: { stopped_at: 'worktree' } } }), 'red');
+  });
+
+  it('queues one request naming the holders; a later stop of the same repository joins it with no second row', () => {
+    const first = ask('2026-11-16T10:00:00.000Z');
+    assert.equal(first.joined, false);
+    const second = ask('2026-11-16T11:00:00.000Z');
+    assert.deepEqual([second.id, second.joined], [first.id, true]);
+    const requests = read();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].rows.length, 1, 'a checkout held again is the same fault: no second row');
+    assert.deepEqual(requests[0].rows[0].holders, holders);
+    assert.equal(requests[0].rows[0].origin, 'full-run');
+    assert.equal(requests[0].rows[0].repo, 'memoro');
+  });
+
+  it('is never retried as a deploy, not even with a row fresh enough to retry', () => {
+    ask('2026-11-16T11:30:00.000Z');
+    const [request] = read();
+    assert.match(retryVerdict({ entry: request, now }).drop, /a full run is not a deploy/u);
+    assert.equal(retryVerdict({ entry: { ...request, rows: request.rows.map(({ origin, ...rest }) => rest) }, now }).retry, true, 'the same row of a deploy is retried: only the origin stops it');
+  });
+
+  it('the reading line says what could not start, what held it and where the repair is', () => {
+    ask('2026-11-16T11:30:00.000Z');
+    const [request] = read();
+    assert.equal(deployMendLine(request),
+      'mc: full run of memoro cannot start: pid 4711 (secret-tool lookup) standing in /work/full/src; repair queued');
+    assert.equal(deployMendLine({ ...request, state: 'running' }), 'mc: full run of memoro cannot start: pid 4711 (secret-tool lookup) standing in /work/full/src; repair running');
+    assert.match(deployMendLine({ ...request, state: 'repaired' }), /; repair landed$/u);
+    assert.equal(deployMendLine({ ...request, state: 'not-retried', reason: 'a full run is not a deploy' }), null, 'a finished full-run request is no deploy\'s story');
   });
 });

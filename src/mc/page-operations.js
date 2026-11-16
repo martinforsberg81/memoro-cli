@@ -233,6 +233,11 @@ export function deployLines(lines, c, wide, production, expand) {
       const step = attempt.stopped_at || progress?.step || 'progress unknown';
       detail(body, c, room, 6, `${deployBar(progress?.stage, state)} · ${step}`,
         state === 'failed' ? ['red'] : ['grey']);
+      // A refusal says why in the verdict lines it was given, and where the whole output is.
+      if (!p.running && attempt.note) detail(body, c, room, 6, attempt.note, state === 'failed' ? ['red'] : ['yellow']);
+      if (!p.running && attempt.output_path && !String(attempt.note || '').includes(attempt.output_path)) {
+        detail(body, c, room, 6, `whole output: ${attempt.output_path}`, ['grey']);
+      }
     });
   }
   // The preparation: the full run and the suites before the deployer, in a
@@ -251,6 +256,7 @@ export function deployLines(lines, c, wide, production, expand) {
       const since = prep.age_seconds == null ? '' : ` · started ${age(prep.age_seconds)}`;
       detail(body, c, room, 6, `${states[prep.state] || prep.state}${since}${pid}`);
       if (prep.error) detail(body, c, room, 6, prep.error, ['red']);
+      if (prep.output_dir && prep.state !== 'done') detail(body, c, room, 6, `whole output of each suite: ${prep.output_dir}`, ['grey']);
       if (prep.state === 'running' && prep.progress) {
         detail(body, c, room, 6, `${prep.progress}${prep.progress_age_seconds == null ? '' : ` · said ${age(prep.progress_age_seconds)}`}`);
       }

@@ -11,7 +11,11 @@
  * `commands/deploy.js`) with a record on disk, `runner/deploy-prepare.json`,
  * that any later `mc deploy`, and the page, find again:
  *
- *   `{ sha, pid, started, stage, log, accept_red, holder, ended, result, error }`
+ *   `{ sha, pid, started, stage, log, accept_red, holder, ended, result, error, output_dir }`
+ *
+ * `output_dir` is where the whole output of each suite and command of this
+ * preparation is (`gate-output.js`, `<suite>.log`); a record written before
+ * it was kept has none, and its suites carry no `output_path`.
  *
  * `stage` is `starting`, `full-run`, `suites` or `done`. `result` is the gate's
  * two measurements, `{ full, exercise }`, exactly as `measureGate` made them;
@@ -29,6 +33,7 @@ import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { measureGate } from './deploy-gate.js';
+import { outputDir } from './gate-output.js';
 import { processAlive } from './lease-owner.js';
 import { realLock } from './runner-lock.js';
 
@@ -152,8 +157,12 @@ export async function prepare(job, {
     say(`mc: still preparing — ${STAGE_WORDS[stage] || stage}, ${Math.round((at - began) / 60000)} min so far`);
   }, beatMs);
   try {
+    // Every suite writes its whole output here as it runs; the record says where.
+    const dir = outputDir(job.root, job.started);
+    patch({ output_dir: dir });
     const measured = await measureGate({
       sha: job.sha, path: job.path, acceptRed: Boolean(job.acceptRed), own: Boolean(job.ownWorktree), env, say,
+      outputDir: dir,
       deps: deps.gate || {}, suites: deps.suites || {}, stage: (next) => { stage = next; return patch({ stage: next }); },
     });
     patch({ stage: 'done', ended: now().toISOString(), result: measured });
