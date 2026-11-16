@@ -127,7 +127,6 @@ import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapaci
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
 import { billingRoute, billingRouteNow, gatewayLaunch } from './billing-route.js';
-import { goalHash, readerWalk, UNREAD_FILE, unreadFor, unreadReasons } from './plan-review.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
@@ -1588,9 +1587,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const programmes = [...new Set(all.map(goal => goal.programme))];
     // Each programme's record, once for this pick (D10): who may start what is read where it is decided.
     const orders = new Map(programmes.map(programme => [programme, orderOf(programme)]));
-    // One walk per goal for this pick (C5): a draft waiting for a plan reader is unavailable, as a held draft is.
-    const readerMemo = new Map();
-    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json')) || Boolean(readerWait(goal, readerMemo));
+    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json'));
     const drafts = programmes
       .map(programme => nextDraft(all, programme, { order: orders.get(programme), unavailable })).filter(Boolean);
     const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !unavailable(goal)
@@ -2733,36 +2730,6 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const reviewWaits = new Map();
   /** The problems each programme's invalid record was last said with, so they are said once. */
   const invalidSaid = new Map();
-  /** The unread record each goal's wait was last said for (its `at`), so the wait is said once per record. */
-  const readerSaid = new Map();
-  /** The hash of the goal's text as it is on disk now (`goalHash`), the one an unread record names. */
-  function currentHash(dir) {
-    return goalHash(parseGoal(deps.read(join(dir, GOAL_FILE)) ?? ''));
-  }
-  /**
-   * Whether `goal` waits for a plan reader (C5): its unread record holds its current text's hash and the reader walk,
-   * asked with the record's author and the runner's catalog, capacity, launch and billing readers, finds no candidate.
-   * `memo` holds the walk per goal for one pick. Returns `{ at, reason }` or null; the wait is said once per record.
-   */
-  function readerWait(goal, memo = new Map()) {
-    if (memo.has(goal.dir)) return memo.get(goal.dir);
-    let wait = null;
-    const record = deps.read(join(goal.dir, UNREAD_FILE)) ? unreadFor(goal.dir, deps.read, currentHash(goal.dir)) : null;
-    if (record) {
-      // The billing reads the runner's own state and API, as a launch's does (billingFor), never the machine's files.
-      const billing = (tool, options) => billingRouteNow(tool, { ...options, capacity: deps.capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.() });
-      const walked = readerWalk({ catalog: deps.catalog(), capacity: deps.capacity.read(), now: deps.now(), author: record.author ?? null, env: deps.env, launch: deps.launch, billing });
-      if (!walked.ok) {
-        wait = { at: String(record.at ?? ''), reason: [...walked.setAside.map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean).join('; ') };
-        if (readerSaid.get(goal.dir) !== wait.at) {
-          say(`${goalName(goal)}: waits for a plan reader — ${wait.reason}`);
-          readerSaid.set(goal.dir, wait.at);
-        }
-      }
-    }
-    memo.set(goal.dir, wait);
-    return wait;
-  }
   /** The hold each goal was last said to be held by (`by|at`), so a hold is said once. */
   const holdsSaid = new Map();
   /**
@@ -3473,7 +3440,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const order = planning ? orderOf(goal.programme) : null;
         // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
         const others = order?.kind === 'stated' ? [...planSessions(goal.programme, listed)].filter(other => other !== name) : [];
-        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')) || Boolean(readerWait(item)));
+        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')));
         // The programme turn's claim or current record holds the programme: the drafts it creates are its own until it ends (D7).
         const turnHolds = planning && (claims.has(turnName(goal.programme)) || stepsHeld().some(item => item.name === turnName(goal.programme)));
         if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length || turnHolds)) {
@@ -3539,14 +3506,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (planning) {
         const now = stateNow(goal);
-        // A draft whose reading found no reader during this session waits for a reader, not for Martin (C4): nothing was
-        // read, so nothing is wrong with it. A record older than the session is not this session's answer: a session that
-        // leaves it untouched is contained as any other, or a reader that can run would relaunch it without progress.
-        const unread = now.stage === 'draft' && now.status === 'ready' ? unreadFor(goal.dir, deps.read, currentHash(goal.dir)) : null;
-        const fresh = unread && Date.parse(unread.at ?? '') >= t0 ? unread : null;
         if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
-          if (fresh) say(`${name}: the draft is complete and waits for a plan reader (${unreadReasons(fresh)})`);
-          else goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
+          goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
         }
       }
       else if (mend && !read.quota && !read.interrupted) afterMend(goal, name, { stage: goal.stage, status: goal.status });

@@ -2,7 +2,7 @@
  * Antigravity CLI (`agy`) adapter — unattended and interactive sessions.
  *
  * agy is Google's coding CLI. mc launches it headless (the build, review,
- * plan-review, finish, mend, plan, manager, intake and decision sessions) and
+ * finish, mend, plan, manager, intake and decision sessions) and
  * in a person's terminal (`mc plan`, `mc martin`, the server's `mc session`).
  * An agy session lives in the terminal that started it: it has no daemon, no
  * remote client and no socket, so `PERSISTENT_DRIVER` is `terminal`, a server
@@ -108,7 +108,7 @@ export const INSTRUCTIONS_SEPARATOR = '\n\n--- TASK ---\n\n';
  * instructions (`instr`, one element, the role's markdown) lead the prompt,
  * separated from the task so the session can tell them apart. A resumed
  * conversation already holds them and gets the task alone. `stream: false`
- * (plan review, the helper and manager turns) prints the one JSON object.
+ * (the helper and manager turns) prints the one JSON object.
  */
 export function headlessArgs({ modelArgs: model, session = [], instr = [], prompt, resume = null, stream = true }) {
   const lead = !resume && instr.length ? `${instr.join('\n\n')}${INSTRUCTIONS_SEPARATOR}` : '';
@@ -134,7 +134,7 @@ export const PROVIDER_PRIORITY_RANK = 2;
 /** Intake and other catalog-routed turns run on a model the catalog does not name for this tool. */
 export const INTAKE_FROM_CATALOG = null;
 
-/** A plan review passes the checkout as an allowed directory, before the output format. */
+/** A reading passes the checkout as an allowed directory, before the output format. */
 export const ALLOWED_DIR = Object.freeze({ flag: '--add-dir', before: '--output-format' });
 
 /** The mechanism that reads this tool's plan usage; `src/mc/run.js` holds the code for it. */

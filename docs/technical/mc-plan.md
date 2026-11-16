@@ -249,14 +249,13 @@ existing `git archive origin/main` mechanism, without repository metadata.
 Cleanup proves the owned export directory's device/inode/birthtime and retains
 and reports a replacement directory or symlink rather than deleting it.
 
-`src/mc/plan-review.js` shares reader selection, adapter/capability and billing
-routing, token/launch mechanics, session launch and report/verdict checks with
-goal plan review. It removes the draft's author from the review catalogue
+`src/mc/programme-review.js` provides reader selection, adapter/capability and billing
+routing, token/launch mechanics, session launch and report/verdict checks for
+programme review. It removes the draft's author from the review catalogue
 when another can run (`--avoid` names the author when given, else the caller's
 tool/model; the author is read last otherwise; the catalogue first retains
 priority only if still present), with the same capacity/API-reserve and fallback rules. No provider
-command or extra routing policy is added. Goal plan review retains its
-20-minute/two-reading policy and draft-to-build gate. Programme review has a
+command or extra routing policy is added. Programme review has a
 30-minute timeout and no reading cap, including a third call on the same text.
 
 The child has MC_ROLE=programme-review, MC_PROGRAMME and its own

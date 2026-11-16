@@ -67,7 +67,6 @@ the session is for; a verb file says how a verb is used). Plan supports interact
 | role | model | started as | who launches it |
 |---|---|---|---|
 | `plan-session` | opus | `plan` | `mc plan <programme>`, a foreground session in `~/mc/programs/<programme>/`; the runner also assigns one next draft in its goal worktree |
-| `plan-review` | sonnet | `plan-review` | `mc goal plan-review`, one headless read-only turn on a draft goal, never the runner ([mc-goals.md](mc-goals.md) § *Plan review*) |
 | `programme-review` | sonnet | `programme-review` | `mc programs review`, an in-session independent document reading, never scheduled by the runner; review catalogue/author exclusion, 30-minute limit and no cap ([mc-plan.md](mc-plan.md#sign-off-and-independent-programme-reading)) |
 | `ask-reader` | fable | `ask-reader` | `mc ask`, when jev did not settle a question: one fresh headless read-only session, in a read-only copy of the asker's worktree, on the `decision` list (not the asker's own model when another can run), limit 10 minutes; never the runner. It may use only `mc goal show\|list\|areas` and `mc ask answer`, and its run row (kind `ask-reader`) counts under the desk's daily ceiling ([mc-jev.md](mc-jev.md) § *The reader*) |
 | `archive-reader` | sonnet | `archive-reader` | `mc run`, once per programme with a record whose goals are all finished: one headless read-only session on a fresh checkout at `origin/main` that writes `WRITE-BACK.md` in the programme directory ([mc-run.md](mc-run.md) § *Programme archive turn*) |
@@ -87,7 +86,7 @@ two-line PROGRAMME-REVIEW.md format live in its role, not a second question
 list. It records only a token-bound programme verdict; mc goal mutations and
 mc ask refuse it, and it has no signing authority. The shared reader launch
 clears inherited goal/session identity and assigns MC_PROGRAMME, its role and
-MC_PROGRAMME_REVIEW_TOKEN. Goal plan review's policy and gate stay separate.
+MC_PROGRAMME_REVIEW_TOKEN.
 
 ## Parts: one role, started more than one way
 
@@ -254,7 +253,7 @@ aim in `~/mc/programs/<programme>/README.md` (Martin, 2026-11-03). Its primary
 deliverable is the programme's planning: the README and design, the resolved
 prerequisite and policy decisions, the goal decomposition and phases, and
 complete goal briefs with contracts, exclusions, documents, success criteria and
-executable checks. Every complete brief, once `mc goal plan-review` has read it, moves from draft to build at once in its
+executable checks. Every complete brief moves from draft to build at once in its
 phase, including one waiting on an earlier phase; a brief with unresolved
 planning prerequisites stays draft (Martin, 2026-11-08). Within that it has, in
 principle, full freedom to move the programme toward the aim, a goal's branch

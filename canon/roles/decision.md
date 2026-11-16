@@ -97,7 +97,7 @@ again. Decide them so:
 - Amend the goal with the verbs (`mc goal set`, `item add|set|remove`,
   `obligation set`, `criterion set`, `criterion add`, `criterion remove`,
   `document add`), replacing the numbered item that was wrong and leaving the
-  rest; record the finding and the new text in LOG.md; then `mc goal ready`. A goal still in `draft` is read with `mc goal plan-review` before it moves. The
+  rest; record the finding and the new text in LOG.md; then `mc goal ready`. The
   goal continues in its stage.
 - If the amendment would change a text Martin holds, it is a brief for Martin:
   the goal stays `Martin`.

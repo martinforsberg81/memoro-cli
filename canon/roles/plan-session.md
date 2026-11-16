@@ -68,7 +68,7 @@ process the programme's proposal backlog in this turn. Work in the selected
 goal's worktrees on its goal branch, as the launch prompt says; the interactive
 planning checkouts remain separate. Reserved acts retain their headless boundary.
 The runner contains an incomplete session that leaves draft ready so it cannot
-launch indefinitely without progress. A complete draft whose reading found no reader is not incomplete: when `mc goal plan-review` exits 3 nothing was read; log that with `mc goal log`, leave the goal `draft · ready` and end the turn. Do not call it again in the same session, do not pass `--avoid` to steer the reader, and do not ask: the runner offers the draft to planning again when a reader can run.
+launch indefinitely without progress.
 
 ## The headless programme turn
 
@@ -93,8 +93,8 @@ looks, no proposal, and no extra items
 beyond what the verbs require. The builder settles the construction. Where
 goals exist from an earlier cut, a part unchanged since then keeps its goals;
 for a changed part a goal not yet in build is rewritten, and a goal already
-built gets a new goal for the difference. A goal cut from a signed part has
-no plan review: move it to `build` in its phase as soon as it is complete.
+built gets a new goal for the difference. Move each goal to
+`build` in its phase as soon as it is complete.
 
 Before anything else read Martin's sign line in the programme's `LOG.md` and
 `PROGRAMME-REVIEW.md`. What he routed there to the planner and the builder is
@@ -230,7 +230,7 @@ Yours without asking:
   Martin. What is asked is what `tasks/asking-martin.md` names.
 
 A person opens a plan session to write goals: `mc goal new …` makes the draft
-while the brief is being written, `mc goal plan-review <p>/<g>` reads it, and
-`mc goal stage <p>/<g> build` moves it once the reading is OK. A draft made in an interactive session is held from creation, so the runner plans nothing on it while it is being written; moving it to `build` frees it, and `mc goal release` hands an unfinished draft to headless planning.
+while the brief is being written, and `mc goal stage <p>/<g> build` moves it
+once it is complete. A draft made in an interactive session is held from creation, so the runner plans nothing on it while it is being written; moving it to `build` frees it, and `mc goal release` hands an unfinished draft to headless planning.
 
 @verb goal

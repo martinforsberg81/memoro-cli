@@ -90,7 +90,7 @@ Build, review, finish, mend, plan, decision and interactive Martin may call it
 within their role bounds; a goal session cannot ask for another goal. The
 Martin role's interactive-only restriction also applies to `mc ask`: an
 unattended Martin call is refused before any goal/log/ledger mutation, key read
-or provider request. `desk-prepare` and `plan-review` cannot ask at all, and an
+or provider request. `desk-prepare` cannot ask at all, and an
 `ask-reader` session may only run `mc ask answer`. The unattended `decision`
 desk role may call `mc ask` at any active stage without acquiring a delivery
 role's stage restriction; its goal mutations retain `by decision` attribution.
@@ -148,7 +148,7 @@ old `--reason` text and every other value are never echoed.
 
 Role `ask-reader` (`canon/roles/ask-reader.md`), model list `decision`
 (`mc-roles.md`), a limit of 10 minutes (`LIMIT_MS`), started as `ask-reader` by
-`mc ask` itself and never by the runner. It mirrors `mc goal plan-review`: a
+`mc ask` itself and never by the runner. It mirrors independent document reading: a
 fresh session that reads and does not edit.
 
 - **Model.** `chooseAskReader` takes the first model of the `decision` list
@@ -175,7 +175,7 @@ fresh session that reads and does not edit.
   goals write anchors both ways (`sectionOf`). An area or section that cannot be
   read is said in the prompt. The
   pages are listed, not inlined: a goal's areas hold hundreds of kilobytes of
-  standards, and the reader reads them in the copy as the plan review does.
+  standards, and the reader reads them in the copy.
   Nothing in it holds a key-source value.
 - **The token.** Each call has an id and a token. The token is only in the
   reader's environment (`MC_ASK_TOKEN`, with the call id in `MC_ASK_CALL`); its

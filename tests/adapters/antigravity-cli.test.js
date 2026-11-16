@@ -29,7 +29,7 @@ test('a resume names the conversation and sends the task alone: the conversation
   assert.equal(agy.resumeArgs({}), null);
 });
 
-test('plan review: stream false prints the one json object, and the declared --add-dir position is a real token of the list', () => {
+test('reading session: stream false prints the one json object, and the declared --add-dir position is a real token of the list', () => {
   const args = build({ stream: false });
   assert.equal(args[args.indexOf('--output-format') + 1], 'json');
   const at = args.indexOf(agy.ALLOWED_DIR.before);

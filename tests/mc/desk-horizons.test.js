@@ -192,7 +192,7 @@ describe('a horizon is stored and read back whole (criterion 1)', () => {
   });
 });
 
-const ROLES = ['manager', 'decision', 'learning', 'desk-prepare', 'plan', 'plan-review', 'build-session:goal', 'review-session:goal', 'mend-session', 'intake', 'work', 'some-new-role'];
+const ROLES = ['manager', 'decision', 'learning', 'desk-prepare', 'plan', 'build-session:goal', 'review-session:goal', 'mend-session', 'intake', 'work', 'some-new-role'];
 /** Every caller a write refuses: each role with and without MC_HEADLESS, a tool session, the desk unattended, and a role-less caller unattended. */
 const REFUSED = [
   ...ROLES.flatMap((role) => [{ role, label: role }, { role, headless: true, label: `${role} headless` }]),
