@@ -863,7 +863,7 @@ test('programme review: a valid verdict cannot persist changed README, changed r
   }
 });
 
-test('programme sign: no or stale reading never signs, current NOT OK requires a logged reason, and current OK signs exact judged bytes', async (t) => {
+test('programme sign: no reading never signs, a reading of an earlier text signs at the desk and is logged, NOT OK requires a logged reason, and OK signs exact bytes', async (t) => {
   for (const condition of ['none', 'stale', 'not-ok', 'ok', 'changed report']) {
     const f = programmeSetup(t);
     if (condition !== 'none') {
@@ -874,8 +874,9 @@ test('programme sign: no or stale reading never signs, current NOT OK requires a
     if (condition === 'changed report') writeFileSync(join(f.dir, PROGRAMME_REVIEW_FILE), 'OK\nfindings: 2\nnot the recorded reading\n');
     const before = f.files();
     const signed = await f.call(['sign', 'p'], { identity: f.martin });
-    assert.equal(signed.code, condition === 'ok' ? 0 : 1, `${condition}: ${signed.err}`);
-    if (condition === 'ok') {
+    assert.equal(signed.code, ['ok', 'stale'].includes(condition) ? 0 : 1, `${condition}: ${signed.err}`);
+    if (condition === 'stale') assert.match(readFileSync(join(f.dir, 'LOG.md'), 'utf8'), /the reading read an earlier text; the edits since were made at the desk/u);
+    if (['ok', 'stale'].includes(condition)) {
       const record = JSON.parse(readFileSync(join(f.dir, 'PROGRAMME.json'), 'utf8'));
       assert.equal(record.state, 'open');
       assert.equal(record.signed_by, 'martin');
@@ -887,7 +888,7 @@ test('programme sign: no or stale reading never signs, current NOT OK requires a
       assert.equal(override.code, condition === 'not-ok' ? 0 : 1, `${condition}: ${override.err}`);
       if (condition === 'not-ok') assert.match(readFileSync(join(f.dir, 'LOG.md'), 'utf8'), /martin · signed — Explicitly accepted the findings/u);
       else {
-        assert.match(override.err, /has no reading of its current text — mc programs review p/u);
+        assert.match(override.err, /has no reading — mc programs review p/u);
         assert.deepEqual(f.files(), before, 'reason cannot invent a current reading');
       }
     }

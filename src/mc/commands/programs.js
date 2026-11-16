@@ -476,13 +476,16 @@ function signVerb({ positional: [name], flags }, { env, stdout, stderr, now = ne
   }
   const dir = join(programsHome(env), name);
   const reason = flags.reason?.trim() || null;
+  let earlier = false;
   try {
     const result = signRecord(dir, { at: typeof now === 'function' ? now() : now, root: workRoot(env), ...(lock ? { lock } : {}),
       check: ({ text }) => {
         const problems = documentProblems(text);
         if (problems.length) return problems;
-        const reading = currentProgrammeReading(dir, text);
-        if (!reading) return [`${name} has no reading of its current text — mc programs review ${name}`];
+        // Martin signs at the desk: a reading of an earlier text counts, since edits made with him need no new reading.
+        const reading = currentProgrammeReading(dir, text, undefined, { anyText: true });
+        if (!reading) return [`${name} has no reading — mc programs review ${name}`];
+        earlier = reading.earlier;
         if (reading.verdict === 'not-ok' && !reason) return [`${name}'s reading is NOT OK — repair PROGRAMME-REVIEW.md or sign with --reason "…"`];
         return [];
       },
@@ -495,7 +498,7 @@ function signVerb({ positional: [name], flags }, { env, stdout, stderr, now = ne
     // The command owns the human record of the act, not another PROGRAMME.json key.
     const log = join(dir, 'LOG.md');
     const before = readTextOrNull(log) ?? '';
-    writeFileAtomic(log, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${result.record.signed_at} · martin · signed${reason ? ` — ${reason}` : ''}\n`);
+    writeFileAtomic(log, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${result.record.signed_at} · martin · signed${reason ? ` — ${reason}` : ''}${earlier ? ' (the reading read an earlier text; the edits since were made at the desk)' : ''}\n`);
     stdout.write(`${name}: signed — goals may be cut\n`);
     return 0;
   } catch (error) { stderr.write(`mc: could not sign ${name}: ${error.message}\n`); return 1; }

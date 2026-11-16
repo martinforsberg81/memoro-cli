@@ -699,11 +699,13 @@ export function programmeReport(text) {
 }
 
 /** A current reading includes the report it recorded, so an unsuccessful newer call cannot substitute its report. */
-export function currentProgrammeReading(dir, text, read = readTextOrNull) {
+export function currentProgrammeReading(dir, text, read = readTextOrNull, { anyText = false } = {}) {
   const meta = jsonOrNull(read(join(dir, PROGRAMME_REVIEW_RECORD)));
   const report = read(join(dir, PROGRAMME_REVIEW_FILE));
   const parsed = programmeReport(report);
-  if (!meta || !parsed || meta.hash !== sha256(text) || meta.report_sha256 !== sha256(report)
+  // anyText: the desk's sign — a reading of an earlier text still counts; edits made with Martin at the desk need no new reading.
+  if (anyText && meta) meta.earlier = meta.hash !== sha256(text);
+  if (!meta || !parsed || (!anyText && meta.hash !== sha256(text)) || meta.report_sha256 !== sha256(report)
     || meta.verdict !== parsed.verdict || meta.findings !== parsed.findings || !Number.isFinite(Date.parse(meta.at))) return null;
   return meta;
 }
