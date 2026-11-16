@@ -24,13 +24,14 @@ import {
   worktreeState, DISK_BUSY_WAIT_MS, takenBackFloor,
 } from '../../../src/mc/commands/deploy.js';
 import { beforePath, readBeforeFile, statePath, takeBeforeReading } from '../../../src/mc/deploy-check.js';
-import { readDeployMends } from '../../../src/mc/deploy-repair.js';
+import { classifyStop, readDeployMends, retryVerdict } from '../../../src/mc/deploy-repair.js';
+import { readMainMends, requestMainRepair } from '../../../src/mc/main-repair.js';
 import { createDiskPressure } from '../../../src/mc/disk-pressure.js';
 import { exerciseApp, gateSet, pickCommit } from '../../../src/mc/deploy-gate.js';
 import {
   HOLDER_WAIT_MS, holderPath, placeWorktree, readHolder, takeHolder,
 } from '../../../src/mc/deploy-worktree.js';
-import { preparationLogPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
+import { preparationLogPath, preparationPath, prepare, readPreparation, writePreparation } from '../../../src/mc/deploy-prepare.js';
 import { processAlive } from '../../../src/mc/lease-owner.js';
 import { deployBar, deployProgress, readDeployProgress } from '../../../src/mc/deploy-progress.js';
 import { mainWorktree } from '../../../src/mc/git.js';
@@ -1986,6 +1987,63 @@ describe('mc deploy — the full run of exactly the commit that would ship', () 
     assert.match(out.stderr, /no main-red mend holds it/u);
   });
 
+  it('a red full run no mend holds is queued by the refusal as its command members, once per stop', async () => {
+    const red = () => RED_RUN({ red: ['command:lint'] });
+    const first = await attempt([], { runs: [red()] });
+    assert.equal(first.code, 1);
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const queuedNow = () => readMainMends({ root: work, repo: 'memoro' }).map((entry) => [entry.file, entry.state]).sort();
+    assert.deepEqual(queuedNow(), [['command:lint', 'queued']]);
+    const second = await attempt([], { runs: [red()] });
+    assert.equal(second.code, 1);
+    assert.match(second.out.stderr, /mc: repair already queued — main-red mend /u);
+    assert.doesNotMatch(second.out.stderr, /repair queued —/u, 'the second preparation says it queued none');
+    assert.deepEqual(queuedNow(), [['command:lint', 'queued']], 'and queued none');
+  });
+
+  it('a red full run that names nothing a mend can take is queued as full-run:<commit>, once', async () => {
+    const red = () => RED_RUN({ red: ['tests/lib/money.test.js'] });
+    const first = await attempt([], { runs: [red()] });
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const [entry, ...rest] = readMainMends({ root: work, repo: 'memoro' });
+    assert.equal(rest.length, 0);
+    assert.deepEqual([entry.file, entry.state], [`full-run:${SHA}`, 'queued']);
+    await attempt([], { runs: [red()] });
+    assert.equal(readMainMends({ root: work, repo: 'memoro' }).length, 1, 'the second preparation queued none');
+  });
+
+  it('a red suite is queued by the refusal as suite:<name> with its verdict and where its whole output is, once per stop', async () => {
+    const dir = '/runner/deploy-prepare/2026-11-15T19-18-00-000Z';
+    const outcomes = { perf: 'red', 'perf:output': `${dir}/perf.log`, 'perf:tail': 'verdict: long task 60 ms, bound 50 ms\n' };
+    const first = await attempt([], { suites: ['smoke', 'perf'], outcomes });
+    assert.equal(first.code, 1);
+    assert.match(first.out.stderr, /mc: repair queued — main-red mend /u);
+    const [entry, ...rest] = readMainMends({ root: work, repo: 'memoro' });
+    assert.equal(rest.length, 0);
+    assert.deepEqual([entry.file, entry.state], ['suite:perf', 'queued']);
+    assert.deepEqual(entry.suite, { name: 'perf', exit: 1, verdict: ['long task 60 ms, bound 50 ms'], output_path: `${dir}/perf.log`, sha: SHA });
+    const second = await attempt([], { suites: ['smoke', 'perf'], outcomes });
+    assert.match(second.out.stderr, /mc: repair already queued — main-red mend /u);
+    assert.equal(readMainMends({ root: work, repo: 'memoro' }).length, 1, 'the second preparation queued none');
+  });
+
+  it('a refusal keeps every earlier preparation\'s whole output; a gate that passes removes them, except what an unfinished repair names', async () => {
+    const base = join(work, 'runner', 'deploy-prepare');
+    const dirs = ['2026-11-13T01-00-00-000Z', '2026-11-14T01-00-00-000Z', 'HELD'].map((name) => join(base, name));
+    const lay = () => { for (const dir of dirs) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'journeys.log'), 'old output\n'); } };
+    lay();
+    const refused = await attempt([], { suites: ['smoke', 'perf'], outcomes: { perf: 'red' } });
+    assert.equal(refused.code, 1);
+    assert.deepEqual(dirs.map(existsSync), [true, true, true], 'the stop is not settled: nothing is removed');
+
+    const held = join(dirs[2], 'journeys.log');
+    requestMainRepair({ root: work, repo: 'memoro', base: SHA, files: [], suites: [{ name: 'journeys', exit: 1, verdict: [], output_path: held, sha: SHA }] });
+    rmSync(preparationPath(work), { force: true }); // the red suite is mended: measured again, and it ships
+    const shipped = await attempt([]);
+    assert.equal(shipped.code, 0, shipped.out.stderr);
+    assert.deepEqual(dirs.map(existsSync), [false, false, true], 'the earlier ones are removed; the one an unfinished repair holds stays');
+  });
+
   it('a mend a person dropped is not named as holding the red', async () => {
     const { out } = await attempt([], { runs: [RED_RUN()], mends: [MEND({ state: 'dropped' }), MEND({ id: 'm2', file: 'command:lint', state: 'running', pr: 77 })] });
     assert.match(out.stderr, /main-red mend: command:lint \(running #77\)/u);
@@ -2117,6 +2175,33 @@ describe('mc deploy — the app, used, before the deployer starts', () => {
     assert.match(out.stderr, /suite journeys failed \(exit 1\) and states no verdict; whole output: \/runner\/deploy-prepare\/T\/journeys\.log/u);
     assert.doesNotMatch(out.stderr, /step 3 failed/u, 'no closing lines are passed off as a verdict');
     assert.match(row.note, /suite journeys failed \(exit 1\) and states no verdict; whole output: /u);
+  });
+
+  it('msr-performance replayed: a long dump closing in braces and then its verdict lines is refused with the verdict, in every place that names it', async () => {
+    // 2026-11-15: the row said `suite msr-performance failed (exit 1):` and nothing after the colon, because the
+    // last eight lines of the output were the dump's closing braces. The verdict is read from the end of the whole
+    // output; a suite that states none is said so, and is not given a guess from its braces.
+    const dir = '/runner/deploy-prepare/2026-11-15T19-18-00-000Z';
+    const dump = `{\n"profile": "mobile-constrained",\n"pass": false,\n"longTaskMs": [60]\n${'}\n'.repeat(30)}`;
+    const { code, out, row } = await attempt([], {
+      suites: ['smoke', 'perf', 'closure'],
+      outcomes: {
+        perf: 'red', 'perf:output': `${dir}/perf.log`,
+        'perf:tail': `${dump}verdict: mobile-constrained: long task 60 ms, bound 50 ms\nverdict: 1 of 4 profiles failed\n`,
+        closure: 'red', 'closure:output': `${dir}/closure.log`,
+        'closure:tail': `verdict: performance-long-task-duration\n${dump}`,
+      },
+    });
+    assert.equal(code, 1);
+    assert.match(out.stderr, /suite perf failed \(exit 1\):\nmc: {5}mobile-constrained: long task 60 ms, bound 50 ms\nmc: {5}1 of 4 profiles failed\nmc: {5}whole output: \/runner\/deploy-prepare\/2026-11-15T19-18-00-000Z\/perf\.log/u);
+    assert.match(out.stderr, /suite closure failed \(exit 1\) and states no verdict; whole output: \/runner\/deploy-prepare\/2026-11-15T19-18-00-000Z\/closure\.log/u);
+    assert.doesNotMatch(out.stderr, /performance-long-task-duration/u, 'a line that is not the closing one is not read as a verdict');
+    assert.match(row.note, /suite perf failed \(exit 1\): mobile-constrained: long task 60 ms, bound 50 ms; 1 of 4 profiles failed; whole output: /u);
+    assert.match(row.note, /suite closure failed \(exit 1\) and states no verdict; whole output: /u);
+    assert.equal(row.output_path, `${dir}/perf.log,${dir}/closure.log`, 'the cell names where each whole output is');
+    const record = JSON.stringify(readPreparation(work));
+    assert.ok(record.includes('mobile-constrained: long task 60 ms, bound 50 ms'), 'deploy-prepare.json keeps the verdict');
+    assert.ok(record.includes(`${dir}/perf.log`), 'and the path');
   });
 
   it('a suite that cannot start refuses: the server never came up', async () => {
@@ -4415,6 +4500,36 @@ describe('mc deploy — a stop by a technical fault is queued for repair', () =>
     const requests = queued();
     assert.equal(requests.length, 1);
     assert.equal(requests[0].rows.length, 2);
+  });
+
+  const heldRun = (extra = {}) => fullRunOf(SHA, {
+    outcome: 'failed', red: null, stopped_at: 'worktree', reason: 'its checkout is held by a live process',
+    holders: [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }], ...extra,
+  });
+
+  it('a full run that could not start queues one deploy-mend request naming who held it; the next joins it; it is never retried as a deploy', async () => {
+    const first = await attempt([], { runs: [], started: heldRun() });
+    assert.equal(first.code, 1);
+    assert.equal(first.spawned.length, 0);
+    assert.match(first.out.stderr, /a repair of the deploy .* is queued|full run of memoro cannot start: .*repair queued/u);
+    const [request, ...others] = queued();
+    assert.equal(others.length, 0);
+    assert.equal(request.state, 'queued');
+    assert.deepEqual([request.rows[0].origin, request.rows[0].repo], ['full-run', 'memoro']);
+    assert.deepEqual(request.rows[0].holders, [{ pid: 4242, command: 'secret-tool lookup service memoro', cwd: '/work/memoro' }]);
+    assert.equal(first.row.outcome, 'refused');
+    await attempt([], { runs: [], started: heldRun() });
+    assert.equal(queued().length, 1, 'a second attempt joins the open request');
+    assert.equal(queued()[0].rows.length, 1, 'the same fault is the same row');
+    const verdict = retryVerdict({ entry: queued()[0], now: new Date(Date.parse(request.rows[0].started) + 60_000) });
+    assert.equal(verdict.retry, undefined, 'no deploy is retried for a full run');
+    assert.match(verdict.drop, /a full run is not a deploy/u);
+  });
+
+  it('a refusal on the code red is never technical, whatever else is queued', () => {
+    assert.equal(classifyStop({ outcome: 'refused', code: 'red' }), false);
+    assert.equal(classifyStop({ outcome: 'refused', code: 'suites' }), true);
+    assert.equal(classifyStop({ outcome: 'refused', code: 'full-run' }), true);
   });
 
   it('--accept-red is carried by the request, and its holder is the deploy\'s', async () => {

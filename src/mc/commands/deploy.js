@@ -780,7 +780,7 @@ function refusalOf({ full, exercise, plan }) {
 /** The gate as --json says it. */
 function gateSummary(gate) {
   return {
-    full_run: { state: gate.full.state, commit: gate.full.commit, run: gate.full.run, mends: gate.full.mends },
+    full_run: { state: gate.full.state, commit: gate.full.commit, run: gate.full.run, mends: gate.full.mends, output: gate.full.output || null },
     suites: gate.exercise ? { commit: gate.exercise.commit, error: gate.exercise.error, results: gate.exercise.suites } : null,
     refused: Boolean(gate.refusal),
     accepted_red: gate.accepted || null,
@@ -1811,6 +1811,7 @@ async function follow({ env, stdout, deps }) {
     const record = readPreparation(root);
     if (preparationState(record, { alive }) === 'running') {
       stdout.write(`mc: following the preparation of ${short(record.sha)} (${STAGE_WORDS[record.stage] || record.stage}, pid ${record.pid}, started ${String(record.started).slice(0, 16).replace('T', ' ')}) — mc deploy joins it\n`);
+      if (record.output_dir) stdout.write(`mc: the whole output of each suite and command is kept in ${record.output_dir}\n`);
       const stopped = await followLog({
         log: record.log || preparationLogPath(root), pid: Number(record.pid), stdout, deps,
         stopped: `the preparation goes on (pid ${record.pid}); mc deploy joins it`,
@@ -1818,6 +1819,12 @@ async function follow({ env, stdout, deps }) {
       return stopped ?? 0;
     }
     stdout.write('mc: no deploy is running\n');
+    // A refusal still standing is the thing to read next: what it said, and where the whole output is.
+    const last = readDeploys(env).at(-1);
+    if (last?.outcome === 'refused' && last.note) {
+      stdout.write(`mc: the last attempt (${short(last.sha)}) was refused: ${last.note}\n`);
+      if (last.output_path && !last.note.includes(last.output_path)) stdout.write(`mc: whole output: ${last.output_path}\n`);
+    }
     return 0;
   }
   stdout.write(`mc: following the deploy of ${short(running.sha)} (pid ${running.pid}, started ${String(running.started).slice(0, 16).replace('T', ' ')})\n`);

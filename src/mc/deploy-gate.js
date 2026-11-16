@@ -69,6 +69,8 @@ function normalized(run) {
     tests: run?.tests ?? null,
     red: measured ? [...run.red] : null,
     measured,
+    // Who held the checkout of a run that could not start: the deploy mend names them.
+    ...(Array.isArray(run?.holders) && run.holders.length ? { holders: run.holders } : {}),
   };
 }
 
