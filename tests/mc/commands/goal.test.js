@@ -159,7 +159,7 @@ test('mc goal new accepts medium and reads it back from GOAL.json', async () => 
 test('mc goal new --stage build is refused with exit 2 and creates nothing; --stage draft makes the goal; no other stage is a new goal\'s', async () => {
   const f = fixture();
   assert.equal(await run(['new', 'mc/plain', '--repo', 'memoro', '--class', 'fast', '--title', 'T', '--stage', 'build'], f.deps), 2);
-  assert.match(f.err(), /written in draft.*mc goal stage <programme>\/<goal> build after its plan review/u);
+  assert.match(f.err(), /written in draft.*mc goal stage <programme>\/<goal> build\n/u);
   assert.equal(f.store[`${DIR}/GOAL.json`], undefined);
   assert.equal(f.store[`${DIR}/LOG.md`], undefined);
   assert.deepEqual(f.calls, [], 'nothing was fetched');
@@ -3164,8 +3164,8 @@ test('several lacks are one refusal, in the order of the parts; the same through
   const f = gateFixture({ text, verdicts: [] });
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1);
   const lines = f.err().trim().split('\n');
-  assert.match(lines[0], /4 things to repair/u);
-  assert.deepEqual(lines.slice(1).map((line) => line.replace(/^ {2}- /u, '').split(' — ')[0]), ['the outcome is empty', 'there is no change item', 'there is no criterion', 'no plan review has read it']);
+  assert.match(lines[0], /3 things to repair/u);
+  assert.deepEqual(lines.slice(1).map((line) => line.replace(/^ {2}- /u, '').split(' — ')[0]), ['the outcome is empty', 'there is no change item', 'there is no criterion']);
   assert.equal(f.err().match(/is not moved to/gu).length, 1, 'one refusal');
 
   const log = gateFixture({ text });
@@ -3180,7 +3180,7 @@ test('several lacks are one refusal, in the order of the parts; the same through
   assert.equal(stateOf(plan), 'draft · ready');
 });
 
-test('draft → dropped is not checked; a build session still gets refusedMove\'s exit 2; a version 1 goal is not asked for parts but needs the reading', async () => {
+test('draft → dropped is not checked; a build session still gets refusedMove\'s exit 2; a version 1 goal is asked for neither parts nor a reading', async () => {
   const dropped = dropFixture(gateFixture({ text: DRAFT_V2({ outcome: [], change: [], success_criteria: [] }), verdicts: [], env: PLAN }));
   assert.equal(await run(['stage', 'mc/plain', 'dropped'], dropped.deps), 0, dropped.err());
   assert.deepEqual(dropped.calls.filter((call) => ['show', 'cat-file'].includes(call.args[0])), [], 'no question was asked');
@@ -3191,27 +3191,25 @@ test('draft → dropped is not checked; a build session still gets refusedMove\'
 
   const v1Text = withGoal(GOAL_TEXT, { stage: 'draft', success_criteria: [] });
   const bare = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: v1Text }) });
-  assert.equal(await run(['stage', 'mc/plain', 'build'], bare.deps), 1);
-  assert.match(bare.err(), /no plan review has read it — mc goal plan-review mc\/plain/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], bare.deps), 0, bare.err());
   const read = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: v1Text, [`${DIR}/${RECORDS_FILE}`]: READ(v1Text, 'ok') }) });
   assert.equal(await run(['stage', 'mc/plain', 'build'], read.deps), 0, read.err());
   assert.deepEqual(read.calls.filter((call) => ['show', 'cat-file'].includes(call.args[0])), [], 'a version 1 goal is asked nothing of the repositories');
 });
 
-test('the reading gate: none and not OK refuse naming mc goal plan-review; OK for the current text moves and remakes the branch', async () => {
+test('no reading is asked for: a complete goal moves with none, with a NOT OK and with an OK, and the move remakes the branch', async () => {
   const none = gateFixture({ verdicts: [] });
-  assert.equal(await run(['stage', 'mc/plain', 'build'], none.deps), 1);
-  assert.match(none.err(), /no plan review has read it — mc goal plan-review mc\/plain/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], none.deps), 0, none.err());
+  assert.equal(stateOf(none), 'build · ready');
   const notOk = gateFixture({ verdicts: ['not-ok'] });
-  assert.equal(await run(['stage', 'mc/plain', 'build'], notOk.deps), 1);
-  assert.match(notOk.err(), /round 1 answered NOT OK.*PLAN-REVIEW\.md/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], notOk.deps), 0, notOk.err());
   const read = gateFixture({ git: (cwd, args = []) => (args[0] === 'rev-list' ? ok('0\n') : areasGit(CLI_ONLY)(cwd, args)) });
   assert.equal(await run(['stage', 'mc/plain', 'build'], read.deps), 0, read.err());
   assert.equal(stateOf(read), 'build · ready');
   assert.ok(read.calls.some((call) => call.args[0] === 'fetch'), 'remakeBranches ran on entering build');
 });
 
-test('after an OK, an edit of the text makes the move refused again; a criterion mark, the phase, a hold and its release do not', async () => {
+test('an edit of the text after a reading does not hold the move; neither do a criterion mark, the phase, a hold and its release', async () => {
   const edits = [
     ['set', 'mc/plain', 'aim', '--text', 'Another aim.'],
     ['item', 'add', 'mc/plain', 'risk', '--text', 'A new risk.', '--settled-by', 'criterion 1'],
@@ -3224,15 +3222,13 @@ test('after an OK, an edit of the text makes the move refused again; a criterion
   for (const argv of edits) {
     const f = gateFixture();
     assert.equal(await run(argv, f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
-    assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1, argv.join(' '));
-    assert.match(f.err(), /the text changed after an OK/u, argv.join(' '));
+    assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, `${argv.join(' ')}: ${f.err()}`);
   }
   for (const argv of [['set', 'mc/plain', 'goal', '--text', 'Other.'], ['set', 'mc/plain', 'contract', '--text', 'Other.']]) {
     const text = withGoal(GOAL_TEXT, { stage: 'draft' });
     const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: text, [`${DIR}/${RECORDS_FILE}`]: READ(text, 'ok') }) });
     assert.equal(await run(argv, f.deps), 0, f.err());
-    assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1, `version 1 ${argv[2]}`);
-    assert.match(f.err(), /the text changed after an OK/u);
+    assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, `version 1 ${argv[2]}: ${f.err()}`);
   }
   const kept = gateFixture();
   for (const argv of [['criterion', 'met', 'mc/plain', '1'], ['criterion', 'unmet', 'mc/plain', '1'], ['phase', 'mc/plain', '1'], ['hold', 'mc/plain', '--reason', 'looking'], ['release', 'mc/plain']]) {
@@ -3241,32 +3237,22 @@ test('after an OK, an edit of the text makes the move refused again; a criterion
   assert.equal(await run(['stage', 'mc/plain', 'build'], kept.deps), 0, kept.err());
 });
 
-test('two readings and --reason move the goal, the log carrying the reason and both verdicts; without --reason, or by log --stage, it is refused', async () => {
+test('two NOT OK readings do not hold the move, by stage or by log --stage, and no reason is asked for', async () => {
   const f = gateFixture({ verdicts: ['not-ok', 'not-ok'] });
-  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 1);
-  assert.match(f.err(), /two readings are stored: the author decides with mc goal stage mc\/plain build --reason/u);
-  assert.equal(await run(['stage', 'mc/plain', 'build', '--reason', 'the reader asks for a second premise the code settles'], f.deps), 0, f.err());
-  const entry = lastLog(f);
-  assert.match(entry.comment, /the reader asks for a second premise.*round 1 NOT OK, round 2 NOT OK/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
   const via = gateFixture({ verdicts: [] });
   via.store[`${DIR}/${RECORDS_FILE}`] = READ(DRAFT_V2({ aim: ['An earlier text.'] }), 'not-ok', 'ok');
-  assert.equal(await run(['log', 'mc/plain', '--comment', 'x', '--stage', 'build'], via.deps), 1);
-  assert.match(via.err(), /mc goal log --stage takes no reason: the author decides with mc goal stage mc\/plain build --reason/u);
-  assert.equal(stateOf(via), 'draft · ready');
+  assert.equal(await run(['log', 'mc/plain', '--comment', 'x', '--stage', 'build'], via.deps), 0, via.err());
+  assert.equal(stateOf(via), 'build · ready');
 });
 
-test('a person\'s move back to draft counts the readings from that move, also for a reading in the same minute; a goal in build is not asked', async () => {
+test('a person\'s move back to draft is marked, and the goal moves to build again with no reading; a goal in build is not asked', async () => {
   const text = withGoal(GOAL_TEXT, { stage: 'build' });
   const f = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: text, [`${DIR}/${RECORDS_FILE}`]: READ(text, 'not-ok', 'not-ok') }) });
   assert.equal(await run(['stage', 'mc/plain', 'draft'], f.deps), 0, f.err());
   const records = JSON.parse(f.store[`${DIR}/${RECORDS_FILE}`]).records;
   assert.deepEqual(records.map((record) => record.kind), ['reading', 'reading', 'marker']);
   assert.equal(records[2].at, '2026-11-01T20:00:00.000Z');
-  assert.equal(await run(['stage', 'mc/plain', 'build', '--reason', 'r'], f.deps), 1, 'the earlier readings are not this stay\'s');
-  assert.match(f.err(), /no plan review has read it/u);
-  const draftText = f.store[`${DIR}/GOAL.json`];
-  const sameMinute = { ...JSON.parse(READ(draftText, 'ok')).records[0], at: '2026-11-01T20:00:30.000Z' };
-  f.store[`${DIR}/${RECORDS_FILE}`] = JSON.stringify({ records: [...records, sameMinute] });
   assert.equal(await run(['stage', 'mc/plain', 'build'], f.deps), 0, f.err());
 
   const building = fixture({ files: seededGoal({ [`${DIR}/GOAL.json`]: withGoal(GOAL_TEXT, { stage: 'build', success_criteria: MET }) }), env: PLAN });
@@ -3501,7 +3487,7 @@ test('goal new refuses draft and dropped programmes before any fetch or goal wri
   }
 });
 
-test('a goal cut from a part of a signed programme moves to build without a plan review; an unsigned one, or one naming no part, still needs it', async () => {
+test('a goal moves to build without a plan review whether or not it is cut from a part of a signed programme', async () => {
   const signed = JSON.stringify({ ...unsignedRecord('open'), signed_at: '2026-11-16T08:00:00Z', signed_by: 'martin', signed_text: 'a'.repeat(64) });
   const part = DRAFT_V2({ documents: [{ label: 'Part 1', path: `${HOME}/mc/SIGNED.md` }] });
   const cut = gateFixture({ text: part, verdicts: [] });
@@ -3511,17 +3497,14 @@ test('a goal cut from a part of a signed programme moves to build without a plan
   assert.equal(await run(['stage', 'mc/plain', 'build'], cut.deps), 0, cut.err());
   assert.equal(woke, 1, 'the stage move wakes the runner\'s idle lanes');
   assert.equal(parseGoal(cut.store[`${DIR}/GOAL.json`]).stage, 'build');
-  assert.match(cut.store[`${DIR}/LOG.md`], /moved without a plan review — cut from a part of the signed programme document/u);
 
   const unsigned = gateFixture({ text: part, verdicts: [] });
   unsigned.store[`${HOME}/mc/PROGRAMME.json`] = JSON.stringify(unsignedRecord('open'));
-  assert.equal(await run(['stage', 'mc/plain', 'build'], unsigned.deps), 1);
-  assert.match(unsigned.err(), /no plan review has read it/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], unsigned.deps), 0, unsigned.err());
 
   const noPart = gateFixture({ verdicts: [] });
   noPart.store[`${HOME}/mc/PROGRAMME.json`] = signed;
-  assert.equal(await run(['stage', 'mc/plain', 'build'], noPart.deps), 1);
-  assert.match(noPart.err(), /no plan review has read it/u);
+  assert.equal(await run(['stage', 'mc/plain', 'build'], noPart.deps), 0, noPart.err());
 });
 
 test('goal new refuses headless recordless creation but admits signed, legacy, area and interactive recordless paths', async () => {

@@ -167,41 +167,15 @@ export function partsLacks(goal, name, probe) {
 
 /**
  * The check on a forward move out of draft. `null` when the move is not one it is held to (the goal is not in
- * draft, the move is to draft or `dropped`); else `{ lacks }` empty and `{ comment }` when the move is allowed
- * by `--reason` after two readings, or `{ refusal }` — the text for stderr, every lack in it.
- * `via` is `stage` or `log`: only the stage verb takes a reason.
+ * draft, the move is to draft or `dropped`); else `{ comment: null }` when the goal is complete, or `{ refusal }`
+ * — the text for stderr, every lack in it. No reading is asked for: plan review is removed (Martin, 2026-11-16).
  */
 export function moveGate({ goal, name, to, via, reason, dir, read, probe, signedPart = false }) {
   if (goal.stage !== 'draft' || !to || to === 'draft' || to === 'dropped') return null;
-  // A goal cut from a part of a signed programme document needs no plan review (Martin, 2026-11-16): the signed
-  // document is the plan, read before he signed it. It must still be complete.
-  if (signedPart) {
-    const lacks = partsLacks(goal, name, probe);
-    if (!lacks.length) return { comment: 'moved without a plan review — cut from a part of the signed programme document' };
-    return { refusal: `${name} is not moved to ${to} — ${lacks.length === 1 ? lacks[0] : `${lacks.length} things to repair:\n${lacks.map((line) => `  - ${line}`).join('\n')}`}` };
-  }
-  const hash = goalHash(goal);
-  const { records, problem } = readRecords(dir, read);
-  if (problem) return { refusal: `${name} is not moved to ${to} — ${problem}` };
-  const state = readingState(records, hash);
+  // A goal moves out of draft when it is complete; no plan review is asked for (Martin, 2026-11-16: plan review is
+  // removed). A reading that exists is advice and is not looked at here.
   const lacks = partsLacks(goal, name, probe);
-  const why = reason && String(reason).trim() ? String(reason).trim() : null;
-  let comment = null;
-  if (state.status !== 'ok') {
-    const second = state.readings.length >= MAX_READINGS;
-    if (second && via === 'stage' && why) {
-      comment = `${why} — moved without an OK reading after ${state.readings.length} readings: ${state.readings.map((one, i) => `round ${i + 1} ${verdictWord(one.verdict)}${one.hash === hash ? '' : ' (an earlier text)'}`).join(', ')}`;
-    } else {
-      const route = second
-        ? (via === 'stage' ? ` — two readings are stored: the author decides with mc goal stage ${name} ${to} --reason "…"` : ` — two readings are stored, and mc goal log --stage takes no reason: the author decides with mc goal stage ${name} ${to} --reason "…"`)
-        : '';
-      const again = `mc goal plan-review ${name}`;
-      if (state.status === 'none') lacks.push(`no plan review has read it — ${again}${route}`);
-      else if (state.status === 'not-ok') lacks.push(`the plan review of round ${state.round} answered NOT OK — repair what ${REVIEW_TEXT_FILE} names and read it again with ${again}${route}`);
-      else lacks.push(`the text changed after an OK (round ${state.round}) — read it again with ${again}${route}`);
-    }
-  }
-  if (!lacks.length) return { comment };
+  if (!lacks.length) return { comment: null };
   return { refusal: `${name} is not moved to ${to} — ${lacks.length === 1 ? lacks[0] : `${lacks.length} things to repair:\n${lacks.map((line) => `  - ${line}`).join('\n')}`}` };
 }
 
