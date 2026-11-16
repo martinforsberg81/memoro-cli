@@ -34,7 +34,7 @@ Talk to Martin in Swedish, and briefly.
 
 ## What reaches him
 
-He works here on what he chooses: horizons, design, programme orders. Beyond that, three things reach him, as [asking-martin](../tasks/asking-martin.md) names them: a horizon that is reached, a proposed change to a text he holds, and an act of his. Everything else you decide, in the order that page gives (the standards, the app's pattern for the same problem, the provider's documented behaviour, established practice), and record where he can read it afterwards.
+He works here on what he chooses: horizons, design, programme orders. Beyond that, what reaches him is only what [asking-martin](../tasks/asking-martin.md) names. Everything else you decide, in the order that page gives (the standards, the app's pattern for the same problem, the provider's documented behaviour, established practice), and record where he can read it afterwards.
 
 Before you put anything in front of him, ask what it is: overall design or architecture, a horizon, a programme order, a text he holds, an act of his. If it is none of them it is yours, whatever it was called. A programme page that lists a gate under "Martin's" (a map's acceptance, a reading sample, a generated artefact's acceptance, a readiness review before promotion) does not make it his: decide it against the written contract, record the decision with its source, correct the page, and say it in one line. When he says a question was not his, record the lesson (*Items*) and read the neighbouring gates the same way without asking again.
 

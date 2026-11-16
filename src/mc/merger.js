@@ -31,7 +31,7 @@
  * inside one: the deployer lets the round in flight finish, builds alone, and
  * that queue goes on after it. Another repository's lane does not wait for it.
  */
-import { spawn as realSpawn, spawnSync } from 'node:child_process';
+import { spawn as realSpawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +48,7 @@ import {
   placeOf, queuedFor,
 } from './merge-queue.js';
 import { answerDeployMend, deployMendPath } from './deploy-repair.js';
-import { answerMainMend, mainMendPath, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
+import { answerMainMend, mainMendPath, readMainMends, removeFinishedWorktrees, requestMainRepair } from './main-repair.js';
 import { removeRedDetail, writeRedDetail } from './merge-red.js';
 import { shouldWait } from './merge-step.js';
 import { realLock } from './runner-lock.js';
@@ -443,7 +443,7 @@ export async function landJob(batch, {
   noteGoal = appendEntry,
   // Main's red becomes goal-less mend lane work (`main-repair.js`).
   repairMain = (request) => requestMainRepair({ ...request, root, read, write, lock, now }),
-  git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }),
+  git = (cwd, args) => runTool('git', args, { cwd }),
   sweepMendWorktrees = defaultSweep,
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
@@ -775,7 +775,7 @@ function defaultSweep(options) {
   return removeFinishedWorktrees({ ...options, exists: existsSync, git: (cwd, args) => { const result = runGit(cwd, args); return { ok: result.status === 0, stderr: result.stderr }; } });
 }
 
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair, sweepMendWorktrees = defaultSweep, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }) }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair, sweepMendWorktrees = defaultSweep, git = (cwd, args) => runTool('git', args, { cwd }) }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
@@ -817,14 +817,20 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     catch (error) { say(`${label}: deploy-mend answer not recorded: ${error.message}`); }
   }
   for (const found of mainRepairsOf(report)) {
+    // requestMainRepair asks about ancestry synchronously; the answers are
+    // fetched here first, so the merger holds no synchronous child.
+    const ancestry = new Map();
+    let landedCommits = [];
+    try { landedCommits = [...new Set(readMainMends({ root, repo: job.repo, read }).filter((entry) => entry.state === 'landed' && entry.landed_commit).map((entry) => entry.landed_commit))]; } catch { /* no state: no ancestry asked */ }
+    for (const commit of landedCommits) {
+      try { const result = await git(job.repo_path, ['merge-base', '--is-ancestor', commit, found.base]); ancestry.set(commit, result?.status === 0 ? true : result?.status === 1 ? false : null); }
+      catch { ancestry.set(commit, null); }
+    }
     const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files,
       tests: (found.tests || []).map((test) => ({ file: test.file, name: test.name,
         ...(test.at ? { at: test.at } : {}), error: test.error,
         ...(test.detail ? { detail: test.detail } : {}), ...(test.stack ? { stack: test.stack } : {}) })),
-      contains: (commit, base) => {
-        try { const result = git(job.repo_path, ['merge-base', '--is-ancestor', commit, base]); return result?.status === 0 ? true : result?.status === 1 ? false : null; }
-        catch { return null; }
-      } });
+      contains: (commit) => ancestry.get(commit) ?? null });
     const where = found.files.join(', ');
     for (const stale of asked.stale_members || []) say(`${stale.file}: reported at ${found.base}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
     if (asked.created?.length) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — main-red mend queued: ${[].concat(asked.created).join(', ')}${asked.open?.length ? `; already under way: ${asked.open.join(', ')}` : ''}`);
