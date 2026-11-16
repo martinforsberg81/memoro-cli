@@ -313,11 +313,13 @@ the deploy, so it is refused.
 | **the pick, or main's tip, is a taken-back commit or before one** | 1 | refused row, code `taken-back`, naming the take-back; also under `--accept-red` and again at final admission (*The gate*, the floor) |
 | the fast-forward or the reset failed | 1 | the deployer's row completed `failed`, stopped at `fast-forward`; nothing spawned |
 | the worktree stands on another commit than the pick, at the deployer's placing, and cannot be placed at it | 1 | the deployer's row completed `failed`, stopped at `moved`, naming the sha that stood; nothing spawned. Run it again |
-| mc's own worktree is held by another process for 90 minutes (an exercise, a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. In the exercise the suites are cannot-run naming the holder |
+| mc's own worktree is held by another process for 90 minutes (a deployer, `mc language`) | 1 | the deployer's row completed `failed`, stopped at `held`, naming the holder; nothing placed or spawned. `mc deploy` again waits for it once more. The exercise of the suites has no such bound: it waits while the holder lives, saying so each minute, and refuses only a holder whose pid is gone and never released it (stale state, technical) |
 | **an unattended session** (`MC_HEADLESS=1`) | 1 | *"an unattended session does not deploy — a deploy is made by whoever types it, and no one typed this (headless, MC_HEADLESS=1); nothing was deployed. mc deploy --dry-run is the reading."* — before any fetch, history read, full run or suite, and no row: nothing was read. `--dry-run` and `--follow` are allowed |
 | `--accept-red` without a reason | 2 | usage; nothing read |
 | **no full run of the exact commit is green** (only when nothing after the live commit is) | 1 | red or stalled: names the commit, the red files and commands and the main-red mend that holds them. Stopped without measuring (never green) or measuring another commit: names that. Refused row, the gate's cells filled |
-| **a suite failed or could not run** | 1 | names the suite and its last lines; refused row |
+| **a gate suite is red** | 1 | names the suite and what it states: its closing `verdict: ` lines, at most ten, verbatim and without the prefix, then `whole output: <path>`; a red suite that closes with none is *"suite `<name>` failed (exit N) and states no verdict; whole output: `<path>`"*. Says that a repair is queued and which (the main-red mend's member `suite:<name>`); code `red`; refused row |
+| **a suite could not run** (the server never came up, a suite never started, a holder's pid gone and never released) | 1 | names the suite and why, with `whole output: <path>` where there is one; code `suites`, technical: queues the deploy mend; refused row |
+| **the full run of the pick cannot start or finish** (its worktree held, a lease, a reservation, the run threw) | 1 | names the commit, the stop and what held it; code `full-run`, technical: queues the deploy mend; refused row |
 | another deploy is running | 1 | names its sha, start and pid; refused row. There is no queue |
 | **a language run is running** | 1 | names its manifest, start and pid; refused row *"a language run of `<manifest>` is running"*. A language run writes to the same production ([`mc-language.md`](mc-language.md)) |
 | the deployer could not be started | 1 | row completed `failed`, stopped at `start` |
@@ -337,11 +339,15 @@ them if they exist.
 Which of these stops is **technical** is one function (`classifyStop`, `src/mc/deploy-repair.js`), and it is read from the
 stop, not from a list of notes: a row `failed` at any `stopped_at`, and a refusal because mc's machinery could not do its part
 (the deploy worktree could not be made or placed, `git status` failed where `main` is, mc's own deploy worktree is dirty or
-ahead of `origin/main` — state mc owns, which a repair may mend — the preparation could not run, a gate suite *cannot run* or
-the suites could not start). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
-in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite, a
+ahead of `origin/main` — state mc owns, which a repair may mend — the preparation could not run, a gate suite *cannot run*, the suites could not start, or the full run of the pick could not start or finish for a reason of
+mc's own — code `full-run`). These are not: a usage error, `--dry-run`, the headless refusal, another deploy or a language run
+in progress, a pick that would move production backwards, no green commit with a red or unmeasured tip, a red gate suite or a red or stalled full run (code `red`: a measured red is
+memoro's and goes to the main-red mend, below; `red` stays outside the classification so a refusal on it starts no deploy retry), a
 replaced preparation, and `main` dirty or ahead of `origin/main` in a worktree that is not mc's own (it may be somebody's). A
-stop nobody has classified is technical. Only a technical stop queues a repair ([A stop that is repaired](#a-stop-that-is-repaired)).
+stop nobody has classified is technical. Only a technical stop queues a deploy repair ([A stop that is repaired](#a-stop-that-is-repaired)); a `red` stop queues
+the main-red mend's members instead ([A red is queued, once per stop](#a-red-is-queued-once-per-stop)), and a deploy refused on a red is
+not started again by the runner: when the repair has landed, the next typed deploy picks the newest green commit through
+the same pick and gate.
 
 A refusal is exit **1** rather than 0 on purpose, so `mc deploy && …`
 does not carry on as though it had shipped. There is no exit for a missing
@@ -392,7 +398,7 @@ passed over. What is left says:
 |---|---|
 | `green` | says so, with the run's time, duration and counts, and goes on |
 | none | the preparation starts `fullRun` — the runner's full run's own round, so the same history and the same main-red mends — and the terminal follows it; its answer is read as a history run is. `--dry-run` starts nothing and says one is needed |
-| `red` | refuses, naming the commit measured, the red files and commands, and the main-red mend that holds them. When no mend holds it, says so; the history keeps red test names, not files, so the gate cannot queue one itself |
+| `red` | refuses, naming the commit measured, the red files and commands, `whole output: <path>` (the file the full run keeps, where the nightly run keeps it) and the main-red mend that holds them. When no mend holds it, the preparation queues one itself, once per stop, from the run's history (*A red is queued, once per stop*) |
 | `stalled` | a run that began and never finished its suite: refuses like a red |
 | `unmeasured` | the run stopped for a reason that is not the machine's and measured nothing: refuses, never green, and `--accept-red` does not take it. A deploy starts a run only when there is none, so every later deploy of that sha reads the same run; the refusal names the way out — `mc test memoro --full`, which writes the history the gate reads |
 | `moved` | the run measured another commit than the one it was started for: refuses |
@@ -406,7 +412,9 @@ detached process ([`src/mc/deploy-prepare-run.js`](../../src/mc/deploy-prepare-r
 [`src/mc/deploy-prepare.js`](../../src/mc/deploy-prepare.js), started with
 `startDetached` like the deployer) and recorded in
 `~/mc/runner/deploy-prepare.json` (`{ sha, pid, started, stage, log,
-accept_red, ended, result, error }`; the log is
+accept_red, ended, result, error, output_dir }`; `output_dir` is where the whole
+output of each suite and command is kept, and a record without it is read as one
+that kept none; the log is
 `~/mc/runner/log/deploy-prepare.log`). `stage` is `starting`, `full-run`,
 `suites` or `done`. The terminal, and the page's deploy panel, only watch it
 (`followLog`): ^C, a closed SSH session or a restarted page stops the
@@ -521,9 +529,12 @@ chosen by `isOwnWorktree` on the worktree step 2 found:
   within its idle window) or a kept browser's (one stepped on it within
   `KEPT_HOLD_SECONDS`) — is waited out and asked again, with the checkout
   untouched: both end by themselves, so the deploy says what it waits for and asks
-  nobody to close anything. The wait has one bound for the whole hold check,
-  `HOLD_WAIT_MS` (ten minutes); a server still held when it has passed refuses,
-  names the hold and leaves the checkout where it stood. Every ensure **pins** the
+  nobody to close anything. The wait has no bound, since a wait is no refusal
+  while what is waited for is alive: while the holder's process lives, the
+  deploy says each minute who holds, since when and what it waits for. A hold
+  whose process is gone and that was never released is stale state of mc's own,
+  refused as such (technical, so it queues the deploy mend) with the checkout
+  where it stood. Every ensure **pins** the
   commit and never follows main, and the commit the server serves is checked
   against the pick after every ensure.
 
@@ -579,12 +590,63 @@ suite whose verdict is wall-clock time — a latency budget, a timeout under
 load — measures the machine as much as the tree: the server's load decides it.
 It is declared `"gate": false` with a `gate_why` that says so. mc cannot tell
 such a suite from its argv, so this is a rule for whoever writes the
-declaration, not something mc checks.
+declaration, not something mc checks. It is the first case of a general rule
+(Martin, 2026-11-15): a run made to go on — the merge round, the full run a
+deploy reads, the gate suites of a deploy — never makes time a verdict. A long
+round, a slow test or a measurement over its bound does not refuse, stop or
+delay a deploy; it is recorded with what was slow and by how much
+(`~/mc/runner/too-slow/<repo>.tsv`). What stays is the bound on what never
+ends — the round's no-progress stall, the never-ends bound of a test, a server
+or an account that never came up, a tool that never answers, a preparation
+whose process is gone — and it is a fault, repaired, not a slow test. A wait
+the preparation makes for another run or for a holder is said each minute and
+is no refusal while the thing waited for is alive.
 
-A suite that gates and fails, or one that
-cannot run (the server never came up, a suite never started), refuses and
-names the suite and its last lines. A suite that exits with the declared skip
+**What a suite says of itself, and where its whole output is (2026-11-16).**
+The whole output of every gate suite and command of a preparation is written, as
+it runs and uncut, stdout and stderr in order, to
+`~/mc/runner/deploy-prepare/<started>/<suite>.log` (`<started>` is the
+preparation record's own, `src/mc/gate-output.js`); the full run's whole output
+stays where the nightly run keeps it. What a suite states is the closing lines
+of its output that begin `verdict: ` (nothing but blank lines after the last
+one): the profile, test or assertion that failed, with the measured value
+against its bound, in words. mc shows those lines, at most ten, verbatim and
+without the prefix, followed by `whole output: <path>`, in the refusal, the
+row's note, the page and `mc deploy --follow`; it reads no other line for a
+reason and never guesses one out of a dump. A red suite that ends without such
+lines is refused as *"suite `<name>` failed (exit N) and states no verdict;
+whole output: `<path>`"*, and is itself the defect its mend repairs. The
+contract for the suites is in memoro's `docs/technical/testing.md`; memoro's
+write-smoke closes with its verdict lines. A directory of a refused preparation
+is removed only when its stop is settled — a later preparation whose gate is
+green, or the shipped deploy — and never while an unfinished repair names a
+file in it.
+
+A suite that gates and fails refuses with the above and with code `red`. One
+that cannot run (the server never came up, a suite never started) refuses with
+code `suites` and says why. A suite that exits with the declared skip
 code (78) is named as skipped with its reason and does not refuse.
+
+### A red is queued, once per stop
+
+A red is memoro's and is repaired by the main-red mend, which the gate used to
+leave to the nightly run. The preparation that meets one queues it
+(`queueMainRed`, `commands/deploy.js`), once per stop — a stop already held by an
+unfinished member is said, not queued again — with the path of the whole output,
+which the request holds while it is unfinished:
+
+- **a red gate suite** is the member `suite:<name>`
+  (`{ name, exit, verdict, output_path, sha }`), deduplicated by that key;
+  `mainMendPrompt` gives its verdict lines and the path, and no `mc gate` of a
+  file by that name;
+- **a red or stalled full run** that no mend holds is queued as the members of
+  the run's files and commands, named by the step the nightly's `repairFromRun`
+  uses (the report's red files, red tests and commands); where the history
+  names no file, the member is `full-run:<commit>`, naming the run and its output.
+
+A stop that is mc's own — a suite that could not run, a server that never came
+up, a full run that cannot start or finish — is the deploy mend's, never the
+main-red mend's (*A stop that is repaired*).
 
 **The reading** shows both results beside the nightly line, and each suite on
 a line of its own; then, with no refusal, the admission and the deployer.
@@ -668,10 +730,10 @@ verb, started, token }`), written and read under a lock, by `takeHolder` in
   released only by the one who took it (the record's `token`).
 - **A waiter waits while the holder's pid lives**, saying each minute what it waits
   for and since when (`mc: waiting for the deploy worktree — held by <verb> (pid
-  <n>), since <time>, <n> min ago`), up to **90 minutes**. After that an exercise's
-  suites are cannot-run naming the holder, a deployer's row is completed `failed`
-  with `stopped_at: 'held'` (and `mc deploy` again waits for it once more), and `mc
-  language` reads nothing.
+  <n>), since <time>, <n> min ago`). The exercise of the suites waits as long as the
+  holder's pid lives (a wait is no refusal); a deployer waits up to **90 minutes**,
+  after which its row is completed `failed` with `stopped_at: 'held'` (and `mc
+  deploy` again waits for it once more), and `mc language` reads nothing.
 - **Only mc's own worktree has one.** Where main is held in the person's checkout,
   nothing here is taken: that tree is the person's, and the shared-checkout route
   is as it was.
@@ -704,6 +766,18 @@ records the pull request per repository before it queues the merge. It ends with
 deploy <id> repaired --reason "…"`, accepted only from a mend session for the request its prompt named (`MC_DEPLOY_MEND`),
 while it is running with no pull request recorded. A session that ends with neither is a failed attempt, and so is a
 closed or red pull request. The request is **repaired** when every recorded pull request landed, or the session said so.
+
+**A full run that cannot start (2026-11-16).** The hourly full run has no deploy row, and a full run that
+stops at `worktree` (held by a process), `threw`, `lease`, `reservation` or `base` is mc's own fault, neither red nor said
+before. The preparation refuses it with the code `full-run`, and the nightly loop queues the same request for an
+incomplete run stopped at `worktree` (`requestDeployRepair`, origin `full-run`): the note names the repository, the stop and
+what held it — the pids, their command lines and working directory; the request joins the open one when the same stop is
+already in it, is repaired by the same mend session, and is **never retried as a deploy** (nothing was typed): it ends when
+its repair has landed. The page says it in one line for as long as the request is unfinished: *full run of `<repo>`
+cannot start: `<what held it>`; repair queued*. The full run itself ends, in a `finally` of its own round and before it
+reports a hold, the processes its round started in its own worktree (the round's process group, recorded as it starts);
+a process there that the round did not start, a live session's, is never ended and the run stops at `worktree` naming it.
+Every suite of a round runs with `MC_TEST_MODE=1`, so a test of mc never reaches the platform keychain.
 
 **The retry.** Once, through the same path as a typed deploy — the same pick, the same gate, the same admission, the same
 never-backwards guard — with the holder `runner for <holder>, <newest row's started>`. It never carries `--accept-red` and
@@ -756,10 +830,11 @@ header the file actually carries rather than the one this module knows.
 | `outcome` | `running`, `deployed`, `failed` or `refused` |
 | `live_commit`, `live_build` | what production answered when the script verified it |
 | `stopped_at` | the last `▸ <step>` header before a non-zero exit |
-| `note` | the reason: the failure message, the refusal, an unverified deploy |
+| `note` | the reason: the failure message, the refusal, an unverified deploy. For a refused gate it is the verdict lines the failure closed with (or *states no verdict*) and `whole output: <path>` |
 | `pid` | the deployer's process |
 | `full_commit`, `full_verdict` | the commit the full run measured and its verdict — `green`, `red`, `stalled`, `unmeasured` or `moved`; empty when none was read |
 | `suites` | each suite's result, `name:state` joined by commas — `ok`, `red`, `skipped` or `cannot-run`; `cannot-run:<why>` when none could start; empty when the suites were not run |
+| `output_path` | where the whole output of what failed is — the full run's file and each failed suite's, joined by commas; empty on a deploy that was not refused for a measured failure and on every row written before the column (2026-11-16). It is the last column of the file, though it belongs to the gate's cells |
 | `accepted_red` | the reason given to `--accept-red`, when a red was accepted |
 | `take_back` | `yes` when the release could be taken back, `no` when it could not — or when the reading could not be made; empty when no reading was made (a refusal before the plan was known or for a backwards pick) and in rows written before the column |
 | `take_back_why` | for `no`, the reasons on one line — `<kind>: <what> (<sha>, …)`, joined by `; `, at most five and `and N more` — or `reading not made: <why>`; empty for `yes` |
@@ -1195,7 +1270,16 @@ commit, red and stalled and unmeasured tips passed over, nothing green, live
 unknown, never backwards), the reading has the exact lines for four situations,
 and the exact-commit suites have cases for the hold order, a server that leaves
 mid-run and a revive at another commit. A non-gate suite and a stale preparation
-have one case each. The headless cases assert that no git, history, full-run or
+have one case each. The whole output has cases of its own: a suite that prints
+5000 lines keeps all of them in its file and gives the closing `verdict: ` lines
+(and one that states none is refused as stating none, with the path); the
+settled stop removes the earlier preparations' directories and keeps one a queued
+repair names; a red suite and a red full run are queued as members, once per
+stop; a full run that cannot start is queued as the deploy mend's and never
+retried as a deploy; a refusal on the code `red` is not technical and starts no
+retry; and a live holder is waited for without a refusal while a dead one is
+stale state. `tests/mc/repo-gate.test.js` holds the full run's own end (a
+process its round left in its worktree is ended, a live session's never is). The headless cases assert that no git, history, full-run or
 suite call was made. A fault check holds the first set: accepting a green run of
 an older commit makes the "older commit" case fail, and the test file is green
 again without it.
@@ -1214,8 +1298,8 @@ untracked strays are removed; a slot not had is cannot-run with the pool's
 reason; the servers the exercise started are stopped after a pass and a
 refusal, and one already there is left; a finished preparation reused after
 the worktree was moved elsewhere on `origin/main`'s line ships because `ship`
-places it at the pick again; and the holder — a live one waited for and the
-exercise then runs, 90 minutes of a live one is cannot-run naming it, a
+places it at the pick again; and the holder — a live one waited for, with no bound, and the
+exercise then runs, a deployer's 90 minutes of a live one ends `failed`, a
 holder whose pid is gone is taken over, a deployer waits the same way and ends
 `failed` stopped at `held`, and a dry run without mc's own worktree makes it.
 The route choice has a case each way: main in a worktree that is not mc's own

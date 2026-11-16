@@ -119,6 +119,21 @@ with the gate on what you changed (it has no file of its own for the gate to
 run). Whether the red release was put back by its take-back or not, as the member says, never
 deploy: the next deploy of a later green commit ships the repair.
 
+A member keyed `suite:<name>` is a gate suite of a deploy that was red: a suite
+of `.mc/test.json` run against a local server of the commit, not a test file, so
+there is no file for the gate to run by that name. The prompt gives the suite's
+verdict (the closing `verdict: ` lines it stated, or that it stated none) and
+the path of its **whole output**, the very file the refusal named; read all of
+it before you repair. A suite that stated no verdict is itself the defect: make
+it close its output with `verdict: ` lines (memoro's `docs/technical/testing.md`).
+A suite that is red because the machine's load decides it, a measured time, is
+repaired so that it measures the app and not the machine, or declared
+`gate: false` with its `gate_why` until it is rebuilt; never widen its bound to
+pass and never delete it. A member keyed `full-run:<commit>` names a full run
+that was red or stalled where the history names no file: read the run's whole
+output the member names. Prove the repair with the gate on what you changed and,
+for a suite, by running the suite's own command as `.mc/test.json` declares it.
+
 Read `tasks/publish-and-merge.md`. Run `mc gate --fresh <named files>` for
 file members and `mc gate --fresh --command <id>` for command members. Require
 GREEN, none of those checks SETTLED. Then complete the change's own
@@ -149,6 +164,15 @@ with mc's own verbs. Never discard a file you cannot show is mc's. Never run `mc
 the runner retries the deploy once when the repair has landed and the pick holds it.
 Never touch production data or credentials. A deploy stopped by main's red or a
 decision is not yours: say so in the proposal and end with `repaired`.
+
+A request whose row says **full run** is not a deploy: the hourly full run of a
+repository could not start or finish for a reason of mc's own (its worktree held
+by a process, a lease, a reservation, the run threw). The note names the stop and
+what held it: pids, command lines and working directory. Find why that process
+was there and repair the cause (a test that leaves a process, a path that reaches
+the keychain, state mc owns); end a stale process only when you can show it is a
+leftover of the run's own round, never a live session's. There is no deploy to
+retry: nothing was typed, so the request ends when the repair has landed.
 
 Write a proposal in `~/mc/programs/mc-tests/proposals/` naming the fault of mc deploy's
 design that let this happen, so it is removed. End with a published PR in each
