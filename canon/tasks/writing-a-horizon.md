@@ -4,22 +4,11 @@ description: Drafting a horizon playback from the app and its records.
 ---
 # Writing a horizon
 
-A horizon is what is worked toward now, over roughly one to two months.
-It is not a standing aim or one per area; do not invent one for an inactive
-part of the app. It takes several programmes. A deliverable with one end
-and one programme is a programme, not a horizon. Split wording too large for
-the period before confirmation.
+A horizon is what is worked toward now, over roughly one to two months. It is not a standing aim or one per area; do not invent one for an inactive part of the app. It takes several programmes. A deliverable with one end and one programme is a programme, not a horizon. Split wording too large for the period before confirmation.
 
-Before drafting, read the area pages, archived programmes of the relevant part,
-open ends on record and the app (with `mc shot`). Distinguish facts actually
-read from unavailable evidence; do not present an assumption as an observation.
-The enduring direction belongs to the area, not the horizon.
+Before drafting, read the area pages, archived programmes of the relevant part, open ends on record and the app (with `mc shot`). Distinguish facts actually read from unavailable evidence; do not present an assumption as an observation. The enduring direction belongs to the area, not the horizon.
 
-Before confirmation, the desk writes `basis.md` beside `playback.md`: what runs
-today, binding decisions, numbered gaps with where each was read, and what is
-not decided. Playback prerequisites name basis gaps by number. Anything not
-yet designed (a new thing or “polished”) goes under not decided: a programme
-document settles it, never the planner. The basis is authored context, not parsed.
+Before confirmation, the desk writes `basis.md` beside `playback.md`: what runs today, binding decisions, numbered gaps with where each was read, and what is not decided. Playback prerequisites name basis gaps by number. Anything not yet designed (a new thing or “polished”) goes under not decided: a programme document settles it, never the planner. The basis is authored context, not parsed.
 
 Draft English playback with exactly these five non-empty headings in order:
 
@@ -48,6 +37,10 @@ State the exclusions explicitly.
 ## The strangest thing the wording permits
 
 Name the nearest wrong reading and distinguish it from the intended scope.
+
+## How work starts from a horizon
+
+A horizon starts no work by itself. Work starts from it as a programme document, an order Martin signs at the desk, and nothing is cut or built before he signs. The basis's not-decided entries are settled in that document, as proposals under Decided by signing, never by a planner. While the desk holds an open `horizon:<slug>` item that stops work, no programme is drafted from the horizon; only when the desk has closed the item is the next programme drafted from it.
 
 ## Changing the wording
 

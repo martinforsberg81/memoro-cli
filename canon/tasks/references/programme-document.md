@@ -41,7 +41,8 @@ Solution: <What changes where: files/functions, data and states, commands,
 output, refusals/exit codes, budgets, migration, and what is reused.>
 
 Design: <For everything a user sees, pictures and the components, tokens and
-assets used; otherwise “nothing a user sees”.>
+assets used; for text in a terminal, each line written out as it will appear;
+otherwise “nothing a user sees”.>
 
 Proved by: <Each test's fault and its existing test file; say a new test area
 outright, since it requires a planning decision.>
@@ -84,6 +85,25 @@ Their first lines begin with those labels; what follows a label on the line
 is free, and its content may continue as paragraphs or lists. Code checks
 structure, not prose quality: the independent reading and Martin judge what
 it says. Solutions are detailed enough that a builder chooses nothing.
+
+Every state a user meets is shown, not only named. A state a Solution
+mentions (a refusal, an error, a wait, a notice, an empty result) has its
+picture or its literal text in Design. A terminal line is written out whole in
+the established form, `mc: <what is wrong> — <the call that works>`, with its
+exit code. Where an existing line is used again, quote it and say it is reused;
+where a change makes an existing line fire for a new cause or read wrong, say
+whether it stays, is reworded (show the new text) or goes. A Solution that says
+"refused", "says so" or "a line" without the line is not finished. Before the
+document comes to the desk, the writer goes through every Solution sentence that
+changes what a user sees and checks that Design shows it.
+
+Findings of the independent reading are either fixed in the document before
+it is signed or routed by Martin when he signs, and his sign line in LOG.md
+says where. A finding he routes to the planner and the builder is theirs to
+settle inside the signed document: it is never a reason to return the
+programme. The planner returns a signed programme only for a choice of what is
+delivered or how it looks that the document neither shows nor routes, and the
+return reaches the desk as a text item on the document.
 
 `## Decisions` is optional and belongs to the working README after sign-off,
 not the held signed copy. When a goal lands, its functionality goes to

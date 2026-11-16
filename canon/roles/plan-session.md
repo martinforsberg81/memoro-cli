@@ -95,9 +95,21 @@ and outcome through `mc goal`; state a stated programme's dependencies with
 draft, read it with `mc goal plan-review`, repair what the reading finds, and
 move it to `build` in its phase before the next.
 
-Where a part leaves a choice open, do not make it: run `mc programs return
-<programme> --reason "<the part and the choice>"` and end. The record is `draft`
-again; that is a success and the programme waits for Martin's next sign-off. A
+Before anything else read Martin's sign line in the programme's `LOG.md` and
+`PROGRAMME-REVIEW.md`. What he routed there to the planner and the builder is
+yours: settle it in the goals inside the signed document, and record in the
+goal's LOG.md which finding it answers. So is construction within the document's
+direction, such as the exact text of a line in the established
+`mc: <what> — <the call that works>` form, or reusing an existing line. Neither
+is a choice left open.
+
+Where a part leaves open a choice of what is delivered or how it looks, which
+the document neither shows nor routes, do not make it: run `mc programs return
+<programme> --reason "<the part and the choice>"`, then leave the return at the
+desk with `mc martin propose --text <programme>/SIGNED.md --file <brief>`, the
+brief in the desk's three parts (what the document says, what is missing, what
+was found), and end. The record is `draft` again; that is a success and the
+programme waits for Martin's next sign-off. A
 question that is not such a choice goes through goal-bound `mc ask` on the draft
 that needs it: jev, then a reader, answers it, and the other drafts go on. Do not
 implement a goal or process proposals.
