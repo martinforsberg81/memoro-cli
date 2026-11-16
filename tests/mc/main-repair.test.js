@@ -50,6 +50,28 @@ describe('main-red repair evidence', () => {
     assert.equal(state.entries()[0].file, 'check:part@started');
   });
 
+  it('a red gate suite is a member of its own, deduplicated by its name while unfinished, and the prompt gives its verdict and whole output', () => {
+    const state = stateWith([]);
+    const suite = { name: 'msr-performance', exit: 1, verdict: ['mobile-constrained: long task 60 ms, bound 50 ms'], output_path: '/runner/deploy-prepare/2026-11-15T19-18/msr-performance.log', sha: 'abcdef1234567' };
+    const first = requestMainRepair({ ...state, base: 'reported-base', files: [], suites: [suite] });
+    assert.equal(first.created.length, 1);
+    assert.deepEqual(state.entries()[0].suite, suite);
+    assert.equal(state.entries()[0].file, 'suite:msr-performance');
+    assert.equal(state.entries()[0].state, 'queued');
+
+    const again = requestMainRepair({ ...state, base: 'reported-base', files: [], suites: [{ ...suite, exit: 2 }, { name: 'journeys', exit: 1, verdict: [], output_path: null, sha: 'abcdef1234567' }] });
+    assert.deepEqual(again.open, [first.created[0]], 'the same suite joins the open member');
+    assert.equal(again.created.length, 1, 'another suite is a member of its own');
+    assert.deepEqual(state.entries().map((entry) => entry.file), ['suite:msr-performance', 'suite:journeys']);
+
+    const prompt = mainMendPrompt({ repo: 'memoro', branch: 'mend/main', worktree: '/work', root: '/fixture/home', entries: state.entries() });
+    assert.match(prompt, /the gate suite msr-performance was red \(exit 1\) at abcdef1/u);
+    assert.match(prompt, /mobile-constrained: long task 60 ms, bound 50 ms/u);
+    assert.match(prompt, /Whole output: \/runner\/deploy-prepare\/2026-11-15T19-18\/msr-performance\.log/u);
+    assert.match(prompt, /the gate suite journeys was red[^\n]*\nIt stated no verdict\./u);
+    assert.doesNotMatch(prompt, /mc gate --fresh suite:/u, 'a suite is not a test file to run by name');
+  });
+
   it('landed commit is stored on every entry for the pull request', () => {
     const state = stateWith([
       { id: 'one', file: 'a.test.js', pr: 71, state: 'published' },

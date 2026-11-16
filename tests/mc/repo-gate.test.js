@@ -362,6 +362,57 @@ describe('the round measures a state worth measuring', () => {
     } finally { fx.cleanup(); }
   });
 
+  // B5, 2026-11-16: a suite's orphaned child (parent 1, cwd in the full run's own
+  // worktree) held the worktree and stopped every later full run at 'worktree'.
+  const orphans = (fx, { groupOfChild }) => {
+    const dir = measurementCheckoutPath(fx.repoPath, fx.workRoot, 'full');
+    const standing = [];
+    const killed = [];
+    return {
+      killed,
+      standing,
+      options: {
+        pr: null, full: true, isolated: true, holdLease: false, lanes: 2,
+        candidateCwds: () => standing.map((one) => ({ ...one })),
+        processGroupOf: async (pid) => (pid === 777 ? groupOfChild : null),
+        killProcess: (pid) => { killed.push(pid); standing.splice(0, standing.length, ...standing.filter((one) => one.pid !== pid)); return true; },
+        suite: ({ cwd, times }) => {
+          // The round's own spawn (group leader 555) leaves a child standing in its worktree.
+          times.spawned(555);
+          standing.push({ pid: 777, cwd: join(dir, 'src') });
+          return fx.suite({ cwd });
+        },
+      },
+    };
+  };
+
+  it('a full run ends what its own spawn left standing in its own worktree, so the next run measures', async () => {
+    const fx = fixture();
+    try {
+      const own = orphans(fx, { groupOfChild: 555 });
+      const first = await fx.run(own.options);
+      assert.equal(first.ok, true, first.reason);
+      assert.deepEqual(own.killed, [777], 'the orphan of the round\'s own spawn was ended');
+      assert.deepEqual(own.standing, []);
+      const second = await fx.run({ ...own.options, suite: fx.suite });
+      assert.notEqual(second.stopped_at, 'worktree', 'the next full run was held by a process the last one left');
+      assert.equal(second.ok, true, second.reason);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a process of a live session in the full run\'s worktree is never ended, and the next run stops at worktree naming it', async () => {
+    const fx = fixture();
+    try {
+      const own = orphans(fx, { groupOfChild: 9999 });
+      await fx.run(own.options);
+      assert.deepEqual(own.killed, [], 'a process of another group was ended');
+      assert.equal(own.standing.length, 1);
+      const second = await fx.run({ ...own.options, suite: fx.suite });
+      assert.equal(second.stopped_at, 'worktree');
+      assert.match(second.reason, /is in use by pid 777/u);
+    } finally { fx.cleanup(); }
+  });
+
   it('heals a dirty or unfinished checkout and recreates a missing or orphaned checkout before measuring', async () => {
     for (const kind of ['dirty', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'missing', 'orphaned']) {
       const fx = fixture();
