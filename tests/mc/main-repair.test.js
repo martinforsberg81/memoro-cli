@@ -64,16 +64,26 @@ describe('main-red repair evidence', () => {
 
   it('mend prompt carries the measured evidence, retained-record state and earlier finished repairs', () => {
     const recordPath = mainRedPath('/fixture/home', 'memoro-cli', 'reported-base');
+    const file = 'tests/red.test.js';
+    const frames = ['async TestContext.<anonymous> (file:///repo/tests/red.test.js:23:4)',
+      'Test.run (node:internal/test_runner/test:1106:25)'];
+    const tap = ['TAP version 13', '# Subtest: assertion', 'not ok 1 - assertion', '  ---', "  type: 'test'",
+      "  location: '/repo/tests/red.test.js:3:1'", "  failureType: 'testCodeFailure'", '  error: |-',
+      '    Assertion failed', '    detail line', '  stack: |-', ...frames.map(frame => `    ${frame}`),
+      '  ...', '1..1', '# tests 1', '# pass 0', '# fail 1'].join('\n');
+    const [parsed] = redTests(tap, [file], { cwd: '/repo' });
+    const test = shapeMainRedTest(parsed);
+    assert.deepEqual(test.stack, frames);
+    assert.deepEqual(test.detail, ['Assertion failed', 'detail line', ...frames.map(frame => `  ${frame}`)]);
     const prompt = mainMendPrompt({ repo: 'memoro-cli', branch: 'mend/main', worktree: '/work', root: '/fixture/home',
-      entries: [{ file: 'tests/red.test.js', base: 'reported-base', tests: [{ name: 'assertion', at: 'tests/red.test.js:23:4',
-        error: ['Assertion failed'], detail: ['detail line', 'frame line'], stack: ['frame line', 'node frame'] }] }],
+      entries: [{ file, base: 'reported-base', tests: [test] }],
       history: [landed()], exists: (path) => path === recordPath });
     assert.match(prompt, /assertion/u);
     assert.match(prompt, /tests\/red\.test\.js:23:4/u);
     assert.match(prompt, /Assertion failed/u);
     assert.match(prompt, /detail line/u);
-    assert.match(prompt, /node frame/u);
-    assert.equal(prompt.split('\n').filter((line) => line === '    frame line').length, 1, 'stack frames already in detail are not printed twice');
+    assert.deepEqual(prompt.split('\n').filter(line => frames.includes(line.trim())),
+      frames.map(frame => `      ${frame}`), 'stack frames in detail keep their formatting and are not printed twice');
     assert.match(prompt, new RegExp(recordPath.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
     assert.match(prompt, /Earlier tests\/red\.test\.js: state landed; PR #1539; landed_commit repair-commit/u);
     assert.match(prompt, /Read where each assertion failed/u);

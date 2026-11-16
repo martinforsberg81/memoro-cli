@@ -145,11 +145,15 @@ export function mainMendPrompt({ repo, entries, branch, worktree, history = [], 
     ? `Prove ${checks.join(' and ')} GREEN (none of these checks SETTLED), then bare mc gate.`
     : 'Prove the repair with mc gate on the files you changed (none of these checks SETTLED), then bare mc gate.';
   const pathFor = (entry) => mainRedPath(root, repo, entry.base);
-  const testsFor = (entry) => (entry.tests || []).map((test) => [
-    `  ${test.name ?? '(unnamed test)'}`, ...(test.at ? [`    at ${test.at}`] : []),
-    ...(test.error || []).map(line => `    ${line}`), ...(test.detail || []).map(line => `    ${line}`),
-    ...(test.stack || []).filter(line => !(test.detail || []).includes(line)).map(line => `    ${line}`),
-  ].join('\n')).join('\n');
+  const testsFor = (entry) => (entry.tests || []).map((test) => {
+    const detail = test.detail || [];
+    const printed = new Set(detail.map(line => line.trim()));
+    return [
+      `  ${test.name ?? '(unnamed test)'}`, ...(test.at ? [`    at ${test.at}`] : []),
+      ...(test.error || []).map(line => `    ${line}`), ...detail.map(line => `    ${line}`),
+      ...(test.stack || []).filter(line => !printed.has(line.trim())).map(line => `    ${line}`),
+    ].join('\n');
+  }).join('\n');
   const memberText = (entry) => {
     if (entry.check) return checkMemberText({ ...entry, repo });
     if (entry.command) return `${entry.file} at base ${entry.base}:\n${JSON.stringify(entry.command, null, 2)}`;
