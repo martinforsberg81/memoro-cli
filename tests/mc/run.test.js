@@ -6142,6 +6142,65 @@ const turnState = (f) => JSON.parse(f.files[TURN_STATE]);
 const draftPlans = (f) => planned(f).filter(Boolean);
 const noRunnableTurn = (runner) => runner.nextWork()?.name !== 'programme:prog';
 
+const draftRecordText = () => JSON.stringify({ ...JSON.parse(plainText()), version: 2, state: 'draft', signed_at: null, signed_by: null, signed_text: null, cut_text: null });
+
+for (const kind of ['plan', 'build', 'review', 'mend']) {
+  const waitingFixture = () => {
+    const f = kind === 'review' ? reviewFixture() : goalFixture({ waiting: { stage: kind === 'plan' ? 'draft' : kind === 'mend' ? 'merge' : 'build', status: kind === 'mend' ? 'blocked' : 'ready', prs: kind === 'mend' ? ['memoro#31'] : [] } });
+    f.deps.pendingMerges = () => [];
+    return f;
+  };
+  test(`programme draft holds ${kind} starts until sign-off without changing goal bytes`, async () => {
+    const f = waitingFixture();
+    f.files[RECORD_AT] = draftRecordText();
+    const before = Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS)));
+    const runner = createRunner({ deps: f.deps });
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, kind);
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0, 'still draft');
+    assert.equal(f.calls.sessions.length, 0, 'no session');
+    assert.deepEqual(Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS))), before);
+    assert.equal(f.log.filter(line => line.includes('waits for sign-off of prog')).length, 1, 'one wait line');
+    f.files[RECORD_AT] = plainText();
+    assert.equal((await runner.pass({ repo: 'memoro' })).ran, 1, 'legacy open remains admitted');
+    assert.equal(f.calls.sessions[0].env.MC_ROLE, { plan: 'plan', build: 'build-session:goal', review: 'review-session:goal', mend: 'mend-session' }[kind]);
+  });
+
+  test(`programme return during ${kind} admission cancels only the unstarted session`, async () => {
+    const f = waitingFixture();
+    f.files[RECORD_AT] = plainText();
+    f.deps.attachDeps = async () => { f.files[RECORD_AT] = draftRecordText(); return { ok: true }; };
+    const before = Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS)));
+    assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
+    assert.equal(f.calls.sessions.length, 0, 'no session after return during allocation');
+    assert.deepEqual(Object.fromEntries(Object.entries(f.files).filter(([path]) => path.startsWith(GOALS))), before);
+  });
+}
+
+test('programme return leaves a running build free to finish and a queued merge free to land', async () => {
+  const build = goalFixture({ building: {} });
+  build.files[RECORD_AT] = plainText();
+  build.answer = (call) => { build.files[RECORD_AT] = draftRecordText(); return endsGoal(build)(call); };
+  assert.equal((await createRunner({ deps: build.deps }).pass({ repo: 'memoro' })).ran, 1);
+  assert.equal(where(build, 'building'), 'done · ready', 'running session finished its own work');
+
+  const f = goalFixture({ queued: { stage: 'merge', prs: ['memoro#31'] } });
+  f.files[RECORD_AT] = draftRecordText();
+  f.deps.pendingMerges = () => [{ repo: 'memoro', pr: 31, state: 'queued' }];
+  const gh = f.deps.gh;
+  let merged = false;
+  f.deps.gh = (cwd, args) => args[0] === 'pr' && args[1] === 'view' && args.includes('state')
+    ? { ok: true, stdout: JSON.stringify({ state: merged ? 'MERGED' : 'OPEN' }) } : gh(cwd, args);
+  const runner = createRunner({ deps: f.deps });
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(where(f, 'queued'), 'merge · ready', 'queue remains merger-owned, not a mend');
+  merged = true; // The merger/GitHub boundary reports its landed job; the runner never performs Git merges.
+  f.deps.now = () => new Date('2026-08-29T10:06:00Z');
+  assert.equal((await runner.pass({ repo: 'memoro' })).ran, 0);
+  assert.equal(where(f, 'queued'), 'done · ready');
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(goalEntries(f, 'queued').at(-1).done, /landed memoro#31/u);
+});
+
 test('programme turn: a recorded open programme with a README and no goals gets one turn at the next pick, sequential and stated alike', async () => {
   for (const [kind, record] of [['sequential', plainText()], ['stated', statedText()]]) {
     const f = programmeFixture({ record });

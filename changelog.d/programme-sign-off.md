@@ -23,3 +23,11 @@ section: Changed
   the next document's model; show/list expose signatures, legacy state and
   design drift. Goal creation refuses draft/dropped programmes and headless
   recordless callers before any fetch or write.
+
+- **Draft programmes wait visibly for sign-off.** Draft records prevent new
+  plan/build/review/mend sessions, including a return during admission, without
+  cancelling running sessions or holding queued merges. Drafts with no goals
+  appear under their horizon; the existing status position reads draft or waits
+  for sign-off when an item already exists. JSON carries the record state.
+  Signed copies, reading metadata and return reasons have the programme-file
+  guard, with the existing file-tool and Bash escape rules unchanged.

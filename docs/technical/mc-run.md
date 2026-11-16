@@ -199,9 +199,14 @@ order without a model call:
    there is no separate queue file. The rule is `phaseStanding`
    ([mc-goals.md](mc-goals.md), *Phases*).
 4. Exclude goals already claimed or named by a live current file, held goals
-   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), and goals whose first
+   (`.hold.json`; `hold` in [mc-goals.md](mc-goals.md)), goals whose valid
+   programme record is `draft`, and goals whose first
    repository is not served by the lane. A review without an
    available route does not stand in front of other work.
+   The draft hold says `waits for sign-off of <programme>`, once while it
+   lasts. It is re-read during admission, before spawning plan, build, review
+   or mend, not just at the pick. A running session finishes normally; neither
+   the merger's queued work nor the runner's landed-PR reconciliation is held.
 5. Take merge-failure mend and goal-less main-red mend first, then decision, a repair build, review, then an ordinary build; the programme planning turn and next-draft planning follow build, then the programme archive turn ([below](#programme-archive-turn)), and the manager's turns ([below](#the-managers-turns)) come last. Pre-merge blocked work wakes no session and is reconciled to Martin. Within the earliest runnable rank, repository fairness
    reserves a share before higher programme priority, then carry/resumed work
    and longest waiting. Waiting begins at the last log entry. A carried build never

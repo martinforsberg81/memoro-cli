@@ -102,6 +102,7 @@ import { OPENAI_PRICES_DATED, PRICES_DATED, rowCost } from './prices.js';
 import { landedSection, readRunRows } from './landed.js';
 import { readDeskCost } from './desk-cost.js';
 import { readPageDesk } from './page-desk.js';
+import { listDeskItems } from './desk-items.js';
 import { agyBrainDir } from './agy-brain.js';
 import { claudeHome, codexHome } from './conversations.js';
 import { PR_LIST_ARGS, parseWorktrees, prOwner } from './open-prs.js';
@@ -1165,11 +1166,6 @@ function recordReader(env) {
   return { found, order: (name) => phaseOrder(found(name)) };
 }
 
-/** A programme's phase order from its record under the programmes home, each read once per call of this. */
-function orderReader(env) {
-  return recordReader(env).order;
-}
-
 /**
  * Phase structure and eligibility carried by JSON and drawn by the tree.
  * `order` is the programme's (`phaseOrder`): for a programme whose phases are
@@ -1310,7 +1306,7 @@ export function programmesSection({
  * `order(programme)`: a lower phase still to finish, or a stated phase it waits
  * for, or an invalid record), so the runner does not pick it yet.
  */
-export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL } = {}) {
+export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = () => SEQUENTIAL, found = () => null } = {}) {
   return goals.map((goal) => {
     const running = currents.some((current) => current.name === goalName(goal) && alive(current.pid));
     const sessions = goalSessions(goal.log);
@@ -1348,6 +1344,8 @@ export function goalsOf({ goals = [], currents = [], alive = pidAlive, order = (
     question: waitsOnPerson(goal) ? (goal.log.at(-1)?.comment ?? null) : null,
     // The hold `mc goal hold` wrote (`{by, tool, at, reason}`), or null.
     hold: readHold(goal.dir),
+    programme_wait: !FINISHED.includes(goal.stage) && found(goal.programme)?.record?.state === 'draft'
+      ? `waits for sign-off of ${goal.programme}` : null,
     problems: goal.problems,
     // Why the runner could not archive this finished goal, from its last
     // `not archived — …` entry after the one that set the stage; null when
@@ -1507,13 +1505,23 @@ export function horizonsSection({ programmes, found = () => ({ status: 'none' })
     try { readdirSync(horizonsDir(env)); } catch (cause) { if (cause?.code !== 'ENOENT') error = cause.message || String(cause); }
   } catch (cause) { error = cause.message || String(cause); }
   const held = new Map(read.horizons.map((item) => [item.slug, item]));
+  // Read an existing item only. Creating or scheduling sign-off items belongs to a later step.
+  const waiting = new Set(listDeskItems({ env }).filter((item) => item.kind === 'sign-off' && item.state !== 'closed').map((item) => item.reference));
   const groups = programmes?.programmes || [];
   let number = programmes?.count ?? 0;
   for (const group of groups) {
     number += 1;
     group.number = number;
     let named = null;
-    try { const record = found(group.programme); named = record?.status === 'valid' ? record.record.horizon ?? null : null; } catch { named = null; }
+    group.record_state = null;
+    try {
+      const record = found(group.programme);
+      if (record?.status === 'valid') {
+        named = record.record.horizon ?? null;
+        group.record_state = record.record.state;
+      }
+    } catch { named = null; }
+    group.sign_off_waiting = waiting.has(`sign-off:${group.programme}`);
     group.horizon = named;
     group.horizon_state = named === null ? null : held.get(named)?.state ?? 'not held';
   }
@@ -1555,12 +1563,13 @@ export function readProgrammes({
   for (const repo of present) {
     for (const name of programmes(repo)) (homes[name] ||= []).push(repo.name);
   }
-  const order = orderReader(env);
+  const records = recordReader(env);
+  const order = records.order;
   const section = programmesSection({
     planning: sessions.planning,
     planningSessions: sessions.planning_sessions,
     runnerSessions: runnerSection({ currents, now, alive }).sessions,
-    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order }),
+    goalRows: goalsOf({ goals: programsGoals({ home: programsHome(env) }), currents, alive, order, found: records.found }),
     programmes: [...Object.keys(homes), ...recordedProgrammes(programsHome(env))],
     proposalCounts: readProgrammeProposalCounts(programsHome(env)),
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),
@@ -1740,7 +1749,7 @@ export async function collectPage({
     programmeSessions: sessions.programme_sessions,
     runnerSessions: runner.sessions,
     sessionStrays: sessions.strays,
-    goalRows: goalsOf({ goals, currents, alive, order }),
+    goalRows: goalsOf({ goals, currents, alive, order, found: records.found }),
     programmes: [...present.flatMap((repo) => listProgrammes(repo)), ...recordedProgrammes(programsHome(env))],
     proposalCounts: programmeProposals,
     priority: (name) => readProgrammePriority(name, { home: programsHome(env) }),

@@ -210,12 +210,12 @@ export function protectedGoalFile(path, { programs = programsHome() } = {}) {
 }
 
 /**
- * A programme's PROGRAMME.json is kept the same way: written by `mc programs
- * create` and `mc programs record` only, and a catch for a mistake, not an intent.
+ * Programme-owned state is kept the same way: written through `mc programs`
+ * only, and a catch for a mistake, not an intent.
  */
-const PROTECTED_PROGRAMME = /^PROGRAMME\.json$/u;
+const PROTECTED_PROGRAMME = /^(?:PROGRAMME\.json|SIGNED\.md|\.programme-review\.json|RETURNED\.md)$/u;
 
-const PROGRAMME_FILE_REASON = 'This file is mc\'s: a programme\'s record is made by `mc programs create <programme> --end "…"` or, for an existing programme directory, `mc programs record <programme> --end "…"`. Run `mc programs show <programme>` to read it.';
+const PROGRAMME_FILE_REASON = 'This file is mc\'s: use `mc programs create`, `mc programs record`, `mc programs sign`, `mc programs return`, `mc programs drop` or `mc programs review` for programme state. Run `mc programs show <programme>` to read it.';
 
 /** Whether `path` is a programme record anywhere under `programs`. */
 export function protectedProgrammeFile(path, { programs = programsHome() } = {}) {
@@ -319,7 +319,7 @@ export const BASH_RULES = [
   },
   {
     id: 'programme-file',
-    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*\bPROGRAMME\.json\b/u,
+    test: /(>>?|\btee\b|\bsed\s+-i|\b(mv|cp|rm|truncate|install)\b)[^;&|\n]*(?:\bPROGRAMME\.json|\bSIGNED\.md|\.programme-review\.json|\bRETURNED\.md)\b/u,
     reason: PROGRAMME_FILE_REASON,
   },
 ];

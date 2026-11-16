@@ -2702,6 +2702,15 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    */
   function heldBy(goal) {
     const name = goalName(goal);
+    const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
+    if (programme.status === 'valid' && programme.record.state === 'draft') {
+      const key = `sign-off:${goal.programme}`;
+      if (holdsSaid.get(name) !== key) {
+        say(`${name}: waits for sign-off of ${goal.programme} — no session is started`);
+        holdsSaid.set(name, key);
+      }
+      return true;
+    }
     const hold = readHold(goal.dir, deps.read);
     if (!hold) { holdsSaid.delete(name); return false; }
     const key = `${hold.by}|${hold.at}`;

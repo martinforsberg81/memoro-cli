@@ -149,7 +149,7 @@ The default page draws HORIZONS where per-programme blocks used to be
 alone). Under the heading, which counts the open horizons and the programmes
 under way, come the open horizons in the desk's order (`position`, then set time, then slug),
 each with one row under it for every programme whose record names it and that
-has something under way: an unfinished goal, a session, an open pull request or
+has something under way: a `draft` record, an unfinished goal, a session, an open pull request or
 an item needing attention. A horizon with no such programme says `nothing under
 way`. Then `Serving no horizon`, the same rows for the programmes that name no
 open horizon; a row there that names one adds its slug and its state, `reached`,
@@ -164,6 +164,11 @@ it (coloured by kind) and the flags for a goal waiting on Martin (`⚑`), blocke
 (`⊘`) or needing attention (`!`). On a narrow terminal the least telling facts
 go first (priority, done, the phase), the name last. A row draws no goal and no
 phase list: those are in the programme's view and in `a`.
+For a draft the phase position instead says `draft`, or `waits for sign-off`
+when an existing open `sign-off:<programme>` desk item of kind `sign-off`
+is present. Closing/removing the item restores `draft`. This is a read only:
+the page creates no desk item. Both texts have the phase's existing narrow-width
+rank. A draft with no goals is still listed under its horizon.
 
 **Numbers.** Goals keep the numbers 1..N. The programmes are N+1..N+M in name
 order, in every listed programme including the folded ones, and the number is on
@@ -182,7 +187,12 @@ none: [<programme names serving no open horizon>], unreadable: [<directory
 names>], error }`, `error` being the reason the store could not be listed, else
 null. Each programme in `programmes.programmes` gains `number`, `horizon` (the
 slug its valid record names, else null) and `horizon_state` (`open`, `reached`,
-`dropped`, `not held` for a slug the store holds no horizon for, or null). Nothing else changes.
+`dropped`, `not held` for a slug the store holds no horizon for, or null),
+`record_state` (a valid record's state, otherwise null) and `sign_off_waiting`
+(whether that existing item is open).
+Unfinished goals carry `programme_wait`, `waits for sign-off of <programme>`
+in a draft programme, otherwise null, drawn on the goal's line in its own view.
+It does not cancel a running session or stop queued merges.
 
 ### PROGRAMMES
 
@@ -197,8 +207,8 @@ Scheduling first prefers blocked recovery, finish/merge, review, build, then
 next-step planning; programme priorities decide within a rank after repository
 shares. See [mc-run.md](mc-run.md#the-pick-in-order).
 
-A programme with a record (`PROGRAMME.json`, [mc-plan.md](mc-plan.md#a-programme-with-a-record)) is on the page, counted as dormant, before it has
-a goal; a programme without a record appears as before.
+A programme with a record (`PROGRAMME.json`, [mc-plan.md](mc-plan.md#a-programme-with-a-record)) is on the page before it has
+a goal; a draft counts as under way, other empty records as dormant. A programme without a record appears as before.
 
 `programmesSection` and `goalsOf` (`page-collect.js`) build programme → phase
 → goal → PR. Each programme is a bounded block with a bold name and cyan

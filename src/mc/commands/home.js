@@ -261,7 +261,7 @@ export function readerFor({ stdout, lines, page, key = null }) {
 export function pageKey(data) {
   const goals = (data?.programmes?.programmes || []).flatMap((group) => group.goals || []);
   const goalKey = goals
-    .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
+    .map((g) => [g.programme, g.name, g.stage, g.status, g.phase, g.title, g.held ? 1 : 0, g.programme_wait ?? '', g.criteria?.met ?? '', g.criteria?.all ?? '', g.running ? 1 : 0].join(':'))
     .join('|');
   const foreground = (data?.programmes?.programmes || []).flatMap((group) => [
     ...(group.planning_sessions || []), ...(group.sessions || []),
@@ -276,7 +276,7 @@ export function pageKey(data) {
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
   // The overview is drawn from the programmes' numbers and names and from the horizons they are under, in order.
   const horizonKey = [
-    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}`).join(','),
+    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}:${group.record_state ?? ''}:${group.sign_off_waiting ? 1 : 0}`).join(','),
     (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
   ].join('/');
   // The overview's IN FLIGHT, NEEDS ATTENTION, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
