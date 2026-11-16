@@ -27,17 +27,19 @@ export function detail(lines, c, wide, indent, value, tone = ['grey']) {
  * its title is its top rule alone. The rules are orange, as DESK's are; the rounded session frames are the one other
  * component and are drawn by their own functions.
  *
- * `facts` is a string, or parts `{ text, styles }` joined by ` · `. They give way to the width: clipped to what the
- * rule leaves, grey when clipped.
+ * `facts` is a string, or parts `{ text, styles, sep }` joined by ` · `; a part's `sep` replaces what goes before it
+ * (for the first part, what follows the two spaces after the title), as a programme's heading sets its horizon and its
+ * phase apart with `  ·  `. They give way to the width: clipped to what the rule leaves, grey when clipped.
  */
 export function frameTop(c, wide, title, facts = '', key = '') {
   const parts = (Array.isArray(facts) ? facts : [{ text: facts, styles: ['grey'] }]).filter((part) => part && part.text);
   const hint = key && wide - width(title) - width(key) >= 10 ? ` ${key} ` : '';
   const room = Math.max(0, wide - 8 - width(title) - width(hint) - 2);
-  const plain = parts.map((part) => part.text).join(' · ');
+  const sep = (part, index) => part.sep ?? (index ? ' · ' : '');
+  const plain = parts.map((part, index) => `${sep(part, index)}${part.text}`).join('');
   const shown = !plain ? ''
     : width(plain) > room ? `  ${c(clip(plain, Math.max(1, room)), 'grey')}`
-      : `  ${parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join(c(' · ', 'grey'))}`;
+      : `  ${parts.map((part, index) => `${sep(part, index) ? c(sep(part, index), 'grey') : ''}${part.styles?.length ? c(part.text, ...part.styles) : part.text}`).join('')}`;
   const used = width(title) + (plain ? 2 + Math.min(width(plain), Math.max(1, room)) : 0);
   const rule = '─'.repeat(Math.max(0, wide - used - width(hint) - 7));
   return `  ${c('┌─ ', 'orange')}${c(title, 'bold')}${shown}${c(` ${rule}`, 'orange')}${hint ? c(hint, 'grey') : ''}${c('┐', 'orange')}`;
