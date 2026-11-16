@@ -31,7 +31,7 @@
  * inside one: the deployer lets the round in flight finish, builds alone, and
  * that queue goes on after it. Another repository's lane does not wait for it.
  */
-import { spawn as realSpawn } from 'node:child_process';
+import { spawn as realSpawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -443,6 +443,7 @@ export async function landJob(batch, {
   noteGoal = appendEntry,
   // Main's red becomes goal-less mend lane work (`main-repair.js`).
   repairMain = (request) => requestMainRepair({ ...request, root, read, write, lock, now }),
+  git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }),
   sweepMendWorktrees = defaultSweep,
   afterLanding = null,
   // A drop may happen during the gate. Recheck ownership at admission and
@@ -481,7 +482,7 @@ export async function landJob(batch, {
       try { await afterLanding(job); } catch (error) { say(`${job.repo}: could not pull the installation (${error.message})`); }
     }
     await tell(job, landed, given, {
-      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain, sweepMendWorktrees,
+      root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds: Math.round((now().getTime() - t0) / 1000), requeued, back, moved, offline, setGoal, goalsOf, noteGoal, repairMain, sweepMendWorktrees, git,
     });
     // Outside any lock: the queue's lock, taken twice by this process, waits 5 s.
     if (onAnswer) {
@@ -774,7 +775,7 @@ function defaultSweep(options) {
   return removeFinishedWorktrees({ ...options, exists: existsSync, git: (cwd, args) => { const result = runGit(cwd, args); return { ok: result.status === 0, stderr: result.stderr }; } });
 }
 
-async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair, sweepMendWorktrees = defaultSweep }) {
+async function tell(job, landed, report, { root, say, gh, now, read, write, lock, appendRun, dropFromPage, seconds, requeued = false, back = false, moved = false, offline = false, setGoal = realSetGoal, goalsOf = null, noteGoal = appendEntry, repairMain = requestMainRepair, sweepMendWorktrees = defaultSweep, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }) }) {
   const label = `${job.repo} #${job.pr}`;
   say(moved ? `${label}: ${report.reason} — leaves the queue; the goal stays in merge`
     : back ? `${label}: ${report.reason}`
@@ -803,7 +804,7 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
 
   // Ownership is recorded by mc publish before queueing, even if its session is still ending.
   if (read(mainMendPath(root, job.repo)) != null && (landed || (!back && !requeued && !offline))) {
-    const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, read, write, lock });
+    const repaired = answerMainMend({ root, repo: job.repo, pr: job.pr, landed, reason: report?.reason, commit: report?.merge_commit, read, write, lock });
     // No force: a session still exiting or uncommitted work keeps its tree for cleanup later.
     if (landed && repaired.length) {
       const swept = sweepMendWorktrees({ root, repo: job.repo, repoPath: job.repo_path, read });
@@ -816,11 +817,19 @@ async function tell(job, landed, report, { root, say, gh, now, read, write, lock
     catch (error) { say(`${label}: deploy-mend answer not recorded: ${error.message}`); }
   }
   for (const found of mainRepairsOf(report)) {
-    const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files, tests: found.tests });
+    const asked = repairMain({ repo: job.repo, pr: job.pr, base: found.base, files: found.files,
+      tests: (found.tests || []).map((test) => ({ file: test.file, name: test.name,
+        ...(test.at ? { at: test.at } : {}), error: test.error,
+        ...(test.detail ? { detail: test.detail } : {}), ...(test.stack ? { stack: test.stack } : {}) })),
+      contains: (commit, base) => {
+        try { const result = git(job.repo_path, ['merge-base', '--is-ancestor', commit, base]); return result?.status === 0 ? true : result?.status === 1 ? false : null; }
+        catch { return null; }
+      } });
     const where = found.files.join(', ');
+    for (const stale of asked.stale_members || []) say(`${stale.file}: reported at ${found.base}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
     if (asked.created?.length) say(`${label}: main is red in ${where} at ${String(found.base).slice(0, 7)} — main-red mend queued: ${[].concat(asked.created).join(', ')}${asked.open?.length ? `; already under way: ${asked.open.join(', ')}` : ''}`);
     else if (asked.open?.length) say(`${label}: main is red in ${where} — its main-red mend is under way: ${asked.open.join(', ')}`);
-    else say(`${label}: main is red in ${where} — no main-red mend requested: ${asked.skipped || 'nothing new'}`);
+    else if (!asked.stale_members?.length) say(`${label}: main is red in ${where} — no main-red mend requested: ${asked.skipped || 'nothing new'}`);
   }
 
   if (appendRun) {

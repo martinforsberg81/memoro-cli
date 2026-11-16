@@ -92,6 +92,14 @@ GOAL.json, LOG.md or proposal, run no goal commands, and do not create a goal.
 The runner records your session log and outcome on the main-red request.
 Use the mend role's default model list, with class fast for the session.
 
+The prompt carries each red test's place and recorded stack and names the
+retained record of the measuring run (`~/.memoro/mc/main-red/<repo>/<base>.json`).
+Read them, and the test at the place named, before you run anything. A red that
+the fresh gate shows green at the same commit is not ended as unreproducible:
+when the recorded failure names a missing prerequisite, it is classified as
+above; otherwise the test depends on load, timing or order, and the repair is
+to the test or the code it exposes.
+
 First classify the red from its error, reading the relevant code and technical
 contracts. Repair a behaviour regression in the owning code or fixture. A
 failure before an assertion because an executable, browser, library or service

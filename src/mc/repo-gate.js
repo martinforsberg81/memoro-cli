@@ -54,6 +54,7 @@ import { claimLease, releaseLease } from './repo-lease.js';
 import { cancelledFiles, killedFiles, redFiles, redNames, redNamesIn, redTests, sameFailure, tapTotals } from './tap-red.js';
 import { mainsOf, redAtFrozenBase } from './gate-settle.js';
 import { readMainRed, recordMainRed, redAt } from './selector-miss.js';
+import { shapeMainRedTest } from './main-repair.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, noteGatePhase, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { runShell as runShellAsync, runTool } from './child-async.js';
@@ -938,7 +939,7 @@ export async function runGate({
       const tests = (result.red_tests || []).filter((test) => main.includes(test.file));
       report.main_repair = {
         base, files: [...new Set([...(report.main_repair?.files || []), ...main])],
-        tests: [...(report.main_repair?.tests || []), ...tests.map((test) => ({ file: test.file, name: test.name, error: (test.error || []).slice(0, 12) }))],
+        tests: [...(report.main_repair?.tests || []), ...tests.map(shapeMainRedTest)],
       };
       // Carried into the landed commit's evidence (`recordLandingMainRed`): an untouched red stays red on main.
       report.main_red = { ...(report.main_red || {}), base, measured_at_base: true,

@@ -1564,8 +1564,34 @@ describe('main\'s red found by the round queues a main-red mend', () => {
     const m = machine([{ ...green, gate: { main_repair: found } }], { repairMain: (request) => { asked.push(request); return { created: ['memoro-cli-a-1234abcd'] }; } });
     const [answer] = await landJob(JOB, m.deps);
     assert.equal(answer.landed, true);
-    assert.deepEqual(asked, [{ repo: 'memoro-cli', pr: 671, ...found }]);
+    assert.equal(asked.length, 1);
+    assert.deepEqual({ ...asked[0], contains: undefined }, { repo: 'memoro-cli', pr: 671, ...found, contains: undefined });
+    assert.equal(typeof asked[0].contains, 'function');
     assert.ok(m.said.some((line) => /main is red in tests\/a\.test\.js at base123 — main-red mend queued: memoro-cli-a-1234abcd/u.test(line)), m.said.join('\n'));
+  });
+
+  it('stale report with exit 1 opens no mend and says which landed repair already fixed it', async () => {
+    const first = requestMainRepair({ repo: 'memoro-cli', root, base: 'old-base', files: found.files });
+    updateMainMends({ root, repo: 'memoro-cli' }, (entries) => {
+      Object.assign(entries[0], { state: 'landed', pr: 1539, landed_commit: 'landed-fix' });
+    });
+    const m = machine([{ ...green, gate: { main_repair: { ...found, base: 'reported-base' } } }], {
+      git: (cwd, args) => { assert.equal(cwd, '/repos/memoro-cli'); assert.deepEqual(args, ['merge-base', '--is-ancestor', 'landed-fix', 'reported-base']); return { status: 1 }; },
+    });
+    await landJob(JOB, m.deps);
+    assert.equal(readMainMends({ root, repo: 'memoro-cli' }).length, 1);
+    assert.ok(m.said.some(line => line.includes('tests/a.test.js: reported at reported-base, which does not contain its landed repair landed-fix (#1539) — no repair opened')), m.said.join('\n'));
+    assert.equal(first.created.length, 1);
+  });
+
+  it('stale report with exit 0 opens a fresh mend after the repair', async () => {
+    requestMainRepair({ repo: 'memoro-cli', root, base: 'old-base', files: found.files });
+    updateMainMends({ root, repo: 'memoro-cli' }, (entries) => {
+      Object.assign(entries[0], { state: 'landed', pr: 1539, landed_commit: 'landed-fix' });
+    });
+    const m = machine([{ ...green, gate: { main_repair: { ...found, base: 'reported-base' } } }], { git: () => ({ status: 0 }) });
+    await landJob(JOB, m.deps);
+    assert.equal(readMainMends({ root, repo: 'memoro-cli' }).length, 2);
   });
 
   it('a round with no main red asks for nothing', async () => {
@@ -1704,7 +1730,7 @@ describe('requestMainRepair — the main-red request file', () => {
     const first = requestMainRepair({ ...request, root, now });
     for (const state of ['queued', 'running', 'published', 'Martin']) {
       updateMainMends({ root, repo: request.repo }, (entries) => { entries[0].state = state; });
-      assert.deepEqual(requestMainRepair({ ...request, root, now, pr: 15178 }), { created: [], open: first.created });
+      assert.deepEqual(requestMainRepair({ ...request, root, now, pr: 15178 }), { created: [], open: first.created, stale: [] });
     }
     const mixed = requestMainRepair({ ...request, root, now, files: ['tests/a.test.js', 'tests/b.test.js'] });
     assert.deepEqual(mixed.open, first.created);
@@ -1713,7 +1739,7 @@ describe('requestMainRepair — the main-red request file', () => {
     assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
   });
 
-  it('a red after landed gets a fresh entry, including when found by the daily full run', async () => {
+  it('a landed commit from the report is kept, and a red after landed gets a fresh entry', async () => {
     const first = requestMainRepair({ ...request, root, now });
     updateMainMends({ root, repo: request.repo }, (entries) => { entries[0].state = 'running'; entries[0].branch = 'mend/main-memoro-fixture'; });
     publishMainMend({ root, repo: request.repo, branch: 'mend/main-memoro-fixture', pr: 15203 });
@@ -1724,6 +1750,7 @@ describe('requestMainRepair — the main-red request file', () => {
     assert.notEqual(again.created[0], first.created[0]);
     assert.deepEqual(entries.map((entry) => [entry.file, entry.state]), [['tests/a.test.js', 'landed'], ['tests/a.test.js', 'queued']]);
     assert.equal(entries[0].pr, 15203);
+    assert.equal(entries[0].landed_commit, green.merge_commit);
     assert.equal(entries[1].finder, 'the full run');
     assert.equal(existsSync(join(root, 'programs', 'main-health', 'goals')), false);
   });
@@ -1734,7 +1761,7 @@ describe('requestMainRepair — the main-red request file', () => {
     const asked = { ...request, files: [], tests: [], commands: [command], pr: null, root, now };
     const first = requestMainRepair(asked);
     assert.equal(first.created.length, 1);
-    assert.deepEqual(requestMainRepair(asked), { created: [], open: first.created });
+    assert.deepEqual(requestMainRepair(asked), { created: [], open: first.created, stale: [] });
     const entries = readMainMends({ root, repo: request.repo });
     assert.deepEqual(entries.map(entry => [entry.file, entry.command, entry.finder]),
       [['command:css:tokens:all', command, 'the full run']]);

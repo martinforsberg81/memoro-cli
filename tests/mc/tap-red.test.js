@@ -314,4 +314,16 @@ describe('a red test keeps its whole error beside its first lines', () => {
     assert.equal(test.error.length, 6);
     assert.deepEqual(test.detail, [...diff.filter(Boolean), '  TestContext.<anonymous> (file:///x/tests/a.test.js:5:10)']);
   });
+
+  it('stack keeps Node TAP frames apart from a long assertion diff', () => {
+    const diff = Array.from({ length: 60 }, (_, i) => `diff ${i}`);
+    const frame = 'async TestContext.<anonymous> (file:///x/tests/a.test.js:99:5)';
+    const tap = ['TAP version 13', '# Subtest: long diff', 'not ok 1 - long diff', '  ---', "  type: 'test'",
+      "  location: '/x/tests/a.test.js:3:1'", "  failureType: 'testCodeFailure'", '  error: |-', ...diff.map(line => `    ${line}`),
+      '  stack: |-', `    ${frame}`, '  ...', '1..1', '# tests 1', '# pass 0', '# fail 1'].join('\n');
+    const [test] = redTests(tap, ['tests/a.test.js'], { cwd: '/x' });
+    assert.deepEqual(test.stack, [frame]);
+    assert.equal(test.at, 'tests/a.test.js:99:5');
+    assert.equal(test.detail.length, 61);
+  });
 });
