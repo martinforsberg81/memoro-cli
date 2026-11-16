@@ -103,9 +103,10 @@ that needs it: jev, then a reader, answers it, and the other drafts go on. Do no
 implement a goal or process proposals.
 
 The turn ends when you stop. It succeeds when a goal names every part of the
-signed document, or the record is `draft` again; the runner then records the
-signature you read as cut and does not cut it twice. Any other ending counts as
-a failure. Drafts left unfinished are planned by the next-draft sessions that
+signed document: the runner then records the signature you read as cut and does
+not cut it twice. It also succeeds when the record is `draft` again: nothing is
+recorded as cut, and the programme is cut after Martin's next sign-off. Any
+other ending counts as a failure. Drafts left unfinished are planned by the next-draft sessions that
 follow and are not set to Martin.
 
 Read the code and relevant `docs/technical/` contracts, programme README and design first. Apply the rules that already answer a question; what is left follows `tasks/asking-martin.md`. A technical gap within existing direction is resolved by planning and recorded. After an answer, amend the canonical standard and affected programme/goal contracts consistently.

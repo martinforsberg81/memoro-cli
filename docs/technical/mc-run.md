@@ -909,10 +909,11 @@ Solution, Design and Proved by into the goal and decides nothing the document
 does not; a part already built gets a goal for the difference only, and the
 goals of an unchanged part are kept. Dependencies of a stated programme are
 stated with `mc programs after`. A choice the document leaves open is not
-settled by the session: it returns the programme with
-`mc programs return <p> --reason "<part and choice>"` (the record is `draft`
-again and nothing waits), or asks a goal-bound `mc ask` on the draft that needs
-it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
+settled and not asked by the session: it returns the programme with
+`mc programs return <p> --reason "<part and choice>"` and ends (the record is
+`draft` again and no turn starts until the next sign-off). Only a question that
+is not such a choice is asked, with a goal-bound `mc ask` on the draft that
+needs it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
 leaves are not set to Martin: the next-draft sessions take them. Proposals are
 not processed.
 
