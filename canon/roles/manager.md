@@ -45,7 +45,8 @@ line:
    --purpose "<what part of the horizon it delivers>"`: one call, inside the
    horizon's wording, with the programme's README written as a complete draft
    of [the programme document](../tasks/references/programme-document.md),
-   started from `mc programs model`. It is an order for Martin to sign, not a
+   written with [writing a programme document](../tasks/writing-a-programme-document.md)
+   and started from `mc programs model`. It is an order for Martin to sign, not a
    page for the next planner: every state a user meets is shown, each terminal
    line written out; where a design is not made it says `Design: wanted` and
    names the states; what is not decided is proposed under Decided by signing.

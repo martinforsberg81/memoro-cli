@@ -6,8 +6,8 @@ description: Designing a programme in mc — its README, decisions, phases and b
 
 A programme is thought through once, before its goals are written. Its design is read from one
 page, `~/mc/programs/<programme>/README.md`; a session that must ask about an unplanned decision
-means the programme was not designed. A builder who has only the document and the code
-decides nothing; where a builder would have to choose, the document is not finished.
+means the programme was not designed. A recorded programme's document is written with
+[writing a programme document](writing-a-programme-document.md): it binds what the user gets, how it looks and how one sees that it works; the construction is the planner's and the builder's.
 
 Every programme is a bounded implementation plan, archived when its work is
 finished and written back. Its enduring direction belongs to the area pages.
