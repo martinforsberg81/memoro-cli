@@ -294,7 +294,7 @@ function dayLine(lines, c, wide, day) {
   // What is not a session, and the cost, give way on a narrow terminal — the
   // cost's basis first, then the cost, then `other` — so the counts keep their
   // colours rather than being clipped grey.
-  const room = wide - 2;
+  const room = wide - 4;
   const used = () => parts.reduce((n, part) => n + part.text.length, 0);
   const other = kinds.other ? `other ${kinds.other}` : null;
   const priced = [cost && `${cost} list (${day.model}, ${day.prices_dated})`, cost && `${cost} list`].filter(Boolean);
@@ -303,7 +303,7 @@ function dayLine(lines, c, wide, day) {
     [other],
   ].map((group) => group.filter(Boolean)).find((group) => used() + group.reduce((n, text) => n + 3 + text.length, 0) <= room) || [];
   for (const text of tail) parts.push(dot, { text, styles: ['grey'] });
-  lines.push(`  ${paint(c, parts, room)}`);
+  lines.push(`    ${paint(c, parts, room)}`);
 }
 
 /** A painted cell, padded to its column with spaces that carry no colour. */

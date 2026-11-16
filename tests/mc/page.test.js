@@ -218,12 +218,15 @@ describe('SESSIONS', () => {
     assert.equal(day.other, 2);
     const runner = runnerSection({ rows: ROWS, now: NOW, alive: () => false });
     runner.day.by_kind = day;
-    const dayAt = (columns) => renderPageLines(pageData({ runner }), { columns, now: NOW, expand: true }).find((l) => /^ {2}24 h /u.test(l));
-    const counts = '  24 h · build 6 (1 merged, 2 built, 1 blocked, 1 failed, 1 timed out) · review 2 (1 queued) · plan 1 (1 open) · other 2';
-    assert.equal(dayAt(160), `${counts} · ≈$4.78 list (per model, 2026-11-09)`);
-    // Narrower, the cost gives way — its basis first, then itself — and the counts stay whole.
-    assert.equal(dayAt(140), `${counts} · ≈$4.78 list`);
-    assert.equal(dayAt(122), counts);
+    const dayAt = (columns) => renderPageLines(pageData({ runner }), { columns, now: NOW, expand: true }).find((l) => /^ {4}24 h /u.test(l));
+    const counts = '    24 h · build 6 (1 merged, 2 built, 1 blocked, 1 failed, 1 timed out) · review 2 (1 queued) · plan 1 (1 open) · other 2';
+    // At the page's widest (160 columns) the row, at the indent every frame row has, has no room for the
+    // cost's basis; the cost itself fits down to 138 columns.
+    assert.equal(dayAt(160), `${counts} · ≈$4.78 list`);
+    // Narrower, the cost gives way too, and the counts stay whole.
+    assert.equal(dayAt(138), `${counts} · ≈$4.78 list`);
+    assert.equal(dayAt(137), counts);
+    assert.equal(dayAt(124), counts);
     // A repair session is counted after review, where finish was; the day
     // above has none, and prints none.
     runner.day.by_kind = dayByKind([row('review', 'success,queued'), row('repair', 'success,built')]);
