@@ -2197,7 +2197,7 @@ describe('collectPage', () => {
     writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: process.pid, started: '2026-08-29T10:00:00Z', predecessor: { pid: 4242 } }));
     const collect = () => collectPage({ env, repos: [], offline: true, now: NOW, alive: (pid) => pid === 4242 || pid === process.pid,
       run: () => ({ status: 1, stdout: '' }), checkout: null });
-    const mcLineOf = (data) => renderPageLines(data, { columns: 220, now: NOW }).find((row) => /^ {2}MC /u.test(row));
+    const mcLineOf = (data) => renderPageLines(data, { columns: 220, now: NOW }).find((row) => /^ {4}MC /u.test(row));
     claimFullRun({ repo: 'memoro-cli', sha, verb: 'full run', root: env.MC_HOME, pid: 4242, alive: () => true, now: () => new Date('2026-11-16T10:00:00.000Z') });
     // A claim of another process is not the predecessor's.
     claimFullRun({ repo: 'memoro', sha, verb: 'mc deploy', root: env.MC_HOME, pid: 5555, alive: () => true, now: () => new Date('2026-11-16T09:00:00.000Z') });
