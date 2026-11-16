@@ -200,6 +200,9 @@ test('plan review\'s removal of the author promotes no other candidate to first 
 
 test('the author is --avoid when given, else MC_TOOL and MC_MODEL, else unknown, and the call and the record say so', async (t) => {
   assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
+  assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'fable' }, 'claude:opus'), { tool: 'claude', model: 'opus' }, '--avoid names the author');
+  assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'fable' }, null), { tool: 'claude', model: 'fable' }, 'without --avoid, the caller is the author');
+  assert.equal(authorOf({ MC_TOOL: 'person' }, null), null, 'a person with no --avoid: unknown');
   assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, null), { tool: 'claude', model: 'opus' });
   assert.deepEqual(authorOf({ MC_TOOL: 'person' }, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
   assert.deepEqual(authorOf({}, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
@@ -237,6 +240,26 @@ test('falls through: a candidate that cannot launch, or whose billing route is u
   assert.match(noCodexRoute.err, /codex gpt-6\.1-sol set aside — no API route/u);
   const onBoth = await readBy({}, { ...f.baseEnv, MC_TOOL: 'codex', MC_MODEL: 'gpt-6.1-sol' });
   assert.equal(onBoth.model, 'claude:opus', 'the caller\'s model is the author, so it is last and the other reads');
+});
+
+test('falls through: with [A, B, C] and the author C, A is set aside by its billing route and B by its launch, and the author\'s model C is read last', async (t) => {
+  const f = setup(t);
+  const ARGON = Object.freeze({ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' });
+  const capacity = applyObservation(capacityOf(0.5, 0.5), 'agy', { windows: { five_hour: win(0.5), weekly: win(0.5) } }, NOW);
+  let model = null;
+  const result = await f.call({
+    env: { ...f.baseEnv, MC_TOOL: 'codex', MC_MODEL: 'gpt-6.1-sol' },
+    extra: {
+      catalog: catalogOf([ARGON, OPUS, SOL]), capacity,
+      billingRoute: (tool) => (tool === 'agy' ? { billing: 'unavailable', why: 'no API route' } : { billing: 'plan' }),
+      launch: (tool) => (tool === 'claude' ? { ok: false, reason: 'no adapter' } : f.deps.launch()),
+      session: async (spawned) => { model = `${spawned.env.MC_TOOL}:${spawned.env.MC_MODEL}`; return DONE; },
+    },
+  });
+  assert.equal(model, 'codex:gpt-6.1-sol', 'the author\'s model reads last');
+  assert.match(result.err, /agy gemini-4-argon-high set aside — no API route/u);
+  assert.match(result.err, /claude opus set aside — no adapter/u);
+  assert.match(result.out, /on codex gpt-6\.1-sol — the author is codex gpt-6\.1-sol \(no other model could run\)/u);
 });
 
 test('falls through: once the first choice is set aside, the list is asked with no first choice, so no other candidate is promoted', () => {

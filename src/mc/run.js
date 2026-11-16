@@ -2748,7 +2748,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     let wait = null;
     const record = deps.read(join(goal.dir, UNREAD_FILE)) ? unreadFor(goal.dir, deps.read, currentHash(goal.dir)) : null;
     if (record) {
-      const walked = readerWalk({ catalog: deps.catalog(), capacity: deps.capacity.read(), now: deps.now(), author: record.author ?? null, env: deps.env, launch: deps.launch, billing: billingRouteNow });
+      // The billing reads the runner's own state and API, as a launch's does (billingFor), never the machine's files.
+      const billing = (tool, options) => billingRouteNow(tool, { ...options, capacity: deps.capacity.read(), state: deps.billing?.readState?.(), api: deps.billing?.readApi?.() });
+      const walked = readerWalk({ catalog: deps.catalog(), capacity: deps.capacity.read(), now: deps.now(), author: record.author ?? null, env: deps.env, launch: deps.launch, billing });
       if (!walked.ok) {
         wait = { at: String(record.at ?? ''), reason: [...walked.setAside.map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean).join('; ') };
         if (readerSaid.get(goal.dir) !== wait.at) {
