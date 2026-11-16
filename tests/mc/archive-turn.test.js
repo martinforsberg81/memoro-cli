@@ -254,7 +254,7 @@ test('archive turn: restricted data, a live goal, a record not open or an archiv
   const live = finished({ [`${HOME}/prog/goals/live/GOAL.json`]: goalFile('build') });
   assert.deepEqual(await onOk(live, never), { ok: false, reason: 'the programme holds a live goal' });
   const closed = finished({ [`${HOME}/prog/PROGRAMME.json`]: JSON.stringify({ ...JSON.parse(RECORD), state: 'done' }) });
-  assert.match((await onOk(closed, never)).reason, /its record does not read valid and open \(done\)/u);
+  assert.match((await onOk(closed, never)).reason, /its record does not read valid and ready \(done\)/u);
   assert.deepEqual(calls, []);
   const failing = finished();
   assert.deepEqual(await onOk(failing, async () => 1), { ok: false, reason: 'archiveProgramme returned 1' });

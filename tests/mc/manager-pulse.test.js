@@ -206,7 +206,7 @@ test('curation turn: the prompt lists every proposals folder, oldest first, and 
   const prompt = curationPrompt({ paths: { memoro: '/w/wt/memoro' }, branches: { memoro: 'manager/curation-x' }, pages: [{ repo: 'memoro', id: 'capture', path: '/w/wt/memoro/docs/technical/areas/capture.md' }], backlog, moved: ['memoro'] });
   assert.ok(prompt.indexOf(`${HOME}/one/proposals/a.md`) < prompt.indexOf(`${HOME}/two/proposals/c.md`));
   assert.ok(prompt.indexOf(`${HOME}/two/proposals/c.md`) < prompt.indexOf('/w/proposals/b.md'));
-  for (const text of ['manager/curation-x', 'Main has moved since the last curation in: memoro', 'a turn that finds nothing to change is a success', '--from-proposal', 'do not make a horizon or a goal']) assert.ok(prompt.includes(text), text);
+  for (const text of ['manager/curation-x', 'Main has moved since the last curation in: memoro', 'a turn that finds nothing to change is a success', 'do not make a horizon or a goal']) assert.ok(prompt.includes(text), text);
   // D7: each changed repository is published with the form that queues it for the merger, whose docs form lands it;
   // `--no-merge` would open a pull request nothing ever queues.
   assert.ok(prompt.includes('Publish each worktree you changed with plain `mc publish` (never `--no-merge`): it opens the pull request and queues it for the merger'), prompt);

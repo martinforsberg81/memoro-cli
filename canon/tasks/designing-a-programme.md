@@ -43,7 +43,7 @@ already established. Do not require the enduring direction to be declared over.
 6. Move every complete goal to `build` in its assigned phase, including those waiting for earlier
    phases. `draft` means an unfinished brief, never a parking queue.
 7. Write and read back the README against [the document structure](references/programme-document.md)
-   (repairs use their short page). Start from `mc programs model`: copy form, never content.
+   (repairs use their short page). A programme is written with Martin in a session, he sets it ready there, and the planner cuts goals from its README.
    Landed sections leave the README.
 
 ## When a goal lands

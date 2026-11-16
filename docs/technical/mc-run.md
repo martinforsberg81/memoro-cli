@@ -465,7 +465,7 @@ merged or closed and at least one merged. See [mc-tidy.md](mc-tidy.md).
 ## Sleeping and stopping
 
 STOP and UPDATE are read between picks and inside idle waits. So is
-`runner/WAKE`: a desk act that changes what may run — `mc programs sign`, a
+`runner/WAKE`: a desk act that changes what may run — setting a programme state, a
 `mc goal` stage move, `mc goal release`, a closed desk item — rewrites it, and
 an idle lane whose wait began before that ends its wait at the next 30-second
 poll instead of sleeping out `--idle-sleep`. The helper's
@@ -882,20 +882,13 @@ remain outside this trigger. See [next draft planning](mc-goals.md#next-draft-pl
 
 ## Programme planning turn
 
-Martin, 2026-11-15, 2026-11-16: a programme whose record Martin signed is cut
-into its phases and goals from the signed document, with nobody present. The
-signature is the trigger, not the absence of goals: `mc programs sign` writes
-it, and a programme with no record, an invalid one, a draft one, a legacy one
-or an area record starts nothing (the programmes' rules are in
-[mc-plan.md](mc-plan.md#a-programme-with-a-record)). `programmeDue`
-(`programme-turn.js`) is model-free and reads at every pick. A turn is due when
+Martin, 2026-11-16: a programme whose record is `ready` is cut
+into its phases and goals from `README.md`, with nobody present.
+`programmeDue` (`programme-turn.js`) is model-free and reads at every pick. A turn is due when
 all hold:
 
-- the record is valid, `open`, signed (`signed_text` set) and not `legacy`, and
-  `README.md` exists;
-- `cut_text` is not `signed_text`: the signature has not been cut yet. Goals
-  already in the programme do not stop a turn, so a re-sign is cut again from
-  the new document and the goals of an unchanged part stay;
+- the record is valid and `ready`, and `README.md` exists;
+- its goals are not already cut;
 - no open desk item of kind `programme` has the reference `programme:<p>`;
 - when the record names a horizon, that horizon reads `open`.
 
@@ -911,42 +904,31 @@ offline holds, STOP and UPDATE are those of every session. It never uses a
 `plan/<programme>` worktree and commits nothing: the served repositories are
 given as read checkouts at `runner/work/programme-turn-<p>/<repo>`, detached at
 origin/main. The prompt is `programmePlanPrompt` (`run-plan.js`), and the plan
-role's headless programme-turn section says the rest. SIGNED.md is the only
-source: the session cuts the programme from it, one or more goals per part,
+role's headless programme-turn section says the rest. `README.md` is the source:
+the session cuts the programme from it, one or more goals per part,
 each naming the part it carries as `Part <n>` in the label of a `documents`
-entry whose path is the programme's SIGNED.md (a path that resolves to another
-file counts for nothing, and no part range is read). It copies the part's
+entry whose path is the programme's `README.md`. It copies the part's
 Solution, Design and Proved by into the goal and decides nothing the document
 does not; a part already built gets a goal for the difference only, and the
 goals of an unchanged part are kept. Dependencies of a stated programme are
 stated with `mc programs after`. A choice the document leaves open is not
-settled and not asked by the session: it returns the programme with
-`mc programs return <p> --reason "<part and choice>"` and ends (the record is
-`draft` again and no turn starts until the next sign-off). Only a question that
-is not such a choice is asked, with a goal-bound `mc ask` on the draft that
+settled by the session: it leaves the question at the desk with
+`mc martin propose --text <programme>/README.md --file <brief>` and ends.
+Only a question that is not such a choice is asked, with a goal-bound `mc ask` on the draft that
 needs it (one way to ask: jev, then a reader), and the other drafts go on. Drafts it
 leaves are not set to Martin: the next-draft sessions take them. Proposals are
 not processed.
 
 **The cut.** After the session `finishTurn` reads the record again under the
-runner lock and reads the signed Part headings (`### Part <n> — …` inside
+runner lock and reads the Part headings (`### Part <n> — …` inside
 `## Parts`, fenced blocks ignored) against the parsed live and archived goals
 (`partsCut`, no stage excluded). The ending is one of:
 
-- `cut`: SIGNED.md still matches the signature the turn launched on and every
-  part is named by a goal. `cut_text` is set to that signature in the record's
-  one atomic write, and the other fields are read fresh and kept;
-- `returned`: the record is `draft` again (the session returned it). Success; the
-  earlier `cut_text` is kept and no turn starts while it is draft;
-- `resigned`: the record carries a newer `signed_text` than the turn read.
-  Nothing is cut and nothing counts; the next pick cuts the new signature;
-- `settled`: the record is `done`, `dropped`, legacy or gone, or carries no
-  signature. Nothing is written and nothing counts;
-- `incomplete`: the record is as launched but SIGNED.md is missing or does not
-  match it, names no part, or a part is named by no goal. A failure (below).
+- `cut`: every part is named by a goal;
+- `settled`: the record is no longer ready. Nothing counts;
+- `incomplete`: a part is named by no goal, or `README.md` is missing. A failure (below).
 
-`runs.tsv` notes say `cut from the signature`, `returned to draft` or
-`not cut (<problem>; …)`.
+`runs.tsv` notes say `cut` or `not cut (<problem>; …)`.
 
 **Next-draft planning waits.** While a programme turn is claimed or current in a
 programme, no next-draft plan session starts in it: the sequential pick filter,

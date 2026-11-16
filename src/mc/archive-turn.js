@@ -148,7 +148,7 @@ export function archiveDue({ programme, home, root, list, read, items = [], stat
   const record = readRecord(dir, { read });
   if (record.status === 'none') return { due: false, reason: 'no record', notice: null };
   if (record.status === 'invalid') return { due: false, reason: 'its record is invalid', notice: null };
-  if (record.record.state !== 'open') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
+  if (record.record.state !== 'ready') return { due: false, reason: `its record reads ${record.record.state}`, notice: null };
   if (liveGoals({ home, programme, list }).length) return { due: false, reason: 'it holds a live goal', notice: null };
   if (openArchiveItem(items, programme)) {
     return { due: false, reason: 'an archive desk item is open', notice: null };
@@ -399,7 +399,7 @@ export async function archiveOnOk({ programme, home, restrictedDir, proposalsHom
   const dir = join(home, programme);
   if (liveGoals({ home, programme, list }).length) return { ok: false, reason: 'the programme holds a live goal' };
   const record = readRecord(dir, { read });
-  if (record.status !== 'valid' || record.record.state !== 'open') return { ok: false, reason: `its record does not read valid and open (${record.status === 'valid' ? record.record.state : record.status})` };
+  if (record.status !== 'valid' || record.record.state !== 'ready') return { ok: false, reason: `its record does not read valid and ready (${record.status === 'valid' ? record.record.state : record.status})` };
   const entries = list(restrictedDir).filter((entry) => !entry.startsWith('.'));
   if (entries.length) return { ok: false, restricted: entries };
   const fence = () => {

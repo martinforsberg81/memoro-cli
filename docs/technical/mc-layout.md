@@ -8,14 +8,10 @@ not a migration. `src/mc/commands/layout.js` and `src/mc/paths.js` supply it.
 
 ```
 ~/mc/programs/<programme>/
-  README.md                         the programme's aim
+  README.md                         the programme document
   PROGRAMME.json                    its record, when it has one (mc-plan.md)
-  SIGNED.md                         held document plus signed design-file hashes
-  PROGRAMME-REVIEW.md                independent reading: verdict, findings count, findings
-  .programme-review.json            judged README/report hashes, verdict, findings/time/model
+  PROGRAMME-REVIEW.md                advisory reading findings
   .programme-review-launch.json     bounded in-flight launch binding, hashed token, pid/start
-  LOG.md                            programme sign-off time/Martin and any override reason
-  RETURNED.md                       appended return/drop time, role and reason
   memoro/  memoro-cli/               plan/<programme> worktrees
   goals/<goal>/
     GOAL.json  LOG.md                brief, state and session log
@@ -108,9 +104,8 @@ The runner's queue lock is `runner/register.lock` (`runner-lock.js`).
 `programs/`, with id `goal-file`; a relative path is resolved against cwd.
 There is no escape for those tools. Bash writes naming GOAL.json are caught
 by a separate rule, with the usual `MC_HOOK_ALLOW=1` escape. Use the `mc goal`
-verbs so each write is validated. `PROGRAMME.json`, `SIGNED.md`,
-`.programme-review.json` and `RETURNED.md` anywhere under `programs/` are
-guarded the same way, with id `programme-file`; they change through the
+verbs so each write is validated. `PROGRAMME.json` anywhere under `programs/` is
+guarded the same way, with id `programme-file`; it changes through the
 `mc programs` verbs. The record sits directly in the programme directory.
 See [mc-hooks.md](mc-hooks.md).
 

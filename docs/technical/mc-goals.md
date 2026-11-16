@@ -170,9 +170,9 @@ written, and a write that would make one is refused with the field named.
   draft: the runner starts no session on a goal in `build` with no criterion,
   and it cannot go to review.
 - `documents` — `[{ label, path }]` (`validateDocuments`). A document whose path
-  is its programme's `SIGNED.md` and whose label carries explicit `Part <n>`
+  is its programme's `README.md` and whose label carries explicit `Part <n>`
   references (`Part 1`, `Parts 1 and 2`, `Part 1; Part 2`; no range) names those
-  parts of the signed document: the programme turn's coverage reads them from
+  parts of the programme document: the programme turn's coverage reads them from
   parsed live and archived goals, with no stage excluded (*Programme planning
   turn* in [mc-run.md](mc-run.md#programme-planning-turn)). A path that
   resolves to another file counts for nothing. The goal file has no other form

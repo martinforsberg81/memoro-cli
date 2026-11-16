@@ -22,7 +22,7 @@ on, and a source area whose `covers` or `paths` the change falls under.
 
 Answer these questions, in this order, each with what you read; the eighth only
 when the prompt says `QUESTION 8 IS ASKED`, the ninth only when the programme
-has a SIGNED.md:
+README.md has parts:
 
 1. Is every premise true on main?
 2. Can every check run here and now, before merge?
@@ -39,9 +39,8 @@ has a SIGNED.md:
    it adds, held against the documents the area names?
 
 9. Does the goal contain a solution, design or decision that its part of the
-   programme's SIGNED.md does not? Read that signed source, with its pictures
-   (`designs/part-<n>/`) and text blocks; yes, or an intended result that
-   differs from them, is NOT OK.
+   programme's README.md does not? Read that source; yes, or an intended result that
+   differs from it, is NOT OK.
 
 Write `PLAN-REVIEW.md` in the goal's directory (the prompt names the path).
 Its first line is `OK` when no question found a defect the build would hit,

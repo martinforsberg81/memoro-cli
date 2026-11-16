@@ -1876,7 +1876,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const roleName = GOAL_ROLES.plan;
     const role = deps.role(roleName);
     if (!role?.overlay) { say(`${name}: ${roleFileText(roleName)} is missing on this machine, skip`); return 'skipped:role-missing'; }
-    // The programme turn carries a signed document over into goals: simple work, on the plan list (Martin, 2026-11-16).
+    // The programme turn carries README.md over into goals: simple work, on the plan list (Martin, 2026-11-16).
     const route = routeClass('plan');
     if (!route.ok) { say(`${name}: ${route.reason} — skip`); return 'skipped:no-capacity'; }
     const settings = routedSettings(null, null, { kind: 'goal', candidate: route.candidate });
@@ -1947,14 +1947,12 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       const count = goalCount({ home: programsHome(deps.env), programme, list: deps.list });
       // An ending the provider caused says nothing about the programme: a quota, an unreachable API, or a refused login counts for nothing.
       const providerEnding = read.quota || read.interrupted === 'offline' || (read.interrupted === 'login' && loginRefusesPlan(launch) && picked.billing === 'plan');
-      // The signature this turn read is the only one it may consume: the record is read again under its lock (finishTurn).
-      const ended = finishTurn({ programme, home: programsHome(deps.env), signed: due.record.signed_text, list: deps.list, read: deps.read, write: deps.write, lock, root });
+      const ended = finishTurn({ programme, home: programsHome(deps.env), list: deps.list, read: deps.read, write: deps.write, lock, root });
       let note = `${read.note},${count} goal${count === 1 ? '' : 's'}`;
-      if (ended.kind === 'cut') note = `${note},cut from the signature`;
-      else if (ended.kind === 'returned') note = `${note},returned to draft`;
-      else if (ended.kind === 'resigned' || ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
+      if (ended.kind === 'cut') note = `${note},cut`;
+      else if (ended.kind === 'settled') note = `${note},not cut (${ended.problems.join('; ')})`;
       else if (!providerEnding) {
-        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of the signed document (${ended.problems.join('; ')}; ${read.note})`;
+        const reason = `planning session exited ${result.status ?? 1} without a goal naming every part of README.md (${ended.problems.join('; ')}; ${read.note})`;
         countTurnFailure(programme, reason, `${out}.jsonl`);
         note = reason;
       }
@@ -2773,9 +2771,9 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const name = goalName(goal);
     const programme = readRecord(join(programsHome(deps.env), goal.programme), { read: deps.read });
     if (programme.status === 'valid' && programme.record.state === 'draft') {
-      const key = `sign-off:${goal.programme}`;
+      const key = `draft:${goal.programme}`;
       if (holdsSaid.get(name) !== key) {
-        say(`${name}: waits for sign-off of ${goal.programme} — no session is started`);
+        say(`${name}: ${goal.programme} is draft — no session is started`);
         holdsSaid.set(name, key);
       }
       return true;

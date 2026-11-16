@@ -413,7 +413,7 @@ function namesParts(f, name, parts) {
 /** A programme `prog` with a record and a page, and the prepared item its planning turn opened. */
 function programmeItem(f, fields = {}) {
   const dir = join(f.home, 'prog'); mkdirSync(join(dir, 'goals'), { recursive: true });
-  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), '# prog\n'); writeFileSync(join(dir, 'SIGNED.md'), SIGNED_MD);
+  writeFileSync(join(dir, 'PROGRAMME.json'), PROGRAMME_RECORD); writeFileSync(join(dir, 'README.md'), SIGNED_MD); writeFileSync(join(dir, 'SIGNED.md'), SIGNED_MD);
   const item = { schema: 'mc-desk-item', version: 1, id: deskItemId('programme', 'programme:prog', stamp), kind: 'programme', reference: 'programme:prog', source_at: stamp, opened_at: stamp, state: 'prepared', sort: 'mechanical', reversible: null, due_at: null, outcome: null, ...fields };
   writeDeskItem(item, { env: f.env });
   return item;
@@ -440,13 +440,13 @@ test('a programme item closes by source when goals name every part of the signed
   assert.equal(syncProgramme(partial).item.state, 'prepared', 'goals naming no part, or part 1 only, leave the item open');
   namesParts(partial, 'two', [2]);
   const held = syncProgramme(partial).item;
-  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'Goals now name every part of the signed document.']);
+  assert.deepEqual([held.state, held.outcome.by, held.outcome.summary], ['closed', 'source', 'Goals now name every part of the programme document.']);
 
   const changed = fixture(); programmeItem(changed); namesParts(changed, 'all', [1, 2]);
-  writeFileSync(join(changed.home, 'prog', 'SIGNED.md'), `${SIGNED_MD}\nEdited after the signature.\n`);
-  assert.equal(syncProgramme(changed).item.state, 'prepared', 'a SIGNED.md that no longer matches the signature closes nothing');
+  writeFileSync(join(changed.home, 'prog', 'README.md'), `${SIGNED_MD}\n### Part 3 — Three\n`);
+  assert.equal(syncProgramme(changed).item.state, 'prepared', 'a README.md with an uncut part closes nothing');
 
-  for (const [kind, record] of [['legacy', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), version: 1, signed_at: undefined, signed_by: undefined, signed_text: undefined, cut_text: undefined })], ['draft', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'draft', signed_at: null, signed_by: null, signed_text: null })]]) {
+  for (const [kind, record] of [['draft', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'draft' })]]) {
     const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
     assert.equal(syncProgramme(f).item.state, 'closed', `${kind}: a record the turn can no longer cut from closes it`);
   }
@@ -454,7 +454,7 @@ test('a programme item closes by source when goals name every part of the signed
   for (const [kind, record] of [['done', JSON.stringify({ ...JSON.parse(PROGRAMME_RECORD), state: 'done' })], ['invalid', '{ not json']]) {
     const f = fixture(); programmeItem(f); writeFileSync(join(f.home, 'prog', 'PROGRAMME.json'), record);
     const closed = syncProgramme(f).item;
-    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and open.'], kind);
+    assert.deepEqual([closed.state, closed.outcome.by, closed.outcome.summary], ['closed', 'source', 'The programme record no longer reads valid and ready.'], kind);
   }
 
   const gone = fixture(); programmeItem(gone); rmSync(join(gone.home, 'prog'), { recursive: true, force: true });

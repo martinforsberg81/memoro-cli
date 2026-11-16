@@ -582,6 +582,22 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   let code;
   if (note) { stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`); code = invalidExit; }
   else if (changed.length) { note = `${changed.join(', ')} changed during the reading`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
+  else if (policy.advisory) {
+    const report = read(join(target.dir, reviewFile));
+    if (result?.timedOut) {
+      note = `the reading exceeded ${limitWords}`;
+      stderr.write(`mc: ${kind} ${target.name}: no reading — ${note}\n`);
+      code = invalidExit;
+    } else if (report === null) {
+      note = `the session ended without writing ${reviewFile}`;
+      stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`);
+      code = 1;
+    } else {
+      const path = join(target.dir, reviewFile);
+      stdout.write(`mc: ${kind} ${target.name}: review written — ${path}\n`);
+      code = 0;
+    }
+  }
   else if (result?.timedOut || !verdict || invalidLaunch) { note = result?.timedOut ? `the reading exceeded ${limitWords}` : `the session ended without a verdict (exit ${result?.status ?? 1})`; stderr.write(`mc: ${kind} ${target.name}: no reading stored — ${note}\n`); code = invalidExit; }
   else {
     const at = now();
@@ -659,30 +675,8 @@ export function readerVerdict({ target, word, ctx, deps = {}, policy }) {
 
 export const PROGRAMME_REVIEW_ROLE = 'programme-review';
 export const PROGRAMME_REVIEW_FILE = 'PROGRAMME-REVIEW.md';
-export const PROGRAMME_REVIEW_RECORD = '.programme-review.json';
 export const PROGRAMME_REVIEW_LAUNCH = '.programme-review-launch.json';
 export const PROGRAMME_REVIEW_LIMIT_MS = 30 * 60_000;
-
-/** The signed report format, not a judgement of its findings. */
-export function programmeReport(text) {
-  if (typeof text !== 'string') return null;
-  const [verdict, count] = text.split(/\r?\n/u);
-  const findings = /^findings: (\d+)$/u.exec(count ?? '');
-  if (!['OK', 'NOT OK'].includes(verdict) || !findings || !Number.isSafeInteger(Number(findings[1]))) return null;
-  return { verdict: verdict === 'OK' ? 'ok' : 'not-ok', findings: Number(findings[1]) };
-}
-
-/** A current reading includes the report it recorded, so an unsuccessful newer call cannot substitute its report. */
-export function currentProgrammeReading(dir, text, read = readTextOrNull, { anyText = false } = {}) {
-  const meta = jsonOrNull(read(join(dir, PROGRAMME_REVIEW_RECORD)));
-  const report = read(join(dir, PROGRAMME_REVIEW_FILE));
-  const parsed = programmeReport(report);
-  // anyText: the desk's sign — a reading of an earlier text still counts; edits made with Martin at the desk need no new reading.
-  if (anyText && meta) meta.earlier = meta.hash !== sha256(text);
-  if (!meta || !parsed || (!anyText && meta.hash !== sha256(text)) || meta.report_sha256 !== sha256(report)
-    || meta.verdict !== parsed.verdict || meta.findings !== parsed.findings || !Number.isFinite(Date.parse(meta.at))) return null;
-  return meta;
-}
 
 /** Only named, known repositories are exported. Never interpret a README entry as an arbitrary disk path. */
 export function programmeRepositories(text, known) {
@@ -698,53 +692,27 @@ export function programmeRepositories(text, known) {
   return { repos };
 }
 
-/** One programme reading, uncapped, bound to README bytes rather than goal records or draft rounds. */
+/** One programme reading, uncapped, advisory: writes report beside programme, records no verdict. */
 export async function programmeReviewCall({ target, ctx, text, repos, deps = {} }) {
-  const { read, write, env, stderr } = ctx;
+  const { read, env, stderr } = ctx;
   if (text === null) { stderr.write(`mc: programme-review ${target.name}: README.md is missing\n`); return 2; }
   const hash = sha256(text);
   const check = () => read(join(target.dir, 'README.md')) !== text ? 'README.md changed during the reading — read its current text again' : null;
   return readerCall({ target, ctx, deps, policy: {
     kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
     reviewFile: PROGRAMME_REVIEW_FILE, limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes', invalidExit: 2,
-    hash, round: 1, author: authorOf(env, null), bound: true,
+    hash, round: 1, author: authorOf(env, null), bound: true, advisory: true,
     checkoutName: `mc-programme-review-${target.name}`, identity: { MC_PROGRAMME: target.name },
     tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', runName: `programme:${target.name}`, repos,
-    names: ['README.md', 'PROGRAMME.json', 'SIGNED.md', 'RETURNED.md'], check,
+    names: ['README.md', 'PROGRAMME.json'], check,
     prompt: (checkout) => [
       `Read the programme ${target.name}. Its directory is ${target.dir}.`,
       `Judge README.md (sha256 ${hash}), not a goal. Read the horizon's playback and basis, the cited standards/code, the places it did not read, and the pictures.`,
       'The repositories are read-only exports at origin/main (no repository metadata):',
       ...repos.map(({ repo }) => `${repo}: ${join(checkout, repo)}`),
-      `Write only ${join(target.dir, PROGRAMME_REVIEW_FILE)}: line one OK or NOT OK; line two findings: <n>; then each finding with its part, entry and narrowest fix.`,
-      `Your last act is mc programs review ${target.name} verdict ok|not-ok, matching line one.`,
+      `Write only ${join(target.dir, PROGRAMME_REVIEW_FILE)}: line one findings: <n>; then each finding with its part, entry and narrowest fix.`,
       'README.md follows:', text,
     ].join('\n\n'),
-    store: ({ verdict, at, candidate, author, launch }) => ctx.lock(workRoot(env), () => {
-      const changed = check();
-      if (changed) return changed;
-      const report = read(join(target.dir, PROGRAMME_REVIEW_FILE));
-      const parsed = programmeReport(report);
-      if (!parsed || parsed.verdict !== verdict || launch.report_sha256 !== sha256(report)) return 'PROGRAMME-REVIEW.md needs matching verdict and findings: <n> on its first two lines';
-      write(join(target.dir, PROGRAMME_REVIEW_RECORD), `${JSON.stringify({ verdict, hash, at: at.toISOString(), findings: parsed.findings,
-        report_sha256: sha256(report), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
-      return null;
-    }, { strict: true, name: 'programme-review-store' }),
-  } });
-}
-
-export function programmeVerdictVerb({ target, word, ctx, deps = {} }) {
-  return readerVerdict({ target, word, ctx, deps, policy: {
-    kind: PROGRAMME_REVIEW_ROLE, role: PROGRAMME_REVIEW_ROLE, launchFile: PROGRAMME_REVIEW_LAUNCH,
-    reviewFile: PROGRAMME_REVIEW_FILE, tokenEnv: 'MC_PROGRAMME_REVIEW_TOKEN', identityKey: 'MC_PROGRAMME', identityLabel: 'programme',
-    limitMs: PROGRAMME_REVIEW_LIMIT_MS, limitWords: 'thirty minutes',
-    record: (text) => ({ report_sha256: sha256(text) }),
-    check: ({ launch, text }) => {
-      if (launch.binding !== target.name || launch.role !== PROGRAMME_REVIEW_ROLE) return 'the launch is not for this programme reading';
-      const current = ctx.read(join(target.dir, 'README.md'));
-      if (current === null || launch.hash !== sha256(current)) return 'README.md changed during the reading — read its current text again';
-      if (!programmeReport(text)) return 'PROGRAMME-REVIEW.md needs findings: <n> on line two';
-      return null;
-    },
+    store: () => null,
   } });
 }

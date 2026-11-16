@@ -331,8 +331,8 @@ function newGoal(args, flags, ctx) {
   }
   if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
   const record = readRecord(join(home, programme), { read: ctx.read });
-  if (record.status === 'valid' && ['draft', 'dropped'].includes(record.record.state)) {
-    stderr.write(`mc: ${programme} is not signed off — mc programs show ${programme}\n`); return 1;
+  if (record.status === 'valid' && record.record.state === 'draft') {
+    stderr.write(`mc: ${programme} is draft — mc programs show ${programme}\n`); return 1;
   }
   if (record.status === 'none' && ctx.env.MC_HEADLESS === '1') {
     stderr.write(`mc: ${programme} has no record — a goal here is made at the desk\n`); return 1;
@@ -432,7 +432,7 @@ function logEntry(args, fields, ctx) {
   const verdict = reviewMove(goal, target, fields.stage, ctx);
   if (verdict.refusal) { stderr.write(`mc: ${verdict.refusal}\n`); return 2; }
   // Out of draft a goal is complete and has been read (plan-review.js); a build session never gets here: refusedMove said so.
-  const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx), signedPart: cutFromSignedPart(goal, target, ctx) });
+  const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx) });
   if (gate?.refusal) { stderr.write(`mc: ${gate.refusal}\n`); return 1; }
   if (fields.stage === 'review' && goal.stage !== 'review' && sessionNotPlan(env)) {
     const unmet = unmetGoalWords(goal, target.name);
@@ -1865,19 +1865,6 @@ function ghIn(cwd, args) {
  * The goal a verb names: `<programme>/<goal>` as given, or MC_GOAL's when none
  * is, as `{ programme, goal, name, dir }`; `{ error }` when neither is a goal name.
  */
-/**
- * Whether the goal is cut from a part of its programme's signed document: the record is open and signed, and the
- * goal names that programme's `SIGNED.md` as a document labelled `Part <n>`. Such a goal moves out of draft
- * without a plan review (`moveGate`).
- */
-function cutFromSignedPart(goal, target, ctx) {
-  const programmeDir = join(ctx.home, target.programme);
-  const found = readRecord(programmeDir, { read: (path) => ctx.read(path) });
-  if (found.status !== 'valid' || found.record.state !== 'open' || !found.record.signed_at) return false;
-  const signed = join(programmeDir, 'SIGNED.md');
-  return (goal.documents ?? []).some((doc) => /^Part \d/u.test(String(doc.label ?? '')) && String(doc.path ?? '') === signed);
-}
-
 function goalNamed(arg, { env, home }) {
   const given = arg ?? env.MC_GOAL;
   if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
@@ -1909,7 +1896,7 @@ export function refusedMove({ from, to = null, status = null, env }) {
   if (to === 'finish') return 'finish is no longer a goal stage to move to — use mc goal stage build for a rejected review';
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (env.MC_ROLE === 'ask-reader') return 'an ask-reader session reads (mc goal show, list, areas) and answers with mc ask answer; it changes no goal and asks no one';
-  if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md, then records its verdict with mc programs review <programme> verdict ok|not-ok; it changes no goal and asks no one';
+  if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md; it changes no goal and asks no one';
   if (env.MC_ROLE === 'plan-review') return 'a plan-review session reads and writes only PLAN-REVIEW.md, then records its verdict with mc goal plan-review <programme>/<goal> verdict ok|not-ok; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
     if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';

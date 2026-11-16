@@ -132,9 +132,8 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
         }
       }
     } else if (item.kind === 'programme') {
-      // A programme item is the planning turn's: it closes when a goal names every part of the signed document (the
-      // runner's own completion predicate, never merely a goal), its record no longer reads valid, open and signed, or
-      // its directory is gone. A state file that cannot be read keeps it open, said.
+      // A programme item is the planning turn's: it closes when a goal names every part of the programme document,
+      // its record no longer reads valid and ready, or its directory is gone. A state file that cannot be read keeps it open, said.
       const programme = item.reference.slice('programme:'.length);
       const turn = readTurnState({ root, programme, read });
       if (turn.status === 'unreadable') {
@@ -144,9 +143,8 @@ function syncHeld({ env, home = programsHome(env), root = workRoot(env), mc = mc
       }
       const record = exists(join(home, programme)) ? readRecord(join(home, programme), { read }) : null;
       if (!record) summary = 'The programme directory is gone.';
-      else if (record.status !== 'valid' || record.record.state !== 'open') summary = 'The programme record no longer reads valid and open.';
-      else if (!cuttable(record.record)) summary = 'The programme record carries no signature to cut from.';
-      else if (!cutProblems({ home, programme, record: record.record, list, read }).length) summary = 'Goals now name every part of the signed document.';
+      else if (record.status !== 'valid' || record.record.state !== 'ready') summary = 'The programme record no longer reads valid and ready.';
+      else if (!cutProblems({ home, programme, list, read }).length) summary = 'Goals now name every part of the programme document.';
     } else if (item.kind === 'archive') {
       // An archive item is the archive turn's: it closes by source only when the programme directory is gone from the
       // programmes home or its goals/ holds a live goal. A directory gone while the state still names a destination whose

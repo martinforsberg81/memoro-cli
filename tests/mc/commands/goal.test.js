@@ -3474,13 +3474,13 @@ const legacyRecord = () => JSON.stringify({ schema: 'mc-programme', version: 1, 
 const unsignedRecord = (state) => ({ ...JSON.parse(legacyRecord()), version: 2, state, signed_at: null, signed_by: null, signed_text: null, cut_text: null });
 const newArgv = ['new', 'mc/fresh', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'A signed part'];
 
-test('goal new refuses draft and dropped programmes before any fetch or goal write', async () => {
-  for (const state of ['draft', 'dropped']) {
+test('goal new refuses draft programmes before any fetch or goal write', async () => {
+  for (const state of ['draft']) {
     for (const env of [{}, { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' }]) {
       const f = fixture({ files: { [`${HOME}/mc/PROGRAMME.json`]: JSON.stringify(unsignedRecord(state)) }, env });
       const before = { ...f.store };
       assert.equal(await run(newArgv, f.deps), 1, state);
-      assert.equal(f.err(), 'mc: mc is not signed off — mc programs show mc\n');
+      assert.equal(f.err(), 'mc: mc is draft — mc programs show mc\n');
       assert.deepEqual(f.store, before);
       assert.deepEqual(f.calls, []);
     }

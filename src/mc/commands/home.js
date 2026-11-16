@@ -276,7 +276,7 @@ export function pageKey(data) {
   // What waits for Martin changes what the top of the page says; its ages and its cost do not.
   // The overview is drawn from the programmes' numbers and names and from the horizons they are under, in order.
   const horizonKey = [
-    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}:${group.record_state ?? ''}:${group.sign_off_waiting ? 1 : 0}`).join(','),
+    (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}:${group.record_state ?? ''}`).join(','),
     (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
   ].join('/');
   // The overview's IN FLIGHT, NEEDS ATTENTION, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.

@@ -607,20 +607,14 @@ for (const tool of ['codex', 'claude']) {
 }
 
 
-describe('programme sign is Martin at the interactive desk only', () => {
-  it('refuses manager, plan, build, headless Martin and a bare shell with no effects', async (t) => {
+describe('removed verbs exit 2', () => {
+  it('refuses sign, return, drop and model with exit 2 and has no effects', async (t) => {
     const setupStart = performance.now();
     const root = mkdtempSync(join(tmpdir(), 'mc-sign-authority-'));
     try {
       const dir = join(root, 'programs', 'p');
       mkdirSync(dir, { recursive: true });
       writeRecord(dir, newRecord({ end: 'A signed result.', createdBy: 'person' }));
-      const page = recordPageTemplate();
-      const hash = (text) => createHash('sha256').update(text).digest('hex');
-      const report = 'OK\nfindings: 0\n';
-      writeFileSync(join(dir, 'README.md'), page);
-      writeFileSync(join(dir, 'PROGRAMME-REVIEW.md'), report);
-      writeFileSync(join(dir, '.programme-review.json'), JSON.stringify({ verdict: 'ok', hash: hash(page), at: '2026-11-15T10:00:00Z', findings: 0, report_sha256: hash(report) }));
       const before = readFileSync(join(dir, 'PROGRAMME.json'), 'utf8');
       t.diagnostic(`sign authority fixture setup: ${(performance.now() - setupStart).toFixed(3)} ms`);
       for (const caller of [
@@ -632,29 +626,28 @@ describe('programme sign is Martin at the interactive desk only', () => {
           env: { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root, ...caller }, stdout, stderr,
         });
         assert.equal(code, 2, JSON.stringify(caller));
-        assert.equal(stderr.out.text, 'mc: only Martin at the desk signs a programme\n');
+        assert.match(stderr.out.text, /unknown flag: --reason|mc programs has no sign/u);
         assert.equal(stdout.out.text, '');
         assert.equal(readFileSync(join(dir, 'PROGRAMME.json'), 'utf8'), before);
-        for (const file of ['SIGNED.md', 'LOG.md', 'RETURNED.md']) assert.equal(existsSync(join(dir, file)), false, file);
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
-it('programme return and drop refuse every unauthorized caller and malformed request without effects', async () => {
+it('programme return and drop exit 2 without effects', async () => {
   const root = mkdtempSync(join(tmpdir(), 'mc-return-authority-'));
   try {
     const dir = join(root, 'programs', 'p'); mkdirSync(dir, { recursive: true });
     const initial = newRecord({ end: 'A result.', createdBy: 'person' });
     writeRecord(dir, initial);
     for (const verb of ['return', 'drop']) {
-      const record = verb === 'return' ? { ...initial, state: 'open', signed_at: '2026-11-14T10:20:30Z', signed_by: 'martin', signed_text: 'a'.repeat(64) } : initial;
+      const record = initial;
       writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify(record));
       const before = readFileSync(join(dir, 'PROGRAMME.json'), 'utf8');
       for (const caller of [{}, { MC_ROLE: 'manager' }, { MC_ROLE: 'build-session:goal', MC_GOAL: 'p/g' }, { MC_ROLE: 'martin', MC_HEADLESS: '1' }, { MC_ROLE: 'plan', MC_PROGRAMME: 'other' }, { MC_ROLE: 'plan', MC_PROGRAMME: 'p', MC_GOAL: 'p/g' }, { MC_ROLE: 'programme-review' }, ...(verb === 'drop' ? [{ MC_ROLE: 'plan', MC_PROGRAMME: 'p' }] : [])]) {
         const stdout = sink(), stderr = sink();
         assert.equal(await programs([verb, 'p', '--reason', 'Not authorized'], { env: { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root, ...caller }, stdout, stderr }), 2, `${verb} ${JSON.stringify(caller)}`);
-        assert.match(stderr.out.text, /only Martin at the desk/u);
+        assert.match(stderr.out.text, new RegExp(`unknown flag: --reason|mc programs has no ${verb}`, 'u'));
         assert.equal(stdout.out.text, '');
         assert.equal(readFileSync(join(dir, 'PROGRAMME.json'), 'utf8'), before);
         assert.deepEqual(readdirSync(dir), ['PROGRAMME.json']);

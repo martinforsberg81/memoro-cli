@@ -2,10 +2,10 @@
 
 The complete document of a programme with a record, except an area repair
 ([repair page](repair-page.md)). `mc programs create` fills in the name, End,
-horizon and purpose in the first fenced block below. Start a draft from the
-signed document `mc programs model` names: copy its headings and part form,
-never its content. [Designing a programme](../designing-a-programme.md) owns
-the design procedure. A programme without a record has [the older page](programme-readme.md).
+horizon and purpose in the first fenced block below. A programme is written with
+Martin in a session, he sets it ready there, and the planner cuts goals from its
+README. [Designing a programme](../designing-a-programme.md) owns the design
+procedure. A programme without a record has [the older page](programme-readme.md).
 
 ```markdown
 # <programme> — <one line on what this programme delivers>
@@ -99,16 +99,9 @@ whether it stays, is reworded (show the new text) or goes. A Solution that says
 document comes to the desk, the writer goes through every Solution sentence that
 changes what a user sees and checks that Design shows it.
 
-Findings of the independent reading are either fixed in the document before
-it is signed or routed by Martin when he signs, and his sign line in LOG.md
-says where. A finding he routes to the planner and the builder is theirs to
-settle inside the signed document: it is never a reason to return the
-programme. The planner returns a signed programme only for a choice of what is
-delivered or how it looks that the document neither shows nor routes, and the
-return reaches the desk as a text item on the document.
+Findings of an advisory reading are settled in the document with Martin before
+it is set ready.
 
-`## Decisions` is optional and belongs to the working README after sign-off,
-not the held signed copy. When a goal lands, its functionality goes to
-`docs/technical/` and its section leaves README; `SIGNED.md` remains the held
-source for build and review. Changing signed scope requires return, a current
-reading and a new sign-off, not an edit to the signed copy.
+`## Decisions` is optional and belongs to the working README.
+When a goal lands, its functionality goes to `docs/technical/` and its section
+leaves README.

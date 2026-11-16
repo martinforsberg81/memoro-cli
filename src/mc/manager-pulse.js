@@ -105,7 +105,7 @@ export function scanRecords({ home, list, read }) {
   const open = []; const invalid = [];
   for (const programme of list(home).filter((name) => NAME_RE.test(name)).sort()) {
     const found = readRecord(join(home, programme), { read });
-    if (found.status === 'valid' && found.record.state === 'open') open.push({ programme, record: found.record });
+    if (found.status === 'valid' && found.record.state !== 'done') open.push({ programme, record: found.record });
     else if (found.status === 'invalid') invalid.push({ programme, problems: found.problems });
   }
   return { open, invalid };
@@ -410,5 +410,5 @@ export function curationPrompt({ paths, branches, pages, backlog, moved = [] }) 
   return `You are the headless manager, curating the area texts with nobody present.${since} Your worktrees, made from origin/main, are ${trees}. The area pages are ${where}. `
     + `Bring each page's Closer, Store and Standards into line with what the code and \`docs/technical/\` now say. Change nothing under ## Aim or ## Decisions of a page, nothing outside \`docs/technical/\`, and no line holding a dated decision of Martin's; \`mc publish\` refuses it. `
     + `Publish each worktree you changed with plain \`mc publish\` (never \`--no-merge\`): it opens the pull request and queues it for the merger, whose docs form lands a pull request whose every file is under docs/. A worktree you did not change needs nothing, and a turn that finds nothing to change is a success. What waits on Martin goes to the desk with \`mc martin propose\`; do not make a horizon or a goal. `
-    + `Proposals, oldest first — turn a proposal into a programme only through \`mc programs create --area <repo>/<id> --purpose "…" --from-proposal <path>\`, which refuses while an open programme already repairs that area:\n${list}`;
+    + `Proposals, oldest first — bring what waits on Martin to the desk with \`mc martin propose\`:\n${list}`;
 }
