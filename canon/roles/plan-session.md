@@ -92,9 +92,8 @@ no solution, design or decision of your own, no proposal, and no extra items
 beyond what the verbs require. The builder settles the construction. Where
 goals exist from an earlier cut, a part unchanged since then keeps its goals;
 for a changed part a goal not yet in build is rewritten, and a goal already
-built gets a new goal for the difference. Read each goal once with
-`mc goal plan-review`, repair only what the reading finds, and move it to
-`build` in its phase.
+built gets a new goal for the difference. A goal cut from a signed part has
+no plan review: move it to `build` in its phase as soon as it is complete.
 
 Before anything else read Martin's sign line in the programme's `LOG.md` and
 `PROGRAMME-REVIEW.md`. What he routed there to the planner and the builder is
