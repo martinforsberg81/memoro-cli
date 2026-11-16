@@ -25,8 +25,8 @@ function fixture({ finishedPr = false, currents = [] } = {}) {
 const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 const draw = (data, over = {}) => renderPageLines(data, { columns: 120, now: NOW, ...over }).map(plain);
 
-describe('PROGRAMMES phase tree', () => {
-  it('shows each Manager as one IN FLIGHT row and programme turns under their owner, with triggers', () => {
+describe('The programmes\' phase tree', () => {
+  it('shows programme turns under their owner, with triggers, and a Manager only under `a`', () => {
     const runner = runnerSection({ now: NOW, alive: () => true, currents: [
       ...['inbox', 'empty'].map((programme, index) => ({ name: `plan:${programme}`, programme,
         kind: 'plan', reason: 'daily_proposals', pid: 200 + index, session_pid: 300 + index,
@@ -43,14 +43,10 @@ describe('PROGRAMMES phase tree', () => {
       programmes: programmesSection({ runnerSessions: runner.sessions, planningSessions: sessions.planning_sessions }) };
     for (const columns of [60, 80, 120, 160]) for (const expand of [false, true]) {
       const lines = draw(JSON.parse(JSON.stringify(data)), { columns, expand });
-      const programmes = lines.findIndex(line => line.includes('PROGRAMMES'));
-      const flight = lines.findIndex(line => line.includes('IN FLIGHT'));
-      assert.ok(programmes >= 0 && flight >= 0, 'the programmes and the sessions are both drawn');
-      // A desk session is one IN FLIGHT row, by name; its frame, trigger and pid are drawn under `a` (D6, D10).
-      for (const [name, age] of [['manager', '30 min'], ['manager', '20 min']]) {
-        const rows = lines.filter((line, index) => index > flight && line.includes(`● ${name}  the desk`) && line.includes(age));
-        assert.equal(rows.length, 1, `${name} ${age} is one IN FLIGHT row`);
-      }
+      const programmes = lines.findIndex(line => /^ {2}┌─ (?:\d+ {2})?inbox /u.test(line));
+      assert.ok(programmes >= 0, 'the programmes are drawn');
+      assert.ok(!lines.some(line => /PROGRAMMES|IN FLIGHT/u.test(line)), 'there is no PROGRAMMES or IN FLIGHT section');
+      // A desk session has its frame, trigger and pid under `a` (D6, D10); the overview counts it in DESK's title.
       if (expand) {
         // Under `a` the hero frame follows PROGRAMMES, and each Manager has its own rounded frame below it.
         const hero = lines.findIndex(line => line.includes('Programs:'));
@@ -75,9 +71,9 @@ describe('PROGRAMMES phase tree', () => {
         assert.equal(lines.filter(line => line.includes(`pid ${pid}`)).length, 1);
       }
       assert.equal(lines.filter(line => line.includes('pid 402')).length, 1, 'interactive plan stays visible');
-      const unassigned = lines.findIndex(line => line.includes('UNASSIGNED ACTIVITY'));
-      assert.ok(unassigned > programmes);
-      assert.ok(lines.slice(unassigned).some(line => line.includes('inbox/missing')), 'goal recovery without a goal stays unassigned');
+      const maintenance = lines.findIndex(line => line.startsWith('  ┌─ MAINTENANCE'));
+      assert.ok(maintenance > programmes);
+      assert.ok(lines.slice(maintenance).some(line => /^ {4}inbox\/missing {2}plan · open/u.test(line)), 'goal recovery without a goal is a MAINTENANCE row');
       assert.ok(!lines.some(line => line.includes('plan:inbox') || line.includes('plan:empty')));
       assert.ok(lines.every(line => width(line) <= columns), `${columns} columns`);
     }
@@ -133,7 +129,7 @@ describe('PROGRAMMES phase tree', () => {
     assert.match(withFinishedPr[finishedAt + 3], /memoro#14859/u, 'the PR is a child row');
   });
 
-  it('puts live sessions beneath their goals, exposes future activity and retains unassigned sessions', () => {
+  it('puts live sessions beneath their goals, exposes future activity and keeps a session on no goal as a MAINTENANCE row', () => {
     const current = (name, kind) => ({ name: `goal:inbox/${name}`, kind, repo: 'memoro', pid: 7,
       tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 });
     const data = fixture({ currents: [current('parallel-a', 'build'), current('far-future', 'review'), current('missing-goal', 'plan')] });
@@ -141,7 +137,8 @@ describe('PROGRAMMES phase tree', () => {
       const lines = draw(data, { columns });
       const painted = renderPageLines(data, { columns, colour: true, now: NOW });
       assert.deepEqual(painted.map(plain), lines);
-      for (const [kind, code] of [['BUILD', 32], ['REVIEW', 35], ['PLAN', 34]]) {
+      // The plan session on no goal is a MAINTENANCE row, not a box: its colours are held by page.test.js.
+      for (const [kind, code] of [['BUILD', 32], ['REVIEW', 35]]) {
         const at = lines.findIndex((line) => line.includes(`● · ${kind}`));
         assert.ok(painted[at - 1].includes(`\u001b[${code}m╭`), `${kind} top border`);
         const bottom = lines.findIndex((line, index) => index > at && line.trimStart().startsWith('╰'));
@@ -164,9 +161,9 @@ describe('PROGRAMMES phase tree', () => {
         assert.equal(width(lines[at + 3]), width(lines[bottom]));
         assert.ok(!lines[bottom + 1]?.includes('check-in'), 'no separate check-in below the frame');
       }
-      const unmatched = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
+      const unmatched = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
       assert.ok(unmatched > 0);
-      assert.ok(lines.slice(unmatched).some((line) => line.includes('inbox/missing-goal')));
+      assert.ok(lines.slice(unmatched).some((line) => /^ {4}inbox\/missing-goal {2}/u.test(line)), 'a session on no goal is a MAINTENANCE row');
       assert.equal(lines.filter((line) => line.includes('● · REVIEW')).length, 1);
       assert.ok(lines.every((line) => width(line) <= columns));
     }
@@ -200,9 +197,9 @@ describe('PROGRAMMES phase tree', () => {
  * view draws no done or dropped goal but one still at work, a phase with
  * nothing drawn is not drawn, a programme with nothing to draw is its heading
  * row, and what needs a person (a refused archive, an open PR) goes under
- * NEEDS ATTENTION in both views.
+ * NEEDS ATTENTION of its own programme's frame in both views.
  */
-describe('PROGRAMMES without finished goals', () => {
+describe('Programmes without finished goals', () => {
   const entry = (tool, stage, comment = null) => ({ at: '2026-11-05T07:00Z', tool, model: null, stage, status: 'ready', done: tool === 'runner' ? null : 'x', comment, next: null });
   const REFUSAL = "memoro's worktree has uncommitted changes (src/a.js)";
   const goalsFor = (...rows) => rows.map(([name, phase, over]) => goal(name, phase, over));
@@ -225,7 +222,7 @@ describe('PROGRAMMES without finished goals', () => {
     const [group] = data.programmes.programmes;
     assert.equal(group.finished, 3);
     const lines = draw(data);
-    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), /inbox {2}3 done/u);
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), /inbox {2}phase 2 of 2 · 4 goals · 3 done/u);
     assert.ok(lines.some((line) => line.includes('Title c')));
     for (const name of ['a', 'b', 'd']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1/u.test(line)), 'phase 1 holds nothing drawn');
@@ -235,27 +232,29 @@ describe('PROGRAMMES without finished goals', () => {
     assert.ok(expanded.some((line) => /Phase 1/u.test(line)));
   });
 
-  it('draws a programme with nothing unfinished as its heading row alone, the next one directly beneath', () => {
+  it('folds a programme with nothing unfinished, and draws it under `a` with its finished goals', () => {
     const data = page([...goalsFor(['x', 1, { stage: 'done' }]), goal('y', 1, { programme: 'second', stage: 'dropped' }), goal('z', 1, { programme: 'third' })]);
     const lines = draw(data);
-    const first = lines.findIndex((line) => /^  ┌─ inbox /u.test(line));
-    assert.match(lines[first], / {2}1 done/u);
-    assert.match(lines[first + 1], /^  ┌─ second /u, 'the next heading follows at once');
-    assert.match(lines[first + 1], / {2}1 done/u);
-    assert.ok(!programmeOf(lines, 'inbox').some((line) => /Phase|Title x|NEEDS/u.test(line)));
+    assert.ok(!lines.some((line) => /^  ┌─ (?:inbox|second) /u.test(line)), 'neither is drawn as a frame');
+    assert.ok(lines.some((line) => /^  ┌─ 2 programmes with nothing under way/u.test(line)), 'both are counted in the folded frame');
     assert.ok(programmeOf(lines, 'third').some((line) => line.includes('Title z')));
-    assert.ok(width(lines[first]) <= 120);
+    const expanded = draw(data, { expand: true });
+    assert.match(expanded.find((line) => /^  ┌─ inbox /u.test(line)), / · 1 done/u);
+    assert.match(expanded.find((line) => /^  ┌─ second /u.test(line)), / · 1 done/u);
+    assert.ok(programmeOf(expanded, 'inbox').some((line) => /Title x/u.test(line)), 'its finished goal is drawn under a');
+    assert.ok(width(lines[lines.findIndex((line) => /^  ┌─ third /u.test(line))]) <= 120);
   });
 
-  it('separates a last programme drawn as its heading alone from the unassigned activity under it', () => {
+  it('draws a session on no goal after the last programme, as a MAINTENANCE row', () => {
     const currents = [{ name: 'mend:main-red', kind: 'mend', repo: 'memoro', pid: 7, tool: 'codex', model: 'sol', started: '2026-11-05T08:48:00Z', check_in_minutes: 60, check_ins: 1 }];
     const data = page([goal('z', 1, { programme: 'alpha' }), ...goalsFor(['x', 1, { stage: 'done' }])], { currents });
     const lines = draw(data);
-    const heading = lines.findIndex((line) => /^  ┌─ inbox /u.test(line));
-    const unassigned = lines.findIndex((line) => line.includes('UNASSIGNED ACTIVITY'));
-    assert.ok(heading >= 0 && unassigned > heading, 'inbox is the last programme, the activity follows it');
-    assert.equal(lines[heading + 1], '', 'a blank line under the lone heading');
-    assert.equal(unassigned, heading + 2);
+    const folded = lines.findIndex((line) => /^  ┌─ 1 programme with nothing under way/u.test(line));
+    const maintenance = lines.findIndex((line) => line.startsWith('  ┌─ MAINTENANCE'));
+    assert.ok(folded >= 0 && maintenance > folded, 'the folded programme is the last, the activity follows it');
+    assert.equal(lines[folded + 1], '', 'a blank line between');
+    assert.equal(maintenance, folded + 2);
+    assert.ok(lines[maintenance + 1].startsWith('    mend:main-red  mend · open'), 'the session is a row of MAINTENANCE');
   });
 
   it('keeps a finished goal that is running, or owns a live session, in its phase until the session ends', () => {
@@ -266,7 +265,7 @@ describe('PROGRAMMES without finished goals', () => {
     assert.ok(lines.some((line) => /Phase 1/u.test(line)));
     assert.ok(!lines.some((line) => line.includes('Title gone')));
     assert.ok(!lines.some((line) => /NEEDS ATTENTION/u.test(line)), 'a goal at work is not needing attention');
-    assert.ok(!lines.some((line) => /UNASSIGNED ACTIVITY/u.test(line)), 'its session is under it, not unassigned');
+    assert.ok(!lines.some((line) => /MAINTENANCE/u.test(line)), 'its session is under it, not a row of MAINTENANCE');
     const after = draw(page(goalsFor(['live', 1, { stage: 'done' }], ['open', 2])));
     assert.ok(!after.some((line) => line.includes('Title live')), 'once the session has ended it leaves');
   });
@@ -295,7 +294,7 @@ describe('PROGRAMMES without finished goals', () => {
     const lines = draw(data);
     for (const name of ['asks', 'halted']) assert.ok(!lines.some((line) => line.includes(`Title ${name}`)), `${name} is not drawn`);
     assert.ok(!lines.some((line) => /Phase 1|NEEDS ATTENTION|▸ Finished/u.test(line)));
-    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), / {2}2 done/u);
+    assert.match(lines.find((line) => line.startsWith('  ┌─ inbox')), / · 2 done/u);
     const expanded = draw(data, { expand: true });
     for (const name of ['asks', 'halted']) assert.ok(expanded.some((line) => line.includes(`Title ${name}`)), `${name} drawn under a`);
   });
@@ -331,8 +330,8 @@ describe('PROGRAMMES without finished goals', () => {
       // `a` goes on to the operations sections, whose PRs panel lists the same PR again: the goal's own rows end there.
       const operations = lines.findIndex((line) => line.includes('MERGE & DEPLOY'));
       const goalRows = operations < 0 ? lines : lines.slice(0, operations);
-      // The programme's tree has it twice (the reason and the PR row); the overview's NEEDS ATTENTION adds its one row.
-      assert.equal(goalRows.filter((line) => line.includes('#77')).length, 3, 'the reason and the row in the tree, one row in NEEDS ATTENTION');
+      // Twice, in its programme (the reason and the PR row); no section of the overview repeats it.
+      assert.equal(goalRows.filter((line) => line.includes('#77')).length, 2, 'the reason and the row, in the programme');
       assert.equal(goalRows.filter((line) => line.includes('Title landed')).length, 1, 'the tree draws the goal once');
     }
   });

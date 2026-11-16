@@ -62,10 +62,10 @@ const plain = (line) => line.replace(/\u001b\[[0-9;]*m/gu, '');
 /** The goal row named `name`, found by its kind and its name. */
 const goalLineOf = (lines, name) => lines.find((line) => new RegExp(`^ +\\d+ ${name}(?: |$)`, 'u').test(plain(line)));
 
-/** The PROGRAMMES section's lines, from its heading to the end of the page. */
+/** The programmes' lines, from the first programme frame's heading to the end of the page. */
 function programmesOf(lines) {
-  const head = lines.findIndex((line) => /^ {2}┌─ PROGRAMMES/u.test(plain(line)));
-  assert.ok(head >= 0, 'PROGRAMMES is drawn');
+  const head = lines.findIndex((line) => /^ {2}┌─ (?:\d+ {2})?[a-z][a-z-]*(?: |$)/u.test(plain(line)));
+  assert.ok(head >= 0, 'a programme frame is drawn');
   return lines.slice(head);
 }
 
@@ -343,8 +343,11 @@ describe('programme pull requests', () => {
       assert.match(lines[divider + 1], /1 open · 1 nobody's/u);
       for (const number of [31, 32, 33, 34]) {
         const own = lines.map((line, index) => ({ line, index })).filter(({ line }) => line.includes(`#${number}`));
-        assert.equal(own.length, 1, `#${number} appears once at ${columns} columns`);
-        assert.equal(own[0].index < divider, number !== 34);
+        // An owned PR is drawn once, under its programme. #34 is nobody's: a MAINTENANCE row, and under `a` also the
+        // operations view's list of PRs outside goals; neither is in a programme's frame.
+        assert.equal(own.length, number === 34 ? 2 : 1, `#${number} is drawn ${number === 34 ? 'in MAINTENANCE and the outside-goals list' : 'once'} at ${columns} columns`);
+        assert.equal(own.every(({ index }) => index < divider), number !== 34);
+        if (number === 34) assert.ok(lines.slice(0, lines.findIndex((line) => line.includes('MAINTENANCE'))).every((line) => !line.includes('#34')), '#34 is in no programme');
       }
     }
   });

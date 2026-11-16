@@ -106,13 +106,17 @@ export function waitedWords(minutes) {
 const stamp = (iso) => String(iso).replace('T', ' ').slice(0, 16);
 const money = (value) => `$${Number(value).toFixed(2)}`;
 
-/** The DESK panel, drawn from `desk` alone. A page whose data has no `desk` draws none. */
-export function deskLines(lines, c, wide, desk) {
+/**
+ * The DESK panel, drawn from `desk` alone. A page whose data has no `desk` draws none. `deskSessions` is how many desk
+ * sessions are open (martin, manager, helper); DESK's title counts them, and a null count says nothing.
+ */
+export function deskLines(lines, c, wide, desk, { deskSessions = null } = {}) {
   if (!desk) return;
   const indent = 4, room = wide - indent;
   const put = (text, ...tones) => lines.push(`${' '.repeat(indent)}${c(clip(text, room), ...tones)}`);
   const waiting = (desk.texts?.length || 0) + (desk.acts?.length || 0);
-  panelHeading(lines, c, wide, 'DESK', desk.error ? '' : waiting ? `${waiting} waiting for you` : 'Nothing waits for you.', 'd  mc martin');
+  const sessionWords = deskSessions ? `${deskSessions} desk session${deskSessions === 1 ? '' : 's'} open` : '';
+  panelHeading(lines, c, wide, 'DESK', desk.error ? '' : [waiting ? `${waiting} waiting for you` : 'Nothing waits for you.', sessionWords].filter(Boolean).map((text) => ({ text, styles: ['grey'] })), 'd  mc martin');
   if (desk.error) {
     put(`desk unreadable — ${desk.error}`, 'red');
     panelEnd(lines, c, wide);

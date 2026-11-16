@@ -41,7 +41,7 @@ import { collectPage } from '../page-collect.js';
 import { CLEAR_ALL } from '../page-frame.js';
 import { LIVE_MIN_COLUMNS, RESTART, liveReader, plainReader } from '../page-live.js';
 import { deskKey } from '../page-desk.js';
-import { attentionItems, flightRows, mergeDeployRows } from '../page-overview.js';
+import { flightRows, maintenanceItems, mergeDeployRows } from '../page-overview.js';
 import { colourFor, columnsFor, renderPageLines } from '../page-render.js';
 import { interactive } from '../prompt.js';
 import { childEnv, mcCheckout } from '../run-control.js';
@@ -279,11 +279,13 @@ export function pageKey(data) {
     (data?.programmes?.programmes || []).map((group) => `${group.number ?? ''}:${group.programme}:${group.horizon ?? ''}:${group.record_state ?? ''}`).join(','),
     (data?.horizons?.open || []).map((horizon) => horizon.slug).join(','),
   ].join('/');
-  // The overview's IN FLIGHT, NEEDS ATTENTION, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
+  // The overview's sessions, MAINTENANCE, MERGE and DEPLOY rows: which sessions, items and runs there are, not how old or dear.
   const flight = flightRows(data || {});
   const overviewKey = [
     [...flight.desk, ...flight.interactive, ...flight.runner].map((row) => row.key).sort().join(','),
-    attentionItems(data || {}).map((item) => `${item.key}:${item.text}`).join(','),
+    // A session's row says how long it has been open: its identity is its key, not its age. A stray session's row
+    // carries its age too; its `fact` is the row without it.
+    maintenanceItems(data || {}).map((item) => (item.key.startsWith('session:') ? item.key : `${item.key}:${item.fact ?? item.text}`)).join(','),
     mergeDeployRows(data || {}).map((row) => `${row.key}:${row.fact ?? row.text}`).join(','),
   ].join('/');
   return [goalKey, activityKey, priorityKey, data?.providerPriority || '', deskKey(data?.desk), horizonKey === '/' ? '' : horizonKey, overviewKey === '//' ? '' : overviewKey].filter(Boolean).join('|');

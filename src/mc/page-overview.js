@@ -1,13 +1,13 @@
 /**
- * The page's overview: what a person reads first, within a budget of rows (docs/technical/mc-ui.md, The overview).
+ * The page's overview: what a person reads first, as long as the work (docs/technical/mc-ui.md, The overview).
  *
- * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, IN FLIGHT (one row per session),
- * NEEDS ATTENTION (one row per item that waits on a person's eye), and one row for each merge and deploy that is queued or
- * running. The operational panels, the hero frame and the pipeline are the operations view (`o`), drawn by page-render.js.
+ * In order: the compact header (at most two rows), DESK, the warnings, HORIZONS, the programmes with something under
+ * way, one folded frame for the programmes with nothing under way (`a` draws them), MAINTENANCE for what belongs to no
+ * programme, and one row for each merge and deploy that is queued or running. The operational panels, the hero frame and
+ * the pipeline are the operations view (`o`), drawn by page-render.js.
  *
- * `overviewLines` draws from `data` alone — what `mc --json` prints — and folds rows until the page is at most
- * `OVERVIEW_ROWS` lines. The order of the folds, and what is never folded, is `FOLDS` below; every fold row says how many
- * rows it holds and that `a` shows them, so a row never disappears without a count. `a` (`expand`) draws no budget.
+ * `overviewLines` draws from `data` alone — what `mc --json` prints. There is no row budget and nothing is folded but the
+ * programmes with nothing under way, so a row never disappears from the page without a frame that counts it.
  *
  * Like page-horizons.js, this module imports nothing from page-render.js, which imports it.
  */
@@ -15,35 +15,14 @@ import { DESKS } from './session-owner.js';
 import { mergeFailureSummary } from './merge-red.js';
 import { ageWords } from './page-cache.js';
 import { deskLines } from './page-desk.js';
-import { clipCell, kindTone, stateTone } from './page-grid.js';
-import { horizonsFoldable, horizonsLines } from './page-horizons.js';
+import { clipCell } from './page-grid.js';
+import { horizonsLines, programmeFacts } from './page-horizons.js';
 import { detail, frameTop, panelEnd } from './page-operations.js';
-import { attentionGoals, notArchived } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
 
-/**
- * The overview is at most this many lines at every width the page draws; the menu's key block and prompt are not counted.
- * 50 rows of content, as before the frames, and the three bottom rules the frames of HORIZONS, IN FLIGHT and NEEDS ATTENTION add.
- */
-export const OVERVIEW_ROWS = 53;
-
-/** Needs attention keeps this many rows before it folds the rest. */
-export const ATTENTION_KEPT = 5;
-
-/**
- * The folds, in the order they are made while the page is over the budget: In flight's runner-session rows from the
- * last, the programme rows under `Serving no horizon` from the last, Needs attention's rows beyond `ATTENTION_KEPT`, and
- * the programme rows of the horizons from the last horizon up. Never folded: the header, DESK, the warnings, the merge
- * and deploy rows, the section headings, the horizon titles, `▸ n with nothing under way`, the desk sessions and the
- * interactive sessions.
- */
-export const FOLDS = Object.freeze(['sessions', 'none', 'attention', 'horizons']);
-
 const one = (text) => String(text ?? '').replace(/\s+/gu, ' ').trim();
 const money = (n) => (n == null ? null : `≈$${n < 10 ? n.toFixed(2) : Math.round(n)}`);
-const finished = (goal) => ['done', 'dropped'].includes(goal.stage);
-
 /** A run of `{ text, styles }` parts, painted. */
 const painted = (c, parts) => parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
 
@@ -100,15 +79,16 @@ export function headerRows(c, wide, data, version) {
   });
 }
 
-/* ---------------------------------------------------------------- In flight */
+/* ----------------------------------------------------------------- Sessions */
 
-/** A session's identity, so the same one seen twice is drawn once: the desk's and a programme's copies of a plan session. */
+/** A session's identity, so the same one seen twice is counted once: the desk's and a programme's copies of a plan session. */
 const identity = (session) => JSON.stringify([session.verb || session.kind || '', session.name || '', session.pid ?? '', session.started ?? '']);
 
 const RUNNER_KINDS = ['plan', 'build', 'review', 'mend'];
 
 /**
- * Every session at work, as rows: `desk` (the sessions of every desk kind, by name: martin, manager, helper, and a kind
+ * Every session at work, as rows (they are counted in DESK's title, drawn under their goal and programme, and — with no
+ * programme or goal — in MAINTENANCE; the rows are the page's key): `desk` (the sessions of every desk kind, by name: martin, manager, helper, and a kind
  * added later), `interactive` (the plan and programme sessions somebody has open) and `runner` (the runner's, by kind
  * and start). Each row is `{ kind, on, age, who, state, key }`; `key` is the session's identity.
  */
@@ -153,117 +133,48 @@ export function flightRows(data) {
   return { desk, interactive: take(interactive), runner: take(runner) };
 }
 
-/** `IN FLIGHT`'s rows, laid out in columns of the width the rows themselves need. */
-function flightRow(c, wide, row, columns) {
-  const mark = { text: '●', styles: kindTone(row.kind) };
-  const head = [
-    mark, { text: ' ' },
-    { text: row.kind.padEnd(columns.kind), styles: kindTone(row.kind) }, { text: '  ' },
-    { text: clipCell(row.on, columns.on).padEnd(columns.on), styles: ['bold'] },
-  ];
-  const tail = [
-    { text: ageWords(row.age).padEnd(columns.age), styles: ['grey'] },
-    row.who ? { text: row.who, styles: ['grey'] } : null,
-    row.state ? { text: row.state, styles: stateTone(row.stateName) } : null,
-  ].filter(Boolean);
-  const out = [...head];
-  let used = 4 + out.reduce((n, part) => n + width(part.text), 0);
-  for (const part of tail) {
-    if (used + 2 + width(part.text.trimEnd()) > wide) break;
-    out.push({ text: '  ' }, part);
-    used += 2 + width(part.text);
-  }
-  return `    ${painted(c, out).replace(/ +$/u, '')}`;
-}
+/* -------------------------------------------------------------- Maintenance */
 
-function flightLines(lines, c, wide, rows, folded) {
-  const all = [...rows.desk, ...rows.interactive, ...rows.runner];
-  const count = all.length;
-  lines.push(frameTop(c, wide, 'IN FLIGHT', count ? `${count} session${count === 1 ? '' : 's'}` : 'nothing running'));
-  if (!count) return;
-  const columns = {
-    kind: Math.max(...all.map((row) => row.kind.length)),
-    on: Math.min(Math.max(...all.map((row) => row.on.length)), Math.max(12, Math.floor(wide / 3))),
-    age: Math.max(...all.map((row) => ageWords(row.age).length)),
-  };
-  const drawn = [...rows.desk, ...rows.interactive, ...rows.runner.slice(0, rows.runner.length - folded)];
-  for (const row of drawn) lines.push(flightRow(c, wide, row, columns));
-  if (folded) lines.push(`    ${c(`▸ ${folded} more session${folded === 1 ? '' : 's'} — a shows ${folded === 1 ? 'it' : 'them'}`, 'grey')}`);
-  panelEnd(lines, c, wide);
-}
+const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
 
-/* --------------------------------------------------------- Needs attention */
+/** The words for whose a pull request is, on a MAINTENANCE row. */
+export function ownerWords(owner) {
+  if (owner.kind === 'plan') return owner.name ? `plan ${owner.name}` : 'a plan branch';
+  if (owner.kind === 'workarea') return `workarea ${owner.name}`;
+  if (owner.kind === 'worktree') return `checked out in ${String(owner.path).replace(/^\/Users\/[^/]+/u, '~')}`;
+  return 'nobody\'s';
+}
 
 /**
- * What needs a person's eye, as items `{ key, label, text, tone }` in the order of the page: a malformed goal, a held
- * goal, a blocked goal, a goal stopped for no progress, a failed merge, a finished goal not archived, a Martin-waiting
- * main-red file or deploy repair, a failed deploy preparation, a failed deploy attempt and a stray area. A goal waiting
- * on Martin with a question is on DESK through its desk item and is not repeated here. Each goal is one item.
+ * The open pull requests no programme, goal, session or the merger draws: a plan session's, one opened from a terminal,
+ * and one nobody holds any more. `sessionPrs` are the pull requests the runner's sessions carry.
  */
-export function attentionItems(data, sessions = data.runner?.sessions || []) {
+export function outsidePrs(prs, sessionPrs = []) {
+  if (!prs) return [];
+  const assigned = new Set(sessionPrs.map((pr) => `${pr.repo}#${pr.number}`));
+  return (prs.items || []).filter((pr) => !pr.programme && !pr.merging && !pr.merge_red && !assigned.has(`${pr.repo}#${pr.number}`));
+}
+
+/**
+ * What belongs to no programme, as items `{ key, label, text, tone }` in the order of the page: a failed merge no goal's
+ * pull request carries, a main-red or deploy repair that waits on Martin, a failed deploy preparation or attempt, a stray
+ * directory or session no verb explains, a runner or plan session with no goal or programme, and a pull request outside
+ * goals. What belongs to a programme is in its frame: a held, blocked, malformed or stopped goal, a finished goal not
+ * archived, and a goal's failed merge.
+ */
+export function maintenanceItems(data) {
   const items = [];
   const groups = data.programmes?.programmes || [];
-  const add = (key, label, text, tone = ['red']) => items.push({ key, label, text: one(text), tone });
-  const merges = new Map();
+  // `fact` is what the live page key reads when the text carries an age (pageKey): the item without how old it is.
+  const add = (key, label, text, tone = ['red'], children = [], fact) => items.push({ key, label, text: one(text), tone, children, ...(fact != null ? { fact: one(fact) } : {}) });
 
-  // A failed merge is one item however it is told: by the goal's pull request or by the merger's own red list.
-  const mergeKey = (repo, number) => `merge:${repo || 'unknown'}#${number}`;
-  for (const group of groups) {
-    for (const goal of group.goals || []) {
-      for (const pr of goal.prs || []) {
-        if (pr.merge_red) merges.set(mergeKey(pr.repo, pr.number), { label: `${group.programme}/${goal.name}`, text: `merge failed — ${pr.repo || 'unknown'}#${pr.number} · ${mergeFailureSummary(pr.merge_red)}` });
-      }
-    }
-  }
+  const mine = new Set();
+  for (const group of groups) for (const goal of group.goals || []) for (const pr of goal.prs || []) if (pr.merge_red) mine.add(`${pr.repo || 'unknown'}#${pr.number}`);
   for (const item of data.merges?.red?.items || []) {
     const prs = item.prs?.length ? item.prs : [{ number: item.pr }];
-    const keys = prs.map((pr) => mergeKey(item.repo, pr.number));
-    if (keys.every((key) => merges.has(key))) continue;
+    if (prs.every((pr) => mine.has(`${item.repo || 'unknown'}#${pr.number}`))) continue;
     const refs = prs.map((pr) => `${item.repo || 'unknown'}#${pr.number}`).join(', ');
-    merges.set(keys[0], { label: item.repo || 'merge', text: `merge failed — ${refs} · ${mergeFailureSummary(item.said || item.reason)}` });
-  }
-
-  const goalKeys = new Set();
-  const goalItem = (group, goal, text) => {
-    const key = `goal:${group.programme}/${goal.name}`;
-    if (goalKeys.has(key)) return;
-    goalKeys.add(key);
-    add(key, `${group.programme}/${goal.name}`, text);
-  };
-  const malformed = new Set(groups.flatMap((group) => attentionGoals(group, sessions).filter((goal) => goal.problems?.length).map((goal) => `${group.programme}/${goal.name}`)));
-  for (const group of groups) {
-    for (const goal of group.goals || []) {
-      if (malformed.has(`${group.programme}/${goal.name}`)) goalItem(group, goal, `GOAL.json: ${goal.problems[0]}`);
-    }
-  }
-  for (const group of groups) {
-    for (const goal of group.goals || []) {
-      if (finished(goal) || !goal.hold) continue;
-      goalItem(group, goal, `held by ${goal.hold.by ?? '—'} since ${goal.hold.at ?? '—'} — ${goal.hold.reason ?? '—'}`);
-    }
-  }
-  for (const group of groups) {
-    for (const goal of group.goals || []) {
-      if (finished(goal) || goal.status !== 'blocked') continue;
-      // A blocked merge is the failed merge's own item, which names the goal.
-      if (goal.stage === 'merge' && (goal.prs || []).some((pr) => pr.merge_red)) continue;
-      const reason = goal.question || goal.last?.comment || 'a mend session resolves the obstacle';
-      goalItem(group, goal, `blocked — ${goal.stage === 'merge' ? mergeFailureSummary(reason) : reason}`);
-    }
-  }
-  for (const group of groups) {
-    for (const goal of group.goals || []) {
-      if (finished(goal) || goal.status !== 'Martin' || !/^no progress:/u.test(goal.last?.comment || '')) continue;
-      goalItem(group, goal, `stopped — ${goal.last.comment}`);
-    }
-  }
-  for (const [key, merge] of merges) add(key, merge.label, merge.text);
-  for (const group of groups) {
-    for (const goal of attentionGoals(group, sessions)) {
-      if (goal.problems?.length) continue;
-      const reason = notArchived(goal);
-      if (reason) goalItem(group, goal, reason);
-    }
+    add(`merge:${item.repo || 'unknown'}#${prs[0].number}`, item.repo || 'merge', `merge failed — ${refs} · ${mergeFailureSummary(item.said || item.reason)}`);
   }
 
   for (const repo of data.checks?.main_mend || []) {
@@ -282,24 +193,50 @@ export function attentionItems(data, sessions = data.runner?.sessions || []) {
     add('deploy:attempt', 'deploy', `attempt failed ${production.failed.short || ''}${production.failed.stopped_at || production.progress?.step ? ` — ${production.failed.stopped_at || production.progress.step}` : ''}`.replace(/ {2,}/gu, ' '));
   }
   for (const stray of data.programmes?.strays || []) {
-    const facts = stray.kind === 'directory' || !stray.kind
-      ? `not an area mc knows · checkout ${stray.checkout ? `yes · ${stray.uncommitted} uncommitted` : 'no'}`
-      : stray.kind === 'tmux' ? 'not an area mc knows · tmux session'
-        : `not an area mc knows · ${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme${stray.pid ? ` · pid ${stray.pid}` : ''}`;
-    add(`stray:${stray.name}`, stray.name, facts, ['yellow']);
+    if (stray.kind === 'directory' || !stray.kind) {
+      add(`stray:${stray.name}`, stray.name, `not an area mc knows · checkout ${stray.checkout ? `yes · ${stray.uncommitted} uncommitted` : 'no'}`, ['yellow']);
+      continue;
+    }
+    const what = stray.kind === 'tmux' ? 'not an area mc knows · tmux session'
+      : `not an area mc knows · ${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme`;
+    const pid = stray.kind !== 'tmux' && stray.pid ? ` · pid ${stray.pid}` : '';
+    add(`stray:${stray.name}`, stray.name, `${what} · ${openFor(stray.age_seconds)}${pid}`, ['yellow'], [], `${what}${pid}`);
+  }
+
+  // Sessions no programme explains: a runner session on no goal of any programme, and a plan or programme session
+  // whose programme is not listed. Match identities rather than object references: cached JSON copies sessions.
+  const names = new Set(groups.map((group) => group.programme));
+  const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
+  const plans = new Set(groups.flatMap((group) => group.planning_sessions || []).map((session) => JSON.stringify([session.name, session.pid, session.started])));
+  const sessionRow = (kind, on, age, who) => [kind, openFor(age), who].filter(Boolean).join(' · ');
+  const who = (session) => [session.tool, session.model].filter(Boolean).join(' · ');
+  for (const session of data.runner?.sessions || []) {
+    if (known.has(sessionGoal(session)) || plans.has(JSON.stringify([session.name, session.pid, session.started]))) continue;
+    // The pull requests the session carries are its child rows, as they are under a goal.
+    const prs = (session.prs || []).map((pr) => `${pr.repo || 'unknown'}#${pr.number}`);
+    add(`session:${identity({ ...session, verb: session.kind })}`, sessionGoal(session) || session.repo || 'unknown', `${sessionRow(session.kind || 'build', null, session.elapsed_seconds, who(session))} · on no goal of a programme`, ['yellow'], prs);
+  }
+  for (const row of flightRows(data).interactive) {
+    if (names.has(row.on.replace(/^programs\//u, ''))) continue;
+    add(`session:${row.key}`, row.on, `${row.kind} session with no programme · ${openFor(row.age)}${row.who ? ` · ${row.who}` : ''}`, ['yellow']);
+  }
+
+  for (const pr of outsidePrs(data.prs, (data.runner?.sessions || []).flatMap((session) => session.prs || []))) {
+    const nobody = pr.owner?.kind === 'none' || !pr.owner;
+    add(`pr:${pr.repo}#${pr.number}`, `${pr.repo || 'unknown'}#${pr.number}`, `pull request outside goals · ${ownerWords(pr.owner || { kind: 'none' })}${pr.draft ? ' · draft' : ''} — ${pr.title || pr.branch || ''}`, nobody ? ['yellow'] : ['grey']);
   }
   return items;
 }
 
-function attentionLines(lines, c, wide, items, folded) {
+function maintenanceLines(lines, c, wide, items) {
   if (!items.length) return;
-  lines.push(frameTop(c, wide, 'NEEDS ATTENTION', String(items.length)));
-  for (const item of items.slice(0, items.length - folded)) {
+  lines.push(frameTop(c, wide, 'MAINTENANCE', `${items.length} outside the programmes`));
+  for (const item of items) {
     const label = clipCell(item.label, Math.max(12, Math.floor(wide / 3)));
     const room = wide - 4 - width(label) - 2;
     lines.push(`    ${c(label, 'bold')}  ${c(clipCell(item.text, Math.max(8, room)), ...item.tone)}`);
+    for (const ref of item.children || []) lines.push(`      ↳ ${c(clipCell(ref, Math.max(8, wide - 8)), ...item.tone)}`);
   }
-  if (folded) lines.push(`    ${c(`▸ ${folded} more need${folded === 1 ? 's' : ''} attention — a shows ${folded === 1 ? 'it' : 'them'}`, 'grey')}`);
   panelEnd(lines, c, wide);
 }
 
@@ -342,57 +279,40 @@ function mergeDeployLines(lines, c, wide, rows) {
   }
 }
 
+
 /* ----------------------------------------------------------------- overview */
 
 /**
- * The overview, as lines. `expand` (`a`) draws every row and folds nothing; otherwise rows are folded, in the order of
- * `FOLDS`, then the blank rows between sections, until the page is at most `OVERVIEW_ROWS` lines or nothing is left. `version` is mc's.
- * `programmes(lines)` draws PROGRAMMES where HORIZONS would be, for a page from before HORIZONS.
+ * The overview, as lines. `drawProgramme(lines, group)` draws one programme's frame (page-render.js owns the body).
+ * The programmes with something under way are drawn in name order below HORIZONS; the others are one folded frame,
+ * or, under `a` (`expand`), their own frames after the ones under way. `version` is mc's.
  */
-export function overviewLines(c, wide, data, { version = '', expand = false, programmes = null } = {}) {
+export function overviewLines(c, wide, data, { version = '', expand = false, drawProgramme = () => {} } = {}) {
   const sessions = data.runner?.sessions || [];
   const flight = flightRows(data);
-  const attention = attentionItems(data, sessions);
-  const merges = mergeDeployRows(data);
-  const foldable = {
-    sessions: flight.runner.length,
-    none: horizonsFoldable(data, { sessions }).none,
-    attention: Math.max(0, attention.length - ATTENTION_KEPT),
-    horizons: horizonsFoldable(data, { sessions }).horizons,
-  };
+  const lines = headerRows(c, wide, data, version);
+  const gap = () => { if (lines.at(-1) !== '') lines.push(''); };
+  gap();
+  deskLines(lines, c, wide, data.desk, { deskSessions: flight.desk.length });
+  gap();
+  warningLines(lines, c, wide, data);
+  gap();
+  if (data.horizons) { horizonsLines(lines, c, wide, data, { sessions }); gap(); }
 
-  const draw = (fold, tight = false) => {
-    const lines = headerRows(c, wide, data, version);
-    lines.push('');
-    const before = lines.length;
-    deskLines(lines, c, wide, data.desk);
-    if (lines.length > before) lines.push('');
-    warningLines(lines, c, wide, data);
-    const gap = lines.length;
-    if (data.horizons) horizonsLines(lines, c, wide, data, { expand, sessions, fold });
-    else if (programmes) programmes(lines);
-    if (lines.length === gap || lines.at(-1) !== '') lines.push('');
-    flightLines(lines, c, wide, flight, fold.sessions);
-    lines.push('');
-    if (attention.length) { attentionLines(lines, c, wide, attention, fold.attention); lines.push(''); }
-    if (merges.length) { mergeDeployLines(lines, c, wide, merges); lines.push(''); }
-    if (lines.at(-1) === '') lines.pop();
-    // Packed: the blank rows between sections go, the one under the header stays.
-    const first = lines.indexOf('');
-    return tight ? lines.filter((row, at) => row !== '' || at === first) : lines;
-  };
-
-  const fold = { sessions: 0, none: 0, attention: 0, horizons: 0 };
-  let lines = draw(fold);
-  if (expand) return lines;
-  for (const name of FOLDS) {
-    // A fold of one row is a fold row in its place: no shorter. It is made only on the way to a longer one.
-    while (lines.length > OVERVIEW_ROWS && fold[name] < foldable[name]) {
-      fold[name] += 1;
-      lines = draw(fold);
-    }
-    if (fold[name] === 1) { fold[name] = 0; lines = draw(fold); }
+  const groups = [...(data.programmes?.programmes || [])].sort((a, b) => String(a.programme).localeCompare(String(b.programme)));
+  const underway = groups.filter((group) => programmeFacts(group, sessions).underway);
+  const asleep = groups.filter((group) => !programmeFacts(group, sessions).underway);
+  for (const group of [...underway, ...(expand ? asleep : [])]) { drawProgramme(lines, group); gap(); }
+  if (!expand && asleep.length) {
+    // One folded frame, its top rule alone.
+    lines.push(frameTop(c, wide, `${asleep.length} programme${asleep.length === 1 ? '' : 's'} with nothing under way`, '', 'a  shows them'));
+    gap();
   }
-  // Everything foldable is folded and the page is still long: the blank rows between its sections give way last.
-  return lines.length > OVERVIEW_ROWS ? draw(fold, true) : lines;
+
+  const items = maintenanceItems(data);
+  if (items.length) { maintenanceLines(lines, c, wide, items); gap(); }
+  const merges = mergeDeployRows(data);
+  if (merges.length) { mergeDeployLines(lines, c, wide, merges); gap(); }
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
 }
