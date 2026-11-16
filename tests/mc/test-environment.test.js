@@ -2080,6 +2080,49 @@ describe('a server that dies behind its wrapper', () => {
     };
   }
 
+  it('re-admits after a known dead server while its wrapper lives, without signalling it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
+    const temp = mkdtempSync(join(tmpdir(), 'mc-test-env-temp-'));
+    const worktree = worktreeWith();
+    const reservations = [];
+    const pauses = [];
+    const progress = [];
+    let t = 0;
+    let signals = 0;
+    try {
+      const result = await ensureDevServer(worktree, DECLARATION, {
+        root, tmpDir: temp, processCwd: () => null, freeMemory: () => null,
+        now: () => t,
+        sleep: async (ms) => { pauses.push(ms); t += ms; },
+        spawn: (_command, _args, options) => {
+          reservations.push(options.env.MC_DEV_ADMITTED);
+          if (reservations.length === 1) {
+            writeFileSync(options.env.MC_KEYS_CHILD_FILE, JSON.stringify({ pid: SERVER, exit: 1 }));
+          } else {
+            registerServer(root, worktree, { port: 8902 });
+          }
+          return { pid: WRAPPER, unref() {}, kill() { signals += 1; } };
+        },
+        pidAlive: (pid) => pid === WRAPPER,
+        fetch: async () => ({ ok: true }),
+        onRetry: (line) => progress.push(line),
+      });
+      assert.equal(result.ok, true, result.error);
+      assert.equal(result.server.url, 'http://127.0.0.1:8902');
+      assert.equal(reservations.length, 2);
+      assert.ok(reservations.every((id) => /^res-/u.test(id)));
+      assert.notEqual(reservations[0], reservations[1]);
+      assert.deepEqual(pauses, [1000, 5000, 1000]);
+      assert.equal(progress.length, 1);
+      assert.match(progress[0], /starting once more/u);
+      assert.equal(signals, 0);
+      assert.deepEqual(readReservations(devPoolPath(root)), []);
+      assert.deepEqual(readdirSync(temp), []);
+    } finally {
+      for (const path of [root, temp, worktree]) rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it('a server that dies while its wrapper lives is named at the next poll, with its exit and the end of its log', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-test-env-root-'));
     const worktree = worktreeWith();
