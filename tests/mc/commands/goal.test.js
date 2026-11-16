@@ -3501,6 +3501,26 @@ test('goal new refuses draft and dropped programmes before any fetch or goal wri
   }
 });
 
+test('a goal cut from a part of a signed programme moves to build without a plan review; an unsigned one, or one naming no part, still needs it', async () => {
+  const signed = JSON.stringify({ ...unsignedRecord('open'), signed_at: '2026-11-16T08:00:00Z', signed_by: 'martin', signed_text: 'a'.repeat(64) });
+  const part = DRAFT_V2({ documents: [{ label: 'Part 1', path: `${HOME}/mc/SIGNED.md` }] });
+  const cut = gateFixture({ text: part, verdicts: [] });
+  cut.store[`${HOME}/mc/PROGRAMME.json`] = signed;
+  assert.equal(await run(['stage', 'mc/plain', 'build'], cut.deps), 0, cut.err());
+  assert.equal(parseGoal(cut.store[`${DIR}/GOAL.json`]).stage, 'build');
+  assert.match(cut.store[`${DIR}/LOG.md`], /moved without a plan review — cut from a part of the signed programme document/u);
+
+  const unsigned = gateFixture({ text: part, verdicts: [] });
+  unsigned.store[`${HOME}/mc/PROGRAMME.json`] = JSON.stringify(unsignedRecord('open'));
+  assert.equal(await run(['stage', 'mc/plain', 'build'], unsigned.deps), 1);
+  assert.match(unsigned.err(), /no plan review has read it/u);
+
+  const noPart = gateFixture({ verdicts: [] });
+  noPart.store[`${HOME}/mc/PROGRAMME.json`] = signed;
+  assert.equal(await run(['stage', 'mc/plain', 'build'], noPart.deps), 1);
+  assert.match(noPart.err(), /no plan review has read it/u);
+});
+
 test('goal new refuses headless recordless creation but admits signed, legacy, area and interactive recordless paths', async () => {
   const denied = fixture({ env: { MC_ROLE: 'plan', MC_HEADLESS: '1', MC_PROGRAMME: 'mc' } });
   const before = { ...denied.store };

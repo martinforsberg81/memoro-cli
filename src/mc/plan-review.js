@@ -171,8 +171,15 @@ export function partsLacks(goal, name, probe) {
  * by `--reason` after two readings, or `{ refusal }` — the text for stderr, every lack in it.
  * `via` is `stage` or `log`: only the stage verb takes a reason.
  */
-export function moveGate({ goal, name, to, via, reason, dir, read, probe }) {
+export function moveGate({ goal, name, to, via, reason, dir, read, probe, signedPart = false }) {
   if (goal.stage !== 'draft' || !to || to === 'draft' || to === 'dropped') return null;
+  // A goal cut from a part of a signed programme document needs no plan review (Martin, 2026-11-16): the signed
+  // document is the plan, read before he signed it. It must still be complete.
+  if (signedPart) {
+    const lacks = partsLacks(goal, name, probe);
+    if (!lacks.length) return { comment: 'moved without a plan review — cut from a part of the signed programme document' };
+    return { refusal: `${name} is not moved to ${to} — ${lacks.length === 1 ? lacks[0] : `${lacks.length} things to repair:\n${lacks.map((line) => `  - ${line}`).join('\n')}`}` };
+  }
   const hash = goalHash(goal);
   const { records, problem } = readRecords(dir, read);
   if (problem) return { refusal: `${name} is not moved to ${to} — ${problem}` };

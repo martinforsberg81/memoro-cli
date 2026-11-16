@@ -28,7 +28,7 @@
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
  *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
- *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`) and have an OK plan review of its current text, or two readings and --reason;
+ *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`) and have an OK plan review of its current text, or two readings and --reason (a goal that names its part of an open, signed programme's SIGNED.md needs no plan review);
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
  *   mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]   one fresh session reads a goal in draft before it is built (`plan-review.js`); exit 0 for OK, 1 for not OK, no verdict or changed files, 2 for a call refused
@@ -429,7 +429,7 @@ function logEntry(args, fields, ctx) {
   const verdict = reviewMove(goal, target, fields.stage, ctx);
   if (verdict.refusal) { stderr.write(`mc: ${verdict.refusal}\n`); return 2; }
   // Out of draft a goal is complete and has been read (plan-review.js); a build session never gets here: refusedMove said so.
-  const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx) });
+  const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx), signedPart: cutFromSignedPart(goal, target, ctx) });
   if (gate?.refusal) { stderr.write(`mc: ${gate.refusal}\n`); return 1; }
   if (fields.stage === 'review' && goal.stage !== 'review' && sessionNotPlan(env)) {
     const unmet = unmetGoalWords(goal, target.name);
@@ -1860,6 +1860,19 @@ function ghIn(cwd, args) {
  * The goal a verb names: `<programme>/<goal>` as given, or MC_GOAL's when none
  * is, as `{ programme, goal, name, dir }`; `{ error }` when neither is a goal name.
  */
+/**
+ * Whether the goal is cut from a part of its programme's signed document: the record is open and signed, and the
+ * goal names that programme's `SIGNED.md` as a document labelled `Part <n>`. Such a goal moves out of draft
+ * without a plan review (`moveGate`).
+ */
+function cutFromSignedPart(goal, target, ctx) {
+  const programmeDir = join(ctx.home, target.programme);
+  const found = readRecord(programmeDir, { read: (path) => ctx.read(path) });
+  if (found.status !== 'valid' || found.record.state !== 'open' || !found.record.signed_at) return false;
+  const signed = join(programmeDir, 'SIGNED.md');
+  return (goal.documents ?? []).some((doc) => /^Part \d/u.test(String(doc.label ?? '')) && String(doc.path ?? '') === signed);
+}
+
 function goalNamed(arg, { env, home }) {
   const given = arg ?? env.MC_GOAL;
   if (!given) return { error: 'which goal? mc goal <programme>/<goal>, or MC_GOAL in a goal session' };
