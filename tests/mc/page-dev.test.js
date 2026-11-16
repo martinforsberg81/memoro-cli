@@ -74,12 +74,19 @@ function pageData(over = {}) {
   };
 }
 
-/** The DEV section's lines: its heading to the blank line after it. */
+/**
+ * The DEV section's lines: its top rule and its rows, without the bottom rule. A frame with rows must close with a
+ * bottom rule and a frame without must not; both are asserted here, so every test that reads the block holds it.
+ */
 function devBlock(lines) {
   const at = lines.findIndex((line) => /^ {2}┌─ DEV /u.test(plain(line)));
   assert.ok(at >= 0, `a DEV heading:\n${lines.map(plain).join('\n')}`);
   const end = lines.findIndex((line, index) => index > at && plain(line) === '');
-  return lines.slice(at, end).filter(line => !plain(line).startsWith('  └'));
+  const block = lines.slice(at, end);
+  const closed = /^ {2}└─+┘$/u.test(plain(block.at(-1)));
+  const body = closed ? block.slice(0, -1) : block;
+  assert.equal(closed, body.length > 1, `a bottom rule exactly when DEV has rows:\n${block.map(plain).join('\n')}`);
+  return body;
 }
 
 /** The escapes a run of text is painted with, as `yellow`, `grey`, … */

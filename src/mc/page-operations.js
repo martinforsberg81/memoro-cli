@@ -52,6 +52,15 @@ export function panelEnd(lines, c, wide) {
   lines.push(`  ${c('└' + '─'.repeat(wide - 4) + '┘', 'orange')}`);
 }
 
+/**
+ * The bottom rule of the frame whose top rule is `lines[top]`, drawn only when
+ * something was drawn under that rule: a frame with nothing beyond its title is
+ * its top rule alone.
+ */
+export function frameEnd(lines, c, wide, top) {
+  if (lines.length > top + 1) panelEnd(lines, c, wide);
+}
+
 const shortPath = (path) => String(path || '').replace(/^\/(?:Users|home)\/[^/]+/u, '~').replace(/^~\/mc\/programs\//u, '');
 
 export function devLines(lines, c, wide, dev, expand) {

@@ -2541,6 +2541,17 @@ describe('collectPage', () => {
     const lines = renderPageLines(data, { columns: 100, now: NOW, colour: true, overview: true });
     const row = lines.find((line) => line.includes('horizons unreadable'));
     assert.ok(row.includes('\u001b[31m'), row);
+    const plainLines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
+    const at = plainLines.findIndex((line) => line.startsWith('  ┌─ HORIZONS'));
+    assert.match(plainLines[at + 2], /^ {2}└─+┘$/u, 'a frame with a row closes under it');
+  });
+
+  it('draws HORIZONS with nothing in it as its top rule alone', () => {
+    const data = { ...DATA, horizons: { open: [], none: [], unreadable: [] } };
+    const lines = renderPageLines(data, { columns: 100, now: NOW, overview: true });
+    const at = lines.findIndex((line) => line.startsWith('  ┌─ HORIZONS'));
+    assert.ok(at >= 0, lines.join('\n'));
+    assert.doesNotMatch(lines[at + 1] || '', /└/u, `no bottom rule under an empty frame:\n${lines.join('\n')}`);
   });
 
   it('says a horizon store that cannot be listed in horizons.error, and still numbers the programmes', async (t) => {
@@ -3308,6 +3319,8 @@ describe('PULL REQUESTS', () => {
     const order = ['PLAN SESSIONS  1', "NOBODY'S  3"].map((head) => out.indexOf(head));
     assert.ok(order.every((n, i) => n > 0 && (i === 0 || n > order[i - 1])), out);
     assert.doesNotMatch(out, /ON A STEP/u);
+    const rows = out.split('\n').filter((line) => /#1\d{4}/u.test(line));
+    assert.ok(rows.length && rows.every((line) => /^ {4}[·◆] /u.test(line)), `a group's rows sit at indent 4 inside its frame:\n${out}`);
   });
 });
 

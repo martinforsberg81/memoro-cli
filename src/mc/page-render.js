@@ -46,7 +46,7 @@
  */
 import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
-import { deployLines, devLines, detail, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
+import { deployLines, devLines, detail, frameEnd, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
 import { headerRows, overviewLines, warningLines } from './page-overview.js';
 import { deskLines } from './page-desk.js';
@@ -482,7 +482,7 @@ export function renderPrsLines(prs, { columns = 100, colour = false } = {}) {
       const mark = pr.merging ? c(MARK.running, 'green')
         : pr.merge_red ? c(MARK.red, 'red', 'bold') : c(nobody ? MARK.waiting : MARK.quiet, nobody ? 'yellow' : 'grey');
       const where = pad(clip(pr.repo || '—', LANE_REPO - 1), LANE_REPO);
-      const left = `  ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
+      const left = `    ${mark} ${c(where, 'grey')} ${cell(c, `#${pr.number}`, PR_NUMBER, PR_TONE)} `
         + `${cell(c, clip(whose(pr), width), width, nobody ? ['yellow'] : [])}  `;
       const right = pr.merging
         ? paint(c, [{ text: pr.merging === 'landing' ? 'landing now' : 'queued for merge', styles: ['green'] }])
@@ -957,8 +957,9 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
   deployLines(lines, c, wide, runner.production, expand);
   panelEnd(lines, c, wide);
   lines.push('');
+  const devTop = lines.length;
   devLines(lines, c, wide, data.dev, expand);
-  panelEnd(lines, c, wide);
+  frameEnd(lines, c, wide, devTop);
   lines.push('');
   maintenanceLines(lines, c, wide, sessions, data.intake, data.checks, expand);
   lines.push('');

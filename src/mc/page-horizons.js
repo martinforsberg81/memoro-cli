@@ -12,7 +12,7 @@
  * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
  */
 import { PR_TONE, STAGE_TONE, clipCell, kindTone } from './page-grid.js';
-import { frameTop, panelEnd } from './page-operations.js';
+import { frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
@@ -178,6 +178,7 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
 
   const open = horizons.open || [];
   const underway = groups.filter((group) => facts.get(group.programme).underway).length;
+  const top = lines.length;
   lines.push(frameTop(c, wide, 'HORIZONS', `${open.length} open horizon${open.length === 1 ? '' : 's'} · ${underway} programme${underway === 1 ? '' : 's'} under way`));
   if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
   if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
@@ -213,7 +214,7 @@ export function horizonsLines(lines, c, wide, data, { expand = false, sessions =
     rows(noneShown.slice(0, noneShown.length - take), extraFor);
     if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} more not serving a horizon — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
   }
-  panelEnd(lines, c, wide);
+  frameEnd(lines, c, wide, top);
   const nothing = expand ? 0 : groups.filter((group) => !shown(group.programme)).length;
   // One folded frame, its top rule alone.
   if (nothing) lines.push(frameTop(c, wide, `${nothing} programme${nothing === 1 ? '' : 's'} with nothing under way`, '', ''));
