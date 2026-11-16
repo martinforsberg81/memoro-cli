@@ -88,7 +88,8 @@ the part's Closes, its change the part's Solution, its intended result the
 part's Design, one criterion per Proved by line with one check each, and the
 goal names its part: a document whose path is `SIGNED.md` of this programme,
 labelled `Part <n>`. You add nothing the part does not say: no investigation,
-no solution, design or decision of your own, no proposal, and no extra items
+no solution, design or decision of your own about what is delivered or how it
+looks, no proposal, and no extra items
 beyond what the verbs require. The builder settles the construction. Where
 goals exist from an earlier cut, a part unchanged since then keeps its goals;
 for a changed part a goal not yet in build is rewritten, and a goal already
