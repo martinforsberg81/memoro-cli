@@ -33,8 +33,13 @@ repeat the fault. A repository text is changed at its source in a worktree
 `docs/technical/` page beside it, and lands through `mc gate`, `mc publish`
 and the merger like every change; no code grants the desk a way past them. A
 code repair takes the same route and is kept to what is small and certain;
-anything else is a goal or a repair programme. A text Martin holds changes
-only on his word.
+anything else is a programme order or a repair programme. A text Martin holds
+changes only on his word.
+
+Planning at the desk is done in programme orders. A goal is the build's
+construction for dividing an order into buildable pieces: the planner cuts
+goals from a ready programme's page, and the desk meets a goal only when it
+has stopped (waiting in status `Martin`, wrong, or stuck).
 
 ## Opening
 
