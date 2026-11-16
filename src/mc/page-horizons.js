@@ -1,26 +1,20 @@
 /**
- * The page's HORIZONS section: the open horizons in the desk's order, and under each one row for every programme that
- * names it and has something under way; then the programmes that serve none, the same way; then one folded row for
- * every other programme (docs/technical/mc-ui.md, The sections). `horizonsLines` draws it from `data.horizons` and
- * `data.programmes` alone, so what `mc --json` says and what the page draws cannot differ.
- *
- * The row is the programme's one-line answer to "is it going, and where": its number, its name, the phase it is in,
- * its unfinished goals by stage, what is done, the open pull requests, then a mark for each session at work on it and
- * the flags for a goal that waits on Martin (⚑), is blocked (⊘) or needs attention (!). Its goals, phases and session
- * frames are in the programme's own view (the number or the name at the prompt) and in `a`.
+ * The page's HORIZONS section and the programme headings (docs/technical/mc-ui.md, The sections). `horizonsLines` draws
+ * one row for every open horizon in the desk's order: its number and title, how many programmes it has and in what
+ * state, and its goals (open, landed, held, open pull requests, a mark while a session works). The programmes are
+ * drawn below it, each in its own frame (page-render.js), headed by `programmeHeading`: its number, its horizon and its
+ * phase. Both draw from `data.horizons` and `data.programmes` alone, so what `mc --json` says and what the page draws
+ * cannot differ.
  *
  * The module draws with its own small pieces and imports nothing from page-render.js, which imports it.
  */
-import { PR_TONE, STAGE_TONE, clipCell, kindTone } from './page-grid.js';
+import { PR_TONE, clipCell, kindTone } from './page-grid.js';
 import { frameEnd, frameTop } from './page-operations.js';
 import { attentionGoals } from './page-programmes.js';
 import { sessionGoal } from './page-activity.js';
 import { clip, width } from './status-render.js';
 
-/** At most this many marks of one kind on a row; more are drawn `●×n`, as the pipeline draws them. */
-const MARK_CAP = 8;
 const FINISHED = ['done', 'dropped'];
-const INDENT = 6;
 
 const finished = (goal) => FINISHED.includes(goal.stage);
 
@@ -62,161 +56,117 @@ export function programmeFacts(group, sessions = []) {
   };
 }
 
-/** The stage counts in the order the pipeline runs them, the stages it does not know after, by name. */
-const STAGES = Object.keys(STAGE_TONE);
-const stageOrder = (stages) => [...stages].sort(([a], [b]) => {
-  const x = STAGES.indexOf(a), y = STAGES.indexOf(b);
-  return (x < 0 ? STAGES.length : x) - (y < 0 ? STAGES.length : y) || a.localeCompare(b);
-});
-
 /** A run of `{ text, styles }` parts, painted. */
 const painted = (c, parts) => parts.map((part) => (part.styles?.length ? c(part.text, ...part.styles) : part.text)).join('');
-const plainWidth = (parts) => parts.reduce((sum, part) => sum + width(part.text), 0);
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const GAP = '  ';
 
 /**
- * One programme row, painted, within `wide`. `extra` are parts the row adds after its facts (the horizon a programme
- * under `Serving no horizon` names, and that horizon's state). Narrow, the facts give way first, the least telling
- * first (`priority`, then `done`, then the phase); the marks and the flags, the stage counts and the open pull
- * requests stay, and the name is clipped last.
+ * The words for a programme's horizon: `horizon 5` (its number among the open horizons, in the desk's order),
+ * `no horizon`, or the slug a record names that is not an open horizon, with that horizon's state. A page without
+ * horizons says nothing.
  */
-export function programmeRow(c, wide, group, facts, { digits = 2, extra = [], nameWidth = 0 } = {}) {
-  const parts = []; // the facts, each with the rank at which it is dropped: higher goes first
-  const add = (rank, text, styles = []) => text && parts.push({ rank, text, styles });
-  if (group.record_state === 'draft') add(4, 'draft');
-  else if (facts.unfinished && facts.current != null) add(4, `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}`);
-  if (facts.unfinished) {
-    const counts = stageOrder(facts.stages).map(([stage, n]) => ({ text: `${n} ${stage}`, styles: STAGE_TONE[stage] || ['grey'] }));
-    counts.forEach((part, index) => parts.push({ rank: 2, text: part.text, styles: part.styles, joined: index > 0 ? ' · ' : null, group: 'stages' }));
-  }
-  if (facts.done) add(5, `${facts.done} done`, ['grey']);
-  if (facts.prs) add(1, `${facts.prs} PR`, [...PR_TONE]);
-  if (group.priority) add(6, `priority ${group.priority}`);
-  if (group.record_invalid) add(0, 'record invalid', ['red']);
-  for (const item of extra) add(0, item.text, item.styles);
-  if (group.dormant && !parts.length) add(7, 'dormant', ['grey']);
-
-  const marks = [];
-  for (const { kind, count } of facts.marks) {
-    if (marks.length) marks.push({ text: ' ' });
-    marks.push({ text: count <= MARK_CAP ? '●'.repeat(count) : `●×${count}`, styles: kindTone(kind) });
-  }
-  const flags = [
-    facts.martin ? { text: `⚑${facts.martin}`, styles: ['yellow'] } : null,
-    facts.blocked ? { text: `⊘${facts.blocked}`, styles: ['red'] } : null,
-    facts.attention ? { text: `!${facts.attention}`, styles: ['red'] } : null,
-  ].filter(Boolean);
-  const tail = [];
-  for (const part of [...marks, ...(marks.length && flags.length ? [{ text: ' ' }] : []), ...flags.flatMap((flag, i) => (i ? [{ text: ' ' }, flag] : [flag]))]) tail.push(part);
-
-  const number = `${String(group.number ?? '').padStart(digits)} `;
-  const room = wide - INDENT;
-  const sep = ' · ';
-  const build = (kept) => {
-    const out = [];
-    for (const part of kept) {
-      if (out.length) out.push({ text: part.joined ?? sep, styles: ['grey'] });
-      out.push({ text: part.text, styles: part.styles });
-    }
-    return out;
-  };
-  const tailWidth = tail.length ? 2 + plainWidth(tail) : 0;
-  let name = group.programme;
-  let kept = [...parts];
-  // The facts start in one column when there is room for it, and not otherwise.
-  const column = () => (kept.length || tail.length ? Math.max(width(name), nameWidth) : width(name));
-  const used = () => width(number) + column() + (kept.length ? 2 + plainWidth(build(kept)) : 0) + tailWidth;
-  while (used() > room && kept.some((part) => part.rank >= 1)) {
-    const top = Math.max(...kept.map((part) => part.rank));
-    const at = kept.map((part) => part.rank).lastIndexOf(top);
-    // A stage count is dropped with its whole run, never one stage of several.
-    if (kept[at].group === 'stages') kept = kept.filter((part) => part.group !== 'stages');
-    else kept.splice(at, 1);
-  }
-  if (used() > room) name = clipCell(name, Math.max(4, room - (used() - width(name))));
-  const gap = kept.length && used() <= room ? ' '.repeat(Math.max(0, column() - width(name))) : '';
-  const facing = kept.length ? `${gap}  ${painted(c, build(kept))}` : '';
-  const trail = tail.length ? `  ${painted(c, tail)}` : '';
-  const text = `${' '.repeat(INDENT)}${c(number, 'grey')}${c(name, 'bold')}${facing}${trail}`;
-  // The last resort: whatever still runs past the width (a name that cannot be clipped further) is cut by the terminal's measure.
-  return width(text) > wide ? clip(text.replace(/\u001b\[[0-9;]*m/gu, ''), wide) : text;
+export function horizonWords(data, group) {
+  if (!data.horizons) return '';
+  const open = (data.horizons.open || []).find((horizon) => (horizon.programmes || []).includes(group.programme) || (group.horizon && horizon.slug === group.horizon));
+  if (open) return open.position != null ? `horizon ${open.position}` : `horizon ${open.slug}`;
+  return group.horizon ? `horizon ${group.horizon}${group.horizon_state ? ` (${group.horizon_state})` : ''}` : 'no horizon';
 }
 
-/** What a row under `Serving no horizon` adds: the slug the record names, and why it is not an open horizon. */
-const extraFor = (group) => (group.horizon ? [{ text: `${group.horizon} (${group.horizon_state})`, styles: ['yellow'] }] : []);
+/**
+ * A programme's frame heading: its number and name in the title; in the top rule its horizon, its phase, its goals and
+ * proposals, then the figures it has always had (priority, done, an invalid record).
+ */
+export function programmeHeading(c, wide, data, group, facts) {
+  const phase = group.record_state === 'draft' ? 'draft' : facts.unfinished && facts.current != null ? `phase ${facts.current}${facts.last != null ? ` of ${facts.last}` : ''}` : '';
+  const goals = group.goals?.length || 0;
+  const parts = [
+    horizonWords(data, group),
+    phase,
+    plural(goals, 'goal'),
+    group.proposals ? plural(group.proposals, 'proposal') : '',
+    group.priority ? `priority ${group.priority}` : '',
+    facts.done ? `${facts.done} done` : '',
+  ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }));
+  if (group.record_invalid) parts.push({ text: 'record invalid', styles: ['red'] });
+  const number = group.number != null ? `${group.number}  ` : '';
+  return frameTop(c, wide, `${number}${group.programme}`, parts);
+}
 
 /**
- * What a drawn HORIZONS can fold (`fold`, below), without drawing it: the programme rows under `Serving no horizon` and
- * the programme rows under the open horizons, as the default page shows them (the ones under way).
+ * What each open horizon says, from the data alone: its programmes' state and its goals. `sessions` are the runner's.
+ * Exported for the tests that hold the row to the data.
  */
-export function horizonsFoldable(data, { sessions = [] } = {}) {
-  const horizons = data.horizons;
-  if (!horizons) return { none: 0, horizons: 0 };
+export function horizonFigures(data, sessions = []) {
   const groups = data.programmes?.programmes || [];
   const byName = new Map(groups.map((group) => [group.programme, group]));
-  const shown = (name) => programmeFacts(byName.get(name), sessions).underway;
-  const named = (horizons.open || []).flatMap((horizon) => (horizon.programmes || []).filter((name) => byName.has(name) && shown(name)));
-  const none = (horizons.none || []).filter((name) => byName.has(name) && shown(name));
-  return { none: none.length, horizons: named.length };
+  return (data.horizons?.open || []).map((horizon) => {
+    const own = (horizon.programmes || []).map((name) => byName.get(name)).filter(Boolean);
+    const all = own.map((group) => ({ group, facts: programmeFacts(group, sessions) }));
+    const sum = (pick) => all.reduce((n, item) => n + pick(item), 0);
+    return {
+      horizon,
+      programmes: own.length,
+      drafts: own.filter((group) => group.record_state === 'draft').length,
+      open: sum(({ facts }) => facts.unfinished),
+      landed: sum(({ facts }) => facts.done),
+      held: sum(({ group }) => (group.goals || []).filter((goal) => !finished(goal) && goal.hold).length),
+      prs: sum(({ facts }) => facts.prs),
+      running: sum(({ facts }) => facts.sessions),
+    };
+  });
 }
 
 /**
- * HORIZONS, drawn into `lines`. `data` is the page's data; `expand` (`a`) draws every programme as a row under its
- * horizon and no folded row; `sessions` are the runner's (`runner.sessions`). `fold` is what the overview's budget
- * folds (page-overview.js): `none` programme rows from the end of `Serving no horizon`, and `horizons` programme rows
- * from the last open horizon up, each horizon keeping its title and saying how many of its rows it folded. Nothing is
- * drawn for a page without `data.horizons` (a page from before this section).
+ * HORIZONS, drawn into `lines`: one row for every open horizon, in the desk's order. Nothing is drawn for a page
+ * without `data.horizons`. `sessions` are the runner's (`runner.sessions`).
  */
-export function horizonsLines(lines, c, wide, data, { expand = false, sessions = [], fold = {} } = {}) {
+export function horizonsLines(lines, c, wide, data, { sessions = [] } = {}) {
   const horizons = data.horizons;
   if (!horizons) return;
   const groups = data.programmes?.programmes || [];
-  const byName = new Map(groups.map((group) => [group.programme, group]));
-  const facts = new Map(groups.map((group) => [group.programme, programmeFacts(group, sessions)]));
-  const digits = String(Math.max(0, ...groups.map((group) => group.number ?? 0))).length;
-  const nameWidth = Math.min(28, Math.floor(wide / 3), Math.max(0, ...groups.filter((group) => facts.get(group.programme).underway || expand).map((group) => width(group.programme))));
-  const shown = (name) => expand || facts.get(name)?.underway;
-
-  const open = horizons.open || [];
-  const underway = groups.filter((group) => facts.get(group.programme).underway).length;
+  const figures = horizonFigures(data, sessions);
+  const underway = groups.filter((group) => programmeFacts(group, sessions).underway).length;
+  const goalsOpen = figures.reduce((n, item) => n + item.open, 0);
+  const running = groups.reduce((n, group) => n + programmeFacts(group, sessions).sessions, 0);
   const top = lines.length;
-  lines.push(frameTop(c, wide, 'HORIZONS', `${open.length} open horizon${open.length === 1 ? '' : 's'} · ${underway} programme${underway === 1 ? '' : 's'} under way`));
+  lines.push(frameTop(c, wide, 'HORIZONS', [
+    `${figures.length} open`,
+    `${underway} ${underway === 1 ? 'programme' : 'programmes'} under way`,
+    `${goalsOpen} ${goalsOpen === 1 ? 'goal' : 'goals'} open`,
+    running ? `${running} running` : '',
+  ].filter(Boolean).map((text) => ({ text, styles: ['grey'] }))));
   if (horizons.error) lines.push(`    ${c(clip(`horizons unreadable — ${horizons.error}`, wide - 4), 'red')}`);
   if (horizons.unreadable?.length) lines.push(`    ${c(clip(`${horizons.unreadable.length} horizon record${horizons.unreadable.length === 1 ? '' : 's'} cannot be read: ${horizons.unreadable.join(', ')}`, wide - 4), 'red')}`);
 
-  const rows = (names, extra = () => []) => names.map((name) => byName.get(name)).filter(Boolean)
-    .filter((group) => shown(group.programme))
-    .forEach((group) => lines.push(programmeRow(c, wide, group, facts.get(group.programme), { digits, nameWidth, extra: extra(group) })));
-
-  // The rows each horizon folds: from the last horizon up, a horizon's rows all before the one above it.
-  const folded = new Map();
-  let left = expand ? 0 : fold.horizons || 0;
-  for (const horizon of [...open].reverse()) {
-    const count = (horizon.programmes || []).filter((name) => byName.has(name) && shown(name)).length;
-    folded.set(horizon, Math.min(left, count));
-    left -= folded.get(horizon);
-  }
-  for (const horizon of open) {
-    const title = horizon.title || horizon.slug;
-    const place = horizon.position != null ? `${horizon.position}  ` : '';
-    const slug = horizon.title && horizon.title !== horizon.slug ? `  ${horizon.slug}` : '';
-    lines.push(`    ${c(`${place}${clip(title, Math.max(8, wide - 6 - place.length - slug.length))}`, 'bold')}${slug ? c(clip(slug, Math.max(0, wide - 8 - width(title) - place.length)), 'grey') : ''}`);
-    const named = (horizon.programmes || []).filter((name) => byName.has(name) && shown(name));
-    const take = folded.get(horizon) || 0;
-    if (named.length) rows(named.slice(0, named.length - take));
-    else lines.push(`${' '.repeat(INDENT)}${c('nothing under way', 'grey')}`);
-    if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} programme${take === 1 ? '' : 's'} folded — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
-  }
-  const none = (horizons.none || []).filter((name) => byName.has(name));
-  const noneShown = none.filter(shown);
-  if (noneShown.length) {
-    const take = expand ? 0 : Math.min(fold.none || 0, noneShown.length);
-    lines.push(`    ${c('Serving no horizon', 'bold')}`);
-    rows(noneShown.slice(0, noneShown.length - take), extraFor);
-    if (take) lines.push(`${' '.repeat(INDENT)}${c(`▸ ${take} more not serving a horizon — a shows ${take === 1 ? 'it' : 'them'}`, 'grey')}`);
-  }
+  const rows = figures.map((figure) => {
+    const state = [
+      figure.programmes ? plural(figure.programmes, 'programme') : 'no programme',
+      figure.drafts ? `${figure.drafts} draft` : null,
+      !figure.open && !figure.drafts && figure.programmes ? (figure.landed ? 'done' : 'nothing open') : null,
+    ].filter(Boolean).join(' · ');
+    const goals = [
+      figure.open ? { text: `${figure.open} open`, styles: [] } : null,
+      figure.landed ? { text: `${figure.landed} landed`, styles: ['grey'] } : null,
+      figure.held ? { text: `⊘ ${figure.held}`, styles: ['red'] } : null,
+      figure.prs ? { text: `${figure.prs} PR`, styles: [...PR_TONE] } : null,
+    ].filter(Boolean);
+    if (!figure.open && !figure.landed && !figure.held && !figure.prs) goals.push({ text: '0 goals open', styles: ['grey'] });
+    if (figure.running) goals.push({ text: '●', styles: kindTone('build') });
+    const joined = goals.flatMap((part, i) => (i && part.text !== '●' ? [{ text: ' · ', styles: ['grey'] }, part] : i ? [{ text: '  ' }, part] : [part]));
+    return { figure, state, joined, goalsWidth: joined.reduce((n, part) => n + width(part.text), 0) };
+  });
+  const places = rows.map(({ figure }) => (figure.horizon.position != null ? `${figure.horizon.position}` : ''));
+  const placeWidth = Math.max(0, ...places.map((place) => place.length));
+  const stateWidth = Math.max(0, ...rows.map((row) => width(row.state)));
+  const goalsWidth = Math.max(0, ...rows.map((row) => row.goalsWidth));
+  const titleRoom = Math.max(8, wide - 4 - placeWidth - (placeWidth ? 2 : 0) - stateWidth - goalsWidth - 2 * GAP.length);
+  const titleWidth = Math.min(titleRoom, Math.max(0, ...rows.map(({ figure }) => width(figure.horizon.title || figure.horizon.slug))));
+  rows.forEach((row, index) => {
+    const title = clipCell(row.figure.horizon.title || row.figure.horizon.slug, titleWidth);
+    const text = `    ${c(places[index].padStart(placeWidth), 'grey')}${placeWidth ? GAP : ''}${c(title, 'bold')}${' '.repeat(Math.max(0, titleWidth - width(title)))}${GAP}${row.state}${' '.repeat(Math.max(0, stateWidth - width(row.state)))}${GAP}${painted(c, row.joined)}`;
+    // The last resort: whatever still runs past the width is cut by the terminal's measure.
+    lines.push(width(text) > wide ? clip(text.replace(/\u001b\[[0-9;]*m/gu, ''), wide) : text);
+  });
   frameEnd(lines, c, wide, top);
-  const nothing = expand ? 0 : groups.filter((group) => !shown(group.programme)).length;
-  // One folded frame, its top rule alone.
-  if (nothing) lines.push(frameTop(c, wide, `${nothing} programme${nothing === 1 ? '' : 's'} with nothing under way`, '', ''));
-  lines.push('');
 }

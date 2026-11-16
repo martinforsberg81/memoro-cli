@@ -78,15 +78,15 @@ describe('bare mc', () => {
       const result = RAN.page;
       assert.equal(result.status, 0, result.stderr);
       // The overview: its sections, and what it leaves to the operations view (`o`).
-      for (const section of ['HORIZONS', 'IN FLIGHT', 'NEEDS ATTENTION']) {
+      for (const section of ['HORIZONS', 'MAINTENANCE']) {
         assert.match(result.stdout, new RegExp(`^\\s+┌─ ${section}\\b`, 'mu'), `${section} is missing`);
       }
-      for (const section of ['MERGE & DEPLOY', 'DEV', 'MAINTENANCE', 'SYSTEM']) {
+      for (const section of ['IN FLIGHT', 'NEEDS ATTENTION', 'PROGRAMMES', 'MERGE & DEPLOY', 'DEV', 'SYSTEM']) {
         assert.doesNotMatch(result.stdout, new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'mu'), `${section} belongs to the operations view`);
       }
       assert.doesNotMatch(result.stdout, /┌─ proposals|^\s+┌─ MC\b/mu, 'no pipeline box, no hero frame');
       // No WORK heading: every session is a programme's or a desk's, and the
-      // two folders nothing explains are strays under NEEDS ATTENTION.
+      // two folders nothing explains are rows of MAINTENANCE.
       assert.doesNotMatch(result.stdout, /^\s+WORK\b/mu);
       assert.match(result.stdout, /^ +alpha +not an area mc knows · checkout yes · 0 uncommitted$/mu);
       assert.match(result.stdout, /^ +beta +not an area mc knows · checkout yes · 0 uncommitted$/mu);
@@ -147,7 +147,7 @@ describe('bare mc', () => {
 
       // Once, not once per refresh. Every section heading appears exactly one
       // time in the whole of stdout.
-      for (const section of ['HORIZONS', 'IN FLIGHT', 'NEEDS ATTENTION']) {
+      for (const section of ['HORIZONS', 'MAINTENANCE']) {
         const seen = printed[''].match(new RegExp(`^\\s+(?:┌─ |── )?${section}\\b`, 'gmu')) || [];
         assert.equal(seen.length, 1, `${section} was printed ${seen.length} times`);
       }

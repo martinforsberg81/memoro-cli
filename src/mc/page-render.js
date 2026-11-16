@@ -48,7 +48,8 @@ import { toolShortName } from '../adapters/index.js';
 import { activityLines, sessionGoal } from './page-activity.js';
 import { deployLines, devLines, detail, frameEnd, frameTop, mergesLines, panelHeading, panelEnd } from './page-operations.js';
 import { programmeTreeLines } from './page-programmes.js';
-import { headerRows, overviewLines, warningLines } from './page-overview.js';
+import { programmeFacts, programmeHeading } from './page-horizons.js';
+import { flightRows, headerRows, outsidePrs, overviewLines, ownerWords, warningLines } from './page-overview.js';
 import { deskLines } from './page-desk.js';
 import { ageWords } from './page-cache.js';
 import { drainLine, stopLine } from './run-control.js';
@@ -320,7 +321,6 @@ const LANE_REPO = 11;
 /** Past this, the age is the thing on the row worth looking at. */
 const STALE_SESSION_S = 24 * 60 * 60;
 const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
-const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
 
 /** Aggregated maintenance queues and recorded error priorities. */
 function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
@@ -366,39 +366,6 @@ function maintenanceLines(lines, c, wide, sessions, intake, checks, expand) {
 }
 
 /**
- * What no kind explains (`programmes.strays`): a directory under `~/mc` that
- * is no area (`listStrays`), with whether it holds a checkout and how much is
- * uncommitted there — the two facts that say whether somebody's work is in it —
- * and a session with no owner: a register entry no verb explains, or a tmux
- * session `mc-<name>` mc did not start for anyone, with how long it has been
- * open. One line each. Nothing removes one, so nothing here offers to.
- */
-function strayLines(lines, c, wide, strays) {
-  if (!strays?.length) return;
-  const room = wide - 4;
-  lines.push(frameTop(c, wide, 'not an area mc knows', `${strays.length}`));
-  for (const stray of strays) {
-    const facts = stray.kind === 'directory' || !stray.kind
-      ? [stray.checkout ? 'checkout yes' : 'checkout no', ...(stray.checkout ? [`${stray.uncommitted} uncommitted`] : [])]
-      : [stray.kind === 'tmux' ? 'tmux session' : `${stray.verb ? `mc ${stray.verb}` : 'a session'} with no programme`,
-        openFor(stray.age_seconds), ...(stray.pid ? [`pid ${stray.pid}`] : [])];
-    lines.push(`    ${paint(c, fitting([
-      { text: pad(clip(stray.name, 21), 22), styles: ['bold'] },
-      { text: facts.join(' · '), styles: ['grey'] },
-    ], room), room)}`);
-  }
-  panelEnd(lines, c, wide);
-}
-
-/** The words for whose a pull request is, on a PULL REQUESTS row. */
-function ownerWords(owner) {
-  if (owner.kind === 'plan') return owner.name ? `plan ${owner.name}` : 'a plan branch';
-  if (owner.kind === 'workarea') return `workarea ${owner.name}`;
-  if (owner.kind === 'worktree') return `checked out in ${String(owner.path).replace(/^\/Users\/[^/]+/u, '~')}`;
-  return 'nobody\'s';
-}
-
-/**
  * MERGE's loose PR group — open pull requests no programme or session draws.
  *
  * A goal's pull requests are on its row in PROGRAMMES, and the merger's are in
@@ -410,9 +377,7 @@ function ownerWords(owner) {
  */
 function prsLines(lines, c, wide, prs, sessionPrs = []) {
   if (!prs) return;
-  const assigned = new Set(sessionPrs.map(pr => `${pr.repo}#${pr.number}`));
-  const items = (prs.items || []).filter(pr => !pr.programme && !pr.merging && !pr.merge_red
-    && !assigned.has(`${pr.repo}#${pr.number}`));
+  const items = outsidePrs(prs, sessionPrs);
   if (!items.length) return;
   const counts = {};
   for (const pr of items) counts[pr.owner?.kind || 'none'] = (counts[pr.owner?.kind || 'none'] || 0) + 1;
@@ -528,46 +493,16 @@ function programmeLine(c, wide, group, expand, numbered = false) {
   return frameTop(c, wide, `${numbered && group.number != null ? `${group.number} ` : ''}${group.programme}`, facts);
 }
 
-function programmesLines(lines, c, wide, programmes, expand, runnerSessions = []) {
-  const statuses = ['ready', 'blocked', 'Martin']
-    .filter((status) => expand && programmes.statuses?.[status])
-    .map((status) => ({ text: `${programmes.statuses[status]} ${status}`, styles: status === 'ready' ? ['green'] : ['red'] }));
-  const groups = programmes.programmes || [];
-  // A page from before the flag has every programme active, as it was drawn.
-  const asleep = groups.filter((group) => group.dormant);
-  const dormant = programmes.dormant ?? asleep.length;
-  const active = programmes.active ?? groups.length - dormant;
-  // PROGRAMMES is a frame of its own, its top rule alone: the counts and the key, then each programme's frame.
-  lines.push(frameTop(c, wide, 'PROGRAMMES', [...(expand ? [{ text: `${active} active · ${dormant} dormant · ${programmes.count} goals`, styles: ['grey'] }] : []), ...statuses], 'p  plan a programme'));
-
-  // The dormant programmes — no goal — are this one line and not a
-  // heading each: on 2026-11-02 they were 27 of 41 headings, every one saying
-  // that it had nothing yet. Directly under the heading, where the counts it explains
-  // are, rather than after the last active group's rows, where it reads as part
-  // of that programme. A live plan session is the one thing on a dormant
-  // programme somebody may come looking for, so the line counts those.
-  // Expanded (`a`), every programme is drawn and the line is not needed.
-  if (!expand && asleep.length) {
-    const hidden = asleep.filter((group) => !(group.planning_sessions?.length || group.sessions?.length));
-    if (hidden.length) lines.push(frameTop(c, wide, `${hidden.length} dormant programme${hidden.length === 1 ? '' : 's'}`));
-  }
-
-  let alone = false;
-  for (const group of groups) {
-    if (group.dormant && !expand && !(group.planning_sessions?.length || group.sessions?.length)) continue;
-    const body = programmeBody(c, wide, group, expand, runnerSessions);
-    // A programme with nothing to draw — nothing unfinished, nothing to attend to — is its heading row alone.
-    if (lines.at(-1) !== '' && !(alone && !body.length)) lines.push('');
-    lines.push(programmeLine(c, wide, group, expand));
-    alone = !body.length;
-    if (alone) continue;
-    lines.push(...body);
-    panelEnd(lines, c, wide);
-  }
-  // A last programme drawn as its heading alone has no border under it: a blank
-  // line keeps what follows (unassigned activity, strays) from reading as its rows.
-  if (alone) lines.push('');
-  unassignedLines(lines, c, wide, programmes, expand, runnerSessions);
+/**
+ * One programme's frame in the overview: its heading (number, horizon, phase), then its plan and programme sessions and
+ * its goals by phase, then the border. A programme with nothing to draw is its heading row alone.
+ */
+function programmeFrame(lines, c, wide, data, group, expand, runnerSessions) {
+  const body = programmeBody(c, wide, group, expand, runnerSessions);
+  lines.push(programmeHeading(c, wide, data, group, programmeFacts(group, runnerSessions)));
+  if (!body.length) return;
+  lines.push(...body);
+  panelEnd(lines, c, wide);
 }
 
 /** What a programme's block holds under its heading: its plan and programme sessions, then its goals by phase. */
@@ -589,25 +524,6 @@ function programmeViewLines(lines, c, wide, group, expand, runnerSessions) {
   if (!body.length) { lines.push(''); return; }
   lines.push(...body);
   panelEnd(lines, c, wide);
-}
-
-/** The runner's sessions no programme's goal or plan explains, then what mc has no kind for. */
-function unassignedLines(lines, c, wide, programmes, expand, runnerSessions = []) {
-  const groups = programmes.programmes || [];
-  const known = new Set(groups.flatMap((group) => (group.goals || []).map((goal) => `${group.programme}/${goal.name}`)));
-  // Match identities rather than object references: cached JSON copies sessions.
-  const identity = (session) => JSON.stringify([session.name, session.pid, session.started]);
-  const programmePlans = new Set(groups.flatMap((group) => group.planning_sessions || []).map(identity));
-  const unmatched = runnerSessions.filter((session) => !known.has(sessionGoal(session)) && !programmePlans.has(identity(session)));
-  if (unmatched.length) {
-    lines.push(frameTop(c, wide, 'UNASSIGNED ACTIVITY', `${unmatched.length} session${unmatched.length === 1 ? '' : 's'}`));
-    for (const session of unmatched) {
-      lines.push(...activityLines(c, wide, session, { indent: 4, expand, named: true }));
-      for (const pr of session.prs || []) detail(lines, c, wide, 6, `${pr.repo || session.repo || 'unknown'}#${pr.number}`, PR_TONE);
-    }
-    panelEnd(lines, c, wide);
-  }
-  strayLines(lines, c, wide, programmes.strays);
 }
 
 /**
@@ -982,7 +898,7 @@ function operationsBody(lines, c, wide, data, { expand, version, at }) {
  * The whole page, as lines. `data` is exactly what `--json` prints: one key
  * per section, so the two can never say different things.
  *
- * Three pages are drawn from it: the overview (the default; at most `OVERVIEW_ROWS` lines, page-overview.js),
+ * Three pages are drawn from it: the overview (the default, as long as the work; page-overview.js),
  * the operations view (`operations`: the hero frame and the panels), and a programme's own view (`view`).
  */
 export function renderPageLines(data, {
@@ -1007,7 +923,7 @@ export function renderPageLines(data, {
   const open = view == null ? null : (data.programmes?.programmes || []).find((group) => group.programme === view);
   if (open) {
     headerLines(lines, c, paintText, wide, data, version, { header: true });
-    deskLines(lines, c, wide, data.desk);
+    deskLines(lines, c, wide, data.desk, { deskSessions: flightRows(data).desk.length });
     managerFrames(lines, c, wide, data, expand);
     warningLines(lines, c, wide, data);
     programmeViewLines(lines, c, wide, open, expand, runnerSessions);
@@ -1016,12 +932,8 @@ export function renderPageLines(data, {
   lines.push(...overviewLines(c, wide, data, {
     version,
     expand,
-    programmes: (into) => programmesLines(into, c, wide, data.programmes, expand, runnerSessions),
+    drawProgramme: (into, group) => programmeFrame(into, c, wide, data, group, expand, runnerSessions),
   }));
-  if (expand && data.horizons) {
-    lines.push('');
-    programmesLines(lines, c, wide, data.programmes, expand, runnerSessions);
-  }
   if (expand) {
     // `a` holds what the single page held (D10): the operations view's sections expanded, beginning with its hero
     // frame (the 24-hour figures and the pipeline), and each desk session's own frame with its trigger and pid (D6).
