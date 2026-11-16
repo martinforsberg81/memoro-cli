@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -639,4 +639,32 @@ describe('programme sign is Martin at the interactive desk only', () => {
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+});
+
+it('programme return and drop refuse every unauthorized caller and malformed request without effects', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-return-authority-'));
+  try {
+    const dir = join(root, 'programs', 'p'); mkdirSync(dir, { recursive: true });
+    const initial = newRecord({ end: 'A result.', createdBy: 'person' });
+    writeRecord(dir, initial);
+    for (const verb of ['return', 'drop']) {
+      const record = verb === 'return' ? { ...initial, state: 'open', signed_at: '2026-11-14T10:20:30Z', signed_by: 'martin', signed_text: 'a'.repeat(64) } : initial;
+      writeFileSync(join(dir, 'PROGRAMME.json'), JSON.stringify(record));
+      const before = readFileSync(join(dir, 'PROGRAMME.json'), 'utf8');
+      for (const caller of [{}, { MC_ROLE: 'manager' }, { MC_ROLE: 'build-session:goal', MC_GOAL: 'p/g' }, { MC_ROLE: 'martin', MC_HEADLESS: '1' }, { MC_ROLE: 'plan', MC_PROGRAMME: 'other' }, { MC_ROLE: 'plan', MC_PROGRAMME: 'p', MC_GOAL: 'p/g' }, { MC_ROLE: 'programme-review' }, ...(verb === 'drop' ? [{ MC_ROLE: 'plan', MC_PROGRAMME: 'p' }] : [])]) {
+        const stdout = sink(), stderr = sink();
+        assert.equal(await programs([verb, 'p', '--reason', 'Not authorized'], { env: { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root, ...caller }, stdout, stderr }), 2, `${verb} ${JSON.stringify(caller)}`);
+        assert.match(stderr.out.text, /only Martin at the desk/u);
+        assert.equal(stdout.out.text, '');
+        assert.equal(readFileSync(join(dir, 'PROGRAMME.json'), 'utf8'), before);
+        assert.deepEqual(readdirSync(dir), ['PROGRAMME.json']);
+      }
+      for (const args of [[verb, 'p'], [verb, 'p', '--reason', ' '], [verb, 'p', '--reason', 'r', '--bogus'], [verb, 'p', 'extra', '--reason', 'r']]) {
+        assert.equal(await programs(args, { env: { MC_HOME: join(root, 'home'), MC_WORK_ROOT: root, MC_ROLE: 'martin' }, stdout: sink(), stderr: sink() }), 2, args.join(' '));
+        assert.equal(readFileSync(join(dir, 'PROGRAMME.json'), 'utf8'), before);
+        assert.deepEqual(readdirSync(dir), ['PROGRAMME.json']);
+      }
+    }
+    assert.equal(await programs(['model', 'unexpected'], { env: { MC_WORK_ROOT: root }, stdout: sink(), stderr: sink() }), 2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

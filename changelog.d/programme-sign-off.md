@@ -15,3 +15,11 @@ section: Changed
   structure and a current reading, with an explicit logged reason for NOT OK.
   Goal review retains its two-reading/20-minute policy and now also reads goals
   against their signed programme part. No sign-off desk item is created.
+- **Programme return, drop and model commands.** Interactive Martin can return
+  an open programme to draft or shelve a declined draft whole; a programme
+  planner can return only its own programme, never from a goal session.
+  Reasons and signed copies are retained without releasing holds or deleting
+  unpublished or restricted material. The latest live/archive signature is
+  the next document's model; show/list expose signatures, legacy state and
+  design drift. Goal creation refuses draft/dropped programmes and headless
+  recordless callers before any fetch or write.

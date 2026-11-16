@@ -164,10 +164,14 @@ export function readRecord(dir, { read = (path) => readFileSync(path, 'utf8') } 
 }
 
 /** The record as `mc programs list --json` and `show --json` give it: null, its facts, or its problems. */
-export function recordView(read) {
+export function recordView(read, { dir } = {}) {
   if (read.status === 'valid') {
     const { horizon, end, state, created, created_by: createdBy } = read.record;
-    return { horizon, ...(read.record.area ? { area: read.record.area } : {}), end, state, created, created_by: createdBy, ...(read.record.phases ? { phases: read.record.phases } : {}) };
+    const { signed_at, signed_by, signed_text, cut_text, legacy } = read.record;
+    return { horizon, ...(read.record.area ? { area: read.record.area } : {}), end, state, created, created_by: createdBy,
+      signed_at, signed_by, signed_text, cut_text, ...(legacy !== undefined ? { legacy } : {}),
+      ...(dir && signed_text ? { designs_changed: designsChanged(dir) } : {}),
+      ...(read.record.phases ? { phases: read.record.phases } : {}) };
   }
   return read.status === 'invalid' ? { problems: read.problems } : null;
 }
@@ -237,6 +241,18 @@ function designHashes(dir) {
     if (error.code !== 'ENOENT' || error.path !== designs) throw error;
   }
   return entries;
+}
+
+/** Compare the complete signed inventory, so additions and removals also count as drift. */
+function designsChanged(dir) {
+  try {
+    const signed = readFileSync(join(dir, 'SIGNED.md'), 'utf8');
+    const marker = '\n## Signed designs\n\n';
+    const start = signed.lastIndexOf(marker);
+    if (start < 0) return true;
+    const current = designHashes(dir).map((file) => `${file.sha256}  ${file.path}\n`).join('');
+    return signed.slice(start + marker.length) !== current;
+  } catch { return true; }
 }
 
 /** Capture the working document and design hashes before opening the record. The command supplies reading/structure checks. */

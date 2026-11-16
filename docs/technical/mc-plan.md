@@ -143,6 +143,9 @@ mc programs create <programme> --end "…" [--horizon <slug> | --area <repo>/<id
 mc programs record <programme> --end "…" [--horizon <slug>]
 mc programs show <programme> [--json]
 mc programs sign <programme> [--reason "…"]
+mc programs return <programme> --reason "…"
+mc programs drop <programme> --reason "…"
+mc programs model
 mc programs review <programme>
 mc programs review <programme> verdict ok|not-ok
 mc programs after <programme> <phase> <phase>… | --none
@@ -159,7 +162,7 @@ unattended. Its form and refusals are in [mc-goals.md](mc-goals.md#stated-order)
 `create` makes `~/mc/programs/<programme>/` with `PROGRAMME.json` (state
 `draft` (or `open` for an area repair), created now), `README.md` from its template, and empty `goals/`,
 `proposals/archive/` and `evidence/`, so `mc goal new <programme>/<goal>`
-works at once. It refuses a name that exists (exit 1) and, when the page
+is available after sign-off (immediately for an area repair). It refuses a name that exists (exit 1) and, when the page
 template cannot be read, makes nothing. `record` gives an existing directory
 without a record its record and touches nothing else; it refuses a directory
 that is missing or already has a record (exit 1). Both refuse a bad name, a
@@ -208,6 +211,29 @@ current OK does not. A successful sign prints `<programme>: signed — goals may
 be cut` and appends Martin/time and any override reason to programme LOG.md.
 The record writer checks the current reading inside its strict lock before
 writing either sign-off file; normal record writes retain their other fields.
+
+`return <programme> --reason "…"` is available only to interactive Martin or
+`MC_ROLE=plan` with that exact `MC_PROGRAMME` and no `MC_GOAL` (the programme
+planning turn, not a goal session). It requires open, clears signed_* but
+retains cut_text and SIGNED.md, appends time/role/reason to RETURNED.md, and
+prints `<programme>: returned to draft — <reason>`. `drop` is interactive
+Martin only and requires draft. It writes dropped and appends the reason,
+then uses the archive's collision-avoiding whole-directory shelving into
+`archive/programs/<programme>` (then `-2`, `-3`, …). It does not release a
+worktree or hold, delete restricted data, move proposals separately, or
+remove dirty/unpushed material: the complete directory is retained. A failed
+move reports the retained location and leaves the dropped record/reason in
+place. Malformed/unauthorized calls exit 2 without effects; wrong state or a
+failed write/move exits 1. No sign-off desk item is created by either verb.
+
+`model` prints the SIGNED.md path with the latest signed_at among valid live
+and archived records that still have that file; legacy unsigned copies do
+not qualify. No signature exits 1 with `mc: no programme document is signed
+yet`. `show` and list expose signature time/author and legacy (`legacy: not
+signed`); their record JSON includes the signature/cut keys. For a signed
+record they compare the complete current designs inventory with the signed
+hash block: changed, new or removed files print `designs changed since
+sign-off` (JSON `designs_changed`). Reads never update a record or signature.
 
 `review` is an in-session call, not a runner lane or scheduled turn. A manager,
 interactive desk, interactive programme plan without MC_GOAL, or a person can

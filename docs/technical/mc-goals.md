@@ -444,7 +444,13 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
   so may a build, review or mend session, which only reads.
 
 - **`new <p>/<g> --repo <r>[,<r>] --class fast|medium|large --title "…" [--phase <n>] [--stage draft] [--structure 1|2]`** — makes a
-  goal, refused unless its flags are valid and its names are new. It writes
+  goal, refused unless its flags are valid and its names are new.
+  Before fetching or writing, draft/dropped programme records refuse (exit 1):
+  `mc: <programme> is not signed off — mc programs show <programme>`.
+  Without a record, `MC_HEADLESS=1` refuses (exit 1): `mc: <programme> has no
+  record — a goal here is made at the desk`; interactive recordless creation
+  remains available. Signed open, legacy open and area repairs are admitted
+  subject to the existing guards, including one live goal per repair area. It writes
   version 2 (numbered parts) unless given `--structure 1`, which writes version 1
   (goal and contract prose); it prints one hint for the version it wrote. It is in
   stage `draft` (awaiting planning; see *Next draft planning*; `--stage build`

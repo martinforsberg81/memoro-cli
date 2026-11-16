@@ -149,10 +149,16 @@ describe('mc programs create', () => {
     } finally { a.done(); }
   });
 
-  it('makes a programme `mc goal new` can put its first goal in', async () => {
+  it('makes a draft that admits its first goal only after public sign-off', async () => {
     const a = area();
     try {
       await call(['create', 'alpha', '--end', 'e'], a.env);
+      const dir = join(a.home, 'alpha');
+      const text = readFileSync(join(dir, 'README.md'), 'utf8');
+      const report = 'OK\nfindings: 0\n';
+      writeFileSync(join(dir, 'PROGRAMME-REVIEW.md'), report);
+      writeFileSync(join(dir, '.programme-review.json'), JSON.stringify({ verdict: 'ok', hash: hash(text), at: NOW.toISOString(), findings: 0, report_sha256: hash(report) }));
+      assert.equal((await call(['sign', 'alpha'], { ...a.env, MC_ROLE: 'martin' })).code, 0);
       const out = [];
       const err = [];
       const code = await goal(['new', 'alpha/first', '--repo', 'memoro-cli', '--class', 'fast', '--title', 'First'], {
@@ -191,7 +197,7 @@ describe('mc programs record and show', () => {
       assert.match(text.out, /horizon {2}mc-autonomy/u);
       assert.match(text.out, /end {6}Alpha done\./u);
       const json = JSON.parse((await call(['show', 'alpha', '--json'], a.env)).out);
-      assert.deepEqual(json, { name: 'alpha', record: { horizon: 'mc-autonomy', end: 'Alpha done.', state: 'draft', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated' } } });
+      assert.deepEqual(json, { name: 'alpha', record: { horizon: 'mc-autonomy', end: 'Alpha done.', state: 'draft', created: '2026-11-14T10:20:30Z', created_by: 'person', ...UNSIGNED, phases: { order: 'stated' } } });
       mkdirSync(join(a.home, 'plain'));
       const none = await call(['show', 'plain'], a.env);
       assert.equal(none.code, 0);
@@ -262,7 +268,7 @@ describe('the list and the page', () => {
       const json = JSON.parse((await call(['list', '--json'], a.env)).out);
       const names = json.programmes.map((item) => item.name);
       assert.deepEqual(names, ['alpha', 'broken']);
-      assert.deepEqual(json.programmes[0].record, { horizon: 'mc-autonomy', end: 'e', state: 'draft', created: '2026-11-14T10:20:30Z', created_by: 'person', phases: { order: 'stated' } });
+      assert.deepEqual(json.programmes[0].record, { horizon: 'mc-autonomy', end: 'e', state: 'draft', created: '2026-11-14T10:20:30Z', created_by: 'person', ...UNSIGNED, phases: { order: 'stated' } });
       assert.ok(json.programmes[1].record.problems.length);
       assert.equal(json.programmes[0].dormant, true);
       const text = (await call(['list'], a.env)).out;
@@ -916,6 +922,132 @@ describe('signed record transitions', () => {
       assert.match(invalid.problems[0], /^signed_at:/u);
       assert.equal(readFileSync(a.file, 'utf8'), before);
       assert.equal(existsSync(join(a.dir, 'SIGNED.md')), false, 'validate before either file is written');
+    } finally { a.done(); }
+  });
+});
+
+describe('programme return, drop and model commands', () => {
+  const put = (a, name, record) => {
+    const dir = join(a.home, name); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, RECORD_FILE), JSON.stringify(record));
+    writeFileSync(join(dir, 'README.md'), `# ${name}\n`);
+    return dir;
+  };
+
+  it('returns only open records, appends role/time/reason and preserves the signed copy and cut', async (t) => {
+    const start = performance.now(), a = area();
+    try {
+      const dir = put(a, 'p', SIGNED);
+      writeFileSync(join(dir, 'SIGNED.md'), 'old signed copy');
+      writeFileSync(join(dir, 'RETURNED.md'), 'Earlier reason\n');
+      t.diagnostic(`return fixture setup: ${(performance.now() - start).toFixed(3)} ms`);
+      const result = await call(['return', 'p', '--reason', 'An unresolved choice.'], { ...a.env, MC_ROLE: 'plan', MC_PROGRAMME: 'p', MC_HEADLESS: '1' });
+      assert.equal(result.code, 0, result.err);
+      assert.equal(result.out, 'p: returned to draft — An unresolved choice.\n');
+      assert.deepEqual(recordOf(a.home, 'p'), { ...DRAFT, cut_text: SIGNED.cut_text });
+      assert.equal(readFileSync(join(dir, 'SIGNED.md'), 'utf8'), 'old signed copy');
+      assert.equal(readFileSync(join(dir, 'RETURNED.md'), 'utf8'), 'Earlier reason\n\n2026-11-14T10:20:30.456Z · plan · returned to draft — An unresolved choice.\n');
+      const before = readFileSync(join(dir, 'RETURNED.md'), 'utf8');
+      const refused = await call(['return', 'p', '--reason', 'Again'], { ...a.env, MC_ROLE: 'martin' });
+      assert.equal(refused.code, 1); assert.match(refused.err, /must be open, reads draft/u);
+      assert.equal(readFileSync(join(dir, 'RETURNED.md'), 'utf8'), before);
+      writeFileSync(join(dir, RECORD_FILE), JSON.stringify(SIGNED));
+      const desk = await call(['return', 'p', '--reason', 'The desk returns it too.'], { ...a.env, MC_ROLE: 'martin' });
+      assert.equal(desk.code, 0, desk.err);
+      assert.equal(recordOf(a.home, 'p').state, 'draft');
+      assert.match(readFileSync(join(dir, 'RETURNED.md'), 'utf8'), /martin · returned to draft — The desk returns it too\./u);
+    } finally { a.done(); }
+  });
+
+  it('drops only a draft and shelves all material without overwriting an existing archive or releasing worktrees', async (t) => {
+    const start = performance.now(), a = area();
+    try {
+      const dir = put(a, 'p', { ...DRAFT, cut_text: SIGNED.cut_text });
+      for (const [file, bytes] of [['SIGNED.md', 'old signature'], ['dirty-work', 'unpushed and dirty'], ['memoro-cli/.git', 'gitdir: keep this checkout'], ['designs/a.png', Buffer.from([0, 255, 1])]]) {
+        mkdirSync(dirname(join(dir, file)), { recursive: true }); writeFileSync(join(dir, file), bytes);
+      }
+      const restricted = join(a.root, 'restricted', 'p', 'private'); mkdirSync(dirname(restricted), { recursive: true }); writeFileSync(restricted, 'restricted data stays');
+      const archive = join(a.root, 'archive', 'programs');
+      // Even empty destinations must not be replaced.
+      for (const name of ['p', 'p-2']) mkdirSync(join(archive, name), { recursive: true });
+      writeFileSync(join(archive, 'p-2', 'keep'), 'earlier archive');
+      t.diagnostic(`drop fixture setup: ${(performance.now() - start).toFixed(3)} ms`);
+      const result = await call(['drop', 'p', '--reason', 'Not this design.'], { ...a.env, MC_ROLE: 'martin' });
+      assert.equal(result.code, 0, result.err);
+      const destination = join(archive, 'p-3');
+      assert.match(result.out, new RegExp(`retained at ${destination}`, 'u'));
+      assert.equal(existsSync(dir), false);
+      const dropped = JSON.parse(readFileSync(join(destination, RECORD_FILE), 'utf8'));
+      assert.deepEqual(dropped, { ...DRAFT, state: 'dropped', cut_text: SIGNED.cut_text });
+      for (const [file, bytes] of [['SIGNED.md', 'old signature'], ['dirty-work', 'unpushed and dirty'], ['memoro-cli/.git', 'gitdir: keep this checkout']]) assert.equal(readFileSync(join(destination, file), 'utf8'), bytes);
+      assert.deepEqual(readFileSync(join(destination, 'designs/a.png')), Buffer.from([0, 255, 1]));
+      assert.match(readFileSync(join(destination, 'RETURNED.md'), 'utf8'), /martin · dropped — Not this design\./u);
+      assert.deepEqual(readdirSync(join(archive, 'p')), []);
+      assert.equal(readFileSync(join(archive, 'p-2', 'keep'), 'utf8'), 'earlier archive');
+      assert.equal(readFileSync(restricted, 'utf8'), 'restricted data stays');
+      put(a, 'open', LEGACY);
+      const refused = await call(['drop', 'open', '--reason', 'No'], { ...a.env, MC_ROLE: 'martin' });
+      assert.equal(refused.code, 1); assert.match(refused.err, /must be draft, reads open/u);
+      assert.equal(recordOf(a.home, 'open').state, 'open');
+      assert.equal(existsSync(join(a.home, 'open', 'RETURNED.md')), false);
+    } finally { a.done(); }
+  });
+
+  it('reports a failed drop move and retains dropped state, reason and all unpublished material in place', async () => {
+    const a = area();
+    try {
+      const dir = put(a, 'p', DRAFT); writeFileSync(join(dir, 'dirty-work'), 'retain');
+      const result = await call(['drop', 'p', '--reason', 'Declined'], { ...a.env, MC_ROLE: 'martin' }, { shelve: () => { throw new Error('move denied'); } });
+      assert.equal(result.code, 1); assert.match(result.err, /move denied — material retained; inspect/u);
+      assert.equal(recordOf(a.home, 'p').state, 'dropped');
+      assert.match(readFileSync(join(dir, 'RETURNED.md'), 'utf8'), /Declined/u);
+      assert.equal(readFileSync(join(dir, 'dirty-work'), 'utf8'), 'retain');
+    } finally { a.done(); }
+  });
+
+  it('model chooses the latest signature over live and archived records, not names or legacy copies', async () => {
+    const a = area();
+    try {
+      put(a, 'old', GOOD);
+      assert.deepEqual(await call(['model'], a.env), { code: 1, out: '', err: 'mc: no programme document is signed yet\n' });
+      const live = put(a, 'z-live', SIGNED); writeFileSync(join(live, 'SIGNED.md'), 'live');
+      const archive = join(a.root, 'archive', 'programs', 'a-archive-2'); mkdirSync(archive, { recursive: true });
+      writeFileSync(join(archive, RECORD_FILE), JSON.stringify({ ...SIGNED, state: 'done', signed_at: '2026-11-15T10:20:30Z' }));
+      writeFileSync(join(archive, 'SIGNED.md'), 'archived');
+      assert.equal((await call(['model'], a.env)).out, `${join(archive, 'SIGNED.md')}\n`);
+      writeFileSync(join(live, RECORD_FILE), JSON.stringify({ ...SIGNED, signed_at: '2026-11-16T10:20:30Z' }));
+      assert.equal((await call(['model'], a.env)).out, `${join(live, 'SIGNED.md')}\n`);
+      assert.equal(recordOf(a.home, 'old').version, 1, 'model reads do not migrate');
+    } finally { a.done(); }
+  });
+
+  it('show and list carry signatures and legacy, and report changed, added and removed designs without changing records', async () => {
+    const a = area();
+    try {
+      const dir = put(a, 'p', DRAFT);
+      mkdirSync(join(dir, 'designs')); writeFileSync(join(dir, 'designs', 'a.png'), 'a');
+      assert.equal(signRecord(dir, { at: NOW, root: a.root }).ok, true);
+      const before = readFileSync(join(dir, RECORD_FILE), 'utf8');
+      const read = () => ({ section: { programmes: [{ programme: 'p', goals: [], statuses: {} }] } });
+      for (const change of ['none', 'changed', 'added', 'removed']) {
+        if (change === 'changed') writeFileSync(join(dir, 'designs', 'a.png'), 'b');
+        if (change === 'added') { writeFileSync(join(dir, 'designs', 'a.png'), 'a'); writeFileSync(join(dir, 'designs', 'extra'), 'new'); }
+        if (change === 'removed') { rmSync(join(dir, 'designs', 'extra')); rmSync(join(dir, 'designs', 'a.png')); }
+        const show = await call(['show', 'p'], a.env);
+        assert.equal(show.code, 0); assert.match(show.out, /signed   2026-11-14T10:20:30Z by martin/u);
+        const json = JSON.parse((await call(['show', 'p', '--json'], a.env)).out).record;
+        assert.equal(json.signed_text, recordOf(a.home, 'p').signed_text);
+        assert.equal(json.designs_changed, change !== 'none', change);
+        const list = await call(['list'], a.env, { read });
+        assert.match(list.out, /record open.*signed 2026-11-14T10:20:30Z by martin/u);
+        for (const output of [show.out, list.out]) assert.equal(output.includes('designs changed since sign-off'), change !== 'none', change);
+      }
+      assert.equal(readFileSync(join(dir, RECORD_FILE), 'utf8'), before);
+      const old = put(a, 'old', GOOD), bytes = readFileSync(join(old, RECORD_FILE), 'utf8');
+      assert.match((await call(['show', 'old'], a.env)).out, /legacy: not signed/u);
+      const list = await call(['list', '--json'], a.env, { read: () => ({ section: { programmes: [{ programme: 'old', goals: [], statuses: {} }] } }) });
+      assert.equal(JSON.parse(list.out).programmes[0].record.legacy, true);
+      assert.equal(readFileSync(join(old, RECORD_FILE), 'utf8'), bytes);
     } finally { a.done(); }
   });
 });

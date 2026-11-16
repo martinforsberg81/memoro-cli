@@ -101,6 +101,12 @@ its check, and each worktree's state.
   whether the goal adds a solution, design or decision absent from its signed
   part: yes is NOT OK.
 - **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs an OK reading of the current text (or two readings and `--reason`). Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
+- **Programme sign-off.** `new` refuses draft/dropped records (exit 1), naming
+  `mc programs show <programme>`. Headless creation without a record refuses
+  (exit 1): a goal there is made at the desk. Both happen before fetch/write.
+  Signed open, legacy and repair programmes retain their other admission rules;
+  interactive recordless creation remains available.
+
 - **New and gone.** `mc goal new <programme>/<goal> --repo … --class
   fast|medium|large --title "…" ` makes one, always in draft: GOAL.json and
   LOG.md, and no worktree (the runner makes it at first use). A draft made without `MC_HEADLESS=1` is held from creation: `mc goal stage` to `build` frees it, and `mc goal release` hands the draft to headless planning. `mc goal drop

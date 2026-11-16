@@ -327,6 +327,13 @@ function newGoal(args, flags, ctx) {
     return 2;
   }
   if (!ctx.list(home).includes(programme)) { stderr.write(`mc: no programme ${programme} under ${home}\n`); return 1; }
+  const record = readRecord(join(home, programme), { read: ctx.read });
+  if (record.status === 'valid' && ['draft', 'dropped'].includes(record.record.state)) {
+    stderr.write(`mc: ${programme} is not signed off — mc programs show ${programme}\n`); return 1;
+  }
+  if (record.status === 'none' && ctx.env.MC_HEADLESS === '1') {
+    stderr.write(`mc: ${programme} has no record — a goal here is made at the desk\n`); return 1;
+  }
   const dir = goalDirIn(home, programme, goal);
   if (ctx.list(join(home, programme, GOALS_DIR)).includes(goal)) { stderr.write(`mc: ${programme}/${goal} exists — ${dir}\n`); return 1; }
   const holed = phaseHole(phase, programme, null, ctx);
