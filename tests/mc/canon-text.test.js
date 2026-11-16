@@ -25,6 +25,7 @@ const DEFINING = {
   'writing-a-horizon': 'A horizon is what is worked toward now, over roughly one to two months.',
   'writing-a-goal': 'A goal is written through the verbs; the files are mc',
   'designing-a-programme': 'A programme is thought through once, before its goals are written',
+  'writing-a-programme-document': 'A programme document is an order, as a buyer of software hands it to the firm',
   'writing-tests': 'A pinned number is a summary of a list, and the list is what to pin.',
 };
 

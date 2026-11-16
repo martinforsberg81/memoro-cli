@@ -27,6 +27,7 @@ Paths below are relative to this skill's directory. Do not preload the tree.
 | Design, change or retire tests | [tasks/writing-tests.md](tasks/writing-tests.md) |
 | Draft a horizon playback | [tasks/writing-a-horizon.md](tasks/writing-a-horizon.md) |
 | Design a programme, its README or its phases | [tasks/designing-a-programme.md](tasks/designing-a-programme.md) |
+| Write or change a programme document | [tasks/writing-a-programme-document.md](tasks/writing-a-programme-document.md) |
 | Write or change a goal's brief or criteria | [tasks/writing-a-goal.md](tasks/writing-a-goal.md) |
 | Git mutations in shared worktrees | [tasks/git.md](tasks/git.md) |
 | Resolve a merge conflict | [tasks/merge-conflicts.md](tasks/merge-conflicts.md) |

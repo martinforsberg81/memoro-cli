@@ -84,7 +84,9 @@ label-start entries: Closes, Solution, Design, Proved by, Not in this part.
 Their first lines begin with those labels; what follows a label on the line
 is free, and its content may continue as paragraphs or lists. Code checks
 structure, not prose quality: the independent reading and Martin judge what
-it says. Solutions are detailed enough that a builder chooses nothing.
+it says. The document binds what the user gets, how it looks and how one
+sees that it works; the construction is the planner's and the builder's
+([writing a programme document](../writing-a-programme-document.md)).
 
 Every state a user meets is shown, not only named. A state a Solution
 mentions (a refusal, an error, a wait, a notice, an empty result) has its
