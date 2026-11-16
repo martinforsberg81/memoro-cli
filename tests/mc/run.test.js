@@ -33,7 +33,6 @@ import { readCanonRole } from '../../src/mc/roles.js';
 import { deskItemId, itemDirectory, writeDeskItem, listDeskItems, syncDeskItems } from '../../src/mc/desk-items.js';
 import { deskItemQuestion } from '../../src/mc/desk-items.js';
 import { addLesson, lessonsDir, listLessons, renderLesson } from '../../src/mc/desk-lessons.js';
-import { goalHash, UNREAD_FILE } from '../../src/mc/plan-review.js';
 
 /**
  * The project a path under the fixture's root belongs to: `/w/step/<p>/…`
@@ -6202,85 +6201,6 @@ test('a plan session goes to the first draft that is free: a held or decision-cl
     assert.equal((await createRunner({ deps: f.deps }).pass({ repo: 'memoro' })).ran, 0);
     assert.deepEqual(planned(f), [], 'the younger draft is not planned past the older');
   }
-});
-
-/* ------------------------------------------------- a draft waiting for a plan reader (C4, C5) */
-
-/** The unread record `mc goal plan-review` writes for the draft's text as it is on disk (`hash` names another text when given). */
-const unreadRecord = (f, name, { hash = null, at = '2026-11-15T10:00:00.000Z' } = {}) => {
-  const current = goalHash(parseGoal(f.files[`${GOALS}/${name}/GOAL.json`]));
-  f.files[`${GOALS}/${name}/${UNREAD_FILE}`] = `${JSON.stringify({ hash: hash ?? current, author: null, set_aside: [], reason: 'no candidate is left', at }, null, 2)}\n`;
-};
-
-/** The review list is one candidate whose tool cannot launch here, so the reader walk finds no reader. Returns the restore. */
-function noReader(f) {
-  const { catalog, launch } = f.deps;
-  f.deps.catalog = () => ({ ...structuredClone(DEFAULT_CATALOG), review: [{ tool: 'agy', model: 'gemini-4-argon-high', effort: 'high' }] });
-  f.deps.launch = (tool) => (tool === 'agy' ? { ok: false, reason: 'no adapter' } : launch(tool));
-  return () => { f.deps.catalog = catalog; f.deps.launch = launch; };
-}
-
-test('a draft that waits for a plan reader is neither planned nor Martin\'s, holds its programme while no reader can run, and is offered to planning again once one can', async () => {
-  const f = goalFixture({ a: { stage: 'draft' }, b: { stage: 'draft' } });
-  unreadRecord(f, 'a');
-  const reader = noReader(f);
-  const runner = createRunner({ deps: f.deps });
-  const said = /waits for a plan reader — agy gemini-4-argon-high: no adapter/u;
-  assert.equal((await runner.pass()).ran, 0, 'no reader can run: no plan session, and the later draft is not offered past it');
-  assert.deepEqual(planned(f), []);
-  assert.equal(where(f, 'a'), 'draft · ready', 'the draft is not Martin\'s');
-  assert.equal(f.log.filter((line) => said.test(line)).length, 1, 'the wait is said');
-  assert.equal((await runner.pass()).ran, 0);
-  assert.equal(f.log.filter((line) => said.test(line)).length, 1, 'and said once for the same record');
-  reader();
-  assert.equal((await runner.pass()).ran, 1, 'a reader can run: the draft is offered to planning again');
-  assert.deepEqual(planned(f), ['prog/a']);
-});
-
-test('a stated programme passes over a draft that waits for a plan reader and offers the phase-2 draft to planning', async () => {
-  const f = goalFixture({ d1: { stage: 'draft' }, d2: { stage: 'draft', phase: 2 } });
-  f.files[RECORD_AT] = statedText();
-  for (const name of ['d1', 'd2']) f.files[`${GOALS}/${name}/GOAL.json`] = withGoal(f.files[`${GOALS}/${name}/GOAL.json`], { success_criteria: [] });
-  unreadRecord(f, 'd1');
-  noReader(f);
-  await createRunner({ deps: f.deps }).pass({ repo: 'memoro' });
-  assert.deepEqual(planned(f), ['prog/d2'], 'the draft that waits is passed over');
-  assert.equal(where(f, 'd1'), 'draft · ready');
-});
-
-test('a plan session that ends with its draft ready and a current unread record waits for a plan reader, not Martin; another text\'s record, an earlier session\'s record, or none, puts it on Martin', async () => {
-  const ended = (record) => {
-    const f = goalFixture({ a: { stage: 'draft' } });
-    f.answer = (call) => { if (record) record(f); return okSession()(call); };
-    return f;
-  };
-  const waiting = ended((f) => unreadRecord(f, 'a', { at: f.deps.now().toISOString() }));
-  await createRunner({ deps: waiting.deps }).pass();
-  assert.equal(where(waiting, 'a'), 'draft · ready', 'the reader is the wait, not Martin');
-  assert.doesNotMatch(waiting.files[`${GOALS}/a/LOG.md`], /plan session ended without completing the draft/u);
-  assert.equal(waiting.log.filter((line) => /prog\/a: the draft is complete and waits for a plan reader \(no candidate is left\)/u.test(line)).length, 1, 'the session\'s end is said');
-  // An earlier session's record, current for the text, that this session leaves untouched: this session read nothing
-  // and answered nothing, so it is contained, or a reader that can run would relaunch it without progress.
-  const stale = goalFixture({ a: { stage: 'draft' } });
-  unreadRecord(stale, 'a', { at: new Date(stale.deps.now().getTime() - 3_600_000).toISOString() });
-  stale.answer = okSession();
-  await createRunner({ deps: stale.deps }).pass();
-  assert.deepEqual(planned(stale), ['prog/a'], 'a reader can run: the draft is offered to planning');
-  assert.equal(where(stale, 'a'), 'draft · Martin', 'a record written before the session is not this session\'s answer');
-  const other = ended((f) => unreadRecord(f, 'a', { hash: '0'.repeat(64) }));
-  await createRunner({ deps: other.deps }).pass();
-  assert.equal(where(other, 'a'), 'draft · Martin', 'a record of another text is not a wait');
-  const none = ended(null);
-  await createRunner({ deps: none.deps }).pass();
-  assert.equal(where(none, 'a'), 'draft · Martin');
-});
-
-test('an unread record for another text does not make a draft wait for a plan reader: it is offered to planning at once', async () => {
-  const f = goalFixture({ a: { stage: 'draft' } });
-  unreadRecord(f, 'a', { hash: '0'.repeat(64) });
-  noReader(f);
-  await createRunner({ deps: f.deps }).pass();
-  assert.deepEqual(planned(f), ['prog/a']);
 });
 
 /* ------------------------------------------------------------ the programme planning turn */

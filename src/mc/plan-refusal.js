@@ -5,7 +5,7 @@
  * login the tool's plan cannot get past) says nothing about the work, and
  * launching the same provider again would meet the same refusal. The runner
  * has always written that refusal for its own launches (`refuseProvider`); the
- * plan review, helper and manager turns, learning pass and desk preparation
+ * helper and manager turns, learning pass and desk preparation
  * parsed the same fields and dropped them. This one function is the rule for
  * all of them, for every tool alike:
  *

@@ -396,9 +396,8 @@ agy -p '<role instructions> --- TASK --- <task>' --output-format stream-json|jso
 
 agy has no instructions flag: the role's markdown leads the one `-p` argument,
 behind a `--- TASK ---` separator, and a resumed conversation (`--conversation`)
-gets the task alone. A session whose output mc reads whole (plan review, the
-helper and manager turns) takes `--output-format json`; plan review adds
-`--add-dir <checkout>` before it. That one argument stays within Linux's 128 KiB
+gets the task alone. A session whose output mc reads whole (the helper and manager turns) takes
+`--output-format json`. That one argument stays within Linux's 128 KiB
 single-argument limit (`MAX_ARG_STRLEN`); the largest role text is about 18 KB
 with the shared text. agy's output is read by the `agy-stream` reader: the
 `result` event's (or the json object's) `status`, `response`, `num_turns`,
@@ -604,7 +603,7 @@ review candidate can run (not refused, not exhausted, its tool launchable, and
 either known under the plan limit or unknown on a tool that bootstraps) review
 takes it, whatever the others' headroom, and a provider priority does not
 outrank it. Only build-model avoidance does: when the first candidate's model
-built the goal, or in plan review when it wrote the text, the ranking above
+built the goal, the ranking above
 chooses, as it does among the rest when the first cannot run. The API reserve
 takes only a candidate whose tool declares an API route; a list whose
 candidates have none waits, naming each and "no API route". A candidate whose
@@ -678,7 +677,7 @@ never zero.
   read is `quota`, or a `login` on a tool whose plan counts it as a refusal
   (agy, claude), on the plan route, is written as the provider's refusal until
   the reset it names, else for the quota sleep, by one function
-  (`plan-refusal.js`) the runner's `refuseProvider`, plan review, the helper
+  (`plan-refusal.js`) the runner's `refuseProvider`, the helper
   and manager turns, the learning pass and desk preparation all call; a write
   that fails is said and the session's result stands.
 - **Both providers are polled independently** at startup when no recent attempt
@@ -866,14 +865,7 @@ provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
 checkouts are not runner work areas. The assignment is to finish the brief and
 reconcile the README and phases, then move that draft to build. An unresolved
 choice goes through goal-bound mc ask. A completed plan session leaving draft ready waits on Martin with an
-incomplete-session diagnostic, preventing an unchanged-work launch loop, except
-one that leaves a draft with a current unread record (`.plan-review-unread.json`,
-*Plan review* in [mc-goals.md](mc-goals.md#plan-review)) written during that session:
-that draft does not set Martin, and the runner says once that the draft is complete
-and waits for a plan reader. A record older than the session, which the session
-left untouched, is no answer from it, and the session is contained as any other. A draft whose session wrote the record waits for a reader as a held draft waits (it holds a sequential
-programme, and its own phase in a stated one) while no reader can run, and is
-offered to planning again once one can. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
+incomplete-session diagnostic, preventing an unchanged-work launch loop. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
 retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing

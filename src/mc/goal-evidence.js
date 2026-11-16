@@ -3,7 +3,7 @@
  * it (docs/technical/mc-goals.md, "Evidence and heads"; mc/evidence-at-current-head).
  *
  * The records are in `.evidence.json` in the goal's directory, beside GOAL.json and LOG.md and not part of the goal's
- * text: the brief and the plan review's hash never hold them, and no LOG.md entry is written for one (the runner reads
+ * text: the brief never holds them, and no LOG.md entry is written for one (the runner reads
  * LOG.md to tell whether a session spoke). Each record is kept under the id the review's verdict uses for the item —
  * `criterion <n>`, a preserve id (`V1`) or `obligation <area>` — and holds the head of every worktree of the goal at
  * the time, the time, the writer's tool and model, and the text. A criterion's record also holds the criterion's text,

@@ -15,6 +15,7 @@
  * (`commands/goal.js`) read a goal, call these and write it through `updateGoal`.
  */
 import { criteriaCount, plain, prose, text, unknownKeys } from './criteria.js';
+import { AREAS_PATH, isSourceArea } from './areas.js';
 
 /** The prose parts, in the order a version 2 goal prints them (`goal set <part> --text`). */
 export const PROSE_PARTS = Object.freeze(['aim', 'outcome', 'latitude', 'protection']);
@@ -273,4 +274,59 @@ export function renderGoalTextV2(goal) {
   part('OUT OF SCOPE', items('out-of-scope'), false);
   part('DOCUMENTS', (goal.documents ?? []).map((doc) => `  ${doc.label} — ${doc.path}`), false);
   return `${lines.join('\n')}\n`;
+}
+
+/** `[repo, path]` of a standard written `<repo>/<path>#<section>`. */
+function standardPath(standard) {
+  const text = String(standard).split('#')[0];
+  const slash = text.indexOf('/');
+  return slash > 0 ? [text.slice(0, slash), text.slice(slash + 1)] : [text, ''];
+}
+
+/**
+ * What a version 2 goal lacks to be built, each lack one line: an empty outcome, no change item, no
+ * criterion, a declared rule area without a stand, a stand whose standard is not on origin/main of the
+ * repository it names. A question that cannot be answered is a line too, with the reason.
+ * `probe.declarations()` is `{ declared: [{ repo, areas }] }` or `{ error }`; `probe.onMain(repo, path)` is
+ * `{ state: 'present'|'absent'|'unknown', why }`.
+ */
+export function partsLacks(goal, name, probe) {
+  if (goal.version !== 2) return [];
+  const lacks = [];
+  if (!(goal.outcome ?? []).some((paragraph) => String(paragraph).trim())) lacks.push(`the outcome is empty — mc goal set ${name} outcome --text "…"`);
+  if (!(goal.change ?? []).length) lacks.push(`there is no change item — mc goal item add ${name} change --where "…" --what "…"`);
+  if (!(goal.success_criteria ?? []).length) lacks.push(`there is no criterion — mc goal criterion add ${name} --criterion "…" --check "…"`);
+  const obligations = goal.obligations ?? [];
+  const read = probe.declarations();
+  if (read.error) lacks.push(`the declared rule areas cannot be read, so the stands cannot be checked: ${read.error}`);
+  else {
+    const taken = new Set(obligations.map((one) => one.area));
+    const bare = read.declared.flatMap((one) => one.areas.filter((area) => !isSourceArea(area)).map((area) => `${one.repo}/${area.id}`)).filter((id) => !taken.has(id));
+    if (bare.length) lacks.push(`no stand on ${bare.join(', ')} — mc goal obligation set ${name} <area> --stand touched|untouched --text "…" (mc goal areas ${name} lists them)`);
+  }
+  for (const one of obligations) {
+    if (!one.standard) continue;
+    const [repo, path] = standardPath(one.standard);
+    const found = probe.onMain(repo, path);
+    if (found.state === 'absent') lacks.push(`the stand on ${one.area} names ${one.standard}, and ${path} is not on origin/main of ${repo}`);
+    else if (found.state !== 'present') lacks.push(`cannot tell whether ${path} is on origin/main of ${repo} (the standard of ${one.area}): ${found.why ?? 'no answer'}`);
+  }
+  if (!read.error) {
+    for (const { repo, areas } of read.declared) {
+      for (const area of areas) {
+        if (!area.page) continue;
+        const found = probe.onMain(repo, area.page);
+        if (found.state === 'absent') lacks.push(`the page of ${repo}/${area.id}, ${area.page}, is not on origin/main of ${repo} — repair ${repo}'s main: its ${AREAS_PATH} or the page`);
+        else if (found.state !== 'present') lacks.push(`cannot tell whether the page of ${repo}/${area.id}, ${area.page}, is on origin/main of ${repo}: ${found.why ?? 'no answer'}`);
+      }
+    }
+  }
+  return lacks;
+}
+
+export function moveGate({ goal, name, to, probe }) {
+  if (goal.stage !== 'draft' || !to || to === 'draft' || to === 'dropped') return null;
+  const lacks = partsLacks(goal, name, probe);
+  if (!lacks.length) return null;
+  return { refusal: `${name} is not moved to ${to} — ${lacks.length === 1 ? lacks[0] : `${lacks.length} things to repair:\n${lacks.map((line) => `  - ${line}`).join('\n')}`}` };
 }

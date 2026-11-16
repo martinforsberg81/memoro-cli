@@ -10,11 +10,10 @@
  *
  * A rule area may also say `"seen": true`: work on it is judged as the user sees it. The key is absent or `true`, so
  * there is one way to say it; the goal review of a goal that stands `touched` on such an area, or trips it, is held to
- * a `seen <area>` line in REVIEW.md (`seenAreas`, `checkVerdict` in `review-verdict.js`), and the plan review asks its
- * eighth question of it (`plan-review.js`). An mc from before reads a file with the key as invalid.
+ * a `seen <area>` line in REVIEW.md (`seenAreas`, `checkVerdict` in `review-verdict.js`). An mc from before reads a file with the key as invalid.
  *
- * The declaration is read by `mc goal areas` and `mc goal obligation set` (`commands/goal.js`), by the plan review's
- * parts check and prompt (`plan-review.js`) and by the tripped and seen areas of a review (`review-verdict.js`, asked
+ * The declaration is read by `mc goal areas` and `mc goal obligation set` (`commands/goal.js`), by the completeness
+ * parts check (`goal-parts.js`) and by the tripped and seen areas of a review (`review-verdict.js`, asked
  * by the runner's launch and, for the tripped areas, by the move out of review). Whether a
  * page exists is asked by the parts check and shown by `mc goal areas`, never when the file is read. Nothing renders
  * a declaration into a goal and no goal file's validation knows of it.
@@ -92,4 +91,31 @@ export function readAreas(repoPath, { git, at = 'origin/main', repo = null }) {
   }
   if (!String(shown.stdout ?? '').trim()) return { ok: true, declared: false, areas: [] };
   return checkAreas(shown.stdout, `${named} at ${at}`);
+}
+
+const pathTokens = (where) => String(where).split(/[\s,;()]+/u).map((token) => token.replace(/:\d[\d,-]*$/u, '').replace(/[.:]+$/u, '')).filter((token) => token.includes('/'));
+const within = (inner, outer) => inner === outer || inner.startsWith(outer.endsWith('/') ? outer : `${outer}/`);
+
+/**
+ * An advisory stand for `area` of `repo`: `touched` naming the change items whose `where` falls under an area path
+ * (or names a directory above one), otherwise `untouched`. A source area has no proposal (`null`).
+ */
+export function proposedStand(goal, repo, area) {
+  if (isSourceArea(area)) return null;
+  const items = [];
+  for (const item of goal.change ?? []) {
+    const hit = pathTokens(item.where ?? '').some((raw) => {
+      const token = raw.startsWith(`${repo}/`) ? raw.slice(repo.length + 1) : raw;
+      return area.paths.some((path) => within(token, path) || within(path, token));
+    });
+    if (hit) items.push(item.id);
+  }
+  return items.length ? { stand: 'touched', items } : { stand: 'untouched', items: [] };
+}
+
+/** The proposal as the line under an area. */
+export function proposedWords(proposal) {
+  return proposal.stand === 'touched'
+    ? `  proposed stand: touched — ${proposal.items.join(', ')} change${proposal.items.length === 1 ? 's' : ''} a path of the area (advisory)`
+    : '  proposed stand: untouched — no change item names a path of the area (advisory)';
 }

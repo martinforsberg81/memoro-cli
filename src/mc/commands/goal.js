@@ -5,7 +5,7 @@
  *                                  GOAL.json (a skeleton) and LOG.md; no worktree yet — the runner makes each
  *                                  repository's worktree on goal/<goal> at the goal's first session;
  *                                  in phase <n> (1 by default), at most one past the last;
- *                                  in stage draft (a goal is moved on with mc goal stage, after its plan review); structure 2 (by default) is the brief as numbered parts (`goal-parts.js`), 1 the older form, as goal and contract prose
+ *                                  in stage draft (a goal is moved on with mc goal stage); structure 2 (by default) is the brief as numbered parts (`goal-parts.js`), 1 the older form, as goal and contract prose
  *   mc goal set <programme>/<goal> title|goal|contract|out-of-scope --text "…"   the field of a version 1 goal replaced; a blank line parts paragraphs
  *   mc goal set <programme>/<goal> title|aim|outcome|latitude|protection --text "…"   the part of a version 2 goal replaced
  *   mc goal item add <programme>/<goal> problem|premise|decision|change|preserve|risk|out-of-scope --text "…" <the part's flags>   a version 2 item; its id printed
@@ -28,11 +28,9 @@
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
  *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
- *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`); no plan review is asked for;
+ *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`);
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
- *   mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]   one fresh session reads a goal in draft before it is built (`plan-review.js`); exit 0 for OK, 1 for not OK, no verdict or changed files, 2 for a call refused
- *   mc goal plan-review <programme>/<goal> verdict ok|not-ok   the reading session's last act, accepted from the session the call launched only
  *   mc goal blocked|ready [<programme>/<goal>] [--reason "…"]   the status, the stage kept
  *   mc goal hold [<programme>/<goal>] --reason "…"   an interactive takeover's hold: the runner starts no session on the goal until release; stage and status stay
  *   mc goal release [<programme>/<goal>] [--reason "…"]   the hold removed; one log entry with each worktree's state
@@ -73,10 +71,9 @@ import { appendFileSync, existsSync, readFileSync, readdirSync, realpathSync, un
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { commandUsage } from '../command-help.js';
-import { isSourceArea, readAreas } from '../areas.js';
+import { isSourceArea, proposedStand, proposedWords, readAreas } from '../areas.js';
 import { checkVerdict, trippedAreas } from '../review-verdict.js';
 import { dropItems, evidenceIds, readEvidence, evidenceLines, evidenceRefusal, itemKey, makeRecord, removeCriterionItem, setItem as setEvidence, worktreeHeads } from '../goal-evidence.js';
-import { appendRecord, markerRecord, moveGate, planReviewCall, proposedStand, proposedWords, readRecords, showLine, verdictVerb } from '../plan-review.js';
 
 import { writeFileAtomic } from '../atomic-write.js';
 import { archiveGoal, finalizeDroppedGoal, moveDir } from '../goal-archive.js';
@@ -84,7 +81,7 @@ import { run as runGit } from '../git.js';
 import { convertGoals, phaseGoals } from '../goal-convert.js';
 import { convertProject } from '../project-convert.js';
 import { addPr, backward, goalBranch, criteriaWords, currentPhase, FINISHED, HOLD_FILE, readHold, goalDirIn, GOAL_FILE, GOALS_DIR, appendEntry, appendLog, CLASSES, goalReferences, isGoalRef, LOG_FILE, listDirsOf, logStamp, noCriteria, parseGoal, parseLog, rejections, parsePrRef, phaseStanding, programmeOrder, programsGoals, PROSE_FIELDS, prRef, prState, readTextOrNull, remakeUnbuiltBranches, renderEntry, renderGoal, renderGoalText, renumberPhases, MEND_ROLE, PLAN_ROLE, REVIEW_FILE, REVIEW_ROLE, sessions, setGoalState, STAGES, stageWords, STATUSES, unmetGoalWords, updateGoal, waitsOnPerson } from '../goals.js';
-import { addItem, ITEM_PARTS, ITEM_WORDS, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
+import { addItem, ITEM_PARTS, ITEM_WORDS, moveGate, partsLacks, PROSE_PARTS, STANDS, V1_PROSE_WORDS, emptyIds, flagOf, itemWords, partOfId, removeItem, removeObligation, setItem, setObligation } from '../goal-parts.js';
 import { checkAgainstMain, conflictReason } from '../main-conflict.js';
 import { queueMerge } from '../merger.js';
 import { workRoot } from '../paths.js';
@@ -137,7 +134,6 @@ const VERB_FLAGS = {
   show: [],
   list: [],
   areas: ['--at'],
-  'plan-review': ['--avoid'],
 };
 /** The verbs that set one field: `blocked` and `ready` the status, `done` and `drop` the final stage. */
 const STATUS_VERBS = ['blocked', 'ready', 'done', 'drop'];
@@ -161,10 +157,6 @@ export async function run(argv, deps = {}) {
   if (argv[0] === 'martin') return retiredMartin(argv, rawStderr);
   // Preparation has no goal mutation authority, including goal-less calls.
   if (env.MC_ROLE === 'desk-prepare' && !['show', 'list', 'areas'].includes(argv[0])) {
-    rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
-  }
-  // A plan-review reading reads, and records its verdict with the one verb the call accepts it by.
-  if (env.MC_ROLE === 'plan-review' && !(['show', 'list', 'areas'].includes(argv[0]) || (argv[0] === 'plan-review' && argv[2] === 'verdict'))) {
     rawStderr.write(`mc: ${refusedMove({ env })}\n`); return 2;
   }
   if (env.MC_ROLE === 'programme-review' && !['show', 'list', 'areas'].includes(argv[0])) {
@@ -227,8 +219,6 @@ export async function run(argv, deps = {}) {
     readFile: deps.readFile || readEntryFile,
     // The keys source's values (a defect's redaction); a test stands in for it.
     readKeys: deps.readKeys || (() => readKeysDotenv({ env, home: env.HOME || process.env.HOME }).values),
-    // The plan review's injected launch, session, clock and checkout (`planReviewCall`); a test stands in for each.
-    planReview: deps.planReview || {},
     // A stage move or a release wakes the runner's idle lanes (`wakeRunner`); a test stands in for it.
     wake: deps.wake || (() => wakeRunner(workRoot(env))),
   };
@@ -276,7 +266,6 @@ export async function run(argv, deps = {}) {
   if (verb === 'archive') return archiveGoals(rest, ctx, flags.all);
   if (verb === 'show') return showGoal(rest, ctx);
   if (verb === 'areas') return areasVerb(rest, flags, ctx);
-  if (verb === 'plan-review') return planReviewVerb(rest, flags, ctx);
   if (verb === 'hold') return holdVerb(rest, flags, ctx);
   if (verb === 'release') return releaseVerb(rest, flags, ctx);
   return listGoals(rest, ctx);
@@ -431,8 +420,8 @@ function logEntry(args, fields, ctx) {
   // A review's move out of review follows its verdict (REVIEW.md): complete for the heads judged and the tripped areas, no NOT OK to merge, one to build.
   const verdict = reviewMove(goal, target, fields.stage, ctx);
   if (verdict.refusal) { stderr.write(`mc: ${verdict.refusal}\n`); return 2; }
-  // Out of draft a goal is complete and has been read (plan-review.js); a build session never gets here: refusedMove said so.
-  const gate = moveGate({ goal, name: target.name, to: fields.stage, via: fields.via ?? 'log', reason: fields.reason ?? null, dir: target.dir, read, probe: planProbe(goal, target, ctx) });
+  // Out of draft a goal is complete; a build session never gets here: refusedMove said so.
+  const gate = moveGate({ goal, name: target.name, to: fields.stage, probe: planProbe(goal, target, ctx) });
   if (gate?.refusal) { stderr.write(`mc: ${gate.refusal}\n`); return 1; }
   if (fields.stage === 'review' && goal.stage !== 'review' && sessionNotPlan(env)) {
     const unmet = unmetGoalWords(goal, target.name);
@@ -452,7 +441,7 @@ function logEntry(args, fields, ctx) {
   if (verdict.third) return thirdRejection({ target, goal, fields, round: verdict.round }, ctx);
   let done = fields.done;
   const back = moves && backward(goal.stage, fields.stage);
-  const base = gate?.comment ?? fields.comment;
+  const base = fields.comment;
   const comment = back ? [base, `moved back from ${goal.stage} to ${fields.stage} by ${writerRole(env) || 'a person'}`].filter(Boolean).join(' — ') : base;
   const entry = { at: logStamp(ctx.now), tool: env.MC_TOOL || 'person', model: env.MC_MODEL || null, role: writerRole(env), done, comment, next: fields.next };
   let now = goal;
@@ -475,8 +464,6 @@ function logEntry(args, fields, ctx) {
       const dropped = dropItems(target.dir, verdict.failed, { read, write });
       if (dropped.problem) stderr.write(`mc: ${dropped.problem} — the rejected items' records are not removed\n`);
     }
-    // A move into draft opens a new count of readings (D6).
-    if (back && fields.stage === 'draft') appendRecord(target.dir, markerRecord(ctx.now, goal.stage), { read, write });
   } else {
     appendEntry({ dir: target.dir, entry: { ...entry, stage: goal.stage, status: goal.status }, read, write });
   }
@@ -972,7 +959,7 @@ function evidenceText(flags, ctx) {
  * or a touched obligation (its area), recorded with the heads of the goal's worktrees as a criterion's mark is
  * (`goal-evidence.js`), and not tied to a head: it is often a reading and not a run. The goal's text and LOG.md are not
  * touched. A build session, a person, plan and the desk may call it; a review and a mend session are refused (the
- * early refusals of `run` already hold plan-review, desk-prepare and learning).
+ * early refusals of `run` already hold desk-prepare and learning).
  */
 function evidenceVerb(args, flags, ctx) {
   const { stdout, stderr, env, read } = ctx;
@@ -1362,33 +1349,6 @@ function planProbe(goal, target, ctx) {
 }
 
 /**
- * `mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]` — one reading of a goal in draft by a fresh
- * session (`planReviewCall`); `… verdict ok|not-ok` is that session's last act (`verdictVerb`). The call is
- * refused (exit 2) for a caller `refusedMove` would not let move the goal from draft to build.
- */
-async function planReviewVerb(args, flags, ctx) {
-  const { stderr, env, read } = ctx;
-  if (args.length < 1 || args.length > 3) { stderr.write(usage()); return 2; }
-  const target = goalNamed(args[0], ctx);
-  if (target.error) { stderr.write(`mc: ${target.error}\n`); return 2; }
-  if (args[1] !== undefined) {
-    if (args[1] !== 'verdict' || args.length !== 3 || flags.avoid !== null) { stderr.write(usage()); return 2; }
-    return verdictVerb({ target, word: args[2], ctx, deps: ctx.planReview });
-  }
-  if (isSession(env) && env.MC_GOAL && env.MC_GOAL !== target.name) { stderr.write(`mc: goal session ${env.MC_GOAL} cannot read ${target.name}\n`); return 2; }
-  const text = read(join(target.dir, GOAL_FILE));
-  if (text === null) { stderr.write(`mc: no goal ${target.name} — ${target.dir} has no ${GOAL_FILE}\n`); return 1; }
-  const goal = parseGoal(text);
-  if (goal.problems) {
-    for (const problem of goal.problems) stderr.write(`mc: ${target.name}: ${problem}\n`);
-    return 1;
-  }
-  const refusal = refusedMove({ from: 'draft', to: 'build', env, dir: target.dir });
-  const declarations = refusal ? { declared: [] } : goalDeclarations(goal, 'origin/main', ctx);
-  return planReviewCall({ target, goal, avoid: flags.avoid, refusal, declarations, ctx, deps: ctx.planReview });
-}
-
-/**
  * One verb's change to a goal's GOAL.json (`updateGoal`), said on stdout, or why
  * not on stderr. `after(goal, target)` runs once the write is made.
  */
@@ -1594,9 +1554,6 @@ function showGoal(args, ctx) {
   stdout.write(`${target.name} · ${stageWords(goal)} · phase ${goal.phase} · ${goal.repos.join(', ')} · ${goal.class} · ${criteriaWords(goal)} · created ${goal.created ?? '—'}${goal.prs.length ? ` · prs ${goal.prs.map(prRef).join(', ')}` : ''}\n`);
   const hold = readHold(target.dir, read);
   if (hold) stdout.write(`held by ${hold.by ?? '—'} since ${hold.at ?? '—'}: ${hold.reason ?? '—'}\n`);
-  const reviewed = readRecords(target.dir, read);
-  const reviewLine = reviewed.problem ? `plan review: ${reviewed.problem}` : showLine({ name: target.name, goal, stage: goal.stage, records: reviewed.records });
-  if (reviewLine) stdout.write(`${reviewLine}\n`);
   // The records are in a file of their own (`goal-evidence.js`): the goal's text is the same with or without them,
   // and a met criterion whose record is at another head than the worktrees' has `stale` written beside it.
   const evidence = evidenceLines({ goal, dir: target.dir, git: ctx.git, exists: ctx.exists, read });
@@ -1897,7 +1854,6 @@ export function refusedMove({ from, to = null, status = null, env }) {
   if (env.MC_ROLE === 'desk-prepare') return 'desk-prepare cannot write goals';
   if (env.MC_ROLE === 'ask-reader') return 'an ask-reader session reads (mc goal show, list, areas) and answers with mc ask answer; it changes no goal and asks no one';
   if (env.MC_ROLE === 'programme-review') return 'a programme-review session reads and writes only PROGRAMME-REVIEW.md; it changes no goal and asks no one';
-  if (env.MC_ROLE === 'plan-review') return 'a plan-review session reads and writes only PLAN-REVIEW.md, then records its verdict with mc goal plan-review <programme>/<goal> verdict ok|not-ok; it changes no goal and asks no one';
   if (['martin', 'decision'].includes(env.MC_ROLE)) {
     if (env.MC_ROLE === 'martin' && env.MC_HEADLESS === '1') return 'the Martin role is interactive-only; unattended sessions cannot use Martin authority';
     if (to === 'done') return 'Martin does not mark a goal done administratively — preserve the normal review, publish and merger handoff';
@@ -1938,7 +1894,7 @@ export function refusedMove({ from, to = null, status = null, env }) {
 
 /** The learning pass's role (`desk-learning.js`): it creates goals and writes the ones it created, nothing else. */
 const LEARNING_ROLE = 'learning';
-const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'item add', 'item set', 'item remove', 'obligation set', 'obligation remove', 'stage', 'plan-review'];
+const LEARNING_VERBS = ['show', 'list', 'areas', 'new', 'set', 'document add', 'criterion add', 'item add', 'item set', 'item remove', 'obligation set', 'obligation remove', 'stage'];
 
 /**
  * Whether the goal was created by the running learning session: its first LOG.md entry is a learning
@@ -1960,7 +1916,6 @@ function learningRefusal(verb, rest, ctx, flags = {}) {
   if (!LEARNING_VERBS.includes(verb)) return `the learning role cannot use ${verb} — it creates and writes new goals, nothing else`;
   if (['show', 'list', 'areas', 'new'].includes(verb)) return null;
   if (verb === 'stage' && rest.length !== 2) return 'the learning role moves a goal it created with mc goal stage <programme>/<goal> build';
-  if (verb === 'plan-review' && rest.length !== 1) return 'the learning role runs mc goal plan-review <programme>/<goal> for a goal it created; the verdict is recorded by the reader, not by it';
   const target = goalNamed(rest[0], ctx);
   if (target.error) return target.error;
   if (!createdInThisSession(target, ctx)) return `the learning role writes only goals it created in this session, and ${target.name} is not one`;

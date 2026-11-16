@@ -97,9 +97,7 @@ its check, and each worktree's state.
   on a goal with no criterion, and the merger does not land a goal with one
   unmet.
 - **Programme readers.** `mc programs review <programme>` commissions an
-  advisory document reading, not this goal's plan review. Its reader
-  writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
-- **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs no reading: the reading is advice. Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
+  advisory document reading. Its reader writes only PROGRAMME-REVIEW.md; it cannot mutate goals.
 - **Programme state.** `new` refuses draft records (exit 1), naming
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.

@@ -144,7 +144,7 @@ written, and a write that would make one is refused with the field named.
 
 - `stage` — `draft`, `build`, `review`, `merge`, `done` or
   `dropped` (`finish` is still read, as the name of a stage old records were in, and no move goes into it) (*Stages*). A goal always starts in `draft`: `mc goal new
-  --stage build` is refused (*Plan review*). `draft` was written `plan` until 2026-11-07 (Martin: the
+  --stage build` is refused (*Completeness gate*). `draft` was written `plan` until 2026-11-07 (Martin: the
   stage names the goal's state; plan is the session that writes drafts): a
   GOAL.json or a LOG.md heading saying `plan` reads as `draft` (`readStage`),
   `mc goal convert` and the runner's `convertAfter` rewrite the GOAL.json once
@@ -351,7 +351,7 @@ closer, the decisions that hold and where its assets are.
   markdown page; a present key that is blank or not a text makes the file
   invalid. Several areas may name one page. Whether the page exists is never
   asked when the declaration is read (a declaration is always readable): the move
-  out of draft asks it (*Plan review*) and `mc goal areas` marks `(missing)`.
+  out of draft asks it (*Completeness gate*) and `mc goal areas` marks `(missing)`.
 - An area with no question is a source area (`isSourceArea`, `areas.js`); one
   with at least one is a rule area. `questions` stays required and an array. An
   empty `questions` is valid only with a `page`, so a rule area does not become a
@@ -364,7 +364,7 @@ closer, the decisions that hold and where its assets are.
   criteria and the repository's `.mc/shot.json` hold them), mc does not check that
   the repository has a `.mc/shot.json`, and on a source area, on which no goal
   takes a stand, it does nothing. What it brings is in *What a review session
-  does* (the `seen <area>` line) and *Plan review* (question 8).
+  does* (the `seen <area>` line).
 - An obligation's `area` is `<repo>/<id>`, `<repo>` being the repository that
   declares it (`memoro-cli/documentation`).
 - A repository without the file declares no areas and behaves as it did.
@@ -372,7 +372,7 @@ closer, the decisions that hold and where its assets are.
   git failure — a revision that does not exist, an unreadable repository — is
   an error, never "declares none".
 - A goal that leaves draft needs a stand on every declared rule area (the parts
-  check, *Plan review*) and none on a source area; no brief or goal text carries
+  check, *Completeness gate*) and none on a source area; no brief or goal text carries
   the declarations: `mc goal show` does not render them.
 - An mc from before a declaration uses `page`, `seen` or a source area refuses the file,
   naming the key (`areas[0].seen is an unknown key`) or the field (`questions`),
@@ -514,7 +514,7 @@ Twenty-one verbs: `stage` moves the stage; `blocked`, `ready`, `done` and
 - **`criterion unmet [<p>/<g>] <n>`** — takes the mark back and drops the criterion's evidence record.
 - **`evidence [<p>/<g>] <id> --text "…" | --file <path|->`** — records evidence for a preserve id or
   the area of a touched obligation (*Evidence and heads*). An unknown id is refused, listing the ids.
-  Build, person, plan, decision and interactive Martin may; review, mend, plan-review, desk-prepare and
+  Build, person, plan, decision and interactive Martin may; review, mend, desk-prepare and
   learning are refused. It writes no LOG.md entry.
 - **`criterion set [<p>/<g>] <n> [--criterion "…"] [--check "…"] [--evidence "…"]`** — rewrites
   the criterion's text, check or evidence (kept when not given) and leaves it unmet, logging the old and new
@@ -1227,7 +1227,7 @@ to `merge`), nor is one the runner returned to build for want of a pull request.
 A goal goes to review only with evidence for every item, run at the head it
 publishes (`src/mc/goal-evidence.js`). The records are in `.evidence.json` in
 the goal's directory, beside GOAL.json and LOG.md, not in the goal's text: the
-brief (`renderGoalText`) and the plan review's hash (`goalHash`) never hold
+brief (`renderGoalText`) never holds
 them, and no LOG.md entry is written for one (the runner reads LOG.md to tell
 whether a session spoke). A record is kept under the id the review's verdict
 uses — `criterion <n>`, a preserve id (`V1`) or `obligation <area>` — and holds
@@ -1246,7 +1246,7 @@ the criterion's now counts as none.
 - **Other items.** `mc goal evidence <p>/<g> <id> --text "…" | --file <path|->`
   records a preserve id or the area of a touched obligation. An unknown id is
   refused, listing the ids. Build, person, plan, decision and interactive
-  Martin may; review, mend, plan-review, desk-prepare and learning are refused.
+  Martin may; review, mend, desk-prepare and learning are refused.
 - **Dropping.** `criterion unmet` and `criterion set` drop the criterion's
   record; `criterion remove` drops it and renumbers the later ones.
 - **The move to review.** A build session's `mc goal stage review` and
@@ -1337,14 +1337,10 @@ The merger does not resolve content conflicts.
 The runner recovers missing queue entries after interruption; it executes the
 existing decision and does not move a goal to `merge` on its own.
 
-## Plan review
+## Completeness gate
 
-No goal needs a plan review to leave draft (Martin, 2026-11-16: plan review is
-removed). The move out of draft asks only that the goal is complete. The
-reading described below can still be called and is advice: nothing reads its
-verdict. Its verb, role and records are removed by the goal
-`no-plan-review/remove-plan-review`; until that has landed, what this section
-says about readings holding a move does not apply.
+No goal needs a reading to leave draft (Martin, 2026-11-16: the draft reading is
+removed). The move out of draft asks only that the goal is complete.
 
 A goal leaves `draft` (to `build`, or to a later stage a plan or person names)
 only when it is complete. Moving it to
@@ -1361,71 +1357,9 @@ move exits 1 and writes nothing.
   line with the reason). Only the move out of draft asks; a page that is gone
   never stops a review or `obligation set`. A question mc cannot answer (a git failure, an unknown repository, a
   failing declarations read) refuses with the reason. Items saying `every`,
-  `only` or `no other` (whole words) without a premise id are not refused; they
-  are listed for the reader.
-- **Reading** (both versions). The latest reading must be OK and judge the
-  current text, or two readings since the goal last entered draft must be
-  stored and `mc goal stage … build --reason "…"` be given; the log entry then
-  carries the reason and both verdicts. `log --stage` has no reason flag and is
-  refused in that case, naming the stage verb.
-- **The text's hash** is sha256 of `renderGoalText` with every criterion's met
-  set false, so met marks, stage, status, phase, repos, class, prs, the log and
-  the hold are not part of it; any other edit asks for a new reading.
-- **`.plan-review.json`** in the goal directory holds append-only records:
-  verdict, hash, round, tool, model, time; a move into draft from another stage
-  appends a marker. Readings and rounds count from the last marker. The goal
-  file format does not change. `PLAN-REVIEW.md` is the latest reading's text; an
-  earlier one is kept as `PLAN-REVIEW-<round>.md`.
-- **The call**: `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]`, for a
-  goal in `draft`, from a caller `refusedMove` would let move it draft→build
-  (a build, review, mend, desk-prepare or plan-review session is
-  refused). The learning role runs one reading per goal it wrote. At most two
-  readings per stay in draft; a refused call exits 2 and launches nothing.
-  Exit 0 is OK, 1 is not OK, no verdict, a timeout (even after a verdict),
-  a changed file or unproven checkout cleanup. Exit 3 is no reader could run:
-  nothing was read, and `.plan-review-unread.json` holds the text's hash, the
-  author, each candidate set aside with its reason, and the time. It is not a
-  reading; it is not written while a reading runs (exit 2), and the next launch
-  removes it.
-- **The reader** runs on the review list, never on the author's model while
-  another candidate can run (the author is `--avoid` when given, else the
-  caller's `MC_TOOL`/`MC_MODEL`; with neither, nothing is excluded and the call
-  and the record say the author is unknown). A candidate that cannot be launched
-  or whose billing route answers `unavailable` is set aside with its reason (stderr: `<tool>:<model> cannot read — <why>; trying the next reader`) and
-  the next is asked, the author's model last; setting one aside makes no other
-  the first choice. It is a child of the call with a 20-minute limit,
-  no runner lane, in a read-only checkout with a unique path per call. The call
-  removes only the directory it created, rechecking its device, inode and birth
-  time before cleanup; a replacement or uncertain identity is retained and named.
-  A dead or expired launch leaves no reading; the next call uses its own path
-  and leaves any abandoned checkout untouched. Its cost is
-  a run row `goal:<p>/<g>`, kind `plan-review`, in the desk's runs: plan cost in
-  `mc landed`, never the goal's own, and not the desk budget.
-- **The verdict** is recorded only by the launched session: `mc goal plan-review
-  <p>/<g> verdict ok|not-ok` needs `MC_ROLE=plan-review`, the launch's goal, the
-  token (only its sha256 is stored, in `.plan-review-launch.json`; the token goes
-  only in the child's environment), a live launch and a `PLAN-REVIEW.md` written
-  after the launch whose first line is `OK` or `NOT OK` matching. A reading during
-  which GOAL.json, LOG.md or `.hold.json` changed is discarded. From this role
-  `mc goal` accepts `show`, `list`, `areas` and the verdict only, and `mc ask` is
-  refused.
-- **The prompt** gives each rule area with the path of its page (`<checkout>/<repo>/<page>`)
-  before its questions, and after the rule areas a section of the source areas,
-  each with what it covers and its page and no question. The role reads the page
-  of each area the goal touches, source areas included; question 4 is widened to
-  the pages, and question 7 asks whether the goal stays inside the end the
-  programme's README states, where it states one. An area that declares `seen`
-  is marked on its line (` · judged as the user sees it`); when the goal stands
-  `touched` on at least one, the prompt adds a line `QUESTION 8 IS ASKED`
-  naming them, and the reader answers question 8: the intended result per
-  viewport, the `mc shot` check, and the tokens, components, icons and assets the
-  goal reuses and adds, held against the documents the area names. Without such an
-  area the line is absent and the question is not asked. The gate is unchanged:
-  no part is added to what a goal needs to leave draft, and whether the goal
-  answers question 8 is the reading's judgement.
-- **Show and areas.** `mc goal show` says where the review stands (none, OK for
-  this text, OK for an earlier text, not OK with the round). `mc goal areas
-  <p>/<g>` proposes a stand for each rule area without one: touched, naming the change
+  `only` or `no other` (whole words) without a premise id are not refused.
+- **Show and areas.** `mc goal show` renders the goal's text, items, obligations
+  and criteria. `mc goal areas <p>/<g>` proposes a stand for each rule area without one: touched, naming the change
   items whose `where` holds a path under the area's paths (or a directory above),
   otherwise untouched. The proposal is advisory.
 
@@ -1435,7 +1369,7 @@ Each stage has one owner, and a goal passes each once:
 
 - `draft` — a plan session writes the goal, interactively or through the
   next-draft assignment below. The plan session moves it to `build`
-  when it is complete and has an OK reading (*Plan review*). (Named `plan` until 2026-11-07.)
+  when it is complete (*Completeness gate*). (Named `plan` until 2026-11-07.)
 - `build` — the runner's build sessions, while it is `ready`; legacy `blocked` outside merge reconciles to Martin without a launch. Three sessions in a row without a commit or a criterion met stop it with `no progress:` and `Martin`; a build session that finds the goal wrong reports it with `mc goal defect`, also `Martin`.
 - `review` — one review session decides; one that dies is run again once, a second crash or dirty refusal waits directly on Martin. A review that finds the goal wrong reports it with `mc goal defect`.
 - `finish` — no longer entered. A goal found in it (`finish · ready`) is moved to `build` by the runner with a log entry; with REVIEW.md it gets a repair build.
@@ -1498,15 +1432,15 @@ programme with no drafts, launch no next-draft session. `dropped` has the same t
 The next draft is selected by ascending phase, creation instant, then name.
 Compare creation instants chronologically regardless of offset or precision;
 missing dates sort before dated goals, and equal or missing instants tie by name.
-The selected draft must be ready and not held; one waiting on Martin, held, or waiting for a plan reader (a current unread record, *Plan review*) holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
+The selected draft must be ready and not held; one waiting on Martin or held holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
 starts, including current records from a predecessor runner. This is the rule
 of a sequential programme.
 
 A stated programme (*Phases*) reads the trigger per phase. A phase offers its
 first draft — by creation instant, then name — when the phase is open, none of
 its goals is in `build`, `review` or `merge` (each is `draft`, `done` or
-`dropped`), and that draft is ready, not held, not decision-claimed and without a current unread record. A first
-draft that waits on Martin, is held, is decision-claimed or waits for a plan reader is not bypassed by a
+`dropped`), and that draft is ready, not held and not decision-claimed. A first
+draft that waits on Martin, is held or is decision-claimed is not bypassed by a
 later draft of its phase: that phase offers none, and holds only itself, so
 another open phase's ready first draft is planned. The programme's next draft
 is the one the lowest phase offering one gives. A goal in another phase,
@@ -1528,7 +1462,7 @@ reconcile the programme README and phases, and move it to build immediately
 when ready. Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends or has a current unread record (`.plan-review-unread.json`, *Plan review*) that the session wrote (its `at` no earlier than the session's start): then nothing is set, and the unread draft waits for a plan reader as a held draft waits, and is offered to planning again when a reader can run; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set, and a held draft is offered to planning again after release; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its

@@ -56,10 +56,7 @@ prompt or a standard. Several changes to the same file go in one goal. The
 lessons' evidence is the goal's `problem`, the exact change its `change` items,
 and it takes a stand on every rule area of its repository.
 
-Each goal you wrote gets one `mc goal plan-review <programme>/<goal>`, with
-the step in [writing-a-goal](../tasks/writing-a-goal.md): on OK, move it to
-`build`; otherwise it stays in `draft` with `PLAN-REVIEW.md` for the plan
-session, and you do not read it a second time.
+When complete, move each goal you wrote to build with `mc goal stage <programme>/<goal> build`.
 
 The goal is in programme `mc` when it changes memoro-cli, and in the programme
 whose aim it serves when it changes memoro's `docs/technical/`.

@@ -38,7 +38,7 @@ import { scanArgs } from './flags.js';
 import { commandUsage } from '../command-help.js';
 import { writeFileAtomic } from '../atomic-write.js';
 import { realLock } from '../runner-lock.js';
-import { programmeRepositories, programmeReviewCall } from '../plan-review.js';
+import { programmeRepositories, programmeReviewCall } from '../programme-review.js';
 
 export function usage() {
   return commandUsage('programs');
