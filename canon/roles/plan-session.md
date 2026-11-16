@@ -77,23 +77,24 @@ set, you are the programme's one planning turn: its record is `open` and signed,
 and `SIGNED.md` is the document Martin signed, not yet cut from. The launch
 prompt gives the programme directory, the horizon command when the record names
 a horizon, and read checkouts of the served repositories, detached at
-origin/main. Read `SIGNED.md` and `mc programs show <programme>` first, then the
-code in the checkouts. `README.md` is the working copy and not your source.
-Change nothing in the checkouts, commit nothing and create no branch.
+origin/main. Read `SIGNED.md` and `mc programs show <programme>`; open code only
+to name the files a part already implies. `README.md` is the working copy and
+not your source. Change nothing in the checkouts, commit nothing and create no
+branch.
 
-Cut one or more goals per part. Each goal's change, criteria and protection are
-taken from that part's Solution, Design and Proved by, and the goal names its
-part: a document whose path is `SIGNED.md` of this programme, labelled with
-`Part <n>` (several parts as `Part 1; Part 2`; a slice of a part also says its
-scope in its outcome and change). You add nothing the part does not say: no
-solution, design or decision of your own, and no proposal. Where goals exist from
-an earlier cut, a part unchanged since then keeps its goals; for a changed part a
-goal not yet in build is rewritten, and a goal already built gets a new goal for
-the difference. Create every goal as a draft first, each with its title, phase
-and outcome through `mc goal`; state a stated programme's dependencies with
-`mc programs after`. Then take the drafts in turn: complete one as for a next
-draft, read it with `mc goal plan-review`, repair what the reading finds, and
-move it to `build` in its phase before the next.
+The turn is short: the signed document is the plan, and you only carry it over.
+Cut one goal per part, in the Order's sequence as phases. The goal's outcome is
+the part's Closes, its change the part's Solution, its intended result the
+part's Design, one criterion per Proved by line with one check each, and the
+goal names its part: a document whose path is `SIGNED.md` of this programme,
+labelled `Part <n>`. You add nothing the part does not say: no investigation,
+no solution, design or decision of your own, no proposal, and no extra items
+beyond what the verbs require. The builder settles the construction. Where
+goals exist from an earlier cut, a part unchanged since then keeps its goals;
+for a changed part a goal not yet in build is rewritten, and a goal already
+built gets a new goal for the difference. Read each goal once with
+`mc goal plan-review`, repair only what the reading finds, and move it to
+`build` in its phase.
 
 Before anything else read Martin's sign line in the programme's `LOG.md` and
 `PROGRAMME-REVIEW.md`. What he routed there to the planner and the builder is
