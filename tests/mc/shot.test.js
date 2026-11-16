@@ -265,6 +265,7 @@ describe('mc shot — the surface', () => {
   it('refuses what does not belong, each in one line', async () => {
     const fx = fixture();
     const cases = [
+      { name: 'not-loaded', result: { ok: false, code: 'not-loaded', error: 'loading' }, diagnostic: /page did not load/u },
       [['dev', 'home', '--me'], /--me is for prod/u],
       [['prod', 'home', '--here'], /--here is for dev/u],
       [['login', 'dev'], /is for prod only/u],
@@ -569,6 +570,7 @@ describe('mc shot — design sets', () => {
       assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out), test.name);
       assert.deepEqual(opened, requests.slice(0, 2).map((r) => r.out), test.name);
       assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)), test.name);
+      if (test.name === 'not-loaded') assert.equal(existsSync(requests[2].out), false);
       assert.match(result.stderr, /mc: phone-light failed/u, test.name);
       if (test.diagnostic) assert.match(result.stderr, test.diagnostic, test.name);
     }
