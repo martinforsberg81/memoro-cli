@@ -3637,7 +3637,9 @@ describe('the suite\'s environment and its time', () => {
 
   it('suiteEnv: a suite never inherits the runner\'s own ~/mc or a nested test context', () => {
   const env = suiteEnv({ MC_WORK_ROOT: '/Users/me/mc', MC_HOME: '/Users/me/.memoro/mc', NODE_TEST_CONTEXT: 'child', MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
-  assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', PATH: '/bin' });
+  // MC_TEST_MODE: no suite reaches the user's keychain (the secret-tool children of B5, 2026-11-15).
+  assert.deepEqual(env, { MC_REPOS_HOME: '/Users/me', MC_TEST_MODE: '1', PATH: '/bin' });
+  assert.equal(suiteEnv({}).MC_TEST_MODE, '1');
 });
 
   it('suiteTimeoutMs: an hour, or MC_GATE_SUITE_MINUTES when it is a positive number', () => {

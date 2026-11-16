@@ -101,11 +101,16 @@ import { attemptInFlight, checkWords, takeBeforeReading } from '../deploy-check.
 import { DEPLOY_MODE, holdName } from '../await-deploy.js';
 import { branchNamed, openBranchPr, pinNote } from '../deploy-branch.js';
 import { deployProgress } from '../deploy-progress.js';
-import { classifyStop, deployMendLine, deployMendReading, gateStopCode, requestDeployRepair } from '../deploy-repair.js';
+import {
+  classifyStop, deployMendLine, deployMendReading, FINISHED, gateStopCode, readDeployMends, requestDeployRepair,
+} from '../deploy-repair.js';
 import {
   deployWorktreePath, isOwnWorktree, leftoverStamps, placeWorktree, STAMP_FILES, strayLines, strayPaths, takeHolder, worktreeState,
 } from '../deploy-worktree.js';
-import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, withMendsNow } from '../deploy-gate.js';
+import { fullRunVerdict, gateRecord, measureGate, pickCommit, reds, suiteLines, suiteWords, withMendsNow } from '../deploy-gate.js';
+import { outputRoot, settleOutputs } from '../gate-output.js';
+import { FINISHED as MAIN_FINISHED, readMainMends, requestMainRepair } from '../main-repair.js';
+import { repairFromStop } from '../nightly-loop.js';
 import {
   preparationLogPath, preparationServes, preparationState, patchPreparation, readPreparation, STAGE_WORDS,
   writePreparation,
@@ -757,12 +762,14 @@ function refusalOf({ full, exercise, plan }) {
   const notes = [];
   if (full.state === 'unmeasured') notes.push(`no full run measured ${plan.short} — stopped at ${full.run?.stopped_at || 'an unknown step'}`);
   else if (full.state === 'moved') notes.push(`the full run measured ${short(full.run?.commit)}, not ${plan.short}`);
-  for (const item of found) notes.push(item.split('\n')[0]);
+  // The record's note is one line: the verdict lines the failure closed with, and where its whole output is.
+  for (const item of found) notes.push(item.replace(/:\n/u, ': ').split('\n').join('; '));
   const lines = [`mc: refused — ${plan.short} is not measured whole and exercised:`, ...full.lines];
   for (const suite of exercise?.suites || []) {
     if (suite.state === 'red' || suite.state === 'cannot-run') {
-      lines.push(`mc:   suite ${suite.name} ${suite.state === 'red' ? `failed (exit ${suite.status ?? 'unknown'})` : 'could not run'} — its last lines:`);
-      for (const line of String(suite.tail || '').split('\n')) lines.push(`mc:     ${line}`);
+      const [first, ...rest] = suiteWords(suite).split('\n');
+      lines.push(`mc:   ${first}`);
+      for (const line of rest) lines.push(`mc:     ${line}`);
     }
   }
   if (exercise?.error) lines.push(`mc:   the suites could not run: ${exercise.error}`);
@@ -911,11 +918,12 @@ export async function run(argv, deps = {}) {
   const repairRoot = deps.root || workRoot(env);
   // A refusal says why it is one by a code (`NOT_TECHNICAL`, deploy-repair.js): only a technical one queues a repair.
   // Every refusal here comes after the reading, so each carries its two cells.
+  let stopFull = null;
   const refuse = (note, code = '') => {
     const row = recordRefusal({
       sha: plan.sha, holder: holder.name, note, gate: cells, takeBack: reading,
     }, env);
-    queueRepair({ row, code, holder: holder.name, acceptRed: opts.acceptRed, deps, root: repairRoot });
+    queueRepair({ row, code, holder: holder.name, acceptRed: opts.acceptRed, deps, root: repairRoot, full: stopFull });
     return row;
   };
 
@@ -1003,11 +1011,19 @@ export async function run(argv, deps = {}) {
   if (opts.json) stdout.write(`${JSON.stringify({ gate: gateSummary(gate) }, null, 2)}\n`);
   else for (const line of gate.lines) stdout.write(`${line}\n`);
   if (gate.refusal) {
-    refuse(gate.refusal.note, gateStopCode({ full: gate.full, exercise: gate.exercise }));
+    const code = gateStopCode({ full: gate.full, exercise: gate.exercise });
+    // A red nobody repairs is repaired by the refusal: queued once, said, and never queued again for the same stop.
+    const queued = queueMainRed({ gate, plan, root, repoPath: path, deps });
+    stopFull = gate.full;
+    refuse(gate.refusal.note, code);
     for (const line of gate.refusal.lines) stderr.write(`${line}\n`);
+    for (const line of queued) stderr.write(`${line}\n`);
+    if (code === 'full-run' || code === 'suites') repairLine({ stdout: stderr, root: repairRoot, deps });
     stderr.write('mc: nothing was deployed\n');
     return 1;
   }
+  // The stop is settled: an earlier refused preparation's whole output is no longer wanted (a queued repair keeps its own).
+  settleGateOutputs({ root, deps });
 
   // The gate has passed and typing `mc deploy` was the decision: nothing is
   // asked. What happens next is the admission, and it is made now, under the
@@ -1095,17 +1111,77 @@ export async function run(argv, deps = {}) {
  * A technical stop queues one repair (`requestDeployRepair`, deploy-repair.js), the copies of the logs with it.
  * Never throws and never changes the deploy's exit code, row or output; the runner's retry queues nothing.
  */
-function queueRepair({ row, code = '', holder, acceptRed, deps, root }) {
+function queueRepair({ row, code = '', holder, acceptRed, deps, root, full = null }) {
   try {
     if (!row) return null;
     const technical = classifyStop({ outcome: row.outcome, code });
     // The runner's retry queues nothing: it says what stopped it, and the runner counts it (D5).
     if (deps.retry) { deps.onStop?.({ row, code, technical }); return null; }
     if (!technical) return null;
+    // A full run mc could not start is not a deploy that failed: the request says whose checkout is held, and the
+    // runner never retries it as a deploy (`retryVerdict`).
+    const fullRun = code === 'full-run' ? { origin: 'full-run', repo: REPO, holders: full?.run?.holders || [] } : {};
     return (deps.queueRepair || requestDeployRepair)({
-      row, holder, acceptRed: Boolean(acceptRed), root, ...(deps.mend || {}),
+      row, holder, acceptRed: Boolean(acceptRed), root, ...(deps.mend || {}), ...fullRun,
       logs: [{ name: 'deploy.log', path: deployLogPath(root) }, { name: 'deploy-prepare.log', path: preparationLogPath(root) }],
     });
+  } catch { return null; }
+}
+
+/**
+ * A refusal on a red repairs it: a red or stalled full run no main-red mend holds goes to main's repair as
+ * file and command members (or one `full-run:<commit>` check member), and each red suite as `suite:<name>`
+ * with its verdict and where its whole output is. Each is queued once — a second preparation of the same
+ * stop finds them open and queues none, and says so. Returns the lines the refusal says; never throws.
+ */
+function queueMainRed({ gate, plan, root, repoPath, deps }) {
+  const lines = [];
+  try {
+    const mainRepair = deps.mainRepair || requestMainRepair;
+    const repair = (request) => mainRepair({ ...request, root, ...(deps.mend || {}) });
+    const named = (ids) => ids.join(', ');
+    const said = [];
+    const created = [];
+    const open = [];
+    let held = false;
+    const full = gate.full;
+    if (full && (full.state === 'red' || full.state === 'stalled')) {
+      const made = (deps.repairFromStop || repairFromStop)({ name: REPO, path: repoPath }, full, {
+        root: deps.gate?.root ?? mcHome(deps.env || process.env), repair, say: (line) => said.push(line),
+      });
+      created.push(...made.created); open.push(...made.open); held = held || made.held;
+    }
+    const suites = (gate.exercise?.suites || []).filter((suite) => suite.state === 'red').map((suite) => ({
+      name: suite.name, exit: suite.status ?? null, verdict: suite.verdict || [], output_path: suite.output_path || null, sha: plan.sha,
+    }));
+    if (suites.length) {
+      const asked = repair({ repo: REPO, base: plan.sha, files: [], suites });
+      created.push(...[].concat(asked?.created || [])); open.push(...[].concat(asked?.open || []));
+    }
+    if (created.length) lines.push(`mc: repair queued — main-red mend ${named(created)}${open.length ? `; already under way: ${named(open)}` : ''}`);
+    else if (open.length) lines.push(`mc: repair already queued — main-red mend ${named(open)} holds it; this preparation queued none`);
+    else if (held) lines.push('mc: a main-red mend already holds this red; none was queued');
+    for (const line of said) if (!lines.includes(line)) lines.push(line);
+  } catch { /* the refusal stands without the line */ }
+  return lines;
+}
+
+/**
+ * The stop is settled — the gate is green, or a deploy ships: the whole output of the earlier refused preparations
+ * is removed, except this preparation's own and what an unfinished repair names. Never throws.
+ */
+function settleGateOutputs({ root, deps }) {
+  try {
+    const held = [];
+    for (const entry of readMainMends({ root, repo: REPO, ...(deps.mend || {}) })) {
+      if (!MAIN_FINISHED.includes(entry.state)) held.push(entry.suite?.output_path, entry.check?.output_path);
+    }
+    const base = outputRoot(root);
+    const pattern = new RegExp(`${base.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/[^"\\s,;]+`, 'gu');
+    for (const entry of readDeployMends({ root, ...(deps.mend || {}) })) {
+      if (!FINISHED.includes(entry.state)) held.push(...(JSON.stringify(entry).match(pattern) || []));
+    }
+    return settleOutputs(root, { keep: readPreparation(root)?.started || null, held });
   } catch { return null; }
 }
 

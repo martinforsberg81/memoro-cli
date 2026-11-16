@@ -46,6 +46,7 @@ export const DEPLOYS_HEADER = [
   'versions_before', 'versions_made', 'versions_why',
   'check', 'check_at', 'check_why',
   'takes_back', 'takes_back_sha', 'takes_back_why',
+  'output_path',
 ];
 
 /**
@@ -56,7 +57,15 @@ export const DEPLOYS_HEADER = [
  * red was accepted — empty otherwise, so an empty cell is a deploy that
  * accepted nothing.
  */
-export const GATE_COLUMNS = ['full_commit', 'full_verdict', 'suites', 'accepted_red'];
+export const GATE_COLUMNS = ['full_commit', 'full_verdict', 'suites', 'accepted_red', 'output_path'];
+
+/*
+ * `output_path` (2026-11-16) belongs to the gate's cells though it is the last
+ * column of the file: where the whole output of a red or stalled run, and of
+ * each red suite, is — the paths joined by commas, empty when the gate judged
+ * nothing red. A row written before the column existed has none and is read
+ * as one that names no output.
+ */
 
 /**
  * The take-back reading's two columns (2026-11-15): `take_back`, `yes` or `no`
@@ -120,7 +129,8 @@ export const TAKES_BACK_COLUMNS = ['takes_back', 'takes_back_sha', 'takes_back_w
  * The headers earlier mc versions wrote, oldest first: before `pid`
  * (2026-10-07), before the gate's columns (2026-11-14), before the
  * take-back reading's and before the Worker versions' (both 2026-11-15),
- * before the check's (the header of 9a094dec) and before the take-back's. A file with exactly
+ * before the check's (the header of 9a094dec), before the take-back's and
+ * before the gate's `output_path` (2026-11-16). A file with exactly
  * one of them is given the current header the next time a row is written, its
  * old rows with the new cells empty: without `pid`, a deploy in progress could
  * never be told from one that died, which is the one thing that column is for.
@@ -131,7 +141,8 @@ const GATE_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('accepted_red
 const TAKE_BACK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('take_back_why') + 1);
 const VERSIONS_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('versions_why') + 1);
 const CHECK_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('check_why') + 1);
-const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER, VERSIONS_HEADER, CHECK_HEADER].map((header) => header.join('\t'));
+const BEFORE_OUTPUT_HEADER = DEPLOYS_HEADER.slice(0, DEPLOYS_HEADER.indexOf('output_path'));
+const OLDER_HEADERS = [PID_COLUMNS.slice(0, -1), PID_COLUMNS, GATE_HEADER, TAKE_BACK_HEADER, VERSIONS_HEADER, CHECK_HEADER, BEFORE_OUTPUT_HEADER].map((header) => header.join('\t'));
 
 export const RUNNING = 'running';
 export const DEPLOYED = 'deployed';

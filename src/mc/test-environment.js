@@ -27,7 +27,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { closeSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,7 @@ import {
   stopServer, strayCwd, touchServer, waitingLine,
 } from './dev-servers.js';
 import { leaseHolder } from './dev-holder.js';
+import { lastLinesOfFile, openOutput, verdictOfFile } from './gate-output.js';
 import { addReservationPid, devPoolPath, disownReservation } from './dev-reservations.js';
 import { KEYS_CHILD_FILE, readKeysChild } from './keys-run.js';
 import { log } from './logger.js';
@@ -992,7 +993,7 @@ export function accountAvailable(declaration, env = process.env) {
  */
 export async function runSuites({
   declaration, worktree, baseUrl: appBaseUrl, staticBaseUrl: staticUrl = null, only = null, env = process.env,
-  stillThere = null, revive = null, onStart = null, onEnd = null, onRevive = null,
+  stillThere = null, revive = null, onStart = null, onEnd = null, onRevive = null, outputDir = null,
 }, deps = {}) {
   let baseUrl = appBaseUrl;
   let staticBaseUrl = staticUrl;
@@ -1042,15 +1043,25 @@ export async function runSuites({
     onStart?.(suite);
     const startedAt = now();
     const [command, ...args] = suite.argv;
-    const finished = runOne(command, args, {
-      cwd: worktree,
-      env: suiteEnv({
-        declaration, baseUrl: urlFor(suite), env, needsAccount: Boolean(suite.needs_account),
-      }),
-      encoding: 'utf8',
-      shell: false,
-      maxBuffer: 32 * 1024 * 1024,
+    const suiteEnvironment = suiteEnv({
+      declaration, baseUrl: urlFor(suite), env, needsAccount: Boolean(suite.needs_account),
     });
+    // With an output directory the whole of what the suite says goes into one
+    // file as it runs, stdout and stderr in the order they came and nothing cut
+    // (`gate-output.js`); without one the output is held in memory, as it was.
+    const output = outputDir ? openOutput(outputDir, suite.name) : null;
+    let finished;
+    try {
+      finished = runOne(command, args, output
+        ? { cwd: worktree, env: suiteEnvironment, stdio: ['ignore', output.fd, output.fd], shell: false }
+        : { cwd: worktree, env: suiteEnvironment, encoding: 'utf8', shell: false, maxBuffer: 32 * 1024 * 1024 });
+      // A suite that could not start wrote nothing: the file says why.
+      if (output && finished.error) writeSync(output.fd, `${finished.error.message || String(finished.error)}\n`);
+    } finally {
+      if (output) closeSync(output.fd);
+    }
+    const written = output ? { output_path: output.path, verdict: verdictOfFile(output.path) } : {};
+    const tailText = () => (output ? lastLinesOfFile(output.path) : tailOf(finished));
     const skip = skipExitCode(declaration);
     const skipped = skip !== null && finished.status === skip;
     const ok = finished.status === 0;
@@ -1068,7 +1079,8 @@ export async function runSuites({
         skipped: false,
         status: finished.status,
         seconds: Math.round((now() - startedAt) / 100) / 10,
-        tail: tailOf(finished),
+        tail: tailText(),
+        ...written,
       });
       onEnd?.(results.at(-1));
       await brought(tier);
@@ -1087,7 +1099,8 @@ export async function runSuites({
       seconds: Math.round((now() - startedAt) / 100) / 10,
       // The tail is what a person reads first, and the whole of a browser
       // matrix's output is megabytes nobody scrolls.
-      tail: tailOf(finished),
+      tail: tailText(),
+      ...written,
     };
     results.push(result);
     onEnd?.(result);

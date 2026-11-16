@@ -67,9 +67,11 @@
  */
 import { spawnSync } from 'node:child_process';
 import { tryGit } from './git.js';
-import { mcHome } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
 import { appendNightlyLog } from './nightly.js';
 import { requestMainRepair, shapeMainRedTest } from './main-repair.js';
+import { requestDeployRepair } from './deploy-repair.js';
+import { mainRecord } from './selector-miss.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from './nightly-history.js';
 import { recordRound, recordRoundStart } from './repo-round-log.js';
 import { fullRunLanes, runGate } from './repo-gate.js';
@@ -223,6 +225,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
       ? [...(report.candidate?.red || []), ...failedCommands.map(command => `command:${command.packageScript}`)]
       : report.candidate?.red || null,
     tests: report.candidate?.totals?.tests ?? null,
+    ...(report.holders?.length ? { holders: report.holders } : {}),
   };
 }
 
@@ -233,7 +236,7 @@ export function runOfReport(repo, report, { startedAt = Date.now(), clock = () =
  */
 export async function fullRun(repo, {
   root = mcHome(), env = process.env, say = () => {}, narrate = say, round = scheduledRound,
-  clock = () => Date.now(), signal = null, repair = requestMainRepair,
+  clock = () => Date.now(), signal = null, repair = requestMainRepair, repairFullRun = requestDeployRepair,
   sha = null, claims = {}, handover = null, onMeasuring = null,
 } = {}) {
   // One full run of a tree at a time, whoever starts it (`full-run-claim.js`):
@@ -246,7 +249,7 @@ export async function fullRun(repo, {
     if (taken.claimed) {
       onMeasuring?.(taken.claim);
       try {
-        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair });
+        return await measure(repo, { root, env, say, narrate, round, clock, signal, repair, repairFullRun });
       } finally {
         releaseClaim(taken.claim, { root, ...claims });
       }
@@ -282,8 +285,13 @@ export async function fullRun(repo, {
  * of a run that measured nothing (`run.red` null), of a green one, or of one
  * without a commit.
  */
-export function repairFromRun(repo, report, run, { repair = requestMainRepair, say = () => {}, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }) } = {}) {
+export function repairFromRun(repo, report, run, {
+  repair = requestMainRepair, say = () => {}, git = (cwd, args) => spawnSync('git', args, { cwd, encoding: 'utf8' }),
+  repairFullRun = null, env = process.env,
+} = {}) {
   const failedCommands = failedCommandsOf(report);
+  // What was asked of main's repair, for a caller that needs to say which: `{ asked, members }` per request.
+  const asks = [];
   // Main's red, repaired as work of its own: the same door a merge round's
   // main red goes through (`merger.js`, `tell`). Only a run that reached its
   // summary — a red set read off a finished suite — and names its files.
@@ -300,6 +308,7 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
       },
       ...(failedCommands.length ? { commands: failedCommands } : {}) });
     const where = [...files, ...failedCommands.map(command => `command:${command.packageScript}`)].join(', ');
+    asks.push({ asked, members: [...files, ...failedCommands.map(command => `command:${command.packageScript}`)] });
     const created = [].concat(asked?.created || []);
     const open = [].concat(asked?.open || []);
     for (const stale of asked?.stale_members || []) say(`${stale.file}: reported at ${run.commit}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
@@ -321,6 +330,7 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
         catch { return null; }
       } });
     const where = hung.join(', ');
+    asks.push({ asked, members: hung });
     const created = [].concat(asked?.created || []);
     const open = [].concat(asked?.open || []);
     for (const stale of asked?.stale_members || []) say(`${stale.file}: reported at ${run.commit}, which does not contain its landed repair ${stale.landed_commit} (#${stale.pr}) — no repair opened`);
@@ -328,6 +338,66 @@ export function repairFromRun(repo, report, run, { repair = requestMainRepair, s
     else if (open.length) say(`${repo.name}: a test never ended in ${where} — its main-red mend is under way: ${open.join(', ')}`);
     else if (!asked?.stale_members?.length) say(`${repo.name}: a test never ended in ${where} — no main-red mend requested: ${asked?.skipped || 'nothing new'}`);
   }
+
+  // A full run that cannot start for a reason of mc's own — its checkout is held — is mc's fault, not main's
+  // red: it goes to the deploy mend as `full-run`, with who holds the checkout. It joins the open request
+  // (one at most), and never makes a deploy to retry.
+  if (repair && repairFullRun && report.stopped_at === 'worktree') {
+    const started = run.started_at || new Date().toISOString();
+    const asked = repairFullRun({
+      row: { started, sha: run.commit || '', stopped_at: 'worktree', note: `full run of ${repo.name} cannot start: ${report.reason || 'its checkout is held'}` },
+      holder: 'the full run', origin: 'full-run', repo: repo.name, holders: report.holders || [], root: workRoot(env),
+    });
+    if (asked?.skipped) say(`${repo.name}: the full run cannot start (${report.reason || 'its checkout is held'}) — no deploy-mend repair requested: ${asked.skipped}`);
+    else say(`${repo.name}: the full run cannot start (${report.reason || 'its checkout is held'}) — deploy-mend repair ${asked?.joined ? 'already under way' : 'queued'}: ${asked?.id}`);
+  }
+  return asks;
+}
+
+/**
+ * A red or stalled full run that no main-red mend holds, handed to main's repair by the preparation
+ * that finds it (the deploy that refuses on it): the file and command members `repairFromRun` makes from
+ * the run's exact-commit evidence, and — when the run names neither — one `full-run:<commit>` member, a
+ * check-style once-only key, so a red nothing could be mapped to still reaches a session. Once per stop:
+ * what is already queued is returned as `open`, and a second preparation of the same stop creates none.
+ *
+ * `full` is the gate's reading (`{ state, run, commit, mends, output }`). Returns
+ * `{ created, open, members, held }`: the ids made, the ids already there, the members' names, and
+ * whether a mend that holds the red made the request unnecessary.
+ */
+export function repairFromStop(repo, full, {
+  root = mcHome(), repair = requestMainRepair, say = () => {}, git, record = mainRecord,
+} = {}) {
+  const run = full?.run;
+  const none = { created: [], open: [], members: [], held: false };
+  if (!repair || !run?.commit || !['red', 'stalled'].includes(full.state)) return none;
+  if ((full.mends || []).some((entry) => !['landed', 'dropped'].includes(entry.state))) return { ...none, held: true };
+  const evidence = record(root, repo.name, run.commit);
+  const names = run.red || [];
+  const commands = names.filter((name) => String(name).startsWith('command:')).map((name) => name.slice('command:'.length));
+  const report = {
+    stopped_at: full.state === 'stalled' ? 'stalled' : null, reason: run.reason,
+    candidate: { red_files: evidence?.files || [], red_tests: evidence?.tests || [] },
+    extra_gates: commands.map((name) => ({ name, id: name, ok: false, command: null, exit_code: null, failure: `red in the full run of ${run.commit.slice(0, 7)}`, output_path: full.output || null })),
+    stalled_files: [],
+  };
+  const requests = [];
+  const asks = repairFromRun(repo, report, { ...run, red: names }, { repair: (request) => { const asked = repair(request); requests.push(asked); return asked; }, say, ...(git ? { git } : {}) });
+  let members = asks.flatMap((ask) => ask.members);
+  if (!members.length) {
+    // Nothing to name: the fallback is the run itself, once per commit.
+    const key = `full-run:${run.commit}`;
+    const asked = repair({ repo: repo.name, base: run.commit,
+      checks: [{ key, part: 'full run', why: names.length ? `red: ${names.slice(0, 20).join(', ')}` : `a ${full.state} full run that names nothing`, sha: run.commit, started: run.at || run.started_at || '', verdict: (full.output ? `whole output: ${full.output}` : ''), taken_back: false, output_path: full.output || null, finder: 'the deploy gate' }] });
+    requests.push(asked);
+    members = [key];
+    if ([].concat(asked?.created || []).length) say(`${repo.name}: the ${full.state} full run of ${run.commit.slice(0, 7)} names no file or command — main-red mend queued: ${[].concat(asked.created).join(', ')} (${key})`);
+  }
+  return {
+    created: requests.flatMap((asked) => [].concat(asked?.created || [])),
+    open: requests.flatMap((asked) => [].concat(asked?.open || [], asked?.finished || [])),
+    members, held: false,
+  };
 }
 
 /**
@@ -341,7 +411,7 @@ function dropped(repo, say) {
 }
 
 async function measure(repo, {
-  root, env, say, narrate, round, clock, signal, repair,
+  root, env, say, narrate, round, clock, signal, repair, repairFullRun,
 }) {
   const startedAt = clock();
   say(`${repo.name} — full run started`);
@@ -376,7 +446,7 @@ async function measure(repo, {
   recordNightlyRun(run, { root });
   say(line(run));
 
-  repairFromRun(repo, report, run, { repair, say });
+  repairFromRun(repo, report, run, { repair, say, repairFullRun, env });
   return run;
 }
 

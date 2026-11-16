@@ -90,6 +90,9 @@ export function storedRun(run) {
     reason: run?.reason ? String(run.reason).slice(0, 300) : null,
     tests: run?.tests ?? null,
     red: measured ? [...run.red] : null,
+    // What held a checkout the run could not use (pid, command, cwd): the deploy mend names it.
+    ...(Array.isArray(run?.holders) && run.holders.length
+      ? { holders: run.holders.slice(0, 5).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}),
   };
 }
 

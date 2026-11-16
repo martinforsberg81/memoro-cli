@@ -37,6 +37,13 @@ export const NOT_TECHNICAL = Object.freeze([
   'usage', 'headless', 'dry-run', 'running', 'language', 'backwards', 'taken-back', 'unmeasured', 'red', 'dirty', 'ahead', 'replaced',
 ]);
 
+/**
+ * The steps a full run stops at for a reason of mc's own, past what a start would help (`worktree`: its
+ * checkout is held; `threw`: its code threw; `lease`, `reservation`, `base`: its own state). `fetch`, `busy`
+ * and `pr` are the machine's or the lane's and are tried again by the next start.
+ */
+export const FULL_RUN_FAULTS = Object.freeze(['worktree', 'threw', 'lease', 'reservation', 'base']);
+
 /** `{ outcome, code }` → true when the stop is a technical fault. `deployed` and `running` are no stop. */
 export function classifyStop({ outcome, code = null } = {}) {
   if (outcome === 'deployed' || outcome === 'running') return false;
@@ -49,7 +56,10 @@ export function classifyStop({ outcome, code = null } = {}) {
  * `suites` only when the sole fault is that a suite could not run (or the suites could not start).
  */
 export function gateStopCode({ full, exercise }) {
-  if (full && ['red', 'stalled', 'unmeasured', 'moved'].includes(full.state)) return full.state === 'red' || full.state === 'stalled' ? 'red' : 'unmeasured';
+  // A full run that could not start or finish for a reason of mc's own is the deploy mend's (`full-run`),
+  // never a retry of the deploy: a deploy of that commit measured nothing, and a full run is not a deploy.
+  if (full?.state === 'unmeasured' && FULL_RUN_FAULTS.includes(full.run?.stopped_at)) return 'full-run';
+  if (full &&['red', 'stalled', 'unmeasured', 'moved'].includes(full.state)) return full.state === 'red' || full.state === 'stalled' ? 'red' : 'unmeasured';
   const suites = exercise?.suites || [];
   if (suites.some((suite) => suite.state === 'red')) return 'red';
   if (exercise?.error || suites.some((suite) => suite.state === 'cannot-run')) return 'suites';
@@ -91,7 +101,7 @@ const newest = (entry) => entry.rows.map((row) => row.started).sort().at(-1);
  * newest row. A failed write or copy never changes the deploy: this never throws.
  * `logs`: `[{ name, path }]`, copied to `runner/deploy-mend/<id>/<row.started>/`.
  */
-export function requestDeployRepair({ row, holder = '', acceptRed = false, logs = [], now = () => new Date(), copy = copyFileSync, mkdir = mkdirSync, ...state }) {
+export function requestDeployRepair({ row, holder = '', acceptRed = false, logs = [], origin = 'deploy', repo = '', holders = [], now = () => new Date(), copy = copyFileSync, mkdir = mkdirSync, ...state }) {
   try {
     if (!row?.started) return { skipped: 'no row' };
     const root = state.root || workRoot();
@@ -99,6 +109,8 @@ export function requestDeployRepair({ row, holder = '', acceptRed = false, logs 
       const open = openRequest(entries);
       const target = open || { id: randomUUID(), rows: [], state: 'queued', failures: 0, created: now().toISOString() };
       if (target.rows.some((item) => item.started === row.started)) return { id: target.id, joined: true };
+      // A checkout held again while the request about it is unfinished is the same fault: no second row, no second copy.
+      if (open && origin === 'full-run' && target.rows.some((item) => item.origin === 'full-run' && item.repo === String(repo || ''))) return { id: target.id, joined: true };
       const copies = join(deployMendCopies(root, target.id), row.started);
       const kept = [];
       try {
@@ -106,14 +118,26 @@ export function requestDeployRepair({ row, holder = '', acceptRed = false, logs 
         for (const log of logs) { try { copy(log.path, join(copies, log.name)); kept.push(log.name); } catch { /* a log that is not there */ } }
       } catch { /* the copies are evidence, not the request */ }
       target.rows.push({ started: row.started, sha: row.sha || '', stopped_at: row.stopped_at || '', note: row.note || '',
-        holder: holder || row.holder || '', accept_red: Boolean(acceptRed), copies, logs: kept });
+        holder: holder || row.holder || '', accept_red: Boolean(acceptRed), copies, logs: kept,
+        // `full-run`: not a deploy but a full run that could not start; who held it is named for the session.
+        ...(origin === 'full-run' ? { origin, repo: String(repo || ''), holders: (holders || []).map(({ pid, command = null, cwd = null }) => ({ pid, command, cwd })) } : {}) });
       if (!open) entries.push(target);
       return { id: target.id, joined: Boolean(open) };
     });
   } catch (error) { return { skipped: error?.message || String(error) }; }
 }
 
-export const requestAcceptsRed = (entry) => entry.rows.some((row) => row.accept_red);
+/** Every row of the request is a full run that could not start: there is no deploy in it to retry. */
+export const onlyFullRun = (entry) => entry.rows.length > 0 && entry.rows.every((row) => row.origin === 'full-run');
+
+/** What held a full run, in words: the holders it names, or the note of the stop. */
+export function fullRunHeld(row) {
+  const holders = row.holders || [];
+  if (!holders.length) return row.note || `it stopped at ${row.stopped_at || 'a step of its own'}`;
+  return holders.map(({ pid, command, cwd }) => `pid ${pid}${command ? ` (${command})` : ''}${cwd ? ` standing in ${cwd}` : ''}`).join('; ');
+}
+
+export const requestAcceptsRed =(entry) => entry.rows.some((row) => row.accept_red);
 export const requestHolder = (entry) => entry.rows[0]?.holder || '';
 
 /** Two failed repairs put the request on Martin; the first returns it to the queue. A spent retry is `retryFailed`'s. */
@@ -232,6 +256,7 @@ export function removeCopies({ root = workRoot(), id, rm = rmSync }) {
  */
 export function retryVerdict({ entry, now = new Date(), shippedSince = () => false, contained = () => ({ ok: true }) }) {
   if (entry.retried) return { drop: 'the one retry of this request was spent' };
+  if (onlyFullRun(entry)) return { drop: 'a full run is not a deploy: the repair is landed and the next full run measures; no deploy is retried' };
   if (requestAcceptsRed(entry)) return { drop: 'the deploy carried --accept-red; a red accepted by a person is not accepted again by the runner' };
   const last = newest(entry);
   if (now.getTime() - Date.parse(last) > RETRY_WINDOW_MS) return { drop: `the stop is older than 24 hours (${last})` };
@@ -248,6 +273,14 @@ export const retryHolder = (entry) => `runner for ${requestHolder(entry)}, ${new
 export function deployMendLine(entry, { now = new Date() } = {}) {
   if (!entry) return null;
   const at = String(newest(entry)).slice(0, 16).replace('T', ' ');
+  if (onlyFullRun(entry)) {
+    // The page's line: what the full run could not do, what held it and where the repair is.
+    const row = entry.rows.at(-1);
+    const words = { queued: 'queued', running: 'running', published: 'running', repaired: 'landed', retrying: 'landed', Martin: 'waiting on Martin' };
+    // A repaired full run is no deploy's story: once it is repaired nothing is retried, and the line ends.
+    if (!UNFINISHED.includes(entry.state)) return null;
+    return `mc: full run of ${row.repo || 'the repository'} cannot start: ${fullRunHeld(row)}; repair ${words[entry.state] || entry.state}`;
+  }
   if (entry.state === 'not-retried') return `mc: the deploy of ${at} was repaired and not retried — ${entry.reason || 'the bounds said no'}`;
   if (!UNFINISHED.includes(entry.state)) return null;
   const waits = { queued: 'queued', running: 'running', published: 'running', retrying: 'repaired, retrying now',
@@ -277,9 +310,14 @@ function shippedAfter(deploys, at) {
 }
 
 export function deployMendPrompt({ entry, branch, worktrees, root }) {
-  const rows = entry.rows.map((row) => `- ${row.started} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a refusal'}: ${row.note}\n  logs: ${row.copies}${row.logs?.length ? ` (${row.logs.join(', ')})` : ''}`).join('\n');
+  const rows = entry.rows.map((row) => row.origin === 'full-run'
+    ? `- ${row.started} full run of ${row.repo || 'a repository'} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a step of its own'}: ${row.note}\n  held by: ${fullRunHeld(row)}`
+    : `- ${row.started} ${row.sha ? row.sha.slice(0, 8) : 'no sha'} stopped at ${row.stopped_at || 'a refusal'}: ${row.note}\n  logs: ${row.copies}${row.logs?.length ? ` (${row.logs.join(', ')})` : ''}`).join('\n');
+  const what = onlyFullRun(entry)
+    ? 'A full run cannot start or finish for a reason of mc\'s own (rows marked "full run": nothing is deployed and no deploy is retried); find what holds it, and repair it at its cause'
+    : 'A deploy stopped on a technical fault (a row marked "full run" is a full run that could not start, not a deploy); find the cause from these rows and logs and repair it at its cause';
   return `You are a deploy-mend session, headless, with no goal (deploy-mend ${entry.id}). Read the deploy-mend section of your mend role.\n` +
-    `A deploy stopped on a technical fault; find the cause from these rows and logs and repair it at its cause.\n${rows}\n` +
+    `${what}.\n${rows}\n` +
     `Work on ${branch} in ${worktrees.map((tree) => `${tree.repo}: ${tree.path}`).join(', ')}. Runner root: ${root}.\n` +
     `Previous outcome: ${entry.reason || 'first attempt'}; session log: ${entry.session_log || 'none'}.\n` +
     `Write a proposal in ~/mc/programs/mc-tests/proposals/ naming the fault of mc deploy's design. End with a published PR (mc publish) or mc repo mend deploy ${entry.id} repaired --reason "<what was repaired>". Never run mc deploy.`;
