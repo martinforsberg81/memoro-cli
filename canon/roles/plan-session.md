@@ -68,7 +68,7 @@ process the programme's proposal backlog in this turn. Work in the selected
 goal's worktrees on its goal branch, as the launch prompt says; the interactive
 planning checkouts remain separate. Reserved acts retain their headless boundary.
 The runner contains an incomplete session that leaves draft ready so it cannot
-launch indefinitely without progress.
+launch indefinitely without progress. A complete draft whose reading found no reader is not incomplete: when `mc goal plan-review` exits 3 nothing was read; log that with `mc goal log`, leave the goal `draft · ready` and end the turn. Do not call it again in the same session, do not pass `--avoid` to steer the reader, and do not ask: the runner offers the draft to planning again when a reader can run.
 
 ## The headless programme turn
 

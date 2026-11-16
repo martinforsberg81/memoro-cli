@@ -1381,11 +1381,18 @@ move exits 1 and writes nothing.
   refused). The learning role runs one reading per goal it wrote. At most two
   readings per stay in draft; a refused call exits 2 and launches nothing.
   Exit 0 is OK, 1 is not OK, no verdict, a timeout (even after a verdict),
-  a changed file or unproven checkout cleanup.
+  a changed file or unproven checkout cleanup. Exit 3 is no reader could run:
+  nothing was read, and `.plan-review-unread.json` holds the text's hash, the
+  author, each candidate set aside with its reason, and the time. It is not a
+  reading; it is not written while a reading runs (exit 2), and the next launch
+  removes it.
 - **The reader** runs on the review list, never on the author's model while
-  another candidate can run (the author is the caller's `MC_TOOL`/`MC_MODEL`,
-  else `--avoid`; with neither, nothing is excluded and the call and the record
-  say the author is unknown). It is a child of the call with a 20-minute limit,
+  another candidate can run (the author is `--avoid` when given, else the
+  caller's `MC_TOOL`/`MC_MODEL`; with neither, nothing is excluded and the call
+  and the record say the author is unknown). A candidate that cannot be launched
+  or whose billing route answers `unavailable` is set aside with its reason (stderr: `<tool>:<model> cannot read — <why>; trying the next reader`) and
+  the next is asked, the author's model last; setting one aside makes no other
+  the first choice. It is a child of the call with a 20-minute limit,
   no runner lane, in a read-only checkout with a unique path per call. The call
   removes only the directory it created, rechecking its device, inode and birth
   time before cleanup; a replacement or uncertain identity is retained and named.
@@ -1490,15 +1497,15 @@ programme with no drafts, launch no next-draft session. `dropped` has the same t
 The next draft is selected by ascending phase, creation instant, then name.
 Compare creation instants chronologically regardless of offset or precision;
 missing dates sort before dated goals, and equal or missing instants tie by name.
-The selected draft must be ready and not held; one waiting on Martin or held holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
+The selected draft must be ready and not held; one waiting on Martin, held, or waiting for a plan reader (a current unread record, *Plan review*) holds planning rather than being bypassed. A draft created without `MC_HEADLESS=1` is held from creation (Martin, 2026-11-15; `hold` in The verbs), so headless planning does not take a draft while its author is writing it; a draft a headless session created, one its author released, and one made before this rule (which carries no hold) are free for it. Only one goal session per programme may be held while planning
 starts, including current records from a predecessor runner. This is the rule
 of a sequential programme.
 
 A stated programme (*Phases*) reads the trigger per phase. A phase offers its
 first draft — by creation instant, then name — when the phase is open, none of
 its goals is in `build`, `review` or `merge` (each is `draft`, `done` or
-`dropped`), and that draft is ready, not held and not decision-claimed. A first
-draft that waits on Martin, is held or is decision-claimed is not bypassed by a
+`dropped`), and that draft is ready, not held, not decision-claimed and without a current unread record. A first
+draft that waits on Martin, is held, is decision-claimed or waits for a plan reader is not bypassed by a
 later draft of its phase: that phase offers none, and holds only itself, so
 another open phase's ready first draft is planned. The programme's next draft
 is the one the lowest phase offering one gives. A goal in another phase,
@@ -1520,7 +1527,7 @@ reconcile the programme README and phases, and move it to build immediately
 when ready. Resolve a remaining policy
 choice through goal-bound `mc ask` under [mc-jev.md](mc-jev.md). Do not implement the draft or process the
 proposal backlog in the headless planning turn. A completed session leaving
-`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends: then nothing is set; provider
+`draft · ready` waits on Martin with an incomplete-session diagnostic, unless the draft is held when the session ends or has a current unread record (`.plan-review-unread.json`, *Plan review*) that the session wrote (its `at` no earlier than the session's start): then nothing is set, and the unread draft waits for a plan reader as a held draft waits, and is offered to planning again when a reader can run; provider
 refusals/offline failures keep their existing retries. Broader programme design
 and proposal intake remain interactive. This restores neither the no-draft
 nor the daily-proposal turn: a programme is planned by that turn only when its

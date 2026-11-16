@@ -860,9 +860,15 @@ kind `plan`, `MC_GOAL` and `MC_HEADLESS=1`; keep the normal routing, admission,
 provider refusals, offline holds, STOP and UPDATE behavior. Interactive planning
 checkouts are not runner work areas. The assignment is to finish the brief and
 reconcile the README and phases, then move that draft to build. An unresolved
-choice goes through goal-bound mc ask. An ordinary completed plan session
-leaving draft ready waits on Martin with an incomplete-session diagnostic,
-preventing an unchanged-work launch loop. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
+choice goes through goal-bound mc ask. A completed plan session leaving draft ready waits on Martin with an
+incomplete-session diagnostic, preventing an unchanged-work launch loop, except
+one that leaves a draft with a current unread record (`.plan-review-unread.json`,
+*Plan review* in [mc-goals.md](mc-goals.md#plan-review)) written during that session:
+that draft does not set Martin, and the runner says once that the draft is complete
+and waits for a plan reader. A record older than the session, which the session
+left untouched, is no answer from it, and the session is contained as any other. A draft whose session wrote the record waits for a reader as a held draft waits (it holds a sequential
+programme, and its own phase in a stated one) while no reader can run, and is
+offered to planning again once one can. A goal that is held when its session ends, of any kind, gets no status, stage or entry from the runner; after release it is taken up from the state its holder left. Provider refusals and offline endings
 retain normal retry behavior and are not evidence of planning failure.
 
 No draft means no plan session. Proposal arrival and daily proposal processing
