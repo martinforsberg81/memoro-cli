@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { itemDirectory } from '../../src/mc/desk-items.js';
-import { cutProblems, cuttable, finishTurn, goalCount, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, signedParts, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
+import { cutProblems, cuttable, finishTurn, goalCount, goalsNamingNoPart, partsCut, partsNamed, programmeDue, readTurnState, recordTurnFailure, documentParts, turnName, turnStatePath } from '../../src/mc/programme-turn.js';
 import { goalJson } from './_helpers/goal-file.js';
 
 /**
@@ -60,6 +60,17 @@ test('programme turn: a draft, a done or dropped record, and one whose goals nam
   assert.deepEqual([due(bothCut).due, due(bothCut).reason], [false, 'its goals are already cut']);
 });
 
+test('programme turn: a ready programme holding a goal that names no part of README.md is planned already and is not due', () => {
+  const byHand = programmeStore({ ...goalAt('one', goalNaming('Part 1')), ...goalAt('plain', goalNaming('The design')) });
+  assert.deepEqual([due(byHand).due, due(byHand).reason], [false, 'its goal plain names no part of README.md']);
+  assert.deepEqual(goalsNamingNoPart({ home: HOME, programme: 'prog', list: byHand.list, read: byHand.read }), ['plain']);
+  const elsewhere = goalJson({ documents: [{ label: 'Part 1', path: `${HOME}/prog/OTHER.md` }] });
+  const older = programmeStore({ ...goalAt('a', elsewhere), ...goalAt('b', elsewhere, true) });
+  assert.deepEqual([due(older).due, due(older).reason], [false, 'its goals a, b name no part of README.md'], 'goals cut from another document of the programme, live or archived, hold the turn');
+  const partial = programmeStore(goalAt('one', goalNaming('Part 1')));
+  assert.equal(due(partial).due, true, 'goals that all name README.md parts leave the uncut parts due');
+});
+
 test('programme turn: no record or README is not due, a horizon that is not open says so, and an open desk item holds the turn', () => {
   const noReadme = programmeStore(); delete noReadme.files[README_AT];
   assert.equal(due(noReadme).reason, 'it has no README.md');
@@ -76,9 +87,9 @@ test('programme turn: no record or README is not due, a horizon that is not open
 });
 
 test('programme document coverage: part headings come from the Parts entry, and a goal names a part only by an explicit label on a document that points at README.md', () => {
-  assert.deepEqual(signedParts(README_MD), [1, 2]);
-  assert.deepEqual(signedParts('## Parts\n\n```\n### Part 9 — Fenced\n```\n\n### Part 3 — Real\n\n## Else\n\n### Part 4 — Outside\n'), [3], 'a fenced example and a heading outside the entry do not count');
-  assert.deepEqual(signedParts('### Part 1 — x\n'), [], 'no Parts entry names no part');
+  assert.deepEqual(documentParts(README_MD), [1, 2]);
+  assert.deepEqual(documentParts('## Parts\n\n```\n### Part 9 — Fenced\n```\n\n### Part 3 — Real\n\n## Else\n\n### Part 4 — Outside\n'), [3], 'a fenced example and a heading outside the entry do not count');
+  assert.deepEqual(documentParts('### Part 1 — x\n'), [], 'no Parts entry names no part');
   assert.deepEqual([...partsNamed('Part 1; Part 2')], [1, 2]);
   assert.deepEqual([...partsNamed('Parts 1, 2 and 4')], [1, 2, 4]);
   assert.deepEqual([...partsNamed('Parts 1-3')], [1], 'no range is read');

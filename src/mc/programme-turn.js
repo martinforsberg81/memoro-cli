@@ -1,7 +1,7 @@
 /**
  * The programme planning turn, model-free (mc-run.md, "Programme planning turn").
  *
- * A programme whose signed document has not yet been cut is planned by one headless plan
+ * A ready programme whose README.md has parts no goal names yet is planned by one headless plan
  * session with nobody present. Everything here is what the runner decides around
  * that session without a model: whether a programme is due, the state file that
  * counts the turns that failed, the desk item the second failure opens, and the
@@ -75,7 +75,7 @@ export function goalCount({ home, programme, list }) {
 }
 
 /** The `### Part n —` headings of the programme document's `## Parts` entry (fenced examples do not count), as numbers. */
-export function signedParts(text) {
+export function documentParts(text) {
   const lines = String(text ?? '').replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\1[^\n]*(?:\n|$)/gmu, '').split(/\r?\n/u);
   const start = lines.indexOf('## Parts');
   if (start < 0) return [];
@@ -86,7 +86,6 @@ export function signedParts(text) {
     return found ? [Number(found[1])] : [];
   });
 }
-export const documentParts = signedParts;
 
 /** The part numbers one document label names: `Part 1; Part 2`, `Parts 1, 2 and 4`. No range is read. */
 export function partsNamed(label) {
@@ -98,29 +97,44 @@ export function partsNamed(label) {
 }
 
 /**
- * The parts of the programme document the programme's goals name, live and archived (mc-goals.md, "Part association"): a
- * document of a goal whose path is this programme's `README.md` (or legacy signed document), labelled with explicit `Part n` references.
+ * Each goal of the programme, live and archived, that reads as a goal: its name and the parts of the programme's
+ * `README.md` it names (mc-goals.md, "Part association"): a document whose path is that README.md, labelled with
+ * explicit `Part n` references. A goal file that is missing, does not parse or does not validate is left out.
  */
-export function partsCut({ home, programme, list, read }) {
+function goalParts({ home, programme, list, read }) {
   const readme = resolve(join(home, programme, 'README.md'));
-  const legacySigned = resolve(join(home, programme, ['SIGNED', 'md'].join('.')));
   const goals = join(home, programme, GOALS_DIR);
-  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => join(goals, name)),
-    ...list(join(goals, ARCHIVE_DIR)).map((name) => join(goals, ARCHIVE_DIR, name))];
-  const named = new Set();
-  for (const dir of dirs) {
+  const dirs = [...list(goals).filter((name) => !name.startsWith('.')).map((name) => [name, join(goals, name)]),
+    ...list(join(goals, ARCHIVE_DIR)).map((name) => [name, join(goals, ARCHIVE_DIR, name)])];
+  const found = [];
+  for (const [name, dir] of dirs) {
     let text;
     try { text = read(join(dir, GOAL_FILE)); } catch { continue; }
     if (text == null) continue;
     const parsed = parseGoal(text);
     if (parsed.problems) continue;
+    const named = new Set();
     for (const document of parsed.documents ?? []) {
       const docPath = typeof document?.path === 'string' ? resolve(join(home, programme), document.path) : null;
-      if (!docPath || (docPath !== readme && docPath !== legacySigned)) continue;
+      if (docPath !== readme) continue;
       for (const part of partsNamed(document.label)) named.add(part);
     }
+    found.push({ name, named });
   }
-  return named;
+  return found;
+}
+
+/** The parts of the programme's `README.md` its goals name, live and archived. */
+export function partsCut({ home, programme, list, read }) {
+  return new Set(goalParts({ home, programme, list, read }).flatMap(({ named }) => [...named]));
+}
+
+/**
+ * The goals, live and archived, that name no part of the programme's `README.md`: goals planned by hand or cut
+ * before the planning turn read README.md. A programme holding one is planned already and is not due a turn.
+ */
+export function goalsNamingNoPart({ home, programme, list, read }) {
+  return goalParts({ home, programme, list, read }).filter(({ named }) => !named.size).map(({ name }) => name).sort();
 }
 
 /**
@@ -130,7 +144,7 @@ export function cutProblems({ home, programme, list, read }) {
   let text;
   try { text = read(join(home, programme, 'README.md')); } catch { text = null; }
   if (text == null) return ['README.md is missing'];
-  const parts = signedParts(text);
+  const parts = documentParts(text);
   if (!parts.length) return ['README.md names no part'];
   const named = partsCut({ home, programme, list, read });
   const missing = parts.filter((part) => !named.has(part));
@@ -152,10 +166,15 @@ export function programmeDue({ programme, home, list, read, items = [], horizon 
   let readme;
   try { readme = read(join(dir, 'README.md')); } catch { readme = null; }
   if (readme == null) return { due: false, reason: 'it has no README.md', notice: null };
-  const parts = signedParts(readme);
+  const parts = documentParts(readme);
   if (!parts.length) return { due: false, reason: 'README.md names no part', notice: null };
   const problems = cutProblems({ home, programme, list, read });
   if (problems.length === 0) return { due: false, reason: 'its goals are already cut', notice: null };
+  const unnamed = goalsNamingNoPart({ home, programme, list, read });
+  if (unnamed.length) {
+    const named = unnamed.length > 3 ? `${unnamed.slice(0, 3).join(', ')} and ${unnamed.length - 3} more` : unnamed.join(', ');
+    return { due: false, reason: `its goal${unnamed.length === 1 ? '' : 's'} ${named} name${unnamed.length === 1 ? 's' : ''} no part of README.md`, notice: null };
+  }
   if (items.some((item) => item.kind === TURN_ITEM_KIND && item.reference === turnReference(programme) && item.state !== 'closed')) {
     return { due: false, reason: 'a programme desk item is open', notice: null };
   }
@@ -236,8 +255,8 @@ function preparedText({ programme, failures, item }) {
 
 /** The brief a later item carries: the turn failed again after a decision pass closed the first. Swedish, as the desk reads it. */
 function briefText({ programme, failures }) {
-  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att målen namngav varje del av det signerade dokumentet; arbetet kan inte fortsätta automatiskt.\n\n`
-    + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: signaturen skärs inte förrän målen täcker varje del.\n\n`
+  return `## Vad det gäller\nPlaneringspasset för programmet ${programme} slutade igen utan att målen namngav varje del av programmets README.md; arbetet kan inte fortsätta automatiskt.\n\n`
+    + `## Alternativ och konsekvenser\n- Undersök underlaget: planeringen kan köras igen när felet är löst.\n- Låt programmet vänta: inga fler mål skärs förrän felet är löst.\n\n`
     + `## Rekommendation och skäl\nUndersök underlaget; planeringspasset har misslyckats igen sedan ett tidigare ärende stängts.\n\n`
     + `## Vad som står still\nProgrammet ${programme} väntar på Martin. Felunderlag:\n${failureLines(failures)}\n\n`
     + `## Kan valet ändras efteråt?\nIngen automatisk tillämpning; detta är ett mekaniskt fel som kräver undersökning.\n`;
