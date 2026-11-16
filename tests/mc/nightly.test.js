@@ -30,9 +30,9 @@ import { preloadVerbs, runVerb } from './_helpers/mc-verb.js';
 import { gateLockPath } from '../../src/mc/gate-lock.js';
 import { nightlyLogPath } from '../../src/mc/nightly.js';
 import { nightlyReading, readNightlyHistory, recordNightlyRun } from '../../src/mc/nightly-history.js';
-import { fullRun, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
+import { fullRun, fullRunDue, fullRunTick, loggedTick, repairFromRun, scheduledRound } from '../../src/mc/nightly-loop.js';
 import { requestMainRepair } from '../../src/mc/main-repair.js';
-import { claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
+import { awaitClaim, claimFullRun, liveClaims, releaseClaim } from '../../src/mc/full-run-claim.js';
 
 await preloadVerbs('test', 'repo');
 
@@ -809,5 +809,223 @@ describe('repairFromRun stale report wiring', () => {
     assert.equal(entries[0].tests[0].at, `${file}:99:5`);
     assert.equal(entries[0].tests[0].detail.length, 40);
     assert.deepEqual(entries[0].tests[0].stack, ['async TestContext.<anonymous> (tests/stack.test.js:99:5)']);
+  });
+});
+
+/**
+ * mc-tests/full-run-survives-handover. The handover signal reaches the runs
+ * that only wait for another run or follow it, and nothing else: a run that
+ * measures goes on, and the run record the runner reads carries what it needs.
+ */
+describe('a full run, and a runner handover', () => {
+  const PREDECESSOR = 4242;
+  const STARTED = new Date('2026-09-03T02:00:00.000Z');
+  const REPO = REPOS[0];
+  /** The predecessor's claim: a live process of another runner, measuring `sha`. */
+  const heldBy = (root, sha = SHA) => claimFullRun({
+    repo: 'memoro', sha, verb: 'full run', root, pid: PREDECESSOR, alive: () => true, now: () => STARTED,
+  }).claim;
+  /** What the predecessor leaves when it ends: its answer in the history, its claim given back. */
+  const ends = (root, claim, commit = SHA) => {
+    recordNightlyRun({
+      repo: 'memoro', path: REPO.path, started_at: '2026-09-03T02:00:01.000Z', duration_ms: 1000,
+      commit, verdict: 'green', stopped_at: null, reason: null, red: [], tests: 17_982,
+    }, { root });
+    releaseClaim(claim, { root, alive: () => true });
+  };
+  const noRound = (asked) => ({ repoPath }) => { asked.push(repoPath); return report(); };
+
+  it('a run waiting for another sha is dropped by the handover signal: no round, nothing written, the claim it waited on kept', async () => {
+    const root = home();
+    try {
+      const claim = heldBy(root, SHA);
+      const handover = new AbortController();
+      const asked = [];
+      const said = [];
+      const run = await fullRun(REPO, {
+        root, sha: OTHER, say: (message) => said.push(message), repair: null, round: noRound(asked), handover: handover.signal,
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { handover.abort(new Error('handover')); } },
+      });
+      assert.equal(run, null, 'a dropped run has no answer');
+      assert.deepEqual(asked, [], 'it measured nothing');
+      assert.deepEqual(readNightlyHistory(REPO.path, { root }).runs, [], 'it wrote nothing');
+      assert.deepEqual(liveClaims({ root, alive: () => true }).map((one) => one.pid), [PREDECESSOR], 'the measuring predecessor\'s claim is untouched, and no claim of its own was taken');
+      assert.match(said.join('\n'), /waiting for it before measuring bbbbbbb[\s\S]*the runner is handing over; this run waited for another and is dropped, nothing measured/u);
+      assert.ok(claim);
+      releaseClaim(claim, { root, alive: () => true });
+      assert.deepEqual(liveClaims({ root, alive: () => true }), [], 'the waited-on claim has ended');
+      assert.deepEqual(asked, [], 'the claim it waited on ending afterwards starts nothing');
+      assert.deepEqual(readNightlyHistory(REPO.path, { root }).runs, [], 'and writes nothing');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run following another of the same sha is dropped by the handover signal, and does not start the round when the followed run later ends', async () => {
+    const root = home();
+    try {
+      const claim = heldBy(root, SHA);
+      const handover = new AbortController();
+      const asked = [];
+      const run = await fullRun(REPO, {
+        root, sha: SHA, say: () => {}, repair: null, round: noRound(asked), handover: handover.signal,
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { handover.abort(new Error('handover')); } },
+      });
+      assert.equal(run, null);
+      assert.deepEqual(asked, []);
+      assert.deepEqual(readNightlyHistory(REPO.path, { root }).runs, []);
+      ends(root, claim);
+      assert.deepEqual(asked, [], 'the followed run ending afterwards starts nothing');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a handover signal that has fired does not reach a round this runner measures: the round runs to its answer under the stop signal alone', async () => {
+    const root = home();
+    try {
+      const handover = new AbortController();
+      const stop = new AbortController();
+      const claimed = [];
+      let signalSeen = null;
+      const run = await fullRun(REPO, {
+        root, sha: SHA, say: () => {}, repair: null, handover: handover.signal, signal: stop.signal,
+        onMeasuring: (claim) => claimed.push(claim.sha),
+        round: ({ signal }) => { signalSeen = signal; handover.abort(new Error('handover')); return report(); },
+      });
+      assert.equal(signalSeen, stop.signal, 'the round holds the stop signal');
+      assert.equal(signalSeen.aborted, false, 'the handover did not reach it');
+      assert.equal(run.commit, SHA);
+      assert.deepEqual(claimed, [SHA], 'the run said it measures');
+      assert.equal(readNightlyHistory(REPO.path, { root }).runs.length, 1, 'the answer is written');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('the run the tick holds says whether it measures, and what: repository, commit, since when', async () => {
+    const root = home();
+    try {
+      const running = new Map();
+      const release = [];
+      const waiter = heldBy(root, SHA);
+      const outcome = await fullRunTick({
+        root, repos: [REPO], head: () => OTHER, running, say: () => {}, repair: null,
+        claims: { alive: () => true, pollMs: 1, sleep: () => new Promise((resolve) => { release.push(resolve); }) },
+        round: () => report(),
+      });
+      const tracked = running.get(REPO.path);
+      await new Promise((resolve) => { setImmediate(resolve); });
+      assert.equal(tracked.measuring, false, 'a run waiting for another sha measures nothing');
+      assert.equal(tracked.repo, 'memoro');
+      assert.equal(tracked.sha, OTHER);
+      ends(root, waiter, SHA);
+      for (const wake of release) wake();
+      const runs = await outcome.done;
+      assert.equal(runs.length, 1);
+      assert.equal(running.size, 0, 'a finished run leaves the map');
+
+      // A run that claims the tree says so, with the claim's own commit and start.
+      const measuringRoot = home();
+      try {
+        const seen = [];
+        const running2 = new Map();
+        const second = await fullRunTick({
+          root: measuringRoot, repos: [REPO], head: () => SHA, running: running2, say: () => {}, repair: null,
+          claims: { alive: () => true, now: () => STARTED },
+          round: async () => {
+            await new Promise((resolve) => { setImmediate(resolve); });
+            const tracked2 = running2.get(REPO.path);
+            seen.push({ measuring: tracked2.measuring, repo: tracked2.repo, sha: tracked2.sha, since: tracked2.since });
+            return report();
+          },
+        });
+        await second.done;
+        assert.deepEqual(seen, [{ measuring: true, repo: 'memoro', sha: SHA, since: STARTED.toISOString() }]);
+      } finally { rmSync(measuringRoot, { recursive: true, force: true }); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a tick whose handover signal has fired starts nothing', async () => {
+    const root = home();
+    try {
+      const handover = new AbortController();
+      handover.abort(new Error('handover'));
+      const { outcome, asked } = await pass(root, { handover: handover.signal });
+      assert.deepEqual(asked, []);
+      assert.equal(outcome.stopped, true);
+      assert.deepEqual(outcome.started, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('no second run measures the tree while a predecessor does, across two handovers; the newer main is measured once, after it ended', async () => {
+    const root = home();
+    try {
+      // The predecessor measures A. Main has moved to B, so a successor waits for A.
+      const claim = heldBy(root, SHA);
+      const asked = [];
+      const first = new AbortController();
+      const one = await fullRunTick({
+        root, repos: [REPO], head: () => OTHER, say: () => {}, repair: null, round: noRound(asked), handover: first.signal,
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { first.abort(new Error('handover 1')); } },
+      });
+      assert.deepEqual(await one.done, [], 'the first successor was handed over from and dropped what it waited for');
+      // The next handover: the predecessor is still measuring, so the next runner waits as well.
+      const second = new AbortController();
+      const two = await fullRunTick({
+        root, repos: [REPO], head: () => OTHER, say: () => {}, repair: null, round: noRound(asked), handover: second.signal,
+        claims: { alive: () => true, pollMs: 1, sleep: async () => { second.abort(new Error('handover 2')); } },
+      });
+      assert.deepEqual(await two.done, []);
+      assert.deepEqual(asked, [], 'across both handovers no round was started beside the measuring run');
+      assert.deepEqual(liveClaims({ root, alive: () => true }).map((one) => one.pid), [PREDECESSOR]);
+      assert.equal(readNightlyHistory(REPO.path, { root }).runs.length, 0);
+      // The predecessor ends and writes A. The runner after it measures B, once.
+      ends(root, claim, SHA);
+      const measureB = ({ repoPath }) => { asked.push(repoPath); return report({ commit: OTHER, started_at: '2026-09-03T03:00:00.000Z' }); };
+      const { outcome } = await pass(root, { repos: [REPO], head: () => OTHER, round: measureB });
+      assert.deepEqual(outcome.started.map((one) => one.repo), ['memoro']);
+      assert.deepEqual(asked, [REPO.path], 'the newer main is measured once');
+      const settled = await pass(root, { repos: [REPO], head: () => OTHER, round: measureB });
+      assert.deepEqual(settled.outcome.started, [], 'and not again');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a run ended through the stop signal is written stopped at gone and is due again at once', async () => {
+    const root = home();
+    try {
+      const stop = new AbortController();
+      const handover = new AbortController();
+      let seen = null;
+      const running = new Map();
+      const outcome = await fullRunTick({
+        root, repos: [REPO], head: () => SHA, say: () => {}, repair: null, running, signal: stop.signal, handover: handover.signal,
+        // A round as the real one ends on its signal: stopped, `gone`.
+        round: ({ signal }) => new Promise((resolve) => {
+          seen = signal;
+          signal.addEventListener('abort', () => resolve(report({ verdict: 'stopped', stopped_at: 'gone', reason: 'the runner ended it', commit: SHA })), { once: true });
+        }),
+      });
+      await new Promise((resolve) => { setImmediate(resolve); });
+      handover.abort(new Error('handover'));
+      await new Promise((resolve) => { setImmediate(resolve); });
+      assert.equal(seen.aborted, false, 'the handover alone does not end the round');
+      stop.abort(new Error('STOP'));
+      const [run] = await outcome.done;
+      assert.equal(seen.aborted, true, 'STOP reached the measuring round');
+      assert.equal(run.stopped_at, 'gone');
+      assert.equal(readNightlyHistory(REPO.path, { root }).runs.at(-1).stopped_at, 'gone');
+      assert.equal(fullRunDue(REPO, { root, head: () => SHA }).due, true, 'due again for the next runner');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('awaitClaim without a signal returns only when the claim ends, and with one when the signal fires', async () => {
+    const root = home();
+    try {
+      const claim = heldBy(root, SHA);
+      let polls = 0;
+      await awaitClaim(claim, { root, alive: () => true, pollMs: 1, sleep: async () => { polls += 1; if (polls === 3) releaseClaim(claim, { root, alive: () => true }); } });
+      assert.equal(polls, 3, 'it waited for the claim to end, not for anything else');
+      const held = heldBy(root, SHA);
+      const signal = new AbortController();
+      let more = 0;
+      await awaitClaim(held, { root, alive: () => true, pollMs: 1, signal: signal.signal, sleep: async () => { more += 1; if (more === 2) signal.abort(new Error('handover')); } });
+      assert.equal(more, 2);
+      assert.deepEqual(liveClaims({ root, alive: () => true }).map((one) => one.pid), [PREDECESSOR], 'the claim it waited on is still held');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

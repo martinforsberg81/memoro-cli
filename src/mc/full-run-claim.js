@@ -97,18 +97,33 @@ export function releaseClaim(claim, { root = mcHome(), lock = realLock, alive = 
  * Wait until the run `claim` names has ended: its process is gone or it gave
  * the claim back. A wait is not silent: `onWait(elapsedMs)` is called once a
  * minute (`everyMs`), so whoever waits can say it is still waiting.
+ *
+ * `signal` is optional: a wait whose signal fires returns at once, with the
+ * claim still live, and the caller reads the signal to know why it returned
+ * (the runner's handover, `fullRun`). Without one the wait ends only with the
+ * claim, as the deploy's preparation needs.
  */
 export async function awaitClaim(claim, {
   root = mcHome(), alive = processAlive, pollMs = CLAIM_POLL_MS,
-  sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
-  onWait = null, everyMs = 60_000, clock = () => Date.now(),
+  sleep = null,
+  onWait = null, everyMs = 60_000, clock = () => Date.now(), signal = null,
 } = {}) {
   const began = clock();
   let told = began;
+  // A sleep the signal cuts short, and removes its timer and listener behind it.
+  const nap = (ms) => new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    let timer = null;
+    const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
+    signal?.addEventListener('abort', done, { once: true });
+    if (sleep) { Promise.resolve(sleep(ms)).then(done, done); } else { timer = setTimeout(done, ms); }
+  });
   for (;;) {
+    if (signal?.aborted) return;
     const held = readAll(root).some((other) => other.pid === claim.pid && other.started === claim.started);
     if (!held || !alive(claim.pid)) return;
-    await sleep(pollMs);
+    await nap(pollMs);
+    if (signal?.aborted) return;
     if (onWait && clock() - told >= everyMs) { told = clock(); onWait(told - began); }
   }
 }

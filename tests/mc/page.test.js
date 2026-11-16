@@ -18,6 +18,7 @@ import { newRecord, writeRecord } from '../../src/mc/programme-record.js';
 import { modelsPath, readModels } from '../../src/mc/model-config.js';
 import { diskSummary } from '../../src/mc/disk-pressure.js';
 import { deployProgress } from '../../src/mc/deploy-progress.js';
+import { claimFullRun } from '../../src/mc/full-run-claim.js';
 import { recordEnd, recordStart } from '../../src/mc/deploys.js';
 import {
   attachPrs, checksSection, collectPage, countNewErrors, dayByKind, dockerSection, horizonsSection, intakeSection, mergePauses, mergePhase, mergesSection, newErrorLines,
@@ -1751,6 +1752,13 @@ describe('the page', () => {
     });
     assert.match(renderPage({ ...DATA, mc: overlap }, { columns: 160, version: '0.7.11', now: NOW }),
       /^ {4}MC {2}0\.7\.11 · pid 9001 · up to date · runner up 120 min · on abc1234 · pid 4242 finishing 2 sessions \(gmail-ready, claims-entity\)$/mu);
+    // mc-tests/full-run-survives-handover: a predecessor that holds only a full
+    // run is not said to finish 0 sessions; with both, both are named.
+    const run = { repo: 'memoro-cli', sha: '1a2b3c4d5e6f7a8b9c0d', since: '2026-11-16T10:00:00.000Z' };
+    const drawn = (predecessor, commit = 'abc1234') => renderPage({ ...DATA, mc: mcSection({ process: DATA.runner.process, commit, behind: 0, now: NOW, pid: 9001, predecessor }) }, { columns: 300, version: '0.7.11', now: NOW });
+    assert.match(drawn({ pid: 4242, steps: [], runs: [run] }), /^ {4}MC {2}0\.7\.11 · pid 9001 · up to date · runner up 120 min · on abc1234 · pid 4242 finishing a full run of memoro-cli at 1a2b3c4 since 2026-11-16 10:00$/mu);
+    assert.doesNotMatch(drawn({ pid: 4242, steps: [], runs: [run] }), /finishing 0 sessions/u);
+    assert.match(drawn({ pid: 4242, steps: ['a'], runs: [run] }, null), /pid 4242 finishing 1 session \(a\) and a full run of memoro-cli at 1a2b3c4 since 2026-11-16 10:00$/mu);
     assert.doesNotMatch(text, /--fresh asks GitHub/u);
     assert.match(text, /note: no runner\/log\/runs\.tsv/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
@@ -2176,6 +2184,37 @@ describe('collectPage', () => {
     const next = await collect();
     assert.equal(next.runner.production.progress, null);
     assert.match(renderPage(next, { columns: 120 }), /\[····\] · progress unknown/u);
+  });
+
+  // The page is another process than the runner it reports on: a predecessor's
+  // full run is read from the claim file it wrote, by its pid
+  // (mc-tests/full-run-survives-handover).
+  it('names the full run a handed-over predecessor measures, read from its claim by pid, and a predecessor with sessions only as before', async (t) => {
+    const root = workRootFixture();
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const env = { MC_WORK_ROOT: root, MC_HOME: join(root, 'home'), MC_REPOS_HOME: join(root, 'repos'), MC_REPOS: '' };
+    const sha = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9012';
+    writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: process.pid, started: '2026-08-29T10:00:00Z', predecessor: { pid: 4242 } }));
+    const collect = () => collectPage({ env, repos: [], offline: true, now: NOW, alive: (pid) => pid === 4242 || pid === process.pid,
+      run: () => ({ status: 1, stdout: '' }), checkout: null });
+    const mcLineOf = (data) => renderPageLines(data, { columns: 220, now: NOW }).find((row) => /^ {2}MC /u.test(row));
+    claimFullRun({ repo: 'memoro-cli', sha, verb: 'full run', root: env.MC_HOME, pid: 4242, alive: () => true, now: () => new Date('2026-11-16T10:00:00.000Z') });
+    // A claim of another process is not the predecessor's.
+    claimFullRun({ repo: 'memoro', sha, verb: 'mc deploy', root: env.MC_HOME, pid: 5555, alive: () => true, now: () => new Date('2026-11-16T09:00:00.000Z') });
+    const data = await collect();
+    assert.deepEqual(data.mc.predecessor, { pid: 4242, steps: [], runs: [{ repo: 'memoro-cli', sha, since: '2026-11-16T10:00:00.000Z' }] });
+    const line = mcLineOf(data);
+    assert.match(line, /pid 4242 finishing a full run of memoro-cli at 1a2b3c4 since 2026-11-16 10:00/u);
+    assert.doesNotMatch(line, /finishing 0 sessions|memoro at/u);
+    // The same predecessor with a session and no claim reads as it did before.
+    rmSync(join(env.MC_HOME, 'full-runs.json'), { force: true });
+    writeFileSync(join(root, 'runner', 'current-memoro-cli.json'), JSON.stringify({
+      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', check_in_minutes: 60, check_ins: 0,
+      started: '2026-08-29T11:40:00Z', pid: 4242, worktree: `${root}/mc-ui/memoro-cli`,
+    }));
+    const sessions = await collect();
+    assert.deepEqual(sessions.mc.predecessor, { pid: 4242, steps: ['mc-ui'], runs: [] });
+    assert.match(mcLineOf(sessions), /pid 4242 finishing 1 session \(mc-ui\)/u);
   });
 
   /** A work root of real files — and no git, no gh, no tmux. */

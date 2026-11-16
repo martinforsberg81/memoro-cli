@@ -2831,6 +2831,164 @@ test('the runs in flight are ended through their signal before the runner leaves
   assert.equal(running.size, 1, 'the map is the pass\'s to empty, not the runner\'s');
 });
 
+/**
+ * mc-tests/full-run-survives-handover. A runner handover does not end a full
+ * run the runner is measuring: the predecessor finishes it like a session, and
+ * says so. A run that only waits for another, or follows it, is dropped by the
+ * handover signal; STOP ends everything through the stop signal.
+ */
+const MEASURED = { repo: 'memoro', sha: 'abc1234def5678', since: '2026-08-29T09:00:00Z' };
+
+/**
+ * A full-run pass that starts one run the runner measures, writes UPDATE (or
+ * STOP) while that run is in flight, and records what each signal said when
+ * the run was released. The run ends only when `release()` is called.
+ */
+function measuringNightly(f, { order = 'UPDATE', extra = [] } = {}) {
+  const seen = { run: null, release: null, stop: null, handover: null, waiting: [] };
+  let started = false;
+  const nightly = async ({ running, signal, handover }) => {
+    if (started) return { started: [], running: ['memoro'], waiting: [], stopped: false, done: Promise.resolve([]) };
+    started = true;
+    seen.stop = signal;
+    seen.handover = handover;
+    const make = (props, watch) => {
+      let end = null;
+      const run = new Promise((resolve) => { end = resolve; if (watch) signal.addEventListener('abort', () => resolve([]), { once: true }); });
+      Object.assign(run, props);
+      return { run, end };
+    };
+    const measuring = make({ measuring: true, ...MEASURED }, true);
+    seen.run = measuring.run;
+    seen.release = () => { measuring.end([]); };
+    measuring.run.finally(() => running.delete('/home/memoro'));
+    running.set('/home/memoro', measuring.run);
+    for (const [index, name] of extra.entries()) {
+      // A run that only waits for another: the handover signal ends it.
+      const waits = make({}, false);
+      handover.addEventListener('abort', () => { seen.waiting.push(name); waits.end([]); }, { once: true });
+      waits.run.finally(() => running.delete(`/home/${name}-${index}`));
+      running.set(`/home/${name}-${index}`, waits.run);
+    }
+    f.files[`/w/runner/${order}`] = '';
+    return { started: [{ repo: 'memoro', why: 'never measured' }], running: [], waiting: [], stopped: false, done: measuring.run };
+  };
+  return { nightly, seen };
+}
+
+/** A sleep that yields a macrotask; `each` runs on every poll, with the poll's number. */
+function pollsWith(f, each) {
+  let polls = 0;
+  f.deps.sleep = () => new Promise((resolve) => { setImmediate(() => { polls += 1; each(polls); resolve(); }); });
+}
+
+test('full run: an UPDATE does not end a run the runner measures — it is finished like a session, said by the handover and the drain line', async () => {
+  const f = goalFixture({}, { livePids: [4242] });
+  const probe = measuringNightly(f, { extra: ['follower'] });
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  const { seen } = probe;
+  const handovers = [];
+  f.deps.handOver = async ({ say, finishing, runs }) => {
+    handovers.push({ finishing, runs });
+    say(`update: handed over to pid 9001 — finishing ${runs.length} full run in flight, taking nothing new`);
+    return { ok: true, pid: 9001 };
+  };
+  let at = null;
+  const clock = new Date('2026-08-29T10:00:00Z').getTime();
+  let now = clock;
+  f.deps.now = () => new Date(now);
+  pollsWith(f, (polls) => {
+    now += UPDATE_POLL_MS;
+    if (polls === 40) {
+      at = { stop: seen.stop.aborted, handover: seen.handover.aborted, followers: seen.waiting.slice() };
+      now += 15 * 60 * 1000;
+    }
+    if (polls === 45) seen.release();
+  });
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.deepEqual(handovers, [{ finishing: 0, runs: [MEASURED] }], 'the handover names the full run the runner measures');
+  assert.deepEqual(at, { stop: false, handover: true, followers: ['follower'] },
+    'forty polls after the handover the run was still measuring: the stop signal untouched, the handover signal fired, the follower dropped');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /update: pid 4242 still waiting on a full run of memoro at abc1234 since 2026-08-29T09:00:00Z/u, 'the drain line names the run');
+  assert.doesNotMatch(log, /full run: ending \d+ runs? in flight before the runner leaves/u, 'the handover did not settle the runs');
+  assert.match(log, /every session pid 4242 held has ended — exiting/u);
+  assert.equal(seen.stop.aborted, false, 'the stop signal was never fired: the round was not cut short');
+  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), false, "the old runner left the successor's runner.json alone");
+});
+
+test('full run: after an UPDATE the runner does not exit while the run it measures is in flight', async () => {
+  const f = goalFixture({}, { livePids: [4242] });
+  const probe = measuringNightly(f);
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  f.deps.handOver = async () => ({ ok: true, pid: 9001 });
+  const events = [];
+  pollsWith(f, (polls) => {
+    events.push(`poll ${polls}`);
+    if (polls === 5) { events.push('release'); probe.seen.release(); }
+  });
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.ok(events.includes('release'), `the runner left before the run it measures had ended: ${events.join(', ')}`);
+  assert.equal(probe.seen.stop.aborted, false);
+});
+
+test('full run: a STOP during the drain of a measured run ends it through the stop signal and exits on STOP', async () => {
+  const f = goalFixture({}, { livePids: [4242] });
+  const probe = measuringNightly(f, { extra: ['follower'] });
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  f.deps.handOver = async () => ({ ok: true, pid: 9001 });
+  let aborted = null;
+  pollsWith(f, (polls) => {
+    if (polls === 10) f.files['/w/runner/STOP'] = '';
+    if (polls === 10) aborted = { stop: probe.seen.stop.aborted, handover: probe.seen.handover.aborted };
+  });
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  assert.deepEqual(aborted, { stop: false, handover: true }, 'until STOP the round went on');
+  assert.equal(probe.seen.stop.aborted, true, 'STOP fired the stop signal, which reaches the measuring round');
+  assert.deepEqual(probe.seen.waiting, ['follower']);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /full run: ending 1 run in flight before the runner leaves/u);
+  assert.match(log, /runner exit on STOP — pid 4242 has ended/u, 'the runner exits on STOP, not on a finished drain');
+  assert.doesNotMatch(log, /every session pid 4242 held has ended — exiting/u);
+});
+
+test('full run: a STOP with no UPDATE ends a measuring and a waiting run alike through both signals, and exits on STOP', async () => {
+  const f = goalFixture({}, { livePids: [4242] });
+  const probe = measuringNightly(f, { order: 'STOP', extra: ['follower'] });
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  const handovers = [];
+  f.deps.handOver = async () => { handovers.push('handed over'); return { ok: true, pid: 9001 }; };
+  pollsWith(f, () => {});
+  // The measuring run ends only through the stop signal, the waiting one only
+  // through the handover signal: the loop resolves only if both fired.
+  const exit = await runLoop({ deps: f.deps });
+  const settled = { stop: probe.seen.stop.aborted, handover: probe.seen.handover.aborted, followers: probe.seen.waiting.slice() };
+  assert.equal(exit, 0);
+  assert.deepEqual(handovers, [], 'STOP alone hands nothing over');
+  assert.deepEqual(settled, { stop: true, handover: true, followers: ['follower'] },
+    'settleFullRuns fired both signals: the stop signal ended the measuring round, the handover signal the waiting run');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /full run: ending 2 runs in flight before the runner leaves/u, 'both runs were in the map when STOP settled them');
+  assert.match(log, /chores: STOP — exiting/u);
+  assert.match(log, /runner exit on STOP/u);
+});
+
+test('full run: a runner taken over by another still finishes the run it measures, and says so', async () => {
+  const f = goalFixture({}, { livePids: [4242, 9001] });
+  const probe = measuringNightly(f, { order: 'NOTHING' });
+  f.deps.nightlyTick = async (options) => { f.calls.ticks.push(options); return probe.nightly(options); };
+  pollsWith(f, (polls) => {
+    // The successor (started by `mc run --update` from elsewhere) names this runner as its predecessor.
+    if (polls === 3) f.files['/w/runner/runner.json'] = `${JSON.stringify({ pid: 9001, started: '2026-08-29T10:00:00Z', predecessor: { pid: 4242 } })}\n`;
+    if (polls === 12) probe.seen.release();
+  });
+  assert.equal(await runLoop({ deps: f.deps }), 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /taken over by pid 9001 — finishing a full run of memoro at abc1234 since 2026-08-29T09:00:00Z, taking nothing new/u);
+  assert.equal(probe.seen.handover.aborted, true);
+  assert.equal(probe.seen.stop.aborted, false);
+});
+
 /* -------------------------------------------------------------- the drain */
 
 /** The archive a drained file lands in, under the fixture's fixed day. */

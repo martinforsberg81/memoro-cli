@@ -9,6 +9,38 @@ there is no headless form and the runner never launches it. A resumed
 conversation receives a refresh of the same opening as a reply, not what it
 remembers of earlier openings. Launch does not make per-goal checkouts.
 
+## What the desk is for
+
+The desk is Martin's way into the whole project, all work on memoro me and on
+mc (`canon/roles/martin.md`). Six kinds of work are done there: horizons are
+set and ordered; programmes are designed and ordered; what was not settled
+lower (a proposed change to a text he holds, an act of his, a wrong goal, a
+goal waiting in status `Martin`) is settled; maintenance keeps the work and mc
+moving (stopped work started again, stuck items, reds on main, lessons,
+programme pages brought to the day); instructions are changed directly; and
+code is repaired, seldom.
+
+A question that is none of overall design or architecture, a horizon, a
+programme order, a text he holds or an act of his is the desk session's own to
+decide, whatever a programme page calls it: a gate listed under a page's
+"Martin's" is decided against its written contract and the page is corrected.
+
+**Direct changes.** An instruction (`canon/`, a repository's `AGENTS.md` or
+`CLAUDE.md`, a programme page) is changed at the desk without a programme,
+when Martin asks or when work there shows it wrong and the next session would
+repeat the fault. A repository text is changed at its source in a worktree
+`~/mc/martin/work/<slug>` on branch `desk/<slug>` from `origin/main`, with the
+`docs/technical/` page beside it, and lands through `mc gate`, `mc publish`
+and the merger like every change; no code grants the desk a way past them. A
+code repair takes the same route and is kept to what is small and certain;
+anything else is a programme order or a repair programme. A text Martin holds
+changes only on his word.
+
+Planning at the desk is done in programme orders. A goal is the build's
+construction for dividing an order into buildable pieces: the planner cuts
+goals from a ready programme's page, and the desk meets a goal only when it
+has stopped (waiting in status `Martin`, wrong, or stuck).
+
 ## Opening
 
 Launch first syncs the durable desk items (below), then builds the opening from
