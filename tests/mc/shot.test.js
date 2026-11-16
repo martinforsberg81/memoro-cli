@@ -511,6 +511,39 @@ describe('mc shot — design sets', () => {
     assert.doesNotMatch(result.stderr, /mc: timing/u);
   });
 
+  it('prints all four successful renderings with labelled diagnostics and one timing line', async () => {
+    const fx = fixture();
+    const requests = [];
+    let ensures = 0;
+    const result = await shot(['dev', 'home', '--set', 'designs', '--state', 'filled', '--shell', 'window', '--click', '.a'], fx, {
+      ensureAppServer: async () => { ensures += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: {}, timing: { slot_wait_ms: 0, server_ms: 0 } }; },
+      runCapture: ({ request }) => {
+        requests.push(request);
+        writeFileSync(request.out, 'picture');
+        return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
+      },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(ensures, 1);
+    assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out]), [
+      ['desktop', 'light', join(fx.home, 'designs/filled-desktop-light.png')],
+      ['desktop', 'dark', join(fx.home, 'designs/filled-desktop-dark.png')],
+      ['iphone', 'light', join(fx.home, 'designs/filled-phone-light.png')],
+      ['iphone', 'dark', join(fx.home, 'designs/filled-phone-dark.png')],
+    ]);
+    for (const request of requests) {
+      assert.equal(request.shell, 'window');
+      assert.deepEqual(request.actions, [{ kind: 'click', selector: '.a' }]);
+      assert.ok(existsSync(request.out));
+    }
+    assert.deepEqual(result.stdout.trim().split('\n'), requests.map((r) => r.out));
+    for (const rendering of ['desktop-light', 'desktop-dark', 'phone-light', 'phone-dark']) {
+      assert.match(result.stderr, new RegExp(`${rendering}: mc: warning — notice`, 'u'));
+    }
+    assert.equal((result.stderr.match(/mc: timing —/gu) || []).length, 1);
+    assert.match(result.stderr, /mc: timing — [^\n]+\n$/u);
+  });
+
   it('stops on each diagnostic failure without opening or claiming the failed rendering', async () => {
     const cases = [
       { name: 'action', result: { failed: { step: 1, kind: 'click', selector: '.a', error: 'missing' } }, diagnostic: /failed.*missing/u },
