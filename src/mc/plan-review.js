@@ -42,6 +42,8 @@ import { pidAlive } from './status-collect.js';
 export const PLAN_REVIEW_ROLE = 'plan-review';
 export const RECORDS_FILE = '.plan-review.json';
 export const LAUNCH_FILE = '.plan-review-launch.json';
+/** The record of a call that found no reader able to run: the text's hash, the author, each candidate set aside. */
+export const UNREAD_FILE = '.plan-review-unread.json';
 export const REVIEW_TEXT_FILE = 'PLAN-REVIEW.md';
 /** How long a reading may take, and so how long its launch is live. */
 export const LIMIT_MS = 20 * 60_000;
@@ -288,37 +290,78 @@ export function proposedWords(proposal) {
 // ----------------------------------------------------------- the model
 
 /**
- * The author's model: the caller's `MC_TOOL` and `MC_MODEL` (an interactive session has neither, and a person's
- * tool is `person`), else `--avoid <tool>:<model>` (split at the first colon), else unknown (`null`).
+ * The author's model: `--avoid <tool>:<model>` when given (split at the first colon) names the draft's author
+ * whoever calls; else the caller's `MC_TOOL` and `MC_MODEL` (an interactive session has neither, and a person's
+ * tool is `person`); else unknown (`null`).
  */
 export function authorOf(env, avoid) {
-  if (env.MC_TOOL && env.MC_TOOL !== 'person' && env.MC_MODEL) return { tool: env.MC_TOOL, model: env.MC_MODEL };
   if (avoid) {
     const colon = avoid.indexOf(':');
     if (colon > 0 && colon < avoid.length - 1) return { tool: avoid.slice(0, colon), model: avoid.slice(colon + 1) };
   }
+  if (env.MC_TOOL && env.MC_TOOL !== 'person' && env.MC_MODEL) return { tool: env.MC_TOOL, model: env.MC_MODEL };
   return null;
 }
 
 /**
- * The reader's candidate (D13): the review list with the author's model taken out of it, asked of
- * `chooseCandidate`; only when that list is empty or answers that nothing can run is the whole list asked.
- * 'Can run' is what `chooseCandidate` answers, its API reserve included.
+ * The reader walk: the candidate a reading runs on. The review list with the author's model taken out is asked
+ * of `chooseCandidate` first; only when that list answers that nothing can run is the whole list asked, so the
+ * author's model is last. 'Can run' is what `chooseCandidate` answers, its API reserve included, and a candidate
+ * whose tool cannot launch or whose billing route answers `unavailable` is set aside with its reason and the
+ * choice is asked again without it (`fallThrough`; with it false the first such candidate ends the walk).
  *
- * The review list's first candidate is its first choice. The reduced list is told which candidate that is
- * (`first`): the catalog's own first, or none when the author's model is it, so the removal promotes no other
- * candidate to first choice and the ranking chooses among the rest.
+ * The review list's first candidate is its first choice while it is in the list asked; once it is set aside the
+ * list is asked with `first` null, so no other candidate is promoted to first choice.
+ *
+ * Returns `{ ok: true, candidate, answer, billing, launched, setAside }`, or `{ ok: false, reason, failed, setAside }`
+ * where `failed` marks a walk ended by a candidate's billing or launch refusal and `reason` is the choice's answer
+ * when none can run. Pure: it writes nothing, so the runner asks it too (the unread record's wait).
  */
-export function chooseReader({ catalog, capacity, now, author, choose = chooseCandidate, launchable }) {
+export function readerWalk({ catalog, capacity, now, author, env = {}, choose = chooseCandidate, launch, billing, fallThrough = true }) {
   const priority = catalog.providerPriority ?? 'auto';
   const top = catalog.review[0] ?? null;
-  const ask = (review, first) => choose({ cls: 'review', catalog: { ...catalog, review }, capacity, now, priority, first, ...(launchable ? { launchable } : {}) });
+  const setAside = [];
+  const gone = new Set();
+  const launches = new Map();
+  const launchOf = (tool) => { if (!launches.has(tool)) launches.set(tool, launch(tool)); return launches.get(tool); };
+  const sideline = (candidate, reason) => { gone.add(candidate); setAside.push({ tool: candidate.tool, model: candidate.model, reason }); };
+  const launchReason = (candidate) => launchOf(candidate.tool)?.hint || launchOf(candidate.tool)?.reason || `${candidate.tool} cannot be launched here`;
+  const stage = (pool) => {
+    for (;;) {
+      for (const one of pool) if (!gone.has(one) && !launchOf(one.tool)?.ok) sideline(one, launchReason(one));
+      const live = pool.filter((one) => !gone.has(one));
+      if (!live.length) return { reason: 'no candidate is left' };
+      const answer = choose({ cls: 'review', catalog: { ...catalog, review: live }, capacity, now, priority, first: live.includes(top) ? top : null });
+      if (!answer?.ok || !answer.candidate) return { reason: answer?.reason || 'no answer' };
+      if (gone.has(answer.candidate)) return { reason: `the choice answered ${answer.candidate.tool} ${answer.candidate.model}, which is already set aside` };
+      const launched = launchOf(answer.candidate.tool);
+      const route = launched?.ok ? billing(answer.candidate.tool, { env, now, route: { billing: answer.billing, why: answer.why } }) : { billing: 'unavailable', why: launchReason(answer.candidate) };
+      if (route.billing !== 'unavailable') return { answer, billing: route, launched };
+      sideline(answer.candidate, route.why);
+      if (!fallThrough) return { reason: route.why, failed: true };
+    }
+  };
   const others = author ? catalog.review.filter((one) => !(one.model === author.model && one.tool === author.tool)) : catalog.review;
-  if (others.length && others.length < catalog.review.length) {
-    const answer = ask(others, others.includes(top) ? top : null);
-    if (answer?.ok && answer.candidate) return answer;
+  const tiers = others.length && others.length < catalog.review.length ? [others, catalog.review] : [catalog.review];
+  let result = { reason: 'no candidate is left' };
+  for (const pool of tiers) {
+    result = stage(pool);
+    if (result.answer || result.failed) break;
   }
-  return ask(catalog.review, top);
+  if (!result.answer) return { ok: false, reason: result.reason, failed: Boolean(result.failed), setAside };
+  return { ok: true, candidate: result.answer.candidate, answer: result.answer, billing: result.billing, launched: result.launched, setAside };
+}
+
+/** The choice `readerWalk` makes, as `chooseCandidate` answers it: `{ ok: true, candidate, … }` or `{ ok: false, reason }`. */
+export function chooseReader({ catalog, capacity, now, author, choose = chooseCandidate, launchable }) {
+  const walked = readerWalk({ catalog, capacity, now, author, choose, launch: (tool) => ({ ok: launchable ? launchable(tool) : true }), billing: () => ({ billing: 'plan', why: '' }) });
+  return walked.ok ? walked.answer : { ok: false, reason: walked.reason };
+}
+
+/** The unread record for the goal's current text (`hash`), or null: another text's record, or one that does not parse, is absent. */
+export function unreadFor(dir, read, hash) {
+  const record = jsonOrNull(read(join(dir, UNREAD_FILE)) ?? '');
+  return record && typeof record === 'object' && record.hash === hash ? record : null;
 }
 
 // -------------------------------------------------- the throwaway checkout
@@ -393,7 +436,9 @@ function liveLaunch(launch, now, alive, limit = LIMIT_MS) {
  * `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` — one reading (D8, D9). `refusal` is what `refusedMove`
  * says of the caller moving this goal from draft to build (null: the caller may); `declarations` is the goal's
  * repositories' declared areas (`{ declared }` or `{ error }`). Exit 0 for OK, 1 for not OK, no verdict or changed
- * files, 2 for a call refused, which writes and launches nothing.
+ * files, 2 for a call refused, which launches nothing, and 3 when no reader could run: nothing was read, and the call
+ * writes `.plan-review-unread.json` (the text's hash, the author, each candidate set aside with its reason) instead of a
+ * reading; the two readings per stay in draft are not consumed.
  */
 export async function planReviewCall({ target, goal, avoid, refusal, declarations, ctx, deps = {} }) {
   const { stdout, stderr, env, read, write } = ctx;
@@ -410,7 +455,7 @@ export async function planReviewCall({ target, goal, avoid, refusal, declaration
 
   return readerCall({ target, ctx, deps, policy: {
     kind: 'plan-review', role: PLAN_REVIEW_ROLE, launchFile: LAUNCH_FILE, reviewFile: REVIEW_TEXT_FILE,
-    limitMs: LIMIT_MS, limitWords: 'twenty minutes', invalidExit: 1,
+    limitMs: LIMIT_MS, limitWords: 'twenty minutes', invalidExit: 1, fallThrough: true, unreadFile: UNREAD_FILE,
     hash: goalHash(goal), round: state.readings.length + 1, author: authorOf(env, avoid),
     checkoutName: `mc-plan-review-${target.programme}-${target.goal}-r${state.readings.length + 1}`,
     identity: { MC_GOAL: target.name }, tokenEnv: 'MC_PLAN_REVIEW_TOKEN', runName: `goal:${target.name}`,
@@ -446,34 +491,53 @@ export async function readerCall({ target, ctx, deps = {}, policy }) {
   const exists = deps.exists ?? existsSync;
   if (exists(checkout)) return refuse(`${checkout} exists and this call did not make it — nothing is launched and nothing removed`);
 
-  // The model, the tool, the role and the billing route: what can fail without a launch, before one is written.
-  const candidateOf = () => {
-    if (deps.route) return deps.route('review');
-    const catalog = deps.catalog ?? readModels(env);
-    const capacity = deps.capacity ?? readCapacity({ root: runnerDir(env) });
-    return chooseReader({ catalog, capacity, now: now(), author, choose: deps.choose, launchable: (tool) => Boolean((deps.launch ?? resolveLaunch)(tool)?.ok) });
-  };
-  let route;
-  try { route = candidateOf(); } catch (error) { route = { ok: false, reason: error.message || String(error) }; }
-  if (!route?.ok || !route.candidate) { stderr.write(`mc: ${kind} ${target.name}: no review candidate can run — ${route?.reason || 'no answer'}\n`); return invalidExit; }
-  const candidate = route.candidate;
-  const launched = (deps.launch ?? resolveLaunch)(candidate.tool);
-  if (!launched?.ok) { stderr.write(`mc: ${kind} ${target.name}: ${launched?.hint || launched?.reason || `${candidate.tool} is unavailable`}\n`); return invalidExit; }
+  // The role, then the candidate: the walk (readerWalk) sets aside a candidate that cannot launch or bill and asks the
+  // next, the author's model last. Nothing is written before a candidate is chosen.
   const role = (deps.role ?? readCanonRole)(roleName);
   if (!role?.overlay) { stderr.write(`mc: ${kind} ${target.name}: the ${roleName} role is missing\n`); return invalidExit; }
-  const billing = (deps.billingRoute ?? billingRouteNow)(candidate.tool, { env, now: now(), route: { billing: route.billing, why: route.why } });
-  if (billing.billing === 'unavailable') { stderr.write(`mc: ${kind} ${target.name}: ${billing.why}\n`); return invalidExit; }
+  // A live launch refuses any claim; the reason is the claim's own words.
+  const runningRefusal = (existing) => {
+    if (existing.problem) return existing.problem;
+    if (existing.launch && liveLaunch(existing.launch, now(), alive, limitMs)) return `a reading of round ${existing.launch.round ?? '?'} is running (pid ${existing.launch.pid}, since ${existing.launch.start})`;
+    return null;
+  };
+  let walked;
+  try {
+    walked = readerWalk({
+      catalog: deps.catalog ?? readModels(env), capacity: deps.capacity ?? readCapacity({ root: runnerDir(env) }), now: now(), author, env,
+      choose: deps.route ? () => deps.route('review') : deps.choose, launch: deps.launch ?? resolveLaunch,
+      billing: deps.billingRoute ?? billingRouteNow, fallThrough: Boolean(policy.fallThrough),
+    });
+  } catch (error) { walked = { ok: false, reason: error.message || String(error), setAside: [] }; }
+  for (const one of walked.setAside ?? []) stderr.write(`mc: ${kind} ${target.name}: ${one.tool} ${one.model} set aside — ${one.reason}\n`);
+  if (!walked.ok) {
+    if (!policy.unreadFile) { stderr.write(`mc: ${kind} ${target.name}: ${walked.failed ? walked.reason : `no review candidate can run — ${walked.reason}`}\n`); return invalidExit; }
+    // No reader: nothing was read. The unread record is written under the claim, never beside a live launch.
+    const unread = { hash, author, set_aside: walked.setAside, reason: walked.reason ?? null, at: now().toISOString() };
+    const parked = lock(lockRoot, () => {
+      const refused = runningRefusal(readLaunch(target.dir, read, launchFile));
+      if (refused) return { refused };
+      write(join(target.dir, policy.unreadFile), `${JSON.stringify(unread, null, 2)}\n`);
+      return {};
+    }, { strict: true, name: `${kind}-claim` });
+    if (parked.refused) return refuse(parked.refused);
+    const reasons = [...walked.setAside.map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean);
+    stderr.write(`mc: ${kind} ${target.name}: no reader can run — nothing was read; the draft waits for a reader (${reasons.join('; ')})\n`);
+    return 3;
+  }
+  const candidate = walked.candidate;
+  const launched = walked.launched;
+  const billing = walked.billing;
 
   // The claim: one launch at a time, a dead or expired one closed as no reading.
   const token = (deps.token ?? (() => randomBytes(24).toString('hex')))();
   const started = now();
   const claimed = lock(lockRoot, () => {
-    const existing = readLaunch(target.dir, read, launchFile);
-    if (existing.problem) return { refused: existing.problem };
-    if (existing.launch && liveLaunch(existing.launch, now(), alive, limitMs)) return { refused: `a reading of round ${existing.launch.round ?? '?'} is running (pid ${existing.launch.pid}, since ${existing.launch.start})` };
-    const problem = policy.check?.();
+    const problem = runningRefusal(readLaunch(target.dir, read, launchFile)) ?? policy.check?.();
     if (problem) return { refused: problem };
     write(join(target.dir, launchFile), `${JSON.stringify({ binding: target.name, role: roleName, round, hash, token_sha256: sha256(token), pid, start: started.toISOString(), tool: candidate.tool, model: candidate.model, author }, null, 2)}\n`);
+    // A launch supersedes an earlier unread record: the draft is read, so it is no longer waiting for a reader.
+    if (policy.unreadFile) { try { (deps.remove ?? ctx.remove)(join(target.dir, policy.unreadFile)); } catch { /* none left */ } }
     return {};
   }, { strict: true, name: `${kind}-claim` });
   if (claimed.refused) return refuse(claimed.refused);

@@ -126,7 +126,8 @@ import { collectClaudeCapacity } from './claude-capacity.js';
 import { applyCollectedCapacity, applyRefusal, CAPACITY_POLL_MS, normaliseCapacity, observeClaudeStream, readCapacity, writeCapacity } from './model-capacity.js';
 import { chooseCandidate } from './model-choice.js';
 import { readModels } from './model-config.js';
-import { billingRoute, gatewayLaunch } from './billing-route.js';
+import { billingRoute, billingRouteNow, gatewayLaunch } from './billing-route.js';
+import { goalHash, readerWalk, UNREAD_FILE, unreadFor } from './plan-review.js';
 import { instructionsFor, readCanonRole, roleFileText, roleRecord, roleSourceOf } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { attachRepoDepsAsync } from './shared-deps.js';
@@ -1587,14 +1588,16 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
     const programmes = [...new Set(all.map(goal => goal.programme))];
     // Each programme's record, once for this pick (D10): who may start what is read where it is decided.
     const orders = new Map(programmes.map(programme => [programme, orderOf(programme)]));
-    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json'));
+    // One walk per goal for this pick (C5): a draft waiting for a plan reader is unavailable, as a held draft is.
+    const readerMemo = new Map();
+    const unavailable = goal => heldBy(goal) || decisionClaimed(join(goal.dir, '.decision.json')) || Boolean(readerWait(goal, readerMemo));
     const drafts = programmes
       .map(programme => nextDraft(all, programme, { order: orders.get(programme), unavailable })).filter(Boolean);
-    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !decisionClaimed(join(goal.dir, '.decision.json'))
+    const planning = drafts.filter(goal => names.includes(goal.repos[0]) && !unavailable(goal)
       && (orders.get(goal.programme).kind === 'stated'
         // Stated phases: this draft's own name and any plan session of the programme hold it; delivery sessions of other phases do not.
         ? !held.has(goalName(goal)) && ![...held].some(name => !name) && planSessions(goal.programme, all).size === 0 && !held.has(turnName(goal.programme))
-        : ![...held].some(name => !name || name === turnName(goal.programme) || name.startsWith(`goal:${goal.programme}/`))) && !heldBy(goal))
+        : ![...held].some(name => !name || name === turnName(goal.programme) || name.startsWith(`goal:${goal.programme}/`))))
       .map(goal => ({ name: goalName(goal), repo: goal.repos[0], kind: 'plan', variant: null, since: goal.log.at(-1)?.at ?? '', resumed: false, goal }));
     return [...planning, ...all
       .filter((goal) => goalSession(goal, merge) !== null
@@ -2729,6 +2732,34 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   const reviewWaits = new Map();
   /** The problems each programme's invalid record was last said with, so they are said once. */
   const invalidSaid = new Map();
+  /** The unread record each goal's wait was last said for (its `at`), so the wait is said once per record. */
+  const readerSaid = new Map();
+  /** The hash of the goal's text as it is on disk now (`goalHash`), the one an unread record names. */
+  function currentHash(dir) {
+    return goalHash(parseGoal(deps.read(join(dir, GOAL_FILE)) ?? ''));
+  }
+  /**
+   * Whether `goal` waits for a plan reader (C5): its unread record holds its current text's hash and the reader walk,
+   * asked with the record's author and the runner's catalog, capacity, launch and billing readers, finds no candidate.
+   * `memo` holds the walk per goal for one pick. Returns `{ at, reason }` or null; the wait is said once per record.
+   */
+  function readerWait(goal, memo = new Map()) {
+    if (memo.has(goal.dir)) return memo.get(goal.dir);
+    let wait = null;
+    const record = deps.read(join(goal.dir, UNREAD_FILE)) ? unreadFor(goal.dir, deps.read, currentHash(goal.dir)) : null;
+    if (record) {
+      const walked = readerWalk({ catalog: deps.catalog(), capacity: deps.capacity.read(), now: deps.now(), author: record.author ?? null, env: deps.env, launch: deps.launch, billing: billingRouteNow });
+      if (!walked.ok) {
+        wait = { at: String(record.at ?? ''), reason: [...walked.setAside.map((one) => `${one.tool} ${one.model}: ${one.reason}`), walked.reason].filter(Boolean).join('; ') };
+        if (readerSaid.get(goal.dir) !== wait.at) {
+          say(`${goalName(goal)}: waits for a plan reader — ${wait.reason}`);
+          readerSaid.set(goal.dir, wait.at);
+        }
+      }
+    }
+    memo.set(goal.dir, wait);
+    return wait;
+  }
   /** The hold each goal was last said to be held by (`by|at`), so a hold is said once. */
   const holdsSaid = new Map();
   /**
@@ -3439,7 +3470,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         const order = planning ? orderOf(goal.programme) : null;
         // Stated phases: the draft must still be the programme's next, and no other plan session of it may be on.
         const others = order?.kind === 'stated' ? [...planSessions(goal.programme, listed)].filter(other => other !== name) : [];
-        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')));
+        const unavailable = (item) => item.goal !== goal.goal && (heldBy(item) || decisionClaimed(join(item.dir, '.decision.json')) || Boolean(readerWait(item)));
         // The programme turn's claim or current record holds the programme: the drafts it creates are its own until it ends (D7).
         const turnHolds = planning && (claims.has(turnName(goal.programme)) || stepsHeld().some(item => item.name === turnName(goal.programme)));
         if (planning && (nextDraft(listed, goal.programme, { order, unavailable })?.goal !== goal.goal || others.length || turnHolds)) {
@@ -3505,7 +3536,8 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
       // A quota or API ending answers nothing about the goal: the next pick takes it again.
       else if (planning) {
         const now = stateNow(goal);
-        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready') {
+        // A draft with a current unread record waits for a reader, not for Martin (C5): no reader was asked, so nothing is wrong with it.
+        if (!read.quota && !read.interrupted && now.stage === 'draft' && now.status === 'ready' && !unreadFor(goal.dir, deps.read, currentHash(goal.dir))) {
           goalState(goal, name, { status: 'Martin' }, { comment: 'the plan session ended without completing the draft — inspect LOG.md and the session log before continuing planning' });
         }
       }

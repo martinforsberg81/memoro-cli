@@ -686,8 +686,9 @@ export function phaseStanding(own, order = SEQUENTIAL) {
  * `order` is the programme's (`phaseOrder`). For a programme whose phases are
  * stated the trigger reads each phase: a phase offers its first draft (oldest
  * created, then by name) when the phase is open, none of its goals is in build,
- * review or merge, and that draft is ready and not `unavailable(goal)` (held or
- * decision-claimed, told by the runner). The draft of the lowest phase that
+ * review or merge, and that draft is ready and not `unavailable(goal)` (told by the
+ * runner: held, decision-claimed, or waiting for a plan reader — a draft whose
+ * `.plan-review-unread.json` names its current text and no reader can run). The draft of the lowest phase that
  * offers one is the programme's. A goal that does not parse holds the whole
  * programme, as it does for any order. An invalid record offers none.
  */

@@ -24,8 +24,8 @@ import { DEFAULT_CATALOG } from '../../src/mc/model-config.js';
 import { applyObservation, normaliseCapacity, readCapacity } from '../../src/mc/model-capacity.js';
 import { runnerDir } from '../../src/mc/paths.js';
 import {
-  authorOf, chooseReader, goalHash, LAUNCH_FILE, LIMIT_MS, markerRecord, partsLacks, planReviewCall, readerPrompt, readingState, RECORDS_FILE,
-  REVIEW_TEXT_FILE, unsupportedClaims, verdictVerb, PROGRAMME_REVIEW_FILE, PROGRAMME_REVIEW_RECORD, PROGRAMME_REVIEW_LAUNCH, PROGRAMME_REVIEW_LIMIT_MS,
+  authorOf, chooseReader, goalHash, LAUNCH_FILE, LIMIT_MS, markerRecord, partsLacks, planReviewCall, readerPrompt, readerWalk, readingState, RECORDS_FILE,
+  REVIEW_TEXT_FILE, unreadFor, UNREAD_FILE, unsupportedClaims, verdictVerb, PROGRAMME_REVIEW_FILE, PROGRAMME_REVIEW_RECORD, PROGRAMME_REVIEW_LAUNCH, PROGRAMME_REVIEW_LIMIT_MS,
 } from '../../src/mc/plan-review.js';
 import { QUOTA_SLEEP_MS, TIMEOUT_EXIT } from '../../src/mc/run-plan.js';
 import { writeFileAtomic } from '../../src/mc/atomic-write.js';
@@ -198,8 +198,9 @@ test('plan review\'s removal of the author promotes no other candidate to first 
   assert.match(byOpus.why, /review candidate 1, the first choice/u);
 });
 
-test('the author is MC_TOOL and MC_MODEL, else --avoid, else unknown, and the call and the record say so', async (t) => {
-  assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, 'codex:gpt-6.1-sol'), { tool: 'claude', model: 'opus' });
+test('the author is --avoid when given, else MC_TOOL and MC_MODEL, else unknown, and the call and the record say so', async (t) => {
+  assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
+  assert.deepEqual(authorOf({ MC_TOOL: 'claude', MC_MODEL: 'opus' }, null), { tool: 'claude', model: 'opus' });
   assert.deepEqual(authorOf({ MC_TOOL: 'person' }, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
   assert.deepEqual(authorOf({}, 'codex:gpt-6.1-sol'), { tool: 'codex', model: 'gpt-6.1-sol' });
   assert.equal(authorOf({}, null), null);
@@ -218,6 +219,84 @@ test('the author is MC_TOOL and MC_MODEL, else --avoid, else unknown, and the ca
   const bad = await unknown.call({ avoid: 'opus' });
   assert.equal(bad.code, 2);
   assert.match(bad.err, /--avoid is <tool>:<model>/u);
+});
+
+test('falls through: a candidate that cannot launch, or whose billing route is unavailable, is set aside with its reason and the next one reads; the author is last', async (t) => {
+  const f = setup(t);
+  const readBy = async (extra, env = f.baseEnv) => {
+    let model = null;
+    const result = await f.call({ env, extra: { ...extra, session: async (spawned) => { model = `${spawned.env.MC_TOOL}:${spawned.env.MC_MODEL}`; return DONE; } } });
+    return { ...result, model };
+  };
+  const noCodexLaunch = await readBy({ launch: (tool) => (tool === 'codex' ? { ok: false, reason: 'no adapter' } : f.deps.launch()) });
+  assert.equal(noCodexLaunch.model, 'claude:opus', 'the author\'s model reads when the other cannot launch');
+  assert.match(noCodexLaunch.err, /codex gpt-6\.1-sol set aside — no adapter/u);
+  assert.match(noCodexLaunch.out, /on claude opus — the author is claude opus \(no other model could run\)/u);
+  const noCodexRoute = await readBy({ billingRoute: (tool) => (tool === 'codex' ? { billing: 'unavailable', why: 'no API route' } : { billing: 'plan' }) });
+  assert.equal(noCodexRoute.model, 'claude:opus');
+  assert.match(noCodexRoute.err, /codex gpt-6\.1-sol set aside — no API route/u);
+  const onBoth = await readBy({}, { ...f.baseEnv, MC_TOOL: 'codex', MC_MODEL: 'gpt-6.1-sol' });
+  assert.equal(onBoth.model, 'claude:opus', 'the caller\'s model is the author, so it is last and the other reads');
+});
+
+test('falls through: once the first choice is set aside, the list is asked with no first choice, so no other candidate is promoted', () => {
+  const calls = [];
+  const choose = (args) => { calls.push(args); return { ok: true, candidate: args.catalog.review[0], why: '' }; };
+  const walked = readerWalk({
+    catalog: catalogOf([SOL, OPUS]), capacity: capacityOf(0.5, 0.5), now: NOW, author: null, choose,
+    launch: () => ({ ok: true }), billing: (tool) => ({ billing: tool === 'codex' ? 'unavailable' : 'plan', why: 'no API route' }),
+  });
+  assert.equal(calls[0].first, SOL, 'the first choice is asked first');
+  assert.equal(calls[1].first, null, 'set aside: no first choice');
+  assert.deepEqual(calls[1].catalog.review, [OPUS]);
+  assert.equal(walked.ok, true);
+  assert.equal(walked.candidate, OPUS);
+  assert.deepEqual(walked.setAside, [{ tool: 'codex', model: 'gpt-6.1-sol', reason: 'no API route' }]);
+});
+
+test('avoid names the author whoever calls: with the caller on codex and --avoid claude:opus, codex reads and the record names claude opus', async (t) => {
+  const f = setup(t);
+  let model = null;
+  const result = await f.call({
+    env: { ...f.baseEnv, MC_TOOL: 'codex', MC_MODEL: 'gpt-6.1-sol' }, avoid: 'claude:opus',
+    extra: { session: async (spawned) => { model = `${spawned.env.MC_TOOL}:${spawned.env.MC_MODEL}`; return f.reads('ok')(spawned); } },
+  });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(model, 'codex:gpt-6.1-sol');
+  assert.deepEqual(f.records()[0].author, { tool: 'claude', model: 'opus' });
+});
+
+test('no reader: exit 3 with nothing read, the unread record for the current text, no launch record and no reading; a later launch removes the record', async (t) => {
+  const f = setup(t);
+  let spawned = false;
+  const none = await f.call({ extra: { launch: () => ({ ok: false, reason: 'no adapter' }), session: async () => { spawned = true; return DONE; } } });
+  assert.equal(none.code, 3, none.err);
+  assert.equal(spawned, false, 'nothing is read');
+  assert.match(none.err, /no reader can run — nothing was read; the draft waits for a reader \(codex gpt-6\.1-sol: no adapter; claude opus: no adapter/u);
+  assert.equal(existsSync(join(f.dir, LAUNCH_FILE)), false, 'no launch record');
+  assert.equal(existsSync(join(f.dir, RECORDS_FILE)), false, 'no reading is stored');
+  assert.equal(existsSync(f.checkoutPath()), false, 'no checkout');
+  assert.equal(f.log().length, 1, 'LOG.md unchanged');
+  const unread = JSON.parse(f.files()[UNREAD_FILE]);
+  assert.deepEqual(Object.keys(unread).sort(), ['at', 'author', 'hash', 'reason', 'set_aside']);
+  assert.equal(unread.hash, goalHash(f.goal));
+  assert.equal(unread.at, NOW.toISOString());
+  assert.deepEqual(unread.author, { tool: 'claude', model: 'opus' });
+  assert.deepEqual(unread.set_aside.map(({ tool, model, reason }) => [tool, model, reason]), [['codex', 'gpt-6.1-sol', 'no adapter'], ['claude', 'opus', 'no adapter']]);
+  assert.equal(unreadFor(f.dir, readTextOrNull, goalHash(f.goal))?.hash, goalHash(f.goal), 'the record names the current text');
+  assert.equal(unreadFor(f.dir, readTextOrNull, 'another text'), null, 'and no other text');
+  const later = await f.call({ extra: { session: f.reads('ok') } });
+  assert.equal(later.code, 0, later.err);
+  assert.equal(existsSync(join(f.dir, UNREAD_FILE)), false, 'the launch removed the unread record');
+});
+
+test('no reader while a reading runs: exit 2 naming the running launch, and no unread record is written', async (t) => {
+  const f = setup(t);
+  writeFileSync(join(f.dir, LAUNCH_FILE), `${JSON.stringify({ binding: 'mc/ex', role: 'plan-review', round: 1, hash: goalHash(f.goal), token_sha256: sha256('x'), pid: 4141, start: NOW.toISOString(), tool: 'codex', model: 'gpt-6.1-sol', author: null })}\n`);
+  const result = await f.call({ extra: { launch: () => ({ ok: false, reason: 'no adapter' }) } });
+  assert.equal(result.code, 2, result.err);
+  assert.match(result.err, /a reading of round 1 is running \(pid 4141/u);
+  assert.equal(existsSync(join(f.dir, UNREAD_FILE)), false);
 });
 
 test('no verdict, a timeout, a failed session and a failed checkout leave no reading, no launch record and no checkout, exit 1; a turn that ran still writes its run row', async (t) => {
