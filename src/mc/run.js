@@ -75,7 +75,7 @@ import { REVIEW_CLASS } from './plan-schema.js';
 import { addBranchWorktree, addGoalWorktree, appendEntry, archiveDirIn, FINISHED, GOAL_FILE, goalBranch, goalOfRecord, goalReferences, goalSession, MEND_ROLE, NO_PROGRESS_LIMIT, NO_PROGRESS_SESSION, NO_PROGRESS_STOP, noProgressEntry, noProgressStreak, NOT_COUNTED, WAITS_FOR_MAIN, PLAN_ROLE, PROGRESS_AGAIN, nextDraft, mergeAnswered, mergeFailures, prsLanded, prState, goalName, renderGoalText, inStage, lastBuildEntry, LOG_FILE, logStamp, parseGoal, parseLog, programsGoals, phaseOpen, programmeOrder, readHold, remakeUnbuiltBranches, REVIEW_DIED_TEXT, REVIEW_ROLE, reviewDiedBefore, setGoalState, stageSince, stageWords } from './goals.js';
 import { phaseGoals } from './goal-convert.js';
 import { realLock } from './runner-lock.js';
-import { drainingOwners, drainState, drainWaiting, handOver, mcCheckout, readRunner } from './run-control.js';
+import { drainingOwners, drainState, drainWaiting, fullRunWords, handOver, mcCheckout, readRunner } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, unreadableSections } from './helper-collect.js';
 import { describeTurn, drainIntake, runHelperTurn } from './helper-turn.js';
 import { loggedTick } from './nightly-loop.js';
@@ -1213,13 +1213,21 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
    * started one, as the record of what the pass did; nothing reads it to decide
    * the next pass (`fullRunDue` decides, per repository). `mc run stop` and UPDATE
    * are asked before each start, and the chore loop ends the runs in flight
-   * (`settleFullRuns`) before the runner leaves, so no suite outlives it.
+   * (`settleFullRuns`) on STOP. UPDATE does not end a run this runner is
+   * measuring: the chore loop waits for it as it waits for the sessions it holds
+   * (`fullRunsMeasuring`), and only a run that waits for another or follows it is
+   * dropped, by the handover signal (`fireHandover`).
    *
    * It is a meter. It commits nothing, pushes nothing, writes nothing inside a
    * repository, and takes no lock a merge round waits for.
    */
   const fullRuns = new Map();
+  // Two signals (mc-tests/full-run-survives-handover, D6). The stop signal
+  // reaches a measuring round and is fired by STOP alone; the handover signal
+  // reaches the runs that only wait for another run or follow it, and is fired
+  // by the handover and by STOP.
   const fullRunsAbort = new AbortController();
+  const handoverAbort = new AbortController();
   async function runNightly() {
     if (stopRequested() || updateRequested()) return null;
     // No once-a-day gate (Martin, 2026-11-15): every pass asks `fullRunDue` of
@@ -1235,6 +1243,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
         shouldStop: () => stopRequested() || updateRequested(),
         running: fullRuns,
         signal: fullRunsAbort.signal,
+        handover: handoverAbort.signal,
       });
       const started = tick?.started || [];
       if (started.length) {
@@ -1314,8 +1323,27 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   async function settleFullRuns() {
     if (!fullRuns.size) return;
     say(`full run: ending ${fullRuns.size} run${fullRuns.size === 1 ? '' : 's'} in flight before the runner leaves`);
+    handoverAbort.abort(new Error('the runner is leaving'));
     fullRunsAbort.abort(new Error('the runner is leaving'));
     await Promise.allSettled([...fullRuns.values()]);
+  }
+
+  /**
+   * The handover has started: a run that only waits for another or follows it
+   * is dropped at once, writing nothing; a run this runner measures goes on and
+   * is finished by this runner (`fullRunsMeasuring`).
+   */
+  function fireHandover() {
+    handoverAbort.abort(new Error('the runner has handed over'));
+  }
+
+  /**
+   * The full runs this runner is measuring — the ones it holds as it holds a
+   * session: repository, commit and since when, as the run's claim says.
+   */
+  function fullRunsMeasuring() {
+    return [...fullRuns.values()].filter((run) => run.measuring)
+      .map((run) => ({ repo: run.repo, sha: run.sha || null, since: run.since || null }));
   }
 
   /**
@@ -3955,7 +3983,7 @@ export function createRunner({ merge = true, deps = realDeps() } = {}) {
   };
 
   return {
-    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, askGithub, stopRequested, startCapacityTicker,
+    paths, repos, say, pass, nextWork, decisionOne, mainMendTicket, deployMendTicket, settleDeployMends, claims, chores, diskTick, disk, runHelperDay, runIntakeDrain, runDeskPreparation, runDepsDaily, runTidyDaily, runNightly, runDeployCheck, runTakeBackFallback, settleFullRuns, fireHandover, fullRunsMeasuring, askGithub, stopRequested, startCapacityTicker,
     updateRequested, holdUpdate, replaced, stillHeld, stepsHeld, laneHolder, pid, generation: () => marked?.generation, markRunner, dropPredecessor, clearRunner, retireOwner,
   };
 }
@@ -4165,6 +4193,14 @@ export async function runLoop({
   let drainMark = null;
   // The sessions this runner holds: its own lane files, not its successor's.
   const ownInFlight = () => runner.stepsHeld().filter((held) => held.pid === runner.pid);
+  // The full runs it measures: work it holds as it holds a session.
+  const runs = () => runner.fullRunsMeasuring?.() || [];
+  const holdingWords = () => {
+    const parts = [];
+    if (ownInFlight().length || !runs().length) parts.push(`${ownInFlight().length} session(s) in flight`);
+    if (runs().length) parts.push(fullRunWords(runs()));
+    return parts.join(' and ');
+  };
   // `mc run --update`, once per runner however many lanes read it: the first
   // loop to see UPDATE starts the handover and every other one awaits the
   // same answer. From that moment the UPDATE is held (`holdUpdate`), so no
@@ -4180,15 +4216,16 @@ export async function runLoop({
     const by = runner.replaced();
     if (by) {
       stopCapacityTicker();
+      runner.fireHandover?.();
       handedOver = true;
       drainMark = deps.now().getTime();
-      runner.say(`taken over by pid ${by.pid} — finishing ${ownInFlight().length} session(s) in flight, taking nothing new`);
+      runner.say(`taken over by pid ${by.pid} — finishing ${holdingWords()}, taking nothing new`);
       return true;
     }
     const handed = await (deps.handOver || handOver)({
-      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, predecessorGeneration: runner.generation(), finishing: ownInFlight().length,
+      paths: runner.paths, deps, say: runner.say, predecessor: runner.pid, predecessorGeneration: runner.generation(), finishing: ownInFlight().length, runs: runs(),
     });
-    if (handed.ok) { stopCapacityTicker(); handedOver = true; drainMark = deps.now().getTime(); return true; }
+    if (handed.ok) { stopCapacityTicker(); runner.fireHandover?.(); handedOver = true; drainMark = deps.now().getTime(); return true; }
     runner.holdUpdate(false);
     deps.remove(runner.paths.update);
     handing = null;
@@ -4269,11 +4306,11 @@ export async function runLoop({
         if (!handedOver) return;
         const state = drainState({ paths: drainPaths, read: deps.read, list: deps.list, now: deps.now(), alive: isAlive });
         const own = state.inFlight.filter((held) => held.pid === runner.pid);
-        if (own.length === 0) return;
+        if (own.length === 0 && runs().length === 0) return;
         const now = deps.now().getTime();
         if (now - drainMark < DRAIN_TICK_MS) return;
         drainMark = now;
-        runner.say(`update: pid ${runner.pid} still ${drainWaiting({ ...state, inFlight: own })}`);
+        runner.say(`update: pid ${runner.pid} still ${drainWaiting({ ...state, inFlight: own, runs: runs() })}`);
       };
       const lane = async (index) => {
         // A lane at or above the total as `lanes.json` says it now. Read only
@@ -4336,14 +4373,17 @@ export async function runLoop({
       // handover it is the ticker while the lanes sit in their sessions.
       const choreLoop = async () => {
         for (;;) {
-          if (runner.stopRequested()) { await runner.settleFullRuns?.(); runner.say('chores: STOP — exiting'); return {}; }
+          if (runner.stopRequested()) { await runner.settleFullRuns?.(); runner.say('chores: STOP — exiting'); return { stop: true }; }
           if (runner.updateRequested()) {
             if (!(await update())) continue;
-            await runner.settleFullRuns?.();
-            while (ownInFlight().length > 0 && !runner.stopRequested()) {
+            // A full run this runner measures is finished like a session; one
+            // that only waits for another is dropped. STOP ends them all.
+            runner.fireHandover?.();
+            while ((ownInFlight().length > 0 || runs().length > 0) && !runner.stopRequested()) {
               drainTick();
               await deps.sleep(UPDATE_POLL_MS);
             }
+            if (runner.stopRequested()) { await runner.settleFullRuns?.(); runner.say('chores: STOP — exiting'); return { stop: true }; }
             return {};
           }
           await runner.chores();

@@ -83,6 +83,7 @@ import { duration } from './page-grid.js';
 import { readLiveVersion } from './live-version.js';
 import { loadSaved } from './deps.js';
 import { nightlyReading } from './nightly-history.js';
+import { liveClaims } from './full-run-claim.js';
 import { watcherState } from './repo-watch.js';
 import { billingStatus } from './billing-route.js';
 import { readCapacity } from './model-capacity.js';
@@ -1124,7 +1125,7 @@ export function mcSection({
     // Only while mc's hook registration in ~/.claude/settings.json has drifted.
     ...(hooks ? { hooks } : {}),
     pid: process?.alive && Number.isInteger(pid) ? pid : null,
-    ...(predecessor ? { predecessor: { pid: predecessor.pid, steps: predecessor.steps || [] } } : {}),
+    ...(predecessor ? { predecessor: { pid: predecessor.pid, steps: predecessor.steps || [], runs: predecessor.runs || [] } } : {}),
     // Only while a process is behind; otherwise the line is what it was.
     ...(behindCheckout.length ? { behind_checkout: behindCheckout } : {}),
     update_requested: updateText == null ? null : {
@@ -1811,6 +1812,10 @@ export async function collectPage({
         ? {
           pid: runnerFile.predecessor.pid,
           steps: runner.sessions.filter((session) => session.pid === runnerFile.predecessor.pid).map((session) => session.name).filter(Boolean),
+          // The full runs it measures, from the claim file it wrote: a
+          // predecessor that holds only a run has no lane file.
+          runs: liveClaims({ root: home, alive }).filter((claim) => claim.pid === runnerFile.predecessor.pid)
+            .map((claim) => ({ repo: claim.repo, sha: claim.sha || null, since: claim.started || null })),
         }
         : null,
       ...mcReading(checkout, runnerFile?.commit ?? null, git),

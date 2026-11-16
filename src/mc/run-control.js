@@ -916,7 +916,20 @@ function progress(word, requested, sinceSeconds, state, waiting) {
  */
 export function drainWaiting(state) {
   const steps = state?.inFlight || [];
+  const runs = state?.runs || [];
+  if (steps.length && runs.length) return `${waitingOn(steps)} and ${fullRunWords(runs)}`;
+  if (runs.length) return `waiting on ${fullRunWords(runs)}`;
   return steps.length ? waitingOn(steps) : 'nothing in flight, the handover comes at the next pick';
+}
+
+/**
+ * The full runs a handed-over runner is finishing, in words — repository,
+ * short commit, since when: `a full run of memoro-cli at 1a2b3c4 since
+ * 2026-11-16T10:00:00.000Z`. One run is one phrase; several are joined with
+ * `and`.
+ */
+export function fullRunWords(runs) {
+  return (runs || []).map((run) => `a full run of ${run.repo} at ${run.sha ? String(run.sha).slice(0, 7) : 'main'}${run.since ? ` since ${run.since}` : ''}`).join(' and ');
 }
 
 function waitingOn(steps) {
@@ -1087,7 +1100,7 @@ export function mcCheckout({ exists = existsSync } = {}) {
  * tree. Whatever the git half did, the say() line states what was actually
  * measured: the sha before and the sha after.
  */
-export async function handOver({ paths, deps, say, checkout = null, predecessor = null, predecessorGeneration = null, finishing = null }) {
+export async function handOver({ paths, deps, say, checkout = null, predecessor = null, predecessorGeneration = null, finishing = null, runs = [] }) {
   deps.remove(paths.update);
   const dir = checkout ?? mcCheckout({ exists: deps.exists });
   say(dir ? `update: ${fastForward(dir, deps)}` : 'update: mc is not running from a git checkout — nothing to fast-forward');
@@ -1160,9 +1173,15 @@ export async function handOver({ paths, deps, say, checkout = null, predecessor 
       predecessor: { pid: predecessor, started: mine?.started || null },
     }, null, 2)}\n`);
   }
-  say(finishing == null
+  // What it still holds: sessions in flight, and the full runs it measures.
+  // A runner holding only a run does not say "finishing 0 step(s)".
+  const holding = [
+    ...(finishing || !runs.length ? [`${finishing} step(s) in flight`] : []),
+    ...(runs.length ? [fullRunWords(runs)] : []),
+  ].join(' and ');
+  say(finishing == null && !runs.length
     ? `update: handed over to pid ${pid} — this runner is done`
-    : `update: handed over to pid ${pid} — finishing ${finishing} step(s) in flight, taking nothing new`);
+    : `update: handed over to pid ${pid} — finishing ${holding}, taking nothing new`);
   return { ok: true, pid };
 }
 

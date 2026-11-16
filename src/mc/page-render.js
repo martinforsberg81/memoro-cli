@@ -655,6 +655,21 @@ function unassignedLines(lines, c, wide, programmes, expand, runnerSessions = []
  * It replaced the line about how old the PR cache is, which was the last thing
  * on the page every time and never the thing anybody came for.
  */
+/**
+ * What the runner a handover replaced is finishing: its sessions, and the full
+ * runs it measures (repository, short commit, since when). A runner that holds
+ * only a run does not say it finishes 0 sessions.
+ */
+function predecessorText(predecessor) {
+  const steps = predecessor.steps || [];
+  const runs = predecessor.runs || [];
+  const sessions = `${steps.length} session${steps.length === 1 ? '' : 's'}${steps.length ? ` (${steps.join(', ')})` : ''}`;
+  // Minutes are enough on a line that has to fit: `2026-11-16 10:00`.
+  const full = runs.map((run) => `a full run of ${run.repo} at ${run.sha ? String(run.sha).slice(0, 7) : 'main'}${run.since ? ` since ${String(run.since).slice(0, 16).replace('T', ' ')}` : ''}`);
+  const parts = [...(steps.length || !runs.length ? [sessions] : []), ...full];
+  return `pid ${predecessor.pid} finishing ${parts.join(' and ')}`;
+}
+
 function mcLine(lines, c, wide, mc, caches, version) {
   const info = mc || {};
   const asked = info.update_requested;
@@ -681,9 +696,7 @@ function mcLine(lines, c, wide, mc, caches, version) {
     { text: info.up_seconds == null ? 'runner not running' : `runner up ${duration(info.up_seconds)}`, styles: ['grey'] },
     { text: info.commit ? `on ${info.commit}` : '', styles: ['grey'] },
     {
-      text: info.predecessor
-        ? `pid ${info.predecessor.pid} finishing ${info.predecessor.steps.length} session${info.predecessor.steps.length === 1 ? '' : 's'}${info.predecessor.steps.length ? ` (${info.predecessor.steps.join(', ')})` : ''}`
-        : '',
+      text: info.predecessor ? predecessorText(info.predecessor) : '',
       styles: ['grey'],
     },
     ...(info.behind_checkout || []).map((p) => ({ text: `${p.name} pid ${p.pid} on ${p.commit} · checkout ${info.head}`, styles: ['yellow'] })),
