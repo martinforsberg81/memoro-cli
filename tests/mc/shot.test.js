@@ -443,6 +443,8 @@ describe('mc shot — design sets', () => {
     const requests = [];
     let ensures = 0;
     const dir = join(fx.home, 'designs');
+    writeFileSync(join(fx.home, 'probe.js'), 'document.title');
+    writeFileSync(join(fx.home, 'rows.csv'), 'a,b');
     const deps = {
       ensureAppServer: async () => { ensures += 1; return { ok: true, baseUrl: 'http://127.0.0.1:8787', server: {}, timing: { slot_wait_ms: 0, server_ms: 0 } }; },
       runCapture: ({ request }) => {
@@ -452,15 +454,29 @@ describe('mc shot — design sets', () => {
         return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
       },
     };
-    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--click', '.x', '--fill', 'input=hello', '--press', 'Enter'], fx, deps);
+    const result = await shot(['dev', 'home', '--set', dir, '--state', 'filled', '--account', 'seeded',
+      '--el', '.panel', '--full', '--locale', 'sv-SE', '--safe-area', '1,2,3,4', '--scroll', '@end',
+      '--measure', '.panel', '--timeout', '45', '--click', '.x', '--context-click', '.y',
+      '--long-press', '.z@800', '--fill', 'input=hello', '--wait-for', '.ready', '--eval', '1+1',
+      '--eval-file', 'probe.js', '--upload', 'input.file=rows.csv', '--press', 'Enter'], fx, deps);
     assert.equal(result.code, 1);
     assert.equal(ensures, 1);
     assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out.split('/').at(-1)]), [
       ['desktop', 'light', 'filled-desktop-light.png'], ['desktop', 'dark', 'filled-desktop-dark.png'], ['iphone', 'light', 'filled-phone-light.png'],
     ]);
     assert.deepEqual(requests.map((r) => r.actions), Array(3).fill([
-      { kind: 'click', selector: '.x' }, { kind: 'fill', selector: 'input', text: 'hello' }, { kind: 'press', key: 'Enter' },
+      { kind: 'click', selector: '.x' }, { kind: 'context-click', selector: '.y' },
+      { kind: 'long-press', selector: '.z', ms: 800 }, { kind: 'fill', selector: 'input', text: 'hello' },
+      { kind: 'wait-for', selector: '.ready' }, { kind: 'eval', script: '1+1' },
+      { kind: 'eval', script: 'document.title' }, { kind: 'upload', selector: 'input.file', file: join(fx.home, 'rows.csv') },
+      { kind: 'press', key: 'Enter' },
     ]));
+    for (const request of requests) {
+      assert.deepEqual({ account: request.account, target: request.target, element: request.element, full: request.full_page,
+        locale: request.locale, safe: request.safe_area, scroll: request.scroll, measure: request.measure, timeout: request.timeout_ms },
+      { account: 'seeded', target: { name: 'home' }, element: '.panel', full: true,
+        locale: 'sv-SE', safe: { top: 1, right: 2, bottom: 3, left: 4 }, scroll: { selector: null, to: 'end' }, measure: '.panel', timeout: 45000 });
+    }
     assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out));
     assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)));
     assert.equal(existsSync(requests[2].out), false);
