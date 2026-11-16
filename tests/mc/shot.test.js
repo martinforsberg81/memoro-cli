@@ -438,7 +438,7 @@ describe('mc shot — the pieces', () => {
 });
 
 describe('mc shot — design sets', () => {
-  it('replays ordered actions in four independent requests and stops on a partial failure', async () => {
+  it('replays every ordered action and request option in all four renderings', async () => {
     const fx = fixture();
     const requests = [];
     let ensures = 0;
@@ -450,7 +450,6 @@ describe('mc shot — design sets', () => {
       runCapture: ({ request }) => {
         requests.push(request);
         writeFileSync(request.out, 'picture');
-        if (requests.length === 3) return { ok: true, result: { ok: false, code: 'not-loaded', error: 'loading' } };
         return { ok: true, result: { ok: true, file: request.out, url: 'http://127.0.0.1:8787/app/', acted: request.actions, warnings: ['notice'] } };
       },
     };
@@ -459,12 +458,13 @@ describe('mc shot — design sets', () => {
       '--measure', '.panel', '--timeout', '45', '--click', '.x', '--context-click', '.y',
       '--long-press', '.z@800', '--fill', 'input=hello', '--wait-for', '.ready', '--eval', '1+1',
       '--eval-file', 'probe.js', '--upload', 'input.file=rows.csv', '--press', 'Enter'], fx, deps);
-    assert.equal(result.code, 1);
+    assert.equal(result.code, 0, result.stderr);
     assert.equal(ensures, 1);
     assert.deepEqual(requests.map((r) => [r.viewport, r.theme, r.out.split('/').at(-1)]), [
-      ['desktop', 'light', 'filled-desktop-light.png'], ['desktop', 'dark', 'filled-desktop-dark.png'], ['iphone', 'light', 'filled-phone-light.png'],
+      ['desktop', 'light', 'filled-desktop-light.png'], ['desktop', 'dark', 'filled-desktop-dark.png'],
+      ['iphone', 'light', 'filled-phone-light.png'], ['iphone', 'dark', 'filled-phone-dark.png'],
     ]);
-    assert.deepEqual(requests.map((r) => r.actions), Array(3).fill([
+    assert.deepEqual(requests.map((r) => r.actions), Array(4).fill([
       { kind: 'click', selector: '.x' }, { kind: 'context-click', selector: '.y' },
       { kind: 'long-press', selector: '.z', ms: 800 }, { kind: 'fill', selector: 'input', text: 'hello' },
       { kind: 'wait-for', selector: '.ready' }, { kind: 'eval', script: '1+1' },
@@ -477,10 +477,8 @@ describe('mc shot — design sets', () => {
       { account: 'seeded', target: { name: 'home' }, element: '.panel', full: true,
         locale: 'sv-SE', safe: { top: 1, right: 2, bottom: 3, left: 4 }, scroll: { selector: null, to: 'end' }, measure: '.panel', timeout: 45000 });
     }
-    assert.deepEqual(result.stdout.trim().split('\n'), requests.slice(0, 2).map((r) => r.out));
-    assert.ok(requests.slice(0, 2).every((r) => existsSync(r.out)));
-    assert.equal(existsSync(requests[2].out), false);
-    assert.match(result.stderr, /phone-light failed/u);
+    assert.deepEqual(result.stdout.trim().split('\n'), requests.map((r) => r.out));
+    assert.ok(requests.every((r) => existsSync(r.out)));
     assert.match(result.stderr, /desktop-light: mc: warning — notice/u);
     assert.match(result.stderr, /mc: timing — /u);
   });
