@@ -102,7 +102,7 @@ its check, and each worktree's state.
   goals or sign. When the programme has SIGNED.md, goal plan review also asks
   whether the goal adds a solution, design or decision absent from its signed
   part: yes is NOT OK.
-- **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs an OK reading of the current text (or two readings and `--reason`). Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
+- **Plan review.** `mc goal plan-review <p>/<g> [--avoid <tool>:<model>]` has a fresh session read a `draft` goal and write `PLAN-REVIEW.md`; `mc goal stage build` needs no reading: the reading is advice. Its last act is `mc goal plan-review <p>/<g> verdict ok|not-ok`; see writing-a-goal.
 - **Programme sign-off.** `new` refuses draft/dropped records (exit 1), naming
   `mc programs show <programme>`. Headless creation without a record refuses
   (exit 1): a goal there is made at the desk. Both happen before fetch/write.

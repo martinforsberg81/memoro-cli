@@ -23,7 +23,7 @@ names is reviewed, what it does not name is not. [The parts](references/goal-des
    `draft` against its questions and writes `PLAN-REVIEW.md` (exit 0 for OK, 1 for not OK, 3 when no reader could run and nothing was read). It takes up to 20 minutes: a session whose
    tool call is shorter runs it in the background and waits. An interactive session passes `--avoid <tool>:<model>` with its own model. `--avoid` names the draft's author, whoever calls.
    Repair what it finds yourself and read again; after two rounds decide, and move with `mc goal stage <p>/<g> build --reason "…"`.
-   `mc goal stage <p>/<g> build` moves a goal that is complete and has an OK reading of its current text; any change to the text asks for a new one.
+   `mc goal stage <p>/<g> build` moves a goal that is complete. No reading is needed for the move (Martin, 2026-11-16): a plan review is advice, and nothing reads its verdict.
 
 Work that is several pieces in order is several goals in phases. In a programme whose record states its phases a goal starts when every goal of each
 phase its own is stated to wait for is done or dropped (`mc programs after`); in every other programme, when every goal in a lower phase is. `mc goal phase

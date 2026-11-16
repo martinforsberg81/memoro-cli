@@ -28,7 +28,7 @@
  *                                  one session's entry appended to LOG.md; with --stage or --status GOAL.json's is set too;
  *                                  a --*-file is read verbatim (`-` is stdin) and takes the place of its inline flag
  *   mc goal stage [<programme>/<goal>] <stage> [--reason "…"]   mc goal log --stage <stage> --comment <reason>;
- *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`) and have an OK plan review of its current text, or two readings and --reason (a goal that names its part of an open, signed programme's SIGNED.md needs no plan review);
+ *                                  out of draft (not to dropped) the goal must be complete (version 2: `partsLacks`); no plan review is asked for;
  *                                  going to build, a worktree whose branch has no commits of its own is remade from origin/main;
  *                                  merge executes the session decision for all registered pull requests
  *   mc goal plan-review <programme>/<goal> [--avoid <tool>:<model>]   one fresh session reads a goal in draft before it is built (`plan-review.js`); exit 0 for OK, 1 for not OK, no verdict or changed files, 2 for a call refused
@@ -318,7 +318,7 @@ function newGoal(args, flags, ctx) {
   if (flags.structure !== null && !['1', '2'].includes(flags.structure)) { stderr.write(`mc: --structure is 1 or 2, not ${flags.structure}\n`); return 2; }
   const structure = flags.structure === '1' ? 1 : 2;
   const stage = flags.stage ?? 'draft';
-  if (stage === 'build') { stderr.write('mc: a new goal is written in draft — write it in draft and move it with mc goal stage <programme>/<goal> build after its plan review (mc goal plan-review)\n'); return 2; }
+  if (stage === 'build') { stderr.write('mc: a new goal is written in draft — write it in draft and move it with mc goal stage <programme>/<goal> build\n'); return 2; }
   if (stage !== 'draft') { stderr.write(`mc: --stage is draft for a new goal, not ${stage}\n`); return 2; }
   const phase = flags.phase === null ? 1 : Number(flags.phase);
   if (!Number.isInteger(phase) || phase < 1) { stderr.write(`mc: --phase is a whole number from 1, not ${flags.phase}\n`); return 2; }
