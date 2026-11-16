@@ -107,7 +107,12 @@ export function bootUnit({ root, execPath, entry, env = {} }) {
     PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
     MC_HOME: env.MC_HOME || join(env.HOME || homedir(), '.memoro', 'mc'),
     MC_WORK_ROOT: id.canonical,
-    MC_REPOS_HOME: env.MC_REPOS_HOME || join(id.canonical, 'repos'),
+    // Only a value the starting environment set. `MC_REPOS_HOME` moves the
+    // primary checkouts, the bare repositories and `self/` together
+    // (paths.js), so inventing `<root>/repos` here put `self/` under
+    // `repos/`, and every session of a boot-started runner found no shared
+    // checkout. Unset, the defaults resolve both under the work root.
+    ...(env.MC_REPOS_HOME ? { MC_REPOS_HOME: env.MC_REPOS_HOME } : {}),
   };
   const environment = Object.entries(values)
     .map(([key, value]) => `Environment=${key}=${systemdQuote(key === 'PATH' ? String(value).split(':').map((part) => resolve(part || '.')).join(':') : resolve(value), { exec: false })}`);

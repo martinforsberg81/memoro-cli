@@ -23,8 +23,17 @@ describe('Linux runner systemd adapter', () => {
     assert.match(generated.text, /Environment=HOME="\/home\/test user"/u);
     assert.match(generated.text, /Environment=PATH="\/bin:\/opt\/tool \$dir"/u);
     assert.ok(generated.text.includes(`Environment=MC_WORK_ROOT=${systemdQuote(root, { exec: false })}`));
+    assert.match(generated.text, /Environment=MC_REPOS_HOME="\/tmp\/repos"/u);
     assert.doesNotMatch(generated.text, /TOKEN|MC_EMIT_SHELL_DIRECTIVES|MC_RUN_SUCCESSOR_OF|ExecStop|PIDFile|KeepAlive/u);
     assert.notEqual(rootIdentity('/tmp/root-one').unit, rootIdentity('/tmp/root-two').unit);
+  });
+
+  it('persists no MC_REPOS_HOME the starting environment did not set', () => {
+    // `<root>/repos` as MC_REPOS_HOME would put self/ under repos/ (paths.js
+    // selfHome), so a boot-started runner's sessions would find no shared checkout.
+    const generated = bootUnit({ root: '/tmp/mc', execPath: '/node', entry: '/mc', env: { HOME: '/home/u', PATH: '/bin' } });
+    assert.doesNotMatch(generated.text, /MC_REPOS_HOME/u);
+    assert.match(generated.text, /Environment=MC_WORK_ROOT="\/tmp\/mc"/u);
   });
 
   it('uses one distinct, root-named scope command and disables argument expansion', () => {
